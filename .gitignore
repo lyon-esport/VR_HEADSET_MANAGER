@@ -1,0 +1,26 @@
+# ignore all logs
+**/logs
+*.logs
+
+# ignore config files
+config/*
+/*.json
+
+# ignore known-headsets data
+/data/
+known_headsets*.csv
+
+# ignore generated html files
+/OBS/*.html
+!/OBS/template/
+
+# ignore records
+records/*
+
+# ignore scrcpy tests
+scrcpy_manualScripts/
+
+#Other...
+desktop.ini
+.vscode
+

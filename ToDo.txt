@@ -1,0 +1,52 @@
+
+-- TESTS avec Romain --
+
+>> Vérifier/Installer automatiquement scrcpy au démarrage du soft
+	- Autorisation adb.exe dans le pare-feu
+	- Autorisation d'execution d'un powershell ? A tester sur pc vierge ou avec durcissement
+
+>> Revoir Gestion de l'ajout d'un casque avec installation automatique de WirelessADB
+	- install config : Proposer les modifs des paramètres Y/N (tester si ca marche)	
+	- aussi ? pour push des param wifi 
+>> Bug sur l'ajout d'un casque par IP
+	Tester toutes les combinaisons d'ajout/suppress
+>> Ajout d'un casque en USB 
+	> si casque avec même serial = update l'IP
+	->> historiser les valeurs d'un casque (serial dans le fichier known headsets)
+	Faire une détection automatique si casque présent en USB > Proposer de l'ajouter 
+
+- Ajout de l'option scrcpy parameters dans les known_headsets.csv pour identifier quel type de paramètres appliquer au casque lors de la capture scrcpy
+
+- Ajout des informations de batterie des manettes dans l'interface web pour OBS
+	Voir les fonction 
+		Get-QuestControllerBatteryStatus
+		et
+		Get-HeadsetBatteryStatus
+
+- MAJ du SerialNumber du casque dans le fichier known_headsets.csv
+
+- Déplacer fichier de config et autres dans un dossier mes documents par exemple pour être spécifique au PC + records + OBS
+	Possibilité de lancer le soft avec plusieurs profils de lancement, ou plusieurs fichier de config différents en paramètre (déjà fait avec pops)
+
+- Installateur Windows
+	- Sans droits d'admin sur le poste
+	- Vérif les pré-requis pour exécuter l'app et les modules nécessaires
+
+- Obs > Stream vers un autre pc (recast)
+- erreur sur affichage - sur scrcpy > voir les logs
+
+- Intégrer la communication avec un Stream Deck
+	>> NamedPipe (https://rkeithhill.wordpress.com/2014/11/01/windows-powershell-and-named-pipes/)
+	>> ou API REST pour avoir une page web pilotable depuis un téléphone portable
+- web page d'affichage de l'etat des casques puis de la gestion (voir ligne ci-dessus)
+
+- GIT Publish + readme
+
+DONE
+- lanceur double clic exe - ok avec cmd
+- fenetre etat des casque séparé du menu de lancement/gestion pour refresh
+- Affichage graphique de état de la batterie dans OBS
+- bouton/option pour ouvrir dossier records, fichier de config générale et fichier cfg casques
+- auto reconnect des videos scrcpy
+- Changer affichage console config (inclure scrcpy autorestart Y/N)
+- Revoir les couleurs de la console

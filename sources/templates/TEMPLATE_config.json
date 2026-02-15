@@ -1,0 +1,45 @@
+{
+  "WIFI":{
+    "wifi_ssid": "DefineHereYourWifiSSID",
+    "wifi_pwd": "YourWifiPassword"
+  },
+  "Paths":{
+    "knownHeadsetsFile": "known_headsets.csv"
+  },
+  "apk":{
+	"adbWirelessActivatorFolder": "ADB Wireless activator",
+	"adbWirelessActivatorApk": "tdg.oculuswirelessadb-1.3.apk",
+	"adbWirelessActivatorPackageName":"tdg.oculuswirelessadb"
+	},
+  "Logging":{
+	"Comment-possibleValues": "DEBUG,INFO,SUCCESS,WARNING,ERROR,NONE",
+    "debugLevelToFile": "INFO",
+    "debugLevelToConsole": "WARNING",
+	"logFile": "logfile.txt"
+  },
+  "VRMonitor":{
+	"refresh_timer":5
+  },
+  "ADB":{
+	"folder":"scrcpywithclientcrop2",
+    "adbPort_default": 5555
+  },
+  "scrcpy":{
+	  "folder":"scrcpywithclientcrop2",
+	  "recordFolder":"C:/DATA/MEDIA/OBS/Stream_Records",
+	  "parameters":{
+		"Quest 3":"--max-fps 45 -b 20M --video-buffer=100 --no-audio --crop 1664:1304:2260:450 --angle=-21 --video-codec=h264 --video-encoder=OMX.qcom.video.encoder.avc --stay-awake",
+		"Quest 3_test":" -b20m --max-fps=30 --video-buffer=100 --video-codec=h264",
+		"Quest 3_Cropped":"-b20m --crop=1664:1304:2260:450 --angle=-21 --max-size=800 --max-fps=30 --video-codec=h265",
+		"Quest 2":"--crop=1550:1250:2000:280 -b10m --max-fps 30 --video-buffer=100 --no-audio --video-buffer=50 --video-codec=h264",
+		"Quest 2_Cropped":"--crop=1550:1250:2000:280 --max-size=800 --video-bit-rate=10M --max-fps 60 --video-buffer=50 --video-codec=h265" 
+	  }
+  },
+  "OBS":{
+	 "HeadsetTemplate":"headset_status_v2.eps",
+	 "headsets_triggers":{
+		"battery_lowLevel": 30,
+		"temperature_highLevel": 50
+	 }
+  }
+}
