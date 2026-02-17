@@ -1,6 +1,12 @@
 
 -- TESTS avec Romain --
 
+- Ajout des informations de batterie des manettes dans l'interface web pour OBS
+	Voir les fonction 
+		Get-QuestControllerBatteryStatus
+		et
+		Get-HeadsetBatteryStatus
+
 >> Vérifier/Installer automatiquement scrcpy au démarrage du soft
 	- Autorisation adb.exe dans le pare-feu
 	- Autorisation d'execution d'un powershell ? A tester sur pc vierge ou avec durcissement
@@ -16,24 +22,24 @@
 	Faire une détection automatique si casque présent en USB > Proposer de l'ajouter 
 
 - Ajout de l'option scrcpy parameters dans les known_headsets.csv pour identifier quel type de paramètres appliquer au casque lors de la capture scrcpy
-
-- Ajout des informations de batterie des manettes dans l'interface web pour OBS
-	Voir les fonction 
-		Get-QuestControllerBatteryStatus
-		et
-		Get-HeadsetBatteryStatus
+>> Q3 Left , Q3 Right, autres paramètres ?
 
 - MAJ du SerialNumber du casque dans le fichier known_headsets.csv
 
 - Déplacer fichier de config et autres dans un dossier mes documents par exemple pour être spécifique au PC + records + OBS
 	Possibilité de lancer le soft avec plusieurs profils de lancement, ou plusieurs fichier de config différents en paramètre (déjà fait avec pops)
 
+- Gestion des traductions -> Remplacer tout le texte de la console de configuration en EN au lieu du FR et proposer un fichier de traduction simple à générer avec IA.
+
 - Installateur Windows
 	- Sans droits d'admin sur le poste
 	- Vérif les pré-requis pour exécuter l'app et les modules nécessaires
 
 - Obs > Stream vers un autre pc (recast)
+- OBS > Proposer un timer qu'on peut reset depuis l'app, pour un timer ou un chrono de l'utilisation du casque (à intégrer au Stream deck)
+
 - erreur sur affichage - sur scrcpy > voir les logs
+
 
 - Intégrer la communication avec un Stream Deck
 	>> NamedPipe (https://rkeithhill.wordpress.com/2014/11/01/windows-powershell-and-named-pipes/)
@@ -41,6 +47,7 @@
 - web page d'affichage de l'etat des casques puis de la gestion (voir ligne ci-dessus)
 
 - GIT Publish + readme
+	+ docs
 
 DONE
 - lanceur double clic exe - ok avec cmd
