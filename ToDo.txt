@@ -1,5 +1,4 @@
-
--- TESTS avec Romain --
+TODO VR HEADSET MANAGER
 
 - Ajout des informations de batterie des manettes dans l'interface web pour OBS
 	Voir les fonction 
