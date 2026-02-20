@@ -92,24 +92,26 @@ foreach ($folder in $requiredFolders) {
 
 
 # Check if config file exists, if not create it from template file and open it for edit
-if $custom_config {
-    $configFilePath = $custom_config
+if ($custom_config) {
+    $global:configFilePath = $custom_config
 } else {
-    $configFilePath = Join-Path -Path $global:ScriptPath -ChildPath "config\config.json"
+    $global:configFilePath = Join-Path -Path $global:ScriptPath -ChildPath "config\config.json"
 }
 
-if (-not (Test-Path -Path $configFilePath)) {
+if (-not (Test-Path -Path $global:configFilePath)) {
     $templateConfigPath = Join-Path -Path $global:ScriptPath -ChildPath "template\config\config.json"
     if (Test-Path -Path $templateConfigPath) {
-        Copy-Item -Path $templateConfigPath -Destination $configFilePath
-        Write-Host "Config file created from template at: $configFilePath" -ForegroundColor Green
+        Copy-Item -Path $templateConfigPath -Destination $global:configFilePath
+        Write-Host "Config file created from template at: $global:configFilePath" -ForegroundColor Green
         
-        $REPLY = Read-Host "Do you want to edit the config file now with your default file editor? (Y/N)" -ForegroundColor Yellow
+        Write-Host "Do you want to edit the config file now with your default file editor? (Y/N)" -ForegroundColor Yellow
+        $REPLY = Read-Host
+        
         if ($REPLY -match '^[Yy]$') {
             # Open the config file in the default text editor
-            Start-Process -FilePath $configFilePath
+            Start-Process -FilePath $global:configFilePath
         } else {
-            Write-Host "You can edit the config file later at: $configFilePath" -ForegroundColor Green
+            Write-Host "You can edit the config file later at: $global:configFilePath" -ForegroundColor Green
         }
 
     } else {
@@ -118,7 +120,7 @@ if (-not (Test-Path -Path $configFilePath)) {
         exit 1
     }
 } else {
-    Write-Host "Config file found at: $configFilePath" -ForegroundColor Green
+    Write-Host "Config file found at: $global:configFilePath" -ForegroundColor Green
 }
 
 
