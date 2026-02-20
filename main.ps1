@@ -51,65 +51,113 @@ Voies d'améliorations :
 #Check on startup the main script if it can identify where it is, and make sure it finds the path of $PSScriptRoot. Otherwise, check if the current execution is in a folder whose name contains "VR_HEADSET_MANAGER".
 #Load the path into the global variable $global:ScriptPath
 
+#Welcome message
+Write-Host "Welcome to VR HEADSET MANAGER!" -ForegroundColor Green
+Write-Host "Starting the initialization process..." -ForegroundColor Green
+
 $global:custom_config = $args[0] 
-Write-Host "Custom config file passed as argument: $custom_config" -ForegroundColor Green
+if ($global:custom_config) {
+    Write-Host "Custom config file passed as argument: $global:custom_config" -ForegroundColor Green
+} else {
+    Write-Host "No custom config file passed as argument. Starting process with default config file path." -ForegroundColor Yellow
+}
 
-
-# Déterminer le chemin de base
+# Get the current script path
 $global:ScriptPath = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 
-# Vérifier si on est dans le dossier modules et remonter d'un niveau si nécessaire
+# check if the current folder name is "modules", if yes, move up one level
 if ((Split-Path $global:ScriptPath -Leaf) -eq "modules") {
     $global:ScriptPath = Split-Path $global:ScriptPath -Parent
 }
 
-# Valider qu'on est bien dans VR_HEADSET_MANAGER
-if ((Split-Path $global:ScriptPath -Leaf) -ne "VR_HEADSET_MANAGER") {
-    Write-Host "Error: Please run this script from the 'VR_HEADSET_MANAGER' folder." -ForegroundColor Red
-    exit 1
-}
-
-#Unblock all scripts in the module folder (in case they were blocked by Windows)
-Get-ChildItem -Path $global:ScriptPath -Filter "*.ps1" -Recurse | Unblock-File
-#$module = (Get-ChildItem "$ScriptPath\modules\*.ps1")[1]
-
-
-########################## INITIALISATION ##########################
-
-# Import des fichiers modules (doit être exécuté au niveau global, et ne peut pas démarrer dans une fonction !)
-$scripts_init = Join-Path -Path $global:ScriptPath -ChildPath "\modules\scripts_init.ps1"
-if (Test-Path -Path $scripts_init) {
-    . $scripts_init
-} else {
-    Write-Host "Erreur: Le script d'initialisation des modules est introuvable !" -ForegroundColor Red
+if ((Split-Path $global:ScriptPath -Leaf) -notmatch "VR_HEADSET_MANAGER") {
+    Write-Host "Error: Please run this script from a folder containing 'VR_HEADSET_MANAGER'." -ForegroundColor Red
+    Read-Host "Press enter for exit"
     exit
 }
 
 
-######################
-######## MAIN ########
-######################
+########################## INITIALISATION ##########################
 
 
+# Check if folders exists in the same folder as the script, otherwise create them
+$requiredFolders = @("config","data","logs","OBS")
+foreach ($folder in $requiredFolders) {
+    $folderPath = Join-Path -Path $global:ScriptPath -ChildPath $folder
+    if (-not (Test-Path -Path $folderPath)) {
+        New-Item -ItemType Directory -Path $folderPath | Out-Null
+        Write-Host "Created missing folder: $folder" -ForegroundColor Yellow
+    }
+}
 
 
+# Check if config file exists, if not create it from template file and open it for edit
+if $custom_config {
+    $configFilePath = $custom_config
+} else {
+    $configFilePath = Join-Path -Path $global:ScriptPath -ChildPath "config\config.json"
+}
 
-# Initialisation du fichier de liste des casques connus 
+if (-not (Test-Path -Path $configFilePath)) {
+    $templateConfigPath = Join-Path -Path $global:ScriptPath -ChildPath "template\config.json"
+    if (Test-Path -Path $templateConfigPath) {
+        Copy-Item -Path $templateConfigPath -Destination $configFilePath
+        Write-Host "Config file created from template at: $configFilePath" -ForegroundColor Green
+        
+        $REPLY = Read-Host "Do you want to edit the config file now with your default file editor? (Y/N)" -ForegroundColor Yellow
+        if ($REPLY -match '^[Yy]$') {
+            # Open the config file in the default text editor
+            Start-Process -FilePath $configFilePath
+        } else {
+            Write-Host "You can edit the config file later at: $configFilePath" -ForegroundColor Green
+        }
+
+    } else {
+        Write-Host "Error: Template config file is missing!" -ForegroundColor Red
+        Read-Host "Press enter for exit"
+        exit 1
+    }
+} else {
+    Write-Host "Config file found at: $configFilePath" -ForegroundColor Green
+}
+
+
+#Unblock all scripts in the module folder (in case they were blocked by Windows)
+Get-ChildItem -Path $global:ScriptPath -Filter "*.ps1" -Recurse | Unblock-File
+
+# Import modules files (must be executed at global level, and cannot start in a function !)
+$scripts_init = Join-Path -Path $global:ScriptPath -ChildPath "\modules\scripts_init.ps1"
+if (Test-Path -Path $scripts_init) {
+    . $scripts_init
+} else {
+    Write-Host "Error: The initialization modules script is missing!" -ForegroundColor Red
+    Read-Host "Press enter for exit"
+    exit
+}
+
+
+# File initialization of the known headsets list file
     #$global:knownHeadsetsFilePath = "$ScriptPath\data\known_headsets.csv"
     $global:knownHeadsets = @()
     if ((Test-Path $global:knownHeadsetsFilePath) -or (Test-KnownHeadsetsFile($global:knownHeadsetsFilePath))) {
         $global:knownHeadsets = @(Import-Csv -Path $global:knownHeadsetsFilePath)
     } else {
-        Write-Log "Le fichier des casques connus n'existe pas ou n'est pas correct, initialisation en cours !" -Level WARNING
+        Write-Log "The known headsets file does not exist or is not correct, initializing!" -Level WARNING
         $headers = "ID","Name","IPAddress","scrcpy_AutoRestart","Record","SerialNumber"
         $headers -join "," | Out-File -FilePath $global:knownHeadsetsFilePath -Encoding UTF8
     }
 
-# Initialisation du fichier de données des casques
+# Data file initialization of the headsets infos file
 $global:knownHeadsetsInfosFilePath = "$ScriptPath\data\known_headsets_infos.csv"
 $global:knownHeadsetsInfos = @()
 $headerLine = '"ID","Name","IPAddress","AdbPort","Ping","ADBWifi","Brand","Model","SerialNumber","BatteryLevel","Charging","Scrcpy","LastUpdateTimeStamp"'
 $headerLine | Out-File -FilePath $global:knownHeadsetsInfosFilePath -Encoding UTF8
+
+
+
+######################
+######## MAIN ########
+######################
 
 # Stard ADB Server if not already started
 $null = Start-AdbServer -adbPath $global:adbPath
@@ -130,34 +178,16 @@ Start-Process powershell.exe -ArgumentList @(
     "`"$configFilePath`""
 )
 
-
 Write-Host "Waiting 5 seconds before showing the main menu... " -ForegroundColor Yellow -NoNewline
     for ($i = 4; $i -ge 1; $i--) {
         Write-Host "$i " -ForegroundColor Cyan -NoNewline
         Start-Sleep -Seconds 1
     }
-Write-Host "`n"  # Retour à la ligne
+Write-Host "`n"
 
 
-
-# Lancement du script principal
+# Starting the main menu function that will show the different options to the user
 Show-MainMenu
-
-#############
-
-<#
-TODO :
-- Corriger le bug qui ne charge pas la liste des casques connus si le fichier known_headsets.csv est vidé puis re-rempli
-    Fonction Start-VRMonitor
-    
-- Ajouter l'option record dans scrcpy
-
-#>
-
-
-
-
-
 
 
 

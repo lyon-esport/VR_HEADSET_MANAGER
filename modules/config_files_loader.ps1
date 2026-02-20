@@ -55,7 +55,7 @@ function Get-Config {
     $global:OBS_temperature_highLevel = $configContent.OBS.headsets_triggers.temperature_highLevel
 
    
-    # Charger les variables de configuration des logs
+    # Charge of logging configuration variables with validation and default values
     #get computer name
     $global:computerName = $env:COMPUTERNAME
     $global:logFolder = $(Join-Path -Path $global:ScriptPath -ChildPath "Logs\$($global:computerName)")
@@ -63,7 +63,10 @@ function Get-Config {
     if (-not (Test-Path $global:logFolder)) {
         New-Item -Path $global:logFolder -ItemType Directory -Force | Out-Null
     }
-    $global:logFile =   Join-Path -Path $global:logFolder -ChildPath $configContent.Logging.logFile
+    # Generate log file name with current date
+    $dateString = Get-Date -Format "yyyy-MM-dd"
+    $global:logFile = Join-Path -Path $global:logFolder -ChildPath "log_$dateString.txt"
+    
     $global:debugLevelToFile = $configContent.Logging.debugLevelToFile
     $global:debugLevelToConsole = $configContent.Logging.debugLevelToConsole
 
