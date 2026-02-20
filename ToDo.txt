@@ -21,21 +21,28 @@ TODO VR HEADSET MANAGER
 	Faire une détection automatique si casque présent en USB > Proposer de l'ajouter 
 
 - Ajout de l'option scrcpy parameters dans les known_headsets.csv pour identifier quel type de paramètres appliquer au casque lors de la capture scrcpy
->> Q3 Left , Q3 Right, autres paramètres ?
+	-> Q3 Left , Q3 Right, autres paramètres ?
+	-> Si changement des paramètres et que le stream en cours est lancé avec d'autres params, relancer automatiquement le stream	
+
 
 - MAJ du SerialNumber du casque dans le fichier known_headsets.csv
 
-- Déplacer fichier de config et autres dans un dossier mes documents par exemple pour être spécifique au PC + records + OBS
-	Possibilité de lancer le soft avec plusieurs profils de lancement, ou plusieurs fichier de config différents en paramètre (déjà fait avec pops)
+- CONFIG FILE
+	- Demander à l'initialisation du fichier de config, ou depuis un menu les paramètres du réseau WIFI et les stocker de manière sécurisée
+	>> A noter que le réseau wifi n'est nécessaire que lors de le connexion d'un casque, et que la plupart du temps les casques sont déjà reliés au réseau wifi...
+	>> Peut être supprimer la fonctionnalité du coup ?
 
-- Gestion des traductions -> Remplacer tout le texte de la console de configuration en EN au lieu du FR et proposer un fichier de traduction simple à générer avec IA.
+- Gestion des traductions
+	-> Remplacer tous les commentaires du code et dans le texte de la console de configuration en EN au lieu du FR.
+	-> Proposer un fichier de traduction simple à générer avec IA.
 
 - Installateur Windows
 	- Sans droits d'admin sur le poste
 	- Vérif les pré-requis pour exécuter l'app et les modules nécessaires
 
-- Obs > Stream vers un autre pc (recast)
-- OBS > Proposer un timer qu'on peut reset depuis l'app, pour un timer ou un chrono de l'utilisation du casque (à intégrer au Stream deck)
+- OBS
+	-> Stream vers un autre pc (recast)
+	-> Proposer un timer qu'on peut reset depuis l'app, pour un timer ou un chrono de l'utilisation du casque (à intégrer au Stream deck)
 
 - erreur sur affichage - sur scrcpy > voir les logs
 
