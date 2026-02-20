@@ -99,7 +99,7 @@ if $custom_config {
 }
 
 if (-not (Test-Path -Path $configFilePath)) {
-    $templateConfigPath = Join-Path -Path $global:ScriptPath -ChildPath "template\config.json"
+    $templateConfigPath = Join-Path -Path $global:ScriptPath -ChildPath "template\config\config.json"
     if (Test-Path -Path $templateConfigPath) {
         Copy-Item -Path $templateConfigPath -Destination $configFilePath
         Write-Host "Config file created from template at: $configFilePath" -ForegroundColor Green

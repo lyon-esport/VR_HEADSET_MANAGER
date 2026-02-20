@@ -5,7 +5,7 @@
 # ignore config files
 config/*
 /*.json
-!/template/*
+!/templates/*
 
 # ignore known-headsets data
 /data/
