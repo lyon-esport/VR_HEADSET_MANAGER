@@ -46,7 +46,7 @@ Before using the tool, make sure the following requirements are met:
 
 - ✅ The Meta Quest headset must be in **Developer Mode**
 - ✅ The Meta Quest headset must be connecter over WIFI, and reachable from the computer you execute the script
-  _Note : To limit lacencies I recommand a dedicated WIFI network and channels for headsets, and an ethernet connexion for the computer which is executing VR HEADSET MANAGER.
+  *Note : To limit lacencies I recommand a dedicated WIFI SSID and channels for headsets only, and an ethernet connexion for the computer which is executing VR HEADSET MANAGER.*
 - ✅ **ADB over WiFi must be enabled** on the headset  
   _TODO: A dedicated article will explain how to enable ADB WiFi properly. The app [oculus-wireless-adb](https://github.com/thedroidgeek/oculus-wireless-adb) is available in **_sources\ADB Wireless activator**
 
