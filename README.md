@@ -27,12 +27,16 @@ I personally use it during showrooms and gaming exhibitions to capture the live 
 2. **Run the launcher**  
    Double-click on: **START_VR_HEADSET_MANAGER.cmd**
    This will start PowerShell with the correct execution policy and launch the manager.
-   On first start it will automatically create Windows Firewall exceptions to allow adb.exe to call with headsets over the network.
+   On first start it will automatically create Windows Firewall exceptions to allow adb.exe to talk with headsets over the network.
 
 3. **Add headset**
-   In the PowerShell console, press **A** to add a headset
+   In the CONFIG PowerShell console, press **A** to add a headset
+   Follow the instructions to add your headset (IP address, Firendly name...)
+   
+4. **Press the number to start screen miroring (scrcpy) of the headset**
 
-4. **Press the number to start scrcpy of the headset**
+5. **Modify headset parameters**
+   Use different options to manage you headsets. You can enable recording, enable the auto-restart of the screen miroring, etc...
 
 ---
 
@@ -48,5 +52,27 @@ Before using the tool, make sure the following requirements are met:
 
 Without these prerequisites, the headset will not be reachable over the network and scrcpy streaming will not work.
 
-   
+---
 
+## Known issues
+
+- Many... It's getting better days after days :-)
+
+---
+
+## Roadmap
+
+- Dev of a Stream deck plugin
+- Review of Meta Quest configuration and ADB activation (by connecting with USB) for headsets that are not already known and configured in VR Heaset Manager
+- Web page to allow configuration and screen miroring visualization
+- Many ideas...
+
+---
+
+## Sources
+
+This project is based on :
+- [scrcpy project](https://github.com/Genymobile/scrcpy) for screen miroring
+- [oculus-wireless-adb](https://github.com/thedroidgeek/oculus-wireless-adb) for enabling ADB over Wifi on Meta Quest VR headsets
+- [Powershell Pode module](https://github.com/Badgerati/Pode) as web server
+- [Powershell EPS module](https://github.com/straightdave/eps) as templating tool for editing values in web pages
