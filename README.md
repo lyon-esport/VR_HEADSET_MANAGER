@@ -76,3 +76,7 @@ This project is based on :
 - [oculus-wireless-adb](https://github.com/thedroidgeek/oculus-wireless-adb) for enabling ADB over Wifi on Meta Quest VR headsets
 - [Powershell Pode module](https://github.com/Badgerati/Pode) as web server
 - [Powershell EPS module](https://github.com/straightdave/eps) as templating tool for editing values in web pages
+
+Streamdeck usefull plugins :
+- [**Stream Countdown Timer**](https://marketplace.elgato.com/product/stream-countdown-timer-625838c6-85ce-4be7-a754-30f00c809b34) by [BarRaider](https://barraider.com/)
+  - *[[FR]YT tutorial to use the timer in OBS](https://www.youtube.com/watch?v=vi4xlhSECeA)*
