@@ -48,7 +48,7 @@ Before using the tool, make sure the following requirements are met:
 - ✅ The Meta Quest headset must be connecter over WIFI, and reachable from the computer you execute the script
   *Note : To limit lacencies I recommand a dedicated WIFI SSID and channels for headsets only, and an ethernet connexion for the computer which is executing VR HEADSET MANAGER.*
 - ✅ **ADB over WiFi must be enabled** on the headset  
-  _TODO: A dedicated article will explain how to enable ADB WiFi properly. The app [oculus-wireless-adb](https://github.com/thedroidgeek/oculus-wireless-adb) is available in **_sources\ADB Wireless activator**
+  _TODO: A dedicated article will explain how to enable ADB WiFi properly. 
 
 Without these prerequisites, the headset will not be reachable over the network and scrcpy streaming will not work.
 
@@ -65,6 +65,7 @@ Without these prerequisites, the headset will not be reachable over the network 
 - Dev of a Stream deck plugin
 - Review of Meta Quest configuration and ADB activation (by connecting with USB) for headsets that are not already known and configured in VR Heaset Manager
 - Web page to allow configuration and screen miroring visualization
+- Review adb_functions.ps1 to pass device adb object in parameter of all request functions, to allow either USB or Wifi ADB device (Get-HeadsetModel, Get-QuestControllerBatteryStatus, Get-HeadsetBatteryStatus...)
 - Many ideas...
 
 ---
