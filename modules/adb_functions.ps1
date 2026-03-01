@@ -251,21 +251,20 @@ function Enable-WiFiADB {
         return $false
     }
 
-    # 2. Detection du casque en USB
-    Write-Log "Recherche du casque connecte en USB..." -Level INFO
+    Write-Log "Searching for USB-connected headset..." -Level INFO
     try {
-        if (-not (Test-AdbDevicesAuthorization)) { # Vérifier si ça marche bien uniquement en USB si d'autres casques sont déjà connectés en ADB Wifi
-            return 
+        
+        # 2. USB Device Detection
+        $usbDevice = Test-UsbAdbDevice -adb $adb
+        if (-not $usbDevice) {
+            Write-Log "No USB ADB device detected" -Level ERROR
+            Write-Log ">> Back to main menu..." -Level INFO
+            Start-Sleep -Seconds 3
+            return $false
         }
 
-
-        ############
-
-        $devices = & $adb devices | Where-Object { $_ -match '\tdevice$' } # Vérifier si ça marche bien uniquement en USB si d'autres casques sont déjà connectés en ADB Wifi ou utiliser l'ID du casque en retour de la fonction Test-AdbDevicesAuthorization (au lieu de true)
-
-        
-        if (-not $devices) {
-            Write-Log "Aucun casque detecte en USB. Verifiez la connexion." -Level WARNING
+        # 3. Check if the device is authorized for USB debugging
+        if (-not (Test-AdbDevicesAuthorization)) { # Vérifier si ça marche bien uniquement en USB si d'autres casques sont déjà connectés en ADB Wifi
             return $false
         }
 
@@ -364,6 +363,46 @@ function Enable-WiFiADB {
         Write-Log "ERREUR: $_" -Level ERROR
         return $false
     }
+}
+
+
+function Test-UsbAdbDevice {
+
+    param(
+        [int]$MaxAttempts = 5,
+        [string]$adb = $global:adbPath
+    )
+
+
+    if (-not (Test-Path $adb)) {
+        Write-Log -Message "ADB executable not found at $adbPath" -Level "ERROR"
+        return $false
+    }
+
+    for ($i = 1; $i -le $MaxAttempts; $i++) {
+
+        try {
+            $usbDevice = & $adbPath devices |
+                Where-Object { $_ -match "`tdevice$" -and $_ -notmatch ":" }
+
+            if ($usbDevice) {
+                Write-Log -Message "USB ADB device detected." -Level "SUCCESS"
+                return $usbDevice
+            }
+        }
+        catch {
+            Write-Log -Message "ADB execution failed: $($_.Exception.Message)" -Level "ERROR"
+        }
+
+        Write-Host "No USB headset detected. Connect it via USB and press ENTER (Q to quit)."
+        if ((Read-Host) -match "^[Qq]$") {
+            Write-Log -Message "User cancelled USB detection." -Level "INFO"
+            return $false
+        }
+    }
+
+    Write-Log -Message "No USB ADB device found after $MaxAttempts attempts." -Level "ERROR"
+    return $false
 }
 
 
