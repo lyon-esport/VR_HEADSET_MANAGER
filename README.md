@@ -63,18 +63,32 @@ Without these prerequisites, the headset will not be reachable over the network 
 
 ### Improvements
 - Review of Meta Quest configuration and ADB activation (by connecting with USB) for headsets that are not already known and configured in VR Heaset Manager
+>> Install config : Do you want to modify headset parameters ? Y/N and test it on a brand new headset
+>> if headset has the same serial : update the IP in the known headsets (need to manage serial in known_headets.csv)
+>> in headset is connected to usb, propose to add it automatically...
+>> If the headset is not connected to the right Wifi, let's propose to connect to...
 - [To validate] Firewall autorization for adb.exe on soft startup
 - Setup powershell execution >> To test on fresh installed pc
+- Bug on adding a headset from the IP address
+	>> Tester toutes les combinaisons d'ajout/suppress
+- Manage recording parameters in the config manager
+- Manage scrcpy parameters in the config manger based on a template in general config file (Q3 Right Eye, Q3 Left Eye...)
+   >> Restart the current headset stream if template changed
+- Save by a secured manner the Wifi Password with [Marshal](https://www.secureideas.com/blog/secure-password-management-in-powershell-best-practices) (ConvertTo-SecureString / ConvertFrom-SecureString)
+
 
 
 ### New functionalities
 - [in process] Dev of a Stream deck plugin
--  Ajout des informations de batterie des manettes dans l'interface web pour OBS  
-    >> Check functions *Get-QuestControllerBatteryStatus* and *Get-HeadsetBatteryStatus*
- - Web page to allow configuration and screen miroring visualization
+  >> Manage communication with Stream Deck Plugin...
+  >> [Named Pipe ?](https://rkeithhill.wordpress.com/2014/11/01/windows-powershell-and-named-pipes/)
+  >> REST API to get a web page to manage it from a phone, or by Stream Deck hitself ?
+- Add controllers battery level for OBS view
+  >> Check functions *Get-QuestControllerBatteryStatus* and *Get-HeadsetBatteryStatus*
+- Web page to allow configuration and screen miroring visualization
 
 ### Code improvement
-- Translate all text (IHM + comments) in [EN] instead of [FR]
+- Translate all text (IHM + comments) in [EN] instead of [FR] - To do by IA... [like this](/docs/translation_fr.xml)
 - Review adb_functions.ps1 to pass device adb object in parameter of all request functions, to allow either USB or Wifi ADB device (Get-HeadsetModel, Get-QuestControllerBatteryStatus, Get-HeadsetBatteryStatus...)
 - Review all powershell code with PSScriptAnalyzer
 
