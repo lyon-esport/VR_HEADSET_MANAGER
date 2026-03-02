@@ -61,11 +61,23 @@ Without these prerequisites, the headset will not be reachable over the network 
 
 ## Roadmap
 
-- Dev of a Stream deck plugin
+### Improvements
 - Review of Meta Quest configuration and ADB activation (by connecting with USB) for headsets that are not already known and configured in VR Heaset Manager
-- Web page to allow configuration and screen miroring visualization
+- [To validate] Firewall autorization for adb.exe on soft startup
+- Setup powershell execution >> To test on fresh installed pc
+
+
+### New functionalities
+- [in process] Dev of a Stream deck plugin
+-  Ajout des informations de batterie des manettes dans l'interface web pour OBS  
+    >> Check functions *Get-QuestControllerBatteryStatus* and *Get-HeadsetBatteryStatus*
+ - Web page to allow configuration and screen miroring visualization
+
+### Code improvement
+- Translate all text (IHM + comments) in [EN] instead of [FR]
 - Review adb_functions.ps1 to pass device adb object in parameter of all request functions, to allow either USB or Wifi ADB device (Get-HeadsetModel, Get-QuestControllerBatteryStatus, Get-HeadsetBatteryStatus...)
-- Many ideas...
+- Review all powershell code with PSScriptAnalyzer
+
 
 ---
 
