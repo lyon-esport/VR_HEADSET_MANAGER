@@ -64,6 +64,7 @@ Without these prerequisites, the headset will not be reachable over the network 
 ### Improvements
 - On startup add following changes :
 	> - Setup powershell execution >> To test on fresh installed pc
+	> - Test if the app is not already running... If yes, warn the user and ask if he really wants to start it...
 	> - Test if the computer have screen saver or auto lock screen
 	>   - If ran as administrator : Propose to remove the parameters
 	>   - If ran as a normal user : Warn the user
