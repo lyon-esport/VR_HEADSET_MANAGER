@@ -77,14 +77,15 @@ Without these prerequisites, the headset will not be reachable over the network 
 
 - Bug on adding a headset from the IP address
 	> Tester every combination by adding/modifying/deleting headset...
-- Manage recording parameters in the config manager
-- Manage scrcpy parameters in the config manger based on a template in general config file (Q3 Right Eye, Q3 Left Eye...)
-   > Restart the current headset stream if template changed
+
 - Save by a secured manner the Wifi Password with [Marshal](https://www.secureideas.com/blog/secure-password-management-in-powershell-best-practices) (ConvertTo-SecureString / ConvertFrom-SecureString)
 
 
 
 ### New functionalities
+- Manage scrcpy profiles for each headset ; save these parameters in known_headsets.csv (Left/right eye; audio duplicate or not ; bandwidth ; FPS ) [L/R]-[D/N]-45-20
+  - Parameters in config.json defines only basics parameters common parameters like crop, angle, video codec, video encoder and video buffer and stay awake
+  - Restart the current headset stream if template changed
 - [in process] Dev of a Stream deck plugin
   > - Manage communication with Stream Deck Plugin...
   > - [Named Pipe ?](https://rkeithhill.wordpress.com/2014/11/01/windows-powershell-and-named-pipes/)
