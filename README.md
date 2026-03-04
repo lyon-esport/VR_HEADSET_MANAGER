@@ -27,8 +27,10 @@ I personally use it during showrooms and gaming exhibitions to capture the live 
 2. **Run the launcher**  
    > - Double-click on: **START_VR_HEADSET_MANAGER.cmd**
    > - This will start PowerShell with the correct execution policy and launch the manager.
-   > - On first start it will automatically create Windows Firewall exceptions to allow adb.exe to talk with headsets over the network.
-
+   > - On first start it will automatically :  
+   >   - add Windows Firewall exceptions to allow adb.exe to talk with headsets over the network.
+   >   - create a config file from the template
+   
 3. **Add headset**
    > - In the CONFIG PowerShell console, press **A** to add a headset
    > - Follow the instructions to add your headset (IP address, Firendly name...)
@@ -60,16 +62,19 @@ Without these prerequisites, the headset will not be reachable over the network 
 
 
 ### Improvements
+- On startup add following changes :
+	> - Setup powershell execution >> To test on fresh installed pc
+	> - Test if the computer have screen saver or auto lock screen
+	>   - If ran as administrator : Propose to remove the parameters
+	>   - If ran as a normal user : Warn the user
+ 	> - If no headset in the known headset file, propose to add it
 - Review of Meta Quest configuration and ADB activation (by connecting with USB) for headsets that are not already known and configured in VR Heaset Manager
-> - Install config : Do you want to modify headset parameters ? Y/N and test it on a brand new headset
-> - if headset has the same serial : update the IP in the known headsets (need to manage serial in known_headets.csv)
-> - in headset is connected to usb, propose to add it automatically...
-> - If the headset is not connected to the right Wifi, let's propose to connect to...
+	> - Install config : Do you want to modify headset parameters ? Y/N and test it on a brand new headset
+	> - if headset has the same serial : update the IP in the known headsets (need to manage serial in known_headets.csv)
+	> - in headset is connected to usb, propose to add it automatically...
+	> - If the headset is not connected to the right Wifi, let's propose to connect to...
 - [To validate] Firewall autorization for adb.exe on soft startup
-- Setup powershell execution >> To test on fresh installed pc
-- Test if the computer have screen saver or auto lock screen
-   > - If ran as administrator : Propose to remove the parameters
-   > - If ran as a normal user : Warn the user
+
 - Bug on adding a headset from the IP address
 	> Tester every combination by adding/modifying/deleting headset...
 - Manage recording parameters in the config manager
