@@ -68,6 +68,7 @@ Without these prerequisites, the headset will not be reachable over the network 
 	>   - If ran as administrator : Propose to remove the parameters
 	>   - If ran as a normal user : Warn the user
  	> - If no headset in the known headset file, propose to add it
+ 	>  - include a json validator or tester (and warn config json is broken, and open a web page with json validator...) then propose to try reload or create a new file based on the template (overwrite existing file)
 - Review of Meta Quest configuration and ADB activation (by connecting with USB) for headsets that are not already known and configured in VR Heaset Manager
 	> - Install config : Do you want to modify headset parameters ? Y/N and test it on a brand new headset
 	> - if headset has the same serial : update the IP in the known headsets (need to manage serial in known_headets.csv)
