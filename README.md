@@ -53,13 +53,11 @@ Without these prerequisites, the headset will not be reachable over the network 
 
 ---
 
-## Known issues
-
-- Many... It's getting better days after days :-)
-
----
-
 ## Roadmap
+
+### Known issues
+- When stream auto restart is enabled, the headset stream starts 2 times (duplicate scrcpy process)
+
 
 ### Improvements
 - Review of Meta Quest configuration and ADB activation (by connecting with USB) for headsets that are not already known and configured in VR Heaset Manager
@@ -69,6 +67,9 @@ Without these prerequisites, the headset will not be reachable over the network 
 >> If the headset is not connected to the right Wifi, let's propose to connect to...
 - [To validate] Firewall autorization for adb.exe on soft startup
 - Setup powershell execution >> To test on fresh installed pc
+- Test if the computer have screen saver or auto lock screen
+   >> If ran as administrator : Propose to remove the parameters
+   >> If ran as a normal user : Warn the user
 - Bug on adding a headset from the IP address
 	>> Tester toutes les combinaisons d'ajout/suppress
 - Manage recording parameters in the config manager
