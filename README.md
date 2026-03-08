@@ -62,8 +62,9 @@ Without these prerequisites, the headset will not be reachable over the network 
 
 
 ### Improvements
-- On startup add following changes :
-	> - Setup powershell execution >> To test on fresh installed pc
+- On startup add following checks :
+	> - [To validate] Firewall authorization for adb.exe on soft startup
+  	> - Setup powershell execution >> To test on fresh installed pc
 	> - Test if the app is not already running... If yes, warn the user and ask if he really wants to start it...
 	> - Test if the computer have screen saver or auto lock screen
 	>   - If ran as administrator : Propose to remove the parameters
@@ -75,13 +76,12 @@ Without these prerequisites, the headset will not be reachable over the network 
 	> - if headset has the same serial : update the IP in the known headsets (need to manage serial in known_headets.csv)
 	> - in headset is connected to usb, propose to add it automatically...
 	> - If the headset is not connected to the right Wifi, let's propose to connect to...
-- [To validate] Firewall authorization for adb.exe on soft startup
+- 
 
 - Bug on adding a headset from the IP address
 	> Tester every combination by adding/modifying/deleting headset...
 
 - Save by a secured manner the Wifi Password with [Marshal](https://www.secureideas.com/blog/secure-password-management-in-powershell-best-practices) (ConvertTo-SecureString / ConvertFrom-SecureString)
-
 
 
 ### New functionalities
