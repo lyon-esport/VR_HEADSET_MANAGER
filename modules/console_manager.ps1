@@ -1,4 +1,6 @@
-# Affichage du menu principale
+# Display the main menu
+Import-LocalizedData -BindingVariable msg -FileName console_manager
+
 function Show-MainMenu {
     do {
 
@@ -7,8 +9,7 @@ function Show-MainMenu {
         Write-Log "VRMonitorProcess: $($VRMonitorProcess.ProcessId)" -Level DEBUG
         
         if (-not $VRMonitorProcess) {
-            Write-Host "Le processus VR Monitor n'est pas en cours d'execution. Relance..." -ForegroundColor Yellow
-            Write-Host "The VR Monitor process is not running. Restarting it..." -ForegroundColor Yellow
+            Write-Host $msg.VRMonitorNotRunning -ForegroundColor Yellow
             $headsets_dashboard_script = Join-Path -Path $scriptPath -ChildPath "modules\headsets_dashboard.ps1"
 
             Start-Process powershell.exe -ArgumentList @(
@@ -28,22 +29,22 @@ function Show-MainMenu {
 
         Clear-Host
         Start-Sleep -Milliseconds 200
-        Write-Host "=== Menu Principal ===" -ForegroundColor Cyan
-        Write-Host " [ID]. Streamer l'ecran d'un casque VR " -BackgroundColor Yellow -ForegroundColor Black
+        Write-Host $msg.MainMenuTitle -ForegroundColor Cyan
+        Write-Host $msg.StreamHeadset -BackgroundColor Yellow -ForegroundColor Black
         
         #Write-Host " 3. Supprimer un casque " -BackgroundColor DarkMagenta -ForegroundColor White
         #Write-Host " 4. Gestion USB d'un casque (Activation Wifi ADB et Applications) " -BackgroundColor Blue -ForegroundColor White
         
         #Write-Host " 9. Verifier la connexion a internet " -BackgroundColor White -ForegroundColor Black
-        Write-Host " +. Activer Wifi ADB sur un casque connecte en USB " -BackgroundColor White -ForegroundColor Black
-        Write-Host " A. Ajouter/modifier un casque " -BackgroundColor Green -ForegroundColor DarkMagenta
-        Write-Host " S. Gestion du tracking des process scrcpy " -BackgroundColor DarkRed -ForegroundColor White
-        Write-Host " R. Gestion du Recording " -BackgroundColor DarkBlue -ForegroundColor White
-        Write-Host " F. Gestion des fichiers et dossiers " -BackgroundColor DarkCyan -ForegroundColor Black 
-        Write-Host " 0. Quitter "
-        Write-Host " Any other key : Refresh"
+        Write-Host $msg.EnableWifiADB -BackgroundColor White -ForegroundColor Black
+        Write-Host $msg.AddModifyHeadset -BackgroundColor Green -ForegroundColor DarkMagenta
+        Write-Host $msg.ScrcpyTracking -BackgroundColor DarkRed -ForegroundColor White
+        Write-Host $msg.RecordingManagement -BackgroundColor DarkBlue -ForegroundColor White
+        Write-Host $msg.FilesFolders -BackgroundColor DarkCyan -ForegroundColor Black 
+        Write-Host $msg.Quit
+        Write-Host $msg.AnyOtherKey
         Write-Host
-        Write-Host "=== CASQUES CONNUS ==="
+        Write-Host $msg.KnownHeadsets
         #Start-Sleep -Milliseconds 200
         #Show-HeadsetsTable -FieldsToShow @("ID","Name", "IPAddress", "Ping", "ADBReachable", "SCRCPY")
         #Show-HeadsetsTable
@@ -52,7 +53,7 @@ function Show-MainMenu {
         #Write-Host "Nom ; Etat (OK/KO) ; Niveau de batterie ; application en cours"
         $headsets = @(Get-KnownHeadsets)
 
-        $choice = (Read-Host "Entrez votre choix").ToUpper()
+        $choice = (Read-Host $msg.EnterChoice).ToUpper()
         
         if ($choice -in $headsets.ID){
             $headsetName = ($headsets | Where-Object { $_.ID -eq $choice }).Name
@@ -65,13 +66,13 @@ function Show-MainMenu {
                 $headsetRecording = $false
             }
 
-            Write-Log -Message "Essai de connexion a $headsetName - $headsetIPAddress" -Level "INFO"
+            Write-Log -Message ($msg.TryingConnection -f $headsetName, $headsetIPAddress) -Level "INFO"
             #Check ping headset first !
             if (Test-Connection -ComputerName $headsetIPAddress -Count 1 -Quiet){
                 start-screenCopy -displayName $headsetName -headsetIP $headsetIPAddress -recording $headsetRecording
             }
             else {
-                Write-Log -Message "PING $headsetIPAddress KO -> Retour au menu precedent dans 5s." -Level "WARNING"
+                Write-Log -Message ($msg.PingKO -f $headsetIPAddress) -Level "WARNING"
                 Start-Sleep -Seconds 5
             }
         }
@@ -82,7 +83,7 @@ function Show-MainMenu {
                         Show-SubMenu-StreamHeadset 
                         
                     }#>
-                'A' { Write-Host "== AJOUT D'UN CASQUE =="
+                'A' { Write-Host $msg.AddHeadsetTitle
                         Show-SubMenu-AddHeadset
                     }
                 <#'3' { Write-Host "== SUPPRESSION D'UN CASQUE ==" #OK
@@ -92,35 +93,35 @@ function Show-MainMenu {
                         Show-SubMenu-ManageHeadset
                     }
                 #>
-                'S' { Write-Host "== GESTION DU TRACKING DES PROCESS SCRCPY =="
+                'S' { Write-Host $msg.ScrcpyTrackingTitle
                         Show-SubMenu-scrcpyTracking
                     }
-                'R' { Write-Host "== GESTION DU RECORDING DES CASQUES =="
+                'R' { Write-Host $msg.RecordingTitle
                         Show-SubMenu-Recording
                     }
-                'F' { Write-Host "== GESTION DES FICHIERS ET DOSSIERS =="
+                'F' { Write-Host $msg.FilesFoldersTitle
                         Show-SubMenu-FilesAndFolders
                     }
                 '9' {
                     $ping = Test-Connection -ComputerName google.com -Count 2
                     if ($ping) {
-                        Write-Host "Connexion reseau internet operationnelle - Ping google.com : $(($ping | Measure-Object -Property ResponseTime -Average).Average) ms" -ForegroundColor Green
+                        Write-Host ($msg.InternetOK -f (($ping | Measure-Object -Property ResponseTime -Average).Average)) -ForegroundColor Green
                     } else {
-                        Write-Host " Probleme de connexion a internet " -ForegroundColor White -BackgroundColor Red
+                        Write-Host $msg.InternetProblem -ForegroundColor White -BackgroundColor Red
                     }
                     pause
                 }
-                '+' { Write-Host "== ACTIVATION WIFI ADB DEPUIS L'USB =="
+                '+' { Write-Host $msg.WifiADBActivation
                         Enable-WiFiADB -wifi_ssid $global:WIFI_SSID -wifi_pwd $global:WIFI_PWD
                     }
                 '0' {
-                    Write-Host "Au revoir !" -ForegroundColor Yellow
+                    Write-Host $msg.Goodbye -ForegroundColor Yellow
                     Stop-VRMonitor
                     Disconnect-ADBConnections
                     break
                 }
                 default {
-                    Write-Host "Refresh" -ForegroundColor Red
+                    Write-Host $msg.Refresh -ForegroundColor Red
                     # Reload all modules and config file
                     . Join-Path -Path $global:ScriptPath -ChildPath "\modules\scripts_init.ps1"
                 }
@@ -134,18 +135,18 @@ function Show-MainMenu {
 
 function Show-SubMenu-StreamHeadset { # CHOIX 1
     Clear-Host
-    Write-Host "=== [1] SELECTIONNER LE CASQUE A STREAMER ===" -BackgroundColor Yellow -ForegroundColor Black
+    Write-Host $msg.SelectHeadsetToStream -BackgroundColor Yellow -ForegroundColor Black
     $headsets = @(get-knownHeadsets)
     if ($headsets.Count -eq 0){
-        Write-Host " Ajoutez d'abord un casque ! " -ForegroundColor DarkRed -BackgroundColor White
+        Write-Host $msg.AddHeadsetFirst -ForegroundColor DarkRed -BackgroundColor White
     }
     else {
         #Show-HeadsetsTable
         Show-HeadsetsTableColored -FieldsToShow @("ID","Name","IPAddress","Ping","ADBWifi","SCRCPY")
-        $userInput = $(Read-Host " Votre choix (0 pour annuler) >>").ToUpper()
+        $userInput = $(Read-Host $msg.YourChoiceCancel).ToUpper()
         
         if ($userInput -eq '0') {
-            Write-Log -Message "Retour au menu precedent." -Level "INFO"
+            Write-Log -Message $msg.ReturnPrevious -Level "INFO"
         }
         elseif ($userInput -match '^\d+$' -and  $userInput -ge 0 -and $userInput -le $headsets.count) {
             $headsetName = ($headsets | Where-Object { $_.ID -eq $userInput }).Name
@@ -157,18 +158,18 @@ function Show-SubMenu-StreamHeadset { # CHOIX 1
             } else {
                 $headsetRecording = $false
             }
-            Write-Log -Message "Essai de connexion a $headsetName - $headsetIPAddress" -Level "INFO"
+            Write-Log -Message ($msg.TryingConnection -f $headsetName, $headsetIPAddress) -Level "INFO"
             #Check ping headset first !
             if (Test-Connection -ComputerName $headsetIPAddress -Count 1 -Quiet){
                 start-screenCopy -displayName $headsetName  -headsetIP $headsetIPAddress -recording $headsetRecording
             }
             else {
-                Write-Log -Message "PING $headsetIPAddress KO -> Retour au menu precedent dans 5s." -Level "WARNING"
+                Write-Log -Message ($msg.PingKO -f $headsetIPAddress) -Level "WARNING"
                 Start-Sleep -Seconds 5
             }
         }
         else {
-            Write-Log -Message "ID '$userInput' invalide ou option non reconnue. Veuillez entrer un ID valide, ou '0' pour annuler." -Level "ERROR"
+            Write-Log -Message ($msg.InvalidID -f $userInput) -Level "ERROR"
         }
     }
     
@@ -178,42 +179,42 @@ function Show-SubMenu-StreamHeadset { # CHOIX 1
 function Show-SubMenu-AddHeadset { #CHOIX 2
     Clear-Host
     Start-Sleep -Milliseconds 200
-    Write-Host "=== [2] AJOUT OU MODIFICATION D'UN CASQUE ===" -BackgroundColor Green -ForegroundColor DarkMagenta
-    Write-Host "`t 1. Scan du reseau pour ajouter un casque"
-    Write-Host "`t 2. Ajouter un casque manuellement a la liste"
-    Write-Host "`t 3. Modifier un casque manuellement a la liste"
-    Write-Host "`t 4. Suppression d'un casque de la liste"
+    Write-Host $msg.AddOrModifyHeadset -BackgroundColor Green -ForegroundColor DarkMagenta
+    Write-Host $msg.ScanNetworkAdd
+    Write-Host $msg.AddManually
+    Write-Host $msg.ModifyManually
+    Write-Host $msg.RemoveFromList
                     
-    Write-Host "`t 0. Revenir au menu precedent"
+    Write-Host $msg.ReturnPreviousMenu
 
-    $userInput = Read-Host " Votre choix >>"
+    $userInput = Read-Host $msg.YourChoice
 
     switch ($userInput) {
         '1' {
-            Write-Log -Message "Lancement du scan reseau pour ajout de casque." -Level "INFO"
+            Write-Log -Message $msg.NetworkScanLaunch -Level "INFO"
             Add-Headset-ScanNetwork #-port 
         }
 
         '2' {
-            Write-Log -Message "Ajout manuel d’un casque." -Level "INFO"
+            Write-Log -Message $msg.ManualAdd -Level "INFO"
             Add-Headset-Manually
         }
 
         '3' {
-            Write-Log -Message "Modification manuelle d’un casque." -Level "INFO"
+            Write-Log -Message $msg.ManualModify -Level "INFO"
             Show-SubMenu-EditHeadset
         }
         '4' {
-            Write-Host "== SUPPRESSION D'UN CASQUE ==" #OK
+            Write-Host $msg.RemoveHeadset #OK
             Show-SubMenu-RemoveHeadset 
         }
         '0' {
-            Write-Log -Message "Retour au menu precedent." -Level "INFO"
+            Write-Log -Message $msg.ReturnPrevious -Level "INFO"
         }
 
         default {
             Write-Log -Message "Option invalide saisie dans le menu d'ajout." -Level "ERROR"
-            Write-Host "Option invalide. Veuillez entrer 1, 2, 3 ou 0." -ForegroundColor Yellow
+            Write-Host $msg.InvalidOption -ForegroundColor Yellow
         }
     }
 }  # PARTIEL
@@ -221,18 +222,18 @@ function Show-SubMenu-AddHeadset { #CHOIX 2
 function Show-SubMenu-EditHeadset { #CHOIX 3
     Clear-Host
     Start-Sleep -Milliseconds 200
-    Write-Host "=== [3] MODIFIER UN CASQUE MANUELLEMENT ===" -BackgroundColor DarkCyan
+    Write-Host $msg.ModifyHeadsetManually -BackgroundColor DarkCyan
 
     $headsets = @(Get-KnownHeadsets)
     if (-not $headsets -or $headsets.Count -eq 0) {
         Write-Log -Message "Aucun casque a modifier." -Level "WARNING"
-        Write-Host "Aucun casque a modifier." -ForegroundColor Yellow
+        Write-Host $msg.NoHeadsetToModify -ForegroundColor Yellow
         return
     }
 
     Show-HeadsetsTableColored
 
-    $idInput = Read-Host "Entrez l'ID du casque a modifier (ou 0 pour revenir au menu)"
+    $idInput = Read-Host $msg.EnterIDToModify
     if ($idInput -eq '0') {
         Write-Log "Retour au menu precedent depuis l'edition." -Level "INFO"
         return
@@ -240,23 +241,23 @@ function Show-SubMenu-EditHeadset { #CHOIX 3
 
     if (-not ($idInput -match '^\d+$') -or [int]$idInput -lt 1 -or [int]$idInput -gt $headsets.Count) {
         Write-Log "ID invalide saisi pour modification : $idInput" -Level "ERROR"
-        Write-Host "ID invalide. Veuillez recommencer." -ForegroundColor Red
+        Write-Host $msg.InvalidIDRetry -ForegroundColor Red
         return
     }
 
     # Liste des champs modifiables avec numeros
     $availableFields = @(
-        "1. Name",
-        "2. IPAddress",
-        "3. scrcpy_AutoRestart",
-        "4. Recording"
+        $msg.FieldName,
+        $msg.FieldIPAddress,
+        $msg.FieldScrcpyAutoRestart,
+        $msg.FieldRecording
     )
 
-    Write-Host "Champs modifiables :"
+    Write-Host $msg.ModifiableFields
     $availableFields | ForEach-Object { Write-Host $_ }
 
     # Demander a l'utilisateur de saisir le numero du champ
-    $fieldNum = Read-Host "Entrez le numero du champ a modifier (1-6)"
+    $fieldNum = Read-Host $msg.EnterFieldNumber
     if ($fieldNum -eq '1') {
         $field = "Name"
     } elseif ($fieldNum -eq '2') {
@@ -269,24 +270,24 @@ function Show-SubMenu-EditHeadset { #CHOIX 3
         $field = "SerialNumber"
     } else {
         Write-Log "Numero de champ invalide saisi : $fieldNum" -Level "ERROR"
-        Write-Host "Numero de champ invalide. Veuillez recommencer." -ForegroundColor Red
+        Write-Host $msg.InvalidFieldNumber -ForegroundColor Red
         return
     }
 
     if ($field -in @("scrcpy_AutoRestart", "Record")) {
         $currentValue = ($headsets | Where-Object { $_.ID -eq [int]$idInput }).$field
-        Write-Host "Valeur actuelle de '$field' : $currentValue"
-        $newValueInput = Read-Host "Entrez la nouvelle valeur pour '$field' (True/False)"
+        Write-Host ($msg.CurrentValue -f $field, $currentValue)
+        $newValueInput = Read-Host ($msg.EnterNewValueBool -f $field)
         if ($newValueInput -in @("True", "true", "False", "false")) {
             $newValue = [System.Convert]::ToBoolean($newValueInput)
         } else {
             Write-Log "Valeur invalide pour le champ boolean '$field' : $newValueInput" -Level "ERROR"
-            Write-Host "Valeur invalide. Veuillez entrer True ou False." -ForegroundColor Red
+            Write-Host $msg.InvalidBoolValue -ForegroundColor Red
             retourn
         }
     } else {
         # Demander la nouvelle valeur pour le champ selectionne
-        $newValue = Read-Host "Nouvelle valeur pour le champ '$field'"
+        $newValue = Read-Host ($msg.EnterNewValue -f $field)
     }
     
 
@@ -305,25 +306,25 @@ function Show-SubMenu-RemoveHeadset {
         return
     }
 
-    Write-Host "=== [3] SUPPRESSION D'UN CASQUE ===" -BackgroundColor DarkMagenta
+    Write-Host $msg.RemoveHeadsetTitle -BackgroundColor DarkMagenta
     Show-HeadsetsTableColored
-    Write-Host "`t [1-$($headsets.Count)] : Saisir l'ID du casque a supprimer "
-    Write-Host "`t ALL : Supprimer TOUS les casques"
-    Write-Host "`t 0   : Revenir au menu precedent"
+    Write-Host ($msg.EnterIDToDelete -f $headsets.Count)
+    Write-Host $msg.DeleteAll
+    Write-Host $msg.ReturnPreviousOption
     # Demander a l'utilisateur de saisir un ID ou 'ALL' ou '0' pour revenir
     $userInput = $(Read-Host " Votre choix >>").ToUpper() #ToUpper = Convertir l'entree de l'utilisateur en majuscule pour la comparaison insensible a la casse
 
     # Si l'utilisateur entre 'ALL', supprimer tous les casques
     if ($userInput -eq 'ALL') {
         # Demander une confirmation avant de supprimer tous les casques
-        $confirmation = $(Read-Host "Êtes-vous sûr de vouloir supprimer tous les casques ? (y/n)").ToUpper()
+        $confirmation = $(Read-Host $msg.ConfirmDeleteAll).ToUpper()
         if ($confirmation -eq 'Y') {
             # Supprimer tous les casques en appelant Remove-KnownHeadset sans specifier de criteres
             Clear-Content -Path $global:knownHeadsetsFilePath -Force
-            Write-Log -Message "Tous les casques ont ete supprimes du fichier." -Level "INFO"
-            Write-Host "Tous les casques ont ete supprimes" -ForegroundColor green
+            Write-Log -Message $msg.AllDeleted -Level "INFO"
+            Write-Host $msg.AllDeletedMsg -ForegroundColor green
         } else {
-            Write-Log -Message "Suppression annulee." -Level "INFO"
+            Write-Log -Message $msg.DeletionCancelled -Level "INFO"
         }
     }
     # Si l'utilisateur entre '0', revenir au menu precedent
@@ -335,46 +336,46 @@ function Show-SubMenu-RemoveHeadset {
         Remove-Headset -ID $userInput
     }
     else {
-        Write-Log -Message "ID invalide ou option non reconnue. Veuillez entrer un ID valide, 'ALL' ou '0'." -Level "ERROR"
+        Write-Log -Message $msg.InvalidIDOrOption -Level "ERROR"
     }
 } # OK
 
 function Show-SubMenu-ManageHeadset { #CHOIX 4
     Clear-Host
     Start-Sleep -Milliseconds 200
-    Write-Host "=== [4] GESTION D'UN CASQUE ===" -BackgroundColor Green -ForegroundColor DarkBlue
-    Write-Host "`t 1. Installer l'application Oculus Wifi ADB sur un casque (USB + mode developpeur obligatoire)"
-    Write-Host "`t 2. Activer le Wifi ADB sur un casque uniquement (USB + mode developpeur obligatoire)"
-    Write-Host "`t 3. Installation d'une application (Not available)"
-    Write-Host "`t 4. Lancement d'une application dans le casque(Not available)"
-    Write-Host "`t 5. Kill d'une application dans le casque (Not available)"
-    Write-Host "`t 6. Desinstallation d'une application dans le casque (Not available)"
+    Write-Host $msg.ManageHeadset -BackgroundColor Green -ForegroundColor DarkBlue
+    Write-Host $msg.InstallOculusApp
+    Write-Host $msg.EnableWifiADBOnly
+    Write-Host $msg.InstallApp
+    Write-Host $msg.LaunchApp
+    Write-Host $msg.KillApp
+    Write-Host $msg.UninstallApp
 
-    Write-Host "`t 0. Revenir au menu precedent"
-    $userInput = $(Read-Host " Votre choix >>").ToUpper() #ToUpper = Convertir l'entree de l'utilisateur en majuscule pour la comparaison insensible a la casse
+    Write-Host $msg.ReturnPreviousMenu
+    $userInput = $(Read-Host $msg.YourChoice).ToUpper() #ToUpper = Convertir l'entree de l'utilisateur en majuscule pour la comparaison insensible a la casse
 
     if ($userInput -eq '1') {
-        Write-Host "== INSTALLATION DE L'APPLICATION OCULUS WIFI ADB (USB CONNECTION REQUISE) =="
+        Write-Host $msg.InstallOculusTitle
         Install-Apk-OculusWirelessAdb
     }
     
     elseif ($userInput -eq '2') {
-        Write-Host "== DEMARRAGE DU WIFI ADB (USB CONNECTION REQUISE) =="
+        Write-Host $msg.StartWifiADB
         Enable-WiFiADB
     }
     elseif ($userInput -in ('3','4','5','6')) {
-        Write-Host "== GESTIONNAIRE D'APPLICATION =="
-        Write-Log "Cette fonctionnalite n'est pas encore developpee" -Level WARNING
+        Write-Host $msg.AppManager
+        Write-Log $msg.NotDeveloped -Level WARNING
                     #list headsets
                     #create a function get-headsetInstalledApps
                     #create a function start-headsetInstalledApp
     }
     elseif ($userInput -eq '0') {
-        Write-Log -Message "Retour au menu precedent." -Level "INFO"
+        Write-Log -Message $msg.ReturnPrevious -Level "INFO"
     }
     else {
-        Write-Log -Message "0ption non reconnue. Veuillez entrer un ID valide, ou '0'." -Level "ERROR"
-        Write-Log -Message "Retour au menu principale" -Level "INFO"
+        Write-Log -Message $msg.UnrecognizedOption -Level "ERROR"
+        Write-Log -Message $msg.ReturnMainMenu -Level "INFO"
     }
 } # TODO
 
@@ -383,19 +384,19 @@ function Show-SubMenu-scrcpyTracking { #CHOIX 5
     $headsets = @(Get-KnownHeadsets)
 
     Start-Sleep -Milliseconds 200
-    Write-Host "=== [5] SWITCH DU SUIVI DES FENÊTRES SCRCPY ===" -ForegroundColor Cyan
+    Write-Host $msg.SwitchScrcpyTracking -ForegroundColor Cyan
     #Write-Host "Menu désactivé pour le moment !"
-    Write-Host "Saisir le numero du casque a modifier"
+    Write-Host $msg.EnterNumberToModify
     #Write-Host "1. Activer le restart automatique des scrcpy"
     #Write-Host "2. Desactiver le restart automatique des scrcpy"
     #Write-Host "3. Lancer un monitoring actif des fenêtres lancees"
     
     if ($headsets.Count -eq 0) {
-        Write-Host "Aucun casque trouve dans le fichier de casques connus." -ForegroundColor Yellow
+        Write-Host $msg.NoHeadsetInFile -ForegroundColor Yellow
     }
     else {
-        write-host "[ID] `t NAME `t`t AutoRestart"
-        Write-Host "------------------------------------------"
+        write-host $msg.IDNameAutoRestart
+        Write-Host $msg.Separator
         $headsets | ForEach-Object {
             $autoRestartText = $_.scrcpy_AutoRestart
             $autoRestartColor = if ($autoRestartText -eq $true) { "Green" } else { "Red" }
@@ -404,24 +405,24 @@ function Show-SubMenu-scrcpyTracking { #CHOIX 5
             Write-Host $autoRestartText -ForegroundColor $autoRestartColor
         }
     }
-    Write-Host "0. Retour"
+    Write-Host $msg.Return
     Write-Host ""
     
-    $choice = Read-Host "Choix"
+    $choice = Read-Host $msg.Choice
 
     if ($choice -in $headsets.ID){
         if ($headsets[$choice-1].scrcpy_AutoRestart -eq $true) {
-            Write-Log -Message "Desactivation du suivi automatique des scrcpy pour le casque ID $choice ($($headsets[$choice-1].Name))." -Level "INFO"
+            Write-Log -Message ($msg.DeactivateAutoTracking -f $choice, $headsets[$choice-1].Name) -Level "INFO"
             $headsets[$choice-1].scrcpy_AutoRestart = $false
         } else {
-            Write-Log -Message "Activation du suivi automatique des scrcpy pour le casque ID $choice ($($headsets[$choice-1].Name))." -Level "INFO"
+            Write-Log -Message ($msg.ActivateAutoTracking -f $choice, $headsets[$choice-1].Name) -Level "INFO"
             $headsets[$choice-1].scrcpy_AutoRestart = $true
         }
         # Sauvegarder les modifications dans le fichier csv
         Save-Headsets -headsets $headsets
     }
     else {
-        Write-Log -Message "Retour au menu precedent..." -Level "INFO"
+        Write-Log -Message $msg.ReturnPreviousDots -Level "INFO"
         Start-Sleep -seconds 2
         break 
     }
@@ -432,15 +433,15 @@ function Show-SubMenu-Recording { #CHOIX 6
     $headsets = @(Get-KnownHeadsets)
 
     Start-Sleep -Milliseconds 200
-    Write-Host "=== [6] SWITCH DU RECORDING DES CASQUES ===" -ForegroundColor Cyan
-    Write-Host "Saisir le numero du casque a modifier"
+    Write-Host $msg.SwitchRecording -ForegroundColor Cyan
+    Write-Host $msg.EnterNumberToModify
     
     if ($headsets.Count -eq 0) {
-        Write-Host "Aucun casque trouve dans le fichier de casques connus." -ForegroundColor Yellow
+        Write-Host $msg.NoHeadsetInFile -ForegroundColor Yellow
     }
     else {
-        write-host "[ID] `t NAME `t`t Recording"
-        Write-Host "------------------------------------------"
+        write-host $msg.IDNameRecording
+        Write-Host $msg.Separator
         $headsets | ForEach-Object {
             $recordingText = $_.Record
             $recordingColor = if ($recordingText -eq $true) { "Green" } else { "Red" }
@@ -449,24 +450,24 @@ function Show-SubMenu-Recording { #CHOIX 6
             Write-Host $recordingText -ForegroundColor $recordingColor
         }
     }
-    Write-Host "0. Retour"
+    Write-Host $msg.Return
     Write-Host ""
     
-    $choice = Read-Host "Choix"
+    $choice = Read-Host $msg.Choice
 
     if ($choice -in $headsets.ID){
         if ($headsets[$choice-1].Record -eq $true) {
-            Write-Log -Message "Desactivation du recording pour le casque ID $choice ($($headsets[$choice-1].Name))." -Level "INFO"
+            Write-Log -Message ($msg.DeactivateRecording -f $choice, $headsets[$choice-1].Name) -Level "INFO"
             $headsets[$choice-1].Record = $false
         } else {
-            Write-Log -Message "Activation du recording pour le casque ID $choice ($($headsets[$choice-1].Name))." -Level "INFO"
+            Write-Log -Message ($msg.ActivateRecording -f $choice, $headsets[$choice-1].Name) -Level "INFO"
             $headsets[$choice-1].Record = $true
         }
         # Sauvegarder les modifications dans le fichier csv
         Save-Headsets -headsets $headsets
     }
     else {
-        Write-Log -Message "Retour au menu precedent..." -Level "INFO"
+        Write-Log -Message $msg.ReturnPreviousDots -Level "INFO"
         Start-Sleep -seconds 2
         break 
     }
@@ -476,47 +477,47 @@ function Show-SubMenu-Recording { #CHOIX 6
 function Show-SubMenu-FilesAndFolders{
     Clear-Host
     Start-Sleep -Milliseconds 200
-    Write-Host "=== GESTION DES FICHIERS ET DOSSIERS ===" -BackgroundColor DarkCyan -ForegroundColor White
-    Write-Host "`t 1. Ouvrir le dossier des enregistrements"
-    Write-Host "`t 2. Ouvrir le dossier des logs"
-    Write-Host "`t 3. Ouvrir le dossier de l'application"
-    Write-Host "`t 4. Editer le fichier de configuration"
-    Write-Host "`t 5. Editer le fichier de config des casques connus"
+    Write-Host $msg.FilesAndFoldersManagement -BackgroundColor DarkCyan -ForegroundColor White
+    Write-Host $msg.OpenRecordingsFolder
+    Write-Host $msg.OpenLogsFolder
+    Write-Host $msg.OpenAppFolder
+    Write-Host $msg.EditConfigFile
+    Write-Host $msg.EditKnownHeadsetsConfig
 
-    Write-Host "`t 0. Revenir au menu precedent"
-    $userInput = $(Read-Host " Votre choix >>").ToUpper() #ToUpper = Convertir l'entree de l'utilisateur en majuscule pour la comparaison insensible a la casse
+    Write-Host $msg.ReturnPreviousMenu
+    $userInput = $(Read-Host $msg.YourChoice).ToUpper() #ToUpper = Convertir l'entree de l'utilisateur en majuscule pour la comparaison insensible a la casse
     switch ($userInput) {
         '1' {
-            Write-Log -Message "Ouverture du dossier des enregistrements." -Level "INFO"
+            Write-Log -Message $msg.OpenRecordings -Level "INFO"
             Open-Folder -folderPath $global:scrcpyRecordFolder
         }
 
         '2' {
-            Write-Log -Message "Ouverture du dossier des logs." -Level "INFO"
+            Write-Log -Message $msg.OpenLogs -Level "INFO"
             Open-Folder -folderPath $global:logFolder
         }
 
         '3' {
-            Write-Log -Message "Ouverture du dossier de l'application." -Level "INFO"
+            Write-Log -Message $msg.OpenApp -Level "INFO"
             Open-Folder -folderPath $global:scriptPath
         }
         '4' {
-            Write-Log -Message "Ouverture du fichier de configuration." -Level "INFO"
+            Write-Log -Message $msg.OpenConfig -Level "INFO"
             Open-File -filePath $global:configFilePath
         }
         '5' {
-            Write-Log -Message "Ouverture du fichier de configuration des casques connus." -Level "INFO"
+            Write-Log -Message $msg.OpenKnownHeadsets -Level "INFO"
             Open-File -filePath $global:knownHeadsetsFilePath
         }
         '0' {
-            Write-Log -Message "Retour au menu precedent..." -Level "INFO"
+            Write-Log -Message $msg.ReturnPreviousDots -Level "INFO"
             Start-Sleep -seconds 2
             break 
         }
 
         default {
             Write-Log -Message "Option invalide saisie dans le menu de gestion des fichiers." -Level "ERROR"
-            Write-Host "Option invalide. Veuillez entrer 1, 2, 3, 4, 5 ou 0." -ForegroundColor Yellow
+            Write-Host $msg.InvalidOptionFiles -ForegroundColor Yellow
         }
     }
 }
@@ -548,7 +549,7 @@ function Open-File {
     if (Test-Path -Path $filePath) {
         Start-Process notepad.exe -ArgumentList "`"$filePath`""
     } else {
-        Write-Log -Message "Le fichier '$filePath' n'existe pas." -Level "ERROR"
-        Write-Host "Le fichier '$filePath' n'existe pas." -ForegroundColor Red
+        Write-Log -Message ($msg.FileNotExist -f $filePath) -Level "ERROR"
+        Write-Host ($msg.FileNotExist -f $filePath) -ForegroundColor Red
     }
 }
