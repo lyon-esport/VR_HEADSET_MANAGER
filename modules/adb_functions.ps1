@@ -2,13 +2,15 @@
 # CONFIGURE QUEST HEADSET USING ADB #
 #####################################
 
+Import-LocalizedData -BindingVariable msg -FileName adb_functions
+
 <#
 function Install-apk-oculuswirelessadb {
-    Write-Log "Cette fonctionnalite n'a pas encore ete developpee" -Level WARNING
+    Write-Log ($msg.FeatureNotImplemented) -Level WARNING
     #Fonction a ecrire - Copie en vrac des actions a realiser en ADB USB
-    # Tester la connexion concurrente en USB si d'autres casques sont deja connectes en WIFI
-    # Installer l'appli et la lancer dans le casque
-    # Si le casque est deja connecte, 
+    # Test concurrent USB connection if other headsets are already connected via WiFi
+    # Install the app and launch it on the headset
+    # If the headset is already connected,
 
     # Usefull adb commands : https://gist.github.com/Pulimet/5013acf2cd5b28e55036c82c91bd56d8
     
@@ -24,7 +26,7 @@ function Install-apk-oculuswirelessadb {
     .\adb.exe devices -l
     .\adb connect 192.168.1.253:5555
     if (((.\adb.exe devices | Select-String $adb_device -AllMatches).Matches.Count) -lt 1) {
-       Write-Log "Pas de casque detecte a ajouter !"  
+       Write-Log ($msg.NoHeadsetToAdd) -Level WARNING
     }
     elseif (((.\adb.exe devices | Select-String $adb_device -AllMatches).Matches.Count) -gt 1)
 
@@ -68,24 +70,24 @@ function Start-AdbServer {
             while ($i -lt 5){
                 $adbProcess = Get-Process -Name "adb" -ErrorAction SilentlyContinue
                 if (-not $adbProcess) {
-                    Write-Log "ADB server not running. Starting server..." WARNING
+                    Write-Log ($msg.ADBServerNotRunning) -Level WARNING
                     $null = Start-Process -FilePath $adbPath -ArgumentList "start-server" -NoNewWindow
                     Start-Sleep -Seconds 3
                 }
                 else{
-                    Write-Log "ADB server started successfully" SUCCESS
+                    Write-Log ($msg.ADBServerStarted) -Level SUCCESS
                     return $true
                 }
                 $i++
             }
         }
         else {
-            Write-Log "ADB server is already running (PID: $($adbProcess.Id))" -Level INFO
+            Write-Log ($msg.ADBServerAlreadyRunning -f $($adbProcess.Id)) -Level INFO
             return $true
         }
     }
     catch {
-        Write-Log "Failed to start ADB server: $_" -Level ERROR
+        Write-Log ($msg.FailedStartADBServer -f $_) -Level ERROR
         return $false
     }
 }
@@ -96,12 +98,12 @@ function Start-AdbServer {
 function Install-Apk-OculusWirelessAdb {
     <#
     .SYNOPSIS
-    Installe l'APK WiFi ADB apres verification de sa presence
+    Installs the WiFi ADB APK after verifying its presence
     
     .DESCRIPTION
-    - Verifie si l'APK est deja installe
-    - Installation uniquement si necessaire
-    - Maintenance des memes permissions critiques
+    - Checks if the APK is already installed
+    - Installs only if necessary
+    - Maintains the same critical permissions
     #>
 
     $adb = $global:adbPath
@@ -109,29 +111,29 @@ function Install-Apk-OculusWirelessAdb {
     $packageName = $global:ADBWirelessActivatorPackageName
     # 1. Verification prealable
     if (-not (Test-Path $adb)) {
-        Write-Log "ADB introuvable dans $global:adbFolder" -Level ERROR
+        Write-Log ($msg.ADBNotFound -f $global:adbFolder) -Level ERROR
         return $false
     }
 
     if (-not (Test-Path $apkPath)) {
-        Write-Log "APK introuvable : $apkPath" -Level ERROR
+        Write-Log ($msg.ApkNotFound -f $apkPath) -Level ERROR
         return $false
     }
 
-    # 2. Detection et verification du casque connecte en USB
+    # 2. Detect and verify headset connected via USB
     #$devices = & $adbPath devices -l | Where-Object { $_ -match '\tdevice$' -and $_ -match '\tusb$' }
 
     & $adb usb
     $devices = & $adb devices | Where-Object { $_ -match '\tdevice$' } 
     if (-not $devices) {
-        Write-Log "Aucun casque detecte" -Level WARNING
+        Write-Log ($msg.NoHeadsetDetected) -Level WARNING
         return $false
     }
     
     $deviceId = ($devices -split '\t')[0]
-    # Recuperation du modele :
+    # Retrieve the model:
     $headsetModel = & $adb -s $deviceId shell getprop ro.product.model
-    Write-Log "Casque detecte : $headsetModel [ $deviceId ]" -Level INFO
+    Write-Log ($msg.HeadsetDetected -f $headsetModel, $deviceId) -Level INFO
 
     try {
 
@@ -140,41 +142,41 @@ function Install-Apk-OculusWirelessAdb {
         $isInstalled = & $adb -s $deviceId shell pm list packages $packageName
         if ($isInstalled) {
             $version = (& $adb -s $deviceId shell dumpsys package $packageName| Select-String "versionName") -split '=' | Select-Object -Last 1
-            Write-Log "L'APK $packageName est deja installe en version $version" -Level INFO 
-            Write-Log "Reinstallation" -Level INFO 
+            Write-Log ($msg.ApkAlreadyInstalled -f $packageName, $version) -Level INFO 
+            Write-Log ($msg.Reinstalling) -Level INFO 
         }
 
         else {
-            # 4. Installation si absent
-            Write-Log "Installation de l'APK..." -Level INFO
+            # 4. Installation if missing
+            Write-Log ($msg.InstallingApk) -Level INFO
             & $adb -s $deviceId install -r $apkPath
             if ($LASTEXITCODE -ne 0) {
-                Write-Log "echec installation APK" -Level ERROR
+                Write-Log ($msg.ApkInstallFailed) -Level ERROR
                 Pause
             }
         }
-        # Application des permissions critiques
-        Write-Log "Configuration des permissions..." -Level INFO
+        # Apply critical permissions
+        Write-Log ($msg.ConfiguringPermissions) -Level INFO
         & $adb -s $deviceId shell pm grant $packageName android.permission.WRITE_SECURE_SETTINGS
         #& $adb -s $deviceId shell pm grant $packageName android.permission.READ_LOGS
-        # Lancement de l'application dans le casque
+        # Launch app on headset
         & $adb shell am start -n tdg.oculuswirelessadb/.MainActivity
 
-        # 5. Activation TCP/IP (dans tous les cas)
-        Write-Log "Activation du mode WiFi ADB..." -Level INFO
+        # 5. Activate TCP/IP (always)
+        Write-Log ($msg.ActivatingWifiAdbMode) -Level INFO
         & $adb -s $deviceId tcpip 5555
         Start-Sleep -Seconds 2
 
         return $true
     }
     catch {deviceId
-        Write-Log "ERREUR : $_" -Level ERROR
+        Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
         return $false
     }
 }
 
 function Test-AdbDevicesAuthorization {
-    # Verifie si un casque est connecte et qu'il est bien autorise
+    # Checks if a headset is connected and authorized for USB debugging
     param (
         [string]$adb = $global:adbPath
     )
@@ -189,24 +191,24 @@ function Test-AdbDevicesAuthorization {
         # Analyse de la sortie ADB
         foreach ($line in $devices) {
             if ($line -like "*unauthorized*") {
-                Write-Log "ADB Debug USB non autorisé : Acceptez le debug USB dans le casque" -Level WARNING
+                Write-Log ($msg.UsbDebugNotAuthorized) -Level WARNING
                 $unauthorizedFound = $true
             }
         }
 
         if ($unauthorizedFound) {
             $attempt++
-            $response = Read-Host "`nRecommencer ? [Entree pour reessayer ($attempt/$maxAttempts) ; 0 pour quitter]"
+            $response = Read-Host ($msg.RetryPrompt -f $attempt, $maxAttempts)
             if ($response -eq '0') {
-                Write-Log "Annulation demandee par l'utilisateur" -Level INFO
+                Write-Log ($msg.UserCancelled) -Level INFO
                 return $false
             }
             continue
         }
 
         if (-not $devices -or $devices -like "*daemon*") {
-            Write-Log "Aucun casque detecte en USB ou probleme de demon ADB" -Level WARNING
-            Write-Log "--> Le casque est-il en mode développeur ?" -Level WARNING
+            Write-Log ($msg.NoUsbHeadsetOrDaemonIssue) -Level WARNING
+            Write-Log ($msg.DeveloperModeHint) -Level WARNING
             return $false
         }
 
@@ -214,23 +216,23 @@ function Test-AdbDevicesAuthorization {
         return $true
     }
 
-    Write-Log "Nombre maximum de tentatives atteint ($maxAttempts)" -Level ERROR
+    Write-Log ($msg.MaxAttemptsReached -f $maxAttempts) -Level ERROR
     return $false
 }
 
 function Enable-WiFiADB {
     <#
     .SYNOPSIS
-    Active le mode WiFi ADB sur un casque Meta Quest connecte en USB
+    Enables WiFi ADB mode on a Meta Quest headset connected via USB
 
     .DESCRIPTION
-    - Detecte un casque connecte en USB
-    - Recupere son adresse IP WiFi
-    - Active le mode TCP/IP
-    - Verifie l'ouverture du port
+    - Detects a headset connected via USB
+    - Retrieves its WiFi IP address
+    - Enables TCP/IP mode
+    - Verifies the port is open
 
     .PARAMETER AdbPort
-    Port a utiliser pour ADB (defaut: 5555)
+    Port to use for ADB (default: 5555)
 
     .EXAMPLE
     Enable-WiFiADB -AdbPort 5555
@@ -245,58 +247,58 @@ function Enable-WiFiADB {
         
     )
 
-    # 1. Verification initiale
+    # 1. Initial verification
     if (-not (Test-Path $adbPath)) {
-        Write-Log "ADB executable not found at $adb" -Level ERROR
+        Write-Log ($msg.ADBExecutableNotFound -f $adb) -Level ERROR
         return $false
     }
 
-    Write-Log "Searching for USB-connected headset..." -Level INFO
+    Write-Log ($msg.SearchingUsbHeadset) -Level INFO
     try {
         
         # 2. USB Device Detection
         $usbDevice = Test-UsbAdbDevice -adb $adb
         if (-not $usbDevice) {
-            Write-Log "No USB ADB device detected" -Level ERROR
-            Write-Log ">> Back to main menu..." -Level INFO
+            Write-Log ($msg.NoUsbAdbDevice) -Level ERROR
+            Write-Log ($msg.BackToMainMenu) -Level INFO
             Start-Sleep -Seconds 3
             return $false
         }
 
         # 3. Check if the device is authorized for USB debugging
-        if (-not (Test-AdbDevicesAuthorization)) { # Vérifier si ça marche bien uniquement en USB si d'autres casques sont déjà connectés en ADB Wifi
+        if (-not (Test-AdbDevicesAuthorization)) { # Ensure this works only via USB when other headsets are connected via ADB WiFi
             return $false
         }
 
         $deviceId = ($devices -split '\t')[0]
-        # Recuperation du modele :
+        # Retrieve the model:
         $headsetModel = & $adb -s $deviceId shell getprop ro.product.model
-        Write-Log "Casque detecte : $headsetModel [ $deviceId ]" -Level INFO
+        Write-Log ($msg.HeadsetDetected -f $headsetModel, $deviceId) -Level INFO
 
-        # Étape 3: Vérification du SSID 
+        # Step 3: Check SSID
         #$wifiInfo = & $adb -s $deviceId shell "dumpsys wifi" > ../../WifiDump.txt
         $wifiInfo = & $adb -s $deviceId shell "dumpsys wifi | grep -E 'mWifiInfo'"
 
         if ($wifiInfo -match 'SSID: "([^"]+)"') {
-            $currentSSID = $matches[1]  # Retourne LES-VR-6G sans les guillemets
-            Write-Log "Currently connected to SSID : $ssid" -Level INFO
+            $currentSSID = $matches[1]  # Returns the SSID without quotes
+            Write-Log ($msg.CurrentlyConnectedSsid -f $currentSSID) -Level INFO
         }
 
-        # Étape 4: Vérification du SSID connecté
+        # Step 4: Verify the connected SSID
         if ($currentSSID -notmatch [regex]::Escape($wifi_ssid)) {
-        Write-Warning "Le casque n'est pas connecte au SSID $wifi_ssid. Forcage de la connexion..." 
+            Write-Warning ($msg.HeadsetNotConnectedToSsid -f $wifi_ssid)
 
             try {
-                # Connexion au nouveau réseau avec option MAC fixe
+                # Connect to new network using fixed MAC option
 
                 & $adb -s $deviceId shell "svc wifi enable"
                 & $adb -s $deviceId shell cmd -w wifi connect-network $wifi_ssid wpa2  $wifi_pwd -r none
 
-                # Activation du réseau
-                Write-Log "Activation du réseau WIFI $wifi_ssid sur le casque $headsetModel [$deviceId]"
+                # Activate network
+                Write-Log ($msg.ActivatingWifiNetwork -f $wifi_ssid, $headsetModel, $deviceId) -Level INFO
                 Start-Sleep -Seconds 5
             } catch {
-                Write-Log "Echec de la configuration WiFi: $_" ERROR
+                Write-Log ($msg.WifiConfigFailed -f $_) -Level ERROR
                 return $false
             }
         }
@@ -305,62 +307,62 @@ function Enable-WiFiADB {
 
 
 
-        # 3. Recuperation de l'IP WiFi
-        Write-Log "Recuperation de l'adresse IP..." -Level INFO
+        # 3. Retrieve WiFi IP
+        Write-Log ($msg.RetrievingIp) -Level INFO
         $ipInfo = & $adb -s $deviceId shell ip -f inet addr show wlan0 | 
                   Select-String 'inet' | 
                   ForEach-Object { ($_ -split '\s+')[2] -split '/' | Select-Object -First 1 }
 
         if (-not $ipInfo) {
-            Write-Log "Impossible de recuperer l'IP. Verifiez la connexion WiFi du casque." -Level ERROR
+            Write-Log ($msg.UnableRetrieveIp) -Level ERROR
             return $false
         }
 
-        Write-Log "IP WiFi detectee: $ipInfo" -Level INFO
+        Write-Log ($msg.WifiIpDetected -f $ipInfo) -Level INFO
 
-        # 4. Installation de Install-Apk-OculusWirelessAdb
-        $answer = Read-Host "OPTIONNEL : Voulez-vous installer OculusWirelessAdb ?(Y/n)"
+        # 4. Install OculusWirelessAdb APK
+        $answer = Read-Host $msg.UsbInstallPrompt
         if ($answer.ToUpper() -eq "Y")
             {Install-Apk-OculusWirelessAdb}
         else {
         # 5. Activation du mode TCP/IP
 
-            Write-Log "Activation du mode WiFi ADB sur le port $AdbPort..." -Level INFO
+            Write-Log ($msg.ActivatingWifiAdbPort -f $AdbPort) -Level INFO
             & $adb -s $deviceId tcpip $AdbPort
         }
-        Start-Sleep -Seconds 5  # Attente de l'initialisation
+        Start-Sleep -Seconds 5  # Wait for initialization
         # 6. Verification du port
-        Write-Log "Verification de l'ouverture du port $AdbPort..." -Level INFO
+        Write-Log ($msg.CheckingPortOpen -f $AdbPort) -Level INFO
         $portTest = $(Test-Port -hostname $ipInfo -port $AdbPort).open
         
         if ($portTest) {
-            Write-Log "Port $AdbPort ouvert avec succes sur $ipInfo" -Level SUCCESS
+            Write-Log ($msg.PortOpened -f $AdbPort, $ipInfo) -Level SUCCESS
             
             $knownHeadsets = Get-KnownHeadsets
             if ($knownHeadsets.IPAddress -contains $ipInfo){
-                Write-Log "IP du casque déjà présente dans la liste des casques connus"
+                Write-Log ($msg.IpAlreadyKnown) -Level INFO
             }
             else {
-                $choice = (Read-Host "Voulez-vous l'ajouter aux casques connus ? (Y/N)").ToUpper()
+                $choice = (Read-Host $msg.AddToKnownPrompt).ToUpper()
 
                 switch ($choice) {
-                    'Y' {   Write-Host "Ajout du casque a la liste" -BackgroundColor green
-                            $headsetName = Read-Host "Quel nom voulez-vous lui donner ?"
+                    'Y' {   Write-Log ($msg.AddingHeadsetToList) -Level INFO
+                            $headsetName = Read-Host ($msg.HeadsetNamePrompt)
                             Add-Headset -Name $headsetName -IPAddress $ipInfo
                         }
                     default {
-                        Write-Host ">> Retour au menu principal" -ForegroundColor green
+                        Write-Log ($msg.ReturnToMainMenu) -Level INFO
                     }
                 }
             }
         }
         else {
-            Write-Log "echec d'ouverture du port $AdbPort" -Level ERROR
+            Write-Log ($msg.PortOpenFailed -f $AdbPort) -Level ERROR
             return $false
         }
     }
     catch {
-        Write-Log "ERREUR: $_" -Level ERROR
+        Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
         return $false
     }
 }
@@ -375,7 +377,7 @@ function Test-UsbAdbDevice {
 
 
     if (-not (Test-Path $adb)) {
-        Write-Log -Message "ADB executable not found at $adbPath" -Level "ERROR"
+        Write-Log ($msg.ADBExecutableNotFound -f $adb) -Level ERROR
         return $false
     }
 
@@ -386,22 +388,21 @@ function Test-UsbAdbDevice {
                 Where-Object { $_ -match "`tdevice$" -and $_ -notmatch ":" }
 
             if ($usbDevice) {
-                Write-Log -Message "USB ADB device detected." -Level "SUCCESS"
+                Write-Log ($msg.UsbAdbDeviceDetected) -Level SUCCESS
                 return $usbDevice
             }
         }
         catch {
-            Write-Log -Message "ADB execution failed: $($_.Exception.Message)" -Level "ERROR"
-        }
+                Write-Log ($msg.ADBExecutionFailed -f $_.Exception.Message) -Level ERROR
 
-        Write-Host "No USB headset detected. Connect it via USB and press ENTER (Q to quit)."
+        Write-Log ($msg.NoUsbHeadsetDetectedPrompt) -Level INFO
         if ((Read-Host) -match "^[Qq]$") {
-            Write-Log -Message "User cancelled USB detection." -Level "INFO"
+            Write-Log ($msg.UserCancelledUsbDetection) -Level INFO
             return $false
         }
     }
 
-    Write-Log -Message "No USB ADB device found after $MaxAttempts attempts." -Level "ERROR"
+    Write-Log ($msg.NoUsbAdbDeviceFound -f $MaxAttempts) -Level ERROR
     return $false
 }
 
@@ -415,15 +416,15 @@ function Get-HeadsetModel {
     )
     $DeviceId = $headsetIP+":"+$AdbPort
 
-    # 1. Verification initiale
+    # 1. Initial verification
     if (-not (Test-Path $adbPath)) {
-        Write-Log "ADB executable not found at $adb" -Level ERROR
+        Write-Log ($msg.ADBExecutableNotFound -f $adbPath) -Level ERROR
         return $false
     }
 
     $connectedDevice = & $adb devices | Select-String $headsetIP -AllMatches
         if ($connectedDevice.Matches.Count -lt 1) {
-            Write-Log -Message "Aucune connexion ADB active pour $headsetIP, tentative de connexion..." -Level "INFO"
+            Write-Log -Message ($msg.NoActiveAdbConnection -f $headsetIP) -Level "INFO"
             & $adb connect $DeviceId | Out-Null
         }
         $headsetModel = (& $adb -s $DeviceId shell getprop ro.product.model).Trim() #.Trim() pour nettoyer la chaine et enlever les retours a la ligne s'il y en a
@@ -460,24 +461,24 @@ function Get-QuestControllerBatteryStatus {
     }
 
     try {
-        Write-Log -Message "Querying controller status via OVRRemoteService for $DeviceId" -Level DEBUG
+        Write-Log ($msg.QueryControllerStatus -f $DeviceId) -Level DEBUG
 
         # 1. init verification 
         if (-not (Test-Path $adbPath)) {
-            Write-Log "ADB executable not found at $adb" -Level ERROR
+            Write-Log ($msg.ADBExecutableNotFound -f $adb) -Level ERROR
             return $false
         }
 
         $connectedDevice = & $adb devices | Select-String $headsetIP -AllMatches
         if ($connectedDevice.Matches.Count -lt 1) {
-            Write-Log -Message "Aucune connexion ADB active pour $headsetIP, tentative de connexion..." -Level "INFO"
+            Write-Log -Message ($msg.NoActiveAdbConnection -f $headsetIP) -Level "INFO"
             & $adb connect $headsetIP | Out-Null
         }
 
         
         $dump = & $adb -s $DeviceId shell dumpsys OVRRemoteService 2>$null
         if (-not $dump) {
-            Write-Log -Message "No OVRRemoteService output for $DeviceId" -Level WARNING
+            Write-Log ($msg.ControllerStatusFailed -f "No output") -Level WARNING
             return $result
         }
 
@@ -500,14 +501,14 @@ function Get-QuestControllerBatteryStatus {
                     $result[$side].TrackingStatus = $Matches[1]
                 }
 
-                Write-Log -Message "Controller $side -> Battery=$($result[$side].Battery) Status=$($result[$side].Status) Tracking=$($result[$side].TrackingStatus)" -Level DEBUG
+                Write-Log ($msg.BatteryStatus -f $DeviceId, $result[$side].Battery, $result[$side].Charging, $result[$side].TempC) -Level DEBUG
             }
         }
 
         return $result
     }
     catch {
-        Write-Log -Message "Failed to retrieve controller status via OVRRemoteService: $($_.Exception.Message)" -Level ERROR
+        Write-Log ($msg.ControllerStatusFailed -f $_.Exception.Message) -Level ERROR
         return $result
     }
 }
@@ -534,12 +535,12 @@ function Get-HeadsetBatteryStatus {
     }
 
     try {
-        Write-Log -Message "Querying battery status for device $DeviceId" -Level DEBUG
+        Write-Log ($msg.BatteryStatusQuery -f $DeviceId) -Level DEBUG
 
         $batteryInfo = & $adb -s $DeviceId shell dumpsys battery 2>$null
 
         if (-not $batteryInfo) {
-            Write-Log -Message "No battery data returned by adb for $DeviceId" -Level WARNING
+            Write-Log ($msg.NoBatteryData -f $DeviceId) -Level WARNING
             return $null
         }
 
@@ -566,11 +567,11 @@ function Get-HeadsetBatteryStatus {
             )
         }
 
-        Write-Log -Message "Battery status for $DeviceId : Level=$($result.Level)% Charging=$($result.Charging) Temp=$($result.TempC)C" -Level INFO
+        Write-Log ($msg.BatteryStatus -f $DeviceId, $result.Level, $result.Charging, $result.TempC) -Level INFO
         return $result
     }
     catch {
-        Write-Log -Message "Failed to retrieve battery status for $DeviceId : $($_.Exception.Message)" -Level ERROR
+        Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
         return $null
     }
 }
@@ -589,10 +590,10 @@ function Disconnect-ADBConnections {
         }
         
         & $adb disconnect
-        Write-Log -Message "All ADB devices are now disconnected" -Level "INFO"
+        Write-Log ($msg.DisconnectingAll) -Level INFO
     }
     catch {
-        Write-Log -Message "Failed to disconnect ADB devices: $_" -Level "ERROR"
+        Write-Log ($msg.DisconnectFailed -f $_) -Level ERROR
         throw
     }
 }
