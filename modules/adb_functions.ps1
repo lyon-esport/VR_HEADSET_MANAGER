@@ -2,7 +2,18 @@
 # CONFIGURE QUEST HEADSET USING ADB #
 #####################################
 
+# Load localized data based on selected language
+$selectedCulture = $global:SelectedLanguage
+$modulePath = Split-Path $MyInvocation.MyCommand.Path
+$localizedFile = Join-Path $modulePath "$selectedCulture\adb_functions.psd1"
+if ($selectedCulture -ne 'en' -and -not (Test-Path $localizedFile)) {
+    Write-Log "Localized file for '$selectedCulture' not found, falling back to English." -Level WARNING
+    $selectedCulture = 'en'
+}
+$originalCulture = $PSUICulture
+$PSUICulture = $selectedCulture
 Import-LocalizedData -BindingVariable msg -FileName adb_functions
+$PSUICulture = $originalCulture
 
 <#
 function Install-apk-oculuswirelessadb {
@@ -286,7 +297,7 @@ function Enable-WiFiADB {
 
         # Step 4: Verify the connected SSID
         if ($currentSSID -notmatch [regex]::Escape($wifi_ssid)) {
-            Write-Warning ($msg.HeadsetNotConnectedToSsid -f $wifi_ssid)
+            Write-Log ($msg.HeadsetNotConnectedToSsid -f $wifi_ssid) -Level WARNING
 
             try {
                 # Connect to new network using fixed MAC option

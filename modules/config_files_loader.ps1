@@ -20,6 +20,8 @@ function Get-Config {
 
 
     # Charger les variables globales obligatoires a partir du fichier JSON
+    $global:SelectedLanguage = $configContent.language
+    Write-Host "DEBUG global:SelectedLanguage = $($global:SelectedLanguage)" -Level DEBUG
     $global:knownHeadsetsFile = $configContent.Paths.knownHeadsetsFile
     Write-Host "DEBUG global:knownHeadsetsFile = $($global:knownHeadsetsFile)" -ForegroundColor Magenta
     

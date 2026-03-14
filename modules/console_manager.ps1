@@ -1,5 +1,17 @@
 # Display the main menu
+
+# Load localized data based on selected language
+$selectedCulture = $global:SelectedLanguage
+$modulePath = Split-Path $MyInvocation.MyCommand.Path
+$localizedFile = Join-Path $modulePath "$selectedCulture\console_manager.psd1"
+if ($selectedCulture -ne 'en' -and -not (Test-Path $localizedFile)) {
+    Write-Log "Localized file for '$selectedCulture' not found, falling back to English." -Level WARNING
+    $selectedCulture = 'en'
+}
+$originalCulture = $PSUICulture
+$PSUICulture = $selectedCulture
 Import-LocalizedData -BindingVariable msg -FileName console_manager
+$PSUICulture = $originalCulture
 
 function Show-MainMenu {
     do {
