@@ -109,6 +109,22 @@ $moduleFiles = Get-ChildItem -Path $ModulesPath -Filter "*.ps1" -File |
     } else {
         Get-Config -ConfigFilePath $ConfigFilePath
         Write-Log "Configuration file $ConfigFilePath loaded successfully" -Level DEBUG
+
+        # Load centralized translations based on selected language
+        $translationsFolder = Join-Path $modulesPath "translations"
+        $translationsLang = Join-Path $translationsFolder "$($global:SelectedLanguage).psd1"
+        $translationsEn   = Join-Path $translationsFolder "en-US.psd1"
+        if (Test-Path $translationsLang) {
+            $global:msg = Import-PowerShellDataFile -Path $translationsLang
+        } elseif (Test-Path $translationsEn) {
+            if ($global:SelectedLanguage -ne 'en-US') {
+                Write-Host "Translations for '$($global:SelectedLanguage)' not found, falling back to English." -ForegroundColor Yellow
+            }
+            $global:msg = Import-PowerShellDataFile -Path $translationsEn
+        } else {
+            Write-Host "[WARNING] No translation file found in $translationsFolder" -ForegroundColor Yellow
+        }
+        Write-Log "Translations loaded for language: $($global:SelectedLanguage)" -Level DEBUG
         Write-Host "DEBUG global:knownHeadsetsFile = $($global:knownHeadsetsFile)" -ForegroundColor Magenta
         Write-Host "DEBUG global:knownHeadsetsFilePath = $($global:knownHeadsetsFilePath)" -ForegroundColor Magenta
     }
