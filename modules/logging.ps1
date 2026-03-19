@@ -53,9 +53,10 @@ function Write-Log {
                 $written = $true
                 break
             } catch {
-                if ($_ -match "en cours d'utilisation") {
-                    Start-Sleep -Milliseconds 200
+                if ($_.Exception.HResult -eq -2147024864 -or $_.Exception.GetType().Name -eq "IOException") { # ERROR_SHARING_VIOLATION if the file is already opened by another process
+                    Start-Sleep -Milliseconds 200 
                     $attempt++
+                }
                 } else {
                     throw
                 }

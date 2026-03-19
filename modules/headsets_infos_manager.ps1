@@ -2,7 +2,8 @@
 # MANAGE DETAILED INFOS OF KNOWN HEADSETS 
 #################
 
-function Test-VRMonitor {
+function Test-VRMonitor { #For tests purpose only
+Copilot: Check Status
 
     $job = Get-Job -Name "VRMonitor" 
     Receive-Job -Job $job
