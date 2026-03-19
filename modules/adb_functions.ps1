@@ -56,10 +56,10 @@ function Start-AdbServer {
     Checks if ADB server is running and starts it if needed using the specified adb.exe path.
     
     .EXAMPLE
-    Start-AdbServer -adbPath "C:\adb\adb.exe"
+    Start-AdbServer -adb "C:\adb\adb.exe"
     #>
     param (
-        [string]$adbPath = $global:adbPath
+        [string]$adb = $global:adbPath
     )
 
     try {
@@ -71,7 +71,7 @@ function Start-AdbServer {
                 $adbProcess = Get-Process -Name "adb" -ErrorAction SilentlyContinue
                 if (-not $adbProcess) {
                     Write-Log ($msg.ADBServerNotRunning) -Level WARNING
-                    $null = Start-Process -FilePath $adbPath -ArgumentList "start-server" -NoNewWindow
+                    $null = Start-Process -FilePath $adb -ArgumentList "start-server" -NoNewWindow
                     Start-Sleep -Seconds 3
                 }
                 else{
@@ -105,8 +105,10 @@ function Install-OculusWirelessAdbApk {
     - Installs only if necessary
     - Maintains the same critical permissions
     #>
+    param (
+        [string]$adb = $global:adbPath
+    )
 
-    $adb = $global:adbPath
     $apkPath = $global:ADBWirelessActivatorAPK
     $packageName = $global:ADBWirelessActivatorPackageName
     # 1. Pre-flight verification
@@ -160,7 +162,7 @@ function Install-OculusWirelessAdbApk {
         & $adb -s $deviceId shell pm grant $packageName android.permission.WRITE_SECURE_SETTINGS
         #& $adb -s $deviceId shell pm grant $packageName android.permission.READ_LOGS
         # Launch app on headset
-        & $adb shell am start -n tdg.oculuswirelessadb/.MainActivity
+        & $adb -s $deviceId shell am start -n tdg.oculuswirelessadb/.MainActivity
 
         # 5. Activate TCP/IP (always)
         Write-Log ($msg.ActivatingWifiAdbMode) -Level INFO
@@ -169,7 +171,7 @@ function Install-OculusWirelessAdbApk {
 
         return $true
     }
-    catch {deviceId
+    catch {
         Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
         return $false
     }
@@ -248,7 +250,7 @@ function Enable-WiFiADB {
     )
 
     # 1. Initial verification
-    if (-not (Test-Path $adbPath)) {
+    if (-not (Test-Path $adb)) {
         Write-Log ($msg.ADBExecutableNotFound -f $adb) -Level ERROR
         return $false
     }
@@ -384,7 +386,7 @@ function Test-UsbAdbDevice {
     for ($i = 1; $i -le $MaxAttempts; $i++) {
 
         try {
-            $usbDevice = & $adbPath devices |
+            $usbDevice = & $adb devices |
                 Where-Object { $_ -match "`tdevice$" -and $_ -notmatch ":" }
 
             if ($usbDevice) {
@@ -418,8 +420,8 @@ function Get-HeadsetModel {
     $DeviceId = $headsetIP+":"+$AdbPort
 
     # 1. Initial verification
-    if (-not (Test-Path $adbPath)) {
-        Write-Log ($msg.ADBExecutableNotFound -f $adbPath) -Level ERROR
+    if (-not (Test-Path $adb)) {
+        Write-Log ($msg.ADBExecutableNotFound -f $adb) -Level ERROR
         return $false
     }
 
@@ -465,7 +467,7 @@ function Get-QuestControllerBatteryStatus {
         Write-Log ($msg.QueryControllerStatus -f $DeviceId) -Level DEBUG
 
         # 1. init verification 
-        if (-not (Test-Path $adbPath)) {
+        if (-not (Test-Path $adb)) {
             Write-Log ($msg.ADBExecutableNotFound -f $adb) -Level ERROR
             return $false
         }
@@ -473,7 +475,7 @@ function Get-QuestControllerBatteryStatus {
         $connectedDevice = & $adb devices | Select-String $headsetIP -AllMatches
         if ($connectedDevice.Matches.Count -lt 1) {
             Write-Log -Message ($msg.NoActiveAdbConnection -f $headsetIP) -Level "INFO"
-            & $adb connect $headsetIP | Out-Null
+            & $adb connect $DeviceId | Out-Null
         }
 
         
@@ -583,7 +585,7 @@ function Get-HeadsetBatteryStatus {
 function Disconnect-ADBConnections {
     param (
         [Parameter()]
-        [string]$adb = $Global:adbPath
+        [string]$adb = $global:adbPath
     )
     try {
         if (-not (Test-Path $adb)) {
