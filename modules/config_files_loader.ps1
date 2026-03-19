@@ -13,9 +13,62 @@ function Get-Config {
         return $false
     }
 
-    # Read the JSON file content
-    #$configContent = Get-Content -Path $ConfigFilePath | Out-String | ConvertFrom-Json
-    $configContent = Get-Content -Path $ConfigFilePath | ConvertFrom-Json
+    # Read and validate the JSON file content
+    $configContent = $null
+    $jsonValid = $false
+    while (-not $jsonValid) {
+        try {
+            $jsonRaw = Get-Content -Path $ConfigFilePath -Raw -ErrorAction Stop
+            $configContent = $jsonRaw | ConvertFrom-Json -ErrorAction Stop
+            $jsonValid = $true
+        }
+        catch {
+            Write-Host ""
+            Write-Host "  *** INVALID JSON: The configuration file contains a syntax error! ***" -ForegroundColor Red -BackgroundColor Black
+            Write-Host "  File  : $ConfigFilePath" -ForegroundColor Yellow
+            Write-Host "  Error : $($_.Exception.Message)" -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "  Opening an online JSON validator in your default browser..." -ForegroundColor Cyan
+            Start-Process "https://jsonlint.com"
+            Write-Host ""
+            Write-Host "  What do you want to do?" -ForegroundColor White
+            Write-Host "    [R] Reload   - Edit and save the file, then press R to retry" -ForegroundColor White
+            Write-Host "    [T] Template - Overwrite config.json with the default template" -ForegroundColor White
+            Write-Host "                   (WARNING: your current config will be lost!)" -ForegroundColor DarkYellow
+            Write-Host "    [Q] Quit     - Exit the application" -ForegroundColor White
+            Write-Host ""
+            $choice = (Read-Host "  Your choice [R/T/Q]").Trim().ToUpper()
+            switch ($choice) {
+                'R' {
+                    Write-Host "  Retrying to load '$ConfigFilePath'..." -ForegroundColor Cyan
+                    # Loop will re-read the file on the next iteration
+                }
+                'T' {
+                    $templatePath = Join-Path -Path $global:ScriptPath -ChildPath "templates\config\config.json"
+                    if (Test-Path $templatePath) {
+                        Copy-Item -Path $templatePath -Destination $ConfigFilePath -Force
+                        Write-Host "  Default template restored to '$ConfigFilePath'." -ForegroundColor Green
+                        Write-Host "  Opening the file in Notepad — please fill in your settings, then restart." -ForegroundColor Yellow
+                        notepad $ConfigFilePath
+                        Start-Sleep -Seconds 3
+                    }
+                    else {
+                        Write-Host "  Template not found at '$templatePath'. Cannot restore." -ForegroundColor Red
+                        Write-Host "  Please fix '$ConfigFilePath' manually, then restart." -ForegroundColor Yellow
+                    }
+                    exit 1
+                }
+                'Q' {
+                    Write-Host "  Exiting..." -ForegroundColor Yellow
+                    exit 1
+                }
+                default {
+                    Write-Host "  Unknown option '$choice'. Please enter R, T or Q." -ForegroundColor Yellow
+                    # Loop again without counting it as a new attempt
+                }
+            }
+        }
+    }
     $sourcesPath = Join-Path -Path $global:ScriptPath -ChildPath "sources"
 
 

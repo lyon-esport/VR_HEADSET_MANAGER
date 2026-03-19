@@ -55,6 +55,30 @@ Improvement areas:
 Write-Host "Welcome to VR HEADSET MANAGER!" -ForegroundColor Green
 Write-Host "Starting the initialization process..." -ForegroundColor Green
 
+# Check if another instance of this script is already running
+$thisScriptName = "main.ps1"
+$currentPID     = $PID
+$otherInstances = Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe' OR Name = 'pwsh.exe'" |
+    Where-Object {
+        $_.ProcessId -ne $currentPID -and
+        $_.CommandLine -match [regex]::Escape($thisScriptName)
+    }
+
+if ($otherInstances) {
+    Write-Host ""
+    Write-Host "  *** WARNING: VR HEADSET MANAGER is already running! ***" -ForegroundColor Yellow -BackgroundColor DarkRed
+    foreach ($inst in $otherInstances) {
+        Write-Host ("  PID {0} — started {1}" -f $inst.ProcessId, $inst.CreationDate) -ForegroundColor Yellow
+    }
+    Write-Host ""
+    $confirm = (Read-Host "  Start anyway? [Y / N]").Trim().ToUpper()
+    if ($confirm.ToUpper() -ne 'Y') {
+        Write-Host "  Launch cancelled." -ForegroundColor Yellow
+        exit 0
+    }
+    Write-Host ""
+}
+
 $global:custom_config = $args[0] 
 if ($global:custom_config) {
     Write-Host "Custom config file passed as argument: $global:custom_config" -ForegroundColor Green
