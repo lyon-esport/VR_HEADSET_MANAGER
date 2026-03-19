@@ -22,6 +22,9 @@ function Show-MainMenu {
                 "-ConfigFilePath", 
                 "`"$configFilePath`""
             )
+            
+            #Prevent the computer from sleeping while the dashboard is running
+            Set-AwakeMode
         }
 
         # Start html monitor update
@@ -117,6 +120,7 @@ function Show-MainMenu {
                     }
                 '0' {
                     Write-Host $msg.Goodbye -ForegroundColor Yellow
+                    Reset-AwakeMode
                     Stop-VRMonitor
                     Disconnect-ADBConnections
                     break

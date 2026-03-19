@@ -44,7 +44,6 @@ if ((Split-Path $global:ScriptPath -Leaf) -ne "VR_HEADSET_MANAGER") {
 }
 
 
-
 $ModulesPath = Join-Path -Path $global:ScriptPath -ChildPath "modules"
     if (-not (Test-Path -Path $ModulesPath -PathType Container)) {
             Write-Warning "The script cannot continue without the modules folder $ModulesPath."
@@ -306,6 +305,36 @@ if (-not (Unblock-ADBFirewallRule -adbPath $global:adbPath)) {
 }
 
 
+
+# Prevent Windows from locking the screen / starting screensaver while the app is running
+# Uses the official SetThreadExecutionState Win32 API
+Add-Type -TypeDefinition @"
+    using System;
+    using System.Runtime.InteropServices;
+    public class AwakeMode {
+        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        public static extern uint SetThreadExecutionState(uint esFlags);
+        public const uint ES_CONTINUOUS       = 0x80000000;
+        public const uint ES_SYSTEM_REQUIRED  = 0x00000001;
+        public const uint ES_DISPLAY_REQUIRED = 0x00000002;
+    }
+"@ -ErrorAction SilentlyContinue
+
+function Set-AwakeMode {
+    # Prevents sleep, screensaver and screen lock
+    [AwakeMode]::SetThreadExecutionState(
+        [AwakeMode]::ES_CONTINUOUS -bor
+        [AwakeMode]::ES_SYSTEM_REQUIRED -bor
+        [AwakeMode]::ES_DISPLAY_REQUIRED
+    ) | Out-Null
+    Write-Log "Awake mode activated: screen lock and sleep are disabled." -Level DEBUG
+}
+
+function Reset-AwakeMode {
+    # Restores normal Windows sleep/lock behaviour
+    [AwakeMode]::SetThreadExecutionState([AwakeMode]::ES_CONTINUOUS) | Out-Null
+    Write-Log "Awake mode deactivated: normal sleep/lock behaviour restored." -Level DEBUG
+}
 
 
 

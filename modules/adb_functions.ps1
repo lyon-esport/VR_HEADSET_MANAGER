@@ -404,6 +404,7 @@ function Test-UsbAdbDevice {
 
     Write-Log ($msg.NoUsbAdbDeviceFound -f $MaxAttempts) -Level ERROR
     return $false
+    }
 }
 
 
