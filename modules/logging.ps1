@@ -57,7 +57,7 @@ function Write-Log {
                     Start-Sleep -Milliseconds 200 
                     $attempt++
                 }
-                } else {
+                else {
                     throw
                 }
             }

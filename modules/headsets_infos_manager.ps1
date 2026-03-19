@@ -78,6 +78,7 @@ function Start-VRMonitor {
 
         $i=1
 
+        #Keep write-host for display to job output
         Write-Host "Starting VRMonitor global:ConfigFilePath = $($global:ConfigFilePath)" -ForegroundColor Magenta 
         
         while($true) {
@@ -86,29 +87,11 @@ function Start-VRMonitor {
             if (Test-Path -Path $scripts_init) {
                 . $scripts_init
             } else {
+                #Keep write-host for display to job output
                 Write-Host "Error: The module initialization script was not found!" -ForegroundColor Red
                 exit
             }
 
-            
-            <#
-            $ModulesPath = "$global:ScriptPath\modules"
-                if (-not (Test-Path -Path $ModulesPath -PathType Container)) {
-                        #Write-Warning "Le dossier des modules n'existe pas : $ModulesPath"
-                        return
-                }
-            $moduleFiles = Get-ChildItem -Path $ModulesPath -Filter "*.ps1" -File
-                foreach ($file in $moduleFiles) {
-                    try {
-                        # On "dot-source" le fichier pour que ses fonctions soient disponibles
-                        . $file.FullName
-                        #Write-Host "[OK] Module $($file.Name) charge" -ForegroundColor Green
-                    }
-                    catch {
-                        #Write-Host "echec de l'import de $($file.Name) : $_" -BackgroundColor Red -ForegroundColor White
-                    }
-                }
-            #>
             
             Write-Log ($msg.JobStarting -f $jobName, $i) -Level DEBUG
             $i++
