@@ -7,7 +7,7 @@ function Get-Test {
     param (
         $message
     )
-    Write-Host "C'est un test ! $message"
+    Write-Host "This is a test! $message"
 } 
 
 
@@ -15,24 +15,24 @@ function Get-Test {
 function Add-Headset-ScanNetwork {
     [CmdletBinding()]
     param (
-        [int]$port = $global:adbPort_default,       # Port a tester
-        [int]$timeout = 200 # Delai d'attente en millisecondes
+        [int]$port = $global:adbPort_default,       # Port to test
+        [int]$timeout = 200 # Wait timeout in milliseconds
     )
     
     $adbPath = Join-Path -Path $global:adbFolder -ChildPath "adb.exe"
     
     Clear-Host
     Start-Sleep -Milliseconds 200
-    Write-Host "=== SCAN DU RESEAU POUR CASQUES ===" -ForegroundColor Cyan
+    Write-Host "=== NETWORK SCAN FOR HEADSETS ===" -ForegroundColor Cyan
 
-    # etape 1 : Selection de l'interface reseau
+    # Step 1: Select the network interface
     $networks = Get-PrivateNetworks
     if (-not $networks) {
-        Write-Host "Aucun reseau prive detecte." -ForegroundColor Red
+        Write-Host "No private network detected." -ForegroundColor Red
         return
     }
 
-    Write-Host "`nInterfaces reseau detectees :"
+    Write-Host "`nDetected network interfaces:"
     $i = 1
     foreach ($net in $networks) {
         Write-Host "$i. $($net.InterfaceAlias) - IP $($net.IPAddress) ($($net.NetworkCIDR))"
@@ -40,27 +40,27 @@ function Add-Headset-ScanNetwork {
     }
 
     do {
-        $selection = Read-Host "Selectionner une interface reseau (1-$(@($networks).Count))"
+        $selection = Read-Host "Select a network interface (1-$(@($networks).Count))"
     } while (-not ($selection -match '^\d+$') -or [int]$selection -lt 1 -or [int]$selection -gt $(@($networks).Count))
 
     $selectedNetwork = $networks[[int]$selection - 1].NetworkCIDR
 
-    # etape 2 : Port ADB a scanner
+    # Step 2: ADB port to scan
 
-    Write-Host "`nAnalyse du reseau $selectedNetwork sur le port $port ..." -ForegroundColor Yellow
+    Write-Host "`nScanning network $selectedNetwork on port $port ..." -ForegroundColor Yellow
     $foundDevices = Test-PortForCidr -CIDR $selectedNetwork -port $port
 
     if (-not $foundDevices -or $foundDevices.Count -eq 0) {
-        Write-Host "Aucun casque detecte sur le reseau." -ForegroundColor Red
+        Write-Host "No headset detected on the network." -ForegroundColor Red
         return
     }
 
 
-    # etape 3.5 : Connexion ADB et recuperation d'infos
+    # Step 3.5: ADB connection and info retrieval
     Start-Sleep -Milliseconds 200
     foreach ($device in $foundDevices) {
         $adbTarget = "$($device.hostname):$port"
-        Write-Log "Connexion a $adbTarget..." -Level INFO
+        Write-Log ($msg.ScanConnecting -f $adbTarget) -Level INFO
 
         $connectOutput = & $adbPath connect $adbTarget 2>&1
         if ($connectOutput -match 'connected to') {
@@ -70,41 +70,41 @@ function Add-Headset-ScanNetwork {
                 $serial = & $adbPath -s $adbTarget shell getprop ro.boot.serialno 2>$null | Out-String
             }
 
-            # Nettoyage des donnees
+            # Clean up the data
             $device | Add-Member -NotePropertyName "Model" -NotePropertyValue ($model.Trim()) -Force
             $device | Add-Member -NotePropertyName "Serial" -NotePropertyValue ($serial.Trim()) -Force
 
-            Write-Log "Connecte a $adbTarget — Modele: $($device.Model), Numero de serie: $($device.Serial)" -Level INFO
+            Write-Log ($msg.ScanConnected -f $adbTarget, $device.Model, $device.Serial) -Level INFO
             & $adbPath disconnect $adbTarget | Out-Null
         } else {
-            Write-Log "echec de connexion a $adbTarget — Ignore." -Level WARNING
-            $device | Add-Member -NotePropertyName "Model" -NotePropertyValue "INCONNU" -Force
-            $device | Add-Member -NotePropertyName "Serial" -NotePropertyValue "INCONNU" -Force
+            Write-Log ($msg.ScanConnectionFailed -f $adbTarget) -Level WARNING
+            $device | Add-Member -NotePropertyName "Model" -NotePropertyValue "UNKNOWN" -Force
+            $device | Add-Member -NotePropertyName "Serial" -NotePropertyValue "UNKNOWN" -Force
         }
     }
 
 
 
 
-    <# etape 4 : Afficher les casques detectes
-    Write-Host "`nCasques detectes :"
+    <# Step 4: Display detected headsets
+    Write-Host "`nDetected headsets:"
     $i = 1
     foreach ($dev in $foundDevices) {
         Write-Host "$i. [$($dev.hostname)]`t [$($dev.Model)]`t [$($dev.Serial)]"
         $i++
     }#>
 
-    # Verification doublons
+    # Duplicate check
     $knownHeadsets = Get-KnownHeadsets
     $knownIPs = $knownHeadsets | ForEach-Object { $_.IPAddress }
 
-    # etape 4 : Afficher les casques detectes
-    Write-Host "`nCasques detectes :"
+    # Step 4: Display detected headsets
+    Write-Host "`nDetected headsets:"
     $i = 1
     foreach ($dev in $foundDevices) {
         $isKnown = $knownIPs -contains $dev.hostname
         if ($isKnown) {
-            Write-Host "$i. [$($dev.hostname)]`t [$($dev.Model)]`t [$($dev.Serial)]  (deja ajoute)" -ForegroundColor DarkGray
+            Write-Host "$i. [$($dev.hostname)]`t [$($dev.Model)]`t [$($dev.Serial)]  (already added)" -ForegroundColor DarkGray
             $dev | Add-Member -NotePropertyName "AlreadyAdded" -NotePropertyValue $true -Force
         } else {
             Write-Host "$i. [$($dev.hostname)]`t [$($dev.Model)]`t [$($dev.Serial)]"
@@ -113,8 +113,8 @@ function Add-Headset-ScanNetwork {
         $i++
     }
 
-    # etape 5 : Selectionner ceux a ajouter
-    $selections = Read-Host "Saisir les numeros des casques a ajouter (ex: 1,3,5)"
+    # Step 5: Select which ones to add
+    $selections = Read-Host "Enter the numbers of headsets to add (e.g.: 1,3,5)"
     $indices = $selections -split ',' | ForEach-Object { ($_ -replace '\s','') } | Where-Object { $_ -match '^\d+$' } | ForEach-Object { [int]$_ - 1 }
 
     $selectedDevices = @()
@@ -125,33 +125,33 @@ function Add-Headset-ScanNetwork {
     }
 
     if (-not $selectedDevices) {
-        Write-Host "Aucun casque selectionne." -ForegroundColor Yellow
+        Write-Host "No headset selected." -ForegroundColor Yellow
         return
     }
 
-    # etape 6 : Confirmation & ajout des casques
-    Write-Host "`nCasques a ajouter :"
+    # Step 6: Confirmation & headset addition
+    Write-Host "`nHeadsets to add:"
     foreach ($dev in $selectedDevices) {
         Write-Host "- $($dev.hostname)"
     }
 
-    $confirm = Read-Host "Confirmer l'ajout de ces casques ? (o/n)"
-    if ($confirm -ne 'o' -and $confirm -ne 'O') {
-        Write-Host "Ajout annule." -ForegroundColor Red
+    $confirm = Read-Host "Confirm adding these headsets? (y/n)"
+    if ($confirm -ne 'y' -and $confirm -ne 'Y') {
+        Write-Host "Addition cancelled." -ForegroundColor Red
         return
     }
 
     foreach ($dev in $selectedDevices) {
-        $name = Read-Host "Nom a attribuer a $($dev.hostname)"
+        $name = Read-Host "Name to assign to $($dev.hostname)"
         if (-not $name) {
-            $name = "Casque_$($dev.hostname.Replace('.', '_'))"
+            $name = "Headset_$($dev.hostname.Replace('.', '_'))"
         }
 
-        Write-Log "Ajout du casque : $name ($($dev.hostname)) - Modele : $model, S/N : $serial" -Level INFO
+        Write-Log ($msg.ScanAddingHeadset -f $name, $dev.hostname, $model, $serial) -Level INFO
         Add-Headset -IPAddress $dev.hostname -Name $name
     }
 
-    Write-Host "`nTous les casques selectionnes ont ete ajoutes !" -ForegroundColor Green
+    Write-Host "`nAll selected headsets have been added!" -ForegroundColor Green
 }
 
 
@@ -268,40 +268,40 @@ function Get-IpRange {
     }
 }
 
-# Fonction pour tester un port sur une adresse IP specifique
+# Function to test a port on a specific IP address
 
 #test-port -hostname "192.168.1.243"
 function Test-Port {
     param (
         [Parameter(Mandatory=$true)]
-        [string]$hostname,  # Nom d'hôte ou adresse IP
-        [int]$port = $Global:adbPort_default,         # Port a tester
-        [int]$timeout = 200 # Delai d'attente en millisecondes
+        [string]$hostname,  # Hostname or IP address
+        [int]$port = $Global:adbPort_default,         # Port to test
+        [int]$timeout = 200 # Wait timeout in milliseconds
     )
 
     $requestCallback = $state = $null
     $client = New-Object System.Net.Sockets.TcpClient
 
-    # Commencer la tentative de connexion
+    # Start the connection attempt
     $beginConnect = $client.BeginConnect($hostname, $port, $requestCallback, $state)
 
-    # Attendre pendant le delai d'attente specifie
+    # Wait for the specified timeout duration
     $startTime = Get-Date
     while (-not $client.Connected -and ((Get-Date) - $startTime).TotalMilliseconds -lt $timeout) {
-        Start-Sleep -Milliseconds 10  # Attente de 10ms pour ne pas surcharger le processeur
+        Start-Sleep -Milliseconds 10  # Wait 10ms to avoid overloading the CPU
     }
 
-    # Verifier si la connexion est reussie
+    # Check whether the connection succeeded
     if ($client.Connected) {
         $open = $true
     } else {
         $open = $false
     }
 
-    # Fermer la connexion
+    # Close the connection
     $client.Close()
 
-    # Retourner l'objet avec le resultat du test
+    # Return the object with the test result
     return [pscustomobject]@{
         hostname = $hostname
         port     = $port
@@ -333,7 +333,7 @@ function Test-PortInternal {
 }
 
 
-# Fonction pour obtenir toutes les adresses IP d'un CIDR et tester le port en PARALLEL
+# Function to get all IP addresses from a CIDR and test the port in PARALLEL
 <#
 $test = Test-PortForCidr -CIDR $selectedNetwork -port $port
 $CIDR = $selectedNetwork
@@ -348,19 +348,19 @@ Test-port -hostname "192.168.1.243" -port 46801
 function Test-PortForCidr {
     <#
     .SYNOPSIS
-    Teste la disponibilité d'un port sur toutes les adresses IP d'un réseau CIDR en parallèle.
+    Tests the availability of a port on all IP addresses of a CIDR network in parallel.
     
     .PARAMETER CIDR
-    La notation CIDR du réseau à scanner (ex: "192.168.1.0/24")
+    The CIDR notation of the network to scan (e.g.: "192.168.1.0/24")
     
     .PARAMETER Port
-    Le port à tester (par défaut: 5555)
+    The port to test (default: 5555)
     
     .PARAMETER Timeout
-    Timeout en millisecondes (par défaut: 500ms)
+    Timeout in milliseconds (default: 500ms)
     
     .PARAMETER MaxThreads
-    Nombre maximum de threads parallèles (par défaut: 50)
+    Maximum number of parallel threads (default: 50)
     #>
     param (
         [Parameter(Mandatory=$true)]
@@ -374,17 +374,17 @@ function Test-PortForCidr {
         [int]$MaxThreads = 50
     )
 
-    # Récupérer toutes les IPs du CIDR
+    # Retrieve all IPs from the CIDR
     $ipRange = Get-IpRange $CIDR
     $totalIPs = $ipRange.Count
-    Write-Log "Scan de $totalIPs adresses IP sur le port $Port" INFO
+    Write-Log ($msg.ScanStarting -f $totalIPs, $Port) -Level INFO
 
-    # Configuration du pool de runspaces
+    # Configure the runspace pool
     $runspacePool = [runspacefactory]::CreateRunspacePool(1, $MaxThreads)
     $runspacePool.Open()
     $jobs = @()
 
-    # ScriptBlock pour tester un port
+    # ScriptBlock to test a port
     $testPortScript = {
         param($ip, $port, $timeout)
         
@@ -411,7 +411,7 @@ function Test-PortForCidr {
         return $result
     }
 
-    # Lancement des jobs en parallèle
+    # Launch jobs in parallel
     foreach ($ip in $ipRange) {
         $powershell = [powershell]::Create().AddScript($testPortScript).AddArgument($ip).AddArgument($Port).AddArgument($Timeout)
         $powershell.RunspacePool = $runspacePool
@@ -421,7 +421,7 @@ function Test-PortForCidr {
         }
     }
     Start-Sleep -Milliseconds $(20*$timeout)
-    # Collecte des résultats
+    # Collect results
     $results = do {
         foreach ($job in $jobs) {
             if ($job.AsyncResult.IsCompleted) {
@@ -432,7 +432,7 @@ function Test-PortForCidr {
         $jobs = $jobs | Where-Object { -not $_.AsyncResult.IsCompleted }
     } while ($jobs.Count -gt 0)
 
-    # Nettoyage
+    # Cleanup
     $runspacePool.Close()
     $runspacePool.Dispose()
 
@@ -442,70 +442,70 @@ function Test-PortForCidr {
 
 
 
-# FonctioRemove-Jobn pour calculer le reseau IP
+# Function to calculate the network IP
 function ConvertTo-CIDR {
     param (
         [string]$IPAddress,
         [int]$PrefixLength
     )
 
-    # Convertir le prefixe en masque de sous-reseau binaire
+    # Convert the prefix to a binary subnet mask
     $binaryMask = ("1" * $PrefixLength).PadRight(32, "0")
     $maskBytes = $binaryMask -split "(.{8})" | Where-Object { $_ -ne "" } | ForEach-Object { [Convert]::ToInt32($_, 2) }
 
-    # Convertir l'IP en octets
+    # Convert the IP into octets
     $ipBytes = $IPAddress.Split('.') | ForEach-Object { [int]$_ }
 
-    # Appliquer un ET logique pour obtenir l'adresse reseau
+    # Apply a logical AND to get the network address
     $networkBytes = for ($i = 0; $i -lt 4; $i++) {
         $ipBytes[$i] -band $maskBytes[$i]
     }
 
-    # Rejoindre les octets pour former l'adresse reseau
+    # Join the octets to form the network address
     $networkIP = $networkBytes -join '.'
 
-    # Retourner le reseau au format CIDR
+    # Return the network in CIDR format
     return "$networkIP/$PrefixLength"
 }
 
-# Fonction pour lister les reseaux IP connectes a la machine
+# Function to list the IP networks connected to the machine
 function Get-PrivateNetworks {
     <#
     .SYNOPSIS
-        Liste les reseaux IP prives connectes au PC avec leurs prefixes et reseaux complets.
+        Lists private IP networks connected to the PC with their prefixes and full networks.
 
     .DESCRIPTION
-        Cette fonction identifie les adresses IP attribuees aux interfaces reseau du systeme 
-        et filtre uniquement celles qui appartiennent aux classes privees A, B ou C. Elle retourne
-        le reseau calcule au format CIDR avec le prefixe.
+        This function identifies IP addresses assigned to the system's network interfaces
+        and filters only those belonging to RFC 1918 private classes A, B, or C. It returns
+        the calculated network in CIDR format with the prefix.
 
     .OUTPUTS
-        Retourne un tableau contenant les interfaces reseau, adresses IP, prefixes et reseaux CIDR.
+        Returns an array containing network interfaces, IP addresses, prefixes, and CIDR networks.
 
     .EXAMPLE
         $networks = Get-PrivateNetworks
-        Liste toutes les adresses IP privees avec leurs reseaux.
+        Lists all private IP addresses with their networks.
 
     .NOTES
-        Compatible avec PowerShell 5.x.
+        Compatible with PowerShell 5.x.
     #>
 
 
 
-    # Recuperation des interfaces reseau actives avec leurs IP
+    # Retrieve active network interfaces with their IPs
     $networkInterfaces = Get-NetIPAddress | Where-Object {
         $_.AddressFamily -eq 'IPv4' -and $_.IPAddress -match '\d+\.\d+\.\d+\.\d+' -and
-        $_.IPAddress -notlike '169.254.*' # Exclut les adresses APIPA
+        $_.IPAddress -notlike '169.254.*' # Excludes APIPA addresses
     }
 
-    # Filtrer uniquement les adresses IP privees selon les classes RFC 1918
+    # Filter only private IP addresses according to RFC 1918 classes
     $privateIPs = $networkInterfaces | Where-Object {
         ($_).IPAddress -match '^10\.' -or           # Classe A
         ($_).IPAddress -match '^172\.(1[6-9]|2[0-9]|3[0-1])\.' -or # Classe B
         ($_).IPAddress -match '^192\.168\.'        # Classe C
     }
 
-    # Ajouter le reseau CIDR a chaque resultat
+    # Add the CIDR network to each result
     $privateIPs | ForEach-Object {
         [PSCustomObject]@{
             InterfaceAlias = $_.InterfaceAlias
@@ -522,20 +522,20 @@ function Test-ValidIPv4 {
         [string]$ipAddress
     )
     
-    # Regex pour validation IPv4 standard
+    # Regex for standard IPv4 validation
     $ipv4Pattern = '^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$'
     
-    # Vérification 1 : Format basique
+    # Check 1: Basic format
     if (-not ($ipAddress -match $ipv4Pattern)) {
         return $false
     }
     
-    # Vérification 2 : Plages réservées/localhost
+    # Check 2: Reserved ranges/localhost
     $octets = $ipAddress -split '\.'
     if ($octets[0] -eq '127') { return $false }  # Loopback
-    if ($octets[0] -eq '0')   { return $false }   # Réseau réservé
+    if ($octets[0] -eq '0')   { return $false }   # Reserved network
     
-    # Vérification 3 : Plages multicast/link-local
+    # Check 3: Multicast/link-local ranges
     if ($octets[0] -eq '224' -or $octets[0] -eq '239') { return $false }
     if ($octets[0] -eq '169' -and $octets[1] -eq '254') { return $false }
     

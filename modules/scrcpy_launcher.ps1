@@ -29,32 +29,32 @@ function start-screenCopy {
     $adb_device = "$headsetIP`:$adbPort"
     $scrcpy = $global:scrcpyFilePath
 
-    if (-not(test-port -hostname $headsetIP -port $adbPort).open){ # Verifie si le port adb est ouvert
-        Write-Log -Message "Le port ADB $adbPort ne repond pas => Connectez d'abord le casque en USB et/ou lancez l'application Oculus Wifi ADB" -Level WARNING
+    if (-not(test-port -hostname $headsetIP -port $adbPort).open){ # Check if the ADB port is open
+        Write-Log -Message ($msg.AdbPortNotResponding -f $adbPort) -Level WARNING
         pause
         return
     }
 
-    # Port ADB ouvert, lancement de la connexion au casque
+    # ADB port open, initiating connection to the headset
     try {
-        Write-Log -Message "Verification de la connexion ADB pour $adb_device" -Level "INFO"
+        Write-Log -Message ($msg.ScrcpyCheckingAdb -f $adb_device) -Level "INFO"
 
         $connectedDevices = & $adb devices | Select-String $adb_device -AllMatches
         if ($connectedDevices.Matches.Count -lt 1) {
-            Write-Log -Message "Aucune connexion ADB active pour $adb_device, tentative de connexion..." -Level "INFO"
+            Write-Log -Message ($msg.NoActiveAdbConnection -f $adb_device) -Level "INFO"
             & $adb connect $adb_device | Out-Null
             Start-Sleep -Seconds 2
         }
 
     } catch {
-        Write-Log -Message "Erreur lors de l'execution : $($_.Exception.Message)" -Level "ERROR"
+        Write-Log -Message ($msg.ScrcpyExecError -f $_.Exception.Message) -Level "ERROR"
 		return
     }
 	
 	
 	$options = ""
     $headsetModel = Get-HeadsetModel $headsetIP
-    Write-Log -Message "Modele detecte : $headsetModel" -Level "INFO"
+    Write-Log -Message ($msg.ScrcpyModelDetected -f $headsetModel) -Level "INFO"
 	<#
     if ($adb_model -like "Quest 2") {
 		#$options = "--crop=1550:1250:2000:280 --max-size=800 --video-bit-rate=10M --max-fps 60 --video-buffer=50 --video-codec=h265" #Oeil droit
@@ -72,12 +72,12 @@ function start-screenCopy {
     if ($scrcpyParameters.$headsetModel){
         $options =  $scrcpyParameters.$headsetModel
     } else {
-		Write-Log -Message "Modele non reconnu, aucun recadrage applique." -Level "WARNING"
+		Write-Log -Message $msg.ScrcpyModelUnknown -Level "WARNING"
 	}
 
-    # Verifie que scrcpy existe
+    # Check that scrcpy exists
     if (-not (Test-Path $scrcpy)) {
-        Write-Log -Message "scrcpy.exe introuvable a l'emplacement $scrcpyPath" -Level "ERROR"
+        Write-Log -Message ($msg.ScrcpyNotFound -f $scrcpyPath) -Level "ERROR"
         return
     }
     
@@ -92,7 +92,7 @@ function start-screenCopy {
         $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
         $recordFile = Join-Path -Path $recordFolder -ChildPath "${displayName}_$timestamp.mp4"
         $recordOption = "--record=$recordFile"
-        Write-Log -Message "Recording active session in $recordFile" -Level "INFO"
+        Write-Log -Message ($msg.ScrcpyRecording -f $recordFile) -Level "INFO"
     } else {
         $recordOption = ""
     }
@@ -100,7 +100,7 @@ function start-screenCopy {
     #.\scrcpy.exe --crop 1664:1304:2260:450 --angle=-21 --max-fps 45 -b 16M --no-audio --video-buffer=100 --video-codec=h264 --video-encoder=OMX.qcom.video.encoder.avc -s $adb_device
     #.\sources\scrcpy-win64-v3.3\scrcpy.exe -s 192.168.1.243:5555 -b20m --crop=1664:1304:2260:450 --angle=-21 --max-size=800 --max-fps=30 --video-codec=h265 --no-audio --window-title=Q3_BLUE
     
-	Write-Log -Message "Lancement de scrcpy avec les arguments : $arguments" -Level "INFO"
+	Write-Log -Message ($msg.ScrcpyLaunching -f $arguments) -Level "INFO"
     try {
         #$process = 
         Start-Process $scrcpy -ArgumentList $arguments -PassThru `
@@ -109,7 +109,7 @@ function start-screenCopy {
 
         
 	} catch {
-        Write-Log -Message "Erreur lors de l'execution de scrcpy : $($_.Exception.Message)" -Level "ERROR"
+        Write-Log -Message ($msg.ScrcpyLaunchError -f $_.Exception.Message) -Level "ERROR"
 		return
     }
 }
@@ -119,7 +119,7 @@ function start-screenCopy {
 
 function Watch-ScrcpyProcesses {
     
-    # Etape 1 : Recuperation des process scrcpy tournant sur le poste
+    # Step 1: Retrieve scrcpy processes running on the machine
 
     $knownHeadsets_with_autorestart = Get-KnownHeadsets | Where-Object { $_.scrcpy_AutoRestart -eq $True }
 
@@ -129,13 +129,13 @@ function Watch-ScrcpyProcesses {
     # For each headset with autorestart, ensure there's a scrcpy process started
 
     foreach ($headset in $knownHeadsets_with_autorestart) {
-        Write-Log "Checking if the headset is connected and ready to start scrcpy: $($headset.Name) ($($headset.IPAddress))" -Level DEBUG
+        Write-Log ($msg.ScrcpyCheckHeadset -f $headset.Name, $headset.IPAddress) -Level DEBUG
 
         if ((Get-KnownHeadsetInfos $headset).ADBWifi -eq $true) {
-            write-log "Checking scrcpy process for headset $($headset.Name) ($($headset.IPAddress))" -Level DEBUG
+            Write-Log ($msg.ScrcpyCheckProcess -f $headset.Name, $headset.IPAddress) -Level DEBUG
             $runningScrcpyProcess_forThisheadset = $runningScrcpyProcess | Where-Object {$_.MainWindowTitle -eq (Convert-Displayname($headset.Name))}
             
-            write-log "Scrcpy process Found for this headset: $($runningScrcpyProcess_forThisheadset)" -Level DEBUG
+            Write-Log ($msg.ScrcpyProcessFound -f $runningScrcpyProcess_forThisheadset) -Level DEBUG
             if (-not $runningScrcpyProcess_forThisheadset) {
                 #Write-Log "No scrcpy process found for headset $($headset.Name) ($($headset.IPAddress)). Starting scrcpy..." -Level INFO
                 start-screenCopy -displayName $headset.Name -headsetIP $headset.IPAddress -recording ($headset.Record -eq "True")
@@ -166,7 +166,7 @@ function Install-ScrcpyDependencies {
     if (-not (Test-Path -Path "C:\msys64\mingw64\share\scrcpy\scrcpy-server")) {
         New-Item -Path "C:/msys64/mingw64/share/scrcpy/" -ItemType Directory -Force
         Copy-Item -Path "$scrcpyFolder\scrcpy-server" -Destination "C:\msys64\mingw64\share\scrcpy\" -Force
-        Write-Log "Scrcpy server file copied." -Level INFO
+        Write-Log $msg.ScrcpyServerFileCopied -Level INFO
     } else {
         #Write-Log "Scrcpy server file already exists." -Level DEBUG
     }
@@ -175,7 +175,7 @@ function Install-ScrcpyDependencies {
     if (-not (Test-Path -Path $destinationPath)) {
         New-Item -Path ([System.IO.Path]::GetDirectoryName($destinationPath)) -ItemType Directory -Force
         Copy-Item -Path "$scrcpyFolder\icon.png" -Destination $destinationPath -Force
-        Write-Log "Scrcpy icon file copied." -Level INFO
+        Write-Log $msg.ScrcpyIconFileCopied -Level INFO
     } else {
         #Write-Log "Scrcpy icon file already exists." -Level DEBUG
     }

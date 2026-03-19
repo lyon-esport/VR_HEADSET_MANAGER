@@ -181,4 +181,104 @@
     InvalidOptionFiles = "Invalid option. Please enter 1, 2, 3, 4, 5 or 0."
     # Open-File
     FileNotExist = "The file '{0}' does not exist."
+
+    # ==========================================
+    # config_files_loader.ps1
+    # ==========================================
+    CsvFileNotFound = "Headset CSV file does not exist at path: {0}"
+    CsvFileEmpty = "CSV file empty or does not match requirements."
+    CsvHeadersMismatch = "CSV file headers do not match requirements. Missing or extra headers detected."
+    CsvNoDataRows = "CSV file exists with correct headers but contains no data rows."
+    CsvValidationPassed = "CSV file validation passed: correct headers and contains data."
+    CsvValidationError = "Error validating headset CSV file: {0}"
+
+    # ==========================================
+    # scripts_init.ps1
+    # ==========================================
+    TranslationsLoaded = "Translations loaded for language: {0}"
+    NetworkProfileCurrent = "Current network profile: {0}"
+    NetworkProfileFailed = "Failed to retrieve network profile: {0}"
+    FirewallRuleCreating = "Creating firewall rule for ADB.exe"
+    FirewallRuleExists = "Firewall rule already exists and is correctly configured"
+    FirewallRuleFailed = "Failed to manage firewall rule: {0}"
+    FirewallConfigSkipped = "Firewall configuration for ADB failed or skipped"
+    AwakeModeActivated = "Awake mode activated: screen lock and sleep are disabled."
+    AwakeModeDeactivated = "Awake mode deactivated: normal sleep/lock behaviour restored."
+
+    # ==========================================
+    # headsets_manager.ps1
+    # ==========================================
+    HeadsetCsvPathEmpty = "The CSV headset file path is empty or not defined."
+    HeadsetCsvNotFound = "The specified CSV file does not exist: {0}"
+    HeadsetCsvReadError = "Error reading the CSV file."
+    NoHeadsetToDisplay = "No known headset to display!"
+    InvalidFieldsIgnored = "The following fields are invalid and will be ignored: {0}"
+    NoHeadsetFoundInFile = "No headset found to display in {0}."
+    NoHeadsetInInfosFile = "No VR headset found in file {0}."
+    HeadsetIpExists = "A headset with IP {0} already exists in the list!"
+    HeadsetAdding = "Adding a new headset: {0} ({1})"
+    HeadsetFieldUpdated = "Field '{0}' updated for ID {1} with value '{2}'"
+    HeadsetFieldNotExist = "Error: Field '{0}' does not exist in the list."
+    HeadsetIdNotFound = "Error: No headset found with ID {0}."
+    HeadsetRemoved = "Headset with ID {0} {1} has been removed."
+    HeadsetsSaved = "Headsets have been reassigned IDs and saved to '{0}'."
+
+    # ==========================================
+    # headsets_infos_manager.ps1
+    # ==========================================
+    JobNotFound = "Job {0} not found -- Don't need to kill it"
+    JobCannotBeStopped = "Job {0} cannot be stopped"
+    JobStopped = "Job {0} [ID {1}] stopped"
+    JobStarting = "Starting Job {0} (cycle {1})"
+    DebugConfigFilePath = "ConfigFilePath: {0}"
+    DebugKnownHeadsetsPath = "knownHeadsetsFilePath: {0}"
+    DebugKnownHeadsetsInfosPath = "knownHeadsetsInfosFilePath: {0}"
+    CheckingHeadsets = "Check for {0} headsets"
+    UpdatingSerialNumber = "Updating SerialNumber for {0} ({1}) to {2}"
+    JobInfoCollected = "JOB - Detailed info collected for {0} headsets"
+    JobRestartsIn = "JOB {0} - Restarts in {1} sec"
+    ScrcpyProcessesFound = "Found {0} scrcpy processes"
+    ScrcpyProcessChecking = "Checking scrcpy process ID {0} at path {1}"
+    ScrcpyProcessCmdLine = "Found scrcpy process with command line: {0}"
+    ScrcpyLookingFor = "Looking for IPAddress: {0} and ADBPort: {1}"
+    ScrcpyRunningFor = "scrcpy is running for {0} ({1})"
+    AdbInfoFailed = "Failed to get ADB info for {0}: {1}"
+
+    # ==========================================
+    # network_scanner.ps1
+    # ==========================================
+    ScanConnecting = "Connecting to {0}..."
+    ScanConnected = "Connected to {0} -- Model: {1}, Serial number: {2}"
+    ScanConnectionFailed = "Connection failed to {0} -- Skipping."
+    ScanAddingHeadset = "Adding headset: {0} ({1}) - Model: {2}, S/N: {3}"
+    ScanStarting = "Scanning {0} IP addresses on port {1}"
+
+    # ==========================================
+    # scrcpy_launcher.ps1
+    # ==========================================
+    AdbPortNotResponding = "ADB port {0} is not responding => Connect the headset via USB first and/or launch the Oculus Wifi ADB application"
+    ScrcpyCheckingAdb = "Checking ADB connection for {0}"
+    ScrcpyExecError = "Error during execution: {0}"
+    ScrcpyModelDetected = "Model detected: {0}"
+    ScrcpyModelUnknown = "Model not recognized, no cropping applied."
+    ScrcpyNotFound = "scrcpy.exe not found at {0}"
+    ScrcpyRecording = "Recording active session in {0}"
+    ScrcpyLaunching = "Launching scrcpy with arguments: {0}"
+    ScrcpyLaunchError = "Error launching scrcpy: {0}"
+    ScrcpyCheckHeadset = "Checking if the headset is connected and ready to start scrcpy: {0} ({1})"
+    ScrcpyCheckProcess = "Checking scrcpy process for headset {0} ({1})"
+    ScrcpyProcessFound = "Scrcpy process found for this headset: {0}"
+    ScrcpyServerFileCopied = "Scrcpy server file copied."
+    ScrcpyIconFileCopied = "Scrcpy icon file copied."
+
+    # ==========================================
+    # console_manager.ps1 (additional)
+    # ==========================================
+    VRMonitorProcessId = "VRMonitorProcess: {0}"
+    InvalidIDModification = "Invalid ID entered for modification: {0}"
+    InvalidOptionAdd = "Invalid option entered in the add menu."
+    InvalidFieldNumberEntered = "Invalid field number entered: {0}"
+    InvalidBoolValueField = "Invalid value for boolean field '{0}': {1}"
+    InvalidOptionFileMenu = "Invalid option entered in the file management menu."
+    FolderNotExist = "Folder path does not exist or is not a directory: {0}"
 }

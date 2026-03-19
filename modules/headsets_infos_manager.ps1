@@ -8,15 +8,15 @@ function Test-VRMonitor {
     Receive-Job -Job $job
 
 
-    # 2. Stopper le job (si en cours)
+    # 2. Stop the job (if running)
     if ($job.State -eq "Running") {
         Stop-Job -Job $job
     }
 
-    # 3. Récupérer les derniers résultats (optionnel)
+    # 3. Retrieve the latest results (optional)
     $results = Receive-Job -Job $job
     Write-Host $results 
-    # 4. Supprimer le job
+    # 4. Remove the job
     Remove-Job -Job $job
 }
 
@@ -30,7 +30,7 @@ function Stop-VRMonitor {
         $job = Get-Job -Name $jobName -ErrorAction Stop 
     }
     catch {
-        Write-Log "Job $jobName not found --> Don't need to kill it" -Level INFO
+        Write-Log ($msg.JobNotFound -f $jobName) -Level INFO
         return $true
     }
     
@@ -40,11 +40,11 @@ function Stop-VRMonitor {
             Remove-Job -Job $job -ErrorAction Stop
         }
         catch {
-            Write-Log "Job $jobName cannot be stopped" -Level ERROR
+            Write-Log ($msg.JobCannotBeStopped -f $jobName) -Level ERROR
             return $false
         }
         
-        Write-Log "Job $jobName [ID $($job.ID)] stopped" -Level INFO
+        Write-Log ($msg.JobStopped -f $jobName, $job.ID) -Level INFO
         return $true
     }
 }
@@ -85,7 +85,7 @@ function Start-VRMonitor {
             if (Test-Path -Path $scripts_init) {
                 . $scripts_init
             } else {
-                Write-Host "Erreur: Le script d'initialisation des modules est introuvable !" -ForegroundColor Red
+                Write-Host "Error: The module initialization script was not found!" -ForegroundColor Red
                 exit
             }
 
@@ -109,14 +109,14 @@ function Start-VRMonitor {
                 }
             #>
             
-            Write-Log "Starting Job $jobName (cycle $i)" DEBUG
+            Write-Log ($msg.JobStarting -f $jobName, $i) -Level DEBUG
             $i++
 
             Get-Config -ConfigFilePath $global:ConfigFilePath
             
-            Write-Log "ConfigFilePath : $($global:ConfigFilePath)" DEBUG
-            Write-Log "knownHeadsetsFilePath : $($global:knownHeadsetsFilePath)" DEBUG
-            Write-Log "knownHeadsetsInfosFilePath : $($global:knownHeadsetsInfosFilePath)" DEBUG
+            Write-Log ($msg.DebugConfigFilePath -f $global:ConfigFilePath) -Level DEBUG
+            Write-Log ($msg.DebugKnownHeadsetsPath -f $global:knownHeadsetsFilePath) -Level DEBUG
+            Write-Log ($msg.DebugKnownHeadsetsInfosPath -f $global:knownHeadsetsInfosFilePath) -Level DEBUG
             
             
             # Check Headstets
@@ -126,16 +126,16 @@ function Start-VRMonitor {
 
             $knownHeadsetsInfo = [System.Collections.ArrayList]@()
 
-            Write-Log "Check for $($knownHeadsets.Count) headsets" DEBUG
+            Write-Log ($msg.CheckingHeadsets -f $knownHeadsets.Count) -Level DEBUG
             foreach ($headset in $knownHeadsets){
                 $knownHeadsetsInfo += Get-KnownHeadsetInfos -knownHeadset $headset
                 if ($headset.SerialNumber -ne $knownHeadsetsInfo.SerialNumber){
-                    Write-Log "Updating SerialNumber for $($headset.Name) ($($headset.IPAddress)) to $($knownHeadsetsInfo.SerialNumber)" DEBUG
+                    Write-Log ($msg.UpdatingSerialNumber -f $headset.Name, $headset.IPAddress, $knownHeadsetsInfo.SerialNumber) -Level DEBUG
                     Update-HeadsetField -ID $headset.ID -Field "SerialNumber" -NewValue $knownHeadsetsInfo.SerialNumber
                 }
             }
 
-            Write-Log "JOB - Detailed info collected for $($knownHeadsetsInfo.Count) headsets" INFO
+            Write-Log ($msg.JobInfoCollected -f $knownHeadsetsInfo.Count) -Level INFO
             # Export vers CSV
             $knownHeadsetsInfo | Export-Csv -Path $global:knownHeadsetsInfosFilePath -Delimiter ";" -Encoding UTF8 -NoTypeInformation
             
@@ -143,7 +143,7 @@ function Start-VRMonitor {
             Update-OBSFile -knownHeadsetsInfo $knownHeadsetsInfo #-obsTemplatePath $global:obsTemplatePath -obsOutputPath $global:obsOutputPath
 
 
-            Write-Log "JOB $jobName - Restarts in $VRMonitor_refresh_timer sec" -Level INFO
+            Write-Log ($msg.JobRestartsIn -f $jobName, $VRMonitor_refresh_timer) -Level INFO
            
             Start-Sleep -Seconds $VRMonitor_refresh_timer
         }
@@ -236,16 +236,16 @@ function Get-KnownHeadsetInfos {
         # Check if scrcpy is running
         $scrcpyProcesses = Get-Process -Name "scrcpy" -ErrorAction SilentlyContinue
         if ($scrcpyProcesses) { 
-            Write-Log "Found $($scrcpyProcesses.Count) scrcpy processes" DEBUG 
+            Write-Log ($msg.ScrcpyProcessesFound -f $scrcpyProcesses.Count) -Level DEBUG
             foreach ($proc in $scrcpyProcesses) {
-                Write-Log "Checking scrcpy process ID $($proc.Id) at path $($proc.Path)" DEBUG
+                Write-Log ($msg.ScrcpyProcessChecking -f $proc.Id, $proc.Path) -Level DEBUG
                 if ($proc.Path -like "$($global:scrcpyFolder)\scrcpy.exe") {
                     $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($proc.Id)").CommandLine
-                    write-log "Found scrcpy process with command line: $cmdLine" DEBUG
-                    write-log "Looking for IPAddress: $IPAddress and ADBPort: $ADBPort" DEBUG
+                    Write-Log ($msg.ScrcpyProcessCmdLine -f $cmdLine) -Level DEBUG
+                    Write-Log ($msg.ScrcpyLookingFor -f $IPAddress, $ADBPort) -Level DEBUG
                     if ($cmdLine -match "$IPAddress(:$ADBPort)?") {
                         $result.SCRCPY = "OK"
-                        Write-Log "scrcpy is running for $($knownHeadset.Name) ($IPAddress)" DEBUG
+                        Write-Log ($msg.ScrcpyRunningFor -f $knownHeadset.Name, $IPAddress) -Level DEBUG
                         break
                     }
                 }
@@ -253,7 +253,7 @@ function Get-KnownHeadsetInfos {
         }
     }
     catch {
-        Write-Log -Message "Failed to get ADB info for $IPAddress : $_" -Level "ERROR"
+        Write-Log -Message ($msg.AdbInfoFailed -f $IPAddress, $_) -Level "ERROR"
     }
     finally {
         # Disconnect ADB

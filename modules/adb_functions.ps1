@@ -109,7 +109,7 @@ function Install-Apk-OculusWirelessAdb {
     $adb = $global:adbPath
     $apkPath = $global:ADBWirelessActivatorAPK
     $packageName = $global:ADBWirelessActivatorPackageName
-    # 1. Verification prealable
+    # 1. Pre-flight verification
     if (-not (Test-Path $adb)) {
         Write-Log ($msg.ADBNotFound -f $global:adbFolder) -Level ERROR
         return $false
@@ -137,7 +137,7 @@ function Install-Apk-OculusWirelessAdb {
 
     try {
 
-        # 3. Verification de l'installation existante
+        # 3. Check for existing installation
         $packageName = $global:ADBWirelessActivatorPackageName
         $isInstalled = & $adb -s $deviceId shell pm list packages $packageName
         if ($isInstalled) {
@@ -188,7 +188,7 @@ function Test-AdbDevicesAuthorization {
         $devices = & $adb devices 2>&1 | Where-Object { $_ -notmatch '^List of devices attached' }
         $unauthorizedFound = $false
 
-        # Analyse de la sortie ADB
+        # Parse ADB output
         foreach ($line in $devices) {
             if ($line -like "*unauthorized*") {
                 Write-Log ($msg.UsbDebugNotAuthorized) -Level WARNING
@@ -212,7 +212,7 @@ function Test-AdbDevicesAuthorization {
             return $false
         }
 
-        # Si on arrive ici, tout est OK
+        # If we reach this point, everything is OK
         return $true
     }
 
@@ -325,13 +325,13 @@ function Enable-WiFiADB {
         if ($answer.ToUpper() -eq "Y")
             {Install-Apk-OculusWirelessAdb}
         else {
-        # 5. Activation du mode TCP/IP
+        # 5. Enable TCP/IP mode
 
             Write-Log ($msg.ActivatingWifiAdbPort -f $AdbPort) -Level INFO
             & $adb -s $deviceId tcpip $AdbPort
         }
         Start-Sleep -Seconds 5  # Wait for initialization
-        # 6. Verification du port
+        # 6. Port verification
         Write-Log ($msg.CheckingPortOpen -f $AdbPort) -Level INFO
         $portTest = $(Test-Port -hostname $ipInfo -port $AdbPort).open
         
