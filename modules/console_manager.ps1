@@ -138,7 +138,7 @@ function Show-MainMenu {
 
 
 
-function Show-SubMenu-StreamHeadset { # CHOIX 1
+function Show-SubMenu-StreamHeadset { # CHOICE 1
     Clear-Host
     Write-Host $msg.SelectHeadsetToStream -BackgroundColor Yellow -ForegroundColor Black
     $headsets = @(get-knownHeadsets)
@@ -181,7 +181,7 @@ function Show-SubMenu-StreamHeadset { # CHOIX 1
 } # TODO
 
 
-function Show-SubMenu-AddHeadset { #CHOIX 2
+function Show-SubMenu-AddHeadset { #CHOICE 2
     Clear-Host
     Start-Sleep -Milliseconds 200
     Write-Host $msg.AddOrModifyHeadset -BackgroundColor Green -ForegroundColor DarkMagenta
@@ -222,9 +222,9 @@ function Show-SubMenu-AddHeadset { #CHOIX 2
             Write-Host $msg.InvalidOption -ForegroundColor Yellow
         }
     }
-}  # PARTIEL
+}  # PARTIAL
 
-function Show-SubMenu-EditHeadset { #CHOIX 3
+function Show-SubMenu-EditHeadset { #CHOICE 3
     Clear-Host
     Start-Sleep -Milliseconds 200
     Write-Host $msg.ModifyHeadsetManually -BackgroundColor DarkCyan
@@ -250,7 +250,7 @@ function Show-SubMenu-EditHeadset { #CHOIX 3
         return
     }
 
-    # Liste des champs modifiables avec numeros
+    # List of modifiable fields with numbers
     $availableFields = @(
         $msg.FieldName,
         $msg.FieldIPAddress,
@@ -261,7 +261,7 @@ function Show-SubMenu-EditHeadset { #CHOIX 3
     Write-Host $msg.ModifiableFields
     $availableFields | ForEach-Object { Write-Host $_ }
 
-    # Demander a l'utilisateur de saisir le numero du champ
+    # Ask the user to enter the field number
     $fieldNum = Read-Host $msg.EnterFieldNumber
     if ($fieldNum -eq '1') {
         $field = "Name"
@@ -288,10 +288,10 @@ function Show-SubMenu-EditHeadset { #CHOIX 3
         } else {
             Write-Log ($msg.InvalidBoolValueField -f $field, $newValueInput) -Level "ERROR"
             Write-Host $msg.InvalidBoolValue -ForegroundColor Red
-            retourn
+            return
         }
     } else {
-        # Demander la nouvelle valeur pour le champ selectionne
+        # Ask for the new value for the selected field
         $newValue = Read-Host ($msg.EnterNewValue -f $field)
     }
     
@@ -336,7 +336,7 @@ function Show-SubMenu-RemoveHeadset {
     elseif ($userInput -eq '0') {
         Write-Log -Message $msg.ReturnPrevious -Level "INFO"
     }
-        # Si l'utilisateur entre un ID specifique, appeler Remove-KnownHeadset
+        # If the user enters a specific ID, call Remove-Headset
     elseif ($userInput -match '^\d+$' -and $userInput -ge 0 -and $userInput -le $headsets.Count) {
         Remove-Headset -ID $userInput
     }
@@ -345,7 +345,7 @@ function Show-SubMenu-RemoveHeadset {
     }
 } # OK
 
-function Show-SubMenu-ManageHeadset { #CHOIX 4
+function Show-SubMenu-ManageHeadset { #CHOICE 4
     Clear-Host
     Start-Sleep -Milliseconds 200
     Write-Host $msg.ManageHeadset -BackgroundColor Green -ForegroundColor DarkBlue
@@ -361,7 +361,7 @@ function Show-SubMenu-ManageHeadset { #CHOIX 4
 
     if ($userInput -eq '1') {
         Write-Host $msg.InstallOculusTitle
-        Install-Apk-OculusWirelessAdb
+        Install-OculusWirelessAdbApk
     }
     
     elseif ($userInput -eq '2') {
@@ -384,16 +384,16 @@ function Show-SubMenu-ManageHeadset { #CHOIX 4
     }
 } # TODO
 
-function Show-SubMenu-scrcpyTracking { #CHOIX 5
+function Show-SubMenu-scrcpyTracking { #CHOICE 5
     Clear-Host
     $headsets = @(Get-KnownHeadsets)
 
     Start-Sleep -Milliseconds 200
     Write-Host $msg.SwitchScrcpyTracking -ForegroundColor Cyan
-    #Write-Host "Menu désactivé pour le moment !"
+    #Write-Host "Menu disabled for now!"
     Write-Host $msg.EnterNumberToModify
-    #Write-Host "1. Activer le restart automatique des scrcpy"
-    #Write-Host "2. Desactiver le restart automatique des scrcpy"
+    #Write-Host "1. Enable automatic scrcpy restart"
+    #Write-Host "2. Disable automatic scrcpy restart"
     #Write-Host "3. Launch active monitoring of running windows"
     
     if ($headsets.Count -eq 0) {
@@ -433,7 +433,7 @@ function Show-SubMenu-scrcpyTracking { #CHOIX 5
     }
 }
 
-function Show-SubMenu-Recording { #CHOIX 6
+function Show-SubMenu-Recording { #CHOICE 6
     Clear-Host
     $headsets = @(Get-KnownHeadsets)
 

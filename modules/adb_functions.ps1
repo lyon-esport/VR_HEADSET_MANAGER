@@ -5,7 +5,7 @@
 # Translations are loaded centrally in scripts_init.ps1 into $global:msg
 
 <#
-function Install-apk-oculuswirelessadb {
+function Install-OculusWirelessAdbApk {
     Write-Log ($msg.FeatureNotImplemented) -Level WARNING
     #Fonction a ecrire - Copie en vrac des actions a realiser en ADB USB
     # Test concurrent USB connection if other headsets are already connected via WiFi
@@ -95,7 +95,7 @@ function Start-AdbServer {
 # Example usage:
 # 
 
-function Install-Apk-OculusWirelessAdb {
+function Install-OculusWirelessAdbApk {
     <#
     .SYNOPSIS
     Installs the WiFi ADB APK after verifying its presence
@@ -323,7 +323,7 @@ function Enable-WiFiADB {
         # 4. Install OculusWirelessAdb APK
         $answer = Read-Host $msg.UsbInstallPrompt
         if ($answer.ToUpper() -eq "Y")
-            {Install-Apk-OculusWirelessAdb}
+            {Install-OculusWirelessAdbApk}
         else {
         # 5. Enable TCP/IP mode
 
