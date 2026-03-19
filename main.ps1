@@ -1,5 +1,5 @@
 ## -*- coding: utf-8 -*-
-# Initialisation du type d'encodage du texte en UTF8
+# Initialization of the text encoding type to UTF8
 #[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 #[Console]::InputEncoding = [System.Text.Encoding]::UTF8
 
@@ -7,43 +7,43 @@
 <#
 .SYNOPSIS
 VR HEADSET MANAGER
-Controleur principal pour la gestion des captures VR
+Main controller for VR capture management
 #>
 
 
 
 <#
 
-Voies d'améliorations :
+Improvement areas:
 
-- Edition du fichier de config à la main
-    > Revérif à chaque refresh que le fichiers est bien formaté
-    > Simplifier le fichier de config : Name;IP
-- Optimisation refresh : lire uniquement les infos du fichier de config, et ne pas lancer un ping + test port à chaque refresh > laisser faire au job en tache de fond
-    - Faire un test de ping plus efficace (et pas au chargement du choix des casques à streamer)
-    --> Faire un 2eme fichier de HeadsetFollowup rempli automatiquement par le script ci-dessous
-    - lancer une fenetre en backgroud qui ping, check le port, et restart le stream automatiquement, et maj le fichier de HeadsetFollowup
-    - Lors du scan, vérifier si un stream portant le même nom est déjà lancé
+- Manual editing of the config file
+    > Re-verify at each refresh that the file is correctly formatted
+    > Simplify the config file: Name;IP
+- Refresh optimization: only read info from the config file, do not ping + test port on every refresh; let the background job handle it
+    - Perform a more efficient ping test (not at headset selection time)
+    --> Create a second HeadsetFollowup file auto-populated by the script below
+    - Launch a background window that pings, checks the port, auto-restarts the stream, and updates the HeadsetFollowup file
+    - During scan, check whether a stream with the same name is already running
 
-- Au menu principal, taper directement le n° de casque à stream
-    - entree pour afficher les infos du HeadsetFollowup
-    - ajouter le flag StreamAutoRestart dans le fichier de followup
-    - Si on retape le même numéro, ça kill le stream en cours, et ça arrête de le rouvrir automatiquement
-- au menu principal > une touche pour activer ADB Wirelss pour un device connecté en usb directement (genre la touche + du clavier...)
-- Customiser les paramètres de scrcpy dans le fichier de cfg json et pas dans le script directement
-- Lors de l'installation de l'apk ADB Wireless ou de l'activation de stream, ajouter automatiquement le casque si le S/N n'est pas deja connu
-    > 0 pour le nom du casque si pas envie de l'ajouter
-- touche "+" pour activer le WIFI ADB sur un casque connecté en USB.
-- Ajouter une fonction de refresh des paramètres d'entrée (touche R ?) pour prendre en compte les MAJ des fichiers modules et du fichier de cfg json.
+- From the main menu, type the headset number directly to stream it
+    - Enter key to display HeadsetFollowup info
+    - Add the StreamAutoRestart flag to the followup file
+    - If the same number is entered again, kill the running stream and stop auto-reopening it
+- From main menu > a key to enable ADB Wireless for a USB-connected device (e.g. the + key)
+- Customize scrcpy parameters in the JSON config file rather than directly in the script
+- When installing the ADB Wireless APK or activating a stream, automatically add the headset if its serial number is not already known
+    > Enter 0 for the headset name if you don't want to add it
+- "+" key to enable WiFi ADB on a USB-connected headset.
+- Add an input-parameter refresh function (R key?) to reload updated module files and the JSON config file.
 
-- check etat du casque si essaie : wifi unauthorized, pas d'adb activé, mode développeur pas activé...
-- Autoriser adb.exe dans le pare-feu Windows au lancement du logiciel (prompt firewall)
+- Check headset state on attempt: wifi unauthorized, ADB not enabled, developer mode not enabled...
+- Allow adb.exe through the Windows Firewall on application startup (firewall prompt)
 
-- Forcer le démarrage du deamon ADB au lancement du script s'il est arrêté
+- Force the ADB daemon to start when the script launches if it is stopped
 
 #>
 
-# Fallback si $PSScriptRoot n'est pas disponible (ex: execution en ligne de commande)
+# Fallback if $PSScriptRoot is not available (e.g. command-line execution)
 #$global:ScriptPath = if ($PSScriptRoot) {$PSScriptRoot} else {"L:\Drive partagés\04 Equipe Technique\20 VR\VR_HEADSET_MANAGER"}
 
 

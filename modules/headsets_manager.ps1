@@ -2,39 +2,39 @@
 # MANAGE KNOWN HEADSET FILE
 #################
 
-# Fonction pour recuperer les casques VR depuis le fichier CSV
-# Exemple d'utilisation de la fonction Get-KnownHeadsets
+# Function to retrieve VR headsets from the CSV file
+# Example usage of the Get-KnownHeadsets function
 # $headsets=Get-KnownHeadsets
 function Get-KnownHeadsets {
     param (
         [string]$knownHeadsetsFilePath = $global:knownHeadsetsFilePath 
     )
 
-    # Verifier si la variable globale $knownHeadsetsFilePath est definie
+    # Check whether the global variable $knownHeadsetsFilePath is defined
     if (-not $knownHeadsetsFilePath) {
-        Write-Log -Message "Le chemin du fichier CSV des casques est vide ou non defini." -Level "ERROR"
+        Write-Log -Message $msg.HeadsetCsvPathEmpty -Level "ERROR"
         return
     }
 
-    # Verifier si le fichier existe
+    # Check whether the file exists
     if (-not (Test-Path $knownHeadsetsFilePath)) {
-        Write-Log -Message "Le fichier CSV specifie n'existe pas : $knownHeadsetsFilePath" -Level "ERROR"
+        Write-Log -Message ($msg.HeadsetCsvNotFound -f $knownHeadsetsFilePath) -Level "ERROR"
         return
     }
 
-    # Lire le fichier CSV et retourner les donnees sous forme d'objets PowerShell
+    # Read the CSV file and return data as PowerShell objects
     try {
         $headsets = @(Import-Csv -Path $knownHeadsetsFilePath)
         return $headsets
     }
     catch {
-        Write-Log -Message "Erreur lors de la lecture du fichier CSV." -Level "ERROR"
+        Write-Log -Message $msg.HeadsetCsvReadError -Level "ERROR"
     } 
 } # OK
 
 
-# AFFICHAGE DE TOUS LES CASQUES
-# AJOUT DU TEST DU PING ET DU PORT ADB ET DE L'ETAT DU STREAM DE SCRCPY
+# DISPLAY ALL HEADSETS
+# WITH PING, ADB PORT, AND SCRCPY STREAM STATUS TESTING
 #Show-HeadsetsTable -FieldsToShow @("ID", "Name", "Model", "Ping", "ADBReachable", "SCRCPY")
 #$FieldsToShow = "all"
 
@@ -48,11 +48,11 @@ function Show-HeadsetsTable {
         [string[]]$FieldsToShow = @("all")
     )
 
-    # Charger les casques depuis le fichier CSV
+    # Load headsets from the CSV file
     $headsets = @(Import-Csv -Path $FilePath -Delimiter ";" )
 
     if ($headsets.Count -eq 0) {
-        Write-Log "Aucun casque connu a afficher !" -Level "INFO"
+        Write-Log $msg.NoHeadsetToDisplay -Level "INFO"
         return
     }
 
@@ -60,12 +60,12 @@ function Show-HeadsetsTable {
         $FieldsToShow = @("ID","Name","IPAddress","Ping","ADBWifi","Model","SerialNumber","Battery","Temp","Charging","SCRCPY")
     }
 
-    # Ajouter "Ping", "ADBReachable", "SCRCPY" aux champs valides
+    # Add "Ping", "ADBReachable", "SCRCPY" to valid fields
     $validFields = $headsets[0].PSObject.Properties.Name.Split(";").replace('"',"") + "SCRCPY"
     $invalidFields = $FieldsToShow | Where-Object { $_ -notin $validFields }
 
     if ($invalidFields.Count -gt 0) {
-        Write-Log "Les champs suivants sont invalides et seront ignores : $($invalidFields -join ', ')" -Level "WARNING"
+        Write-Log ($msg.InvalidFieldsIgnored -f ($invalidFields -join ', ')) -Level "WARNING"
     }
 
     $FieldsToShow = $FieldsToShow | Where-Object { $_ -in $validFields }
@@ -84,7 +84,7 @@ function Show-HeadsetsTable {
     if ($headsets.Count -gt 0) {
         $headsets  | Select-Object $FieldsToShow | Format-Table -AutoSize
     } else {
-        Write-Log "No headset found to display in $FilePath." -Level WARNING
+        Write-Log ($msg.NoHeadsetFoundInFile -f $FilePath) -Level WARNING
     }
 }
 
@@ -98,17 +98,17 @@ function Show-HeadsetsConfig {
     $knownHeadsetsConfig = @(Import-Csv -Path $global:knownHeadsetsFilePath -Delimiter "," )
 
     if (-not $knownHeadsetsConfig -or $knownHeadsetsConfig.Count -eq 0) {
-        Write-Log "No headset found to display in $global:knownHeadsetsFilePath." -Level INFO
+        Write-Log ($msg.NoHeadsetFoundInFile -f $global:knownHeadsetsFilePath) -Level INFO
         return
     }
     # display table formated with "|" as separator and colored if $UseColors is true
     if ($UseColors){
 
-        # Déterminer la largeur de la console
+        # Determine the console width
         $consoleWidth = $Host.UI.RawUI.WindowSize.Width - 1
-        if ($consoleWidth -lt 0) { $consoleWidth = 80 } # Valeur par défaut
+        if ($consoleWidth -lt 0) { $consoleWidth = 80 } # Default value
 
-        # Définir les longueurs de padding pour chaque champ et les place dans un tableau
+        # Define the padding lengths for each field and store them in a hashtable
         $Padding = @{
             ID = 2
             Name = 15
@@ -117,14 +117,14 @@ function Show-HeadsetsConfig {
             Record = 6
         }
         
-        # Créer l'en-tête du tableau
+        # Build the table header
         $header = ""
         foreach ($field in $FieldsToShow) {
             $header += $field.PadRight($Padding[$field]).Substring(0,$Padding[$field]) + " | "
         }
         Write-Host $header.Substring(0, [Math]::Min($header.Length, $consoleWidth))
 
-        # Afficher chaque ligne avec le formatage approprié
+        # Display each row with appropriate formatting
         foreach ($headset in $knownHeadsetsConfig) {
             foreach ($field in $FieldsToShow) {
                 $value = $headset.$field
@@ -163,22 +163,22 @@ function Show-HeadsetsTableColored {
     )
 
     $knownHeadsetsInfo = @(Import-Csv -Path $knownHeadsetsInfosFilePath -Delimiter ";" )
-    # Vérifier si des données sont présentes
+    # Check whether data is present
     if (-not $knownHeadsetsInfo -or $knownHeadsetsInfo.Count -eq 0) {
-        Write-Log "Aucun casque VR trouve dans le fichier $knownHeadsetsInfosFilePath." -Level WARNING
+        Write-Log ($msg.NoHeadsetInInfosFile -f $knownHeadsetsInfosFilePath) -Level WARNING
         return
     }
 
 
     if ($UseColors){
 
-        # Déterminer la largeur de la console
+        # Determine the console width
         $consoleWidth = $Host.UI.RawUI.WindowSize.Width - 1
-        if ($consoleWidth -lt 0) { $consoleWidth = 80 } # Valeur par défaut
+        if ($consoleWidth -lt 0) { $consoleWidth = 80 } # Default value
 
 
 
-        # Définir les longueurs de padding pour chaque champ et les place dans un tableau
+        # Define the padding lengths for each field and store them in a hashtable
         $Padding = @{
             ID = 2
             Name = 15
@@ -194,26 +194,26 @@ function Show-HeadsetsTableColored {
         }
         
 
-        # Créer l'en-tête du tableau
+        # Build the table header
         $header = ""
         foreach ($field in $FieldsToShow) {
             $header += $field.PadRight($Padding[$field]).Substring(0,$Padding[$field]) + " | "
         }
         Write-Host $header.Substring(0, [Math]::Min($header.Length, $consoleWidth))
 
-        # Afficher chaque ligne avec le formatage approprié
+        # Display each row with appropriate formatting
         foreach ($headset in $knownHeadsetsInfo) {
-            # Déterminer la couleur de fond
+            # Determine the background color
             $bgColor = "$null"
             
             if ($headset.Ping -eq $False) {
-                $bgColor = "DarkGray" # Casque ne répond pas
+                $bgColor = "DarkGray" # Headset not responding
             }
             elseif ($headset.ADBWifi -eq $False) {
-                $bgColor = "Black"  # l'ADB du casque ne répond pas sur le port spécifié
+                $bgColor = "Black"  # Headset ADB not responding on the specified port
             }
             elseif ($headset.Temp -and [int]($headset.Temp -replace ',','.') -gt 55) {
-                $bgColor = "DarkRed" # Température > 50°
+                $bgColor = "DarkRed" # Temperature > 50°
             }
             elseif ($headset.Battery -and [int]($headset.Battery -replace '[^\d]','') -lt 40 -and $headset.Charging -eq $False) {
                 $bgColor = "DarkRed" # Battery < 40% and not charging
@@ -222,13 +222,13 @@ function Show-HeadsetsTableColored {
                 $bgColor = "DarkYellow" # Battery < 30% and charging
             }
             elseif ($headset.Charging -eq $False) {
-                $bgColor = "DarkYellow" # Casque n'est pas en charge
+                $bgColor = "DarkYellow" # Headset is not charging
             }
             elseif ($headset.SCRCPY -eq "OK") {
-                $bgColor = "Green" # Scrcpy est lancé
+                $bgColor = "Green" # Scrcpy is running
             }
             else {
-                $bgColor = "White" # Couleur par défaut (tout va bien)
+                $bgColor = "White" # Default color (everything is fine)
             }
             
 
@@ -261,7 +261,7 @@ function Show-HeadsetsTableColored {
                     $degree = [char]0x00B0
                     $value = $($value -replace '\,0$','')+$degree+'C'
                 }
-                # Ajouter le champ à la ligne
+                # Add the field to the row
                 if ($null -eq $value) {
                     $value = "-"
                 }
@@ -278,12 +278,12 @@ function Show-HeadsetsTableColored {
                 $line += "$($value.PadRight($Padding[$field]).Substring(0,$Padding[$field])) | "
             }
 
-            # Afficher la ligne avec les couleurs appropriées
+            # Display the row with appropriate colors
 
             Write-Host $line.Substring(0, [Math]::Min($line.Length, $consoleWidth)) -BackgroundColor $bgColor -ForegroundColor $fgColor
             
         }
-    } else { # Pas de couleurs
+    } else { # No colors
         $knownHeadsetsInfo | Select-Object $FieldsToShow | Format-Table -AutoSize
     }
 }
@@ -294,19 +294,19 @@ function Show-HeadsetsTableColored {
 #Add-Headset -IPAddress "192.168.1.223" -Name "Q3 Manu"
 function Add-Headset {
     param (
-        [array]$headsets = (Import-Csv -Path $global:knownHeadsetsFilePath),  # Valeur par defaut : fichier CSV
+        [array]$headsets = (Import-Csv -Path $global:knownHeadsetsFilePath),  # Default value: CSV file
         [Parameter(Mandatory = $true)][string]$IPAddress,
-        [string]$Name = "Nouveau casque"#,
+        [string]$Name = "New headset"#,
         #[int]$AdbPort = 5555
     )
 
-    #Test si le casque n'existe pas déjà avec la même @IP
+    #Check if a headset with the same @IP does not already exist
     if ( $headsets.IPAddress -contains $IPAddress){
-        Write-Log "Le casque avec l'IP $IPAddress existe deja dans la liste !" WARNING
+        Write-Log ($msg.HeadsetIpExists -f $IPAddress) -Level WARNING
         return
     }
     
-    # Ajouter un nouveau casque a la liste
+    # Add a new headset to the list
     $newHeadset = [PSCustomObject]@{
         ID          = ($headsets | Measure-Object).Count + 1
         Name         = $Name
@@ -317,19 +317,19 @@ function Add-Headset {
         #AdbPort      = $AdbPort
     }
 
-    # Ajouter a la liste des casques
+    # Add to the headset list
     $headsets += $newHeadset
 
-    Write-Log "Ajout d'un nouveau casque : $Name ($IPAddress)" -Level INFO
+    Write-Log ($msg.HeadsetAdding -f $Name, $IPAddress) -Level INFO
 
-    # Sauvegarder dans le fichier CSV
+    # Save to the CSV file
     Save-Headsets -headsets $headsets
 } # OK
 
 # Update-HeadsetField -ID ([int]"1") -Field "SerialNumber" -NewValue "ABC123"
 function Update-HeadsetField {
     param (
-        [array]$headsets = (Import-Csv -Path $global:knownHeadsetsFilePath),  # Valeur par defaut : fichier CSV
+        [array]$headsets = (Import-Csv -Path $global:knownHeadsetsFilePath),  # Default value: CSV file
         [int]$ID,
         [string]$Field,
         [string]$NewValue
@@ -340,14 +340,14 @@ function Update-HeadsetField {
     if ($headset) {
         if ($headset.PSObject.Properties.Name -contains $Field) {
             $headset.$Field = $NewValue
-            Write-Log "Champ '$Field' mis a jour pour l'ID $ID avec la valeur '$NewValue'" -Level INFO
+            Write-Log ($msg.HeadsetFieldUpdated -f $Field, $ID, $NewValue) -Level INFO
         } else {
-            Write-Log "Erreur : Le champ '$Field' n'existe pas dans la liste." -Level ERROR
+            Write-Log ($msg.HeadsetFieldNotExist -f $Field) -Level ERROR
         }
     } else {
-        Write-Log "Erreur : Aucun casque trouve avec l'ID $ID." -Level ERROR
+        Write-Log ($msg.HeadsetIdNotFound -f $ID) -Level ERROR
     }
-    # Sauvegarder les modifications dans le fichier CSV
+    # Save changes to the CSV file
     Save-Headsets -headsets $headsets
     #return $headsets
 } # OK
@@ -358,17 +358,17 @@ function Remove-Headset {
         [int]$ID
     )
 
-    # Recherche du casque avec l'ID specifie
+    # Find the headset with the specified ID
     $headsetToRemove = $headsets | Where-Object { $_.ID -eq $ID }
 
     if ($headsetToRemove) {
-        # Supprimer le casque de la liste
+        # Remove the headset from the list
         $headsets = $headsets | Where-Object { $_.ID -ne $ID }
-        Write-Log "Le casque avec l'ID $ID $($headsetToRemove.Name) a ete supprime." -Level INFO
+        Write-Log ($msg.HeadsetRemoved -f $ID, $headsetToRemove.Name) -Level INFO
     } else {
-        Write-Log "Erreur : Aucun casque trouve avec l'ID $ID." -Level ERROR
+        Write-Log ($msg.HeadsetIdNotFound -f $ID) -Level ERROR
     }
-    # Sauvegarder les modifications dans le fichier CSV
+    # Save changes to the CSV file
     Save-Headsets -headsets $headsets
     #return $headsets
 } #OK
@@ -379,7 +379,7 @@ function Save-Headsets {
         [string]$FilePath = $global:knownHeadsetsFilePath 
     )
 
-    # Reorganiser les ID a partir de 1
+    # Reassign IDs starting from 1
     $newHeadsets = $headsets | Sort-Object ID
     $newID = 1
     foreach ($headset in $newHeadsets) {
@@ -387,36 +387,36 @@ function Save-Headsets {
         $newID++
     }
 
-    # Sauvegarder dans le fichier CSV
+    # Save to the CSV file
     $newHeadsets | Export-Csv -Path $FilePath -NoTypeInformation -Encoding UTF8
-    Write-Log "Les casques ont ete reorganises et enregistres dans '$FilePath'." -Level INFO
+    Write-Log ($msg.HeadsetsSaved -f $FilePath) -Level INFO
     Write-htmlMonitor $newHeadsets
 } #OK
 
 
 function Add-Headset-Manually {
-    # Effacer l'ecran
+    # Clear the screen
     Clear-Host
     Start-Sleep -Milliseconds 200
-    Write-Host "=== AJOUT MANUEL D'UN CASQUE ===" -BackgroundColor Green -ForegroundColor Black
+    Write-Host "=== MANUAL HEADSET ADDITION ===" -BackgroundColor Green -ForegroundColor Black
 
-    # Demander les informations necessaires
-    $name = Read-Host "Nom du casque (obligatoire)"
+    # Ask for the required information
+    $name = Read-Host "Headset name (mandatory)"
     if (-not $name) {
-        Write-Host "Le nom est obligatoire. Abandon." -ForegroundColor Red
+        Write-Host "The name is mandatory. Aborting." -ForegroundColor Red
         return
     }
 
-    $ip = Read-Host "Adresse IP du casque (obligatoire)"
+    $ip = Read-Host "Headset IP address (mandatory)"
     if (-not (Test-ValidIPv4 $ip)) {
-        Write-Host "Une adresse IP valide est obligatoire. Abandon." -ForegroundColor Red
+        Write-Host "A valid IP address is mandatory. Aborting." -ForegroundColor Red
         return
     }
 
-    # Champs facultatifs
-    #$adbPortInput = Read-Host "Port ADB (optionnel, defaut: 5555)"
+    # Optional fields
+    #$adbPortInput = Read-Host "ADB port (optional, default: 5555)"
 
-    # Traitement des valeurs par defaut
+    # Handle default values
 <#
     if ([string]::IsNullOrWhiteSpace($adbPortInput)) {
         $adbPort = 5555
@@ -424,8 +424,8 @@ function Add-Headset-Manually {
         $adbPort = [int]$adbPortInput
     }
  #>
-    # Appel de la fonction principale
+    # Call the main function
     Add-Headset -IPAddress $ip -Name $name #-adbPort $adbPort
 
-    Write-Host "Casque ajoute avec succes !" -ForegroundColor Cyan
+    Write-Host "Headset added successfully!" -ForegroundColor Cyan
 } #OK

@@ -7,7 +7,7 @@ function Show-MainMenu {
 
          #Check if headsets dashboard is running, if not restart it
         $VRMonitorProcess = Get-WmiObject -Class Win32_Process -Filter "ParentProcessId = $PID" | Where-Object { $_.CommandLine -match "headsets_dashboard.ps1" }
-        Write-Log "VRMonitorProcess: $($VRMonitorProcess.ProcessId)" -Level DEBUG
+        Write-Log ($msg.VRMonitorProcessId -f $VRMonitorProcess.ProcessId) -Level DEBUG
         
         if (-not $VRMonitorProcess) {
             Write-Host $msg.VRMonitorNotRunning -ForegroundColor Yellow
@@ -36,10 +36,10 @@ function Show-MainMenu {
         Write-Host $msg.MainMenuTitle -ForegroundColor Cyan
         Write-Host $msg.StreamHeadset -BackgroundColor Yellow -ForegroundColor Black
         
-        #Write-Host " 3. Supprimer un casque " -BackgroundColor DarkMagenta -ForegroundColor White
-        #Write-Host " 4. Gestion USB d'un casque (Activation Wifi ADB et Applications) " -BackgroundColor Blue -ForegroundColor White
+        #Write-Host " 3. Remove a headset " -BackgroundColor DarkMagenta -ForegroundColor White
+        #Write-Host " 4. USB headset management (Enable Wifi ADB and Applications) " -BackgroundColor Blue -ForegroundColor White
         
-        #Write-Host " 9. Verifier la connexion a internet " -BackgroundColor White -ForegroundColor Black
+        #Write-Host " 9. Check internet connection " -BackgroundColor White -ForegroundColor Black
         Write-Host $msg.EnableWifiADB -BackgroundColor White -ForegroundColor Black
         Write-Host $msg.AddModifyHeadset -BackgroundColor Green -ForegroundColor DarkMagenta
         Write-Host $msg.ScrcpyTracking -BackgroundColor DarkRed -ForegroundColor White
@@ -54,7 +54,7 @@ function Show-MainMenu {
         #Show-HeadsetsTable
         Show-HeadsetsConfig
         #Show-HeadsetsTableColored -FieldsToShow @("ID","Name", "IPAddress")
-        #Write-Host "Nom ; Etat (OK/KO) ; Niveau de batterie ; application en cours"
+        #Write-Host "Name ; Status (OK/KO) ; Battery level ; current application"
         $headsets = @(Get-KnownHeadsets)
 
         $choice = (Read-Host $msg.EnterChoice).ToUpper()
@@ -63,7 +63,7 @@ function Show-MainMenu {
             $headsetName = ($headsets | Where-Object { $_.ID -eq $choice }).Name
             $headsetIPAddress = ($headsets | Where-Object { $_.ID -eq $choice }).IPAddress
             $headsetRecording = ($headsets | Where-Object { $_.ID -eq $choice }).Record
-            #convertion de $headsetRecording en boolean
+            #convert $headsetRecording to boolean
             if ($headsetRecording -in @("True", "true", $true)) {
                 $headsetRecording = $true
             } else {
@@ -83,17 +83,17 @@ function Show-MainMenu {
         else {
 
             switch ($choice) {
-                <#'1' { Write-Host "=== Streamer l'ecran d'un casque VR ===" -BackgroundColor Blue
+                <#'1' { Write-Host "=== Stream the screen of a VR headset ===" -BackgroundColor Blue
                         Show-SubMenu-StreamHeadset 
                         
                     }#>
                 'A' { Write-Host $msg.AddHeadsetTitle
                         Show-SubMenu-AddHeadset
                     }
-                <#'3' { Write-Host "== SUPPRESSION D'UN CASQUE ==" #OK
+                <#'3' { Write-Host "== HEADSET REMOVAL ==" #OK
                         Show-SubMenu-RemoveHeadset 
                     }
-                '4' { Write-Host "== GESTION D'UN CASQUE =="
+                '4' { Write-Host "== HEADSET MANAGEMENT =="
                         Show-SubMenu-ManageHeadset
                     }
                 #>
@@ -157,7 +157,7 @@ function Show-SubMenu-StreamHeadset { # CHOIX 1
             $headsetName = ($headsets | Where-Object { $_.ID -eq $userInput }).Name
             $headsetIPAddress = ($headsets | Where-Object { $_.ID -eq $userInput }).IPAddress
             $headsetRecording = ($headsets | Where-Object { $_.ID -eq $userInput }).Record
-            #convertion de $headsetRecording en boolean
+            #convert $headsetRecording to boolean
             if ($headsetRecording -in @("True", "true", $true)) {
                 $headsetRecording = $true
             } else {
@@ -218,7 +218,7 @@ function Show-SubMenu-AddHeadset { #CHOIX 2
         }
 
         default {
-            Write-Log -Message "Option invalide saisie dans le menu d'ajout." -Level "ERROR"
+            Write-Log -Message $msg.InvalidOptionAdd -Level "ERROR"
             Write-Host $msg.InvalidOption -ForegroundColor Yellow
         }
     }
@@ -231,7 +231,7 @@ function Show-SubMenu-EditHeadset { #CHOIX 3
 
     $headsets = @(Get-KnownHeadsets)
     if (-not $headsets -or $headsets.Count -eq 0) {
-        Write-Log -Message "Aucun casque a modifier." -Level "WARNING"
+        Write-Log -Message $msg.NoHeadsetToModify -Level "WARNING"
         Write-Host $msg.NoHeadsetToModify -ForegroundColor Yellow
         return
     }
@@ -240,12 +240,12 @@ function Show-SubMenu-EditHeadset { #CHOIX 3
 
     $idInput = Read-Host $msg.EnterIDToModify
     if ($idInput -eq '0') {
-        Write-Log "Retour au menu precedent depuis l'edition." -Level "INFO"
+        Write-Log $msg.ReturnFromEdit -Level "INFO"
         return
     }
 
     if (-not ($idInput -match '^\d+$') -or [int]$idInput -lt 1 -or [int]$idInput -gt $headsets.Count) {
-        Write-Log "ID invalide saisi pour modification : $idInput" -Level "ERROR"
+        Write-Log ($msg.InvalidIDModification -f $idInput) -Level "ERROR"
         Write-Host $msg.InvalidIDRetry -ForegroundColor Red
         return
     }
@@ -274,7 +274,7 @@ function Show-SubMenu-EditHeadset { #CHOIX 3
     } elseif ($fieldNum -eq '5') {
         $field = "SerialNumber"
     } else {
-        Write-Log "Numero de champ invalide saisi : $fieldNum" -Level "ERROR"
+        Write-Log ($msg.InvalidFieldNumberEntered -f $fieldNum) -Level "ERROR"
         Write-Host $msg.InvalidFieldNumber -ForegroundColor Red
         return
     }
@@ -286,7 +286,7 @@ function Show-SubMenu-EditHeadset { #CHOIX 3
         if ($newValueInput -in @("True", "true", "False", "false")) {
             $newValue = [System.Convert]::ToBoolean($newValueInput)
         } else {
-            Write-Log "Valeur invalide pour le champ boolean '$field' : $newValueInput" -Level "ERROR"
+            Write-Log ($msg.InvalidBoolValueField -f $field, $newValueInput) -Level "ERROR"
             Write-Host $msg.InvalidBoolValue -ForegroundColor Red
             retourn
         }
@@ -296,18 +296,18 @@ function Show-SubMenu-EditHeadset { #CHOIX 3
     }
     
 
-    # Mettre a jour le casque avec les nouveaux parametres
+    # Update the headset with the new parameters
     Update-HeadsetField -ID ([int]$idInput) -Field $field -NewValue $newValue
 } # OK
 
 function Show-SubMenu-RemoveHeadset { 
-    # Verifier s'il existe des casques dans le fichier
+    # Check whether headsets exist in the file
     Clear-Host
     Start-Sleep -Milliseconds 200
-    $headsets = @(get-knownHeadsets) # @() pour s'assurer que l'objet est bien de type array, et qu'on peut faire un .Count !
+    $headsets = @(get-knownHeadsets) # @() ensures the object is an array so .Count works
     if (-not $headsets) {
-        Write-Log -Message "Aucun casque trouve dans le fichier. Aucune suppression possible." -Level "INFO"
-        Write-Host "Il n'y a aucun casque a supprimer." -ForegroundColor Yellow
+        Write-Log -Message $msg.NoHeadsetFound -Level "INFO"
+        Write-Host "There is no headset to delete." -ForegroundColor Yellow
         return
     }
 
@@ -316,15 +316,15 @@ function Show-SubMenu-RemoveHeadset {
     Write-Host ($msg.EnterIDToDelete -f $headsets.Count)
     Write-Host $msg.DeleteAll
     Write-Host $msg.ReturnPreviousOption
-    # Demander a l'utilisateur de saisir un ID ou 'ALL' ou '0' pour revenir
-    $userInput = $(Read-Host " Votre choix >>").ToUpper() #ToUpper = Convertir l'entree de l'utilisateur en majuscule pour la comparaison insensible a la casse
+    # Ask the user to enter an ID, 'ALL', or '0' to return
+    $userInput = $(Read-Host " Your choice >>").ToUpper() #ToUpper = Convert user input to uppercase for case-insensitive comparison
 
-    # Si l'utilisateur entre 'ALL', supprimer tous les casques
+    # If the user enters 'ALL', delete all headsets
     if ($userInput -eq 'ALL') {
-        # Demander une confirmation avant de supprimer tous les casques
+        # Ask for confirmation before deleting all headsets
         $confirmation = $(Read-Host $msg.ConfirmDeleteAll).ToUpper()
         if ($confirmation -eq 'Y') {
-            # Supprimer tous les casques en appelant Remove-KnownHeadset sans specifier de criteres
+            # Delete all headsets by calling Remove-KnownHeadset without specifying criteria
             Clear-Content -Path $global:knownHeadsetsFilePath -Force
             Write-Log -Message $msg.AllDeleted -Level "INFO"
             Write-Host $msg.AllDeletedMsg -ForegroundColor green
@@ -332,9 +332,9 @@ function Show-SubMenu-RemoveHeadset {
             Write-Log -Message $msg.DeletionCancelled -Level "INFO"
         }
     }
-    # Si l'utilisateur entre '0', revenir au menu precedent
+    # If the user enters '0', return to the previous menu
     elseif ($userInput -eq '0') {
-        Write-Log -Message "Retour au menu precedent." -Level "INFO"
+        Write-Log -Message $msg.ReturnPrevious -Level "INFO"
     }
         # Si l'utilisateur entre un ID specifique, appeler Remove-KnownHeadset
     elseif ($userInput -match '^\d+$' -and $userInput -ge 0 -and $userInput -le $headsets.Count) {
@@ -357,7 +357,7 @@ function Show-SubMenu-ManageHeadset { #CHOIX 4
     Write-Host $msg.UninstallApp
 
     Write-Host $msg.ReturnPreviousMenu
-    $userInput = $(Read-Host $msg.YourChoice).ToUpper() #ToUpper = Convertir l'entree de l'utilisateur en majuscule pour la comparaison insensible a la casse
+    $userInput = $(Read-Host $msg.YourChoice).ToUpper() #ToUpper = Convert user input to uppercase for case-insensitive comparison
 
     if ($userInput -eq '1') {
         Write-Host $msg.InstallOculusTitle
@@ -394,7 +394,7 @@ function Show-SubMenu-scrcpyTracking { #CHOIX 5
     Write-Host $msg.EnterNumberToModify
     #Write-Host "1. Activer le restart automatique des scrcpy"
     #Write-Host "2. Desactiver le restart automatique des scrcpy"
-    #Write-Host "3. Lancer un monitoring actif des fenêtres lancees"
+    #Write-Host "3. Launch active monitoring of running windows"
     
     if ($headsets.Count -eq 0) {
         Write-Host $msg.NoHeadsetInFile -ForegroundColor Yellow
@@ -423,7 +423,7 @@ function Show-SubMenu-scrcpyTracking { #CHOIX 5
             Write-Log -Message ($msg.ActivateAutoTracking -f $choice, $headsets[$choice-1].Name) -Level "INFO"
             $headsets[$choice-1].scrcpy_AutoRestart = $true
         }
-        # Sauvegarder les modifications dans le fichier csv
+        # Save changes to the CSV file
         Save-Headsets -headsets $headsets
     }
     else {
@@ -468,7 +468,7 @@ function Show-SubMenu-Recording { #CHOIX 6
             Write-Log -Message ($msg.ActivateRecording -f $choice, $headsets[$choice-1].Name) -Level "INFO"
             $headsets[$choice-1].Record = $true
         }
-        # Sauvegarder les modifications dans le fichier csv
+        # Save changes to the CSV file
         Save-Headsets -headsets $headsets
     }
     else {
@@ -490,7 +490,7 @@ function Show-SubMenu-FilesAndFolders{
     Write-Host $msg.EditKnownHeadsetsConfig
 
     Write-Host $msg.ReturnPreviousMenu
-    $userInput = $(Read-Host $msg.YourChoice).ToUpper() #ToUpper = Convertir l'entree de l'utilisateur en majuscule pour la comparaison insensible a la casse
+    $userInput = $(Read-Host $msg.YourChoice).ToUpper() #ToUpper = Convert user input to uppercase for case-insensitive comparison
     switch ($userInput) {
         '1' {
             Write-Log -Message $msg.OpenRecordings -Level "INFO"
@@ -521,7 +521,7 @@ function Show-SubMenu-FilesAndFolders{
         }
 
         default {
-            Write-Log -Message "Option invalide saisie dans le menu de gestion des fichiers." -Level "ERROR"
+            Write-Log -Message $msg.InvalidOptionFileMenu -Level "ERROR"
             Write-Host $msg.InvalidOptionFiles -ForegroundColor Yellow
         }
     }
@@ -541,7 +541,7 @@ function Open-Folder {
         Start-Process explorer.exe -ArgumentList $normalizedPath
     }
     else {
-        Write-Log "Folder path does not exist or is not a directory: $FolderPath" -Level ERROR
+        Write-Log ($msg.FolderNotExist -f $FolderPath) -Level ERROR
     }
 }
 

@@ -1,5 +1,5 @@
 #Load-Config -ConfigFilePath $ConfigFilePath
-# Fonction pour charger les variables de configuration depuis un fichier JSON
+# Function to load configuration variables from a JSON file
 function Get-Config {
     param (
         [string]$ConfigFilePath
@@ -7,19 +7,19 @@ function Get-Config {
     
     Write-Host "DEBUG ConfigFilePath = $ConfigFilePath" -ForegroundColor Magenta
     
-    # Verifier si le fichier existe
+    # Check whether the file exists
     if (-not (Test-Path $ConfigFilePath)) {
         Write-Host "Configuration file does not exist..." -ForegroundColor Red
         return $false
     }
 
-    # Lire le contenu du fichier JSON
+    # Read the JSON file content
     #$configContent = Get-Content -Path $ConfigFilePath | Out-String | ConvertFrom-Json
     $configContent = Get-Content -Path $ConfigFilePath | ConvertFrom-Json
     $sourcesPath = Join-Path -Path $global:ScriptPath -ChildPath "sources"
 
 
-    # Charger les variables globales obligatoires a partir du fichier JSON
+    # Load mandatory global variables from the JSON file
     $global:SelectedLanguage = $configContent.language
     Write-Host "DEBUG global:SelectedLanguage = $($global:SelectedLanguage)" -Level DEBUG
     $global:knownHeadsetsFile = $configContent.Paths.knownHeadsetsFile
@@ -85,7 +85,7 @@ function Get-Config {
     }
 
 
-    # Verifier les variables chargees
+    # Verify the loaded variables
     Write-Log "ScriptFolder: $global:ScriptPath" -Level DEBUG
     Write-Log "adbPort_default: $global:adbPort_default" -Level DEBUG
     Write-Log "adbFolder: $global:adbFolder" -Level DEBUG
@@ -104,14 +104,14 @@ function Get-Config {
         }
     }
 
-    # VARIABLES GLOBALES POUR LE SUIVI DES PROCESS SCRCPY ET RELANCEMENT AUTOMATIQUE
-    $global:scrcpyProcesses = @() #permettra de conserver une trace des process scrcpy lances
+    # GLOBAL VARIABLES FOR SCRCPY PROCESS TRACKING AND AUTO-RESTART
+    $global:scrcpyProcesses = @() #will keep track of launched scrcpy processes
     $global:scrcpyRestartAuto = $true
     
     Write-Log "Configuration variables successfully loaded" -Level DEBUG
 } # OK
 
-# Vérifie que le fichier de casques connus est OK
+# Verifies that the known headsets file is valid
 function Test-KnownHeadsetsFile {
     [CmdletBinding()]
     param (
@@ -120,7 +120,7 @@ function Test-KnownHeadsetsFile {
 
     # Check if file exists
     if (-not (Test-Path -Path $FilePath)) {
-        Write-Log -Message "Headset CSV file does not exist at path: $FilePath" -Level WARNING
+        Write-Log -Message ($msg.CsvFileNotFound -f $FilePath) -Level WARNING
         return $false
     }
 
@@ -128,7 +128,7 @@ function Test-KnownHeadsetsFile {
         # Attempt to import CSV
         $content = Import-Csv -Path $FilePath
         if (-not $content){
-            Write-Log -Message "CSV file empty or do not match requirements." -Level WARNING
+            Write-Log -Message $msg.CsvFileEmpty -Level WARNING
             return $false
         }
         # Check headers
@@ -137,21 +137,21 @@ function Test-KnownHeadsetsFile {
 
         $headerMatch = Compare-Object -ReferenceObject $requiredHeaders -DifferenceObject $actualHeaders -PassThru
         if ($headerMatch) {
-            Write-Log -Message "CSV file headers do not match requirements. Missing or extra headers detected." -Level WARNING
+            Write-Log -Message $msg.CsvHeadersMismatch -Level WARNING
             return $false
         }
 
         # Check at least one data row exists
         if ($content.Count -eq 0) {
-            Write-Log -Message "CSV file exists with correct headers but contains no data rows." -Level WARNING
+            Write-Log -Message $msg.CsvNoDataRows -Level WARNING
             return $false
         }
 
-        Write-Log -Message "CSV file validation passed: correct headers and contains data." -Level INFO
+        Write-Log -Message $msg.CsvValidationPassed -Level INFO
         return $true
     }
     catch {
-        Write-Log -Message "Error validating headset CSV file: $_" -Level ERROR
+        Write-Log -Message ($msg.CsvValidationError -f $_) -Level ERROR
         return $false
     }
 }

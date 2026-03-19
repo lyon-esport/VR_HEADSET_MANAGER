@@ -181,4 +181,104 @@
     InvalidOptionFiles = "Option invalide. Veuillez entrer 1, 2, 3, 4, 5 ou 0."
     # Open-File
     FileNotExist = "Le fichier '{0}' n'existe pas."
+
+    # ==========================================
+    # config_files_loader.ps1
+    # ==========================================
+    CsvFileNotFound = "Le fichier CSV des casques n'existe pas au chemin : {0}"
+    CsvFileEmpty = "Fichier CSV vide ou ne correspond pas aux exigences."
+    CsvHeadersMismatch = "Les en-tetes du fichier CSV ne correspondent pas aux exigences. En-tetes manquants ou supplementaires detectes."
+    CsvNoDataRows = "Le fichier CSV existe avec les bons en-tetes mais ne contient aucune ligne de donnees."
+    CsvValidationPassed = "Validation du fichier CSV reussie : bons en-tetes et donnees presentes."
+    CsvValidationError = "Erreur lors de la validation du fichier CSV des casques : {0}"
+
+    # ==========================================
+    # scripts_init.ps1
+    # ==========================================
+    TranslationsLoaded = "Traductions chargees pour la langue : {0}"
+    NetworkProfileCurrent = "Profil reseau actuel : {0}"
+    NetworkProfileFailed = "Impossible de recuperer le profil reseau : {0}"
+    FirewallRuleCreating = "Creation d'une regle de pare-feu pour ADB.exe"
+    FirewallRuleExists = "La regle de pare-feu existe deja et est correctement configuree"
+    FirewallRuleFailed = "Impossible de gerer la regle de pare-feu : {0}"
+    FirewallConfigSkipped = "Configuration du pare-feu pour ADB echouee ou ignoree"
+    AwakeModeActivated = "Mode eveil active : le verrouillage ecran et la veille sont desactives."
+    AwakeModeDeactivated = "Mode eveil desactive : comportement de veille/verrouillage normal restaure."
+
+    # ==========================================
+    # headsets_manager.ps1
+    # ==========================================
+    HeadsetCsvPathEmpty = "Le chemin du fichier CSV des casques est vide ou non defini."
+    HeadsetCsvNotFound = "Le fichier CSV specifie n'existe pas : {0}"
+    HeadsetCsvReadError = "Erreur lors de la lecture du fichier CSV."
+    NoHeadsetToDisplay = "Aucun casque connu a afficher !"
+    InvalidFieldsIgnored = "Les champs suivants sont invalides et seront ignores : {0}"
+    NoHeadsetFoundInFile = "Aucun casque trouve a afficher dans {0}."
+    NoHeadsetInInfosFile = "Aucun casque VR trouve dans le fichier {0}."
+    HeadsetIpExists = "Un casque avec l'IP {0} existe deja dans la liste !"
+    HeadsetAdding = "Ajout d'un nouveau casque : {0} ({1})"
+    HeadsetFieldUpdated = "Champ '{0}' mis a jour pour l'ID {1} avec la valeur '{2}'"
+    HeadsetFieldNotExist = "Erreur : Le champ '{0}' n'existe pas dans la liste."
+    HeadsetIdNotFound = "Erreur : Aucun casque trouve avec l'ID {0}."
+    HeadsetRemoved = "Le casque avec l'ID {0} {1} a ete supprime."
+    HeadsetsSaved = "Les casques ont ete reorganises et enregistres dans '{0}'."
+
+    # ==========================================
+    # headsets_infos_manager.ps1
+    # ==========================================
+    JobNotFound = "Job {0} introuvable -- Pas besoin de l'arreter"
+    JobCannotBeStopped = "Le job {0} ne peut pas etre arrete"
+    JobStopped = "Job {0} [ID {1}] arrete"
+    JobStarting = "Demarrage du job {0} (cycle {1})"
+    DebugConfigFilePath = "ConfigFilePath : {0}"
+    DebugKnownHeadsetsPath = "knownHeadsetsFilePath : {0}"
+    DebugKnownHeadsetsInfosPath = "knownHeadsetsInfosFilePath : {0}"
+    CheckingHeadsets = "Verification pour {0} casques"
+    UpdatingSerialNumber = "Mise a jour du numero de serie pour {0} ({1}) vers {2}"
+    JobInfoCollected = "JOB - Infos detaillees collectees pour {0} casques"
+    JobRestartsIn = "JOB {0} - Redemarrage dans {1} sec"
+    ScrcpyProcessesFound = "{0} processus scrcpy trouves"
+    ScrcpyProcessChecking = "Verification du processus scrcpy ID {0} au chemin {1}"
+    ScrcpyProcessCmdLine = "Processus scrcpy trouve avec la ligne de commande : {0}"
+    ScrcpyLookingFor = "Recherche de l'adresse IP : {0} et du port ADB : {1}"
+    ScrcpyRunningFor = "scrcpy est en cours d'execution pour {0} ({1})"
+    AdbInfoFailed = "Impossible de recuperer les infos ADB pour {0} : {1}"
+
+    # ==========================================
+    # network_scanner.ps1
+    # ==========================================
+    ScanConnecting = "Connexion a {0}..."
+    ScanConnected = "Connecte a {0} -- Modele : {1}, Numero de serie : {2}"
+    ScanConnectionFailed = "Echec de connexion a {0} -- Ignore."
+    ScanAddingHeadset = "Ajout du casque : {0} ({1}) - Modele : {2}, N/S : {3}"
+    ScanStarting = "Scan de {0} adresses IP sur le port {1}"
+
+    # ==========================================
+    # scrcpy_launcher.ps1
+    # ==========================================
+    AdbPortNotResponding = "Le port ADB {0} ne repond pas => Connectez d'abord le casque en USB et/ou lancez l'application Oculus Wifi ADB"
+    ScrcpyCheckingAdb = "Verification de la connexion ADB pour {0}"
+    ScrcpyExecError = "Erreur lors de l'execution : {0}"
+    ScrcpyModelDetected = "Modele detecte : {0}"
+    ScrcpyModelUnknown = "Modele non reconnu, aucun recadrage applique."
+    ScrcpyNotFound = "scrcpy.exe introuvable a l'emplacement {0}"
+    ScrcpyRecording = "Enregistrement de la session en cours dans {0}"
+    ScrcpyLaunching = "Lancement de scrcpy avec les arguments : {0}"
+    ScrcpyLaunchError = "Erreur lors du lancement de scrcpy : {0}"
+    ScrcpyCheckHeadset = "Verification si le casque est connecte et pret pour scrcpy : {0} ({1})"
+    ScrcpyCheckProcess = "Verification du processus scrcpy pour le casque {0} ({1})"
+    ScrcpyProcessFound = "Processus scrcpy trouve pour ce casque : {0}"
+    ScrcpyServerFileCopied = "Fichier serveur scrcpy copie."
+    ScrcpyIconFileCopied = "Fichier icone scrcpy copie."
+
+    # ==========================================
+    # console_manager.ps1 (additional)
+    # ==========================================
+    VRMonitorProcessId = "VRMonitorProcess : {0}"
+    InvalidIDModification = "ID invalide pour la modification : {0}"
+    InvalidOptionAdd = "Option invalide saisie dans le menu d'ajout."
+    InvalidFieldNumberEntered = "Numero de champ invalide saisi : {0}"
+    InvalidBoolValueField = "Valeur invalide pour le champ boolean '{0}' : {1}"
+    InvalidOptionFileMenu = "Option invalide saisie dans le menu de gestion des fichiers."
+    FolderNotExist = "Le chemin du dossier n'existe pas ou n'est pas un dossier : {0}"
 }

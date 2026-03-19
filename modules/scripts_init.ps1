@@ -6,7 +6,7 @@ $scripts_init = Join-Path -Path $global:ScriptPath -ChildPath "\modules\scripts_
 if (Test-Path -Path $scripts_init) {
     . $scripts_init
 } else {
-    Write-Host "Erreur: Le script d'initialisation des modules est introuvable !" -ForegroundColor Red
+    Write-Host "Error: The module initialization script was not found!" -ForegroundColor Red
     exit
 }
 
@@ -32,7 +32,7 @@ if (Test-Path -Path $scripts_init) {
 # Get the base path
 $global:ScriptPath = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 
-# Vérifier si on est dans le dossier modules et remonter d'un niveau si nécessaire
+# Check whether we are in the modules folder and move up one level if necessary
 if ((Split-Path $global:ScriptPath -Leaf) -eq "modules") {
     $global:ScriptPath = Split-Path $global:ScriptPath -Parent
 }
@@ -59,7 +59,7 @@ $moduleFiles = Get-ChildItem -Path $ModulesPath -Filter "*.ps1" -File |
 
     foreach ($file in $moduleFiles) {
         try {
-            # On "dot-source" le fichier pour que ses fonctions soient disponibles
+            # Dot-source the file so its functions become available
             . $file.FullName
             if (-not $global:debugLevelToConsole -or $global:debugLevelToConsole -in @('DEBUG','INFO','SUCCESS')) {
                 Write-Host "[OK] Module $($file.Name) loaded" -ForegroundColor Green
@@ -108,25 +108,33 @@ $moduleFiles = Get-ChildItem -Path $ModulesPath -Filter "*.ps1" -File |
     } else {
         Get-Config -ConfigFilePath $ConfigFilePath
         Write-Log "Configuration file $ConfigFilePath loaded successfully" -Level DEBUG
-
-        # Load centralized translations based on selected language
-        $translationsFolder = Join-Path $modulesPath "translations"
-        $translationsLang = Join-Path $translationsFolder "$($global:SelectedLanguage).psd1"
-        $translationsEn   = Join-Path $translationsFolder "en-US.psd1"
-        if (Test-Path $translationsLang) {
-            $global:msg = Import-PowerShellDataFile -Path $translationsLang
-        } elseif (Test-Path $translationsEn) {
-            if ($global:SelectedLanguage -ne 'en-US') {
-                Write-Host "Translations for '$($global:SelectedLanguage)' not found, falling back to English." -ForegroundColor Yellow
-            }
-            $global:msg = Import-PowerShellDataFile -Path $translationsEn
-        } else {
-            Write-Host "[WARNING] No translation file found in $translationsFolder" -ForegroundColor Yellow
-        }
-        Write-Log "Translations loaded for language: $($global:SelectedLanguage)" -Level DEBUG
         Write-Host "DEBUG global:knownHeadsetsFile = $($global:knownHeadsetsFile)" -ForegroundColor Magenta
         Write-Host "DEBUG global:knownHeadsetsFilePath = $($global:knownHeadsetsFilePath)" -ForegroundColor Magenta
     }
+
+    # Load centralized translations based on selected language.
+    # Runs after the config if/else so it also applies when the config file was
+    # missing (no language set) — falls back to English in that case.
+    $translationsFolder = Join-Path $modulesPath "translations"
+    $translationsEn     = Join-Path $translationsFolder "en-US.psd1"
+    $translationsLang   = if ($global:SelectedLanguage) {
+                              Join-Path $translationsFolder "$($global:SelectedLanguage).psd1"
+                          } else { $null }
+
+    if ($translationsLang -and (Test-Path $translationsLang)) {
+        $global:msg = Import-PowerShellDataFile -Path $translationsLang
+    } elseif (Test-Path $translationsEn) {
+        if ($global:SelectedLanguage -and $global:SelectedLanguage -ne 'en-US') {
+            Write-Host "Translations for '$($global:SelectedLanguage)' not found, falling back to English." -ForegroundColor Yellow
+        }
+        $global:msg = Import-PowerShellDataFile -Path $translationsEn
+    } else {
+        Write-Host "[ERROR] No translation file found in $translationsFolder" -ForegroundColor Red
+        Write-Host "[ERROR] a default translation file en-US.psd1 is required for the application to run." -ForegroundColor Red
+        Read-Host 'Press Enter to stop the application...'
+        exit
+    }
+    Write-Log ($msg.TranslationsLoaded -f $global:SelectedLanguage) -Level DEBUG
 
 
 
@@ -210,7 +218,7 @@ function Unblock-ADBFirewallRule {
 
     # Verify ADB executable exists
     if (-not (Test-Path -Path $AdbPath)) {
-        Write-Log "ADB executable not found at $AdbPath" -Level ERROR
+        Write-Log ($msg.ADBExecutableNotFound -f $AdbPath) -Level ERROR
         return $false
     }
     
@@ -268,10 +276,10 @@ function Unblock-ADBFirewallRule {
     # Get current network profile type
     try {
         $currentNetworkProfile = (Get-NetConnectionProfile).NetworkCategory
-        Write-Log "Current network profile: $currentNetworkProfile" -Level DEBUG
+        Write-Log ($msg.NetworkProfileCurrent -f $currentNetworkProfile) -Level DEBUG
     }
     catch {
-        Write-Log "Failed to retrieve network profile: $_" -Level WARNING
+        Write-Log ($msg.NetworkProfileFailed -f $_) -Level WARNING
         $currentNetworkProfile = "DomainAuthenticated"
     }
     
@@ -283,25 +291,25 @@ function Unblock-ADBFirewallRule {
         $invalidPaths = $existingPaths | Where-Object { $_ -ne $AdbPath }
 
         if ((-not $firewallRules) -or ($invalidPaths)) {
-            Write-Log "Creating firewall rule for ADB.exe" -Level INFO
+            Write-Log $msg.FirewallRuleCreating -Level INFO
             Invoke-AsAdmin -ScriptBlock $scriptBlock_AddFWRules -ruleName $ruleName -AdbPath $AdbPath
             return $true
         }
         else {
             # Rule exists, verify program path is correct
-                Write-Log "Firewall rule already exists and is correctly configured" -Level DEBUG
+                Write-Log $msg.FirewallRuleExists -Level DEBUG
                 return $true
         }
     }
     catch {
-        Write-Log "Failed to manage firewall rule: $_" -Level ERROR
+        Write-Log ($msg.FirewallRuleFailed -f $_) -Level ERROR
         return $false
     }
 }
 
 # Check and configure firewall for ADB
 if (-not (Unblock-ADBFirewallRule -adbPath $global:adbPath)) {
-    Write-Log "Firewall configuration for ADB failed or skipped" -Level WARNING
+    Write-Log $msg.FirewallConfigSkipped -Level WARNING
 }
 
 
@@ -327,13 +335,13 @@ function Set-AwakeMode {
         [AwakeMode]::ES_SYSTEM_REQUIRED -bor
         [AwakeMode]::ES_DISPLAY_REQUIRED
     ) | Out-Null
-    Write-Log "Awake mode activated: screen lock and sleep are disabled." -Level DEBUG
+    Write-Log $msg.AwakeModeActivated -Level DEBUG
 }
 
 function Reset-AwakeMode {
     # Restores normal Windows sleep/lock behaviour
     [AwakeMode]::SetThreadExecutionState([AwakeMode]::ES_CONTINUOUS) | Out-Null
-    Write-Log "Awake mode deactivated: normal sleep/lock behaviour restored." -Level DEBUG
+    Write-Log $msg.AwakeModeDeactivated -Level DEBUG
 }
 
 

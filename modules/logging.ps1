@@ -1,5 +1,5 @@
 ##########################
-### FONCTIONS DE BASE ####
+### BASE FUNCTIONS    ####
 ##########################
 
 
@@ -11,7 +11,7 @@ function Write-Log {
         [string]$Level = "INFO"
     )
 
-    # Dictionnaire des couleurs pour la console
+    # Color dictionary for the console
     $colors = @{
         "DEBUG"   = "DarkGray"
         "INFO"    = "Green"
@@ -20,27 +20,27 @@ function Write-Log {
         "ERROR"   = @{ Background = "Red"; Foreground = "White" }
     }
     
-    # Obtenir l'heure actuelle au format "yyyy-MM-dd HH:mm:ss"
+    # Get the current time in "yyyy-MM-dd HH:mm:ss" format
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $logEntry = "$timestamp [$Level] $Message"
     $consoleEntry = "[$Level] $Message"
 
-    # Liste des niveaux de log classes par importance
+    # List of log levels sorted by importance
     $logLevels = @("DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR")
     
-    # Verifier si le niveau de log autorise l'affichage dans la console
+    # Check whether the log level allows console output
     if ($logLevels.IndexOf($Level) -ge $logLevels.IndexOf($global:debugLevelToConsole) -or $global:debugLevelToConsole -eq "DEBUG") {
         
         if ($colors[$Level].GetType().Name -eq "Hashtable") {
-            # Affichage avec fond rouge et texte blanc pour les erreurs
+            # Display with colored background for errors/success
             Write-Host $consoleEntry -BackgroundColor $colors[$Level].Background -ForegroundColor $colors[$Level].Foreground
         } else {
-            # Affichage normal pour les autres niveaux
+            # Normal display for other log levels
             Write-Host $consoleEntry -ForegroundColor $colors[$Level]
         }
     }
 
-    # Verifier si le niveau de log autorise l'ecriture dans le fichier
+    # Check whether the log level allows writing to file
     if ($logLevels.IndexOf($Level) -ge $logLevels.IndexOf($global:debugLevelToFile) -or $global:debugLevelToFile -eq "DEBUG") {
         $attempt = 0
         $maxAttempts = 5
@@ -62,17 +62,17 @@ function Write-Log {
             }
         }
         if (-not $written) {
-            Write-Warning "Impossible d'ecrire dans le fichier log apres $maxAttempts tentatives : $logEntry"
+            Write-Warning "Failed to write to the log file after $maxAttempts attempts: $logEntry"
         }
     }
 
 }
 
 
-# 📌 **Exemples d'utilisation :**
+# 📌 **Usage examples:**
 <#
-Write-Log -Message "Ceci est un message de debug" -Level "DEBUG"
-Write-Log -Message "Processus termine avec succes" -Level "INFO"
-Write-Log -Message "Attention : Une configuration est manquante" -Level "WARNING"
-Write-Log -Message "Erreur fatale : Impossible de continuer" -Level "ERROR"
+Write-Log -Message "This is a debug message" -Level "DEBUG"
+Write-Log -Message "Process completed successfully" -Level "INFO"
+Write-Log -Message "Warning: A configuration item is missing" -Level "WARNING"
+Write-Log -Message "Fatal error: Cannot continue" -Level "ERROR"
 #>
