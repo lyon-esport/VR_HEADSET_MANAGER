@@ -90,19 +90,28 @@ $moduleFiles = Get-ChildItem -Path $ModulesPath -Filter "*.ps1" -File |
 
 # check if config file exists and load it
     if ( -not (Test-Path $ConfigFilePath)) {
-        Write-Host "Error: The configuration file does not exist or the path is not defined!" -ForegroundColor Red
-        #copy template default config file
-        $templateConfigFile = Join-Path -Path $global:ScriptPath -ChildPath "sources\templates\TEMPLATE_config.json"
-        Copy-Item -Path $templateConfigFile -Destination $ConfigFilePath -Force
-        #rename it to config.json
-        #Rename-Item -Path $ConfigFilePath -NewName "config.json" -Force
-        Write-Host "A default configuration file has been created at $ConfigFilePath. Please review and modify it as needed, then restart the script." -ForegroundColor Yellow
-        #wait 4 seconds
-        Start-Sleep -Seconds 4
-        #open the config file in notepad
-        notepad $ConfigFilePath
-        Write-Host "Press any key to exit..." -ForegroundColor Yellow
-        # exit the script
+        Write-Host ""
+        Write-Host "  *** Configuration file not found! ***" -ForegroundColor Red -BackgroundColor Black
+        Write-Host "  Expected : $ConfigFilePath" -ForegroundColor Yellow
+        Write-Host ""
+        $templatePath = Join-Path -Path $global:ScriptPath -ChildPath "templates\config\config.json"
+        if (Test-Path $templatePath) {
+            # Ensure the destination directory exists
+            $configDir = Split-Path $ConfigFilePath -Parent
+            if (-not (Test-Path $configDir)) {
+                New-Item -Path $configDir -ItemType Directory -Force | Out-Null
+            }
+            Copy-Item -Path $templatePath -Destination $ConfigFilePath -Force
+            Write-Host "  A default configuration file has been created from the template." -ForegroundColor Green
+            Write-Host "  Please fill in your settings, save and restart the script." -ForegroundColor Yellow
+            Write-Host ""
+            Start-Sleep -Seconds 2
+            notepad $ConfigFilePath
+        }
+        else {
+            Write-Host "  Template not found at '$templatePath'." -ForegroundColor Red
+            Write-Host "  Please create '$ConfigFilePath' manually, then restart." -ForegroundColor Yellow
+        }
         exit 1
 
     } else {
