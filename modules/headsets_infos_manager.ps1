@@ -150,17 +150,19 @@ function Get-KnownHeadsetInfos {
  
     #$result = @()
     $result = [PSCustomObject]@{
-        ID            = $knownHeadset.ID
-        Name          = $knownHeadset.Name
-        IPAddress     = $knownHeadset.IPAddress
-        Ping          = $false
-        ADBWifi       = $false
-        Battery       = "-"
-        Charging      = "-"
-        Temp          = "-"
-        SCRCPY        = "-"
-        Model         = "-"
-        SerialNumber  = "-"
+        ID              = $knownHeadset.ID
+        Name            = $knownHeadset.Name
+        IPAddress       = $knownHeadset.IPAddress
+        Ping            = $false
+        ADBWifi         = $false
+        Battery         = "-"
+        Charging        = "-"
+        Temp            = "-"
+        BatteryControllerLeft  = "-"
+        BatteryControllerRight = "-"
+        SCRCPY          = "-"
+        Model           = "-"
+        SerialNumber    = "-"
     }
 
     $IPAddress = $knownHeadset.IPAddress
@@ -199,23 +201,14 @@ function Get-KnownHeadsetInfos {
         $serial = & $adb -s "${IPAddress}:$ADBPort" shell "getprop ro.serialno" 
         if ($serial) { $result.SerialNumber = $serial.Trim() }
         
-        # Get battery info
-        $batteryInfo = & $adb -s "${IPAddress}:$ADBPort" shell "dumpsys battery"
+        # Get battery info (headset + controllers)
+        $batteryInfo = Get-HeadsetBatteryStatus -headsetIP $IPAddress -adb $adb -AdbPort $ADBPort
         if ($batteryInfo) {
-            $level = $batteryInfo | Select-String "level:\s+(\d+)"
-            if ($level) { 
-                $result.Battery = $level.Matches.Groups[1].Value + " %"
-            }
-            
-            $charging = $batteryInfo | Select-String "AC powered:\s+(\w+)"
-            if ($charging) {
-                $result.Charging = $charging.Matches.Groups[1].Value -eq "true"
-            }
-            # Temperature
-            $BatteryTemp = $batteryInfo | Select-String "temperature:\s+(\d+)"
-            if ($BatteryTemp) {
-                $result.Temp = [math]::Round($BatteryTemp.Matches.Groups[1].Value/10, 1).ToString("0.0") #+ "°C"
-            }
+            if ($null -ne $batteryInfo.Level)    { $result.Battery  = "$($batteryInfo.Level) %" }
+            if ($null -ne $batteryInfo.Charging) { $result.Charging = $batteryInfo.Charging }
+            if ($null -ne $batteryInfo.TempC)    { $result.Temp     = $batteryInfo.TempC.ToString("0.0") }
+            $result.BatteryControllerLeft  = if ($null -ne $batteryInfo.BatteryControllerLeft)  { "$($batteryInfo.BatteryControllerLeft) %" }  else { "-" }
+            $result.BatteryControllerRight = if ($null -ne $batteryInfo.BatteryControllerRight) { "$($batteryInfo.BatteryControllerRight) %" } else { "-" }
         }
         # Check if scrcpy is running
         $scrcpyProcesses = Get-Process -Name "scrcpy" -ErrorAction SilentlyContinue

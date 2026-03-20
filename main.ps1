@@ -68,7 +68,7 @@ if ($otherInstances) {
     Write-Host ""
     Write-Host "  *** WARNING: VR HEADSET MANAGER is already running! ***" -ForegroundColor Yellow -BackgroundColor DarkRed
     foreach ($inst in $otherInstances) {
-        Write-Host ("  PID {0} — started {1}" -f $inst.ProcessId, $inst.CreationDate) -ForegroundColor Yellow
+        Write-Host ("  PID {0} - started {1}" -f $inst.ProcessId, $inst.CreationDate) -ForegroundColor Yellow
     }
     Write-Host ""
     $confirm = (Read-Host "  Start anyway? [Y / N]").Trim().ToUpper()
