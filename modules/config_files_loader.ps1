@@ -1,19 +1,20 @@
 #Load-Config -ConfigFilePath $ConfigFilePath
-# Function to load configuration variables from a JSON file
-function Get-Config {
+
+function Read-ConfigJson {
+    <#
+    .SYNOPSIS
+    Reads and validates a JSON config file interactively.
+
+    .DESCRIPTION
+    Attempts to parse the file as JSON. On failure, shows the parse error,
+    opens an online validator, and prompts the user to [R]eload, restore
+    the [T]emplate, or [Q]uit. Loops until valid JSON is obtained.
+    Returns the parsed object on success.
+    #>
     param (
         [string]$ConfigFilePath
     )
-    
-    Write-Host "DEBUG ConfigFilePath = $ConfigFilePath" -ForegroundColor Magenta
-    
-    # Check whether the file exists
-    if (-not (Test-Path $ConfigFilePath)) {
-        Write-Host "Configuration file does not exist..." -ForegroundColor Red
-        return $false
-    }
 
-    # Read and validate the JSON file content
     $configContent = $null
     $jsonValid = $false
     while (-not $jsonValid) {
@@ -48,7 +49,7 @@ function Get-Config {
                     if (Test-Path $templatePath) {
                         Copy-Item -Path $templatePath -Destination $ConfigFilePath -Force
                         Write-Host "  Default template restored to '$ConfigFilePath'." -ForegroundColor Green
-                        Write-Host "  Opening the file in Notepad — please fill in your settings, then restart." -ForegroundColor Yellow
+                        Write-Host "  Opening the file in Notepad - please fill in your settings, then restart." -ForegroundColor Yellow
                         notepad $ConfigFilePath
                         Start-Sleep -Seconds 3
                     }
@@ -69,6 +70,25 @@ function Get-Config {
             }
         }
     }
+    return $configContent
+}
+
+# Function to load configuration variables from a JSON file
+function Get-Config {
+    param (
+        [string]$ConfigFilePath
+    )
+    
+    Write-Host "DEBUG ConfigFilePath = $ConfigFilePath" -ForegroundColor Magenta
+    
+    # Check whether the file exists
+    if (-not (Test-Path $ConfigFilePath)) {
+        Write-Host "Configuration file does not exist..." -ForegroundColor Red
+        return $false
+    }
+
+    # Read and validate the JSON file content
+    $configContent = Read-ConfigJson -ConfigFilePath $ConfigFilePath
     $sourcesPath = Join-Path -Path $global:ScriptPath -ChildPath "sources"
 
 

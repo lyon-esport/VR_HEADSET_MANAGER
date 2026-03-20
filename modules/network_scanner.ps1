@@ -300,6 +300,7 @@ function Test-Port {
 
     # Close the connection
     $client.Close()
+    Remove-Variable $beginConnect -ErrorAction SilentlyContinue
 
     # Return the object with the test result
     return [pscustomobject]@{

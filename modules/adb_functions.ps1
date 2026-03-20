@@ -531,10 +531,12 @@ function Get-HeadsetBatteryStatus {
     $DeviceId = $headsetIP+":"+$AdbPort
 
     $result = [PSCustomObject]@{
-        Level     = $null
-        Charging  = $false
-        TempC     = $null
-        RawStatus = $null
+        Level                = $null
+        Charging             = $false
+        TempC                = $null
+        RawStatus            = $null
+        BatteryControllerLeft  = $null
+        BatteryControllerRight = $null
     }
 
     try {
@@ -568,6 +570,13 @@ function Get-HeadsetBatteryStatus {
                 $tempMatch.Matches[0].Groups[1].Value / 10,
                 1
             )
+        }
+
+        # Controller battery levels (left & right)
+        $controllers = Get-QuestControllerBatteryStatus -headsetIP $headsetIP -adb $adb -AdbPort $AdbPort
+        if ($controllers) {
+            $result.BatteryControllerLeft  = $controllers.Left.Battery
+            $result.BatteryControllerRight = $controllers.Right.Battery
         }
 
         Write-Log ($msg.BatteryStatus -f $DeviceId, $result.Level, $result.Charging, $result.TempC) -Level INFO

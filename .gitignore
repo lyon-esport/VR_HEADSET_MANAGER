@@ -26,3 +26,5 @@ desktop.ini
 .vscode
 OBS/timer/
 .gdoc
+/.github/
+*_test.ps1
