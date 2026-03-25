@@ -59,7 +59,7 @@ Without these prerequisites, the headset will not be reachable over the network 
 
 ### Known issues
 - When stream auto restart is enabled, the headset stream starts 2 times (duplicate scrcpy process)
-
+- known_headsets.csv : Do not update correctly the serial number
 
 ### Improvements
 - On startup add following checks :
