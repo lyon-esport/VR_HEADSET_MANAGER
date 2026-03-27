@@ -79,13 +79,6 @@ if ($otherInstances) {
     Write-Host ""
 }
 
-$global:custom_config = $args[0] 
-if ($global:custom_config) {
-    Write-Host "Custom config file passed as argument: $global:custom_config" -ForegroundColor Green
-} else {
-    Write-Host "No custom config file passed as argument. Starting process with default config file path." -ForegroundColor Yellow
-}
-
 # Get the current script path
 $global:ScriptPath = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 
@@ -114,7 +107,12 @@ foreach ($folder in $requiredFolders) {
     }
 }
 
-
+$custom_config = $args[0] 
+if ($custom_config) {
+    Write-Host "Custom config file passed as argument: $custom_config" -ForegroundColor Green
+} else {
+    Write-Host "No custom config file passed as argument. Starting process with default config file path." -ForegroundColor Yellow
+}
 # Check if config file exists, if not create it from template file and open it for edit
 if ($custom_config) {
     $global:configFilePath = $custom_config
