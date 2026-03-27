@@ -44,6 +44,17 @@ function Install-OculusWirelessAdbApk {
     .\adb.exe  connect 192.168.1.253:5555
     .\adb.exe disconnect 192.168.1.253:5555
     .\adb.exe kill-server
+
+    #KEY COMMANDS
+     .\adb.exe shell input keyevent 3 #Simulate Home button press
+     .\adb.exe shell input keyevent 4 #Simulate Back button press
+     .\adb.exe shell input keyevent 26 #Simulate Power button press
+     .\adb.exe shell input keyevent 82 #Simulate Menu button press
+    .\adb.exe shell input keyevent 223 #Simulate Volume Up button press
+    .\adb.exe shell input keyevent 224 #Simulate Volume Down button press
+    
+
+
 }
 #>
 
@@ -454,11 +465,13 @@ function Get-QuestControllerBatteryStatus {
         Left  = @{
             Battery        = $null
             Status         = $null
+            ExternalStatus = $null
             TrackingStatus = $null
         }
         Right = @{
             Battery        = $null
             Status         = $null
+            ExternalStatus = $null
             TrackingStatus = $null
         }
     }
@@ -498,6 +511,14 @@ function Get-QuestControllerBatteryStatus {
 
                 if ($line -match "Status:\s*([A-Za-z]+)") {
                     $result[$side].Status = $Matches[1]
+                }
+
+                if ($line -match "ExternalStatus:\s*(\S+)") {
+                    $result[$side].ExternalStatus = $Matches[1].TrimEnd(',')
+                    # Null out battery if controller is not connected (e.g. Searching, Disconnected)
+                    if ($result[$side].ExternalStatus -notmatch "^CONNECTED") {
+                        $result[$side].Battery = $null
+                    }
                 }
 
                 if ($line -match "TrackingStatus:\s*([A-Za-z]+)") {
@@ -609,4 +630,6 @@ function Disconnect-ADBConnections {
         throw
     }
 }
+
+
 

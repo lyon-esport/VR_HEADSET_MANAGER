@@ -177,22 +177,37 @@ function Show-HeadsetsTableColored {
         if ($consoleWidth -lt 0) { $consoleWidth = 80 } # Default value
 
 
-
-        # Define the padding lengths for each field and store them in a hashtable
-        $Padding = @{
-            ID = 2
-            Name = 15
-            IPAddress = 13
-            Ping = 4
-            ADBWifi = 7
-            Model = 7
-            SerialNumber = 14
-            Battery = 4
-            Charging = 10
-            Temp = 7
-            SCRCPY = 7
+        # Compute column widths dynamically: max of header length and longest value in each column
+        $Padding = @{}
+        foreach ($field in $FieldsToShow) {
+            $maxLen = $field.Length  # start with header length
+            foreach ($headset in $knownHeadsetsInfo) {
+                # Mirror the same transformations applied during rendering
+                $value = $headset.$field
+                if ($field -eq "Battery") {
+                    $h  = ($headset.Battery               -replace '[^\d]','').Trim()
+                    $cl = ($headset.BatteryControllerLeft  -replace '[^\d]','').Trim()
+                    $cr = ($headset.BatteryControllerRight -replace '[^\d]','').Trim()
+                    if (-not $h)  { $h  = "-" }
+                    if (-not $cl) { $cl = "-" }
+                    if (-not $cr) { $cr = "-" }
+                    $value = "$cl|$h|$cr"
+                } elseif ($field -eq "Temp" -and $value) {
+                    $value = ($value -replace '\,0$','') + ([char]0x00B0) + 'C'
+                } elseif ($field -eq "ADBWifi") {
+                    $value = if ($headset.ADBWifi -eq "True") { "OK" } else { "KO" }
+                } elseif ($field -eq "Ping") {
+                    $value = if ($headset.Ping -eq "True") { "OK" } else { "KO" }
+                } elseif ($value -is [bool]) {
+                    $value = if ($value) { "OK" } else { "KO" }
+                } elseif ($null -eq $value) {
+                    $value = "-"
+                }
+                if ($value.Length -gt $maxLen) { $maxLen = $value.Length }
+            }
+            $Padding[$field] = $maxLen
         }
-        
+
 
         # Build the table header
         $header = ""
@@ -223,6 +238,12 @@ function Show-HeadsetsTableColored {
             }
             elseif ($headset.Charging -eq $False) {
                 $bgColor = "DarkYellow" # Headset is not charging
+            }
+            elseif (
+                ($headset.BatteryControllerLeft  -match '\d' -and [int]($headset.BatteryControllerLeft  -replace '[^\d]','') -lt 20) -or
+                ($headset.BatteryControllerRight -match '\d' -and [int]($headset.BatteryControllerRight -replace '[^\d]','') -lt 20)
+            ) {
+                $bgColor = "DarkYellow" # A controller battery is below 20%
             }
             elseif ($headset.SCRCPY -eq "OK") {
                 $bgColor = "Green" # Scrcpy is running
@@ -261,6 +282,16 @@ function Show-HeadsetsTableColored {
                     $degree = [char]0x00B0
                     $value = $($value -replace '\,0$','')+$degree+'C'
                 }
+                # Composite battery: [CtrlL|Headset|CtrlR] without %
+                if ($field -eq "Battery") {
+                    $h  = ($headset.Battery              -replace '[^\d]','').Trim()
+                    $cl = ($headset.BatteryControllerLeft  -replace '[^\d]','').Trim()
+                    $cr = ($headset.BatteryControllerRight -replace '[^\d]','').Trim()
+                    if (-not $h)  { $h  = "-" }
+                    if (-not $cl) { $cl = "-" }
+                    if (-not $cr) { $cr = "-" }
+                    $value = "$cl[$h]$cr"
+                }
                 # Add the field to the row
                 if ($null -eq $value) {
                     $value = "-"
@@ -275,7 +306,15 @@ function Show-HeadsetsTableColored {
                     $value = if ($headset.Ping -eq "True") { "OK" } else { "KO" }
                 }
 
-                $line += "$($value.PadRight($Padding[$field]).Substring(0,$Padding[$field])) | "
+                if ($field -eq "Battery") { # Center battery result in its column
+                    $pad   = $Padding[$field]
+                    $total = $pad - $value.Length
+                    $left  = [Math]::Floor($total / 2)
+                    $right = $total - $left
+                    $line += (" " * $left + $value + " " * $right).Substring(0, $pad) + " | "
+                } else {
+                    $line += "$($value.PadRight($Padding[$field]).Substring(0,$Padding[$field])) | "
+                }
             }
 
             # Display the row with appropriate colors
