@@ -94,6 +94,7 @@ Without these prerequisites, the headset will not be reachable over the network 
 - Web page to allow configuration and screen miroring visualization
 - Detect while a new headset is connected on the USB port and propose to start adding process
 - implement a local resteam functionality that allows to give access to the headset screen from any other computer or phone
+  > [mediamtx](https://github.com/bluenviron/mediamtx)
 
 ### Code improvement
 - [IN TEST] Translate all text (IHM + comments) in [EN] instead of [FR] - To do by IA... [like this](/docs/translation_fr.xml)
