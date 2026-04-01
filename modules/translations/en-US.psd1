@@ -54,12 +54,21 @@
     NoUsbAdbDeviceFound = "No USB ADB device found after {0} attempts."
     QueryControllerStatus = "Querying controller status via OVRRemoteService for {0}"
     ControllerStatusFailed = "Failed to retrieve controller status via OVRRemoteService: {0}"
+    DumpsysUnknownCommand = "'dumpsys' returned 'unknown command' - developer mode may not be enabled on the headset"
+    ControllerBatteryStatus = "Headset {0} Controller {1} : Battery={2}% Status={3} Tracking={4}"
     BatteryStatusQuery = "Querying battery status for device {0}"
     NoBatteryData = "No battery data returned by adb for {0}"
-    BatteryStatus = "Battery status for {0} : Level={1}% Charging={2} Temp={3}C"
+    BatteryStatus = "Battery status for {0} : Level={1}% Charging={2} Temp={3}C MaxCharging={4}W"
     DisconnectingAll = "All ADB devices are now disconnected"
     NoActiveAdbConnection = "No active ADB connection for {0}, attempting to connect..."
     DisconnectFailed = "Failed to disconnect ADB devices: {0}"
+    AdbWifiAlreadyConnected = "ADB WiFi already connected to {0}"
+    AdbWifiConnecting = "Connecting to headset {0} via ADB WiFi..."
+    AdbWifiPingFailed = "Headset {0} is not reachable on the network (ping failed)"
+    AdbWifiPortClosed = "ADB port {0} is not open on {1} - WiFi ADB is not active"
+    AdbWifiDevModeHint = "--> Check that developer mode is enabled and WiFi ADB is activated on the headset"
+    AdbWifiConnected = "Connected to {0} via ADB WiFi"
+    AdbWifiConnectFailed = "ADB WiFi connection failed to {0}: {1}"
 
     # ==========================================
     # console_manager.ps1

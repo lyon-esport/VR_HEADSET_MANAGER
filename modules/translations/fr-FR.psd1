@@ -54,12 +54,21 @@
     NoUsbAdbDeviceFound = "Aucun peripherique ADB USB trouve apres {0} tentatives."
     QueryControllerStatus = "Interrogation du statut du controleur via OVRRemoteService pour {0}"
     ControllerStatusFailed = "Impossible de recuperer le statut du controleur via OVRRemoteService : {0}"
+    DumpsysUnknownCommand = "'dumpsys' a retourne 'unknown command' - le mode developpeur n'est peut-etre pas active sur le casque"
+    ControllerBatteryStatus = "Casque {0} Controleur {1} : Batterie={2}% Statut={3} Tracking={4}"
     BatteryStatusQuery = "Interrogation du statut de la batterie pour l'appareil {0}"
     NoBatteryData = "Aucune donnee de batterie retournee par adb pour {0}"
-    BatteryStatus = "Statut de la batterie pour {0} : Niveau={1}% En charge={2} Temp={3}C"
+    BatteryStatus = "Statut de la batterie pour {0} : Niveau={1}% En charge={2} Temp={3}C Max charge={4}W"
     DisconnectingAll = "Tous les peripheriques ADB sont maintenant deconnectes"
     NoActiveAdbConnection = "Aucune connexion ADB active pour {0}, tentative de connexion..."
     DisconnectFailed = "Echec de la deconnexion des peripheriques ADB : {0}"
+    AdbWifiAlreadyConnected = "ADB WiFi deja connecte a {0}"
+    AdbWifiConnecting = "Connexion au casque {0} via ADB WiFi..."
+    AdbWifiPingFailed = "Le casque {0} n'est pas joignable sur le reseau (ping echoue)"
+    AdbWifiPortClosed = "Le port ADB {0} n'est pas ouvert sur {1} - le WiFi ADB n'est pas actif"
+    AdbWifiDevModeHint = "--> Verifiez que le mode developpeur est active et que le WiFi ADB est lance sur le casque"
+    AdbWifiConnected = "Connecte a {0} via ADB WiFi"
+    AdbWifiConnectFailed = "Echec de la connexion ADB WiFi a {0} : {1}"
 
     # ==========================================
     # console_manager.ps1
