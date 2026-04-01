@@ -1,0 +1,22 @@
+﻿2026-04-01 23:44:12 [INFO] === mDNS Headset Discovery Started ===
+2026-04-01 23:44:12 [DEBUG] mDNS: Joined multicast group on interface 192.168.1.10
+2026-04-01 23:44:12 [DEBUG] mDNS: Joined multicast group on interface 172.23.80.1
+2026-04-01 23:44:12 [DEBUG] mDNS: Query sent for service type [_adb-tls-connect._tcp]
+2026-04-01 23:44:12 [DEBUG] mDNS: Query sent for service type [_adb-tls-pairing._tcp]
+2026-04-01 23:44:12 [DEBUG] mDNS: Query sent for service type [_adb._tcp]
+2026-04-01 23:44:12 [INFO] mDNS: Listening for responses (5000ms)...
+2026-04-01 23:44:13 [SUCCESS] mDNS: Device found -> [adb-2G0YC5ZG1W00ZJ-XUIVEi] at 192.168.1.243:13
+2026-04-01 23:44:13 [SUCCESS] mDNS: Device found -> [0009B0AD0059@TX-RZ900._raop._tcp.local] at 192.168.1.5:136
+2026-04-01 23:44:14 [SUCCESS] mDNS: Device found -> [SpotifyConnect._spotify-connect._tcp.local] at 192.168.1.5:144
+2026-04-01 23:44:14 [SUCCESS] mDNS: Device found -> [TX-RZ900._http._tcp.local] at 192.168.1.5:80
+2026-04-01 23:44:18 [SUCCESS] 4 headset(s) discovered.
+2026-04-01 23:45:02 [DEBUG] mDNS: Joined multicast group on interface 192.168.1.10
+2026-04-01 23:45:02 [DEBUG] mDNS: Joined multicast group on interface 172.23.80.1
+2026-04-01 23:45:02 [DEBUG] mDNS: Query sent for service type [_adb-tls-connect._tcp]
+2026-04-01 23:45:02 [DEBUG] mDNS: Query sent for service type [_adb-tls-pairing._tcp]
+2026-04-01 23:45:02 [DEBUG] mDNS: Query sent for service type [_adb._tcp]
+2026-04-01 23:45:02 [INFO] mDNS: Listening for responses (8000ms)...
+2026-04-01 23:45:03 [SUCCESS] mDNS: Device found -> [adb-2G0YC5ZG1W00ZJ-XUIVEi] at 192.168.1.243:13
+2026-04-01 23:45:03 [SUCCESS] mDNS: Device found -> [0009B0AD0059@TX-RZ900._raop._tcp.local] at 192.168.1.5:136
+2026-04-01 23:45:03 [SUCCESS] mDNS: Device found -> [SpotifyConnect._spotify-connect._tcp.local] at 192.168.1.5:144
+2026-04-01 23:45:03 [SUCCESS] mDNS: Device found -> [TX-RZ900._http._tcp.local] at 192.168.1.5:80
