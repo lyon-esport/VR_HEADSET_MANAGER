@@ -59,24 +59,21 @@ Without these prerequisites, the headset will not be reachable over the network 
 
 ### Known issues
 - When stream auto restart is enabled, the headset stream starts 2 times (duplicate scrcpy process)
-
+- known_headsets.csv : Do not update correctly the serial number
 
 ### Improvements
 - On startup add following checks :
 	> - [To validate] Firewall authorization for adb.exe on soft startup
   	> - Setup powershell execution >> To test on fresh installed pc
-	> - Test if the app is not already running... If yes, warn the user and ask if he really wants to start it...
-	> - Test if the computer have screen saver or auto lock screen
-	>   - If ran as administrator : Propose to remove the parameters
-	>   - If ran as a normal user : Warn the user
+	> - [TO TEST] Test if the app is not already running... If yes, warn the user and ask if he really wants to start it...
+	> - [TO TEST] Keep the computer awake while the script is running to prevent screen lockout or hibernation.
  	> - If no headset in the known headset file, propose to add it
- 	>  - include a json validator or tester (and warn config json is broken, and open a web page with json validator...) then propose to try reload or create a new file based on the template (overwrite existing file)
+ 	>  - [IN TEST] include a json validator or tester (and warn config json is broken, and open a web page with json validator...) then propose to try reload or create a new file based on the template (overwrite existing file)
 - Review of Meta Quest configuration and ADB activation (by connecting with USB) for headsets that are not already known and configured in VR Heaset Manager
 	> - Install config : Do you want to modify headset parameters ? Y/N and test it on a brand new headset
 	> - if headset has the same serial : update the IP in the known headsets (need to manage serial in known_headets.csv)
 	> - in headset is connected to usb, propose to add it automatically...
 	> - If the headset is not connected to the right Wifi, let's propose to connect to...
-- 
 
 - Bug on adding a headset from the IP address
 	> Tester every combination by adding/modifying/deleting headset...
@@ -95,9 +92,12 @@ Without these prerequisites, the headset will not be reachable over the network 
 - Add controllers battery level for OBS view
   > Check functions *Get-QuestControllerBatteryStatus* and *Get-HeadsetBatteryStatus*
 - Web page to allow configuration and screen miroring visualization
+- Detect while a new headset is connected on the USB port and propose to start adding process
+- implement a local resteam functionality that allows to give access to the headset screen from any other computer or phone
+  > [mediamtx](https://github.com/bluenviron/mediamtx)
 
 ### Code improvement
-- Translate all text (IHM + comments) in [EN] instead of [FR] - To do by IA... [like this](/docs/translation_fr.xml)
+- [IN TEST] Translate all text (IHM + comments) in [EN] instead of [FR] - To do by IA... [like this](/docs/translation_fr.xml)
 - Review adb_functions.ps1 to pass device adb object in parameter of all request functions, to allow either USB or Wifi ADB device (Get-HeadsetModel, Get-QuestControllerBatteryStatus, Get-HeadsetBatteryStatus...)
 - Review all powershell code with PSScriptAnalyzer
 
