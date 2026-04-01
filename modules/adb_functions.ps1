@@ -255,7 +255,7 @@ function Enable-WiFiADB {
         [Parameter(Mandatory=$true)]
         [string]$wifi_ssid,
         [string]$wifi_pwd,
-        [int]$AdbPort = 5555,
+        [int]$AdbPort = $global:adbPort_default,
         [string]$adb = $global:adbPath
         
     )
@@ -421,28 +421,105 @@ function Test-UsbAdbDevice {
 }
 
 
-function Get-HeadsetModel {
+function Connect-AdbWifi {
+    <#
+    .SYNOPSIS
+    Connects to a VR headset via ADB over WiFi and keeps the connection open.
+
+    .DESCRIPTION
+    - If the headset is already in the ADB devices list as connected, skips reconnection.
+    - Tests network reachability via ping.
+    - Checks if the ADB TCP port is open.
+    - A closed port hints that developer mode or WiFi ADB is not enabled on the headset.
+    - Attempts adb connect and verifies the result.
+
+    .PARAMETER headsetIP
+    IP address of the headset.
+
+    .PARAMETER AdbPort
+    ADB TCP port to connect to (default: 5555).
+
+    .EXAMPLE
+    Connect-AdbWifi -headsetIP "192.168.1.100" -AdbPort 5555
+    #>
     param (
         [Parameter(Mandatory=$true)]
         [string]$headsetIP,
-        [string]$adb = $global:adbPath,
-        [int]$AdbPort = 5555 
+        [int]$AdbPort = $global:adbPort_default,
+        [string]$adb = $global:adbPath
     )
-    $DeviceId = $headsetIP+":"+$AdbPort
 
-    # 1. Initial verification
+    $DeviceId = "${headsetIP}:${AdbPort}"
+
+    # 1. Verify ADB executable
     if (-not (Test-Path $adb)) {
         Write-Log ($msg.ADBExecutableNotFound -f $adb) -Level ERROR
         return $false
     }
 
-    $connectedDevice = & $adb devices | Select-String $headsetIP -AllMatches
-        if ($connectedDevice.Matches.Count -lt 1) {
-            Write-Log -Message ($msg.NoActiveAdbConnection -f $headsetIP) -Level "INFO"
-            & $adb connect $DeviceId | Out-Null
+    # 2. Check if already connected (avoid redundant reconnects)
+    $alreadyConnected = & $adb devices 2>&1 |
+        Where-Object { $_ -match ("^" + [regex]::Escape($DeviceId) + "\s+device$") }
+    if ($alreadyConnected) {
+        Write-Log ($msg.AdbWifiAlreadyConnected -f $DeviceId) -Level DEBUG
+        return $true
+    }
+
+    Write-Log ($msg.AdbWifiConnecting -f $DeviceId) -Level INFO
+
+    # 3. Test network reachability (ping)
+    $pingOk = Test-Connection -ComputerName $headsetIP -Count 1 -Quiet -ErrorAction SilentlyContinue
+    if (-not $pingOk) {
+        Write-Log ($msg.AdbWifiPingFailed -f $headsetIP) -Level WARNING
+        return $false
+    }
+
+    # 4. Test ADB TCP port is open
+    $portOpen = (Test-Port -hostname $headsetIP -port $AdbPort).open
+    if (-not $portOpen) {
+        Write-Log ($msg.AdbWifiPortClosed -f $AdbPort, $headsetIP) -Level WARNING
+        Write-Log ($msg.AdbWifiDevModeHint) -Level WARNING
+        return $false
+    }
+
+    # 5. Connect via ADB WiFi
+    try {
+        $connectOutput = & $adb connect $DeviceId 2>&1
+
+        # Verify the device appears as connected
+        $nowConnected = & $adb devices 2>&1 |
+            Where-Object { $_ -match ("^" + [regex]::Escape($DeviceId) + "\s+device$") }
+        if ($nowConnected) {
+            Write-Log ($msg.AdbWifiConnected -f $DeviceId) -Level SUCCESS
+            return $true
         }
-        $headsetModel = (& $adb -s $DeviceId shell getprop ro.product.model).Trim() #.Trim() pour nettoyer la chaine et enlever les retours a la ligne s'il y en a
-        return $headsetModel
+        else {
+            Write-Log ($msg.AdbWifiConnectFailed -f $DeviceId, ($connectOutput -join " ")) -Level ERROR
+            return $false
+        }
+    }
+    catch {
+        Write-Log ($msg.AdbWifiConnectFailed -f $DeviceId, $_) -Level ERROR
+        return $false
+    }
+}
+
+
+function Get-HeadsetModel {
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$headsetIP,
+        [string]$adb = $global:adbPath,
+        [int]$AdbPort = $global:adbPort_default
+    )
+    $DeviceId = "${headsetIP}:${AdbPort}"
+
+    if (-not (Connect-AdbWifi -headsetIP $headsetIP -AdbPort $AdbPort -adb $adb)) {
+        return $false
+    }
+
+    $headsetModel = (& $adb -s $DeviceId shell getprop ro.product.model).Trim() #.trim() to remove any trailing newline characters
+    return $headsetModel
 }
 
 
@@ -457,9 +534,9 @@ function Get-QuestControllerBatteryStatus {
         [Parameter(Mandatory=$true)]
         [string]$headsetIP,
         [string]$adb = $global:adbPath,
-        [int]$AdbPort = 5555 
+        [int]$AdbPort = $global:adbPort_default
     )
-    $DeviceId = $headsetIP+":"+$AdbPort
+    $DeviceId = "${headsetIP}:${AdbPort}"
 
     $result = @{
         Left  = @{
@@ -479,16 +556,8 @@ function Get-QuestControllerBatteryStatus {
     try {
         Write-Log ($msg.QueryControllerStatus -f $DeviceId) -Level DEBUG
 
-        # 1. init verification 
-        if (-not (Test-Path $adb)) {
-            Write-Log ($msg.ADBExecutableNotFound -f $adb) -Level ERROR
-            return $false
-        }
-
-        $connectedDevice = & $adb devices | Select-String $headsetIP -AllMatches
-        if ($connectedDevice.Matches.Count -lt 1) {
-            Write-Log -Message ($msg.NoActiveAdbConnection -f $headsetIP) -Level "INFO"
-            & $adb connect $DeviceId | Out-Null
+        if (-not (Connect-AdbWifi -headsetIP $headsetIP -AdbPort $AdbPort -adb $adb)) {
+            return $result
         }
 
         
@@ -525,7 +594,8 @@ function Get-QuestControllerBatteryStatus {
                     $result[$side].TrackingStatus = $Matches[1]
                 }
 
-                Write-Log ($msg.BatteryStatus -f $DeviceId, $result[$side].Battery, $result[$side].Charging, $result[$side].TempC) -Level DEBUG
+                $batteryDisplay = if ($null -ne $result[$side].Battery) { $result[$side].Battery } else { "N/A" }
+                Write-Log ($msg.ControllerBatteryStatus -f $DeviceId, $side, $batteryDisplay, $result[$side].ExternalStatus, $result[$side].TrackingStatus) -Level DEBUG
             }
         }
 
@@ -547,21 +617,28 @@ function Get-HeadsetBatteryStatus {
         [Parameter(Mandatory=$true)]
         [string]$headsetIP,
         [string]$adb = $global:adbPath,
-        [int]$AdbPort = 5555 
+        [int]$AdbPort = $global:adbPort_default
     )
-    $DeviceId = $headsetIP+":"+$AdbPort
+    $DeviceId = "${headsetIP}:${AdbPort}"
 
     $result = [PSCustomObject]@{
-        Level                = $null
-        Charging             = $false
-        TempC                = $null
-        RawStatus            = $null
+        Level                  = $null
+        Charging               = $false
+        TempC                  = $null
+        RawStatus              = $null
+        MaxChargingCurrentA    = $null
+        MaxChargingVoltageV    = $null
+        MaxChargingWattageW    = $null
         BatteryControllerLeft  = $null
         BatteryControllerRight = $null
     }
 
     try {
         Write-Log ($msg.BatteryStatusQuery -f $DeviceId) -Level DEBUG
+
+        if (-not (Connect-AdbWifi -headsetIP $headsetIP -AdbPort $AdbPort -adb $adb)) {
+            return $null
+        }
 
         $batteryInfo = & $adb -s $DeviceId shell dumpsys battery 2>$null
 
@@ -593,6 +670,19 @@ function Get-HeadsetBatteryStatus {
             )
         }
 
+        # Max charging current (microamps -> A) and voltage (microvolts -> V)
+        $currentMatch = $batteryInfo | Select-String "Max charging current:\s+(\d+)"
+        $voltageMatch = $batteryInfo | Select-String "Max charging voltage:\s+(\d+)"
+        if ($currentMatch) {
+            $result.MaxChargingCurrentA = [math]::Round($currentMatch.Matches[0].Groups[1].Value / 1000000, 3)
+        }
+        if ($voltageMatch) {
+            $result.MaxChargingVoltageV = [math]::Round($voltageMatch.Matches[0].Groups[1].Value / 1000000, 3)
+        }
+        if ($result.MaxChargingCurrentA -and $result.MaxChargingVoltageV) {
+            $result.MaxChargingWattageW = [math]::Round($result.MaxChargingCurrentA * $result.MaxChargingVoltageV, 2)
+        }
+
         # Controller battery levels (left & right)
         $controllers = Get-QuestControllerBatteryStatus -headsetIP $headsetIP -adb $adb -AdbPort $AdbPort
         if ($controllers) {
@@ -600,7 +690,7 @@ function Get-HeadsetBatteryStatus {
             $result.BatteryControllerRight = $controllers.Right.Battery
         }
 
-        Write-Log ($msg.BatteryStatus -f $DeviceId, $result.Level, $result.Charging, $result.TempC) -Level INFO
+        Write-Log ($msg.BatteryStatus -f $DeviceId, $result.Level, $result.Charging, $result.TempC, $result.MaxChargingWattageW) -Level INFO
         return $result
     }
     catch {
