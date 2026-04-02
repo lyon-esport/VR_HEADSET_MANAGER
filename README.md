@@ -73,14 +73,15 @@ Before using the tool, make sure the following requirements are met:
 
 ### Improvements
 #### 🏃Startup checks
-- [ ] ⚠️ [TO TEST : KO] Keep the computer awake while the script is running to prevent screen lockout or hibernation.
-- [x] [To validate] Firewall authorization for adb.exe on soft startup
+- [ ] ⚠️ [🔄 TO TEST : KO] Keep the computer awake while the script is running to prevent screen lockout or hibernation.
+- [x] [🔄 To validate] Firewall authorization for adb.exe on soft startup
 - [ ] Setup powershell execution >> To test on fresh installed pc
 - [ ] If no headset in the known headset file, propose to add it or search over the network (mdns scan ? usb ?)
+- [ ] Check available json config files in /config folder, and propose to select the right one if any
 - [x] Test if the app is not already running... If yes, warn the user and ask if he really wants to start it...
 
 #### 🛠️ Backend
-- [x] [IN TEST] include a json validator or tester (and warn config json is broken, and open a web page with json validator...) then propose to try reload or create a new file based on the template (overwrite existing file)
+- [x] [🔄 IN TEST] include a json validator or tester (and warn config json is broken, and open a web page with json validator...) then propose to try reload or create a new file based on the template (overwrite existing file)
 - [ ] :key: Save by a secured manner the Wifi Password with [Marshal](https://www.secureideas.com/blog/secure-password-management-in-powershell-best-practices) (ConvertTo-SecureString / ConvertFrom-SecureString)
 - [ ] REST API to provide a web page to manage it from a phone, or by Stream Deck hitself ?
 
@@ -106,23 +107,23 @@ Before using the tool, make sure the following requirements are met:
 
 #### 🎨 UI and Visual customization
 - [ ] ⚠️ Add controllers battery level for OBS view
-- [ ] - [ ] Web page to allow configuration and screen miroring visualization
+- [ ] Web page to allow configuration and screen miroring visualization
 
+#### Headset info scrapping and interraction
+- [ ] Force the screen to get out of the game and switch to passthrough mode
+- [ ] Force recenter
+- [ ] Grab currently running application (also if back to home/QGO ?)
 
 #### 🧪 New functionalities
 
-- [ ] ⚠️ [⛏️IN PROCESS] implement a local resteam functionality that allows to give access to the headset screen from any other computer or phone
+- [ ] ⚠️ [⛏️ IN PROCESS] implement a local resteam functionality that allows to give access to the headset screen from any other computer or phone
   > [mediamtx](https://github.com/bluenviron/mediamtx)
 
-- [ ] ⚠️ [⛏️IN PROCESS] Dev of a Stream deck plugin
+- [ ] ⚠️ [⛏️ IN PROCESS] Dev of a Stream deck plugin
   > - Manage communication with Stream Deck Plugin...
   > - [Named Pipe ?](https://rkeithhill.wordpress.com/2014/11/01/windows-powershell-and-named-pipes/)
 
-
-
 - [ ] Detect while a new headset is connected on the USB port and propose to start adding process
-
-
 
 
 ### Code improvement
