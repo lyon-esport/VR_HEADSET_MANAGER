@@ -38,12 +38,12 @@ I personally use it during showrooms and gaming exhibitions to capture the live 
    > - Follow the instructions to add your headset (IP address, Firendly name...)
    > - Installation of [oculus-wireless-adb](https://github.com/thedroidgeek/oculus-wireless-adb) is proposed to start ADB Wifi from the headset without USB connection required.
    
-5. **Press the key corresponding to the ID if the headset to start screen miroring (scrcpy) manually**
+4. **Press the key corresponding to the ID if the headset to start screen miroring (scrcpy) manually**
 
-6. **Modify headset parameters**
-   Use different options to manage you headsets. You can enable recording, enable the auto-restart of the screen miroring, etc...
+5. **Modify headset parameters**
+   - Use different options to manage you headsets. You can enable recording, enable the auto-restart of the screen miroring, etc...
 
-7. **Modify VR HEADSET MANAGER parameters**
+6. **Modify VR HEADSET MANAGER parameters**
    - You can adapt configuration in the ./config/config.json file following [this guide](/docs/config.md)
    - Optionnally you can start the script with another custom config file by passing it as a parameter
 
