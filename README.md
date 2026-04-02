@@ -62,44 +62,44 @@ Without these prerequisites, the headset will not be reachable over the network 
 - known_headsets.csv : Do not update correctly the serial number
 
 ### Improvements
-- On startup add following checks :
-	> - [To validate] Firewall authorization for adb.exe on soft startup
-  	> - Setup powershell execution >> To test on fresh installed pc
-	> - [TO TEST] Test if the app is not already running... If yes, warn the user and ask if he really wants to start it...
-	> - [TO TEST] Keep the computer awake while the script is running to prevent screen lockout or hibernation.
- 	> - If no headset in the known headset file, propose to add it
- 	>  - [IN TEST] include a json validator or tester (and warn config json is broken, and open a web page with json validator...) then propose to try reload or create a new file based on the template (overwrite existing file)
-- Review of Meta Quest configuration and ADB activation (by connecting with USB) for headsets that are not already known and configured in VR Heaset Manager
+- [ ] On startup add following checks :
+  	- [ ] Setup powershell execution >> To test on fresh installed pc
+	- [ ] [TO TEST : KO] Keep the computer awake while the script is running to prevent screen lockout or hibernation.
+ 	- [ ] If no headset in the known headset file, propose to add it or search over the network (mdns scan ? usb ?)
+    - [x] [To validate] Firewall authorization for adb.exe on soft startup
+	- [x] Test if the app is not already running... If yes, warn the user and ask if he really wants to start it...
+ 	- [x] [IN TEST] include a json validator or tester (and warn config json is broken, and open a web page with json validator...) then propose to try reload or create a new file based on the template (overwrite existing file)
+- [ ] Review of Meta Quest configuration and ADB activation (by connecting with USB) for headsets that are not already known and configured in VR Heaset Manager
 	> - Install config : Do you want to modify headset parameters ? Y/N and test it on a brand new headset
 	> - if headset has the same serial : update the IP in the known headsets (need to manage serial in known_headets.csv)
 	> - in headset is connected to usb, propose to add it automatically...
 	> - If the headset is not connected to the right Wifi, let's propose to connect to...
 
-- Bug on adding a headset from the IP address
+- [ ] Bug on adding a headset from the IP address
 	> Tester every combination by adding/modifying/deleting headset...
 
-- Save by a secured manner the Wifi Password with [Marshal](https://www.secureideas.com/blog/secure-password-management-in-powershell-best-practices) (ConvertTo-SecureString / ConvertFrom-SecureString)
+- [ ] Save by a secured manner the Wifi Password with [Marshal](https://www.secureideas.com/blog/secure-password-management-in-powershell-best-practices) (ConvertTo-SecureString / ConvertFrom-SecureString)
 
 
 ### New functionalities
-- Manage scrcpy profiles for each headset ; save these parameters in known_headsets.csv (Left/right eye; audio duplicate or not ; bandwidth ; FPS ) [L/R]-[D/N]-45-20
+- [ ] Manage scrcpy profiles for each headset ; save these parameters in known_headsets.csv (Left/right eye; audio duplicate or not ; bandwidth ; FPS ) [L/R]-[D/N]-45-20
   - Parameters in config.json defines only basics parameters common parameters like crop, angle, video codec, video encoder and video buffer and stay awake
   - Restart the current headset stream if template changed
-- [in process] Dev of a Stream deck plugin
+- [ ] [in process] Dev of a Stream deck plugin
   > - Manage communication with Stream Deck Plugin...
   > - [Named Pipe ?](https://rkeithhill.wordpress.com/2014/11/01/windows-powershell-and-named-pipes/)
   > - REST API to get a web page to manage it from a phone, or by Stream Deck hitself ?
-- Add controllers battery level for OBS view
+- [ ] Add controllers battery level for OBS view
   > Check functions *Get-QuestControllerBatteryStatus* and *Get-HeadsetBatteryStatus*
-- Web page to allow configuration and screen miroring visualization
-- Detect while a new headset is connected on the USB port and propose to start adding process
-- implement a local resteam functionality that allows to give access to the headset screen from any other computer or phone
+- [ ] Web page to allow configuration and screen miroring visualization
+- [ ] Detect while a new headset is connected on the USB port and propose to start adding process
+- [ ] implement a local resteam functionality that allows to give access to the headset screen from any other computer or phone
   > [mediamtx](https://github.com/bluenviron/mediamtx)
 
 ### Code improvement
-- [IN TEST] Translate all text (IHM + comments) in [EN] instead of [FR] - To do by IA... [like this](/docs/translation_fr.xml)
-- Review adb_functions.ps1 to pass device adb object in parameter of all request functions, to allow either USB or Wifi ADB device (Get-HeadsetModel, Get-QuestControllerBatteryStatus, Get-HeadsetBatteryStatus...)
-- Review all powershell code with PSScriptAnalyzer
+- [ ] [IN TEST] Translate all text (IHM + comments) in [EN] instead of [FR] - To do by IA... [like this](/docs/translation_fr.xml)
+- [ ] Review adb_functions.ps1 to pass device adb object in parameter of all request functions, to allow either USB or Wifi ADB device (Get-HeadsetModel, Get-QuestControllerBatteryStatus, Get-HeadsetBatteryStatus...)
+- [ ] Review all powershell code with PSScriptAnalyzer
 
 
 ---
