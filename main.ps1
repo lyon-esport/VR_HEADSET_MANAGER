@@ -147,7 +147,7 @@ if (-not (Test-Path -Path $global:configFilePath)) {
 
 
 #Unblock all scripts in the module folder (in case they were blocked by Windows)
-Get-ChildItem -Path $global:ScriptPath -Filter "*.ps1" -Recurse | Unblock-File
+Get-ChildItem -Path $global:ScriptPath -Include "*.ps1","*.psd1" -Recurse -File | Unblock-File
 
 # Import modules files (must be executed at global level, and cannot start in a function !)
 $scripts_init = Join-Path -Path $global:ScriptPath -ChildPath "\modules\scripts_init.ps1"
