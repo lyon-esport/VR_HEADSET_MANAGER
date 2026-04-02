@@ -44,8 +44,8 @@ I personally use it during showrooms and gaming exhibitions to capture the live 
    Use different options to manage you headsets. You can enable recording, enable the auto-restart of the screen miroring, etc...
 
 7. **Modify VR HEADSET MANAGER parameters**
-   You can adapt configuration in the ./config/config.json file following [this guide](/docs/config.md)
-   Optionnally you can start the script with another custom config file by passing it as a parameter
+   - You can adapt configuration in the ./config/config.json file following [this guide](/docs/config.md)
+   - Optionnally you can start the script with another custom config file by passing it as a parameter
 
 ---
 
