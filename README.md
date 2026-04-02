@@ -51,24 +51,27 @@ Before using the tool, make sure the following requirements are met:
   *Note : To limit lacencies I recommand a dedicated WIFI SSID and channels for headsets only, and an ethernet connexion for the computer which is executing VR HEADSET MANAGER.*
 - ✅ **ADB over WiFi must be enabled** on the headset >> [You can follow this process to enable it !](/docs/docs_HowToEnableADBWifi.md)
 
-Without these prerequisites, the headset will not be reachable over the network and scrcpy streaming will not work.
+> [!IMPORTANT]
+> Without these prerequisites, the headset will not be reachable over the network and scrcpy streaming will not work.
 
 ---
 
-## Roadmap
+## Roadmap 🎯
 
 ### Known issues
 - When stream auto restart is enabled, the headset stream starts 2 times (duplicate scrcpy process)
 - known_headsets.csv : Do not update correctly the serial number
 
 ### Improvements
-- [ ] On startup add following checks :
-  	- [ ] Setup powershell execution >> To test on fresh installed pc
-	- [ ] [TO TEST : KO] Keep the computer awake while the script is running to prevent screen lockout or hibernation.
- 	- [ ] If no headset in the known headset file, propose to add it or search over the network (mdns scan ? usb ?)
-    - [x] [To validate] Firewall authorization for adb.exe on soft startup
-	- [x] Test if the app is not already running... If yes, warn the user and ask if he really wants to start it...
- 	- [x] [IN TEST] include a json validator or tester (and warn config json is broken, and open a web page with json validator...) then propose to try reload or create a new file based on the template (overwrite existing file)
+#### Startup checks
+- [ ] Setup powershell execution >> To test on fresh installed pc
+- [ ] [TO TEST : KO] Keep the computer awake while the script is running to prevent screen lockout or hibernation.
+- [ ] If no headset in the known headset file, propose to add it or search over the network (mdns scan ? usb ?)
+- [x] [To validate] Firewall authorization for adb.exe on soft startup
+- [x] Test if the app is not already running... If yes, warn the user and ask if he really wants to start it...
+
+#### Startup checks
+- [x] [IN TEST] include a json validator or tester (and warn config json is broken, and open a web page with json validator...) then propose to try reload or create a new file based on the template (overwrite existing file)
 - [ ] Review of Meta Quest configuration and ADB activation (by connecting with USB) for headsets that are not already known and configured in VR Heaset Manager
 	> - Install config : Do you want to modify headset parameters ? Y/N and test it on a brand new headset
 	> - if headset has the same serial : update the IP in the known headsets (need to manage serial in known_headets.csv)
@@ -76,10 +79,12 @@ Without these prerequisites, the headset will not be reachable over the network 
 	> - If the headset is not connected to the right Wifi, let's propose to connect to...
 
 - [ ] Bug on adding a headset from the IP address
-	> Tester every combination by adding/modifying/deleting headset...
+	> Test every combination by adding/modifying/deleting headset...
 
 - [ ] Save by a secured manner the Wifi Password with [Marshal](https://www.secureideas.com/blog/secure-password-management-in-powershell-best-practices) (ConvertTo-SecureString / ConvertFrom-SecureString)
 
+#### 🎨 Visual customization
+- []
 
 ### New functionalities
 - [ ] Manage scrcpy profiles for each headset ; save these parameters in known_headsets.csv (Left/right eye; audio duplicate or not ; bandwidth ; FPS ) [L/R]-[D/N]-45-20
@@ -98,9 +103,9 @@ Without these prerequisites, the headset will not be reachable over the network 
 
 ### Code improvement
 - [ ] [IN TEST] Translate all text (IHM + comments) in [EN] instead of [FR] - To do by IA... [like this](/docs/translation_fr.xml)
-- [ ] Review adb_functions.ps1 to pass device adb object in parameter of all request functions, to allow either USB or Wifi ADB device (Get-HeadsetModel, Get-QuestControllerBatteryStatus, Get-HeadsetBatteryStatus...)
 - [ ] Review all powershell code with PSScriptAnalyzer
-
+- [x] Review adb_functions.ps1 to pass device adb object in parameter of all request functions, to allow either USB or Wifi ADB device (Get-HeadsetModel, Get-QuestControllerBatteryStatus, Get-HeadsetBatteryStatus...)
+    Note : Implemented for ADB Wifi only, not for USB.
 
 ---
 
@@ -111,6 +116,8 @@ This project is based on :
 - [oculus-wireless-adb](https://github.com/thedroidgeek/oculus-wireless-adb) for enabling ADB over Wifi on Meta Quest VR headsets
 - [Powershell Pode module](https://github.com/Badgerati/Pode) as web server
 - [Powershell EPS module](https://github.com/straightdave/eps) as templating tool for editing values in web pages
+- [MediaMTX : A real-time media server used for restream screen capture](https://github.com/bluenviron/mediamtx)
+- [Emoji cheat sheet](https://github.com/ikatyang/emoji-cheat-sheet)
 
 Streamdeck usefull plugins :
 - [**Stream Countdown Timer**](https://marketplace.elgato.com/product/stream-countdown-timer-625838c6-85ce-4be7-a754-30f00c809b34) by [BarRaider](https://barraider.com/)
