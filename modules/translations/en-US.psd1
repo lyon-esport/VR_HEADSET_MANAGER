@@ -277,6 +277,10 @@
     ScrcpyCheckHeadset = "Checking if the headset is connected and ready to start scrcpy: {0} ({1})"
     ScrcpyCheckProcess = "Checking scrcpy process for headset {0} ({1})"
     ScrcpyProcessFound = "Scrcpy process found for this headset: {0}"
+    ScrcpyRecordingChanged = "Recording option changed for {0}, restarting scrcpy..."
+    ScrcpyOptionsChanged = "Scrcpy parameters changed for {0} ({1}), restarting..."
+    ScrcpyRestarting = "Restarting scrcpy for headset {0}"
+    ScrcpyStopTimeout = "scrcpy did not exit cleanly for {0} - force killing (recording may be incomplete)"
     ScrcpyServerFileCopied = "Scrcpy server file copied."
     ScrcpyIconFileCopied = "Scrcpy icon file copied."
 

@@ -130,14 +130,56 @@ function Watch-ScrcpyProcesses {
     foreach ($headset in $knownHeadsets_with_autorestart) {
         Write-Log ($msg.ScrcpyCheckHeadset -f $headset.Name, $headset.IPAddress) -Level DEBUG
 
-        if ((Get-KnownHeadsetInfos $headset).ADBWifi -eq $true) {
+        $headsetInfos = Get-KnownHeadsetInfos $headset
+        if ($headsetInfos.ADBWifi -eq $true) {
             Write-Log ($msg.ScrcpyCheckProcess -f $headset.Name, $headset.IPAddress) -Level DEBUG
             $runningScrcpyProcess_forThisheadset = $runningScrcpyProcess | Where-Object {$_.MainWindowTitle -eq (Convert-Displayname($headset.Name))}
             
             Write-Log ($msg.ScrcpyProcessFound -f $runningScrcpyProcess_forThisheadset) -Level DEBUG
             if (-not $runningScrcpyProcess_forThisheadset) {
-                #Write-Log "No scrcpy process found for headset $($headset.Name) ($($headset.IPAddress)). Starting scrcpy..." -Level INFO
                 start-screenCopy -displayName $headset.Name -headsetIP $headset.IPAddress -recording ($headset.Record -eq "True")
+            } else {
+                # scrcpy is running - check if parameters have changed
+                $shouldRestart = $false
+                $expectedRecording = ($headset.Record -eq "True")
+
+                $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($runningScrcpyProcess_forThisheadset.Id)").CommandLine
+
+                # Check recording option mismatch
+                $hasRecord = $cmdLine -match "--record="
+                if ($hasRecord -ne $expectedRecording) {
+                    Write-Log ($msg.ScrcpyRecordingChanged -f $headset.Name) -Level INFO
+                    $shouldRestart = $true
+                }
+
+                # Check scrcpy options mismatch (model-based)
+                if (-not $shouldRestart) {
+                    $headsetModel = $headsetInfos.Model
+                    $expectedOptions = if ($global:scrcpyParameters.$headsetModel) { $global:scrcpyParameters.$headsetModel } else { "" }
+                    if ($expectedOptions -ne "") {
+                        $normalizedCmdLine = ($cmdLine  -replace '\s+', ' ').Trim()
+                        $normalizedOptions = ($expectedOptions -replace '\s+', ' ').Trim()
+                        if ($normalizedCmdLine -notlike "*$normalizedOptions*") {
+                            Write-Log ($msg.ScrcpyOptionsChanged -f $headset.Name, $headsetModel) -Level INFO
+                            $shouldRestart = $true
+                        }
+                    }
+                }
+
+                if ($shouldRestart) {
+                    Write-Log ($msg.ScrcpyRestarting -f $headset.Name) -Level INFO
+                    # Send WM_CLOSE so scrcpy can finalise any recording file before exiting
+                    $closed = $runningScrcpyProcess_forThisheadset.CloseMainWindow()
+                    if ($closed) {
+                        $runningScrcpyProcess_forThisheadset.WaitForExit(10000) | Out-Null
+                    }
+                    if (-not $runningScrcpyProcess_forThisheadset.HasExited) {
+                        Write-Log ($msg.ScrcpyStopTimeout -f $headset.Name) -Level WARNING
+                        Stop-Process -Id $runningScrcpyProcess_forThisheadset.Id -Force -ErrorAction SilentlyContinue
+                        Start-Sleep -Seconds 1
+                    }
+                    start-screenCopy -displayName $headset.Name -headsetIP $headset.IPAddress -recording $expectedRecording
+                }
             }
         }
     }
