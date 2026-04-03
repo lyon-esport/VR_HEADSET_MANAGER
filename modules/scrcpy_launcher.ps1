@@ -103,10 +103,9 @@ function start-screenCopy {
 	Write-Log -Message ($msg.ScrcpyLaunching -f $arguments) -Level "INFO"
     try {
         #$process = 
-        Start-Process $scrcpy -ArgumentList $arguments -PassThru `
+        Start-Process $scrcpy -ArgumentList $arguments -PassThru -NoNewWindow `
 			-RedirectStandardOutput (Join-Path -Path $global:logFolder -ChildPath ($displayName+"_StandardOutput.txt")) `
-			-RedirectStandardError  (Join-Path -Path $global:logFolder -ChildPath ($displayName+"_StandardError.txt")) #-WindowStyle hidden
-
+			-RedirectStandardError  (Join-Path -Path $global:logFolder -ChildPath ($displayName+"_StandardError.txt"))
         
 	} catch {
         Write-Log -Message ($msg.ScrcpyLaunchError -f $_.Exception.Message) -Level "ERROR"
