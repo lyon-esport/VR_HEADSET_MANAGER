@@ -21,6 +21,9 @@ records/*
 # ignore scrcpy tests
 scrcpy_manualScripts/
 
+# ignore large sources
+/sources/ffmpeg-8.1-essentials_build.zip
+
 #Other...
 desktop.ini
 .vscode
