@@ -82,7 +82,7 @@ Before using the tool, make sure the following requirements are met:
 
 #### 🛠️ Backend
 - [x] [🔄 IN TEST] include a json validator or tester (and warn config json is broken, and open a web page with json validator...) then propose to try reload or create a new file based on the template (overwrite existing file)
-- [ ] ⚠️ Scan if modules files have changed despite reloading it every 5s.
+- [X] ⚠️ Scan if modules files have changed despite reloading it every 5s.
 - [ ] :key: Save by a secured manner the Wifi Password with [Marshal](https://www.secureideas.com/blog/secure-password-management-in-powershell-best-practices) (ConvertTo-SecureString / ConvertFrom-SecureString)
 - [ ] REST API to provide a web page to manage it from a phone, or by Stream Deck hitself ?
 
@@ -101,7 +101,7 @@ Before using the tool, make sure the following requirements are met:
   > check all devices availabiel with 5555 opened
 
 #### 📺 VR Headset Screen capture
-- [ ] Manage scrcpy profiles for each headse
+- [ ] [In process] Manage scrcpy profiles for each headset
   -  Save these parameters in known_headsets.csv (Left/right eye; audio duplicate or not ; bandwidth ; FPS ) [L/R]-[D/N]-45-20
   - Parameters in config.json defines only template parameters common parameters like crop, angle, video codec, video encoder and video buffer and stay awake for each headset type
   - Restart the current headset stream if template changed
