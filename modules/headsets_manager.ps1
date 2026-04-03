@@ -92,7 +92,7 @@ function Show-HeadsetsTable {
 function Show-HeadsetsConfig {
     param (
             #[array]$knownHeadsetsInfosFilePath = $global:knownHeadsetsInfosFilePath,
-            [array]$FieldsToShow = @("ID","Name","IPAddress","scrcpy_AutoRestart","Record","SerialNumber"),
+            [array]$FieldsToShow = @("ID","Name","IPAddress","scrcpy_AutoRestart","Record","ScrcpyProfile","SerialNumber"),
             [bool]$UseColors = $true
         )
     $knownHeadsetsConfig = @(Import-Csv -Path $global:knownHeadsetsFilePath -Delimiter "," )
@@ -115,6 +115,8 @@ function Show-HeadsetsConfig {
             IPAddress = 13
             scrcpy_AutoRestart = 15
             Record = 6
+            ScrcpyProfile = 14
+            SerialNumber = 20
         }
         
         # Build the table header
@@ -352,6 +354,7 @@ function Add-Headset {
         IPAddress    = $IPAddress
         scrcpy_AutoRestart = "False"
         Record       = "False"
+        ScrcpyProfile = "R-N-45-20"
         SerialNumber = ""
         #AdbPort      = $AdbPort
     }

@@ -9,6 +9,65 @@ $headsetIP = "192.168.1.243"
 $displayName =  "Quest 3 Manu"
 start-screenCopy -displayName $displayName -headsetIP $ip
 #>
+
+# Build the scrcpy argument string from a model template (config.json) and a per-headset profile.
+# Profile format: [L/R]-[D/N]-FPS-BW  e.g. "R-N-45-20"
+#   L/R = Left or Right eye  (selects crop + angle from model template)
+#   D/N = audio-dup or no-audio
+#   FPS = max-fps value
+#   BW  = bitrate in Mbps
+function ConvertTo-ScrcpyArguments {
+    param(
+        [string]$headsetModel,
+        [string]$profile = "R-N-45-20",
+        $modelTemplate = $null
+    )
+
+    if ([string]::IsNullOrWhiteSpace($profile)) { $profile = "R-N-45-20" }
+    $parts = $profile -split '-'
+    if ($parts.Count -ne 4) {
+        Write-Log ($msg.ScrcpyInvalidProfile -f $profile) -Level WARNING
+        $parts = @('R', 'N', '45', '20')
+    }
+    $eye       = $parts[0].ToUpper()  # L or R
+    $audioPref = $parts[1].ToUpper()  # D=audio-dup, N=no-audio
+    $fps       = $parts[2]            # e.g. 45
+    $bw        = $parts[3]            # e.g. 20 (Mbps)
+
+    if ($null -eq $modelTemplate) {
+        $modelTemplate = $global:scrcpyParameters.$headsetModel
+    }
+
+    $audioArg = if ($audioPref -eq 'D') { "--audio-dup" } else { "--no-audio" }
+
+    if ($null -eq $modelTemplate) {
+        Write-Log $msg.ScrcpyModelUnknown -Level WARNING
+        return "--max-fps=$fps -b ${bw}M $audioArg"
+    }
+
+    # Backward compat: if old flat-string format, return as-is
+    if ($modelTemplate -is [string]) {
+        return $modelTemplate
+    }
+
+    # New object format: combine template with per-headset profile
+    $crop  = if ($eye -eq 'L') { $modelTemplate.crop_left  } else { $modelTemplate.crop_right  }
+    $angle = if ($eye -eq 'L') { $modelTemplate.angle_left } else { $modelTemplate.angle_right }
+
+    $argParts = [System.Collections.Generic.List[string]]::new()
+    if ($crop)  { $argParts.Add("--crop $crop") }
+    if ($null -ne $angle -and "$angle" -ne "" -and [int]"$angle" -ne 0) { $argParts.Add("--angle=$angle") }
+    $argParts.Add("--max-fps=$fps")
+    $argParts.Add("-b ${bw}M")
+    if ($modelTemplate.video_codec)   { $argParts.Add("--video-codec=$($modelTemplate.video_codec)") }
+    if ($modelTemplate.video_encoder -and $modelTemplate.video_encoder -ne "") { $argParts.Add("--video-encoder=$($modelTemplate.video_encoder)") }
+    if ($modelTemplate.video_buffer)  { $argParts.Add("--video-buffer=$($modelTemplate.video_buffer)") }
+    if ($modelTemplate.stay_awake -eq $true) { $argParts.Add("--stay-awake") }
+    $argParts.Add($audioArg)
+
+    return ($argParts -join ' ')
+}
+
 function start-screenCopy {
     param (
         [Parameter(Mandatory=$true)]
@@ -20,7 +79,7 @@ function start-screenCopy {
 
         [int]$adbPort = $global:adbPort_default,
 
-        $scrcpyParameters = $global:scrcpyParameters
+        [string]$profile = "R-N-45-20"
 
     )
 
@@ -69,11 +128,7 @@ function start-screenCopy {
     
     
 
-    if ($scrcpyParameters.$headsetModel){
-        $options =  $scrcpyParameters.$headsetModel
-    } else {
-		Write-Log -Message $msg.ScrcpyModelUnknown -Level "WARNING"
-	}
+    $options = ConvertTo-ScrcpyArguments -headsetModel $headsetModel -profile $profile
 
     # Check that scrcpy exists
     if (-not (Test-Path $scrcpy)) {
@@ -137,10 +192,12 @@ function Watch-ScrcpyProcesses {
             
             Write-Log ($msg.ScrcpyProcessFound -f $runningScrcpyProcess_forThisheadset) -Level DEBUG
             if (-not $runningScrcpyProcess_forThisheadset) {
-                start-screenCopy -displayName $headset.Name -headsetIP $headset.IPAddress -recording ($headset.Record -eq "True")
+                $headsetProfile = if ($headset.ScrcpyProfile) { $headset.ScrcpyProfile } else { "R-N-45-20" }
+                start-screenCopy -displayName $headset.Name -headsetIP $headset.IPAddress -recording ($headset.Record -eq "True") -profile $headsetProfile
             } else {
                 # scrcpy is running - check if parameters have changed
                 $shouldRestart = $false
+                $headsetProfile = if ($headset.ScrcpyProfile) { $headset.ScrcpyProfile } else { "R-N-45-20" }
                 $expectedRecording = ($headset.Record -eq "True")
 
                 $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($runningScrcpyProcess_forThisheadset.Id)").CommandLine
@@ -152,12 +209,12 @@ function Watch-ScrcpyProcesses {
                     $shouldRestart = $true
                 }
 
-                # Check scrcpy options mismatch (model-based)
+                # Check scrcpy options and profile mismatch
                 if (-not $shouldRestart) {
                     $headsetModel = $headsetInfos.Model
-                    $expectedOptions = if ($global:scrcpyParameters.$headsetModel) { $global:scrcpyParameters.$headsetModel } else { "" }
+                    $expectedOptions = ConvertTo-ScrcpyArguments -headsetModel $headsetModel -profile $headsetProfile
                     if ($expectedOptions -ne "") {
-                        $normalizedCmdLine = ($cmdLine  -replace '\s+', ' ').Trim()
+                        $normalizedCmdLine = ($cmdLine -replace '\s+', ' ').Trim()
                         $normalizedOptions = ($expectedOptions -replace '\s+', ' ').Trim()
                         if ($normalizedCmdLine -notlike "*$normalizedOptions*") {
                             Write-Log ($msg.ScrcpyOptionsChanged -f $headset.Name, $headsetModel) -Level INFO
@@ -178,7 +235,7 @@ function Watch-ScrcpyProcesses {
                         Stop-Process -Id $runningScrcpyProcess_forThisheadset.Id -Force -ErrorAction SilentlyContinue
                         Start-Sleep -Seconds 1
                     }
-                    start-screenCopy -displayName $headset.Name -headsetIP $headset.IPAddress -recording $expectedRecording
+                    start-screenCopy -displayName $headset.Name -headsetIP $headset.IPAddress -recording $expectedRecording -profile $headsetProfile
                 }
             }
         }
