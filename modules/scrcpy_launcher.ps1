@@ -99,13 +99,25 @@ function start-screenCopy {
     $arguments = "-s $adb_device $options --window-title=$displayName $recordOption"
     #.\scrcpy.exe --crop 1664:1304:2260:450 --angle=-21 --max-fps 45 -b 16M --no-audio --video-buffer=100 --video-codec=h264 --video-encoder=OMX.qcom.video.encoder.avc -s $adb_device
     #.\sources\scrcpy-win64-v3.3\scrcpy.exe -s 192.168.1.243:5555 -b20m --crop=1664:1304:2260:450 --angle=-21 --max-size=800 --max-fps=30 --video-codec=h265 --no-audio --window-title=Q3_BLUE
-    
+
+    # Use scrcpy-noconsole.vbs (bundled with scrcpy) to hide the console window
+    # while keeping the video window visible. wscript.exe runs the VBS with style 0 (hidden).
+    $scrcpyNoConsole = Join-Path -Path $global:scrcpyFolder -ChildPath "scrcpy-noconsole.vbs"
+    if (Test-Path $scrcpyNoConsole) {
+        $launcher       = "wscript.exe"
+        $launchArgs     = "`"$scrcpyNoConsole`" $arguments"
+    } else {
+        # Fallback: launch scrcpy.exe directly (console window will be visible)
+        Write-Log -Message ($msg.ScrcpyNoConsoleVbsNotFound) -Level WARNING
+        $launcher       = $scrcpy
+        $launchArgs     = $arguments
+    }
+
 	Write-Log -Message ($msg.ScrcpyLaunching -f $arguments) -Level "INFO"
     try {
-        #$process = 
-        Start-Process $scrcpy -ArgumentList $arguments -PassThru `
+        Start-Process $launcher -ArgumentList $launchArgs -PassThru `
 			-RedirectStandardOutput (Join-Path -Path $global:logFolder -ChildPath ($displayName+"_StandardOutput.txt")) `
-			-RedirectStandardError  (Join-Path -Path $global:logFolder -ChildPath ($displayName+"_StandardError.txt")) #-WindowStyle hidden
+			-RedirectStandardError  (Join-Path -Path $global:logFolder -ChildPath ($displayName+"_StandardError.txt"))
 
         
 	} catch {

@@ -288,6 +288,8 @@
     InvalidOptionAdd = "Option invalide saisie dans le menu d'ajout."
     InvalidFieldNumberEntered = "Numero de champ invalide saisi : {0}"
     InvalidBoolValueField = "Valeur invalide pour le champ boolean '{0}' : {1}"
+    ScrcpyNoConsoleVbsNotFound = "scrcpy-noconsole.vbs introuvable - la fenetre de commande sera visible"
+
     InvalidOptionFileMenu = "Option invalide saisie dans le menu de gestion des fichiers."
     FolderNotExist = "Le chemin du dossier n'existe pas ou n'est pas un dossier : {0}"
 
