@@ -290,4 +290,24 @@
     InvalidBoolValueField = "Valeur invalide pour le champ boolean '{0}' : {1}"
     InvalidOptionFileMenu = "Option invalide saisie dans le menu de gestion des fichiers."
     FolderNotExist = "Le chemin du dossier n'existe pas ou n'est pas un dossier : {0}"
+
+    # ==========================================
+    # restream.ps1
+    # ==========================================
+    MediaMtxNotEnabled = "Le restream est desactive dans la config (mediamtx.enabled = false)"
+    MediaMtxNotFound = "mediamtx.exe introuvable a : {0}"
+    MediaMtxAlreadyRunning = "MediaMtx est deja en cours d'execution (PID : {0})"
+    MediaMtxStarting = "Demarrage du serveur de restream mediamtx..."
+    MediaMtxStarted = "MediaMtx demarre avec succes (PID : {0})"
+    MediaMtxStartFailed = "Impossible de demarrer mediamtx : {0}"
+    MediaMtxStopped = "MediaMtx arrete"
+    MediaMtxStopFailed = "Impossible d'arreter mediamtx : {0}"
+    MediaMtxApiNotReachable = "API mediamtx inaccessible a {0} - nouvelle tentative au prochain cycle"
+    MediaMtxPathAdded = "Chemin de restream ajoute pour {0} : {1}"
+    MediaMtxPathRemoved = "Chemin de restream supprime : {0}"
+    MediaMtxPathSyncFailed = "Echec de la synchronisation du chemin de restream pour {0} : {1}"
+    MediaMtxFfmpegNotFound = "ffmpeg.exe introuvable a {0} - capture de restream indisponible"
+    MediaMtxFirewallRuleCreating = "Creation des regles pare-feu pour mediamtx (RTSP:{0}, HLS:{1})"
+    MediaMtxFirewallRuleExists = "Les regles pare-feu mediamtx existent deja et sont correctement configurees"
+    MediaMtxFirewallRuleFailed = "Impossible de gerer les regles pare-feu mediamtx : {0}"
 }

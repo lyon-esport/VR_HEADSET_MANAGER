@@ -290,4 +290,24 @@
     InvalidBoolValueField = "Invalid value for boolean field '{0}': {1}"
     InvalidOptionFileMenu = "Invalid option entered in the file management menu."
     FolderNotExist = "Folder path does not exist or is not a directory: {0}"
+
+    # ==========================================
+    # restream.ps1
+    # ==========================================
+    MediaMtxNotEnabled = "Restream is disabled in config (mediamtx.enabled = false)"
+    MediaMtxNotFound = "mediamtx.exe not found at: {0}"
+    MediaMtxAlreadyRunning = "MediaMtx is already running (PID: {0})"
+    MediaMtxStarting = "Starting mediamtx restream server..."
+    MediaMtxStarted = "MediaMtx started successfully (PID: {0})"
+    MediaMtxStartFailed = "Failed to start mediamtx: {0}"
+    MediaMtxStopped = "MediaMtx stopped"
+    MediaMtxStopFailed = "Failed to stop mediamtx: {0}"
+    MediaMtxApiNotReachable = "MediaMtx API not reachable at {0} - will retry next cycle"
+    MediaMtxPathAdded = "Restream path added for {0}: {1}"
+    MediaMtxPathRemoved = "Restream path removed: {0}"
+    MediaMtxPathSyncFailed = "Failed to sync restream path for {0}: {1}"
+    MediaMtxFfmpegNotFound = "ffmpeg.exe not found at {0} - restream capture unavailable"
+    MediaMtxFirewallRuleCreating = "Creating firewall rules for mediamtx restream ports (RTSP:{0}, HLS:{1})"
+    MediaMtxFirewallRuleExists = "MediaMtx firewall rules already exist and are correctly configured"
+    MediaMtxFirewallRuleFailed = "Failed to manage mediamtx firewall rules: {0}"
 }
