@@ -24,7 +24,7 @@ I personally use it during showrooms and gaming exhibitions to capture the live 
    > Copy or clone the `VR_HEADSET_MANAGER` folder to your local computer.
 
 2. **Run the launcher**  
-   - :warning: Run as admin :warning: **START_VR_HEADSET_MANAGER.cmd** 
+   - :warning: Run as admin on the first time :warning: **START_VR_HEADSET_MANAGER.cmd** 
    > - This will start PowerShell with the correct execution policy and launch the manager.
    > - On first start it will automatically :  
    >   - add Windows Firewall exceptions to allow adb.exe to talk with headsets over the network.
