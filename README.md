@@ -82,6 +82,7 @@ Before using the tool, make sure the following requirements are met:
 
 #### 🛠️ Backend
 - [x] [🔄 IN TEST] include a json validator or tester (and warn config json is broken, and open a web page with json validator...) then propose to try reload or create a new file based on the template (overwrite existing file)
+- [ ] ⚠️ Scan if modules files have changed despite reloading it every 5s.
 - [ ] :key: Save by a secured manner the Wifi Password with [Marshal](https://www.secureideas.com/blog/secure-password-management-in-powershell-best-practices) (ConvertTo-SecureString / ConvertFrom-SecureString)
 - [ ] REST API to provide a web page to manage it from a phone, or by Stream Deck hitself ?
 
