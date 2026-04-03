@@ -288,6 +288,8 @@
     InvalidOptionAdd = "Invalid option entered in the add menu."
     InvalidFieldNumberEntered = "Invalid field number entered: {0}"
     InvalidBoolValueField = "Invalid value for boolean field '{0}': {1}"
+    ScrcpyNoConsoleVbsNotFound = "scrcpy-noconsole.vbs not found - console window will be visible"
+
     InvalidOptionFileMenu = "Invalid option entered in the file management menu."
     FolderNotExist = "Folder path does not exist or is not a directory: {0}"
 
