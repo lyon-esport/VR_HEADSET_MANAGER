@@ -277,6 +277,10 @@
     ScrcpyCheckHeadset = "Verification si le casque est connecte et pret pour scrcpy : {0} ({1})"
     ScrcpyCheckProcess = "Verification du processus scrcpy pour le casque {0} ({1})"
     ScrcpyProcessFound = "Processus scrcpy trouve pour ce casque : {0}"
+    ScrcpyRecordingChanged = "Option d'enregistrement modifiee pour {0}, redemarrage de scrcpy..."
+    ScrcpyOptionsChanged = "Parametres scrcpy modifies pour {0} ({1}), redemarrage..."
+    ScrcpyRestarting = "Redemarrage de scrcpy pour le casque {0}"
+    ScrcpyStopTimeout = "scrcpy ne s'est pas arrete proprement pour {0} - arret force (enregistrement potentiellement incomplet)"
     ScrcpyServerFileCopied = "Fichier serveur scrcpy copie."
     ScrcpyIconFileCopied = "Fichier icone scrcpy copie."
 
