@@ -42,5 +42,18 @@
 		"battery_controller_lowLevel": 20,
 		"temperature_highLevel": 50
 	 }
+  },
+  "mediamtx": {
+    "enabled": true,
+    "folder": "mediamtx_v1.17.1_windows_amd64",
+    "rtsp_port": 8554,
+    "hls_port": 8888,
+    "webrtc_port": 8889,
+    "api_port": 9997,
+    "stream_framerate": 30,
+    "stream_bitrate": "4M"
+  },
+  "ffmpeg": {
+    "folder": "ffmpeg"
   }
 }

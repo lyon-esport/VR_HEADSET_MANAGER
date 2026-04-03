@@ -129,6 +129,25 @@ function Get-Config {
     $global:OBS_battery_lowLevel = $configContent.OBS.headsets_triggers.battery_lowLevel
     $global:OBS_temperature_highLevel = $configContent.OBS.headsets_triggers.temperature_highLevel
 
+    # mediamtx restream server
+    if ($configContent.mediamtx) {
+        $global:mediamtxEnabled      = [bool]$configContent.mediamtx.enabled
+        $global:mediamtxFolder       = Join-Path -Path $sourcesPath -ChildPath $configContent.mediamtx.folder
+        $global:mediamtxFilePath     = Join-Path -Path $global:mediamtxFolder -ChildPath "mediamtx.exe"
+        $global:mediamtxYmlPath      = Join-Path -Path $global:ScriptPath -ChildPath "config\mediamtx_headsets.yml"
+        $global:mediamtxRtspPort     = $configContent.mediamtx.rtsp_port
+        $global:mediamtxHlsPort      = $configContent.mediamtx.hls_port
+        $global:mediamtxWebrtcPort   = $configContent.mediamtx.webrtc_port
+        $global:mediamtxApiPort      = $configContent.mediamtx.api_port
+        $global:mediamtxFramerate    = $configContent.mediamtx.stream_framerate
+        $global:mediamtxBitrate      = $configContent.mediamtx.stream_bitrate
+    } else {
+        $global:mediamtxEnabled = $false
+    }
+    # ffmpeg.exe
+    $ffmpegFolder = if ($configContent.ffmpeg) { $configContent.ffmpeg.folder } else { "ffmpeg" }
+    $global:ffmpegFilePath = Join-Path -Path $sourcesPath -ChildPath "$ffmpegFolder\ffmpeg.exe"
+
    
     # Charge of logging configuration variables with validation and default values
     #get computer name

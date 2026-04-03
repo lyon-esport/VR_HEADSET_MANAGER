@@ -316,12 +316,82 @@ function Unblock-ADBFirewallRule {
     }
 }
 
+function Unblock-MediaMtxFirewallRule {
+    <#
+    .SYNOPSIS
+    Ensures Windows Firewall allows inbound connections to mediamtx restream ports.
+
+    .DESCRIPTION
+    Creates inbound rules named [VR_HEADSET_MANAGER]MediaMtx_Allowed for:
+      - TCP+UDP on the RTSP port (default 8554) for RTSP streaming via VLC / OBS
+      - TCP on the HLS port (default 8888) for browser / OBS HLS playback
+      - TCP+UDP on the WebRTC port (default 8889) for browser WebRTC playback
+    Rules apply to all network profiles (Domain, Private, Public) so remote viewers
+    on any network segment can connect. Admin elevation is requested if needed.
+    #>
+    if (-not $global:mediamtxEnabled) {
+        Write-Log $msg.MediaMtxNotEnabled -Level DEBUG
+        return
+    }
+    $ruleName   = "_[VR_HEADSET_MANAGER]MediaMtx_Allowed"
+    $rtspPort   = if ($global:mediamtxRtspPort)   { $global:mediamtxRtspPort   } else { 8554 }
+    $hlsPort    = if ($global:mediamtxHlsPort)    { $global:mediamtxHlsPort    } else { 8888 }
+    $webrtcPort = if ($global:mediamtxWebrtcPort) { $global:mediamtxWebrtcPort } else { 8889 }
+
+    $scriptBlock_AddMediaMtxFWRules = {
+        param($RuleName, $rtspPort, $hlsPort, $webrtcPort)
+        Write-Host " Firewall rules will be created for mediamtx restream " -ForegroundColor Cyan -BackgroundColor Black
+        Write-Host "`t Rule base  : $RuleName"
+        Write-Host "`t RTSP   port $rtspPort  (TCP+UDP inbound)"
+        Write-Host "`t HLS    port $hlsPort   (TCP inbound)"
+        Write-Host "`t WebRTC port $webrtcPort (TCP+UDP inbound)"
+        Write-Host "`t Profile    : Any (Domain, Private, Public)"
+        Read-Host "Press Enter to continue... or cancel with Ctrl+C"
+        New-NetFirewallRule -DisplayName ($RuleName + ' RTSP-TCP [IN]') `
+                            -Direction Inbound -Protocol TCP -LocalPort $rtspPort `
+                            -Action Allow -Profile Any -ErrorAction Continue | Out-Null
+        New-NetFirewallRule -DisplayName ($RuleName + ' RTSP-UDP [IN]') `
+                            -Direction Inbound -Protocol UDP -LocalPort $rtspPort `
+                            -Action Allow -Profile Any -ErrorAction Continue | Out-Null
+        New-NetFirewallRule -DisplayName ($RuleName + ' HLS-TCP [IN]') `
+                            -Direction Inbound -Protocol TCP -LocalPort $hlsPort `
+                            -Action Allow -Profile Any -ErrorAction Continue | Out-Null
+        New-NetFirewallRule -DisplayName ($RuleName + ' WebRTC-TCP [IN]') `
+                            -Direction Inbound -Protocol TCP -LocalPort $webrtcPort `
+                            -Action Allow -Profile Any -ErrorAction Continue | Out-Null
+        New-NetFirewallRule -DisplayName ($RuleName + ' WebRTC-UDP [IN]') `
+                            -Direction Inbound -Protocol UDP -LocalPort $webrtcPort `
+                            -Action Allow -Profile Any -ErrorAction Continue | Out-Null
+        Read-Host "MediaMtx firewall rules created. Press Enter to exit."
+    }
+    try {
+        $existing = Get-NetFirewallRule -ErrorAction SilentlyContinue |
+                    Where-Object { $_.DisplayName -ilike "*VR_HEADSET_MANAGER*MediaMtx*" }
+        if (-not $existing) {
+            Write-Log ($msg.MediaMtxFirewallRuleCreating -f $rtspPort, $hlsPort) -Level INFO
+            Invoke-AsAdmin -ScriptBlock $scriptBlock_AddMediaMtxFWRules `
+                           -ruleName $ruleName -rtspPort $rtspPort `
+                           -hlsPort $hlsPort -webrtcPort $webrtcPort
+        }
+        else {
+            Write-Log $msg.MediaMtxFirewallRuleExists -Level DEBUG
+        }
+    }
+    catch {
+        Write-Log ($msg.MediaMtxFirewallRuleFailed -f $_) -Level ERROR
+    }
+}
+
 # Check and configure firewall for ADB
 if (-not (Unblock-ADBFirewallRule -adbPath $global:adbPath)) {
     Write-Log $msg.FirewallConfigSkipped -Level WARNING
 }
 
+# Check and configure firewall for mediamtx restream ports (RTSP/HLS/WebRTC)
+Unblock-MediaMtxFirewallRule
 
+# Start mediamtx restream server in background (if enabled in config)
+Start-MediaMtx
 
 # Prevent Windows from locking the screen / starting screensaver while the app is running
 # Uses the official SetThreadExecutionState Win32 API

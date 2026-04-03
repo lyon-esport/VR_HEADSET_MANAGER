@@ -126,6 +126,8 @@ function Start-VRMonitor {
             # Update OBS file
             Update-OBSFile -knownHeadsetsInfo $knownHeadsetsInfo #-obsTemplatePath $global:obsTemplatePath -obsOutputPath $global:obsOutputPath
 
+            # Sync mediamtx restream paths with current headsets
+            Sync-RestreamPaths
 
             Write-Log ($msg.JobRestartsIn -f $jobName, $VRMonitor_refresh_timer) -Level INFO
            
