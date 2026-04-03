@@ -57,16 +57,27 @@ $moduleFiles = Get-ChildItem -Path $ModulesPath -Filter "*.ps1" -File |
         $_.Name -notlike "*_test.ps1"
     }
 
+    if (-not $global:moduleSnapshots) { $global:moduleSnapshots = @{} }
+
     foreach ($file in $moduleFiles) {
         try {
+            # Skip if already loaded and not modified since last load
+            $lastWrite = $file.LastWriteTime
+            if ($global:moduleSnapshots.ContainsKey($file.FullName) -and
+                $global:moduleSnapshots[$file.FullName] -eq $lastWrite) {
+                Write-Host "[SKIP] Module $($file.Name) unchanged" -ForegroundColor DarkGray
+                continue
+            }
             # Dot-source the file so its functions become available
             . $file.FullName
-            if (-not $global:debugLevelToConsole -or $global:debugLevelToConsole -in @('DEBUG','INFO','SUCCESS')) {
+            
+            $global:moduleSnapshots[$file.FullName] = $lastWrite
+            if ($global:debugLevelToConsole -in @('DEBUG','INFO','SUCCESS')) {
                 Write-Host "[OK] Module $($file.Name) loaded" -ForegroundColor Green
             }
         }
         catch {
-            if (-not $global:debugLevelToConsole -or $global:debugLevelToConsole -ne 'NONE') {
+            if ($global:debugLevelToConsole -ne 'NONE') {
                 Write-Host "[ERROR] Unable to load module $($file.Name)" -BackgroundColor Red -ForegroundColor White
             }
         }
