@@ -28,11 +28,26 @@
 	  "folder":"scrcpy-win64-v3.3.4_patchedNoFlickering",
 	  "recordFolder":"C:/DATA/MEDIA/OBS/Stream_Records",
 	  "parameters":{
-		"Quest 3":"--max-fps 45 -b 20M --video-buffer=100 --no-audio --crop 1664:1304:2260:450 --angle=-21 --video-codec=h264 --video-encoder=OMX.qcom.video.encoder.avc --stay-awake",
-		"Quest 3_test":" -b20m --max-fps=30 --video-buffer=100 --video-codec=h264",
-		"Quest 3_Cropped":"-b20m --crop=1664:1304:2260:450 --angle=-21 --max-size=800 --max-fps=30 --video-codec=h265",
-		"Quest 2":"--crop=1550:1250:2000:280 -b10m --max-fps 30 --video-buffer=100 --no-audio --video-buffer=50 --video-codec=h264",
-		"Quest 2_Cropped":"--crop=1550:1250:2000:280 --max-size=800 --video-bit-rate=10M --max-fps 60 --video-buffer=50 --video-codec=h265" 
+		"Quest 3":{
+			"crop_right":"1664:1304:2260:450",
+			"crop_left":"1664:1304:200:450",
+			"angle_right":-21,
+			"angle_left":22,
+			"video_codec":"h264",
+			"video_encoder":"OMX.qcom.video.encoder.avc",
+			"video_buffer":100,
+			"stay_awake":true
+		},
+		"Quest 2":{
+			"crop_right":"1550:1250:2000:280",
+			"crop_left":"1550:1250:0:280",
+			"angle_right":0,
+			"angle_left":0,
+			"video_codec":"h264",
+			"video_encoder":"",
+			"video_buffer":100,
+			"stay_awake":true
+		}
 	  }
   },
   "OBS":{

@@ -43,6 +43,7 @@ function Show-MainMenu {
         Write-Host $msg.EnableWifiADB -BackgroundColor White -ForegroundColor Black
         Write-Host $msg.AddModifyHeadset -BackgroundColor Green -ForegroundColor DarkMagenta
         Write-Host $msg.ScrcpyTracking -BackgroundColor DarkRed -ForegroundColor White
+        Write-Host $msg.ScrcpyOptions -BackgroundColor DarkCyan -ForegroundColor Yellow
         Write-Host $msg.RecordingManagement -BackgroundColor DarkBlue -ForegroundColor White
         Write-Host $msg.FilesFolders -BackgroundColor DarkCyan -ForegroundColor Black 
         Write-Host $msg.Quit
@@ -83,22 +84,15 @@ function Show-MainMenu {
         else {
 
             switch ($choice) {
-                <#'1' { Write-Host "=== Stream the screen of a VR headset ===" -BackgroundColor Blue
-                        Show-SubMenu-StreamHeadset 
-                        
-                    }#>
                 'A' { Write-Host $msg.AddHeadsetTitle
                         Show-SubMenu-AddHeadset
                     }
-                <#'3' { Write-Host "== HEADSET REMOVAL ==" #OK
-                        Show-SubMenu-RemoveHeadset 
-                    }
-                '4' { Write-Host "== HEADSET MANAGEMENT =="
-                        Show-SubMenu-ManageHeadset
-                    }
-                #>
+
                 'S' { Write-Host $msg.ScrcpyTrackingTitle
                         Show-SubMenu-scrcpyTracking
+                    }
+                'M' { Write-Host $msg.ScrcpyOptionsTitle
+                        Show-SubMenu-ScrcpyOptions
                     }
                 'R' { Write-Host $msg.RecordingTitle
                         Show-SubMenu-Recording
@@ -255,7 +249,8 @@ function Show-SubMenu-EditHeadset { #CHOICE 3
         $msg.FieldName,
         $msg.FieldIPAddress,
         $msg.FieldScrcpyAutoRestart,
-        $msg.FieldRecording
+        $msg.FieldRecording,
+        $msg.FieldScrcpyProfile
     )
 
     Write-Host $msg.ModifiableFields
@@ -272,6 +267,8 @@ function Show-SubMenu-EditHeadset { #CHOICE 3
     } elseif ($fieldNum -eq '4') {
         $field = "Record"
     } elseif ($fieldNum -eq '5') {
+        $field = "ScrcpyProfile"
+    } elseif ($fieldNum -eq '6') {
         $field = "SerialNumber"
     } else {
         Write-Log ($msg.InvalidFieldNumberEntered -f $fieldNum) -Level "ERROR"
@@ -288,6 +285,15 @@ function Show-SubMenu-EditHeadset { #CHOICE 3
         } else {
             Write-Log ($msg.InvalidBoolValueField -f $field, $newValueInput) -Level "ERROR"
             Write-Host $msg.InvalidBoolValue -ForegroundColor Red
+            return
+        }
+    } elseif ($field -eq "ScrcpyProfile") {
+        $currentValue = ($headsets | Where-Object { $_.ID -eq [int]$idInput }).$field
+        Write-Host ($msg.CurrentValue -f $field, $currentValue)
+        $newValue = Read-Host ($msg.EnterNewValue -f $field)
+        if ($newValue -notmatch '^[LR]-[DN]-\d+-\d+$') {
+            Write-Log $msg.InvalidScrcpyProfileFormat -Level "ERROR"
+            Write-Host $msg.InvalidScrcpyProfileFormat -ForegroundColor Red
             return
         }
     } else {
@@ -477,6 +483,118 @@ function Show-SubMenu-Recording { #CHOICE 6
         break 
     }
 } # OK
+
+
+function Show-SubMenu-ScrcpyOptions {
+    $headsets = @(Get-KnownHeadsets)
+    if ($headsets.Count -eq 0) {
+        Write-Host $msg.NoHeadsetInFile -ForegroundColor Yellow
+        return
+    }
+
+    do {
+        Clear-Host
+        Start-Sleep -Milliseconds 100
+        Write-Host $msg.ScrcpyOptionsTitle -ForegroundColor Cyan
+        Write-Host $msg.ScrcpyOptionsSelectHeadset
+        Write-Host $msg.IDNameScrcpyProfile
+        Write-Host $msg.Separator
+        $headsets | ForEach-Object {
+            $profileText = if ($_.ScrcpyProfile) { $_.ScrcpyProfile } else { "R-N-45-20" }
+            Write-Host "$($_.ID)`t$($_.Name.PadRight(16))`t$profileText"
+        }
+        Write-Host $msg.Return
+        Write-Host ""
+
+        $idInput = Read-Host $msg.Choice
+        if ($idInput -eq '0') { return }
+
+        $headset = $headsets | Where-Object { $_.ID -eq $idInput }
+        if (-not $headset) {
+            Write-Log ($msg.InvalidID -f $idInput) -Level WARNING
+            Start-Sleep -Seconds 2
+            continue
+        }
+
+        # Inner loop: edit individual profile fields for the selected headset
+        do {
+            $profile = if ($headset.ScrcpyProfile) { $headset.ScrcpyProfile } else { "R-N-45-20" }
+            $parts = $profile -split '-'
+            if ($parts.Count -ne 4) { $parts = @('R','N','45','20') }
+            $eye  = $parts[0].ToUpper()
+            $audio = $parts[1].ToUpper()
+            $fps  = $parts[2]
+            $bw   = $parts[3]
+            $eyeLabel   = if ($eye   -eq 'L') { 'Left'      } else { 'Right' }
+            $audioLabel = if ($audio -eq 'D') { 'Duplicate' } else { 'No audio' }
+
+            Clear-Host
+            Write-Host "$($msg.ScrcpyOptionsTitle) - $($headset.Name)" -ForegroundColor Cyan
+            Write-Host $msg.Separator
+            Write-Host " [#]  $($msg.ScrcpyOptTableHeader)"
+            Write-Host $msg.Separator
+            Write-Host " [1]  $($msg.ScrcpyOptEyeLabel.PadRight(16)) : $eyeLabel"
+            Write-Host " [2]  $($msg.ScrcpyOptAudioLabel.PadRight(16)) : $audioLabel"
+            Write-Host " [3]  $($msg.ScrcpyOptFPSLabel.PadRight(16)) : $fps"
+            Write-Host " [4]  $($msg.ScrcpyOptBitrateLabel.PadRight(16)) : $bw"
+            Write-Host " [0]  $($msg.Return)"
+
+            $opt = Read-Host $msg.ScrcpyOptionsEnterOption
+
+            switch ($opt) {
+                '1' {
+                    $val = (Read-Host ($msg.ScrcpyOptionsEye -f $eye)).ToUpper()
+                    if ($val -in @('L','R')) {
+                        $parts[0] = $val
+                    } else {
+                        Write-Host $msg.ScrcpyOptionsInvalidEye -ForegroundColor Red
+                        Start-Sleep -Seconds 2
+                    }
+                }
+                '2' {
+                    $val = (Read-Host ($msg.ScrcpyOptionsAudio -f $audio)).ToUpper()
+                    if ($val -in @('D','N')) {
+                        $parts[1] = $val
+                    } else {
+                        Write-Host $msg.ScrcpyOptionsInvalidAudio -ForegroundColor Red
+                        Start-Sleep -Seconds 2
+                    }
+                }
+                '3' {
+                    $val = Read-Host ($msg.ScrcpyOptionsFPS -f $fps)
+                    if ($val -match '^\d+$' -and [int]$val -gt 0) {
+                        $parts[2] = $val
+                    } else {
+                        Write-Host $msg.ScrcpyOptionsInvalidNumber -ForegroundColor Red
+                        Start-Sleep -Seconds 2
+                    }
+                }
+                '4' {
+                    $val = Read-Host ($msg.ScrcpyOptionsBitrate -f $bw)
+                    if ($val -match '^\d+$' -and [int]$val -gt 0) {
+                        $parts[3] = $val
+                    } else {
+                        Write-Host $msg.ScrcpyOptionsInvalidNumber -ForegroundColor Red
+                        Start-Sleep -Seconds 2
+                    }
+                }
+                '0' { break }
+                default { }
+            }
+
+            if ($opt -in @('1','2','3','4')) {
+                $newProfile = $parts -join '-'
+                $headset.ScrcpyProfile = $newProfile
+                Update-HeadsetField -ID ([int]$headset.ID) -Field "ScrcpyProfile" -NewValue $newProfile
+                # Refresh local array so the outer list reflects the change
+                $headsets = @(Get-KnownHeadsets)
+                $headset = $headsets | Where-Object { $_.ID -eq $idInput }
+                Write-Log ($msg.ScrcpyOptionsSaved -f $headset.Name, $newProfile) -Level INFO
+            }
+        } while ($opt -ne '0')
+
+    } while ($true)
+}
 
 
 function Show-SubMenu-FilesAndFolders{
