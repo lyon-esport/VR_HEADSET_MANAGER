@@ -155,11 +155,12 @@ function Add-RestreamPath {
     # ffmpeg captures the scrcpy window by its exact title using Windows GDI grab,
     # encodes to H.264 with low-latency settings, and pushes RTSP to mediamtx.
     # -rtsp_transport tcp: avoids UDP hole-punching issues on loopback.
+    # -pkt_size 1316: keeps RTP packets within Ethernet MTU (mediamtx warns at >1440).
     $cmd = "$ffmpegFwd -f gdigrab -framerate $($global:mediamtxFramerate)" +
            " -i title=$windowTitle -c:v libx264 -preset ultrafast" +
            " -tune zerolatency -b:v $($global:mediamtxBitrate)" +
            " -maxrate $($global:mediamtxBitrate) -bufsize $($global:mediamtxBitrate)" +
-           " -rtsp_transport tcp -f rtsp $rtspUrl"
+           " -pkt_size 1316 -rtsp_transport tcp -f rtsp $rtspUrl"
 
     $body = @{
         runOnDemand             = $cmd
