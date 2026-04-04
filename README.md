@@ -66,8 +66,8 @@ Before using the tool, make sure the following requirements are met:
 ## Roadmap 🎯
 
 ### 🐞Known issues
-- [ ] When stream auto restart is enabled, the headset stream starts sometimes 2 times if the fist stream didn't had time to start (duplicate scrcpy process)
-- [ ] known_headsets.csv : Do not update correctly the serial number
+- [x] When stream auto restart is enabled, the headset stream starts sometimes 2 times if the fist stream didn't had time to start (duplicate scrcpy process)
+- [x] known_headsets.csv : Do not update correctly the serial number
 - [ ] Bug on adding a headset from the IP address
 	> Test every combination by adding/modifying/deleting headset...
 
@@ -101,8 +101,8 @@ Before using the tool, make sure the following requirements are met:
   > check all devices availabiel with 5555 opened
 
 #### 📺 VR Headset Screen capture
-- [ ] [In process] Manage scrcpy profiles for each headset
-  -  Save these parameters in known_headsets.csv (Left/right eye; audio duplicate or not ; bandwidth ; FPS ) [L/R]-[D/N]-45-20
+- [X] [OK] Manage scrcpy profiles for each headset
+  - Save these parameters in known_headsets.csv (Left/right eye; audio duplicate or not ; bandwidth ; FPS ) [L/R]-[D/N]-45-20
   - Parameters in config.json defines only template parameters common parameters like crop, angle, video codec, video encoder and video buffer and stay awake for each headset type
   - Restart the current headset stream if template changed
 
@@ -140,6 +140,7 @@ Before using the tool, make sure the following requirements are met:
 This project is based on :
 - [scrcpy project](https://github.com/Genymobile/scrcpy) for screen miroring
 - [oculus-wireless-adb](https://github.com/thedroidgeek/oculus-wireless-adb) for enabling ADB over Wifi on Meta Quest VR headsets
+- [MetaMetadata : THE database that links package name to app name and related icons](https://github.com/threethan/MetaMetadata)
 - [Powershell Pode module](https://github.com/Badgerati/Pode) as web server
 - [Powershell EPS module](https://github.com/straightdave/eps) as templating tool for editing values in web pages
 - [MediaMTX : A real-time media server used for restream screen capture](https://github.com/bluenviron/mediamtx)
