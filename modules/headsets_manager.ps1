@@ -57,7 +57,7 @@ function Show-HeadsetsTable {
     }
 
     if ($FieldsToShow -contains 'all') {
-        $FieldsToShow = @("ID","Name","IPAddress","Ping","ADBWifi","Model","SerialNumber","Battery","Temp","Charging","SCRCPY")
+        $FieldsToShow = @("ID","Name","IPAddress","Ping","ADBWifi","Model","SerialNumber","Battery","Temp","Charging","SCRCPY","RunningApp")
     }
 
     # Add "Ping", "ADBReachable", "SCRCPY" to valid fields
@@ -160,7 +160,7 @@ function Show-HeadsetsConfig {
 function Show-HeadsetsTableColored {
     param (
         [array]$knownHeadsetsInfosFilePath = $global:knownHeadsetsInfosFilePath,
-        [array]$FieldsToShow = @("ID","Name","IPAddress","Ping","ADBWifi","Battery","Charging","Temp","SCRCPY","Model","SerialNumber"),
+        [array]$FieldsToShow = @("ID","Name","IPAddress","Ping","ADBWifi","Battery","Charging","Temp","SCRCPY","Model","SerialNumber","RunningApp"),
         [bool]$UseColors = $true
     )
 

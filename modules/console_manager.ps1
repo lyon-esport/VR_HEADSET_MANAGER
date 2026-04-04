@@ -115,7 +115,6 @@ function Show-MainMenu {
                 '0' {
                     Write-Host $msg.Goodbye -ForegroundColor Yellow
                     Reset-AwakeMode
-                    Stop-VRMonitor
                     Disconnect-ADBConnections
                     break
                 }
