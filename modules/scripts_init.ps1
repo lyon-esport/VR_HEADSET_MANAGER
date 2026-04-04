@@ -50,7 +50,7 @@ $ModulesPath = Join-Path -Path $global:ScriptPath -ChildPath "modules"
             return
     }
 
-$moduleFiles = Get-ChildItem -Path $ModulesPath -Filter "*.ps1" -File | 
+$moduleFiles = Get-ChildItem -Path $ModulesPath -Filter "*.ps1" -File | Sort-Object Name | 
     Where-Object { 
         $_.Name -notlike "*_init.ps1" -and 
         $_.Name -notlike "headsets_dashboard.ps1" -and

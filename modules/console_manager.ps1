@@ -122,7 +122,13 @@ function Show-MainMenu {
                 default {
                     Write-Host $msg.Refresh -ForegroundColor Red
                     # Reload all modules and config file
-                    . Join-Path -Path $global:ScriptPath -ChildPath "\modules\scripts_init.ps1"
+                    $scripts_init = Join-Path -Path $global:ScriptPath -ChildPath "\modules\scripts_init.ps1"
+                    if (Test-Path -Path $scripts_init) {
+                        . $scripts_init
+                    } else {
+                        Write-Host "Error: The initialization script is missing!" -ForegroundColor Red
+                        exit
+                    }
                 }
             }
         }
@@ -288,14 +294,7 @@ function Show-SubMenu-EditHeadset { #CHOICE 3
             return
         }
     } elseif ($field -eq "ScrcpyProfile") {
-        $currentValue = ($headsets | Where-Object { $_.ID -eq [int]$idInput }).$field
-        Write-Host ($msg.CurrentValue -f $field, $currentValue)
-        $newValue = Read-Host ($msg.EnterNewValue -f $field)
-        if ($newValue -notmatch '^[LR]-[DN]-\d+-\d+$') {
-            Write-Log $msg.InvalidScrcpyProfileFormat -Level "ERROR"
-            Write-Host $msg.InvalidScrcpyProfileFormat -ForegroundColor Red
-            return
-        }
+        Show-SubMenu-ScrcpyOptions -HeadsetID ([int]$idInput)
     } else {
         # Ask for the new value for the selected field
         $newValue = Read-Host ($msg.EnterNewValue -f $field)
@@ -495,7 +494,7 @@ function Show-SubMenu-ScrcpyOptions {
     do {
         Clear-Host
         Start-Sleep -Milliseconds 100
-        Write-Host $msg.ScrcpyOptionsTitle -ForegroundColor Cyan
+        Write-Host $msg.ScrcpyOptionsTitle -ForegrprofileoundColor Cyan
         Write-Host $msg.ScrcpyOptionsSelectHeadset
         Write-Host $msg.IDNameScrcpyProfile
         Write-Host $msg.Separator
@@ -518,8 +517,8 @@ function Show-SubMenu-ScrcpyOptions {
 
         # Inner loop: edit individual profile fields for the selected headset
         do {
-            $profile = if ($headset.ScrcpyProfile) { $headset.ScrcpyProfile } else { "R-N-45-20" }
-            $parts = $profile -split '-'
+            $scrcpyProfile = if ($headset.ScrcpyProfile) { $headset.ScrcpyProfile } else { "R-N-45-20" }
+            $parts = $scrcpyProfile -split '-'
             if ($parts.Count -ne 4) { $parts = @('R','N','45','20') }
             $eye  = $parts[0].ToUpper()
             $audio = $parts[1].ToUpper()
