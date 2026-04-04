@@ -172,8 +172,9 @@ function Get-KnownHeadsetInfos {
         SCRCPY          = "-"
         Model           = "-"
         SerialNumber    = "-"
+        RunningApp      = "-"
+        RunningAppIcon  = ""
     }
-
     $IPAddress = $knownHeadset.IPAddress
 
     # 1. Test ping
@@ -219,6 +220,14 @@ function Get-KnownHeadsetInfos {
             $result.BatteryControllerLeft  = if ($null -ne $batteryInfo.BatteryControllerLeft)  { "$($batteryInfo.BatteryControllerLeft) %" }  else { "-" }
             $result.BatteryControllerRight = if ($null -ne $batteryInfo.BatteryControllerRight) { "$($batteryInfo.BatteryControllerRight) %" } else { "-" }
         }
+        # Get running app
+        $pkg = Get-HeadsetForegroundApp -headsetIP $IPAddress -adb $adb -AdbPort $ADBPort
+        if ($pkg) {
+            $appInfo = Get-AppDisplayName -PackageName $pkg
+            $result.RunningApp   = $appInfo.DisplayName
+            $result.RunningAppIcon = $appInfo.IconUrl
+        }
+
         # Check if scrcpy is running
         $scrcpyProcesses = Get-Process -Name "scrcpy" -ErrorAction SilentlyContinue
         if ($scrcpyProcesses) { 

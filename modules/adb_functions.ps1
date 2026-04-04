@@ -690,7 +690,7 @@ function Get-HeadsetBatteryStatus {
             $result.BatteryControllerRight = $controllers.Right.Battery
         }
 
-        Write-Log ($msg.BatteryStatus -f $DeviceId, $result.Level, $result.Charging, $result.TempC, $result.MaxChargingWattageW) -Level INFO
+        Write-Log ($msg.BatteryStatus -f $DeviceId, $result.Level, $result.Charging, $result.TempC, $result.MaxChargingWattageW) -Level DEBUG
         return $result
     }
     catch {
@@ -700,6 +700,107 @@ function Get-HeadsetBatteryStatus {
 }
 
 
+
+
+function Get-HeadsetForegroundApp {
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$headsetIP,
+        [string]$adb = $global:adbPath,
+        [int]$AdbPort = $global:adbPort_default
+    )
+    $DeviceId = "${headsetIP}:${AdbPort}"
+
+    if (-not (Connect-AdbWifi -headsetIP $headsetIP -AdbPort $AdbPort -adb $adb)) {
+        return $null
+    }
+
+    try {
+        $dumpLines = @(& $adb -s $DeviceId shell dumpsys activity activities 2>$null)
+
+        # Quest 3 / Android 12+: the ActivityRecord wraps across two lines:
+        #   line N  : "  topResumedActivity=ActivityRecord{hash u0 "
+        #   line N+1: "com.package.name/com.ClassName tXXXX}"
+        # We want the FIRST match (= the user app, not system overlays).
+        for ($i = 0; $i -lt $dumpLines.Count - 1; $i++) {
+            if ($dumpLines[$i] -match 'topResumedActivity=ActivityRecord\{') {
+                # Most common: package on next line
+                $nextLine = $dumpLines[$i + 1].Trim()
+                if ($nextLine -match '^([\w\.]+)/') {
+                    return $Matches[1]
+                }
+                # Same-line format (some Android 10/11 builds)
+                if ($dumpLines[$i] -match 'topResumedActivity.*?\s+([\w\.]+)/') {
+                    return $Matches[1]
+                }
+            }
+        }
+
+        # Fallback: mResumedActivity (Quest 2 / older firmware)
+        $line = $dumpLines | Select-String "mResumedActivity" | Select-Object -First 1
+        if ($line -match 'mResumedActivity.*?\s+([\w\.]+)/') {
+            return $Matches[1]
+        }
+
+    } catch {
+        Write-Log ($msg.AdbInfoFailed -f $headsetIP, $_) -Level ERROR
+    }
+    return $null
+}
+
+
+# Resolves a Quest package name to its display name and icon URL.
+# Checks data/app_names.csv first; on cache miss fetches from:
+#   https://github.com/threethan/MetaMetadata (updates daily, covers all Meta Store + SideQuest apps)
+# Unknown packages are cached with DisplayName = PackageName and empty IconUrl so the
+# network is never hit more than once per package.
+function Get-AppDisplayName {
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$PackageName
+    )
+
+    $cacheFile = Join-Path $global:ScriptPath "data\app_names.csv"
+
+    # Load cache into a hashtable keyed by PackageName
+    $cache = @{}
+    if (Test-Path $cacheFile) {
+        foreach ($row in @(Import-Csv -Path $cacheFile -Delimiter ",")) {
+            $cache[$row.PackageName] = $row
+        }
+    }
+
+    # Return cached entry if present
+    if ($cache.ContainsKey($PackageName)) {
+        return $cache[$PackageName]
+    }
+
+    # Cache miss - fetch from MetaMetadata
+    $url = "https://raw.githubusercontent.com/threethan/MetaMetadata/main/data/common/$PackageName.json"
+    try {
+        $response = Invoke-RestMethod -Uri $url -TimeoutSec 8 -ErrorAction Stop
+        $newEntry = [PSCustomObject]@{
+            PackageName = $PackageName
+            DisplayName = $response.name
+            IconUrl     = if ($response.square) { $response.square } elseif ($response.icon) { $response.icon } else { "" }
+        }
+        Write-Log ($msg.AppDisplayNameResolved -f $PackageName, $response.name) -Level DEBUG
+    } catch {
+        # Not found in repo (system app, sideloaded app, etc.) - store placeholder
+        $newEntry = [PSCustomObject]@{
+            PackageName = $PackageName
+            DisplayName = $PackageName
+            IconUrl     = ""
+        }
+        Write-Log ($msg.AppDisplayNameNotFound -f $PackageName) -Level DEBUG
+    }
+
+    # Persist to cache
+    $cache[$PackageName] = $newEntry
+    $cache.Values | Export-Csv -Path $cacheFile -NoTypeInformation -Encoding UTF8
+
+    return $newEntry
+}
 
 
 function Disconnect-ADBConnections {
