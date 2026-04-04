@@ -19,9 +19,14 @@ Write-Host "ID du process parent: $parentPID"
 $callerScript = (Get-Process -Id $parentPID)
 Write-Host "Caller script : $callerScript" -ForegroundColor Yellow
 
-Write-Host "Starting loop until Caller script is closed..." -ForegroundColor Green
+Write-Host "Starting VR Headsets Monitor until Caller script is closed..." -ForegroundColor Green
 #sleep for 10s to let the caller script finish its initialization
-Start-Sleep -Seconds 10
+Write-Host "Waiting 10 seconds before showing the main menu... " -ForegroundColor Yellow -NoNewline
+    for ($i = 10; $i -ge 1; $i--) {
+        Write-Host "$i " -ForegroundColor Cyan -NoNewline
+        Start-Sleep -Seconds 1
+    }
+Write-Host "`n"
 
 while ($true) {
     # Check if caller script is still running
@@ -39,6 +44,7 @@ while ($true) {
         Write-Host "Error: The initialization script is missing!" -ForegroundColor Red
         exit
     }
+
 # Display the headsets table
     Clear-Host
     Write-Host "VR Headsets Monitor started..." -ForegroundColor Green

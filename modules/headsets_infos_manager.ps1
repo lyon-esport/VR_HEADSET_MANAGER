@@ -112,10 +112,17 @@ function Start-VRMonitor {
 
             Write-Log ($msg.CheckingHeadsets -f $knownHeadsets.Count) -Level DEBUG
             foreach ($headset in $knownHeadsets){
-                $knownHeadsetsInfo += Get-KnownHeadsetInfos -knownHeadset $headset
-                if ($headset.SerialNumber -ne $knownHeadsetsInfo.SerialNumber){
-                    Write-Log ($msg.UpdatingSerialNumber -f $headset.Name, $headset.IPAddress, $knownHeadsetsInfo.SerialNumber) -Level DEBUG
-                    Update-HeadsetField -ID $headset.ID -Field "SerialNumber" -NewValue $knownHeadsetsInfo.SerialNumber
+                $headsetInfo = Get-KnownHeadsetInfos -knownHeadset $headset
+                $knownHeadsetsInfo += $headsetInfo
+
+                # Update SerialNumber in known_headsets.csv if ADB is reachable and the value has changed
+                $fetchedSerial = $headsetInfo.SerialNumber
+                if ($headsetInfo.ADBWifi -eq $true `
+                    -and -not [string]::IsNullOrWhiteSpace($fetchedSerial) `
+                    -and $fetchedSerial -ne "-" `
+                    -and $fetchedSerial -ne $headset.SerialNumber) {
+                    Write-Log ($msg.UpdatingSerialNumber -f $headset.Name, $headset.IPAddress, $fetchedSerial) -Level INFO
+                    Update-HeadsetField -ID $headset.ID -Field "SerialNumber" -NewValue $fetchedSerial
                 }
             }
 

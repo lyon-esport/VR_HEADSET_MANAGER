@@ -1,10 +1,14 @@
 <#
 .SYNOPSIS
-    Modifies scrcpy_AutoRestart or Record for a headset entry in known_headsets.csv.
+    Modifies headset settings in known_headsets.csv, including scrcpy profile parameters.
 
 .DESCRIPTION
     Standalone script intended to be called by an external process (e.g. StreamDeck key press).
     Identifies the target headset by ID or Name, then sets or toggles the specified field.
+
+    Fields AutoRestart and Record accept: True / False / Toggle
+    Fields Eye and Audio accept:          Toggle / L or R (Eye) / D or N (Audio)
+    Fields FPS and Bitrate accept:        a positive integer value
 
 .PARAMETER ID
     Numeric ID of the headset as stored in the CSV.
@@ -13,15 +17,25 @@
     Name of the headset as stored in the CSV (case-insensitive).
 
 .PARAMETER Field
-    The field to modify. Accepted values: AutoRestart, Record.
+    The field to modify.
+    Accepted values: AutoRestart, Record, Eye, Audio, FPS, Bitrate
 
 .PARAMETER Value
-    The value to set. Accepted values: True, False, Toggle (default: Toggle).
+    The value to apply.
+      AutoRestart / Record : True | False | Toggle  (default: Toggle)
+      Eye                  : L | R | Toggle          (default: Toggle)
+      Audio                : D | N | Toggle          (default: Toggle)
+      FPS                  : positive integer
+      Bitrate              : positive integer (Mbps)
 
 .EXAMPLE
     .\Edit-Headset.ps1 -ID 2 -Field AutoRestart -Value Toggle
     .\Edit-Headset.ps1 -Name "Q3 BLUE" -Field Record -Value True
-    .\Edit-Headset.ps1 -ID 1 -Field AutoRestart
+    .\Edit-Headset.ps1 -ID 1 -Field Eye -Value Toggle
+    .\Edit-Headset.ps1 -ID 1 -Field Eye -Value L
+    .\Edit-Headset.ps1 -ID 2 -Field Audio -Value D
+    .\Edit-Headset.ps1 -ID 2 -Field FPS -Value 30
+    .\Edit-Headset.ps1 -ID 2 -Field Bitrate -Value 20
 #>
 
 param (
@@ -29,15 +43,14 @@ param (
     [string] $Name  = "",
 
     [Parameter(Mandatory = $true)]
-    [ValidateSet("AutoRestart", "Record")]
+    [ValidateSet("AutoRestart", "Record", "Eye", "Audio", "FPS", "Bitrate")]
     [string] $Field,
 
-    [ValidateSet("True", "False", "Toggle")]
     [string] $Value = "Toggle"
 )
 
 # ---------------------------------------------------------------------------
-# Path to the known_headsets.csv file - adjust if needed
+# Path to the known_headsets.csv file
 # ---------------------------------------------------------------------------
 $KnownHeadsetsFilePath = Join-Path $PSScriptRoot "..\data\known_headsets.csv"
 
@@ -54,12 +67,6 @@ if (-not (Test-Path $KnownHeadsetsFilePath)) {
     exit 1
 }
 
-# Map friendly field name to CSV column name
-$CsvColumn = switch ($Field) {
-    "AutoRestart" { "scrcpy_AutoRestart" }
-    "Record"      { "Record" }
-}
-
 # ---------------------------------------------------------------------------
 # Load CSV
 # ---------------------------------------------------------------------------
@@ -73,12 +80,10 @@ if ($headsets.Count -eq 0) {
 # ---------------------------------------------------------------------------
 # Find target headset
 # ---------------------------------------------------------------------------
-$target = $null
-
-if ($ID -ne -1) {
-    $target = $headsets | Where-Object { $_.ID -eq $ID }
+$target = if ($ID -ne -1) {
+    $headsets | Where-Object { $_.ID -eq $ID }
 } else {
-    $target = $headsets | Where-Object { $_.Name -ieq $Name }
+    $headsets | Where-Object { $_.Name -ieq $Name }
 }
 
 if ($null -eq $target) {
@@ -88,24 +93,80 @@ if ($null -eq $target) {
 }
 
 # ---------------------------------------------------------------------------
-# Resolve new value
-# ---------------------------------------------------------------------------
-$currentValue = $target.$CsvColumn
-
-if ($Value -eq "Toggle") {
-    $newValue = if ($currentValue -ieq "True") { "False" } else { "True" }
-} else {
-    $newValue = $Value
-}
-
-# ---------------------------------------------------------------------------
 # Apply change
 # ---------------------------------------------------------------------------
-$target.$CsvColumn = $newValue
+$Value = $Value.Trim()
+
+switch ($Field) {
+
+    # --- Boolean fields -----------------------------------------------------
+    { $_ -in @("AutoRestart", "Record") } {
+        $CsvColumn = if ($Field -eq "AutoRestart") { "scrcpy_AutoRestart" } else { "Record" }
+        $currentValue = $target.$CsvColumn
+        $newValue = switch ($Value.ToLower()) {
+            "toggle" { if ($currentValue -ieq "True") { "False" } else { "True" } }
+            "true"   { "True" }
+            "false"  { "False" }
+            default  {
+                Write-Error "Invalid value '$Value' for field '$Field'. Use True, False or Toggle."
+                exit 1
+            }
+        }
+        $target.$CsvColumn = $newValue
+        Write-Host "[$($target.ID)] $($target.Name) - $CsvColumn : $currentValue -> $newValue"
+    }
+
+    # --- Profile fields (Eye, Audio, FPS, Bitrate) --------------------------
+    { $_ -in @("Eye", "Audio", "FPS", "Bitrate") } {
+        $rawProfile = if ($target.ScrcpyProfile) { $target.ScrcpyProfile } else { "R-N-45-20" }
+        $parts = $rawProfile -split '-'
+        if ($parts.Count -ne 4) { $parts = @('R','N','45','20') }
+
+        $oldProfile = $rawProfile
+        $v = $Value.ToUpper()
+
+        switch ($Field) {
+            "Eye" {
+                $current = $parts[0]
+                $parts[0] = switch ($v) {
+                    "TOGGLE" { if ($current -eq 'L') { 'R' } else { 'L' } }
+                    "L"      { 'L' }
+                    "R"      { 'R' }
+                    default  { Write-Error "Invalid value '$Value' for Eye. Use L, R or Toggle." ; exit 1 }
+                }
+            }
+            "Audio" {
+                $current = $parts[1]
+                $parts[1] = switch ($v) {
+                    "TOGGLE" { if ($current -eq 'D') { 'N' } else { 'D' } }
+                    "D"      { 'D' }
+                    "N"      { 'N' }
+                    default  { Write-Error "Invalid value '$Value' for Audio. Use D, N or Toggle." ; exit 1 }
+                }
+            }
+            "FPS" {
+                if ($Value -notmatch '^\d+$' -or [int]$Value -le 0) {
+                    Write-Error "Invalid value '$Value' for FPS. Must be a positive integer."
+                    exit 1
+                }
+                $parts[2] = $Value
+            }
+            "Bitrate" {
+                if ($Value -notmatch '^\d+$' -or [int]$Value -le 0) {
+                    Write-Error "Invalid value '$Value' for Bitrate. Must be a positive integer (Mbps)."
+                    exit 1
+                }
+                $parts[3] = $Value
+            }
+        }
+
+        $newProfile = $parts -join '-'
+        $target.ScrcpyProfile = $newProfile
+        Write-Host "[$($target.ID)] $($target.Name) - ScrcpyProfile : $oldProfile -> $newProfile"
+    }
+}
 
 # ---------------------------------------------------------------------------
 # Save CSV (preserve column order identical to original)
 # ---------------------------------------------------------------------------
 $headsets | Export-Csv -Path $KnownHeadsetsFilePath -NoTypeInformation -Encoding UTF8
-
-Write-Host "[$($target.ID)] $($target.Name) - $CsvColumn : $currentValue -> $newValue"
