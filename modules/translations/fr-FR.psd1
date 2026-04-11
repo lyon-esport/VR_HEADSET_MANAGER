@@ -297,6 +297,7 @@
     ScrcpyInvalidProfile = "Profil scrcpy invalide '{0}', valeurs par defaut utilisees. Format attendu : [L/R]-[D/N]-FPS-BW (ex. R-N-45-20)"
     ScrcpyNotFound = "scrcpy.exe introuvable a l'emplacement {0}"
     ScrcpyRecording = "Enregistrement de la session en cours dans {0}"
+    ScrcpyAlreadyRunning = "Scrcpy est deja en cours d'execution pour {0}, demarrage ignore."
     ScrcpyLaunching = "Lancement de scrcpy avec les arguments : {0}"
     ScrcpyLaunchError = "Erreur lors du lancement de scrcpy : {0}"
     ScrcpyCheckHeadset = "Verification si le casque est connecte et pret pour scrcpy : {0} ({1})"
