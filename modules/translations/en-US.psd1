@@ -299,6 +299,7 @@
     ScrcpyInvalidProfile = "Invalid scrcpy profile '{0}', using defaults. Expected format: [L/R]-[D/N]-FPS-BW (e.g. R-N-45-20)"
     ScrcpyNotFound = "scrcpy.exe not found at {0}"
     ScrcpyRecording = "Recording active session in {0}"
+    ScrcpyAlreadyRunning = "Scrcpy is already running for {0}, skipping launch."
     ScrcpyLaunching = "Launching scrcpy with arguments: {0}"
     ScrcpyLaunchError = "Error launching scrcpy: {0}"
     ScrcpyCheckHeadset = "Checking if the headset is connected and ready to start scrcpy: {0} ({1})"

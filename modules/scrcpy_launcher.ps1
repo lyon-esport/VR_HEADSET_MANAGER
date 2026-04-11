@@ -59,13 +59,29 @@ function ConvertTo-ScrcpyArguments {
     if ($null -ne $angle -and "$angle" -ne "" -and [int]"$angle" -ne 0) { $argParts.Add("--angle=$angle") }
     $argParts.Add("--max-fps=$fps")
     $argParts.Add("-b ${bw}M")
+    if ($modelTemplate.max_size)       { $argParts.Add("--max-size=$($modelTemplate.max_size)") }
     if ($modelTemplate.video_codec)   { $argParts.Add("--video-codec=$($modelTemplate.video_codec)") }
     if ($modelTemplate.video_encoder -and $modelTemplate.video_encoder -ne "") { $argParts.Add("--video-encoder=$($modelTemplate.video_encoder)") }
-    if ($modelTemplate.video_buffer)  { $argParts.Add("--video-buffer=$($modelTemplate.video_buffer)") }
+    if ($modelTemplate.video_buffer)  {
+        $argParts.Add("--video-buffer=$($modelTemplate.video_buffer)")
+        $argParts.Add("--audio-buffer=$($modelTemplate.video_buffer)")
+    }
     if ($modelTemplate.stay_awake -eq $true) { $argParts.Add("--stay-awake") }
     $argParts.Add($audioArg)
 
     return ($argParts -join ' ')
+}
+
+# Returns the running scrcpy process whose window title matches $displayName,
+# or $null if none found. $displayName must be in window-title form (spaces -> underscores).
+function Get-ScrcpyProcess {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$displayName
+    )
+    return Get-Process -Name "scrcpy" -ErrorAction SilentlyContinue |
+        Where-Object { $_.MainWindowTitle -eq $displayName } |
+        Select-Object -First 1
 }
 
 function start-screenCopy {
@@ -84,6 +100,14 @@ function start-screenCopy {
     )
 
     $displayName =  Convert-Displayname($displayName)
+
+    # Guard: skip if a scrcpy window for this headset is already running
+    if (Get-ScrcpyProcess -displayName $displayName) {
+        Write-Log -Message ($msg.ScrcpyAlreadyRunning -f $displayName) -Level WARNING
+        Start-Sleep -Seconds 5
+        return
+    }
+
     $adb = $global:adbPath
     $adb_device = "$headsetIP`:$adbPort"
     $scrcpy = $global:scrcpyFilePath
@@ -177,9 +201,6 @@ function Watch-ScrcpyProcesses {
 
     $knownHeadsets_with_autorestart = Get-KnownHeadsets | Where-Object { $_.scrcpy_AutoRestart -eq $True }
 
-    $runningScrcpyProcess = @(Get-Process -Name "scrcpy" -ErrorAction SilentlyContinue)
-    #$runningScrcpyProcess | Format-List *
-    
     # For each headset with autorestart, ensure there's a scrcpy process started
 
     foreach ($headset in $knownHeadsets_with_autorestart) {
@@ -188,7 +209,7 @@ function Watch-ScrcpyProcesses {
         $headsetInfos = Get-KnownHeadsetInfos $headset
         if ($headsetInfos.ADBWifi -eq $true) {
             Write-Log ($msg.ScrcpyCheckProcess -f $headset.Name, $headset.IPAddress) -Level DEBUG
-            $runningScrcpyProcess_forThisheadset = $runningScrcpyProcess | Where-Object {$_.MainWindowTitle -eq (Convert-Displayname($headset.Name))}
+            $runningScrcpyProcess_forThisheadset = Get-ScrcpyProcess -displayName (Convert-Displayname $headset.Name)
             
             Write-Log ($msg.ScrcpyProcessFound -f $runningScrcpyProcess_forThisheadset) -Level DEBUG
             if (-not $runningScrcpyProcess_forThisheadset) {
