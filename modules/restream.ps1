@@ -32,12 +32,14 @@ function Write-MediaMtxYml {
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     # mediamtx v1.x uses flat top-level keys (not nested YAML mappings).
     # "api: false" is the default - must be explicitly set to true.
+    # logFile path must be ASCII-safe - use the mediamtx folder (no accented chars in relative path).
     $yaml = @"
 # VR_HEADSET_MANAGER - mediamtx configuration
 # Auto-generated: $timestamp - do not edit manually
 
-logLevel: warn
-logDestinations: [stdout]
+logLevel: info
+logDestinations: [stdout, file]
+logFile: mediamtx.log
 
 rtsp: true
 rtspAddress: :$($global:mediamtxRtspPort)
@@ -154,10 +156,12 @@ function Add-RestreamPath {
 
     # ffmpeg captures the scrcpy window by its exact title using Windows GDI grab,
     # encodes to H.264 with low-latency settings, and pushes RTSP to mediamtx.
+    # -pix_fmt yuv420p: GDI grab outputs BGR0 which makes libx264 pick yuv444p by default;
+    #   mediamtx and most RTSP clients only accept standard yuv420p H.264 - must be explicit.
     # -rtsp_transport tcp: avoids UDP hole-punching issues on loopback.
     # -pkt_size 1316: keeps RTP packets within Ethernet MTU (mediamtx warns at >1440).
     $cmd = "$ffmpegFwd -f gdigrab -framerate $($global:mediamtxFramerate)" +
-           " -i title=$windowTitle -c:v libx264 -preset ultrafast" +
+           " -i title=$windowTitle -pix_fmt yuv420p -c:v libx264 -preset ultrafast" +
            " -tune zerolatency -b:v $($global:mediamtxBitrate)" +
            " -maxrate $($global:mediamtxBitrate) -bufsize $($global:mediamtxBitrate)" +
            " -pkt_size 1316 -rtsp_transport tcp -f rtsp $rtspUrl"
@@ -171,8 +175,12 @@ function Add-RestreamPath {
 
     $apiUrl = "http://localhost:$($global:mediamtxApiPort)/v3/config/paths/add/$pathName"
     try {
+        # Send as explicit UTF-8 bytes: PowerShell 5 Invoke-RestMethod defaults to
+        # Windows-1252 for string bodies, which corrupts non-ASCII chars (e.g. accented
+        # letters in the file path). Encoding the body manually guarantees correct UTF-8.
+        $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
         $null = Invoke-RestMethod -Uri $apiUrl -Method Post `
-                                  -Body $body -ContentType "application/json" `
+                                  -Body $bodyBytes -ContentType "application/json" `
                                   -ErrorAction Stop
         Write-Log ($msg.MediaMtxPathAdded -f $HeadsetName, $rtspUrl) -Level INFO
     }
