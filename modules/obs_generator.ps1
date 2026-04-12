@@ -23,7 +23,6 @@ function Update-OBSFile {
             name            = $headset.Name
             ping            = [bool]$headset.Ping
             battery         = if ($headset.Battery -ne "-") { [convert]::ToInt32($($headset.Battery -replace ' %','') , 10) } else { $headset.Battery }
-            battery_lowLevel = $global:OBS_battery_lowLevel
             battery_ctrl_left  = if ($headset.BatteryControllerLeft  -ne "-") { [convert]::ToInt32($($headset.BatteryControllerLeft  -replace ' %','') , 10) } else { $headset.BatteryControllerLeft }
             battery_ctrl_right = if ($headset.BatteryControllerRight -ne "-") { [convert]::ToInt32($($headset.BatteryControllerRight -replace ' %','') , 10) } else { $headset.BatteryControllerRight }
             charging        = [bool]$headset.Charging
@@ -84,4 +83,45 @@ function Write-htmlMonitor {
     }
     $headsetsHtml = Invoke-EpsTemplate -Path $obsMonitorTemplatePath -Safe -binding $TemplateVariables
     $headsetsHtml | Out-File -FilePath $obsOutputPath -Encoding UTF8
+}
+
+# Generates one [video].html per headset using the scrcpy WHEP video template.
+# Each file embeds a WebRTC player (WHEP) that connects to the mediamtx stream
+# on demand (mediamtx starts ffmpeg GDI capture of the scrcpy window when a viewer connects).
+# Output file naming: <DisplayName>[video].html  e.g. Q3_BLUE[video].html
+function Update-OBSVideoFile {
+    param(
+        [Parameter(Mandatory=$true)]
+        [System.Collections.ArrayList]$knownHeadsetsInfo,
+
+        [string]$obsVideoTemplatePath = $global:OBS_videoTemplate,
+
+        [string]$obsOutputPath = (Join-Path -Path $global:ScriptPath -ChildPath "\OBS\")
+    )
+
+    if (-not (Test-Path -Path $obsVideoTemplatePath)) {
+        Write-Log ("Video template not found: $obsVideoTemplatePath") -Level WARNING
+        return
+    }
+
+    foreach ($headset in $knownHeadsetsInfo) {
+        # Compute the mediamtx stream path from the headset name.
+        # Matches ConvertTo-RestreamPathName in restream.ps1:
+        #   Convert-Displayname replaces spaces with underscores, then lowercase.
+        $streamPath = (Convert-Displayname -displayName $headset.Name).ToLower()
+
+        $videoInfo = @{
+            name                  = $headset.Name
+            stream_path           = $streamPath
+            mediamtx_webrtc_port  = $global:mediamtxWebrtcPort
+            mediamtx_hls_port     = $global:mediamtxHlsPort
+        }
+
+        $videoHtml = Invoke-EpsTemplate -Path $obsVideoTemplatePath -Safe -binding $videoInfo
+
+        # Write to <DisplayName>[video].html  e.g. Q3_BLUE[video].html
+        # Use -LiteralPath because brackets in filenames are misread as wildcards by -FilePath.
+        $outputFile = Join-Path -Path $obsOutputPath -ChildPath ((Convert-Displayname $headset.Name) + "[video].html")
+        $videoHtml | Out-File -LiteralPath $outputFile -Encoding UTF8
+    }
 }
