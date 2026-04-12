@@ -266,6 +266,7 @@
     DebugKnownHeadsetsInfosPath = "knownHeadsetsInfosFilePath : {0}"
     CheckingHeadsets = "Verification pour {0} casques"
     UpdatingSerialNumber = "Mise a jour du numero de serie pour {0} ({1}) vers {2}"
+    UpdatingModel = "Mise a jour du modele pour {0} ({1}) vers {2}"
     JobInfoCollected = "JOB - Infos detaillees collectees pour {0} casques"
     JobRestartsIn = "JOB {0} - Redemarrage dans {1} sec"
     ScrcpyProcessesFound = "{0} processus scrcpy trouves"
