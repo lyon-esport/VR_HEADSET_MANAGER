@@ -82,6 +82,7 @@
     ScrcpyTracking = " S. Gestion du tracking des process scrcpy "
     ScrcpyOptions = " M. Modifier les options scrcpy par casque "
     RecordingManagement = " R. Gestion du Recording "
+    VideoRecast = " V. Recast video (RTSP/WebRTC) "
     FilesFolders = " F. Gestion des fichiers et dossiers "
     Quit = " 0. Quitter "
     AnyOtherKey = " Any other key : Refresh"

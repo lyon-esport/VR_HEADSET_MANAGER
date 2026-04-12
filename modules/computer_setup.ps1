@@ -271,12 +271,10 @@ function Initialize-ComputerSetup {
     }
 
     # Firewall - mediamtx restream ports (RTSP/HLS/WebRTC)
-    # TODO: re-enable once restream feature is validated
-    # Unblock-MediaMtxFirewallRule
+    Unblock-MediaMtxFirewallRule
 
     # mediamtx restream server auto-start
-    # TODO: re-enable once restream feature is validated
-    # Start-MediaMtx
+    Start-MediaMtx
 
     # Keep the PC awake for the duration of the session
     Set-AwakeMode
