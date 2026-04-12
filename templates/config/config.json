@@ -55,6 +55,10 @@
 	 "headsets_triggers":{
 		"battery_lowLevel": 30,
 		"battery_controller_lowLevel": 20,
+		"headset_battery_warningLevel": 40,
+		"headset_battery_criticalLevel": 30,
+		"controllers_battery_warningLevel": 30,
+		"controllers_battery_criticalLevel": 20,
 		"temperature_highLevel": 50
 	 }
   },
