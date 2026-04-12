@@ -19,14 +19,14 @@ start-screenCopy -displayName $displayName -headsetIP $ip
 function ConvertTo-ScrcpyArguments {
     param(
         [string]$headsetModel,
-        [string]$profile = "R-N-45-20",
+        [string]$scrcpyProfile = "R-N-45-20",
         $modelTemplate = $null
     )
 
-    if ([string]::IsNullOrWhiteSpace($profile)) { $profile = "R-N-45-20" }
-    $parts = $profile -split '-'
+    if ([string]::IsNullOrWhiteSpace($scrcpyProfile)) { $scrcpyProfile = "R-N-45-20" }
+    $parts = $scrcpyProfile -split '-'
     if ($parts.Count -ne 4) {
-        Write-Log ($msg.ScrcpyInvalidProfile -f $profile) -Level WARNING
+        Write-Log ($msg.ScrcpyInvalidProfile -f $scrcpyProfile) -Level WARNING
         $parts = @('R', 'N', '45', '20')
     }
     $eye       = $parts[0].ToUpper()  # L or R
@@ -95,7 +95,7 @@ function start-screenCopy {
 
         [int]$adbPort = $global:adbPort_default,
 
-        [string]$profile = "R-N-45-20"
+        [string]$scrcpyProfile = "R-N-45-20"
 
     )
 
@@ -152,7 +152,7 @@ function start-screenCopy {
     
     
 
-    $options = ConvertTo-ScrcpyArguments -headsetModel $headsetModel -profile $profile
+    $options = ConvertTo-ScrcpyArguments -headsetModel $headsetModel -scrcpyProfile $scrcpyProfile
 
     # Check that scrcpy exists
     if (-not (Test-Path $scrcpy)) {
@@ -214,7 +214,7 @@ function Watch-ScrcpyProcesses {
             Write-Log ($msg.ScrcpyProcessFound -f $runningScrcpyProcess_forThisheadset) -Level DEBUG
             if (-not $runningScrcpyProcess_forThisheadset) {
                 $headsetProfile = if ($headset.ScrcpyProfile) { $headset.ScrcpyProfile } else { "R-N-45-20" }
-                start-screenCopy -displayName $headset.Name -headsetIP $headset.IPAddress -recording ($headset.Record -eq "True") -profile $headsetProfile
+                start-screenCopy -displayName $headset.Name -headsetIP $headset.IPAddress -recording ($headset.Record -eq "True") -scrcpyProfile $headsetProfile
             } else {
                 # scrcpy is running - check if parameters have changed
                 $shouldRestart = $false
@@ -233,7 +233,7 @@ function Watch-ScrcpyProcesses {
                 # Check scrcpy options and profile mismatch
                 if (-not $shouldRestart) {
                     $headsetModel = $headsetInfos.Model
-                    $expectedOptions = ConvertTo-ScrcpyArguments -headsetModel $headsetModel -profile $headsetProfile
+                    $expectedOptions = ConvertTo-ScrcpyArguments -headsetModel $headsetModel -scrcpyProfile $headsetProfile
                     if ($expectedOptions -ne "") {
                         $normalizedCmdLine = ($cmdLine -replace '\s+', ' ').Trim()
                         $normalizedOptions = ($expectedOptions -replace '\s+', ' ').Trim()
@@ -256,7 +256,7 @@ function Watch-ScrcpyProcesses {
                         Stop-Process -Id $runningScrcpyProcess_forThisheadset.Id -Force -ErrorAction SilentlyContinue
                         Start-Sleep -Seconds 1
                     }
-                    start-screenCopy -displayName $headset.Name -headsetIP $headset.IPAddress -recording $expectedRecording -profile $headsetProfile
+                    start-screenCopy -displayName $headset.Name -headsetIP $headset.IPAddress -recording $expectedRecording -scrcpyProfile $headsetProfile
                 }
             }
         }
