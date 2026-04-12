@@ -52,6 +52,7 @@
   },
   "OBS":{
 	 "HeadsetTemplate":"headset_status_v2.eps",
+	 "VideoTemplate":"headset_scrcpy.eps",
 	 "headsets_triggers":{
 		"battery_lowLevel": 30,
 		"battery_controller_lowLevel": 20,
