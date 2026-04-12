@@ -54,8 +54,6 @@
 	 "HeadsetTemplate":"headset_status_v2.eps",
 	 "VideoTemplate":"headset_scrcpy.eps",
 	 "headsets_triggers":{
-		"battery_lowLevel": 30,
-		"battery_controller_lowLevel": 20,
 		"headset_battery_warningLevel": 40,
 		"headset_battery_criticalLevel": 30,
 		"controllers_battery_warningLevel": 30,

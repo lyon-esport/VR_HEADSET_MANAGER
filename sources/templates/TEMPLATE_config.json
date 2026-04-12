@@ -38,7 +38,10 @@
   "OBS":{
 	 "HeadsetTemplate":"headset_status_v2.eps",
 	 "headsets_triggers":{
-		"battery_lowLevel": 30,
+		"headset_battery_warningLevel": 40,
+		"headset_battery_criticalLevel": 30,
+		"controllers_battery_warningLevel": 30,
+		"controllers_battery_criticalLevel": 20,
 		"temperature_highLevel": 50
 	 }
   }
