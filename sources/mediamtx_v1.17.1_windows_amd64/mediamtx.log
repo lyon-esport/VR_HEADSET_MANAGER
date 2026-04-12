@@ -276,3 +276,63 @@
 2026/04/12 04:44:14 INF [WebRTC] [session 5f3fb14c] created by [::1]:65122
 2026/04/12 04:44:14 INF [path q3_blue] runOnDemand command started
 2026/04/12 04:44:14 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:44:17 INF [WebRTC] [session e9e0a918] created by [::1]:65117
+2026/04/12 04:44:19 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:44:24 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:44:29 INF [path q3_blue] runOnDemand command stopped: timed out
+2026/04/12 04:44:29 INF [WebRTC] [session e9e0a918] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:44:29 INF [WebRTC] [session 5f3fb14c] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:44:31 INF [WebRTC] [session 32db537a] created by [::1]:65122
+2026/04/12 04:44:31 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:44:31 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:44:34 INF [WebRTC] [session 81bdd5c0] created by [::1]:65117
+2026/04/12 04:44:36 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:44:41 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:44:46 INF [path q3_blue] runOnDemand command stopped: timed out
+2026/04/12 04:44:46 INF [WebRTC] [session 32db537a] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:44:46 INF [WebRTC] [session 81bdd5c0] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:44:48 INF [WebRTC] [session d489a449] created by [::1]:65122
+2026/04/12 04:44:48 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:44:48 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:44:51 INF [WebRTC] [session 893868b7] created by [::1]:65117
+2026/04/12 04:44:53 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:44:58 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:45:03 INF [path q3_blue] runOnDemand command stopped: timed out
+2026/04/12 04:45:03 INF [WebRTC] [session d489a449] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:45:03 INF [WebRTC] [session 893868b7] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:45:05 INF [WebRTC] [session 51b730ec] created by [::1]:65122
+2026/04/12 04:45:05 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:45:05 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:45:08 INF [WebRTC] [session 735bb37a] created by [::1]:65117
+2026/04/12 04:45:10 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:45:15 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:45:20 INF [path q3_blue] runOnDemand command stopped: timed out
+2026/04/12 04:45:20 INF [WebRTC] [session 51b730ec] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:45:20 INF [WebRTC] [session 735bb37a] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:45:22 INF [WebRTC] [session 8f5d7332] created by [::1]:65122
+2026/04/12 04:45:22 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:45:23 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:45:25 INF [WebRTC] [session dc5a49f2] created by [::1]:65117
+2026/04/12 04:45:28 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:45:33 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:45:37 INF [path q3_blue] runOnDemand command stopped: timed out
+2026/04/12 04:45:37 INF [WebRTC] [session 8f5d7332] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:45:37 INF [WebRTC] [session dc5a49f2] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:45:39 INF [WebRTC] [session 9cf0ea14] created by [::1]:65122
+2026/04/12 04:45:39 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:45:39 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:45:42 INF [WebRTC] [session d78721d8] created by [::1]:65117
+2026/04/12 04:45:44 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:45:49 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:45:54 INF [path q3_blue] runOnDemand command stopped: timed out
+2026/04/12 04:45:54 INF [WebRTC] [session 9cf0ea14] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:45:54 INF [WebRTC] [session d78721d8] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:45:56 INF [WebRTC] [session f69b4c7e] created by [::1]:65122
+2026/04/12 04:45:56 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:45:56 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:45:59 INF [WebRTC] [session 465dcb2e] created by [::1]:65117
+2026/04/12 04:46:01 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:46:06 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:46:11 INF [path q3_blue] runOnDemand command stopped: timed out
+2026/04/12 04:46:11 INF [WebRTC] [session f69b4c7e] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:46:11 INF [WebRTC] [session 465dcb2e] closed: source of path 'q3_blue' has timed out
