@@ -30,16 +30,22 @@ function Write-MediaMtxYml {
         [string]$YmlPath = $global:mediamtxYmlPath
     )
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    # mediamtx v1.x uses flat top-level keys (not nested YAML mappings).
-    # "api: false" is the default - must be explicitly set to true.
-    # logFile path must be ASCII-safe - use the mediamtx folder (no accented chars in relative path).
+
+    # Build the log file path inside the global log folder.
+    # Use forward slashes: mediamtx (Go) handles them on Windows and they are
+    # unambiguous in YAML without needing escaping.
+    # The YAML is written as UTF-8 without BOM so non-ASCII chars (e.g. accented
+    # letters in the path) are preserved correctly. PS5 Set-Content -Encoding UTF8
+    # adds a BOM which breaks YAML parsers, so we use .NET directly.
+    $mediamtxLogFile = (Join-Path $global:logFolder "mediamtx.log").Replace('\', '/')
+
     $yaml = @"
 # VR_HEADSET_MANAGER - mediamtx configuration
 # Auto-generated: $timestamp - do not edit manually
 
 logLevel: info
 logDestinations: [stdout, file]
-logFile: mediamtx.log
+logFile: $mediamtxLogFile
 
 rtsp: true
 rtspAddress: :$($global:mediamtxRtspPort)
@@ -55,7 +61,8 @@ apiAddress: :$($global:mediamtxApiPort)
 
 paths: {}
 "@
-    $yaml | Set-Content -Path $YmlPath -Encoding ascii
+    # Write UTF-8 without BOM - required for YAML and to preserve non-ASCII path chars.
+    [System.IO.File]::WriteAllText($YmlPath, $yaml, [System.Text.UTF8Encoding]::new($false))
 }
 
 
