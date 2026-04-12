@@ -105,13 +105,13 @@
       <main class="card" role="main" aria-label="Statut <%= $name %>">
         <h1 class="title"><%= $name %>
            <span class="muted">
-            <% if (-not $ping) { %>☠️<% } elseif ( ($temp -gt $temperature_highLevel) -or ($battery -lt $battery_lowLevel) -or (-not $charging) ) { %>⚠️<% } else { %>✅<% } %>
+            <% if (-not $ping) { %>☠️<% } elseif ( ($temp -gt $temperature_highLevel) -or ($battery -lt $headset_battery_criticalLevel) -or (-not $charging) ) { %>⚠️<% } else { %>✅<% } %>
         </span>
         </h1>
         <div class="values" aria-live="polite">
           <span class="batt" aria-label="Batterie en pourcent">
             <span class="emoji" aria-hidden="true">
-            <% if ($battery -lt $battery_lowLevel) { %>🪫<% } else { %>🔋<% } %>
+            <% if ($battery -lt $headset_battery_criticalLevel) { %>🪫<% } else { %>🔋<% } %>
             </span>
             <strong><%= $battery %> %</strong>
             <span class="muted">

@@ -130,9 +130,9 @@ function Get-Config {
     $global:OBS_videoTemplate    = Join-Path -Path $global:ScriptPath -ChildPath ("\OBS\template\"+$videoTemplateName)
     $global:OBS_temperature_highLevel = $configContent.OBS.headsets_triggers.temperature_highLevel
     $global:OBS_headset_battery_warningLevel      = if ($null -ne $configContent.OBS.headsets_triggers.headset_battery_warningLevel)      { [int]$configContent.OBS.headsets_triggers.headset_battery_warningLevel      } else { 40 }
-    $global:OBS_headset_battery_criticalLevel     = if ($null -ne $configContent.OBS.headsets_triggers.headset_battery_criticalLevel)     { [int]$configContent.OBS.headsets_triggers.headset_battery_criticalLevel     } else { [int]$configContent.OBS.headsets_triggers.battery_lowLevel }
+    $global:OBS_headset_battery_criticalLevel     = if ($null -ne $configContent.OBS.headsets_triggers.headset_battery_criticalLevel)     { [int]$configContent.OBS.headsets_triggers.headset_battery_criticalLevel     } else { 30 }
     $global:OBS_controllers_battery_warningLevel  = if ($null -ne $configContent.OBS.headsets_triggers.controllers_battery_warningLevel)  { [int]$configContent.OBS.headsets_triggers.controllers_battery_warningLevel  } else { 30 }
-    $global:OBS_controllers_battery_criticalLevel = if ($null -ne $configContent.OBS.headsets_triggers.controllers_battery_criticalLevel) { [int]$configContent.OBS.headsets_triggers.controllers_battery_criticalLevel } else { [int]$configContent.OBS.headsets_triggers.battery_controller_lowLevel }
+    $global:OBS_controllers_battery_criticalLevel = if ($null -ne $configContent.OBS.headsets_triggers.controllers_battery_criticalLevel) { [int]$configContent.OBS.headsets_triggers.controllers_battery_criticalLevel } else { 20 }
 
     # mediamtx restream server
     if ($configContent.mediamtx) {
