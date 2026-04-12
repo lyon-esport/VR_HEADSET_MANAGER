@@ -265,7 +265,6 @@ function Watch-ScrcpyProcesses {
 
 
 
-
 function Convert-Displayname {
     param(
              [Parameter(Mandatory=$true)]
