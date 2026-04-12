@@ -45,6 +45,7 @@ function Show-MainMenu {
         Write-Host $msg.ScrcpyTracking -BackgroundColor DarkRed -ForegroundColor White
         Write-Host $msg.ScrcpyOptions -BackgroundColor DarkCyan -ForegroundColor Yellow
         Write-Host $msg.RecordingManagement -BackgroundColor DarkBlue -ForegroundColor White
+        Write-Host $msg.VideoRecast -BackgroundColor DarkMagenta -ForegroundColor White
         Write-Host $msg.FilesFolders -BackgroundColor DarkCyan -ForegroundColor Black 
         Write-Host $msg.Quit
         Write-Host $msg.AnyOtherKey
@@ -97,6 +98,7 @@ function Show-MainMenu {
                 'R' { Write-Host $msg.RecordingTitle
                         Show-SubMenu-Recording
                     }
+                'V' { Show-SubMenu-VideoRecast }
                 'F' { Write-Host $msg.FilesFoldersTitle
                         Show-SubMenu-FilesAndFolders
                     }
@@ -114,6 +116,7 @@ function Show-MainMenu {
                     }
                 '0' {
                     Write-Host $msg.Goodbye -ForegroundColor Yellow
+                    Stop-AllScrcpy
                     Reset-AwakeMode
                     Disconnect-ADBConnections
                     break
@@ -128,6 +131,9 @@ function Show-MainMenu {
                         Write-Host "Error: The initialization script is missing!" -ForegroundColor Red
                         exit
                     }
+                    # Signal main.ps1 to re-enter Show-MainMenu with the freshly loaded definition
+                    $global:MenuReload = $true
+                    break
                 }
             }
         }
@@ -590,6 +596,58 @@ function Show-SubMenu-ScrcpyOptions {
                 Write-Log ($msg.ScrcpyOptionsSaved -f $headset.Name, $newProfile) -Level INFO
             }
         } while ($opt -ne '0')
+
+    } while ($true)
+}
+
+
+function Show-SubMenu-VideoRecast {
+    # Available protocols in rotation order
+    $protocols = @("rtsp", "hls", "webrtc")
+    $protocolIndex = 0
+
+    do {
+        $protocol = $protocols[$protocolIndex]
+        $headsets = @(Get-KnownHeadsets)
+
+        Clear-Host
+        Write-Host $msg.VideoRecastTitle -BackgroundColor DarkMagenta -ForegroundColor White
+        Write-Host ($msg.VideoRecastProtocol -f $protocol.ToUpper())
+        Write-Host ""
+
+        # Build URL list - use localhost for clipboard (viewer opens on this PC)
+        $urls = @{}
+        foreach ($h in $headsets) {
+            $url = Get-RestreamUrl -HeadsetName $h.Name -Protocol $protocol -LocalIP "localhost"
+            $urls[$h.ID] = $url
+            Write-Host ($msg.VideoRecastURLLine -f $h.ID, $h.Name, $url)
+        }
+
+        Write-Host ""
+        Write-Host $msg.VideoRecastHeader -ForegroundColor Cyan
+        Write-Host " 0. Return to main menu" -ForegroundColor Gray
+        Write-Host ""
+
+        $input = (Read-Host $msg.EnterChoice).ToUpper()
+
+        if ($input -eq '0') {
+            return
+        }
+        elseif ($input -eq 'P') {
+            # Cycle to next protocol
+            $protocolIndex = ($protocolIndex + 1) % $protocols.Count
+        }
+        elseif ($urls.ContainsKey($input)) {
+            $selectedUrl = $urls[$input]
+            Set-Clipboard -Value $selectedUrl
+            Write-Host ($msg.VideoRecastCopied -f $selectedUrl) -ForegroundColor Green
+            Start-Sleep -Seconds 2
+            return
+        }
+        else {
+            Write-Host $msg.VideoRecastInvalidChoice -ForegroundColor Red
+            Start-Sleep -Seconds 2
+        }
 
     } while ($true)
 }

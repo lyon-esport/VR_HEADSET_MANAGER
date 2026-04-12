@@ -251,12 +251,11 @@ function Sync-RestreamPaths {
         $pathName = ConvertTo-RestreamPathName -HeadsetName $headset.Name
         if ($pathName -notin $currentPaths) {
             Add-RestreamPath -HeadsetName $headset.Name -HeadsetIP $headset.IPAddress
-            #Remove-RestreamPath -PathName $pathName
         }
     }
 
-    # Optional: uncomment to automatically remove paths for headsets deleted from the list.
-    # $expectedPaths = $headsets | ForEach-Object { ConvertTo-RestreamPathName -HeadsetName $_.Name }
+    # Remove paths for headsets that no longer exist in the known headsets list.
+    $expectedPaths = $headsets | ForEach-Object { ConvertTo-RestreamPathName -HeadsetName $_.Name }
     foreach ($path in $currentPaths) {
         if ($path -notin $expectedPaths) { Remove-RestreamPath -PathName $path }
     }

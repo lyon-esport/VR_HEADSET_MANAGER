@@ -211,7 +211,12 @@ Write-Host "`n"
 
 
 # Starting the main menu function that will show the different options to the user
-Show-MainMenu
+# Loop re-enters Show-MainMenu whenever a module reload is triggered (any-key refresh).
+$global:MenuReload = $false
+do {
+    $global:MenuReload = $false
+    Show-MainMenu
+} while ($global:MenuReload)
 
 
 

@@ -264,6 +264,22 @@ function Watch-ScrcpyProcesses {
 }
 
 
+# Gracefully stops all running scrcpy processes launched from this app's scrcpy folder.
+# Sends WM_CLOSE first so active recordings are finalised, then force-kills after timeout.
+function Stop-AllScrcpy {
+    $procs = Get-Process -Name "scrcpy" -ErrorAction SilentlyContinue |
+             Where-Object { $_.Path -like "$($global:scrcpyFolder)\scrcpy.exe" }
+    if (-not $procs) { return }
+    foreach ($proc in $procs) {
+        $closed = $proc.CloseMainWindow()
+        if ($closed) { $proc.WaitForExit(5000) | Out-Null }
+        if (-not $proc.HasExited) {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+        }
+    }
+    Write-Log "All scrcpy processes stopped." -Level INFO
+}
+
 
 function Convert-Displayname {
     param(

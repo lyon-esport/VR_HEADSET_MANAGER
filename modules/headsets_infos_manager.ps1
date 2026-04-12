@@ -124,7 +124,7 @@ function Start-VRMonitor {
                     Write-Log ($msg.UpdatingModel -f $headset.Name, $headset.IPAddress, $fetchedModel) -Level INFO
                     Update-HeadsetField -ID $headset.ID -Field "Model" -NewValue $fetchedModel
                 }
-                
+
                 # Update SerialNumber in known_headsets.csv if ADB is reachable and the value has changed
                 $fetchedSerial = $headsetInfo.SerialNumber
                 if ($headsetInfo.ADBWifi -eq $true `
@@ -142,8 +142,11 @@ function Start-VRMonitor {
             # Export vers CSV
             $knownHeadsetsInfo | Export-Csv -Path $global:knownHeadsetsInfosFilePath -Delimiter ";" -Encoding UTF8 -NoTypeInformation
             
-            # Update OBS file
-            Update-OBSFile -knownHeadsetsInfo $knownHeadsetsInfo #-obsTemplatePath $global:obsTemplatePath -obsOutputPath $global:obsOutputPath
+            # Update OBS status file
+            Update-OBSFile -knownHeadsetsInfo $knownHeadsetsInfo
+
+            # Update OBS video HTML files (WHEP player per headset, static - only changes when headset list changes)
+            Update-OBSVideoFile -knownHeadsetsInfo $knownHeadsetsInfo
 
             # Sync mediamtx restream paths with current headsets
             Sync-RestreamPaths
