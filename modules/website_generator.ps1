@@ -1,14 +1,14 @@
 
-#Update-OBSFile -knownHeadsetsInfo $knownHeadsetsInfo -obsTemplatePath (Join-Path -Path $global:ScriptPath -ChildPath "\OBS\template\headset_status_v2.eps") # $global:obsTemplatePath -obsOutputPath $global:obsOutputPath
+#Update-OBSFile -knownHeadsetsInfo $knownHeadsetsInfo -obsTemplatePath (Join-Path -Path $global:ScriptPath -ChildPath "\website\template\headset_status_v2.eps") # $global:obsTemplatePath -obsOutputPath $global:obsOutputPath
 function Update-OBSFile {
     param(
         [Parameter(Mandatory=$true)]
         [System.Collections.ArrayList]$knownHeadsetsInfo,
 
-        #[string]$obsTemplatePath = (Join-Path -Path $global:ScriptPath -ChildPath "\OBS\template\headset_status_v2.eps") ,
+        #[string]$obsTemplatePath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\template\headset_status_v2.eps") ,
         [string]$obsTemplatePath = $global:OBS_headsetTemplate ,
 
-        [string]$obsOutputPath = (Join-Path -Path $global:ScriptPath -ChildPath "\OBS\")
+        [string]$obsOutputPath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\")
     )
 
     if (-not (Test-Path -Path $obsTemplatePath)) {
@@ -66,9 +66,9 @@ function Write-htmlMonitor {
     param(
         [Parameter(Mandatory=$true)]
         [System.Collections.ArrayList]$knownHeadsets,
-        [string]$obsMonitorTemplatePath = (Join-Path -Path $global:ScriptPath -ChildPath "\OBS\template\monitor.eps"),
+        [string]$obsMonitorTemplatePath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\template\monitor.eps"),
 
-        [string]$obsOutputPath = (Join-Path -Path $global:ScriptPath -ChildPath "\OBS\monitor.html")
+        [string]$obsOutputPath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\monitor.html")
     )
 
     if (-not (Test-Path -Path $obsMonitorTemplatePath)) {
@@ -96,7 +96,7 @@ function Update-OBSVideoFile {
 
         [string]$obsVideoTemplatePath = $global:OBS_videoTemplate,
 
-        [string]$obsOutputPath = (Join-Path -Path $global:ScriptPath -ChildPath "\OBS\")
+        [string]$obsOutputPath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\")
     )
 
     if (-not (Test-Path -Path $obsVideoTemplatePath)) {
