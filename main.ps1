@@ -98,7 +98,7 @@ if ((Split-Path $global:ScriptPath -Leaf) -notmatch "VR_HEADSET_MANAGER") {
 
 
 # Check if folders exists in the same folder as the script, otherwise create them
-$requiredFolders = @("config","data","logs","OBS")
+$requiredFolders = @("config","data","logs","website")
 foreach ($folder in $requiredFolders) {
     $folderPath = Join-Path -Path $global:ScriptPath -ChildPath $folder
     if (-not (Test-Path -Path $folderPath)) {

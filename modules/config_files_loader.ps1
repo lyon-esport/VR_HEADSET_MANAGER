@@ -125,9 +125,9 @@ function Get-Config {
     $global:adbPort_default = $configContent.ADB.adbPort_default
 
 
-    $global:OBS_headsetTemplate = Join-Path -Path $global:ScriptPath -ChildPath ("\OBS\template\"+$configContent.OBS.HeadsetTemplate)
+    $global:OBS_headsetTemplate = Join-Path -Path $global:ScriptPath -ChildPath ("\website\template\"+$configContent.OBS.HeadsetTemplate)
     $videoTemplateName = if ($configContent.OBS.VideoTemplate) { $configContent.OBS.VideoTemplate } else { "headset_scrcpy.eps" }
-    $global:OBS_videoTemplate    = Join-Path -Path $global:ScriptPath -ChildPath ("\OBS\template\"+$videoTemplateName)
+    $global:OBS_videoTemplate    = Join-Path -Path $global:ScriptPath -ChildPath ("\website\template\"+$videoTemplateName)
     $global:OBS_temperature_highLevel = $configContent.OBS.headsets_triggers.temperature_highLevel
     $global:OBS_headset_battery_warningLevel      = if ($null -ne $configContent.OBS.headsets_triggers.headset_battery_warningLevel)      { [int]$configContent.OBS.headsets_triggers.headset_battery_warningLevel      } else { 40 }
     $global:OBS_headset_battery_criticalLevel     = if ($null -ne $configContent.OBS.headsets_triggers.headset_battery_criticalLevel)     { [int]$configContent.OBS.headsets_triggers.headset_battery_criticalLevel     } else { 30 }
