@@ -115,19 +115,33 @@ try {
         $response = $context.Response
 
         try {
-            # Resolve URL path to a file under websitePath
+            # Resolve URL path to a file.
+            # /data/*.csv  -> served from <ScriptPath>\data\  (read-only CSV export)
+            # everything else -> served from <ScriptPath>\website\
             $urlPath = $request.Url.LocalPath.TrimStart('/').Replace('/', [System.IO.Path]::DirectorySeparatorChar)
             if ([string]::IsNullOrEmpty($urlPath)) { $urlPath = 'video_monitor.html' }
 
-            $filePath = Join-Path $websitePath $urlPath
-
-            # Prevent path traversal outside websitePath
-            $resolvedFile    = [System.IO.Path]::GetFullPath($filePath)
-            $resolvedWebsite = [System.IO.Path]::GetFullPath($websitePath)
-            if (-not $resolvedFile.StartsWith($resolvedWebsite)) {
-                $response.StatusCode = 403
-                $response.Close()
-                continue
+            $dataPath = Join-Path $ScriptPath "data"
+            if ($urlPath.StartsWith("data" + [System.IO.Path]::DirectorySeparatorChar)) {
+                # Only allow .csv files from the data folder - no traversal
+                $fileRelative = $urlPath.Substring(5)  # strip "data\"
+                $resolvedFile    = [System.IO.Path]::GetFullPath((Join-Path $dataPath $fileRelative))
+                $resolvedBase    = [System.IO.Path]::GetFullPath($dataPath)
+                $allowedExt      = [System.IO.Path]::GetExtension($resolvedFile).ToLower()
+                if (-not $resolvedFile.StartsWith($resolvedBase) -or $allowedExt -ne '.csv') {
+                    $response.StatusCode = 403
+                    $response.Close()
+                    continue
+                }
+            } else {
+                $resolvedFile    = [System.IO.Path]::GetFullPath((Join-Path $websitePath $urlPath))
+                $resolvedBase    = [System.IO.Path]::GetFullPath($websitePath)
+                # Prevent path traversal outside websitePath
+                if (-not $resolvedFile.StartsWith($resolvedBase)) {
+                    $response.StatusCode = 403
+                    $response.Close()
+                    continue
+                }
             }
 
             if ([System.IO.File]::Exists($resolvedFile)) {
