@@ -283,14 +283,13 @@ function Enable-WiFiADB {
             return $false
         }
 
-        $deviceId = ($devices -split '\t')[0]
+        $deviceId = ($usbDevice -split '\t')[0]
         # Retrieve the model:
-        $headsetModel = & $adb -s $deviceId shell getprop ro.product.model
+        $headsetModel = (& $adb -s $deviceId shell getprop ro.product.model 2>$null).Trim()
         Write-Log ($msg.HeadsetDetected -f $headsetModel, $deviceId) -Level INFO
 
-        # Step 3: Check SSID
-        #$wifiInfo = & $adb -s $deviceId shell "dumpsys wifi" > ../../WifiDump.txt
-        $wifiInfo = & $adb -s $deviceId shell "dumpsys wifi | grep -E 'mWifiInfo'"
+        # Step 3: Check SSID (filter in PowerShell to avoid shell pipe issues on some Android builds)
+        $wifiInfo = (& $adb -s $deviceId shell dumpsys wifi 2>$null) | Select-String 'mWifiInfo'
 
         if ($wifiInfo -match 'SSID: "([^"]+)"') {
             $currentSSID = $matches[1]  # Returns the SSID without quotes
@@ -301,18 +300,20 @@ function Enable-WiFiADB {
         if ($currentSSID -notmatch [regex]::Escape($wifi_ssid)) {
             Write-Log ($msg.HeadsetNotConnectedToSsid -f $wifi_ssid) -Level WARNING
 
-            try {
-                # Connect to new network using fixed MAC option
+            $switchChoice = (Read-Host ($msg.SwitchToSsidPrompt -f $wifi_ssid)).ToUpper()
+            if ($switchChoice -eq 'Y') {
+                try {
+                    & $adb -s $deviceId shell "svc wifi enable"
+                    & $adb -s $deviceId shell cmd -w wifi connect-network $wifi_ssid wpa2 $wifi_pwd -r none
 
-                & $adb -s $deviceId shell "svc wifi enable"
-                & $adb -s $deviceId shell cmd -w wifi connect-network $wifi_ssid wpa2  $wifi_pwd -r none
-
-                # Activate network
-                Write-Log ($msg.ActivatingWifiNetwork -f $wifi_ssid, $headsetModel, $deviceId) -Level INFO
-                Start-Sleep -Seconds 5
-            } catch {
-                Write-Log ($msg.WifiConfigFailed -f $_) -Level ERROR
-                return $false
+                    Write-Log ($msg.ActivatingWifiNetwork -f $wifi_ssid, $headsetModel, $deviceId) -Level INFO
+                    Start-Sleep -Seconds 5
+                } catch {
+                    Write-Log ($msg.WifiConfigFailed -f $_) -Level ERROR
+                    return $false
+                }
+            } else {
+                Write-Log ($msg.KeepingCurrentWifi) -Level INFO
             }
         }
 

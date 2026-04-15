@@ -48,11 +48,15 @@ function Invoke-AsAdmin {
         }
         $argumentsString = $argumentPairs -join ' '
 
-        # Build the full command with proper quoting
+        # Encode command as Base64 to avoid quoting/special-character issues
+        # when the scriptblock content contains double quotes or newlines.
         $command = "& { $scriptBlockString } $argumentsString"
+        $encodedCommand = [Convert]::ToBase64String(
+            [System.Text.Encoding]::Unicode.GetBytes($command)
+        )
 
         Start-Process -FilePath "powershell.exe" `
-                      -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $command `
+                      -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $encodedCommand `
                       -Verb RunAs `
                       -Wait
     }
@@ -227,6 +231,94 @@ function Unblock-MediaMtxFirewallRule {
 }
 
 
+function Unblock-WebServerFirewallRule {
+    <#
+    .SYNOPSIS
+    Ensures Windows Firewall allows inbound TCP connections to the Pode web server port.
+
+    .DESCRIPTION
+    Creates an inbound TCP rule named [VR_HEADSET_MANAGER]WebServer_Allowed for the port
+    defined in $global:WebServer_port. Applies to all profiles so LAN clients can connect.
+    Admin elevation is requested if needed.
+    #>
+    if (-not $global:WebServer_enabled) { return }
+
+    $port     = if ($global:WebServer_port) { $global:WebServer_port } else { 8080 }
+    $ruleName = "_[VR_HEADSET_MANAGER]WebServer_Allowed"
+
+    $scriptBlock_AddWebServerFWRule = {
+        param($RuleName, $Port)
+        Write-Host " Firewall rule will be created for the VR Headset Manager web server " -ForegroundColor Cyan -BackgroundColor Black
+        Write-Host "`t Rule name : $RuleName"
+        Write-Host "`t TCP port  : $Port (inbound)"
+        Write-Host "`t Profile   : Any (Domain, Private, Public)"
+        Read-Host "Press Enter to continue... or cancel with Ctrl+C"
+        New-NetFirewallRule -DisplayName ($RuleName + ' [IN]') `
+                            -Direction Inbound -Protocol TCP -LocalPort $Port `
+                            -Action Allow -Profile Any -ErrorAction Continue | Out-Null
+        Read-Host "Web server firewall rule created. Press Enter to exit."
+    }
+
+    try {
+        $existing = Get-NetFirewallRule -ErrorAction SilentlyContinue |
+                    Where-Object { $_.DisplayName -ilike "*VR_HEADSET_MANAGER*WebServer*" }
+        if (-not $existing) {
+            Write-Log ($msg.WebServerFirewallRuleCreating -f $port) -Level INFO
+            Invoke-AsAdmin -ScriptBlock $scriptBlock_AddWebServerFWRule -RuleName $ruleName -Port $port
+        } else {
+            Write-Log $msg.WebServerFirewallRuleExists -Level DEBUG
+        }
+    }
+    catch {
+        Write-Log ($msg.WebServerFirewallRuleFailed -f $_) -Level ERROR
+    }
+}
+
+
+function Register-WebServerUrlAcl {
+    <#
+    .SYNOPSIS
+    Registers an HTTP URL ACL so Pode can bind to all interfaces without admin rights.
+
+    .DESCRIPTION
+    Pode uses HttpListener internally, which requires either admin privileges or a
+    pre-registered URL reservation to bind on addresses other than localhost.
+    This function runs  netsh http add urlacl url=http://+:<port>/ user=Everyone
+    once (elevated), after which the web server process does NOT need to run as admin.
+    #>
+    if (-not $global:WebServer_enabled) { return }
+
+    $port = if ($global:WebServer_port) { $global:WebServer_port } else { 8080 }
+    $url  = "http://+:$port/"
+
+    $scriptBlock_AddUrlAcl = {
+        param($Url)
+        Write-Host " Registering HTTP URL ACL for Pode web server " -ForegroundColor Cyan -BackgroundColor Black
+        Write-Host "`t URL   : $Url"
+        Write-Host "`t User  : S-1-1-0 (Everyone - locale-independent SID)"
+        Read-Host "Press Enter to continue... or cancel with Ctrl+C"
+        # Use the universal SID S-1-1-0 (Everyone) to avoid locale issues
+        # (e.g. French Windows uses "Tout le monde" but "Everyone" fails)
+        $result = netsh http add urlacl url=$Url sddl="D:(A;;GX;;;S-1-1-0)" 2>&1
+        Write-Host $result
+        Read-Host "URL ACL registered. Press Enter to exit."
+    }
+
+    try {
+        $existing = netsh http show urlacl url=$url 2>&1
+        if ($existing -match [regex]::Escape($url)) {
+            Write-Log ($msg.WebServerUrlAclExists -f $port) -Level DEBUG
+        } else {
+            Write-Log ($msg.WebServerUrlAclRegistering -f $port) -Level INFO
+            Invoke-AsAdmin -ScriptBlock $scriptBlock_AddUrlAcl -Url $url
+        }
+    }
+    catch {
+        Write-Log ($msg.WebServerUrlAclFailed -f $_) -Level ERROR
+    }
+}
+
+
 # Keep Windows awake (no sleep, no screensaver, no screen lock) while the app is running.
 # Uses the official SetThreadExecutionState Win32 API via P/Invoke.
 Add-Type -TypeDefinition @"
@@ -265,6 +357,12 @@ function Initialize-ComputerSetup {
     Called once at startup from scripts_init.ps1.
     #>
 
+    # Guard: scripts_init.ps1 is dot-sourced on every module reload AND by
+    # headsets_dashboard.ps1 in its refresh loop. Only run setup tasks once
+    # per PowerShell process to avoid duplicate firewall prompts and UAC windows.
+    if ($global:ComputerSetupDone) { return }
+    $global:ComputerSetupDone = $true
+
     # Firewall - ADB
     if (-not (Unblock-ADBFirewallRule -AdbPath $global:adbPath)) {
         Write-Log $msg.FirewallConfigSkipped -Level WARNING
@@ -272,6 +370,12 @@ function Initialize-ComputerSetup {
 
     # Firewall - mediamtx restream ports (RTSP/HLS/WebRTC)
     Unblock-MediaMtxFirewallRule
+
+    # Firewall - web server port
+    Unblock-WebServerFirewallRule
+
+    # HTTP URL ACL - allows Pode to bind on all interfaces without running as admin
+    Register-WebServerUrlAcl
 
     # mediamtx restream server auto-start
     Start-MediaMtx

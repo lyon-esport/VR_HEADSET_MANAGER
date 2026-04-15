@@ -164,6 +164,59 @@ $moduleFiles = Get-ChildItem -Path $ModulesPath -Filter "*.ps1" -File | Sort-Obj
 # Run all computer-level setup tasks (firewall rules, service auto-starts, etc.)
 Initialize-ComputerSetup
 
+# Start the Pode web server in a separate PowerShell window (guarded: skip if already running)
+if ($global:WebServer_enabled) {
+
+    # PID-file lock: a single file in the data folder records the running server PID.
+    # Written before Start-Process so any concurrent caller (dashboard loop, module
+    # reload) sees it immediately and skips the launch. Stale entries are cleaned up
+    # by verifying the stored PID is still alive.
+    $webServerPidFile = Join-Path $global:ScriptPath "data\webserver.pid"
+
+    $webServerRunning = $false
+
+    # 1. In-process guard (fastest path - same PS session)
+    if ($global:WebServerProcess -and -not $global:WebServerProcess.HasExited) {
+        $webServerRunning = $true
+        Write-Log ($msg.WebServerAlreadyRunning -f $global:WebServer_port) -Level DEBUG
+    }
+
+    # 2. PID-file guard (cross-process: dashboard loop, module reload, parallel calls)
+    if (-not $webServerRunning -and (Test-Path $webServerPidFile)) {
+        $storedPid = [int](Get-Content $webServerPidFile -Raw -ErrorAction SilentlyContinue)
+        if ($storedPid -and (Get-Process -Id $storedPid -ErrorAction SilentlyContinue)) {
+            $webServerRunning = $true
+            $global:WebServerProcess = Get-Process -Id $storedPid -ErrorAction SilentlyContinue
+            Write-Log ($msg.WebServerAlreadyRunning -f $global:WebServer_port) -Level DEBUG
+        } else {
+            # Stale PID file from a previous crashed run - remove it
+            Remove-Item $webServerPidFile -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    if (-not $webServerRunning) {
+        $web_server_script = Join-Path $global:ScriptPath "modules\Pode_WebServer\web_server.ps1"
+
+        # Write a placeholder PID entry BEFORE launching so concurrent callers
+        # see the file and skip. Use current PID as sentinel; overwritten by
+        # web_server.ps1 once it has its own PID.
+        $PID | Set-Content $webServerPidFile -Force -ErrorAction SilentlyContinue
+
+        $global:WebServerProcess = Start-Process powershell.exe -ArgumentList @(
+            "-NoExit",
+            "-File",
+            "`"$web_server_script`"",
+            "-ScriptPath",
+            "`"$global:ScriptPath`"",
+            "-ConfigFilePath",
+            "`"$ConfigFilePath`"",
+            "-PidFile",
+            "`"$webServerPidFile`""
+        ) -PassThru
+        Write-Log ($msg.WebServerStarted -f $global:WebServer_port) -Level INFO
+    }
+}
+
 
 
 

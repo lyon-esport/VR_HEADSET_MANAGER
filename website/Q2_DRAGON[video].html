@@ -57,12 +57,15 @@
     <script>
       // -----------------------------------------------------------------------
       // WHEP (WebRTC HTTP Egress Protocol) player for mediamtx
-      // Stream URL: http://localhost:{webrtcPort}/{streamPath}/whep
+      // Uses window.location.hostname so it works from any LAN client without
+      // hardcoding localhost. Falls back to localhost when opened as a local file.
+      // Stream URL: http://{host}:{webrtcPort}/{streamPath}/whep
       // mediamtx starts ffmpeg on-demand when this page connects.
       // -----------------------------------------------------------------------
 
       // EPS-rendered constants (baked into HTML at generation time)
-      var WHEP_URL = 'http://localhost:8889/q2_dragon/whep';
+      var WHEP_HOST = window.location.hostname || 'localhost';
+      var WHEP_URL = 'http://' + WHEP_HOST + ':8889/q2_dragon/whep';
       var RETRY_DELAY_MS = 5000;   // retry interval when stream is unavailable
 
       var videoEl  = document.getElementById('stream');

@@ -29,7 +29,9 @@
     NoUsbAdbDevice = "No USB ADB device detected"
     BackToMainMenu = ">> Back to main menu..."
     CurrentlyConnectedSsid = "Currently connected to SSID: {0}"
-    HeadsetNotConnectedToSsid = "Headset is not connected to SSID {0}. Forcing connection..."
+    HeadsetNotConnectedToSsid = "Headset is not connected to SSID {0}."
+    SwitchToSsidPrompt = "Switch headset to SSID {0} (defined in config)? [Y/N]"
+    KeepingCurrentWifi = "Keeping current WiFi. Enabling ADB over WiFi only."
     UsbAdbDeviceDetected = "USB ADB device detected."
     ADBExecutionFailed = "ADB execution failed: {0}"
     ActivatingWifiNetwork = "Activating WIFI network {0} on headset {1} [{2}]"
@@ -236,6 +238,9 @@
     # scripts_init.ps1
     # ==========================================
     TranslationsLoaded = "Translations loaded for language: {0}"
+    WebServerAlreadyRunning = "Web server already running on port {0}"
+    WebServerStarted = "Web server started on port {0}"
+    WebServerStopped = "Web server stopped"
     NetworkProfileCurrent = "Current network profile: {0}"
     NetworkProfileFailed = "Failed to retrieve network profile: {0}"
     FirewallRuleCreating = "Creating firewall rule for ADB.exe"
@@ -350,4 +355,10 @@
     MediaMtxFirewallRuleCreating = "Creating firewall rules for mediamtx restream ports (RTSP:{0}, HLS:{1})"
     MediaMtxFirewallRuleExists = "MediaMtx firewall rules already exist and are correctly configured"
     MediaMtxFirewallRuleFailed = "Failed to manage mediamtx firewall rules: {0}"
+    WebServerFirewallRuleCreating = "Creating firewall rule for web server port {0}"
+    WebServerFirewallRuleExists = "Web server firewall rule already exists and is correctly configured"
+    WebServerFirewallRuleFailed = "Failed to manage web server firewall rule: {0}"
+    WebServerUrlAclRegistering = "Registering HTTP URL ACL for web server port {0} (allows non-admin binding)"
+    WebServerUrlAclExists = "Web server URL ACL already registered for port {0}"
+    WebServerUrlAclFailed = "Failed to register web server URL ACL: {0}"
 }

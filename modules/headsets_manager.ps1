@@ -435,6 +435,7 @@ function Save-Headsets {
     $newHeadsets | Export-Csv -Path $FilePath -NoTypeInformation -Encoding UTF8
     Write-Log ($msg.HeadsetsSaved -f $FilePath) -Level INFO
     Write-htmlMonitor $newHeadsets
+    Write-VideoMonitor $newHeadsets
 } #OK
 
 

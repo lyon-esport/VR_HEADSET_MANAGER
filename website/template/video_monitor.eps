@@ -1,0 +1,520 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VR Headsets - Video Monitor</title>
+  <style>
+    /* ─── Configuration ─────────────────────────────────────────────────────── */
+    :root {
+      --min-video-w:        640px;  /* minimum width per video cell */
+      --grid-gap:           6px;
+      --bg:                 #111;
+      --bar-h:              46px;
+      --bar-bg:             #161616;
+      --bar-border:         #252525;
+      --brand-color:        #60a5fa;
+      --sep-color:          #252525;
+      --filter-active-bg:   #3b82f6;
+      --filter-active-txt:  #fff;
+      --filter-idle-bg:     #1e1e1e;
+      --filter-idle-txt:    #555;
+      --dot-all:            #444;
+      --dot-ping:           #22c55e;
+      --dot-stream:         #3b82f6;
+      --drop-bg:            #1c1c1e;
+      --drop-border:        #2e2e2e;
+      --drop-item-hover:    #262628;
+      --drop-label-color:   #3a3a3a;
+      --muted:              #333;
+    }
+    /* ─────────────────────────────────────────────────────────────────────── */
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      background: var(--bg);
+      min-height: 100vh;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    }
+
+    /* ── Top bar ─────────────────────────────────────────────────────────── */
+    .topbar {
+      display: flex;
+      align-items: center;
+      height: var(--bar-h);
+      background: var(--bar-bg);
+      border-bottom: 1px solid var(--bar-border);
+      position: sticky;
+      top: 0;
+      z-index: 200;
+    }
+
+    /* Brand (left) */
+    .topbar-brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 16px;
+      flex-shrink: 0;
+      color: var(--brand-color);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    /* Vertical separator */
+    .v-sep {
+      width: 1px;
+      align-self: stretch;
+      background: var(--sep-color);
+      flex-shrink: 0;
+      margin: 8px 0;
+    }
+
+    /* Filter group (center) */
+    .topbar-filters {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 0 14px;
+      flex: 1;
+    }
+    .filter-label {
+      color: #3a3a3a;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-right: 4px;
+      flex-shrink: 0;
+    }
+    .filter-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      border-radius: 20px;
+      border: 1px solid transparent;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      background: var(--filter-idle-bg);
+      color: var(--filter-idle-txt);
+      transition: background 0.15s, color 0.15s;
+      user-select: none;
+      white-space: nowrap;
+    }
+    .filter-btn:hover { background: #242424; color: #888; }
+    .filter-btn.active {
+      background: var(--filter-active-bg);
+      color: var(--filter-active-txt);
+      border-color: rgba(255,255,255,0.10);
+    }
+    .dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .dot-all    { background: var(--dot-all); }
+    .dot-ping   { background: var(--dot-ping); }
+    .dot-stream { background: var(--dot-stream); }
+    .badge {
+      font-size: 10px;
+      font-weight: 700;
+      opacity: 0.65;
+    }
+
+    /* Right section */
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      flex-shrink: 0;
+    }
+    #last-update {
+      padding: 0 14px;
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    /* Actions dropdown */
+    .actions-menu { position: relative; }
+    .actions-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      height: var(--bar-h);
+      padding: 0 16px;
+      background: transparent;
+      border: none;
+      border-left: 1px solid var(--bar-border);
+      color: #555;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.15s, color 0.15s;
+      font-family: inherit;
+    }
+    .actions-btn:hover { background: #1e1e1e; color: #aaa; }
+    .actions-btn.open  { background: #1e1e1e; color: #ddd; }
+    .chevron { transition: transform 0.15s; opacity: 0.4; }
+    .actions-btn.open .chevron { transform: rotate(180deg); }
+
+    .actions-dropdown {
+      display: none;
+      position: absolute;
+      top: calc(var(--bar-h) + 1px);
+      right: 0;
+      min-width: 210px;
+      background: var(--drop-bg);
+      border: 1px solid var(--drop-border);
+      border-radius: 0 0 6px 6px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+      z-index: 300;
+    }
+    .actions-dropdown.open { display: block; }
+    .drop-section {
+      padding: 5px 0;
+      border-bottom: 1px solid var(--drop-border);
+    }
+    .drop-section:last-child { border-bottom: none; }
+    .drop-section-label {
+      padding: 4px 13px 3px;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.10em;
+      color: var(--drop-label-color);
+    }
+    .drop-item {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      width: 100%;
+      padding: 7px 13px;
+      background: transparent;
+      border: none;
+      color: #888;
+      font-size: 13px;
+      font-family: inherit;
+      text-align: left;
+      cursor: pointer;
+      transition: background 0.1s, color 0.1s;
+    }
+    .drop-item:hover { background: var(--drop-item-hover); color: #ddd; }
+    .drop-item-icon { opacity: 0.45; flex-shrink: 0; }
+    .drop-item .soon {
+      margin-left: auto;
+      font-size: 10px;
+      opacity: 0.3;
+      font-style: italic;
+    }
+    .drop-item.disabled { opacity: 0.35; cursor: default; pointer-events: none; }
+
+    /* Video grid */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(var(--min-video-w), 1fr));
+      gap: var(--grid-gap);
+      padding: var(--grid-gap);
+      align-items: start;
+    }
+
+    /* Cell */
+    .cell {
+      position: relative;
+      aspect-ratio: 16 / 9;
+      overflow: hidden;
+      background: #000;
+      border-radius: 3px;
+    }
+    .cell.hidden { display: none; }
+
+    /* Full-cell video iframe */
+    .video-frame {
+      position: absolute;
+      inset: 0;
+      width: 100%; height: 100%;
+      border: none;
+    }
+
+    /* Status PiP wrapper - top-left, 1/3 of cell width, 16:9 */
+    .status-wrapper {
+      position: absolute;
+      top: 0; left: 0;
+      width: 33.333%;
+      aspect-ratio: 16 / 9;
+      overflow: hidden;
+      z-index: 10;
+      border-right:  1px solid rgba(255,255,255,0.10);
+      border-bottom: 1px solid rgba(255,255,255,0.10);
+      border-radius: 0 0 3px 0;
+    }
+    /* Rendered at NATURAL_W x NATURAL_H, scaled by JS */
+    .status-frame {
+      position: absolute;
+      top: 0; left: 0;
+      border: none;
+      pointer-events: none;
+      transform-origin: top left;
+    }
+
+    /* Offline dimming overlay */
+    .offline-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(0,0,0,0.60);
+      z-index: 20;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      color: rgba(255,255,255,0.35);
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      pointer-events: none;
+    }
+    .cell.offline .offline-overlay { display: flex; }
+  </style>
+</head>
+<body>
+
+  <header class="topbar">
+
+    <!-- Left: brand -->
+    <div class="topbar-brand">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>
+      </svg>
+      VR Headset Manager
+    </div>
+
+    <div class="v-sep"></div>
+
+    <!-- Center: view filters -->
+    <div class="topbar-filters">
+      <span class="filter-label">Show:</span>
+      <button class="filter-btn active" data-filter="all">
+        <span class="dot dot-all"></span>All<span class="badge" id="count-all"></span>
+      </button>
+      <button class="filter-btn" data-filter="reachable">
+        <span class="dot dot-ping"></span>Reachable<span class="badge" id="count-reachable"></span>
+      </button>
+      <button class="filter-btn" data-filter="streaming">
+        <span class="dot dot-stream"></span>Streaming<span class="badge" id="count-streaming"></span>
+      </button>
+    </div>
+
+    <!-- Right: timestamp + actions menu -->
+    <div class="topbar-right">
+      <span id="last-update"></span>
+      <div class="v-sep"></div>
+      <div class="actions-menu" id="actions-menu">
+        <button class="actions-btn" id="actions-toggle">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+          </svg>
+          Headsets
+          <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="6 9 12 15 18 9"/>
+          </svg>
+        </button>
+        <div class="actions-dropdown" id="actions-dropdown">
+
+          <div class="drop-section">
+            <div class="drop-section-label">Monitor</div>
+            <button class="drop-item" onclick="pollCsv()">
+              <svg class="drop-item-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-.18-3.36"/>
+              </svg>
+              Refresh status now
+            </button>
+          </div>
+
+          <!--
+            FUTURE HEADSET ACTIONS
+            Add <button class="drop-item"> entries here.
+            Use .disabled class for not-yet-implemented items.
+            Group related items in a .drop-section block.
+          -->
+          <div class="drop-section">
+            <div class="drop-section-label">Headset actions</div>
+            <button class="drop-item disabled">
+              <svg class="drop-item-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/>
+              </svg>
+              Connect headset<span class="soon">soon</span>
+            </button>
+            <button class="drop-item disabled">
+              <svg class="drop-item-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+              </svg>
+              Start streaming<span class="soon">soon</span>
+            </button>
+            <button class="drop-item disabled">
+              <svg class="drop-item-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M4.93 4.93a10 10 0 0 0 0 14.14"/>
+              </svg>
+              Headset settings<span class="soon">soon</span>
+            </button>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+  </header>
+
+  <div class="grid" id="grid">
+<% foreach ($headset in $headsets) { %>
+    <div class="cell" data-name="<%= $headset.name %>" data-display="<%= $headset.displayName %>">
+      <iframe class="video-frame"   src="<%= $headset.displayName %>[video].html"      allow="autoplay" scrolling="no"></iframe>
+      <div class="status-wrapper">
+        <iframe class="status-frame" src="<%= $headset.displayName %>[monitoring].html" scrolling="no"></iframe>
+      </div>
+      <div class="offline-overlay">OFFLINE</div>
+    </div>
+<% } %>
+  </div>
+
+  <script>
+    // ── Configuration ────────────────────────────────────────────────────────
+    var CSV_PATH      = '../data/known_headsets_infos.csv';
+    var CSV_DELIMITER = ';';
+    var REFRESH_MS    = 5000;   // CSV poll interval in ms
+    var NATURAL_W     = 480;    // natural render width of the status iframe
+    var NATURAL_H     = 270;    // must keep 16:9 ratio with NATURAL_W
+    // ─────────────────────────────────────────────────────────────────────────
+
+    var currentFilter = 'all';
+    // Pre-seed status from DOM: all cells shown as reachable until CSV data arrives.
+    // This ensures filters work even when the CSV cannot be fetched (e.g. file:// protocol).
+    var headsetStatus = (function() {
+      var s = {};
+      document.querySelectorAll('#grid .cell').forEach(function(cell) {
+        if (cell.dataset.display) s[cell.dataset.display] = { ping: true, scrcpy: false };
+      });
+      return s;
+    })();
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
+    // Parse semicolon-delimited CSV, strip surrounding quotes from every cell
+    function parseCsv(text) {
+      // Strip UTF-8 BOM that PowerShell 5 adds to Export-Csv -Encoding UTF8
+      text = text.replace(/^\uFEFF/, '');
+      var lines = text.trim().split(/\r?\n/);
+      if (lines.length < 2) return [];
+      var headers = lines[0].split(CSV_DELIMITER).map(function(h) {
+        return h.replace(/^"|"$/g, '').trim();
+      });
+      return lines.slice(1).map(function(line) {
+        var cols = line.split(CSV_DELIMITER).map(function(c) {
+          return c.replace(/^"|"$/g, '').trim();
+        });
+        var obj = {};
+        headers.forEach(function(h, i) { obj[h] = cols[i] !== undefined ? cols[i] : ''; });
+        return obj;
+      });
+    }
+
+    // Mirrors PowerShell Convert-Displayname: replace spaces with underscores
+    function toDisplayName(name) {
+      return name.replace(/ /g, '_');
+    }
+
+    // ── CSV polling ──────────────────────────────────────────────────────────
+    function pollCsv() {
+      fetch(CSV_PATH + '?_=' + Date.now())
+        .then(function(r) { if (!r.ok) throw new Error(r.status); return r.text(); })
+        .then(function(text) {
+          var rows = parseCsv(text);
+          var newStatus = {};
+          rows.forEach(function(row) {
+            var dn = toDisplayName(row['Name'] || '');
+            if (!dn) return;
+            newStatus[dn] = {
+              ping:   (row['Ping']  || '').toLowerCase() === 'true',
+              scrcpy: (row['SCRCPY'] || '').toLowerCase() === 'ok'
+            };
+          });
+          headsetStatus = newStatus;
+          applyFilter(currentFilter);
+          document.getElementById('last-update').textContent =
+            'Updated ' + new Date().toLocaleTimeString();
+        })
+        .catch(function() { /* keep last known state on network error */ });;
+    }
+
+    // ── Filter + count badges ────────────────────────────────────────────────
+    function applyFilter(filter) {
+      currentFilter = filter;
+
+      document.querySelectorAll('.filter-btn').forEach(function(btn) {
+        btn.classList.toggle('active', btn.dataset.filter === filter);
+      });
+
+      var counts = { all: 0, reachable: 0, streaming: 0 };
+
+      document.querySelectorAll('#grid .cell').forEach(function(cell) {
+        var dn   = cell.dataset.display;
+        var stat = headsetStatus[dn] || { ping: false, scrcpy: false };
+
+        counts.all++;
+        if (stat.ping)   counts.reachable++;
+        if (stat.scrcpy) counts.streaming++;
+
+        var visible = filter === 'all' ||
+                     (filter === 'reachable' && stat.ping) ||
+                     (filter === 'streaming' && stat.scrcpy);
+        cell.classList.toggle('hidden',  !visible);
+        cell.classList.toggle('offline', !stat.ping);
+      });
+
+      document.getElementById('count-all').textContent       = ' (' + counts.all + ')';
+      document.getElementById('count-reachable').textContent = ' (' + counts.reachable + ')';
+      document.getElementById('count-streaming').textContent = ' (' + counts.streaming + ')';
+    }
+
+    // ── Scale status overlays ────────────────────────────────────────────────
+    function applyScale() {
+      document.querySelectorAll('#grid .cell').forEach(function(cell) {
+        var scale = (cell.offsetWidth / 3) / NATURAL_W;
+        cell.querySelectorAll('.status-frame').forEach(function(fr) {
+          fr.style.width     = NATURAL_W + 'px';
+          fr.style.height    = NATURAL_H + 'px';
+          fr.style.transform = 'scale(' + scale + ')';
+        });
+      });
+    }
+
+    // ── Actions dropdown toggle ───────────────────────────────────────────────
+    var actionsToggle   = document.getElementById('actions-toggle');
+    var actionsDropdown = document.getElementById('actions-dropdown');
+    actionsToggle.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var open = actionsDropdown.classList.toggle('open');
+      actionsToggle.classList.toggle('open', open);
+    });
+    document.addEventListener('click', function() {
+      actionsDropdown.classList.remove('open');
+      actionsToggle.classList.remove('open');
+    });
+
+    // ── Boot ─────────────────────────────────────────────────────────────────
+    document.querySelectorAll('.filter-btn').forEach(function(btn) {
+      btn.addEventListener('click', function() { applyFilter(btn.dataset.filter); });
+    });
+
+    var ro = new ResizeObserver(applyScale);
+    ro.observe(document.getElementById('grid'));
+
+    document.addEventListener('DOMContentLoaded', function() {
+      applyScale();
+      pollCsv();
+      setInterval(pollCsv, REFRESH_MS);
+    });
+  </script>
+</body>
+</html>
