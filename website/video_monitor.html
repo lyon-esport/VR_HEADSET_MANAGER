@@ -111,6 +111,11 @@
       color: var(--filter-active-txt);
       border-color: rgba(255,255,255,0.10);
     }
+    .filter-btn.active.offline {
+      background: #4a2800;
+      color: #a06030;
+      border-color: #6b3a00;
+    }
     .dot {
       width: 7px; height: 7px;
       border-radius: 50%;
@@ -247,8 +252,6 @@
       aspect-ratio: 16 / 9;
       overflow: hidden;
       z-index: 10;
-      border-right:  1px solid rgba(255,255,255,0.10);
-      border-bottom: 1px solid rgba(255,255,255,0.10);
       border-radius: 0 0 3px 0;
     }
     /* Rendered at NATURAL_W x NATURAL_H, scaled by JS */
@@ -477,6 +480,18 @@
       });
       container.appendChild(btnAll);
 
+      var btnActive = document.createElement('button');
+      btnActive.className = 'filter-btn';
+      btnActive.textContent = 'Active';
+      btnActive.addEventListener('click', function() {
+        Object.keys(headsetVisible).forEach(function(dn) {
+          var stat = headsetStatus[dn] || { scrcpy: false };
+          setHeadsetVisible(dn, stat.scrcpy);
+        });
+        document.getElementById('toggle-all').classList.remove('active');
+      });
+      container.appendChild(btnActive);
+
       var btnNone = document.createElement('button');
       btnNone.className = 'filter-btn';
       btnNone.textContent = 'None';
@@ -572,6 +587,8 @@
         var dn   = cell.dataset.display;
         var stat = headsetStatus[dn] || { ping: false, scrcpy: false };
         cell.classList.toggle('offline', !stat.ping);
+        var btn = document.querySelector('[data-headset="' + dn + '"]');
+        if (btn) btn.classList.toggle('offline', !stat.scrcpy);
       });
     }
 
