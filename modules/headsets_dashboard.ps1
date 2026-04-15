@@ -53,6 +53,7 @@ while ($true) {
     Show-HeadsetsTableColored
     
     Watch-ScrcpyProcesses # Restart scrcpy window if it was closed
+    Start-MediaMtx        # Restart mediamtx if it has stopped
 
     Write-host "Refesh in $global:VRMonitor_refresh_timer seconds... " -ForegroundColor Yellow -NoNewline
     Start-Sleep -Seconds 1
