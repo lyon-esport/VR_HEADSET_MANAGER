@@ -335,7 +335,6 @@
 
     <!-- Right: timestamp + actions menu -->
     <div class="topbar-right">
-      <span id="last-update"></span>
       <div class="v-sep"></div>
       <div class="actions-menu" id="actions-menu">
         <button class="actions-btn" id="actions-toggle">
@@ -533,8 +532,6 @@
           });
           headsetStatus = newStatus;
           applyOfflineState();
-          document.getElementById('last-update').textContent =
-            'Updated ' + new Date().toLocaleTimeString();
         })
         .catch(function() { /* keep last known state on network error */ });;
     }
