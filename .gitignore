@@ -12,8 +12,8 @@ config/*
 known_headsets*.csv
 
 # ignore generated html files
-/OBS/*.html
-!/OBS/template/
+/website/*.html
+!/website/template/
 
 # ignore records
 records/*
