@@ -35,6 +35,7 @@
       background: var(--bg);
       min-height: 100vh;
       font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      overflow-x: hidden;
     }
 
     /* ── Top bar ─────────────────────────────────────────────────────────── */
@@ -80,6 +81,8 @@
       gap: 4px;
       padding: 0 14px;
       flex: 1;
+      min-width: 0;
+      overflow: hidden;
     }
     .filter-label {
       color: #3a3a3a;
@@ -130,11 +133,46 @@
       opacity: 0.65;
     }
 
+    /* Compact headset dropdown (shown when topbar overflows) */
+    .headset-compact { display: none; position: relative; flex-shrink: 0; }
+    .headset-compact-btn {
+      display: inline-flex; align-items: center; gap: 7px;
+      height: var(--bar-h); padding: 0 14px;
+      background: transparent; border: none;
+      border-right: 1px solid var(--bar-border);
+      color: #555; font-size: 12px; font-weight: 600; cursor: pointer;
+      white-space: nowrap; font-family: inherit;
+      transition: background 0.15s, color 0.15s;
+    }
+    .headset-compact-btn:hover { background: #1e1e1e; color: #aaa; }
+    .headset-compact-btn.open  { background: #1e1e1e; color: #ddd; }
+    .headset-compact-panel {
+      display: none; position: absolute; top: calc(var(--bar-h) + 1px); left: 0;
+      min-width: 190px; background: var(--drop-bg);
+      border: 1px solid var(--drop-border); border-radius: 0 0 6px 6px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.6); z-index: 300; padding: 4px 0;
+    }
+    .headset-compact-panel.open { display: block; }
+    .headset-compact-item {
+      display: flex; align-items: center; gap: 9px;
+      width: 100%; padding: 7px 13px; background: transparent; border: none;
+      color: #888; font-size: 13px; font-family: inherit;
+      text-align: left; cursor: pointer; transition: background 0.1s, color 0.1s;
+    }
+    .headset-compact-item:hover { background: var(--drop-item-hover); color: #ddd; }
+    .headset-compact-item .item-check { width: 13px; flex-shrink: 0; opacity: 0; }
+    .headset-compact-item.checked .item-check { opacity: 1; color: var(--filter-active-bg); }
+    .headset-compact-item.checked.offline .item-check { color: #a06030; }
+    .headset-compact-divider { height: 1px; background: var(--drop-border); margin: 3px 0; }
+    .topbar.compact #headset-toggles { display: none; }
+    .topbar.compact .headset-compact { display: flex; align-items: center; }
+
     /* Right section */
     .topbar-right {
       display: flex;
       align-items: center;
       flex-shrink: 0;
+      margin-left: auto;
     }
     #last-update {
       padding: 0 14px;
@@ -319,29 +357,41 @@
 
     <div class="v-sep"></div>
 
+    <!-- Compact headset picker (shown when topbar overflows) -->
+    <div class="headset-compact" id="headset-compact">
+      <button class="headset-compact-btn" id="headset-compact-toggle">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="3" width="20" height="14" rx="2"/><polyline points="8 21 12 17 16 21"/>
+        </svg>
+        Headsets
+        <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+      <div class="headset-compact-panel" id="headset-compact-panel"></div>
+    </div>
+
     <!-- Center: per-headset visibility toggles (buttons injected by JS) -->
     <div class="topbar-filters" id="headset-toggles">
       <span class="filter-label">Show:</span>
     </div>
 
-    <!-- Status overlay toggle -->
-    <div class="v-sep"></div>
-    <button class="actions-btn" id="status-toggle" title="Toggle status overlay">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
-      </svg>
-      Status
-    </button>
-
-    <!-- Right: timestamp + actions menu -->
+    <!-- Right: status toggle + actions menu -->
     <div class="topbar-right">
+      <div class="v-sep"></div>
+      <button class="actions-btn" id="status-toggle" title="Toggle status overlay">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+        </svg>
+        Status
+      </button>
       <div class="v-sep"></div>
       <div class="actions-menu" id="actions-menu">
         <button class="actions-btn" id="actions-toggle">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
           </svg>
-          Headsets
+          Config
           <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="6 9 12 15 18 9"/>
           </svg>
@@ -479,6 +529,48 @@
         });
         container.appendChild(btn);
       });
+
+      // Build compact dropdown panel (mirrors button state for narrow viewports)
+      var compactPanel = document.getElementById('headset-compact-panel');
+      if (compactPanel) {
+        [{ label: 'All', fn: function() { Object.keys(headsetVisible).forEach(function(d) { setHeadsetVisible(d, true); }); document.getElementById('toggle-all').classList.add('active'); } },
+         { label: 'Active', fn: function() { Object.keys(headsetVisible).forEach(function(d) { var s = headsetStatus[d] || { scrcpy: false }; setHeadsetVisible(d, s.scrcpy); }); document.getElementById('toggle-all').classList.remove('active'); } },
+         { label: 'None', fn: function() { Object.keys(headsetVisible).forEach(function(d) { setHeadsetVisible(d, false); }); document.getElementById('toggle-all').classList.remove('active'); } }
+        ].forEach(function(s) {
+          var item = document.createElement('button');
+          item.className = 'headset-compact-item';
+          item.innerHTML = '<span class="item-check"></span>' + s.label;
+          item.addEventListener('click', s.fn);
+          compactPanel.appendChild(item);
+        });
+        var divider = document.createElement('div');
+        divider.className = 'headset-compact-divider';
+        compactPanel.appendChild(divider);
+        document.querySelectorAll('#grid .cell').forEach(function(cell) {
+          var dn   = cell.dataset.display;
+          var name = cell.dataset.name || dn;
+          var item = document.createElement('button');
+          item.className = 'headset-compact-item checked';
+          item.dataset.compactHeadset = dn;
+          item.innerHTML = '<svg class="item-check" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>' + name;
+          item.addEventListener('click', function() {
+            setHeadsetVisible(dn, !headsetVisible[dn]);
+            var allOn = Object.keys(headsetVisible).every(function(k) { return headsetVisible[k]; });
+            document.getElementById('toggle-all').classList.toggle('active', allOn);
+          });
+          compactPanel.appendChild(item);
+        });
+        var compactToggle = document.getElementById('headset-compact-toggle');
+        compactToggle.addEventListener('click', function(e) {
+          e.stopPropagation();
+          var open = compactPanel.classList.toggle('open');
+          compactToggle.classList.toggle('open', open);
+        });
+        document.addEventListener('click', function() {
+          compactPanel.classList.remove('open');
+          compactToggle.classList.remove('open');
+        });
+      }
     }
 
     function setHeadsetVisible(dn, visible) {
@@ -487,6 +579,8 @@
       if (cell) cell.classList.toggle('hidden', !visible);
       var btn = document.querySelector('[data-headset="' + dn + '"]');
       if (btn) btn.classList.toggle('active', visible);
+      var compactItem = document.querySelector('[data-compact-headset="' + dn + '"]');
+      if (compactItem) compactItem.classList.toggle('checked', visible);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -544,6 +638,8 @@
         cell.classList.toggle('offline', !stat.ping);
         var btn = document.querySelector('[data-headset="' + dn + '"]');
         if (btn) btn.classList.toggle('offline', !stat.scrcpy);
+        var compactItem = document.querySelector('[data-compact-headset="' + dn + '"]');
+        if (compactItem) compactItem.classList.toggle('offline', !stat.scrcpy);
       });
     }
 
@@ -574,16 +670,27 @@
 
     // ── Status overlay toggle ────────────────────────────────────────────────
     var statusVisible = true;
-    document.getElementById('status-toggle').addEventListener('click', function() {
+    var statusToggleBtn = document.getElementById('status-toggle');
+    statusToggleBtn.style.color = 'var(--filter-active-bg)';
+    statusToggleBtn.addEventListener('click', function() {
       statusVisible = !statusVisible;
       document.querySelectorAll('#grid .cell').forEach(function(cell) {
         cell.classList.toggle('status-hidden', !statusVisible);
       });
-      this.style.color = statusVisible ? '' : 'var(--filter-active-bg)';
+      this.style.color = statusVisible ? 'var(--filter-active-bg)' : '';
     });
 
     // ── Boot ─────────────────────────────────────────────────────────────────
     buildHeadsetToggles();
+
+    function checkTopbarOverflow() {
+      var topbar = document.querySelector('.topbar');
+      var toggles = document.getElementById('headset-toggles');
+      topbar.classList.remove('compact');
+      topbar.classList.toggle('compact', toggles.scrollWidth > toggles.clientWidth);
+    }
+    var topbarRo = new ResizeObserver(checkTopbarOverflow);
+    topbarRo.observe(document.querySelector('.topbar'));
 
     var ro = new ResizeObserver(applyScale);
     ro.observe(document.getElementById('grid'));
