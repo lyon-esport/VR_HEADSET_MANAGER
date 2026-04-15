@@ -212,7 +212,7 @@ if ($global:WebServer_enabled) {
             "`"$ConfigFilePath`"",
             "-PidFile",
             "`"$webServerPidFile`""
-        ) -PassThru
+        ) -WindowStyle Hidden -PassThru
         Write-Log ($msg.WebServerStarted -f $global:WebServer_port) -Level INFO
     }
 }

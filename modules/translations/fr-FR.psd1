@@ -237,6 +237,8 @@
     FirewallRuleFailed = "Impossible de gerer la regle de pare-feu : {0}"
     FirewallConfigSkipped = "Configuration du pare-feu pour ADB echouee ou ignoree"
     WebServerAlreadyRunning = "Serveur web deja en cours d'execution sur le port {0}"
+    WebServerLinksHeader = "Moniteur web accessible :"
+    WebServerLinkLine    = "  http://{0}:{1}/"
     WebServerStarted = "Serveur web demarre sur le port {0}"
     WebServerStopped = "Serveur web arrete"
     AwakeModeActivated = "Mode eveil active : le verrouillage ecran et la veille sont desactives."

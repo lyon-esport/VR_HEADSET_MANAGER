@@ -239,6 +239,8 @@
     # ==========================================
     TranslationsLoaded = "Translations loaded for language: {0}"
     WebServerAlreadyRunning = "Web server already running on port {0}"
+    WebServerLinksHeader = "Web monitor available at:"
+    WebServerLinkLine    = "  http://{0}:{1}/"
     WebServerStarted = "Web server started on port {0}"
     WebServerStopped = "Web server stopped"
     NetworkProfileCurrent = "Current network profile: {0}"
