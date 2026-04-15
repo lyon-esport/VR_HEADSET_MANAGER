@@ -260,6 +260,30 @@
       transform-origin: top left;
     }
 
+    /* Hide status overlays when toggle is off */
+    .status-hidden .status-wrapper { display: none; }
+
+    /* Expand button - top-right of each cell */
+    .expand-btn {
+      position: absolute;
+      top: 8px; right: 8px;
+      z-index: 30;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 30px; height: 30px;
+      border-radius: 6px;
+      background: rgba(0,0,0,0.55);
+      border: 1px solid rgba(255,255,255,0.12);
+      color: rgba(255,255,255,0.70);
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 0.15s, background 0.15s;
+      text-decoration: none;
+    }
+    .cell:hover .expand-btn { opacity: 1; }
+    .expand-btn:hover { background: rgba(59,130,246,0.75); color: #fff; border-color: rgba(59,130,246,0.6); }
+
     /* Offline dimming overlay */
     .offline-overlay {
       position: absolute;
@@ -292,19 +316,19 @@
 
     <div class="v-sep"></div>
 
-    <!-- Center: view filters -->
-    <div class="topbar-filters">
+    <!-- Center: per-headset visibility toggles (buttons injected by JS) -->
+    <div class="topbar-filters" id="headset-toggles">
       <span class="filter-label">Show:</span>
-      <button class="filter-btn active" data-filter="all">
-        <span class="dot dot-all"></span>All<span class="badge" id="count-all"></span>
-      </button>
-      <button class="filter-btn" data-filter="reachable">
-        <span class="dot dot-ping"></span>Reachable<span class="badge" id="count-reachable"></span>
-      </button>
-      <button class="filter-btn" data-filter="streaming">
-        <span class="dot dot-stream"></span>Streaming<span class="badge" id="count-streaming"></span>
-      </button>
     </div>
+
+    <!-- Status overlay toggle -->
+    <div class="v-sep"></div>
+    <button class="actions-btn" id="status-toggle" title="Toggle status overlay">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+      </svg>
+      Status
+    </button>
 
     <!-- Right: timestamp + actions menu -->
     <div class="topbar-right">
@@ -373,6 +397,12 @@
       <div class="status-wrapper">
         <iframe class="status-frame" src="<%= $headset.displayName %>[monitoring].html" scrolling="no"></iframe>
       </div>
+      <a class="expand-btn" href="<%= $headset.displayName %>[video].html" target="_blank" title="Open full page" aria-label="Open full page">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
+          <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+        </svg>
+      </a>
       <div class="offline-overlay">OFFLINE</div>
     </div>
 <% } %>
@@ -387,16 +417,63 @@
     var NATURAL_H     = 270;    // must keep 16:9 ratio with NATURAL_W
     // ─────────────────────────────────────────────────────────────────────────
 
-    var currentFilter = 'all';
-    // Pre-seed status from DOM: all cells shown as reachable until CSV data arrives.
-    // This ensures filters work even when the CSV cannot be fetched (e.g. file:// protocol).
-    var headsetStatus = (function() {
-      var s = {};
-      document.querySelectorAll('#grid .cell').forEach(function(cell) {
-        if (cell.dataset.display) s[cell.dataset.display] = { ping: true, scrcpy: false };
+    var headsetStatus = {};
+
+    // ── Per-headset visibility toggles ──────────────────────────────────────────
+    var headsetVisible = {};
+
+    function buildHeadsetToggles() {
+      var container = document.getElementById('headset-toggles');
+
+      var btnAll = document.createElement('button');
+      btnAll.id = 'toggle-all';
+      btnAll.className = 'filter-btn active';
+      btnAll.textContent = 'All';
+      btnAll.addEventListener('click', function() {
+        Object.keys(headsetVisible).forEach(function(dn) { setHeadsetVisible(dn, true); });
+        this.classList.add('active');
       });
-      return s;
-    })();
+      container.appendChild(btnAll);
+
+      var btnNone = document.createElement('button');
+      btnNone.className = 'filter-btn';
+      btnNone.textContent = 'None';
+      btnNone.addEventListener('click', function() {
+        Object.keys(headsetVisible).forEach(function(dn) { setHeadsetVisible(dn, false); });
+        document.getElementById('toggle-all').classList.remove('active');
+      });
+      container.appendChild(btnNone);
+
+      var sep = document.createElement('span');
+      sep.className = 'v-sep';
+      sep.style.cssText = 'margin: 8px 6px; height: auto; align-self: stretch;';
+      container.appendChild(sep);
+
+      document.querySelectorAll('#grid .cell').forEach(function(cell) {
+        var dn   = cell.dataset.display;
+        var name = cell.dataset.name || dn;
+        headsetVisible[dn] = true;
+
+        var btn = document.createElement('button');
+        btn.className = 'filter-btn active';
+        btn.dataset.headset = dn;
+        btn.textContent = name;
+        btn.addEventListener('click', function() {
+          setHeadsetVisible(dn, !headsetVisible[dn]);
+          var allOn = Object.keys(headsetVisible).every(function(k) { return headsetVisible[k]; });
+          document.getElementById('toggle-all').classList.toggle('active', allOn);
+        });
+        container.appendChild(btn);
+      });
+    }
+
+    function setHeadsetVisible(dn, visible) {
+      headsetVisible[dn] = visible;
+      var cell = document.querySelector('#grid .cell[data-display="' + dn + '"]');
+      if (cell) cell.classList.toggle('hidden', !visible);
+      var btn = document.querySelector('[data-headset="' + dn + '"]');
+      if (btn) btn.classList.toggle('active', visible);
+    }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -440,41 +517,20 @@
             };
           });
           headsetStatus = newStatus;
-          applyFilter(currentFilter);
+          applyOfflineState();
           document.getElementById('last-update').textContent =
             'Updated ' + new Date().toLocaleTimeString();
         })
         .catch(function() { /* keep last known state on network error */ });;
     }
 
-    // ── Filter + count badges ────────────────────────────────────────────────
-    function applyFilter(filter) {
-      currentFilter = filter;
-
-      document.querySelectorAll('.filter-btn').forEach(function(btn) {
-        btn.classList.toggle('active', btn.dataset.filter === filter);
-      });
-
-      var counts = { all: 0, reachable: 0, streaming: 0 };
-
+    // ── Offline state update ──────────────────────────────────────────────────
+    function applyOfflineState() {
       document.querySelectorAll('#grid .cell').forEach(function(cell) {
         var dn   = cell.dataset.display;
         var stat = headsetStatus[dn] || { ping: false, scrcpy: false };
-
-        counts.all++;
-        if (stat.ping)   counts.reachable++;
-        if (stat.scrcpy) counts.streaming++;
-
-        var visible = filter === 'all' ||
-                     (filter === 'reachable' && stat.ping) ||
-                     (filter === 'streaming' && stat.scrcpy);
-        cell.classList.toggle('hidden',  !visible);
         cell.classList.toggle('offline', !stat.ping);
       });
-
-      document.getElementById('count-all').textContent       = ' (' + counts.all + ')';
-      document.getElementById('count-reachable').textContent = ' (' + counts.reachable + ')';
-      document.getElementById('count-streaming').textContent = ' (' + counts.streaming + ')';
     }
 
     // ── Scale status overlays ────────────────────────────────────────────────
@@ -502,10 +558,18 @@
       actionsToggle.classList.remove('open');
     });
 
-    // ── Boot ─────────────────────────────────────────────────────────────────
-    document.querySelectorAll('.filter-btn').forEach(function(btn) {
-      btn.addEventListener('click', function() { applyFilter(btn.dataset.filter); });
+    // ── Status overlay toggle ────────────────────────────────────────────────
+    var statusVisible = true;
+    document.getElementById('status-toggle').addEventListener('click', function() {
+      statusVisible = !statusVisible;
+      document.querySelectorAll('#grid .cell').forEach(function(cell) {
+        cell.classList.toggle('status-hidden', !statusVisible);
+      });
+      this.style.color = statusVisible ? '' : 'var(--filter-active-bg)';
     });
+
+    // ── Boot ─────────────────────────────────────────────────────────────────
+    buildHeadsetToggles();
 
     var ro = new ResizeObserver(applyScale);
     ro.observe(document.getElementById('grid'));
