@@ -167,7 +167,7 @@ function Add-RestreamPath {
     #   mediamtx and most RTSP clients only accept standard yuv420p H.264 - must be explicit.
     # -rtsp_transport tcp: avoids UDP hole-punching issues on loopback.
     # -pkt_size 1316: keeps RTP packets within Ethernet MTU (mediamtx warns at >1440).
-    $cmd = "$ffmpegFwd -f gdigrab -framerate $($global:mediamtxFramerate)" +
+    $cmd = "$ffmpegFwd -f gdigrab -framerate $($global:mediamtxFramerate) -draw_mouse 0" +
            " -i title=$windowTitle -pix_fmt yuv420p -c:v libx264 -preset ultrafast" +
            " -tune zerolatency -b:v $($global:mediamtxBitrate)" +
            " -maxrate $($global:mediamtxBitrate) -bufsize $($global:mediamtxBitrate)" +

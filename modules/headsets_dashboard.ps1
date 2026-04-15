@@ -67,11 +67,9 @@ while ($true) {
 # Parent process has exited - perform cleanup and close this window.
 # Note: $msg and other globals may not be available here (loop already exited),
 # so use Write-Host directly and call functions defensively.
-Write-Host "Stopping VRMonitor background job..." -ForegroundColor Yellow
-try { Stop-VRMonitor } catch { }
-
-Write-Host "Stopping scrcpy processes..." -ForegroundColor Yellow
-try { Stop-AllScrcpy } catch { }
+Write-Host "Stopping application services..." -ForegroundColor Yellow
+try { Stop-VRMonitor }       catch { }
+try { Invoke-AppShutdown }   catch { }
 
 Write-Host "Closing dashboard window." -ForegroundColor Red
 Start-Sleep -Seconds 2
