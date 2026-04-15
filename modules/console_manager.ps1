@@ -29,6 +29,7 @@ function Show-MainMenu {
 
         # Start html monitor update
         Write-htmlMonitor $global:knownHeadsets
+        Write-VideoMonitor $global:knownHeadsets
 
 
         Clear-Host
@@ -119,6 +120,13 @@ function Show-MainMenu {
                     Stop-AllScrcpy
                     Reset-AwakeMode
                     Disconnect-ADBConnections
+                    if ($global:WebServerProcess -and -not $global:WebServerProcess.HasExited) {
+                        Stop-Process -Id $global:WebServerProcess.Id -Force -ErrorAction SilentlyContinue
+                        Write-Log ($msg.WebServerStopped) -Level INFO
+                    }
+                    # Clean up PID file so a fresh start works next time
+                    $webServerPidFile = Join-Path $global:ScriptPath "data\webserver.pid"
+                    Remove-Item $webServerPidFile -Force -ErrorAction SilentlyContinue
                     break
                 }
                 default {

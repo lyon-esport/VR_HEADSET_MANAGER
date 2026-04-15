@@ -53,10 +53,10 @@ function Update-OBSFile {
         [System.Char]::ConvertFromUtf32(0x26A0) # warning emoji
         [System.Char]::ConvertFromUtf32(0x1F6AB) # no entry emoji
 #>
-        # write html to $output/$name.html
+        # write html to $output/$name[monitoring].html
         # $value =  @{ Name = "Quest3 BLEU" }
-        $outputFile = Join-Path -Path $obsOutputPath -ChildPath ((Convert-Displayname($headset.Name)) + ".html")
-        $headsetsHtml | Out-File -FilePath $outputFile -Encoding UTF8
+        $outputFile = Join-Path -Path $obsOutputPath -ChildPath ((Convert-Displayname($headset.Name)) + "[monitoring].html")
+        $headsetsHtml | Out-File -LiteralPath $outputFile -Encoding UTF8
 
     }
 }
@@ -124,4 +124,33 @@ function Update-OBSVideoFile {
         $outputFile = Join-Path -Path $obsOutputPath -ChildPath ((Convert-Displayname $headset.Name) + "[video].html")
         $videoHtml | Out-File -LiteralPath $outputFile -Encoding UTF8
     }
+}
+
+# Generates website/video_monitor.html from the video_monitor.eps template.
+# Lists every headset in $knownHeadsets; the page JS polls the CSV at runtime
+# to filter cells by All / Reachable (ping) / Streaming (scrcpy).
+function Write-VideoMonitor {
+    param(
+        [Parameter(Mandatory=$true)]
+        [System.Collections.ArrayList]$knownHeadsets,
+        [string]$templatePath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\template\video_monitor.eps"),
+        [string]$outputPath   = (Join-Path -Path $global:ScriptPath -ChildPath "\website\video_monitor.html")
+    )
+
+    if (-not (Test-Path -Path $templatePath)) {
+        Write-Log ("Video monitor template not found: $templatePath") -Level WARNING
+        return
+    }
+
+    $headsetData = [System.Collections.ArrayList]@()
+    foreach ($h in $knownHeadsets) {
+        $null = $headsetData.Add(@{
+            name        = $h.Name
+            displayName = Convert-Displayname $h.Name
+        })
+    }
+
+    $templateVars = @{ headsets = $headsetData }
+    $html = Invoke-EpsTemplate -Path $templatePath -Safe -binding $templateVars
+    $html | Out-File -LiteralPath $outputPath -Encoding UTF8
 }

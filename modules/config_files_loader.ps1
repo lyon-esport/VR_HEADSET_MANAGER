@@ -153,6 +153,10 @@ function Get-Config {
     $ffmpegFolder = if ($configContent.ffmpeg) { $configContent.ffmpeg.folder } else { "ffmpeg" }
     $global:ffmpegFilePath = Join-Path -Path $sourcesPath -ChildPath "$ffmpegFolder\ffmpeg.exe"
 
+    # Web server
+    $global:WebServer_enabled = if ($null -ne $configContent.WebServer.enabled) { [bool]$configContent.WebServer.enabled } else { $false }
+    $global:WebServer_port    = if ($configContent.WebServer.port)               { [int]$configContent.WebServer.port }    else { 8080 }
+
    
     # Charge of logging configuration variables with validation and default values
     #get computer name
