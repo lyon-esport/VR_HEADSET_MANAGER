@@ -1,0 +1,250 @@
+/* ── Shared topbar CSS - included by all VR Headset Manager pages ── */
+
+:root {
+  --bar-h:              46px;
+  --bar-bg:             #161616;
+  --bar-border:         #252525;
+  --brand-color:        #60a5fa;
+  --sep-color:          #252525;
+  --filter-active-bg:   #3b82f6;
+  --filter-active-txt:  #fff;
+  --filter-idle-bg:     #1e1e1e;
+  --filter-idle-txt:    #555;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  height: var(--bar-h);
+  background: var(--bar-bg);
+  border-bottom: 1px solid var(--bar-border);
+  position: sticky;
+  top: 0;
+  z-index: 200;
+}
+
+.topbar-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px;
+  flex-shrink: 0;
+  color: var(--brand-color);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  text-decoration: none;
+}
+.topbar-brand:hover { color: #93c5fd; }
+
+.v-sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--sep-color);
+  flex-shrink: 0;
+  margin: 8px 0;
+}
+
+.topbar-title {
+  padding: 0 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #444;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.topbar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: var(--bar-h);
+  padding: 0 16px;
+  background: transparent;
+  border: none;
+  border-left: 1px solid var(--bar-border);
+  color: #555;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  font-family: inherit;
+  text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+}
+.topbar-btn:hover { background: #1e1e1e; color: #aaa; }
+
+/* ── Topbar filter buttons (center section) ── */
+.topbar-filters {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 14px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+.filter-label {
+  color: #3a3a3a;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-right: 4px;
+  flex-shrink: 0;
+}
+.filter-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 20px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--filter-idle-bg);
+  color: var(--filter-idle-txt);
+  transition: background 0.15s, color 0.15s;
+  user-select: none;
+  white-space: nowrap;
+  font-family: inherit;
+}
+.filter-btn:hover { background: #242424; color: #888; }
+.filter-btn.active {
+  background: var(--filter-active-bg);
+  color: var(--filter-active-txt);
+  border-color: rgba(255,255,255,0.10);
+}
+.filter-btn.active.offline {
+  background: #4a2800;
+  color: #a06030;
+  border-color: #6b3a00;
+}
+.filter-btn.offline { opacity: 0.45; }
+
+/* ── Topbar right: actions / Config dropdown ── */
+:root {
+  --drop-bg:            #1c1c1e;
+  --drop-border:        #2e2e2e;
+  --drop-item-hover:    #262628;
+  --drop-label-color:   #3a3a3a;
+}
+
+.actions-menu { position: relative; }
+.actions-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: var(--bar-h);
+  padding: 0 16px;
+  background: transparent;
+  border: none;
+  border-left: 1px solid var(--bar-border);
+  color: #555;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+  font-family: inherit;
+}
+.actions-btn:hover { background: #1e1e1e; color: #aaa; }
+.actions-btn.open  { background: #1e1e1e; color: #ddd; }
+.chevron { transition: transform 0.15s; opacity: 0.4; }
+.actions-btn.open .chevron { transform: rotate(180deg); }
+
+.actions-dropdown {
+  display: none;
+  position: absolute;
+  top: calc(var(--bar-h) + 1px);
+  right: 0;
+  min-width: 210px;
+  background: var(--drop-bg);
+  border: 1px solid var(--drop-border);
+  border-radius: 0 0 6px 6px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+  z-index: 300;
+}
+.actions-dropdown.open { display: block; }
+.drop-section {
+  padding: 5px 0;
+  border-bottom: 1px solid var(--drop-border);
+}
+.drop-section:last-child { border-bottom: none; }
+.drop-section-label {
+  padding: 4px 13px 3px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.10em;
+  color: var(--drop-label-color);
+}
+.drop-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 13px;
+  background: transparent;
+  border: none;
+  color: #888;
+  font-size: 13px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+  text-decoration: none;
+}
+.drop-item:hover { background: var(--drop-item-hover); color: #ddd; }
+.drop-item-icon { opacity: 0.45; flex-shrink: 0; }
+.drop-item .soon {
+  margin-left: auto;
+  font-size: 10px;
+  opacity: 0.3;
+  font-style: italic;
+}
+.drop-item.disabled { opacity: 0.35; cursor: default; pointer-events: none; }
+
+/* ── Compact dropdown (shown when topbar overflows on narrow viewports) ── */
+.headset-compact { display: none; position: relative; flex-shrink: 0; }
+.headset-compact-btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: var(--bar-h); padding: 0 14px;
+  background: transparent; border: none;
+  border-right: 1px solid var(--bar-border);
+  color: #555; font-size: 12px; font-weight: 600; cursor: pointer;
+  white-space: nowrap; font-family: inherit;
+  transition: background 0.15s, color 0.15s;
+}
+.headset-compact-btn:hover { background: #1e1e1e; color: #aaa; }
+.headset-compact-btn.open  { background: #1e1e1e; color: #ddd; }
+.headset-compact-panel {
+  display: none; position: absolute; top: calc(var(--bar-h) + 1px); left: 0;
+  min-width: 190px; background: var(--drop-bg);
+  border: 1px solid var(--drop-border); border-radius: 0 0 6px 6px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.6); z-index: 300; padding: 4px 0;
+}
+.headset-compact-panel.open { display: block; }
+.headset-compact-item {
+  display: flex; align-items: center; gap: 9px;
+  width: 100%; padding: 7px 13px; background: transparent; border: none;
+  color: #888; font-size: 13px; font-family: inherit;
+  text-align: left; cursor: pointer; transition: background 0.1s, color 0.1s;
+}
+.headset-compact-item:hover { background: var(--drop-item-hover); color: #ddd; }
+.headset-compact-item .item-check { width: 13px; flex-shrink: 0; opacity: 0; }
+.headset-compact-item.checked .item-check { opacity: 1; color: var(--filter-active-bg); }
+.headset-compact-item.checked.offline .item-check { color: #a06030; }
+.headset-compact-divider { height: 1px; background: var(--drop-border); margin: 3px 0; }
+/* Hide filter bar and show compact button when topbar is too narrow */
+.topbar.compact .topbar-filters { display: none; }
+.topbar.compact .headset-compact { display: flex; align-items: center; }
