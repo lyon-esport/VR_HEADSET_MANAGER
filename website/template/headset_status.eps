@@ -1,22 +1,22 @@
 <!doctype html>
-<html lang="fr">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta http-equiv="refresh" content="5">
-    <title>VR Headset - Status</title>
+    <title><%= $name  %> VR Headset - Status</title>
 
     <style>
       :root {
-        --text: #e5e7eb;     /* gris clair */
-        --accent: #60a5fa;   /* bleu */
-        --muted: #94a3b8;    /* gris bleuté */
+        --text: #e5e7eb;     /* light gray */
+        --accent: #60a5fa;   /* blue */
+        --muted: #94a3b8;    /* blue-gray */
       }
       * { box-sizing: border-box; }
       html, body {
         height: 100%;
         margin: 0;
-        background: transparent !important; /* clé pour OBS */
+        background: transparent !important; /* key for OBS */
         color: var(--text);
         font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
       }
@@ -28,7 +28,7 @@
       }
       .card {
         width: min(720px, 92vw);
-        background: transparent;  /* aucun fond pour l'incrustation */
+        background: transparent;  /* no background for overlay */
         border: none;
         border-radius: 16px;
         padding: 28px 32px;
@@ -54,7 +54,7 @@
         text-shadow: 0 2px 6px rgba(0,0,0,0.35);
       }
 
-      /* Styles communs */
+      /* Common styles */
       .batt, .temp {
         display: inline-flex;
         align-items: center;
@@ -62,64 +62,129 @@
         padding: 10px 14px;
         border-radius: 999px;
         border: 1px solid transparent;
-        color: #fff; /* texte toujours blanc par défaut */
+        color: #fff; /* text always white by default */
       }
       .batt .emoji, .temp .emoji {
         filter: drop-shadow(0 2px 4px rgba(0,0,0,0.25));
       }
       .muted { color: var(--muted); font-weight: 500; }
 
-      /* États batterie (fond/bordure uniquement, texte reste blanc) */
-      .batt--low {                       /* <= 30% : rouge */
+      /* Battery states (background/border only, text stays white) */
+      .batt--low {                       /* <= 30%: red */
         background: rgba(239, 68, 68, 0.18);
         border-color: rgba(239, 68, 68, 0.35);
 		color: red;
       }
-      .batt--mid {                       /* 31–59% : orange */
+      .batt--mid {                       /* 31-59%: orange */
         background: rgba(245, 158, 11, 0.18);
         border-color: rgba(245, 158, 11, 0.35);
 		color: orange;
       }
-      .batt--ok {                        /* >= 60% : bleu (style actuel) */
+      .batt--ok {                        /* >= 60%: blue (current style) */
         background: rgba(96, 165, 250, 0.12);
         border-color: rgba(96, 165, 250, 0.25);
 		color: white;
       }
 
-      /* Température normale (bleu) */
+      /* Normal temperature (blue) */
       .temp {
         background: rgba(96,165,250,0.12);
         border-color: rgba(96,165,250,0.25);
 		color: white;
       }
-      /* Température chaude > 50 °C : fond + texte rouges */
+      /* Hot temperature > 50 °C: red background + text */
       .temp--hot {
         background: rgba(239, 68, 68, 0.20);
         border-color: rgba(239, 68, 68, 0.45);
         color: red;
       }
+
+      /* Device icon row: left controller, headset, right controller */
+      .device-icons {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 20px;
+        margin: 10px 0 14px;
+      }
+      .device-icon {
+        height: clamp(36px, 5.5vw, 52px);
+        width: auto;
+        filter: drop-shadow(0 2px 4px rgba(0,0,0,0.35));
+      }
     </style>
   </head>
   <body>
     <div class="wrap">
-      <main class="card" role="main" aria-label="Statut <%= $name %>">
+      <main class="card" role="main" aria-label="Status <%= $name %>">
         <h1 class="title"><%= $name %>
            <span class="muted">
-            <% if ($ping -eq $true) { %>✅<% } else { %>☠️<% } %>
+            <% if (-not $ping) { %>☠️<% } elseif ( ($temp -gt $temperature_highLevel) -or ($battery -lt $headset_battery_criticalLevel) -or (-not $charging) ) { %>⚠️<% } else { %>✅<% } %>
         </span>
         </h1>
+<%
+  # Determine headset icon color based on ping and battery level
+  if (-not $ping) {
+    $headsetIconColor = "UNAVAILABLE"
+  } elseif ($battery -eq "-") {
+    $headsetIconColor = "WHITE"
+  } elseif ($battery -lt $headset_battery_criticalLevel) {
+    $headsetIconColor = "RED"
+  } elseif ($battery -lt $headset_battery_warningLevel) {
+    $headsetIconColor = "ORANGE"
+  } else {
+    $headsetIconColor = "GREEN"
+  }
+
+  # Determine left controller icon color based on battery level
+  if ($battery_ctrl_left -eq "-") {
+    $ctrlLeftColor = "GREY"
+  } elseif ($battery_ctrl_left -lt $controllers_battery_criticalLevel) {
+    $ctrlLeftColor = "RED"
+  } elseif ($battery_ctrl_left -lt $controllers_battery_warningLevel) {
+    $ctrlLeftColor = "ORANGE"
+  } else {
+    $ctrlLeftColor = "GREEN"
+  }
+
+  # Determine right controller icon color based on battery level
+  if ($battery_ctrl_right -eq "-") {
+    $ctrlRightColor = "GREY"
+  } elseif ($battery_ctrl_right -lt $controllers_battery_criticalLevel) {
+    $ctrlRightColor = "RED"
+  } elseif ($battery_ctrl_right -lt $controllers_battery_warningLevel) {
+    $ctrlRightColor = "ORANGE"
+  } else {
+    $ctrlRightColor = "GREEN"
+  }
+
+  # URL-encode model name for use in asset path (e.g., 'Quest 3' -> 'Quest%203')
+  $assetModelPath = if ($model -and $model -ne "-") { [System.Uri]::EscapeDataString($model) } else { "" }
+%>
+<% if ($assetModelPath) { %>
+        <div class="device-icons" aria-label="Device hardware status">
+          <img src="assets/<%= $assetModelPath %>/Ctrl_Left_<%= $ctrlLeftColor %>.png"
+               alt="Left Controller - <%= $ctrlLeftColor %>" class="device-icon" />
+          <img src="assets/<%= $assetModelPath %>/Headset_<%= $headsetIconColor %>.png"
+               alt="Headset - <%= $headsetIconColor %>" class="device-icon" />
+          <img src="assets/<%= $assetModelPath %>/Ctrl_Right_<%= $ctrlRightColor %>.png"
+               alt="Right Controller - <%= $ctrlRightColor %>" class="device-icon" />
+        </div>
+<% } %>
         <div class="values" aria-live="polite">
-          <span class="batt" aria-label="Batterie en pourcent">
-            <span class="emoji" aria-hidden="true"><%= $battery_emoji %>
-            
+          <span class="batt" aria-label="Battery percentage">
+            <span class="emoji" aria-hidden="true">
+            <% if ($battery -lt $headset_battery_criticalLevel) { %>🪫<% } else { %>🔋<% } %>
             </span>
             <strong><%= $battery %> %</strong>
-            <span class="muted"><%= $charging_emoji %></span>
+            <span class="muted">
+              <% if ($charging) { %>⚡<% } else { %>🚫<% } %>
+            </span>
             
           </span>
-          <span class="temp" aria-label="Température en Celsius">
+          <span class="temp" aria-label="Temperature in Celsius">
             <span class="emoji" aria-hidden="true">
-              <%= $temp_emoji %>
+              <% if ($temp -gt $temperature_highLevel) { %>🔥<% } else { %>❄️<% } %>
             </span>
             <strong><%= $temp %>&nbsp;°C</strong>
           </span>
@@ -140,12 +205,12 @@
 
         batt.classList.remove('batt--low', 'batt--mid', 'batt--ok');
 
-        if (num <= 30) {
-          batt.classList.add('batt--low');   // rouge
-        } else if (num < 60) {
+        if (num <= <%= $headset_battery_criticalLevel %>) {
+          batt.classList.add('batt--low');   // red
+        } else if (num < <%= $headset_battery_warningLevel %>) {
           batt.classList.add('batt--mid');   // orange
         } else {
-          batt.classList.add('batt--ok');    // bleu
+          batt.classList.add('batt--ok');    // blue
         }
       }
 
@@ -160,16 +225,16 @@
         const t = parseInt((strong.textContent || '').replace(/\D/g, ''), 10);
         if (isNaN(t)) return;
 
-        temp.classList.toggle('temp--hot', t > 50);
+        temp.classList.toggle('temp--hot', t > <%= $temperature_highLevel %> );
       }
 
-      // Au chargement
+      // On load
       document.addEventListener('DOMContentLoaded', () => {
         applyBatteryClass();
         applyTempClass();
       });
 
-      // Observer les changements dynamiques
+      // Watch for dynamic changes
       const battTarget = document.querySelector('.batt strong');
       if (battTarget) {
         const moBatt = new MutationObserver(applyBatteryClass);

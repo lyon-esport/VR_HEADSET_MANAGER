@@ -114,6 +114,67 @@ try {
         $request  = $context.Request
         $response = $context.Response
 
+        # CORS preflight
+        if ($request.HttpMethod -eq 'OPTIONS') {
+            $response.Headers.Add('Access-Control-Allow-Origin', '*')
+            $response.Headers.Add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+            $response.Headers.Add('Access-Control-Allow-Headers', 'Content-Type')
+            $response.StatusCode = 204
+            $response.Close()
+            continue
+        }
+
+        # API: POST /api/autorestart  body: {"name":"Q3_BLUE","value":true}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/autorestart') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body    = $reader.ReadToEnd()
+                $reader.Close()
+                $json    = $body | ConvertFrom-Json
+
+                # Validate input - name must be a simple identifier (no path chars)
+                $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+
+                $csvPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_headsets.csv"))
+                $dataRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data"))
+                if (-not $csvPath.StartsWith($dataRoot)) { throw "Path traversal denied" }
+
+                $rows = Import-Csv -Path $csvPath
+                $updated = $false
+                foreach ($row in $rows) {
+                    $dn = ($row.Name -replace ' ', '_')
+                    if ($dn -eq $safeName) {
+                        $row.scrcpy_AutoRestart = if ([string]$json.value -eq 'True' -or [string]$json.value -eq 'true') { 'True' } else { 'False' }
+                        $updated = $true
+                        break
+                    }
+                }
+                if ($updated) {
+                    $rows | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8 -Force
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                } else {
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"not found"}')
+                }
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
         try {
             # Resolve URL path to a file.
             # /data/*.csv  -> served from <ScriptPath>\data\  (read-only CSV export)

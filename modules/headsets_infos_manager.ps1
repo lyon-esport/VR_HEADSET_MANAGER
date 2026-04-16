@@ -181,6 +181,7 @@ function Get-KnownHeadsetInfos {
         ADBWifi         = $false
         Battery         = "-"
         Charging        = "-"
+        ChargingWattage = "-"
         Temp            = "-"
         BatteryControllerLeft  = "-"
         BatteryControllerRight = "-"
@@ -231,6 +232,7 @@ function Get-KnownHeadsetInfos {
         if ($batteryInfo) {
             if ($null -ne $batteryInfo.Level)    { $result.Battery  = "$($batteryInfo.Level) %" }
             if ($null -ne $batteryInfo.Charging) { $result.Charging = $batteryInfo.Charging }
+            if ($null -ne $batteryInfo.MaxChargingWattageW -and $batteryInfo.Charging -eq $true) { $result.ChargingWattage = "$($batteryInfo.MaxChargingWattageW)" }
             if ($null -ne $batteryInfo.TempC)    { $result.Temp     = $batteryInfo.TempC.ToString("0.0") }
             $result.BatteryControllerLeft  = if ($null -ne $batteryInfo.BatteryControllerLeft)  { "$($batteryInfo.BatteryControllerLeft) %" }  else { "-" }
             $result.BatteryControllerRight = if ($null -ne $batteryInfo.BatteryControllerRight) { "$($batteryInfo.BatteryControllerRight) %" } else { "-" }
