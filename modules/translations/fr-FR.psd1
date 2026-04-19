@@ -66,6 +66,7 @@
     DisconnectFailed = "Echec de la deconnexion des peripheriques ADB : {0}"
     HeadsetRebooting = "Redemarrage du casque {0}..."
     HeadsetShuttingDown = "Extinction du casque {0}..."
+    HeadsetRecentering = "Recentrage de la vue du casque {0}..."
     AdbWifiAlreadyConnected = "ADB WiFi deja connecte a {0}"
     AdbWifiConnecting = "Connexion au casque {0} via ADB WiFi..."
     AdbWifiPingFailed = "Le casque {0} n'est pas joignable sur le reseau (ping echoue)"

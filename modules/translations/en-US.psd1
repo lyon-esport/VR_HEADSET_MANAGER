@@ -66,6 +66,7 @@
     DisconnectFailed = "Failed to disconnect ADB devices: {0}"
     HeadsetRebooting = "Rebooting headset {0}..."
     HeadsetShuttingDown = "Shutting down headset {0}..."
+    HeadsetRecentering = "Triggering view recenter on headset {0}..."
     AdbWifiAlreadyConnected = "ADB WiFi already connected to {0}"
     AdbWifiConnecting = "Connecting to headset {0} via ADB WiFi..."
     AdbWifiPingFailed = "Headset {0} is not reachable on the network (ping failed)"
