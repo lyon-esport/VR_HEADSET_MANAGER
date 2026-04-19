@@ -13,7 +13,7 @@
 	},
   "Logging":{
 	"Comment-possibleValues": "DEBUG,INFO,SUCCESS,WARNING,ERROR,NONE",
-    "debugLevelToFile": "INFO",
+    "debugLevelToFile": "DEBUG",
     "debugLevelToConsole": "INFO",
 	"logFile": "logfile.txt"
   },

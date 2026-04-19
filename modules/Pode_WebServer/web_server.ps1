@@ -10,7 +10,9 @@
 param(
     [string]$ScriptPath,
     [string]$ConfigFilePath,
-    [string]$PidFile
+    [string]$PidFile,
+    [string]$LogFolder,
+    [string]$LogFile
 )
 
 # Resolve project root: prefer passed -ScriptPath, otherwise navigate up from this script's location
@@ -23,6 +25,23 @@ if (-not $ConfigFilePath) {
     $ConfigFilePath = Join-Path $ScriptPath "config\config.json"
 }
 
+# Set globals needed by Write-Log and other modules before dot-sourcing scripts_init
+$global:ScriptPath      = $ScriptPath
+$global:ConfigFilePath  = $ConfigFilePath
+if ($LogFolder) { $global:logFolder = $LogFolder }
+if ($LogFile)   { $global:logFile   = $LogFile   }
+
+# Import all modules (same pattern as VRMonitor job in headsets_infos_manager.ps1)
+# Flag prevents scripts_init from launching another web server or running computer setup
+$global:IsWebServerProcess = $true
+$scripts_init = Join-Path $ScriptPath "modules\scripts_init.ps1"
+if (Test-Path $scripts_init) {
+    . $scripts_init
+} else {
+    Write-Host "[WebServer] ERROR: scripts_init.ps1 not found at: $scripts_init" -ForegroundColor Red
+    exit 1
+}
+
 $websitePath = Join-Path $ScriptPath "website"
 
 # Read port, enabled flag, and ADB settings from config.json
@@ -30,6 +49,8 @@ $port       = 8080
 $enabled    = $true
 $adbPath    = $null
 $adbPort    = 5555
+$apkPath    = $null
+$apkPackage = 'tdg.oculuswirelessadb'
 try {
     $cfg = Get-Content $ConfigFilePath -Raw -ErrorAction Stop | ConvertFrom-Json
     if ($null -ne $cfg.WebServer.port)        { $port    = [int]$cfg.WebServer.port }
@@ -38,17 +59,22 @@ try {
         $adbPath = Join-Path (Join-Path $ScriptPath 'sources') $cfg.ADB.folder | Join-Path -ChildPath 'adb.exe'
     }
     if ($null -ne $cfg.ADB.adbPort_default)   { $adbPort = [int]$cfg.ADB.adbPort_default }
+    if ($cfg.apk.adbWirelessActivatorFolder -and $cfg.apk.adbWirelessActivatorApk) {
+        $apkPath = Join-Path (Join-Path $ScriptPath 'sources') $cfg.apk.adbWirelessActivatorFolder |
+                   Join-Path -ChildPath $cfg.apk.adbWirelessActivatorApk
+    }
+    if ($cfg.apk.adbWirelessActivatorPackageName) { $apkPackage = $cfg.apk.adbWirelessActivatorPackageName }
 } catch {
-    Write-Host "[WebServer] Could not read config.json, using default port $port." -ForegroundColor Yellow
+    Write-Log ($msg.WebServerConfigReadFailed -f $port) -Level WARNING
 }
 
 if (-not $enabled) {
-    Write-Host "[WebServer] Web server is disabled in config.json. Exiting." -ForegroundColor Yellow
+    Write-Log $msg.WebServerDisabled -Level WARNING
     exit 0
 }
 
 if (-not (Test-Path $websitePath)) {
-    Write-Host "[WebServer] ERROR: website folder not found at: $websitePath" -ForegroundColor Red
+    Write-Log ($msg.WebServerWebsiteFolderNotFound -f $websitePath) -Level ERROR
     exit 1
 }
 
@@ -79,17 +105,15 @@ $lanIPs = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
         $_.IPAddress -match '^192\.168\.'
     }).IPAddress
 
-Write-Host ""
-Write-Host "[WebServer] Starting on port $port..." -ForegroundColor Cyan
-Write-Host "[WebServer] Serving files from: $websitePath" -ForegroundColor Cyan
+Write-Log ($msg.WebServerStartingOnPort -f $port) -Level INFO
+Write-Log ($msg.WebServerServingFrom -f $websitePath) -Level DEBUG
 if ($lanIPs) {
     foreach ($ip in $lanIPs) {
-        Write-Host "[WebServer]   http://${ip}:${port}/video_monitor.html" -ForegroundColor Green
+        Write-Log ($msg.WebServerLinkLine -f $ip, $port) -Level INFO
     }
 } else {
-    Write-Host "[WebServer] WARNING: No RFC 1918 LAN address found. Server listening on all interfaces." -ForegroundColor Yellow
+    Write-Log $msg.WebServerNoLanAddress -Level WARNING
 }
-Write-Host ""
 
 # Write own PID to lock file so scripts_init.ps1 can detect us across reloads
 if ($PidFile) {
@@ -104,14 +128,14 @@ $listener.Prefixes.Add("http://+:$port/")
 try {
     $listener.Start()
 } catch {
-    Write-Host "[WebServer] ERROR: Failed to start listener on port $port." -ForegroundColor Red
-    Write-Host "[WebServer] Ensure the URL ACL is registered (run the app once as admin, or see computer_setup.ps1)." -ForegroundColor Yellow
-    Write-Host "[WebServer] $_" -ForegroundColor Red
+    Write-Log ($msg.WebServerListenerFailed -f $port) -Level ERROR
+    Write-Log $msg.WebServerUrlAclHint -Level WARNING
+    Write-Log ($msg.WebServerListenerError -f $_) -Level ERROR
     if ($PidFile -and (Test-Path $PidFile)) { Remove-Item $PidFile -Force -ErrorAction SilentlyContinue }
     exit 1
 }
 
-Write-Host "[WebServer] Listening on http://+:$port/ - press Ctrl+C to stop." -ForegroundColor Green
+Write-Log ($msg.WebServerListening -f $port) -Level SUCCESS
 
 try {
     while ($listener.IsListening) {
@@ -705,6 +729,238 @@ try {
             continue
         }
 
+        # API: GET /api/detectusbheadset  - detects a USB-connected ADB device and returns its WiFi IP
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/detectusbheadset') {
+            try {
+                $result = @{ found = $false; ip = ''; model = '' }
+                if ($adbPath -and (Test-Path $adbPath)) {
+                    $devices = & $adbPath devices 2>$null | Where-Object {
+                        $_ -match "`tdevice$" -and $_ -notmatch ':'
+                    }
+                    $firstDevice = @($devices) | Select-Object -First 1
+                    if ($firstDevice) {
+                        $deviceId = ($firstDevice -split "`t")[0].Trim()
+                        $ipOutput = & $adbPath -s $deviceId shell ip -f inet addr show wlan0 2>$null
+                        $ip = ''
+                        foreach ($line in $ipOutput) {
+                            if ($line -match 'inet\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/') {
+                                $ip = $Matches[1]; break
+                            }
+                        }
+                        $model = ((& $adbPath -s $deviceId shell getprop ro.product.model 2>$null) -join '').Trim()
+                        if ($ip -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') {
+                            $result = @{ found = $true; ip = $ip; model = $model }
+                        }
+                    }
+                }
+                $jsonOut   = ConvertTo-Json $result -Compress
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonOut)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"found":false}')
+                    $response.StatusCode      = 200
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/addheadset  body: {"name":"Q3 Blue","ip":"192.168.1.243"}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/addheadset') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body    = $reader.ReadToEnd()
+                $reader.Close()
+                $json    = $body | ConvertFrom-Json
+
+                # Validate name: letters, numbers, spaces, hyphens, underscores (1-40 chars)
+                $safeName = [regex]::Match($json.name.Trim(), '^[\w\s\-]{1,40}$').Value
+                if (-not $safeName) { throw "INVALID_NAME" }
+
+                # Validate IP format and octet range
+                $safeIp = [regex]::Match($json.ip, '^(\d{1,3}\.){3}\d{1,3}$').Value
+                if (-not $safeIp) { throw "INVALID_IP" }
+                $octets = $safeIp -split '\.'
+                if ($octets | Where-Object { [int]$_ -gt 255 }) { throw "INVALID_IP" }
+
+                $csvPath  = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_headsets.csv"))
+                $dataRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data"))
+                if (-not $csvPath.StartsWith($dataRoot)) { throw "Path traversal denied" }
+
+                $rows = @()
+                if (Test-Path $csvPath) { $rows = @(Import-Csv -Path $csvPath) }
+
+                if ($rows | Where-Object { $_.IPAddress -eq $safeIp })   { throw "IP_DUPLICATE" }
+                if ($rows | Where-Object { $_.Name      -eq $safeName }) { throw "NAME_DUPLICATE" }
+
+                $newId  = if ($rows.Count -gt 0) { $rows.Count + 1 } else { 1 }
+                $newRow = [PSCustomObject]@{
+                    ID                 = $newId
+                    Name               = $safeName
+                    IPAddress          = $safeIp
+                    scrcpy_AutoRestart = 'False'
+                    Record             = 'False'
+                    ScrcpyProfile      = 'R-N-45-20'
+                    Model              = ''
+                    SerialNumber       = ''
+                }
+                $rows += $newRow
+                $rows | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8 -Force
+
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                $errMsg = switch -Regex ($_.Exception.Message) {
+                    'IP_DUPLICATE'   { '{"ok":false,"error":"This IP address is already registered."}' }
+                    'NAME_DUPLICATE' { '{"ok":false,"error":"A headset with this name already exists."}' }
+                    'INVALID_NAME'   { '{"ok":false,"error":"Invalid name. Use letters, numbers, spaces or hyphens."}' }
+                    'INVALID_IP'     { '{"ok":false,"error":"Invalid IP address."}' }
+                    default          { '{"ok":false,"error":"Server error."}' }
+                }
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes($errMsg)
+                    $response.StatusCode      = 200
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: GET /api/detectusbheadset  - detects a USB-connected ADB device and returns its WiFi IP
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/detectusbheadset') {
+            try {
+                $result = @{ found = $false; ip = ''; model = '' }
+                if ($adbPath -and (Test-Path $adbPath)) {
+                    $devices = & $adbPath devices 2>$null | Where-Object {
+                        $_ -match "`tdevice$" -and $_ -notmatch ':'
+                    }
+                    $firstDevice = @($devices) | Select-Object -First 1
+                    if ($firstDevice) {
+                        $deviceId = ($firstDevice -split "`t")[0].Trim()
+                        $ipOutput = & $adbPath -s $deviceId shell ip -f inet addr show wlan0 2>$null
+                        $ip = ''
+                        foreach ($line in $ipOutput) {
+                            if ($line -match 'inet\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/') {
+                                $ip = $Matches[1]; break
+                            }
+                        }
+                        $model = ((& $adbPath -s $deviceId shell getprop ro.product.model 2>$null) -join '').Trim()
+                        if ($ip -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') {
+                            $result = @{ found = $true; ip = $ip; model = $model }
+                        }
+                    }
+                }
+                $jsonOut   = ConvertTo-Json $result -Compress
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonOut)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"found":false}')
+                    $response.StatusCode      = 200
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/addheadset  body: {"name":"Q3 Blue","ip":"192.168.1.243"}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/addheadset') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body    = $reader.ReadToEnd()
+                $reader.Close()
+                $json    = $body | ConvertFrom-Json
+
+                # Validate name: letters, numbers, spaces, hyphens, underscores (1-40 chars)
+                $safeName = [regex]::Match($json.name.Trim(), '^[\w\s\-]{1,40}$').Value
+                if (-not $safeName) { throw "INVALID_NAME" }
+
+                # Validate IP format and octet range
+                $safeIp = [regex]::Match($json.ip, '^(\d{1,3}\.){3}\d{1,3}$').Value
+                if (-not $safeIp) { throw "INVALID_IP" }
+                $octets = $safeIp -split '\.'
+                if ($octets | Where-Object { [int]$_ -gt 255 }) { throw "INVALID_IP" }
+
+                $csvPath  = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_headsets.csv"))
+                $dataRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data"))
+                if (-not $csvPath.StartsWith($dataRoot)) { throw "Path traversal denied" }
+
+                $rows = @()
+                if (Test-Path $csvPath) { $rows = @(Import-Csv -Path $csvPath) }
+
+                if ($rows | Where-Object { $_.IPAddress -eq $safeIp })   { throw "IP_DUPLICATE" }
+                if ($rows | Where-Object { $_.Name      -eq $safeName }) { throw "NAME_DUPLICATE" }
+
+                $newId  = if ($rows.Count -gt 0) { $rows.Count + 1 } else { 1 }
+                $newRow = [PSCustomObject]@{
+                    ID                 = $newId
+                    Name               = $safeName
+                    IPAddress          = $safeIp
+                    scrcpy_AutoRestart = 'False'
+                    Record             = 'False'
+                    ScrcpyProfile      = 'R-N-45-20'
+                    Model              = ''
+                    SerialNumber       = ''
+                }
+                $rows += $newRow
+                $rows | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8 -Force
+
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                $errMsg = switch -Regex ($_.Exception.Message) {
+                    'IP_DUPLICATE'   { '{"ok":false,"error":"This IP address is already registered."}' }
+                    'NAME_DUPLICATE' { '{"ok":false,"error":"A headset with this name already exists."}' }
+                    'INVALID_NAME'   { '{"ok":false,"error":"Invalid name. Use letters, numbers, spaces or hyphens."}' }
+                    'INVALID_IP'     { '{"ok":false,"error":"Invalid IP address."}' }
+                    default          { '{"ok":false,"error":"Server error."}' }
+                }
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes($errMsg)
+                    $response.StatusCode      = 200
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
         try {
             # Resolve URL path to a file.
             # /data/*.csv  -> served from <ScriptPath>\data\  (read-only CSV export)
@@ -763,5 +1019,5 @@ try {
     if ($PidFile -and (Test-Path $PidFile)) {
         Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
     }
-    Write-Host "[WebServer] Stopped." -ForegroundColor Yellow
+    Write-Log $msg.WebServerStopped -Level INFO
 }

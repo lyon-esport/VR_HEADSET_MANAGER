@@ -195,7 +195,9 @@ function Invoke-AppShutdown {
 
 
 # Run all computer-level setup tasks (firewall rules, service auto-starts, etc.)
-Initialize-ComputerSetup
+if (-not $global:IsWebServerProcess) {
+    Initialize-ComputerSetup
+}
 
 function Start-WebServer {
     param(
@@ -265,14 +267,20 @@ function Start-WebServer {
             "-ConfigFilePath",
             "`"$ConfigFilePath`"",
             "-PidFile",
-            "`"$webServerPidFile`""
+            "`"$webServerPidFile`"",
+            "-LogFolder",
+            "`"$global:logFolder`"",
+            "-LogFile",
+            "`"$global:logFile`""
         ) -WindowStyle Hidden -PassThru
         Write-Log ($msg.WebServerStarted -f $global:WebServer_port) -Level INFO
     }
 }
 
 # Start the Pode web server in a separate PowerShell window (guarded: skip if already running)
-Start-WebServer
+if (-not $global:IsWebServerProcess) {
+    Start-WebServer
+}
 
 
 
