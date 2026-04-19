@@ -415,6 +415,12 @@ function Remove-Headset {
             Remove-Item $cachePath -Force -ErrorAction SilentlyContinue
             Write-Log ("Deleted installed apps cache: $cachePath") -Level DEBUG
         }
+        # Delete the per-headset favorites file
+        $favPath = Join-Path $global:ScriptPath "data\$(Convert-Displayname $headsetToRemove.Name)_favorite_apps.csv"
+        if (Test-Path $favPath) {
+            Remove-Item $favPath -Force -ErrorAction SilentlyContinue
+            Write-Log ("Deleted favorites cache: $favPath") -Level DEBUG
+        }
     } else {
         Write-Log ($msg.HeadsetIdNotFound -f $ID) -Level ERROR
     }
