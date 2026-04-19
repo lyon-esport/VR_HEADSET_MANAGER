@@ -135,7 +135,6 @@ function Start-VRMonitor {
                     Update-HeadsetField -ID $headset.ID -Field "SerialNumber" -NewValue $fetchedSerial
                 }
 
-                # Update installed apps cache if ADB is reachable
                 if ($headsetInfo.ADBWifi -eq $true) {
                     Update-InstalledAppsCache -headsetName $headset.Name -headsetIP $headset.IPAddress
                 }
@@ -220,20 +219,23 @@ function Get-KnownHeadsetInfos {
     
     # 3. Get device info via ADB
     try {
-        # Connect to device
-        & $adb connect "${IPAddress}:$ADBPort" | Out-Null
-        
-        # Get device model - If it takes too long, it will timeout and go to catch
-        
-        $model = & $adb -s "${IPAddress}:$ADBPort" shell "getprop ro.product.model"
+        # Connect to device and get a device object for subsequent calls
+        $device = Get-AdbWifiDevice -headsetIP $IPAddress -AdbPort $ADBPort -adb $adb
+        if (-not $device) {
+            $result.ADBWifi = $false
+            return $result
+        }
+
+        # Get device model
+        $model = & $adb -s $device.DeviceId shell "getprop ro.product.model"
         if ($model) { $result.Model = $model.Trim() }
-        
+
         # Get serial number
-        $serial = & $adb -s "${IPAddress}:$ADBPort" shell "getprop ro.serialno" 
+        $serial = & $adb -s $device.DeviceId shell "getprop ro.serialno"
         if ($serial) { $result.SerialNumber = $serial.Trim() }
-        
+
         # Get battery info (headset + controllers)
-        $batteryInfo = Get-HeadsetBatteryStatus -headsetIP $IPAddress -adb $adb -AdbPort $ADBPort
+        $batteryInfo = Get-HeadsetBatteryStatus -Device $device -adb $adb
         if ($batteryInfo) {
             if ($null -ne $batteryInfo.Level)    { $result.Battery  = "$($batteryInfo.Level) %" }
             if ($null -ne $batteryInfo.Charging) { $result.Charging = $batteryInfo.Charging }
@@ -243,7 +245,7 @@ function Get-KnownHeadsetInfos {
             $result.BatteryControllerRight = if ($null -ne $batteryInfo.BatteryControllerRight) { "$($batteryInfo.BatteryControllerRight) %" } else { "-" }
         }
         # Get running app
-        $pkg = Get-HeadsetForegroundApp -headsetIP $IPAddress -adb $adb -AdbPort $ADBPort
+        $pkg = Get-HeadsetForegroundApp -Device $device -adb $adb
         if ($pkg) {
             $appInfo = Get-AppDisplayName -PackageName $pkg
             $result.RunningApp   = $appInfo.DisplayName
@@ -294,11 +296,13 @@ function Update-InstalledAppsCache {
     )
 
     try {
-        $cachePath   = Get-InstalledAppsCachePath -headsetName $headsetName
+        $cachePath    = Get-InstalledAppsCachePath -headsetName $headsetName
         $appNamesPath = Join-Path $global:ScriptPath "data\app_names.csv"
 
-        # Fetch third-party packages via ADB
-        $rawOutput = & $adb -s "${headsetIP}:$ADBPort" shell pm list packages -3 2>$null
+        # Connect (idempotent) and fetch third-party packages
+        $device = Get-AdbWifiDevice -headsetIP $headsetIP -AdbPort $ADBPort -adb $adb
+        if (-not $device) { return }
+        $rawOutput = & $adb -s $device.DeviceId shell pm list packages -3 2>$null
         $packages  = @($rawOutput | ForEach-Object { ($_ -replace '^package:', '').Trim() } | Where-Object { $_ -ne '' } | Sort-Object)
 
         if ($packages.Count -eq 0) { return }

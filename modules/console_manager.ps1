@@ -393,7 +393,8 @@ function Show-SubMenu-LaunchApp {
             [PSCustomObject]@{ PackageName = $_.PackageName; DisplayName = $_.DisplayName; IconUrl = $_.IconUrl }
         })
     } else {
-        $installedApps = @(Get-HeadsetInstalledApps -headsetIP $headset.IPAddress -ThirdPartyOnly)
+        $wifiDevice = Get-AdbWifiDevice -headsetIP $headset.IPAddress
+        $installedApps = if ($wifiDevice) { @(Get-HeadsetInstalledApps -Device $wifiDevice -ThirdPartyOnly) } else { @() }
     }
     if ($installedApps.Count -eq 0) {
         Write-Host $msg.LaunchAppNoApps -ForegroundColor Yellow
@@ -497,7 +498,8 @@ function Show-SubMenu-LaunchApp {
             }
             $targetApp = $displayList[$launchIdx]
             Write-Host ($msg.LaunchAppLaunching -f $targetApp.DisplayName, $headset.Name) -ForegroundColor Cyan
-            $ok = Invoke-HeadsetApp -headsetIP $headset.IPAddress -PackageName $targetApp.PackageName
+            $wifiDevice = Get-AdbWifiDevice -headsetIP $headset.IPAddress
+            $ok = if ($wifiDevice) { Invoke-HeadsetApp -Device $wifiDevice -PackageName $targetApp.PackageName } else { $false }
             if ($ok) {
                 Write-Host $msg.LaunchAppSuccess -ForegroundColor Green
             } else {

@@ -109,80 +109,78 @@ function Start-AdbServer {
 function Install-OculusWirelessAdbApk {
     <#
     .SYNOPSIS
-    Installs the WiFi ADB APK after verifying its presence
-    
+    Installs the WiFi ADB APK on a connected headset.
+
     .DESCRIPTION
-    - Checks if the APK is already installed
-    - Installs only if necessary
-    - Maintains the same critical permissions
+    - Accepts an optional $Device object (from Get-AdbUsbDevice or Get-AdbWifiDevice).
+    - If no $Device is supplied, auto-detects a USB-connected device.
+    - Checks if the APK is already installed, installs/reinstalls, grants permissions,
+      launches the app, and enables TCP/IP mode.
     #>
     param (
+        [PSCustomObject]$Device = $null,
         [string]$adb = $global:adbPath
     )
 
-    $apkPath = $global:ADBWirelessActivatorAPK
+    $apkPath     = $global:ADBWirelessActivatorAPK
     $packageName = $global:ADBWirelessActivatorPackageName
+
     # 1. Pre-flight verification
     if (-not (Test-Path $adb)) {
         Write-Log ($msg.ADBNotFound -f $global:adbFolder) -Level ERROR
         return $false
     }
-
     if (-not (Test-Path $apkPath)) {
         Write-Log ($msg.ApkNotFound -f $apkPath) -Level ERROR
         return $false
     }
 
-    # 2. Detect and verify headset connected via USB
-    #$devices = & $adbPath devices -l | Where-Object { $_ -match '\tdevice$' -and $_ -match '\tusb$' }
-
-    & $adb usb
-    $devices = & $adb devices | Where-Object { $_ -match '\tdevice$' } 
-    if (-not $devices) {
-        Write-Log ($msg.NoHeadsetDetected) -Level WARNING
-        return $false
+    # 2. Resolve device - auto-detect USB if not provided
+    if (-not $Device) {
+        & $adb usb 2>$null
+        $Device = Get-AdbUsbDevice -adb $adb
+        if (-not $Device) {
+            Write-Log ($msg.NoHeadsetDetected) -Level WARNING
+            return $false
+        }
     }
-    
-    $deviceId = ($devices -split '\t')[0]
-    # Retrieve the model:
-    $headsetModel = & $adb -s $deviceId shell getprop ro.product.model
+    $deviceId = $Device.DeviceId
+
+    # Retrieve the model
+    $headsetModel = (& $adb -s $deviceId shell getprop ro.product.model 2>$null).Trim()
     Write-Log ($msg.HeadsetDetected -f $headsetModel, $deviceId) -Level INFO
 
     try {
-
         # 3. Check for existing installation
-        $packageName = $global:ADBWirelessActivatorPackageName
         $isInstalled = & $adb -s $deviceId shell pm list packages $packageName
         if ($isInstalled) {
-            $version = (& $adb -s $deviceId shell dumpsys package $packageName| Select-String "versionName") -split '=' | Select-Object -Last 1
-            Write-Log ($msg.ApkAlreadyInstalled -f $packageName, $version) -Level INFO 
-            Write-Log ($msg.Reinstalling) -Level INFO 
-        }
-
-        else {
+            $version = (& $adb -s $deviceId shell dumpsys package $packageName | Select-String "versionName") -split '=' | Select-Object -Last 1
+            Write-Log ($msg.ApkAlreadyInstalled -f $packageName, $version) -Level INFO
+            Write-Log ($msg.Reinstalling) -Level INFO
+        } else {
             # 4. Installation if missing
             Write-Log ($msg.InstallingApk) -Level INFO
             & $adb -s $deviceId install -r $apkPath
             if ($LASTEXITCODE -ne 0) {
                 Write-Log ($msg.ApkInstallFailed) -Level ERROR
-                Pause
+                return $false
             }
         }
-        # Apply critical permissions
+
+        # 5. Apply critical permissions
         Write-Log ($msg.ConfiguringPermissions) -Level INFO
         & $adb -s $deviceId shell pm grant $packageName android.permission.WRITE_SECURE_SETTINGS
-        #& $adb -s $deviceId shell pm grant $packageName android.permission.READ_LOGS
-        # Launch app on headset
-        & $adb -s $deviceId shell am start -n tdg.oculuswirelessadb/.MainActivity
 
-        # 5. Activate TCP/IP (always)
+        # 6. Launch app on headset
+        & $adb -s $deviceId shell am start -n "$packageName/.MainActivity"
+
+        # 7. Activate TCP/IP
         Write-Log ($msg.ActivatingWifiAdbMode) -Level INFO
         & $adb -s $deviceId tcpip 5555
         Start-Sleep -Seconds 2
 
         return $true
-    }
-    catch {
+    } catch {
         Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
         return $false
     }
@@ -270,7 +268,7 @@ function Enable-WiFiADB {
     try {
         
         # 2. USB Device Detection
-        $usbDevice = Test-UsbAdbDevice -adb $adb
+        $usbDevice = Get-AdbUsbDevice -adb $adb
         if (-not $usbDevice) {
             Write-Log ($msg.NoUsbAdbDevice) -Level ERROR
             Write-Log ($msg.BackToMainMenu) -Level INFO
@@ -283,7 +281,7 @@ function Enable-WiFiADB {
             return $false
         }
 
-        $deviceId = ($usbDevice -split '\t')[0]
+        $deviceId = $usbDevice.DeviceId
         # Retrieve the model:
         $headsetModel = (& $adb -s $deviceId shell getprop ro.product.model 2>$null).Trim()
         Write-Log ($msg.HeadsetDetected -f $headsetModel, $deviceId) -Level INFO
@@ -382,126 +380,110 @@ function Enable-WiFiADB {
 }
 
 
-function Test-UsbAdbDevice {
+function Get-AdbUsbDevice {
+    <#
+    .SYNOPSIS
+    Detects a USB-connected ADB device and returns a device object, or $null if none found.
 
-    param(
+    .DESCRIPTION
+    Returns a PSCustomObject: DeviceId (USB serial), ConnectionType='USB', IP=$null, Port=$null.
+    Prompts the user to retry (or press Q to cancel) on each failed attempt.
+    #>
+    param (
         [int]$MaxAttempts = 5,
         [string]$adb = $global:adbPath
     )
 
-
     if (-not (Test-Path $adb)) {
         Write-Log ($msg.ADBExecutableNotFound -f $adb) -Level ERROR
-        return $false
+        return $null
     }
 
     for ($i = 1; $i -le $MaxAttempts; $i++) {
-
         try {
-            $usbDevice = & $adb devices |
+            $usbLine = & $adb devices |
                 Where-Object { $_ -match "`tdevice$" -and $_ -notmatch ":" }
-
-            if ($usbDevice) {
+            if ($usbLine) {
+                $serial = ($usbLine -split "`t")[0].Trim()
                 Write-Log ($msg.UsbAdbDeviceDetected) -Level SUCCESS
-                return $usbDevice
+                return [PSCustomObject]@{ DeviceId = $serial; ConnectionType = 'USB'; IP = $null; Port = $null }
             }
+        } catch {
+            Write-Log ($msg.ADBExecutionFailed -f $_.Exception.Message) -Level ERROR
         }
-        catch {
-                Write-Log ($msg.ADBExecutionFailed -f $_.Exception.Message) -Level ERROR
-
         Write-Log ($msg.NoUsbHeadsetDetectedPrompt) -Level INFO
         if ((Read-Host) -match "^[Qq]$") {
             Write-Log ($msg.UserCancelledUsbDetection) -Level INFO
-            return $false
+            return $null
         }
     }
 
     Write-Log ($msg.NoUsbAdbDeviceFound -f $MaxAttempts) -Level ERROR
-    return $false
-    }
+    return $null
 }
 
 
-function Connect-AdbWifi {
+function Get-AdbWifiDevice {
     <#
     .SYNOPSIS
-    Connects to a VR headset via ADB over WiFi and keeps the connection open.
+    Verifies WiFi ADB connectivity and returns a device object, or $null on failure.
 
     .DESCRIPTION
-    - If the headset is already in the ADB devices list as connected, skips reconnection.
-    - Tests network reachability via ping.
-    - Checks if the ADB TCP port is open.
-    - A closed port hints that developer mode or WiFi ADB is not enabled on the headset.
-    - Attempts adb connect and verifies the result.
-
-    .PARAMETER headsetIP
-    IP address of the headset.
-
-    .PARAMETER AdbPort
-    ADB TCP port to connect to (default: 5555).
-
-    .EXAMPLE
-    Connect-AdbWifi -headsetIP "192.168.1.100" -AdbPort 5555
+    Replaces the pattern: $DeviceId = "IP:Port" + Connect-AdbWifi call inside every function.
+    Returns a PSCustomObject with DeviceId, ConnectionType='WiFi', IP, Port - ready to pass
+    to any device function (Get-HeadsetBatteryStatus, Invoke-HeadsetReboot, etc.).
     #>
     param (
         [Parameter(Mandatory=$true)]
         [string]$headsetIP,
         [int]$AdbPort = $global:adbPort_default,
-        [string]$adb = $global:adbPath
+        [string]$adb  = $global:adbPath
     )
 
     $DeviceId = "${headsetIP}:${AdbPort}"
 
-    # 1. Verify ADB executable
     if (-not (Test-Path $adb)) {
         Write-Log ($msg.ADBExecutableNotFound -f $adb) -Level ERROR
-        return $false
+        return $null
     }
 
-    # 2. Check if already connected (avoid redundant reconnects)
+    # Already connected? Return immediately without re-connecting.
     $alreadyConnected = & $adb devices 2>&1 |
         Where-Object { $_ -match ("^" + [regex]::Escape($DeviceId) + "\s+device$") }
     if ($alreadyConnected) {
         Write-Log ($msg.AdbWifiAlreadyConnected -f $DeviceId) -Level DEBUG
-        return $true
+        return [PSCustomObject]@{ DeviceId = $DeviceId; ConnectionType = 'WiFi'; IP = $headsetIP; Port = $AdbPort }
     }
 
     Write-Log ($msg.AdbWifiConnecting -f $DeviceId) -Level INFO
 
-    # 3. Test network reachability (ping)
     $pingOk = Test-Connection -ComputerName $headsetIP -Count 1 -Quiet -ErrorAction SilentlyContinue
     if (-not $pingOk) {
         Write-Log ($msg.AdbWifiPingFailed -f $headsetIP) -Level WARNING
-        return $false
+        return $null
     }
 
-    # 4. Test ADB TCP port is open
     $portOpen = (Test-Port -hostname $headsetIP -port $AdbPort).open
     if (-not $portOpen) {
         Write-Log ($msg.AdbWifiPortClosed -f $AdbPort, $headsetIP) -Level WARNING
         Write-Log ($msg.AdbWifiDevModeHint) -Level WARNING
-        return $false
+        return $null
     }
 
-    # 5. Connect via ADB WiFi
     try {
         $connectOutput = & $adb connect $DeviceId 2>&1
-
-        # Verify the device appears as connected
         $nowConnected = & $adb devices 2>&1 |
             Where-Object { $_ -match ("^" + [regex]::Escape($DeviceId) + "\s+device$") }
         if ($nowConnected) {
             Write-Log ($msg.AdbWifiConnected -f $DeviceId) -Level SUCCESS
-            return $true
-        }
-        else {
+            return [PSCustomObject]@{ DeviceId = $DeviceId; ConnectionType = 'WiFi'; IP = $headsetIP; Port = $AdbPort }
+        } else {
             Write-Log ($msg.AdbWifiConnectFailed -f $DeviceId, ($connectOutput -join " ")) -Level ERROR
-            return $false
+            return $null
         }
-    }
-    catch {
+    } catch {
         Write-Log ($msg.AdbWifiConnectFailed -f $DeviceId, $_) -Level ERROR
-        return $false
+        return $null
     }
 }
 
@@ -509,17 +491,11 @@ function Connect-AdbWifi {
 function Get-HeadsetModel {
     param (
         [Parameter(Mandatory=$true)]
-        [string]$headsetIP,
-        [string]$adb = $global:adbPath,
-        [int]$AdbPort = $global:adbPort_default
+        [PSCustomObject]$Device,
+        [string]$adb = $global:adbPath
     )
-    $DeviceId = "${headsetIP}:${AdbPort}"
-
-    if (-not (Connect-AdbWifi -headsetIP $headsetIP -AdbPort $AdbPort -adb $adb)) {
-        return $false
-    }
-
-    $headsetModel = (& $adb -s $DeviceId shell getprop ro.product.model).Trim() #.trim() to remove any trailing newline characters
+    if (-not $Device) { return $null }
+    $headsetModel = (& $adb -s $Device.DeviceId shell getprop ro.product.model).Trim()
     return $headsetModel
 }
 
@@ -533,11 +509,11 @@ function Get-QuestControllerBatteryStatus {
 
     param (
         [Parameter(Mandatory=$true)]
-        [string]$headsetIP,
-        [string]$adb = $global:adbPath,
-        [int]$AdbPort = $global:adbPort_default
+        [PSCustomObject]$Device,
+        [string]$adb = $global:adbPath
     )
-    $DeviceId = "${headsetIP}:${AdbPort}"
+    if (-not $Device) { return @{ Left = @{ Battery=$null; Status=$null; ExternalStatus=$null; TrackingStatus=$null }; Right = @{ Battery=$null; Status=$null; ExternalStatus=$null; TrackingStatus=$null } } }
+    $DeviceId = $Device.DeviceId
 
     $result = @{
         Left  = @{
@@ -557,11 +533,6 @@ function Get-QuestControllerBatteryStatus {
     try {
         Write-Log ($msg.QueryControllerStatus -f $DeviceId) -Level DEBUG
 
-        if (-not (Connect-AdbWifi -headsetIP $headsetIP -AdbPort $AdbPort -adb $adb)) {
-            return $result
-        }
-
-        
         $dump = & $adb -s $DeviceId shell dumpsys OVRRemoteService 2>$null
         if (-not $dump) {
             Write-Log ($msg.ControllerStatusFailed -f "No output") -Level WARNING
@@ -616,11 +587,11 @@ function Get-HeadsetBatteryStatus {
     #>
     param (
         [Parameter(Mandatory=$true)]
-        [string]$headsetIP,
-        [string]$adb = $global:adbPath,
-        [int]$AdbPort = $global:adbPort_default
+        [PSCustomObject]$Device,
+        [string]$adb = $global:adbPath
     )
-    $DeviceId = "${headsetIP}:${AdbPort}"
+    if (-not $Device) { return $null }
+    $DeviceId = $Device.DeviceId
 
     $result = [PSCustomObject]@{
         Level                  = $null
@@ -636,10 +607,6 @@ function Get-HeadsetBatteryStatus {
 
     try {
         Write-Log ($msg.BatteryStatusQuery -f $DeviceId) -Level DEBUG
-
-        if (-not (Connect-AdbWifi -headsetIP $headsetIP -AdbPort $AdbPort -adb $adb)) {
-            return $null
-        }
 
         $batteryInfo = & $adb -s $DeviceId shell dumpsys battery 2>$null
 
@@ -685,7 +652,7 @@ function Get-HeadsetBatteryStatus {
         }
 
         # Controller battery levels (left & right)
-        $controllers = Get-QuestControllerBatteryStatus -headsetIP $headsetIP -adb $adb -AdbPort $AdbPort
+        $controllers = Get-QuestControllerBatteryStatus -Device $Device -adb $adb
         if ($controllers) {
             $result.BatteryControllerLeft  = $controllers.Left.Battery
             $result.BatteryControllerRight = $controllers.Right.Battery
@@ -706,15 +673,11 @@ function Get-HeadsetBatteryStatus {
 function Get-HeadsetForegroundApp {
     param (
         [Parameter(Mandatory=$true)]
-        [string]$headsetIP,
-        [string]$adb = $global:adbPath,
-        [int]$AdbPort = $global:adbPort_default
+        [PSCustomObject]$Device,
+        [string]$adb = $global:adbPath
     )
-    $DeviceId = "${headsetIP}:${AdbPort}"
-
-    if (-not (Connect-AdbWifi -headsetIP $headsetIP -AdbPort $AdbPort -adb $adb)) {
-        return $null
-    }
+    if (-not $Device) { return $null }
+    $DeviceId = $Device.DeviceId
 
     try {
         $dumpLines = @(& $adb -s $DeviceId shell dumpsys activity activities 2>$null)
@@ -827,20 +790,15 @@ function Disconnect-ADBConnections {
 function Invoke-HeadsetReboot {
     <#
     .SYNOPSIS
-    Reboots a VR headset via ADB over WiFi.
+    Reboots a VR headset via ADB.
     #>
     param (
         [Parameter(Mandatory=$true)]
-        [string]$headsetIP,
-        [string]$adb = $global:adbPath,
-        [int]$AdbPort = $global:adbPort_default
+        [PSCustomObject]$Device,
+        [string]$adb = $global:adbPath
     )
-    $DeviceId = "${headsetIP}:${AdbPort}"
-
-    if (-not (Connect-AdbWifi -headsetIP $headsetIP -AdbPort $AdbPort -adb $adb)) {
-        Write-Log ($msg.AdbWifiConnectFailed -f $DeviceId, "unreachable") -Level ERROR
-        return $false
-    }
+    if (-not $Device) { Write-Log ($msg.AdbWifiConnectFailed -f 'unknown', 'no device') -Level ERROR; return $false }
+    $DeviceId = $Device.DeviceId
 
     try {
         Write-Log ($msg.HeadsetRebooting -f $DeviceId) -Level INFO
@@ -881,16 +839,11 @@ function Invoke-HeadsetRecenter {
     #>
     param (
         [Parameter(Mandatory=$true)]
-        [string]$headsetIP,
-        [string]$adb = $global:adbPath,
-        [int]$AdbPort = $global:adbPort_default
+        [PSCustomObject]$Device,
+        [string]$adb = $global:adbPath
     )
-    $DeviceId = "${headsetIP}:${AdbPort}"
-
-    if (-not (Connect-AdbWifi -headsetIP $headsetIP -AdbPort $AdbPort -adb $adb)) {
-        Write-Log ($msg.AdbWifiConnectFailed -f $DeviceId, "unreachable") -Level ERROR
-        return $false
-    }
+    if (-not $Device) { Write-Log ($msg.AdbWifiConnectFailed -f 'unknown', 'no device') -Level ERROR; return $false }
+    $DeviceId = $Device.DeviceId
 
     try {
         Write-Log ($msg.HeadsetRecentering -f $DeviceId) -Level INFO
@@ -907,20 +860,15 @@ function Invoke-HeadsetRecenter {
 function Invoke-HeadsetShutdown {
     <#
     .SYNOPSIS
-    Powers off a VR headset via ADB over WiFi.
+    Powers off a VR headset via ADB.
     #>
     param (
         [Parameter(Mandatory=$true)]
-        [string]$headsetIP,
-        [string]$adb = $global:adbPath,
-        [int]$AdbPort = $global:adbPort_default
+        [PSCustomObject]$Device,
+        [string]$adb = $global:adbPath
     )
-    $DeviceId = "${headsetIP}:${AdbPort}"
-
-    if (-not (Connect-AdbWifi -headsetIP $headsetIP -AdbPort $AdbPort -adb $adb)) {
-        Write-Log ($msg.AdbWifiConnectFailed -f $DeviceId, "unreachable") -Level ERROR
-        return $false
-    }
+    if (-not $Device) { Write-Log ($msg.AdbWifiConnectFailed -f 'unknown', 'no device') -Level ERROR; return $false }
+    $DeviceId = $Device.DeviceId
 
     try {
         Write-Log ($msg.HeadsetShuttingDown -f $DeviceId) -Level INFO
@@ -964,14 +912,13 @@ function Invoke-HeadsetApp {
     #>
     param (
         [Parameter(Mandatory=$true)]
-        [string]$headsetIP,
+        [PSCustomObject]$Device,
         [string]$PackageName  = '',
         [string]$DisplayName  = '',
-        [string]$adb          = $global:adbPath,
-        [int]$AdbPort         = $global:adbPort_default
+        [string]$adb          = $global:adbPath
     )
-
-    $DeviceId = "${headsetIP}:${AdbPort}"
+    if (-not $Device) { Write-Log ($msg.AdbWifiConnectFailed -f 'unknown', 'no device') -Level ERROR; return $false }
+    $DeviceId = $Device.DeviceId
 
     # 1. Resolve PackageName from DisplayName if not provided directly
     if (-not $PackageName) {
@@ -1001,11 +948,7 @@ function Invoke-HeadsetApp {
         Get-AppDisplayName -PackageName $PackageName | Out-Null
     }
 
-    # 2. Connect to headset
-    if (-not (Connect-AdbWifi -headsetIP $headsetIP -AdbPort $AdbPort -adb $adb)) {
-        Write-Log ($msg.AdbWifiConnectFailed -f $DeviceId, "unreachable") -Level ERROR
-        return $false
-    }
+    # 2. Device already connected - no Connect-AdbWifi needed
 
     # 3. Verify the app is installed on the headset
     $installed = & $adb -s $DeviceId shell pm list packages $PackageName 2>$null
@@ -1075,19 +1018,13 @@ function Get-HeadsetInstalledApps {
     #>
     param (
         [Parameter(Mandatory=$true)]
-        [string]$headsetIP,
+        [PSCustomObject]$Device,
         [switch]$ThirdPartyOnly,
         [switch]$ResolveMissing,
-        [string]$adb    = $global:adbPath,
-        [int]$AdbPort   = $global:adbPort_default
+        [string]$adb    = $global:adbPath
     )
-
-    $DeviceId = "${headsetIP}:${AdbPort}"
-
-    if (-not (Connect-AdbWifi -headsetIP $headsetIP -AdbPort $AdbPort -adb $adb)) {
-        Write-Log ($msg.AdbWifiConnectFailed -f $DeviceId, "unreachable") -Level ERROR
-        return @()
-    }
+    if (-not $Device) { return @() }
+    $DeviceId = $Device.DeviceId
 
     try {
         $pmArgs = if ($ThirdPartyOnly) { 'list packages -3' } else { 'list packages' }
