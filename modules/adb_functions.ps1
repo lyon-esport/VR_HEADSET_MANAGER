@@ -824,4 +824,282 @@ function Disconnect-ADBConnections {
 }
 
 
+function Invoke-HeadsetReboot {
+    <#
+    .SYNOPSIS
+    Reboots a VR headset via ADB over WiFi.
+    #>
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$headsetIP,
+        [string]$adb = $global:adbPath,
+        [int]$AdbPort = $global:adbPort_default
+    )
+    $DeviceId = "${headsetIP}:${AdbPort}"
+
+    if (-not (Connect-AdbWifi -headsetIP $headsetIP -AdbPort $AdbPort -adb $adb)) {
+        Write-Log ($msg.AdbWifiConnectFailed -f $DeviceId, "unreachable") -Level ERROR
+        return $false
+    }
+
+    try {
+        Write-Log ($msg.HeadsetRebooting -f $DeviceId) -Level INFO
+        & $adb -s $DeviceId reboot 2>$null
+        return $true
+    }
+    catch {
+        Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
+        return $false
+    }
+}
+
+
+function Invoke-HeadsetShutdown {
+    <#
+    .SYNOPSIS
+    Powers off a VR headset via ADB over WiFi.
+    #>
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$headsetIP,
+        [string]$adb = $global:adbPath,
+        [int]$AdbPort = $global:adbPort_default
+    )
+    $DeviceId = "${headsetIP}:${AdbPort}"
+
+    if (-not (Connect-AdbWifi -headsetIP $headsetIP -AdbPort $AdbPort -adb $adb)) {
+        Write-Log ($msg.AdbWifiConnectFailed -f $DeviceId, "unreachable") -Level ERROR
+        return $false
+    }
+
+    try {
+        Write-Log ($msg.HeadsetShuttingDown -f $DeviceId) -Level INFO
+        & $adb -s $DeviceId reboot -p 2>$null
+        return $true
+    }
+    catch {
+        Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
+        return $false
+    }
+}
+
+
+function Invoke-HeadsetApp {
+    <#
+    .SYNOPSIS
+    Launches an application on a VR headset via ADB over WiFi.
+
+    .DESCRIPTION
+    Accepts either a PackageName or a DisplayName.
+    - If a DisplayName is supplied, it is resolved to a PackageName via the
+      app_names.csv cache (and updated if the app is not yet listed).
+    - Verifies the app is installed on the headset before launching.
+    - Returns $true on success, $false on any failure.
+
+    .PARAMETER headsetIP
+    IP address of the headset.
+
+    .PARAMETER PackageName
+    Android package name (e.g. "com.myapp.vr"). Takes priority over DisplayName.
+
+    .PARAMETER DisplayName
+    Human-readable app name as listed in app_names.csv (e.g. "SKYBOX VR Video Player").
+
+    .PARAMETER AdbPort
+    ADB TCP port (default: global adbPort_default).
+
+    .EXAMPLE
+    Invoke-HeadsetApp -headsetIP "192.168.1.100" -PackageName "com.myapp.vr"
+    Invoke-HeadsetApp -headsetIP "192.168.1.100" -DisplayName "SKYBOX VR Video Player"
+    #>
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$headsetIP,
+        [string]$PackageName  = '',
+        [string]$DisplayName  = '',
+        [string]$adb          = $global:adbPath,
+        [int]$AdbPort         = $global:adbPort_default
+    )
+
+    $DeviceId = "${headsetIP}:${AdbPort}"
+
+    # 1. Resolve PackageName from DisplayName if not provided directly
+    if (-not $PackageName) {
+        if (-not $DisplayName) {
+            Write-Log ($msg.ErrorOccurred -f "Either PackageName or DisplayName must be provided.") -Level ERROR
+            return $false
+        }
+
+        # Search cache
+        $cacheFile = Join-Path $global:ScriptPath "data\app_names.csv"
+        $match = $null
+        if (Test-Path $cacheFile) {
+            $match = @(Import-Csv -Path $cacheFile -Delimiter ",") |
+                     Where-Object { $_.DisplayName -eq $DisplayName } |
+                     Select-Object -First 1
+        }
+
+        if ($match) {
+            $PackageName = $match.PackageName
+            Write-Log ($msg.AppDisplayNameResolved -f $PackageName, $DisplayName) -Level DEBUG
+        } else {
+            Write-Log ($msg.AppDisplayNameNotFound -f $DisplayName) -Level ERROR
+            return $false
+        }
+    } else {
+        # Ensure the package is listed in app_names.csv (triggers cache update if needed)
+        Get-AppDisplayName -PackageName $PackageName | Out-Null
+    }
+
+    # 2. Connect to headset
+    if (-not (Connect-AdbWifi -headsetIP $headsetIP -AdbPort $AdbPort -adb $adb)) {
+        Write-Log ($msg.AdbWifiConnectFailed -f $DeviceId, "unreachable") -Level ERROR
+        return $false
+    }
+
+    # 3. Verify the app is installed on the headset
+    $installed = & $adb -s $DeviceId shell pm list packages $PackageName 2>$null
+    if (-not ($installed -match [regex]::Escape("package:$PackageName"))) {
+        Write-Log ($msg.ErrorOccurred -f "App '$PackageName' is not installed on $DeviceId.") -Level ERROR
+        return $false
+    }
+
+    # 4. Launch the app
+    try {
+        Write-Log ($msg.HeadsetDetected -f $PackageName, $DeviceId) -Level INFO
+        # Meta Home (vrshell) is a system launcher - monkey cannot inject into it; use HOME intent
+        if ($PackageName -eq 'com.oculus.vrshell') {
+            $launchOutput = & $adb -s $DeviceId shell am start -a android.intent.action.MAIN -c android.intent.category.HOME 2>&1
+            if ($launchOutput -match "error|Error|Exception") {
+                Write-Log ($msg.ErrorOccurred -f "Failed to launch Meta Home: $launchOutput") -Level ERROR
+                return $false
+            }
+            return $true
+        }
+        $launchOutput = & $adb -s $DeviceId shell monkey -p $PackageName -c android.intent.category.LAUNCHER 1 2>&1
+        if ($launchOutput -match "error|Error|Exception") {
+            Write-Log ($msg.ErrorOccurred -f "Failed to launch '$PackageName': $launchOutput") -Level ERROR
+            return $false
+        }
+        return $true
+    }
+    catch {
+        Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
+        return $false
+    }
+}
+
+
+function Get-HeadsetInstalledApps {
+    <#
+    .SYNOPSIS
+    Returns an array of all installed applications on a VR headset via ADB over WiFi.
+
+    .DESCRIPTION
+    Queries the headset with "pm list packages" and returns an array of PSCustomObjects
+    with PackageName, DisplayName and IconUrl.
+    - Known packages are resolved instantly from the local app_names.csv cache.
+    - When -ResolveMissing is specified, packages absent from the cache are looked up
+      online via the MetaMetadata repository and app_names.csv is updated accordingly.
+      Requires an active internet connection; unknown apps that are not found online
+      are stored with DisplayName = PackageName and IconUrl = "" so the network is
+      never hit more than once per package.
+
+    .PARAMETER headsetIP
+    IP address of the headset.
+
+    .PARAMETER ThirdPartyOnly
+    When specified, only returns user-installed (non-system) packages (-3 flag).
+
+    .PARAMETER ResolveMissing
+    When specified, fetches metadata for packages not yet in app_names.csv and
+    updates the cache file. Requires internet access.
+
+    .PARAMETER AdbPort
+    ADB TCP port (default: global adbPort_default).
+
+    .EXAMPLE
+    Get-HeadsetInstalledApps -headsetIP "192.168.1.243"
+    Get-HeadsetInstalledApps -headsetIP "192.168.1.243" -ThirdPartyOnly
+    Get-HeadsetInstalledApps -headsetIP "192.168.1.243" -ThirdPartyOnly -ResolveMissing
+    #>
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$headsetIP,
+        [switch]$ThirdPartyOnly,
+        [switch]$ResolveMissing,
+        [string]$adb    = $global:adbPath,
+        [int]$AdbPort   = $global:adbPort_default
+    )
+
+    $DeviceId = "${headsetIP}:${AdbPort}"
+
+    if (-not (Connect-AdbWifi -headsetIP $headsetIP -AdbPort $AdbPort -adb $adb)) {
+        Write-Log ($msg.AdbWifiConnectFailed -f $DeviceId, "unreachable") -Level ERROR
+        return @()
+    }
+
+    try {
+        $pmArgs = if ($ThirdPartyOnly) { 'list packages -3' } else { 'list packages' }
+        $rawLines = & $adb -s $DeviceId shell pm $pmArgs 2>$null
+
+        if (-not $rawLines) {
+            Write-Log ($msg.ErrorOccurred -f "No packages returned from $DeviceId") -Level WARNING
+            return @()
+        }
+
+        # Load app_names.csv cache into a hashtable for fast lookup
+        $cache = @{}
+        $cacheFile = Join-Path $global:ScriptPath "data\app_names.csv"
+        if (Test-Path $cacheFile) {
+            foreach ($row in @(Import-Csv -Path $cacheFile -Delimiter ",")) {
+                $cache[$row.PackageName] = $row
+            }
+        }
+
+        # Collect all package names first
+        $packages = foreach ($line in $rawLines) {
+            if ($line -match '^package:(.+)$') { $Matches[1].Trim() }
+        }
+
+        # Resolve missing packages online if requested
+        if ($ResolveMissing) {
+            $missing = @($packages | Where-Object { -not $cache.ContainsKey($_) })
+            if ($missing.Count -gt 0) {
+                Write-Log ($msg.AppDisplayNameNotFound -f "$($missing.Count) unknown packages - fetching online...") -Level INFO
+                foreach ($pkg in $missing) {
+                    # Get-AppDisplayName fetches metadata and updates app_names.csv automatically
+                    $entry = Get-AppDisplayName -PackageName $pkg
+                    $cache[$pkg] = $entry
+                }
+            }
+        }
+
+        $apps = foreach ($pkg in $packages) {
+            if ($cache.ContainsKey($pkg)) {
+                [PSCustomObject]@{
+                    PackageName = $pkg
+                    DisplayName = $cache[$pkg].DisplayName
+                    IconUrl     = $cache[$pkg].IconUrl
+                }
+            } else {
+                [PSCustomObject]@{
+                    PackageName = $pkg
+                    DisplayName = $pkg
+                    IconUrl     = ''
+                }
+            }
+        }
+
+        $apps = @($apps | Sort-Object PackageName)
+        Write-Log ($msg.HeadsetDetected -f "$($apps.Count) apps", $DeviceId) -Level INFO
+        return $apps
+    }
+    catch {
+        Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
+        return @()
+    }
+}
+
+
 

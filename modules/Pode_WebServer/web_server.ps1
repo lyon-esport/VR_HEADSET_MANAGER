@@ -25,13 +25,19 @@ if (-not $ConfigFilePath) {
 
 $websitePath = Join-Path $ScriptPath "website"
 
-# Read port and enabled flag from config.json
-$port    = 8080
-$enabled = $true
+# Read port, enabled flag, and ADB settings from config.json
+$port       = 8080
+$enabled    = $true
+$adbPath    = $null
+$adbPort    = 5555
 try {
     $cfg = Get-Content $ConfigFilePath -Raw -ErrorAction Stop | ConvertFrom-Json
-    if ($null -ne $cfg.WebServer.port)    { $port    = [int]$cfg.WebServer.port }
-    if ($null -ne $cfg.WebServer.enabled) { $enabled = [bool]$cfg.WebServer.enabled }
+    if ($null -ne $cfg.WebServer.port)        { $port    = [int]$cfg.WebServer.port }
+    if ($null -ne $cfg.WebServer.enabled)     { $enabled = [bool]$cfg.WebServer.enabled }
+    if ($cfg.ADB.folder) {
+        $adbPath = Join-Path (Join-Path $ScriptPath 'sources') $cfg.ADB.folder | Join-Path -ChildPath 'adb.exe'
+    }
+    if ($null -ne $cfg.ADB.adbPort_default)   { $adbPort = [int]$cfg.ADB.adbPort_default }
 } catch {
     Write-Host "[WebServer] Could not read config.json, using default port $port." -ForegroundColor Yellow
 }
@@ -124,6 +130,292 @@ try {
             continue
         }
 
+        # API: POST /api/updateip  body: {"name":"Q3_BLUE","ip":"192.168.1.99"}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/updateip') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body    = $reader.ReadToEnd()
+                $reader.Close()
+                $json    = $body | ConvertFrom-Json
+
+                $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+
+                $safeIp = [regex]::Match($json.ip, '^(\d{1,3}\.){3}\d{1,3}$').Value
+                if (-not $safeIp) { throw "Invalid IP address" }
+
+                $csvPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_headsets.csv"))
+                $dataRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data"))
+                if (-not $csvPath.StartsWith($dataRoot)) { throw "Path traversal denied" }
+
+                $rows = Import-Csv -Path $csvPath
+                $updated = $false
+                foreach ($row in $rows) {
+                    $dn = ($row.Name -replace ' ', '_')
+                    if ($dn -eq $safeName) {
+                        $row.IPAddress = $safeIp
+                        $updated = $true
+                        break
+                    }
+                }
+                if ($updated) {
+                    $rows | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8 -Force
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                } else {
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"not found"}')
+                }
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/recording  body: {"name":"Q3_BLUE","value":true}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/recording') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body    = $reader.ReadToEnd()
+                $reader.Close()
+                $json    = $body | ConvertFrom-Json
+
+                $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+
+                $csvPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_headsets.csv"))
+                $dataRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data"))
+                if (-not $csvPath.StartsWith($dataRoot)) { throw "Path traversal denied" }
+
+                $rows = Import-Csv -Path $csvPath
+                $updated = $false
+                foreach ($row in $rows) {
+                    $dn = ($row.Name -replace ' ', '_')
+                    if ($dn -eq $safeName) {
+                        $row.Record = if ([string]$json.value -eq 'True' -or [string]$json.value -eq 'true') { 'True' } else { 'False' }
+                        $updated = $true
+                        break
+                    }
+                }
+                if ($updated) {
+                    $rows | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8 -Force
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                } else {
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"not found"}')
+                }
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/removeheadset  body: {"name":"Q3_BLUE"}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/removeheadset') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body    = $reader.ReadToEnd()
+                $reader.Close()
+                $json    = $body | ConvertFrom-Json
+
+                $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+
+                $csvPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_headsets.csv"))
+                $dataRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data"))
+                if (-not $csvPath.StartsWith($dataRoot)) { throw "Path traversal denied" }
+
+                $rows = @(Import-Csv -Path $csvPath)
+                $match = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName }
+                if (-not $match) { throw "Headset not found" }
+
+                # Remove the matching row and reassign IDs
+                $rows = @($rows | Where-Object { ($_.Name -replace ' ','_') -ne $safeName })
+                $newId = 1
+                foreach ($row in $rows) { $row.ID = $newId; $newId++ }
+
+                $rows | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8 -Force
+
+                # Delete installed apps cache for this headset
+                $appsCachePath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\${safeName}_installed_apps.csv"))
+                if ($appsCachePath.StartsWith($dataRoot) -and (Test-Path $appsCachePath)) {
+                    Remove-Item $appsCachePath -Force -ErrorAction SilentlyContinue
+                }
+
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/reboot  body: {"name":"Q3_BLUE"}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/reboot') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body    = $reader.ReadToEnd()
+                $reader.Close()
+                $json    = $body | ConvertFrom-Json
+                $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+                $csvPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_headsets.csv"))
+                $rows = Import-Csv -Path $csvPath
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName }
+                if (-not $headset) { throw "Headset not found" }
+                if (-not $adbPath -or -not (Test-Path $adbPath)) { throw "ADB not found at: $adbPath" }
+                $deviceId = "$($headset.IPAddress):$adbPort"
+                & $adbPath connect $deviceId 2>$null | Out-Null
+                & $adbPath -s $deviceId reboot 2>$null | Out-Null
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/shutdown  body: {"name":"Q3_BLUE"}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/shutdown') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body    = $reader.ReadToEnd()
+                $reader.Close()
+                $json    = $body | ConvertFrom-Json
+                $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+                $csvPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_headsets.csv"))
+                $rows = Import-Csv -Path $csvPath
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName }
+                if (-not $headset) { throw "Headset not found" }
+                if (-not $adbPath -or -not (Test-Path $adbPath)) { throw "ADB not found at: $adbPath" }
+                $deviceId = "$($headset.IPAddress):$adbPort"
+                & $adbPath connect $deviceId 2>$null | Out-Null
+                & $adbPath -s $deviceId reboot -p 2>$null | Out-Null
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/updateprofile  body: {"name":"Q3_BLUE","profile":"R-N-45-20"}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/updateprofile') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body    = $reader.ReadToEnd()
+                $reader.Close()
+                $json    = $body | ConvertFrom-Json
+
+                # Validate headset name
+                $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+
+                # Validate profile format: [L/R]-[D/N]-<posint>-<posint>
+                $safeProfile = [regex]::Match($json.profile, '^[LR]-[DN]-\d+-\d+$').Value
+                if (-not $safeProfile) { throw "Invalid profile format" }
+                $parts = $safeProfile -split '-'
+                if ([int]$parts[2] -lt 1 -or [int]$parts[3] -lt 1) { throw "FPS and bitrate must be positive" }
+
+                $csvPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_headsets.csv"))
+                $dataRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data"))
+                if (-not $csvPath.StartsWith($dataRoot)) { throw "Path traversal denied" }
+
+                $rows = Import-Csv -Path $csvPath
+                $updated = $false
+                foreach ($row in $rows) {
+                    $dn = ($row.Name -replace ' ', '_')
+                    if ($dn -eq $safeName) {
+                        $row.ScrcpyProfile = $safeProfile
+                        $updated = $true
+                        break
+                    }
+                }
+                if ($updated) {
+                    $rows | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8 -Force
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                } else {
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"not found"}')
+                }
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
         # API: POST /api/autorestart  body: {"name":"Q3_BLUE","value":true}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/autorestart') {
             try {
@@ -156,6 +448,231 @@ try {
                 } else {
                     $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"not found"}')
                 }
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: GET /api/favoriteapps  - returns Meta Home + favorites as JSON
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/favoriteapps') {
+            try {
+                $metaHomePkg = 'com.oculus.vrshell'
+                $metaHomeObj = @{ package = $metaHomePkg; displayName = 'Meta Home' }
+                $favCsvPath  = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\favorite_apps.csv"))
+                $favList     = @($metaHomeObj)
+                if (Test-Path $favCsvPath) {
+                    $favRows = Import-Csv -Path $favCsvPath -Delimiter ","
+                    foreach ($r in $favRows) {
+                        if ($r.PackageName -and $r.PackageName -ne $metaHomePkg) {
+                            $favList += @{ package = $r.PackageName; displayName = $r.DisplayName }
+                        }
+                    }
+                }
+                $appNamesPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\app_names.csv"))
+                if (Test-Path $appNamesPath) {
+                    $appNames = @{}
+                    Import-Csv -Path $appNamesPath -Delimiter "," | ForEach-Object { $appNames[$_.PackageName] = $_.DisplayName }
+                    $favList = $favList | ForEach-Object {
+                        $dn = if ($appNames.ContainsKey($_.package) -and $appNames[$_.package]) { $appNames[$_.package] } else { $_.displayName }
+                        @{ package = $_.package; displayName = $dn }
+                    }
+                }
+                $json = ConvertTo-Json @($favList) -Compress
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: GET /api/installedapps?name=Q3_BLUE  - returns installed third-party apps as JSON
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/installedapps') {
+            try {
+                $rawQuery  = $request.Url.Query.TrimStart('?')
+                $nameParam = if ($rawQuery -match '(?:^|&)name=([^&]+)') { [Uri]::UnescapeDataString($Matches[1]) } else { '' }
+                $safeName  = [regex]::Match(($nameParam -replace ' ','_'), '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+
+                $dataRoot     = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data"))
+                $appNamesPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\app_names.csv"))
+                $cachePath    = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\${safeName}_installed_apps.csv"))
+                $favCsvPath   = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\favorite_apps.csv"))
+                $metaHomePkg  = 'com.oculus.vrshell'
+
+                if (-not $cachePath.StartsWith($dataRoot)) { throw "Path traversal denied" }
+
+                # Load favorites
+                $favPkgs = @()
+                if (Test-Path $favCsvPath) {
+                    $favPkgs = @(Import-Csv -Path $favCsvPath -Delimiter "," | Select-Object -ExpandProperty PackageName)
+                }
+
+                # Use cache if available
+                if (Test-Path $cachePath) {
+                    $cachedRows = @(Import-Csv -Path $cachePath -Delimiter ",")
+                    $appList = @($cachedRows | ForEach-Object {
+                        $pkg = $_.PackageName
+                        $dn  = if ($_.DisplayName -and $_.DisplayName -ne $pkg) { $_.DisplayName } else { $pkg }
+                        @{ package = $pkg; displayName = $dn; favorite = ($favPkgs -contains $pkg -or $pkg -eq $metaHomePkg) }
+                    } | Sort-Object { $_.displayName })
+                } else {
+                    # Fallback: live ADB call
+                    $csvPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_headsets.csv"))
+                    $rows    = Import-Csv -Path $csvPath
+                    $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName }
+                    if (-not $headset) { throw "Headset not found" }
+                    if (-not $adbPath -or -not (Test-Path $adbPath)) { throw "ADB not found" }
+
+                    $deviceId  = "$($headset.IPAddress):$adbPort"
+                    & $adbPath connect $deviceId 2>$null | Out-Null
+                    $rawOutput = & $adbPath -s $deviceId shell pm list packages -3 2>$null
+                    $packages  = @($rawOutput | ForEach-Object { ($_ -replace '^package:', '').Trim() } | Where-Object { $_ -ne '' })
+
+                    $appNames = @{}
+                    if (Test-Path $appNamesPath) {
+                        Import-Csv -Path $appNamesPath -Delimiter "," | ForEach-Object { if ($_.PackageName) { $appNames[$_.PackageName] = $_.DisplayName } }
+                    }
+
+                    $appList = @($packages | ForEach-Object {
+                        $pkg = $_
+                        $dn  = if ($appNames.ContainsKey($pkg) -and $appNames[$pkg]) { $appNames[$pkg] } else { $pkg }
+                        @{ package = $pkg; displayName = $dn; favorite = ($favPkgs -contains $pkg -or $pkg -eq $metaHomePkg) }
+                    } | Sort-Object { $_.displayName })
+                }
+
+                $json = ConvertTo-Json @($appList) -Compress
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('[]')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/launchapp  body: {"name":"Q3_BLUE","package":"com.beatgames.beatsaber"}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/launchapp') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body    = $reader.ReadToEnd()
+                $reader.Close()
+                $json     = $body | ConvertFrom-Json
+                $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
+                $safePkg  = [regex]::Match($json.package, '^[\w\.\-]+$').Value
+                if (-not $safeName -or -not $safePkg) { throw "Invalid input" }
+
+                $csvPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_headsets.csv"))
+                $rows    = Import-Csv -Path $csvPath
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName }
+                if (-not $headset) { throw "Headset not found" }
+                if (-not $adbPath -or -not (Test-Path $adbPath)) { throw "ADB not found" }
+
+                $deviceId = "$($headset.IPAddress):$adbPort"
+                & $adbPath connect $deviceId 2>$null | Out-Null
+                # Meta Home cannot be launched via monkey; use the HOME intent instead
+                if ($safePkg -eq 'com.oculus.vrshell') {
+                    $result = & $adbPath -s $deviceId shell am start -a android.intent.action.MAIN -c android.intent.category.HOME 2>&1
+                    $ok = ($result -join '') -match 'Starting:'
+                } else {
+                    $result = & $adbPath -s $deviceId shell monkey -p $safePkg -c android.intent.category.LAUNCHER 1 2>&1
+                    $ok = ($result -join '') -match 'Events injected'
+                }
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($(if ($ok) { '{"ok":true}' } else { '{"ok":false}' }))
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/togglefavorite  body: {"package":"com.pkg","displayName":"App","favorite":true}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/togglefavorite') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body    = $reader.ReadToEnd()
+                $reader.Close()
+                $json    = $body | ConvertFrom-Json
+                $safePkg = [regex]::Match($json.package, '^[\w\.\-]+$').Value
+                if (-not $safePkg) { throw "Invalid package name" }
+                # Protect Meta Home from being unfavorited
+                if ($safePkg -eq 'com.oculus.vrshell') {
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                    $response.StatusCode      = 200
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $respBytes.Length
+                    $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+                    continue
+                }
+                $favCsvPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\favorite_apps.csv"))
+                $dataRoot   = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data"))
+                if (-not $favCsvPath.StartsWith($dataRoot)) { throw "Path traversal denied" }
+
+                $favRows = @()
+                if (Test-Path $favCsvPath) { $favRows = @(Import-Csv -Path $favCsvPath -Delimiter ",") }
+                $addFav = [string]$json.favorite -eq 'True' -or [string]$json.favorite -eq 'true'
+                if ($addFav) {
+                    if (-not ($favRows | Where-Object { $_.PackageName -eq $safePkg })) {
+                        $favRows += [PSCustomObject]@{ PackageName = $safePkg; DisplayName = $json.displayName }
+                    }
+                } else {
+                    $favRows = @($favRows | Where-Object { $_.PackageName -ne $safePkg })
+                }
+                if ($favRows.Count -eq 0) {
+                    Set-Content -Path $favCsvPath -Value '"PackageName","DisplayName"' -Encoding UTF8
+                } else {
+                    $favRows | Export-Csv -Path $favCsvPath -NoTypeInformation -Encoding UTF8 -Force
+                }
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
                 $response.StatusCode      = 200
                 $response.ContentType     = 'application/json; charset=utf-8'
                 $response.Headers.Add('Access-Control-Allow-Origin', '*')
