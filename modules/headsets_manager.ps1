@@ -409,6 +409,12 @@ function Remove-Headset {
         # Remove the headset from the list
         $headsets = $headsets | Where-Object { $_.ID -ne $ID }
         Write-Log ($msg.HeadsetRemoved -f $ID, $headsetToRemove.Name) -Level INFO
+        # Delete the installed apps cache file for this headset
+        $cachePath = Join-Path $global:ScriptPath "data\$(Convert-Displayname $headsetToRemove.Name)_installed_apps.csv"
+        if (Test-Path $cachePath) {
+            Remove-Item $cachePath -Force -ErrorAction SilentlyContinue
+            Write-Log ("Deleted installed apps cache: $cachePath") -Level DEBUG
+        }
     } else {
         Write-Log ($msg.HeadsetIdNotFound -f $ID) -Level ERROR
     }

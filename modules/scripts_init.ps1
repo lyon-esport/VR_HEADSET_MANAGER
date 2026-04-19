@@ -157,6 +157,39 @@ $moduleFiles = Get-ChildItem -Path $ModulesPath -Filter "*.ps1" -File | Sort-Obj
     Write-Log ($msg.TranslationsLoaded -f $global:SelectedLanguage) -Level DEBUG
 
 
+function Invoke-AppShutdown {
+    <#
+    .SYNOPSIS
+    Gracefully shuts down all app services.
+
+    .DESCRIPTION
+    Stops scrcpy processes, resets awake mode, disconnects ADB, stops the web server,
+    cleans up the PID file, and stops mediamtx. Designed to be called both from the
+    main menu quit handler ('0') and from headsets_dashboard.ps1 when the parent process
+    exits. Each step is wrapped defensively so a missing $msg or failed function does
+    not prevent the remaining steps from running.
+    #>
+    try { Stop-AllScrcpy }            catch { }
+    try { Reset-AwakeMode }           catch { }
+    try { Disconnect-ADBConnections }  catch { }
+
+    # Stop web server - try process object first, then PID file as cross-process fallback
+    $webServerPidFile = Join-Path $global:ScriptPath "data\webserver.pid"
+    $wsPid = $null
+    if ($global:WebServerProcess -and -not $global:WebServerProcess.HasExited) {
+        $wsPid = $global:WebServerProcess.Id
+    } elseif (Test-Path $webServerPidFile) {
+        $wsPid = [int](Get-Content $webServerPidFile -Raw -ErrorAction SilentlyContinue)
+    }
+    if ($wsPid -and (Get-Process -Id $wsPid -ErrorAction SilentlyContinue)) {
+        Stop-Process -Id $wsPid -Force -ErrorAction SilentlyContinue
+        try { Write-Log $msg.WebServerStopped -Level INFO } catch { Write-Host "[App] Web server stopped." }
+    }
+    Remove-Item $webServerPidFile -Force -ErrorAction SilentlyContinue
+
+    try { Stop-MediaMtx } catch { }
+}
+
 
 
 

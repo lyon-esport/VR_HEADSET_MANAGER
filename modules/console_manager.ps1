@@ -3,39 +3,6 @@
 # Translations are loaded centrally in scripts_init.ps1 into $global:msg
 
 
-function Invoke-AppShutdown {
-    <#
-    .SYNOPSIS
-    Gracefully shuts down all app services.
-
-    .DESCRIPTION
-    Stops scrcpy processes, resets awake mode, disconnects ADB, stops the web server,
-    cleans up the PID file, and stops mediamtx. Designed to be called both from the
-    main menu quit handler ('0') and from headsets_dashboard.ps1 when the parent process
-    exits. Each step is wrapped defensively so a missing $msg or failed function does
-    not prevent the remaining steps from running.
-    #>
-    try { Stop-AllScrcpy }            catch { }
-    try { Reset-AwakeMode }           catch { }
-    try { Disconnect-ADBConnections }  catch { }
-
-    # Stop web server - try process object first, then PID file as cross-process fallback
-    $webServerPidFile = Join-Path $global:ScriptPath "data\webserver.pid"
-    $wsPid = $null
-    if ($global:WebServerProcess -and -not $global:WebServerProcess.HasExited) {
-        $wsPid = $global:WebServerProcess.Id
-    } elseif (Test-Path $webServerPidFile) {
-        $wsPid = [int](Get-Content $webServerPidFile -Raw -ErrorAction SilentlyContinue)
-    }
-    if ($wsPid -and (Get-Process -Id $wsPid -ErrorAction SilentlyContinue)) {
-        Stop-Process -Id $wsPid -Force -ErrorAction SilentlyContinue
-        try { Write-Log $msg.WebServerStopped -Level INFO } catch { Write-Host "[App] Web server stopped." }
-    }
-    Remove-Item $webServerPidFile -Force -ErrorAction SilentlyContinue
-
-    try { Stop-MediaMtx } catch { }
-}
-
 
 function Show-MainMenu {
     do {
@@ -246,7 +213,7 @@ function Show-SubMenu-AddHeadset { #CHOICE 2
     Write-Host $msg.AddManually
     Write-Host $msg.ModifyManually
     Write-Host $msg.RemoveFromList
-                    
+    Write-Host $msg.LaunchAppMenu
     Write-Host $msg.ReturnPreviousMenu
 
     $userInput = Read-Host $msg.YourChoice
@@ -269,6 +236,9 @@ function Show-SubMenu-AddHeadset { #CHOICE 2
         '4' {
             Write-Host $msg.RemoveHeadset #OK
             Show-SubMenu-RemoveHeadset 
+        }
+        '5' {
+            Show-SubMenu-LaunchApp
         }
         '0' {
             Write-Log -Message $msg.ReturnPrevious -Level "INFO"
@@ -362,8 +332,183 @@ function Show-SubMenu-EditHeadset { #CHOICE 3
     Update-HeadsetField -ID ([int]$idInput) -Field $field -NewValue $newValue
 } # OK
 
-function Show-SubMenu-RemoveHeadset { 
-    # Check whether headsets exist in the file
+function Get-FavoriteApps {
+    $csvPath = Join-Path $global:ScriptPath "data\favorite_apps.csv"
+    if (-not (Test-Path $csvPath)) { return @() }
+    return @(Import-Csv -Path $csvPath -Delimiter ",")
+}
+
+function Save-FavoriteApps {
+    param ([array]$favorites)
+    $csvPath = Join-Path $global:ScriptPath "data\favorite_apps.csv"
+    if ($favorites.Count -eq 0) {
+        Set-Content -Path $csvPath -Value '"PackageName","DisplayName"' -Encoding UTF8
+    } else {
+        $favorites | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8 -Force
+    }
+}
+
+function Show-SubMenu-LaunchApp {
+    Clear-Host
+    Start-Sleep -Milliseconds 200
+    Write-Host $msg.LaunchAppTitle -BackgroundColor DarkCyan -ForegroundColor White
+
+    # Step 1: select headset
+    $headsets = @(Get-KnownHeadsets)
+    if (-not $headsets -or $headsets.Count -eq 0) {
+        Write-Host $msg.LaunchAppNoHeadsets -ForegroundColor Yellow
+        Start-Sleep -Seconds 3
+        return
+    }
+
+    Write-Host ""
+    Write-Host $msg.LaunchAppSelectHeadset -ForegroundColor Cyan
+    Show-HeadsetsConfig
+    Write-Host $msg.ReturnPreviousMenu
+    $headsetChoice = Read-Host $msg.YourChoice
+    if ($headsetChoice -eq '0') { return }
+
+    $headset = $headsets | Where-Object { $_.ID -eq $headsetChoice }
+    if (-not $headset) {
+        Write-Log ($msg.InvalidID -f $headsetChoice) -Level WARNING
+        Start-Sleep -Seconds 2
+        return
+    }
+
+    # Step 2: load installed apps - from per-headset cache file first, live ADB fallback
+    Clear-Host
+    Write-Host $msg.LaunchAppTitle -BackgroundColor DarkCyan -ForegroundColor White
+    Write-Host ""
+    Write-Host ($msg.LaunchAppLoadingApps -f $headset.Name) -ForegroundColor DarkGray
+    $safeName  = Convert-Displayname $headset.Name
+    $cachePath = Join-Path $global:ScriptPath "data\${safeName}_installed_apps.csv"
+    if (Test-Path $cachePath) {
+        $installedApps = @(Import-Csv -Path $cachePath -Delimiter "," | ForEach-Object {
+            [PSCustomObject]@{ PackageName = $_.PackageName; DisplayName = $_.DisplayName; IconUrl = $_.IconUrl }
+        })
+    } else {
+        $installedApps = @(Get-HeadsetInstalledApps -headsetIP $headset.IPAddress -ThirdPartyOnly)
+    }
+    if ($installedApps.Count -eq 0) {
+        Write-Host $msg.LaunchAppNoApps -ForegroundColor Yellow
+        Start-Sleep -Seconds 3
+        return
+    }
+
+    do {
+        $favorites = @(Get-FavoriteApps)
+        $favPkgs   = $favorites | Select-Object -ExpandProperty PackageName
+
+        # Build display list: Meta Home always first, then other favorites, then the rest
+        $metaHomePkg = 'com.oculus.vrshell'
+        $metaHomeApp = $installedApps | Where-Object { $_.PackageName -eq $metaHomePkg }
+        if (-not $metaHomeApp) {
+            $metaHomeApp = [PSCustomObject]@{ PackageName = $metaHomePkg; DisplayName = 'Meta Home'; IconUrl = '' }
+        }
+        $favApps    = @($installedApps | Where-Object { $_.PackageName -ne $metaHomePkg -and $favPkgs -contains $_.PackageName })
+        $nonFavApps = @($installedApps | Where-Object { $_.PackageName -ne $metaHomePkg -and $favPkgs -notcontains $_.PackageName })
+        $displayList = @($metaHomeApp) + @($favApps) + @($nonFavApps)
+
+        Clear-Host
+        Write-Host $msg.LaunchAppTitle -BackgroundColor DarkCyan -ForegroundColor White
+        Write-Host " Headset: $($headset.Name) [$($headset.IPAddress)]" -ForegroundColor Gray
+        Write-Host ""
+        Write-Host $msg.LaunchAppSelectApp -ForegroundColor Cyan
+        Write-Host ""
+
+        $index = 1
+        $metaSectionShown = $false
+        $favSectionShown  = $false
+        $allSectionShown  = $false
+
+        foreach ($app in $displayList) {
+            $isMetaHome = $app.PackageName -eq $metaHomePkg
+            $isFav      = $favPkgs -contains $app.PackageName
+
+            if ($isMetaHome -and -not $metaSectionShown) {
+                Write-Host "  [Meta Home]" -ForegroundColor Cyan
+                $metaSectionShown = $true
+            }
+            if (-not $isMetaHome -and $isFav -and -not $favSectionShown) {
+                Write-Host ""
+                Write-Host "  $($msg.LaunchAppFavorites)" -ForegroundColor Yellow
+                $favSectionShown = $true
+            }
+            if (-not $isMetaHome -and -not $isFav -and -not $allSectionShown) {
+                Write-Host ""
+                Write-Host "  $($msg.LaunchAppAllApps)" -ForegroundColor DarkGray
+                $allSectionShown = $true
+            }
+
+            $star  = if ($isMetaHome) { 'H' } elseif ($isFav) { '*' } else { ' ' }
+            $label = if ($app.DisplayName -and $app.DisplayName -ne $app.PackageName) { $app.DisplayName } else { $app.PackageName }
+            $color = if ($isMetaHome) { 'Cyan' } elseif ($isFav) { 'Yellow' } else { 'Gray' }
+            Write-Host ("  [{0,3}] {1} {2}" -f $index, $star, $label) -ForegroundColor $color
+            $index++
+        }
+
+        Write-Host ""
+        Write-Host "  [0]   Return" -ForegroundColor DarkGray
+        Write-Host ""
+        Write-Host "  Enter a number to launch, F<n> to toggle favorite (e.g. F1, F12):" -ForegroundColor White
+        $input = (Read-Host " >>").Trim()
+
+        if ($input -eq '0') { return }
+
+        # Toggle favorite: F<number>
+        if ($input -match '^[Ff](\d+)$') {
+            $favIdx = [int]$Matches[1] - 1
+            if ($favIdx -lt 0 -or $favIdx -ge $displayList.Count) {
+                Write-Log ($msg.LaunchAppInvalidChoice -f $input) -Level WARNING
+                Start-Sleep -Seconds 2
+                continue
+            }
+            $targetApp = $displayList[$favIdx]
+            if ($favPkgs -contains $targetApp.PackageName) {
+                # Remove from favorites
+                $favorites = @($favorites | Where-Object { $_.PackageName -ne $targetApp.PackageName })
+                Save-FavoriteApps -favorites $favorites
+                Write-Log ($msg.LaunchAppFavRemoved -f $targetApp.DisplayName) -Level INFO
+                Write-Host ($msg.LaunchAppFavRemoved -f $targetApp.DisplayName) -ForegroundColor DarkGray
+            } else {
+                # Add to favorites
+                $favorites += [PSCustomObject]@{ PackageName = $targetApp.PackageName; DisplayName = $targetApp.DisplayName }
+                Save-FavoriteApps -favorites $favorites
+                Write-Log ($msg.LaunchAppFavAdded -f $targetApp.DisplayName) -Level INFO
+                Write-Host ($msg.LaunchAppFavAdded -f $targetApp.DisplayName) -ForegroundColor Yellow
+            }
+            Start-Sleep -Milliseconds 800
+            continue
+        }
+
+        # Launch: plain number
+        if ($input -match '^\d+$') {
+            $launchIdx = [int]$input - 1
+            if ($launchIdx -lt 0 -or $launchIdx -ge $displayList.Count) {
+                Write-Log ($msg.LaunchAppInvalidChoice -f $input) -Level WARNING
+                Start-Sleep -Seconds 2
+                continue
+            }
+            $targetApp = $displayList[$launchIdx]
+            Write-Host ($msg.LaunchAppLaunching -f $targetApp.DisplayName, $headset.Name) -ForegroundColor Cyan
+            $ok = Invoke-HeadsetApp -headsetIP $headset.IPAddress -PackageName $targetApp.PackageName
+            if ($ok) {
+                Write-Host $msg.LaunchAppSuccess -ForegroundColor Green
+            } else {
+                Write-Host $msg.LaunchAppFailed -ForegroundColor Red
+            }
+            Start-Sleep -Seconds 2
+            continue
+        }
+
+        Write-Log ($msg.LaunchAppInvalidChoice -f $input) -Level WARNING
+        Start-Sleep -Seconds 2
+
+    } while ($true)
+}
+
+
+function Show-SubMenu-RemoveHeadset {     # Check whether headsets exist in the file
     Clear-Host
     Start-Sleep -Milliseconds 200
     $headsets = @(get-knownHeadsets) # @() ensures the object is an array so .Count works
