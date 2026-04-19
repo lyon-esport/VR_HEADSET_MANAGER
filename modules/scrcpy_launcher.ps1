@@ -114,7 +114,6 @@ function start-screenCopy {
 
     if (-not(test-port -hostname $headsetIP -port $adbPort).open){ # Check if the ADB port is open
         Write-Log -Message ($msg.AdbPortNotResponding -f $adbPort) -Level WARNING
-        pause
         return
     }
 

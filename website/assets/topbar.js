@@ -10,6 +10,9 @@
  *   </div>
  */
 (function () {
+  // Apply saved theme immediately to avoid flash of wrong theme
+  try { if (localStorage.getItem('vrm-theme') === 'light') document.documentElement.setAttribute('data-theme', 'light'); } catch (e) {}
+
   var _filterCallback = null;
 
   var BRAND_SVG =
@@ -230,6 +233,20 @@
             '</button>' +
           '</div>' +
 
+          '<div class="drop-section">' +
+            '<div class="drop-section-label">Display</div>' +
+            '<button class="drop-item" id="theme-toggle-btn">' +
+              '<svg class="drop-item-icon" id="theme-toggle-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+                '<circle cx="12" cy="12" r="5"/>' +
+                '<line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>' +
+                '<line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>' +
+                '<line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>' +
+                '<line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>' +
+              '</svg>' +
+              '<span id="theme-toggle-label">Light Mode</span>' +
+            '</button>' +
+          '</div>' +
+
         '</div>' +
       '</div>'
   };
@@ -248,5 +265,36 @@
       dropdown.classList.remove('open');
       toggle.classList.remove('open');
     });
+
+    // Theme toggle
+    function _updateThemeBtn() {
+      var lbl = document.getElementById('theme-toggle-label');
+      var ico = document.getElementById('theme-toggle-icon');
+      var isLight = document.documentElement.getAttribute('data-theme') === 'light';
+      if (lbl) lbl.textContent = isLight ? 'Dark Mode' : 'Light Mode';
+      if (ico) ico.innerHTML = isLight
+        ? '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>'
+        : '<circle cx="12" cy="12" r="5"/>' +
+          '<line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>' +
+          '<line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>' +
+          '<line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>' +
+          '<line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>';
+    }
+    _updateThemeBtn();
+    var themeBtn = document.getElementById('theme-toggle-btn');
+    if (themeBtn) {
+      themeBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var isLight = document.documentElement.getAttribute('data-theme') === 'light';
+        if (isLight) {
+          document.documentElement.removeAttribute('data-theme');
+          try { localStorage.setItem('vrm-theme', 'dark'); } catch (e) {}
+        } else {
+          document.documentElement.setAttribute('data-theme', 'light');
+          try { localStorage.setItem('vrm-theme', 'light'); } catch (e) {}
+        }
+        _updateThemeBtn();
+      });
+    }
   });
 }());
