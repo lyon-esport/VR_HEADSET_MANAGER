@@ -181,6 +181,30 @@
       if (item) item.classList.toggle('checked', checked);
     },
 
+    manageDevicesBtnHTML:
+      '<button class="topbar-btn" id="manage-devices-btn" title="Manage new devices (add headset, WiFi ADB, APK install)">' +
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+          '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>' +
+        '</svg>' +
+        '<span class="topbar-btn-label">Manage New Devices</span>' +
+      '</button>',
+
+    // Wire the Manage New Devices button.
+    // If onOpen is provided it is called on click; otherwise navigates to /headset_settings.html#manage.
+    initManageDevicesBtn: function (onOpen) {
+      document.addEventListener('DOMContentLoaded', function () {
+        var btn = document.getElementById('manage-devices-btn');
+        if (!btn) return;
+        btn.addEventListener('click', function () {
+          if (typeof onOpen === 'function') {
+            onOpen();
+          } else {
+            window.location.href = '/headset_settings.html#manage';
+          }
+        });
+      });
+    },
+
     configMenuHTML:
       '<div class="actions-menu" id="actions-menu">' +
         '<button class="actions-btn" id="actions-toggle">' +
