@@ -21,19 +21,6 @@
         display: block;
       }
 
-      /* Headset name overlay - top-left corner, non-interactive */
-      #overlay-name {
-        position: absolute;
-        top: 8px; left: 12px;
-        color: rgba(255, 255, 255, 0.65);
-        font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-        font-size: 13px;
-        font-weight: 600;
-        letter-spacing: 0.4px;
-        text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
-        pointer-events: none;
-      }
-
       /* Status message shown while connecting or on error - centered */
       #status {
         position: absolute;
@@ -51,7 +38,6 @@
   </head>
   <body>
     <video id="stream" autoplay muted playsinline></video>
-    <div id="overlay-name"><%= $name %></div>
     <div id="status"></div>
 
     <script>
