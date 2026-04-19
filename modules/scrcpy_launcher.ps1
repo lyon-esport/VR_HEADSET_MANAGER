@@ -135,7 +135,8 @@ function start-screenCopy {
 	
 	
 	$options = ""
-    $headsetModel = Get-HeadsetModel $headsetIP
+    $wifiDevice     = Get-AdbWifiDevice -headsetIP $headsetIP
+    $headsetModel   = if ($wifiDevice) { Get-HeadsetModel -Device $wifiDevice } else { $null }
     Write-Log -Message ($msg.ScrcpyModelDetected -f $headsetModel) -Level "INFO"
 	<#
     if ($adb_model -like "Quest 2") {
