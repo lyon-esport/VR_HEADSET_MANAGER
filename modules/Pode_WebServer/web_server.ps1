@@ -327,10 +327,9 @@ try {
                 $rows = Import-Csv -Path $csvPath
                 $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName }
                 if (-not $headset) { throw "Headset not found" }
-                if (-not $adbPath -or -not (Test-Path $adbPath)) { throw "ADB not found at: $adbPath" }
-                $deviceId = "$($headset.IPAddress):$adbPort"
-                & $adbPath connect $deviceId 2>$null | Out-Null
-                & $adbPath -s $deviceId reboot 2>$null | Out-Null
+                $device = Get-AdbWifiDevice -headsetIP $headset.IPAddress -AdbPort $adbPort -adb $adbPath
+                if (-not $device) { throw "Could not connect to headset via ADB WiFi" }
+                Invoke-HeadsetReboot -Device $device -adb $adbPath | Out-Null
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
                 $response.StatusCode      = 200
                 $response.ContentType     = 'application/json; charset=utf-8'
@@ -364,10 +363,9 @@ try {
                 $rows = Import-Csv -Path $csvPath
                 $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName }
                 if (-not $headset) { throw "Headset not found" }
-                if (-not $adbPath -or -not (Test-Path $adbPath)) { throw "ADB not found at: $adbPath" }
-                $deviceId = "$($headset.IPAddress):$adbPort"
-                & $adbPath connect $deviceId 2>$null | Out-Null
-                & $adbPath -s $deviceId reboot -p 2>$null | Out-Null
+                $device = Get-AdbWifiDevice -headsetIP $headset.IPAddress -AdbPort $adbPort -adb $adbPath
+                if (-not $device) { throw "Could not connect to headset via ADB WiFi" }
+                Invoke-HeadsetShutdown -Device $device -adb $adbPath | Out-Null
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
                 $response.StatusCode      = 200
                 $response.ContentType     = 'application/json; charset=utf-8'
@@ -584,22 +582,13 @@ try {
                     $rows    = Import-Csv -Path $csvPath
                     $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName }
                     if (-not $headset) { throw "Headset not found" }
-                    if (-not $adbPath -or -not (Test-Path $adbPath)) { throw "ADB not found" }
 
-                    $deviceId  = "$($headset.IPAddress):$adbPort"
-                    & $adbPath connect $deviceId 2>$null | Out-Null
-                    $rawOutput = & $adbPath -s $deviceId shell pm list packages -3 2>$null
-                    $packages  = @($rawOutput | ForEach-Object { ($_ -replace '^package:', '').Trim() } | Where-Object { $_ -ne '' })
+                    $device = Get-AdbWifiDevice -headsetIP $headset.IPAddress -AdbPort $adbPort -adb $adbPath
+                    if (-not $device) { throw "Could not connect to headset via ADB WiFi" }
 
-                    $appNames = @{}
-                    if (Test-Path $appNamesPath) {
-                        Import-Csv -Path $appNamesPath -Delimiter "," | ForEach-Object { if ($_.PackageName) { $appNames[$_.PackageName] = $_.DisplayName } }
-                    }
-
-                    $appList = @($packages | ForEach-Object {
-                        $pkg = $_
-                        $dn  = if ($appNames.ContainsKey($pkg) -and $appNames[$pkg]) { $appNames[$pkg] } else { $pkg }
-                        @{ package = $pkg; displayName = $dn; favorite = ($favPkgs -contains $pkg -or $pkg -eq $metaHomePkg) }
+                    $installedApps = Get-HeadsetInstalledApps -Device $device -ThirdPartyOnly -adb $adbPath
+                    $appList = @($installedApps | ForEach-Object {
+                        @{ package = $_.PackageName; displayName = $_.DisplayName; favorite = ($favPkgs -contains $_.PackageName -or $_.PackageName -eq $metaHomePkg) }
                     } | Sort-Object { $_.displayName })
                 }
 
@@ -639,18 +628,9 @@ try {
                 $rows    = Import-Csv -Path $csvPath
                 $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName }
                 if (-not $headset) { throw "Headset not found" }
-                if (-not $adbPath -or -not (Test-Path $adbPath)) { throw "ADB not found" }
-
-                $deviceId = "$($headset.IPAddress):$adbPort"
-                & $adbPath connect $deviceId 2>$null | Out-Null
-                # Meta Home cannot be launched via monkey; use the HOME intent instead
-                if ($safePkg -eq 'com.oculus.vrshell') {
-                    $result = & $adbPath -s $deviceId shell am start -a android.intent.action.MAIN -c android.intent.category.HOME 2>&1
-                    $ok = ($result -join '') -match 'Starting:'
-                } else {
-                    $result = & $adbPath -s $deviceId shell monkey -p $safePkg -c android.intent.category.LAUNCHER 1 2>&1
-                    $ok = ($result -join '') -match 'Events injected'
-                }
+                $device = Get-AdbWifiDevice -headsetIP $headset.IPAddress -AdbPort $adbPort -adb $adbPath
+                if (-not $device) { throw "Could not connect to headset via ADB WiFi" }
+                $ok = Invoke-HeadsetApp -Device $device -PackageName $safePkg -adb $adbPath
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes($(if ($ok) { '{"ok":true}' } else { '{"ok":false}' }))
                 $response.StatusCode      = 200
                 $response.ContentType     = 'application/json; charset=utf-8'
@@ -732,142 +712,11 @@ try {
         # API: GET /api/detectusbheadset  - detects a USB-connected ADB device and returns its WiFi IP
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/detectusbheadset') {
             try {
-                $result = @{ found = $false; ip = ''; model = '' }
-                if ($adbPath -and (Test-Path $adbPath)) {
-                    $devices = & $adbPath devices 2>$null | Where-Object {
-                        $_ -match "`tdevice$" -and $_ -notmatch ':'
-                    }
-                    $firstDevice = @($devices) | Select-Object -First 1
-                    if ($firstDevice) {
-                        $deviceId = ($firstDevice -split "`t")[0].Trim()
-                        $ipOutput = & $adbPath -s $deviceId shell ip -f inet addr show wlan0 2>$null
-                        $ip = ''
-                        foreach ($line in $ipOutput) {
-                            if ($line -match 'inet\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/') {
-                                $ip = $Matches[1]; break
-                            }
-                        }
-                        $model = ((& $adbPath -s $deviceId shell getprop ro.product.model 2>$null) -join '').Trim()
-                        if ($ip -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') {
-                            $result = @{ found = $true; ip = $ip; model = $model }
-                        }
-                    }
-                }
-                $jsonOut   = ConvertTo-Json $result -Compress
-                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonOut)
-                $response.StatusCode      = 200
-                $response.ContentType     = 'application/json; charset=utf-8'
-                $response.Headers.Add('Access-Control-Allow-Origin', '*')
-                $response.ContentLength64 = $respBytes.Length
-                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
-            } catch {
-                try {
-                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"found":false}')
-                    $response.StatusCode      = 200
-                    $response.ContentType     = 'application/json; charset=utf-8'
-                    $response.Headers.Add('Access-Control-Allow-Origin', '*')
-                    $response.ContentLength64 = $errBytes.Length
-                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
-                } catch {}
-            } finally {
-                $response.Close()
-            }
-            continue
-        }
-
-        # API: POST /api/addheadset  body: {"name":"Q3 Blue","ip":"192.168.1.243"}
-        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/addheadset') {
-            try {
-                $reader  = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
-                $body    = $reader.ReadToEnd()
-                $reader.Close()
-                $json    = $body | ConvertFrom-Json
-
-                # Validate name: letters, numbers, spaces, hyphens, underscores (1-40 chars)
-                $safeName = [regex]::Match($json.name.Trim(), '^[\w\s\-]{1,40}$').Value
-                if (-not $safeName) { throw "INVALID_NAME" }
-
-                # Validate IP format and octet range
-                $safeIp = [regex]::Match($json.ip, '^(\d{1,3}\.){3}\d{1,3}$').Value
-                if (-not $safeIp) { throw "INVALID_IP" }
-                $octets = $safeIp -split '\.'
-                if ($octets | Where-Object { [int]$_ -gt 255 }) { throw "INVALID_IP" }
-
-                $csvPath  = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_headsets.csv"))
-                $dataRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data"))
-                if (-not $csvPath.StartsWith($dataRoot)) { throw "Path traversal denied" }
-
-                $rows = @()
-                if (Test-Path $csvPath) { $rows = @(Import-Csv -Path $csvPath) }
-
-                if ($rows | Where-Object { $_.IPAddress -eq $safeIp })   { throw "IP_DUPLICATE" }
-                if ($rows | Where-Object { $_.Name      -eq $safeName }) { throw "NAME_DUPLICATE" }
-
-                $newId  = if ($rows.Count -gt 0) { $rows.Count + 1 } else { 1 }
-                $newRow = [PSCustomObject]@{
-                    ID                 = $newId
-                    Name               = $safeName
-                    IPAddress          = $safeIp
-                    scrcpy_AutoRestart = 'False'
-                    Record             = 'False'
-                    ScrcpyProfile      = 'R-N-45-20'
-                    Model              = ''
-                    SerialNumber       = ''
-                }
-                $rows += $newRow
-                $rows | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8 -Force
-
-                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
-                $response.StatusCode      = 200
-                $response.ContentType     = 'application/json; charset=utf-8'
-                $response.Headers.Add('Access-Control-Allow-Origin', '*')
-                $response.ContentLength64 = $respBytes.Length
-                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
-            } catch {
-                $errMsg = switch -Regex ($_.Exception.Message) {
-                    'IP_DUPLICATE'   { '{"ok":false,"error":"This IP address is already registered."}' }
-                    'NAME_DUPLICATE' { '{"ok":false,"error":"A headset with this name already exists."}' }
-                    'INVALID_NAME'   { '{"ok":false,"error":"Invalid name. Use letters, numbers, spaces or hyphens."}' }
-                    'INVALID_IP'     { '{"ok":false,"error":"Invalid IP address."}' }
-                    default          { '{"ok":false,"error":"Server error."}' }
-                }
-                try {
-                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes($errMsg)
-                    $response.StatusCode      = 200
-                    $response.ContentType     = 'application/json; charset=utf-8'
-                    $response.Headers.Add('Access-Control-Allow-Origin', '*')
-                    $response.ContentLength64 = $errBytes.Length
-                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
-                } catch {}
-            } finally {
-                $response.Close()
-            }
-            continue
-        }
-
-        # API: GET /api/detectusbheadset  - detects a USB-connected ADB device and returns its WiFi IP
-        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/detectusbheadset') {
-            try {
-                $result = @{ found = $false; ip = ''; model = '' }
-                if ($adbPath -and (Test-Path $adbPath)) {
-                    $devices = & $adbPath devices 2>$null | Where-Object {
-                        $_ -match "`tdevice$" -and $_ -notmatch ':'
-                    }
-                    $firstDevice = @($devices) | Select-Object -First 1
-                    if ($firstDevice) {
-                        $deviceId = ($firstDevice -split "`t")[0].Trim()
-                        $ipOutput = & $adbPath -s $deviceId shell ip -f inet addr show wlan0 2>$null
-                        $ip = ''
-                        foreach ($line in $ipOutput) {
-                            if ($line -match 'inet\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/') {
-                                $ip = $Matches[1]; break
-                            }
-                        }
-                        $model = ((& $adbPath -s $deviceId shell getprop ro.product.model 2>$null) -join '').Trim()
-                        if ($ip -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') {
-                            $result = @{ found = $true; ip = $ip; model = $model }
-                        }
-                    }
+                $usbInfo = Get-AdbUsbDeviceInfo -adb $adbPath
+                $result = if ($usbInfo -and $usbInfo.IP -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') {
+                    @{ found = $true; ip = $usbInfo.IP; model = $usbInfo.Model }
+                } else {
+                    @{ found = $false; ip = ''; model = '' }
                 }
                 $jsonOut   = ConvertTo-Json $result -Compress
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonOut)

@@ -423,6 +423,54 @@ function Get-AdbUsbDevice {
 }
 
 
+function Get-AdbUsbDeviceInfo {
+    <#
+    .SYNOPSIS
+    Silently detects a USB-connected ADB device in a single attempt (no interactive prompts).
+
+    .DESCRIPTION
+    Designed for programmatic use (e.g. web server API routes). Unlike Get-AdbUsbDevice,
+    this function makes one detection attempt with no retries or Read-Host prompts.
+    Returns a PSCustomObject with DeviceId, ConnectionType, IP and Model, or $null if none found.
+    IP is retrieved from the wlan0 interface of the connected device.
+    #>
+    param (
+        [string]$adb = $global:adbPath
+    )
+
+    if (-not $adb -or -not (Test-Path $adb)) { return $null }
+
+    try {
+        $usbLine = & $adb devices 2>$null | Where-Object { $_ -match "`tdevice$" -and $_ -notmatch ':' }
+        if (-not $usbLine) { return $null }
+
+        $deviceId = ($usbLine -split "`t")[0].Trim()
+
+        # Retrieve WiFi IP from wlan0
+        $ip = ''
+        $ipOutput = & $adb -s $deviceId shell ip -f inet addr show wlan0 2>$null
+        foreach ($line in $ipOutput) {
+            if ($line -match 'inet\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/') {
+                $ip = $Matches[1]; break
+            }
+        }
+
+        $model = ((& $adb -s $deviceId shell getprop ro.product.model 2>$null) -join '').Trim()
+
+        return [PSCustomObject]@{
+            DeviceId       = $deviceId
+            ConnectionType = 'USB'
+            IP             = $ip
+            Model          = $model
+            Port           = $null
+        }
+    } catch {
+        Write-Log ($msg.ADBExecutionFailed -f $_.Exception.Message) -Level ERROR
+        return $null
+    }
+}
+
+
 function Get-AdbWifiDevice {
     <#
     .SYNOPSIS
