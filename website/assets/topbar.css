@@ -279,3 +279,19 @@
 [data-theme="light"] .headset-compact-item:hover   { color: #111; }
 [data-theme="light"] .topbar-btn:hover             { background: #f5f5f5; color: #333; }
 [data-theme="light"] .topbar-title                 { color: #aaa; }
+
+/* ── Responsive: keep topbar from overflowing ── */
+.topbar-right { flex-shrink: 0; }
+
+@media (max-width: 700px) {
+  .topbar-btn-label { display: none; }
+  .topbar-btn       { padding: 0 10px; }
+  .actions-btn      { padding: 0 10px; }
+  .topbar-brand     { padding: 0 10px; }
+}
+
+@media (max-width: 400px) {
+  .topbar-btn       { padding: 0 8px; }
+  .actions-btn      { padding: 0 8px; }
+  .topbar-brand     { padding: 0 8px; }
+}

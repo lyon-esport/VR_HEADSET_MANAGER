@@ -423,6 +423,126 @@ function Get-AdbUsbDevice {
 }
 
 
+function Enable-AdbTcpIp {
+    <#
+    .SYNOPSIS
+    Enables WiFi ADB (tcpip mode) on a USB-connected device. No interactive prompts.
+    Designed for web server API use. Returns a result object.
+    #>
+    param (
+        [int]$AdbPort = $global:adbPort_default,
+        [string]$adb  = $global:adbPath
+    )
+
+    if (-not $adb -or -not (Test-Path $adb)) {
+        return [PSCustomObject]@{ ok = $false; error = "ADB not found" }
+    }
+
+    try {
+        $usbLine = & $adb devices 2>$null | Where-Object { $_ -match "`tdevice$" -and $_ -notmatch ':' }
+        if (-not $usbLine) {
+            return [PSCustomObject]@{ ok = $false; error = "No USB headset detected" }
+        }
+        $deviceId = ($usbLine -split "`t")[0].Trim()
+
+        $model = ((& $adb -s $deviceId shell getprop ro.product.model 2>$null) -join '').Trim()
+
+        # Enable TCP/IP mode
+        & $adb -s $deviceId tcpip $AdbPort 2>$null | Out-Null
+        Start-Sleep -Seconds 2
+
+        # Retrieve WiFi IP
+        $ip = ''
+        $ipOutput = & $adb -s $deviceId shell ip -f inet addr show wlan0 2>$null
+        foreach ($line in $ipOutput) {
+            if ($line -match 'inet\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/') {
+                $ip = $Matches[1]; break
+            }
+        }
+
+        Write-Log ($msg.ActivatingWifiAdbPort -f $AdbPort) -Level INFO
+        return [PSCustomObject]@{ ok = $true; model = $model; ip = $ip; port = $AdbPort }
+    } catch {
+        Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
+        return [PSCustomObject]@{ ok = $false; error = $_.Exception.Message }
+    }
+}
+
+
+function Get-AdbUsbDeviceDetails {
+    <#
+    .SYNOPSIS
+    Returns full details about a USB-connected ADB device for the web UI.
+
+    .DESCRIPTION
+    Single-attempt, no interactive prompts. Returns DeviceId, IP, Model,
+    SerialNumber, WiFiSSID, WifiAdbOpen (bool), ApkInstalled (bool), or $null.
+    Designed for the /api/usbdeviceinfo web server route.
+    #>
+    param (
+        [string]$PackageName = $global:ADBWirelessActivatorPackageName,
+        [int]$AdbPort        = $global:adbPort_default,
+        [string]$adb         = $global:adbPath
+    )
+
+    if (-not $adb -or -not (Test-Path $adb)) { return $null }
+
+    try {
+        $usbLine = & $adb devices 2>$null | Where-Object { $_ -match "`tdevice$" -and $_ -notmatch ':' }
+        if (-not $usbLine) { return $null }
+
+        $deviceId = ($usbLine -split "`t")[0].Trim()
+
+        # WiFi IP from wlan0
+        $ip = ''
+        $ipOutput = & $adb -s $deviceId shell ip -f inet addr show wlan0 2>$null
+        foreach ($line in $ipOutput) {
+            if ($line -match 'inet\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/') {
+                $ip = $Matches[1]; break
+            }
+        }
+
+        $model        = ((& $adb -s $deviceId shell getprop ro.product.model 2>$null) -join '').Trim()
+        $serialNumber = ((& $adb -s $deviceId shell getprop ro.serialno 2>$null) -join '').Trim()
+
+        # Current WiFi SSID
+        $ssid = ''
+        $wifiInfo = (& $adb -s $deviceId shell dumpsys wifi 2>$null) | Select-String 'mWifiInfo'
+        if ($wifiInfo -match 'SSID: "([^"]+)"') { $ssid = $Matches[1] }
+
+        # WiFi ADB already open on IP:Port?
+        $wifiAdbOpen = $false
+        if ($ip) {
+            $wifiDeviceId = "${ip}:${AdbPort}"
+            $adbDevices   = & $adb devices 2>$null
+            $wifiAdbOpen  = [bool]($adbDevices | Where-Object { $_ -match ("^" + [regex]::Escape($wifiDeviceId) + "\s+device$") })
+        }
+
+        # APK installed?
+        $apkInstalled = $false
+        if ($PackageName) {
+            $pmResult     = & $adb -s $deviceId shell pm list packages $PackageName 2>$null
+            $apkInstalled = [bool]($pmResult | Where-Object { $_ -match "package:$([regex]::Escape($PackageName))" })
+        }
+
+        return [PSCustomObject]@{
+            DeviceId       = $deviceId
+            ConnectionType = 'USB'
+            IP             = $ip
+            Model          = $model
+            SerialNumber   = $serialNumber
+            WiFiSSID       = $ssid
+            WifiAdbOpen    = $wifiAdbOpen
+            ApkInstalled   = $apkInstalled
+            Port           = $null
+        }
+    } catch {
+        Write-Log ($msg.ADBExecutionFailed -f $_.Exception.Message) -Level ERROR
+        return $null
+    }
+}
+
+
 function Get-AdbUsbDeviceInfo {
     <#
     .SYNOPSIS
