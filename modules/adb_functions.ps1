@@ -854,6 +854,56 @@ function Invoke-HeadsetReboot {
 }
 
 
+function Invoke-HeadsetRecenter {
+    <#
+    .SYNOPSIS
+    Triggers a view recenter on a Meta Quest headset via ADB over WiFi.
+
+    .DESCRIPTION
+    *** NOT WORKING - UNDER INVESTIGATION ***
+
+    Attempted approach: send a proximity-close broadcast (com.oculus.vrpowermanager.prox_close)
+    to simulate putting the headset on, which should trigger RecenterLocalSpace_Internal
+    in com.oculus.vrruntimeservice.
+
+    Logcat confirms RecenterLocalSpace_Internal is called when the user manually recenters
+    via the controller long-press or the hand tracking UI, but the broadcast alone does
+    not reliably trigger it remotely via ADB.
+
+    Other approaches tested with no success:
+      - am broadcast -a com.oculus.vrpowermanager.RECENTER
+      - am broadcast -a com.oculus.vrshell.RECENTER
+      - am broadcast -a com.oculus.guardian.RESET_ORIENTATION
+      - input keyevent --longpress 312 (KEYCODE_STEM_PRIMARY)
+      - input keyevent --longpress 3 (HOME)
+      - service call space 1/2/3
+      - service call runtimeipchelper 1..10
+    #>
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$headsetIP,
+        [string]$adb = $global:adbPath,
+        [int]$AdbPort = $global:adbPort_default
+    )
+    $DeviceId = "${headsetIP}:${AdbPort}"
+
+    if (-not (Connect-AdbWifi -headsetIP $headsetIP -AdbPort $AdbPort -adb $adb)) {
+        Write-Log ($msg.AdbWifiConnectFailed -f $DeviceId, "unreachable") -Level ERROR
+        return $false
+    }
+
+    try {
+        Write-Log ($msg.HeadsetRecentering -f $DeviceId) -Level INFO
+        & $adb -s $DeviceId shell am broadcast -a com.oculus.vrpowermanager.prox_close 2>$null
+        return $true
+    }
+    catch {
+        Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
+        return $false
+    }
+}
+
+
 function Invoke-HeadsetShutdown {
     <#
     .SYNOPSIS
