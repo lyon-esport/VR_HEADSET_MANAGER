@@ -197,15 +197,36 @@ function Invoke-AppShutdown {
 # Run all computer-level setup tasks (firewall rules, service auto-starts, etc.)
 Initialize-ComputerSetup
 
-# Start the Pode web server in a separate PowerShell window (guarded: skip if already running)
-if ($global:WebServer_enabled) {
+function Start-WebServer {
+    param(
+        [switch]$Restart
+    )
 
+    if (-not $global:WebServer_enabled) { return }
+
+    $webServerPidFile = Join-Path $global:ScriptPath "data\webserver.pid"
+
+    # -- Stop phase (only when -Restart is requested) -------------------------
+    if ($Restart) {
+        $wsPid = $null
+        if ($global:WebServerProcess -and -not $global:WebServerProcess.HasExited) {
+            $wsPid = $global:WebServerProcess.Id
+        } elseif (Test-Path $webServerPidFile) {
+            $wsPid = [int](Get-Content $webServerPidFile -Raw -ErrorAction SilentlyContinue)
+        }
+        if ($wsPid -and (Get-Process -Id $wsPid -ErrorAction SilentlyContinue)) {
+            Stop-Process -Id $wsPid -Force -ErrorAction SilentlyContinue
+            Write-Log $msg.WebServerStopped -Level INFO
+        }
+        Remove-Item $webServerPidFile -Force -ErrorAction SilentlyContinue
+        $global:WebServerProcess = $null
+    }
+
+    # -- Start phase ----------------------------------------------------------
     # PID-file lock: a single file in the data folder records the running server PID.
     # Written before Start-Process so any concurrent caller (dashboard loop, module
     # reload) sees it immediately and skips the launch. Stale entries are cleaned up
     # by verifying the stored PID is still alive.
-    $webServerPidFile = Join-Path $global:ScriptPath "data\webserver.pid"
-
     $webServerRunning = $false
 
     # 1. In-process guard (fastest path - same PS session)
@@ -249,6 +270,9 @@ if ($global:WebServer_enabled) {
         Write-Log ($msg.WebServerStarted -f $global:WebServer_port) -Level INFO
     }
 }
+
+# Start the Pode web server in a separate PowerShell window (guarded: skip if already running)
+Start-WebServer
 
 
 
