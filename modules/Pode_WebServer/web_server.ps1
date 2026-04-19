@@ -740,6 +740,124 @@ try {
             continue
         }
 
+        # API: POST /api/enablewifiadb  - runs adb tcpip 5555 on the USB-connected headset
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/enablewifiadb') {
+            try {
+                $result = Enable-AdbTcpIp -AdbPort $adbPort -adb $adbPath
+                $json   = ConvertTo-Json $result -Compress
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/installadbwifiapk  - installs the WiFi ADB APK on the USB-connected headset
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/installadbwifiapk') {
+            try {
+                $device = Get-AdbUsbDeviceInfo -adb $adbPath
+                if (-not $device) {
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"No USB headset detected"}')
+                    $response.StatusCode = 200
+                    $response.ContentType = 'application/json; charset=utf-8'
+                    $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                    $response.ContentLength64 = $respBytes.Length
+                    $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+                } else {
+                    $ok = Install-OculusWirelessAdbApk -Device $device -adb $adbPath
+                    # Retrieve IP after install (tcpip was run inside Install-OculusWirelessAdbApk)
+                    $ip    = ''
+                    $model = ''
+                    $portOpen = $false
+                    $ipOutput = & $adbPath -s $device.DeviceId shell ip -f inet addr show wlan0 2>$null
+                    foreach ($line in $ipOutput) {
+                        if ($line -match 'inet\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/') { $ip = $Matches[1]; break }
+                    }
+                    $model = ((& $adbPath -s $device.DeviceId shell getprop ro.product.model 2>$null) -join '').Trim()
+                    if ($ip) { $portOpen = (Test-Port -hostname $ip -port $adbPort).open }
+                    $resultObj = @{ ok = [bool]$ok; model = $model; ip = $ip; port = $adbPort; portOpen = $portOpen; reinstalled = $true }
+                    $json = ConvertTo-Json $resultObj -Compress
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+                    $response.StatusCode      = 200
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                    $response.ContentLength64 = $respBytes.Length
+                    $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+                }
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: GET /api/usbdeviceinfo  - returns full details of USB-connected ADB device
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/usbdeviceinfo') {
+            try {
+                $result = @{ found = $false; ip = ''; model = ''; serialNumber = ''; ssid = ''; wifiAdbOpen = $false; apkInstalled = $false; alreadyRegistered = $false }
+                if ($adbPath -and (Test-Path $adbPath)) {
+                    $details = Get-AdbUsbDeviceDetails -adb $adbPath -AdbPort $adbPort -PackageName $apkPackage
+                    if ($details) {
+                        $alreadyReg = $false
+                        $csvPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_headsets.csv"))
+                        if ((Test-Path $csvPath) -and $details.SerialNumber) {
+                            $rows = Import-Csv -Path $csvPath
+                            $alreadyReg = [bool]($rows | Where-Object { $_.SerialNumber -eq $details.SerialNumber })
+                        }
+                        $result = @{
+                            found             = $true
+                            ip                = $details.IP
+                            model             = $details.Model
+                            serialNumber      = $details.SerialNumber
+                            ssid              = $details.WiFiSSID
+                            wifiAdbOpen       = $details.WifiAdbOpen
+                            apkInstalled      = $details.ApkInstalled
+                            alreadyRegistered = $alreadyReg
+                        }
+                    }
+                }
+                $jsonOut   = ConvertTo-Json $result -Compress
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonOut)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"found":false}')
+                    $response.StatusCode      = 200
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
         # API: POST /api/addheadset  body: {"name":"Q3 Blue","ip":"192.168.1.243"}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/addheadset') {
             try {

@@ -36,7 +36,7 @@
     brandHTML:
       '<a href="/" class="topbar-brand">' +
         BRAND_SVG +
-        'VR Headset Manager' +
+        '<span class="topbar-btn-label">VR Headset Manager</span>' +
       '</a>',
 
     vsepHTML: '<div class="v-sep"></div>',
@@ -48,7 +48,7 @@
           '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
             '<rect x="2" y="3" width="20" height="14" rx="2"/><polyline points="8 21 12 17 16 21"/>' +
           '</svg>' +
-          'Filters' +
+          '<span class="topbar-btn-label">Filters</span>' +
           CHEVRON_SVG +
         '</button>' +
         '<div class="headset-compact-panel" id="headset-compact-panel"></div>' +
@@ -59,16 +59,16 @@
     // Wire actions with TopBar.initFilters(callback) or TopBar.setActiveFilter(id)
     filtersHTML:
       '<button class="filter-btn active" id="filter-all">' +
-        '<span class="dot" style="background:#444"></span>All' +
+        '<span class="dot" style="background:#444"></span><span class="topbar-btn-label">All</span>' +
       '</button>' +
       '<button class="filter-btn" id="filter-online">' +
-        '<span class="dot" style="background:#22c55e"></span>Online' +
+        '<span class="dot" style="background:#22c55e"></span><span class="topbar-btn-label">Online</span>' +
       '</button>' +
       '<button class="filter-btn" id="filter-scrcpy">' +
-        '<span class="dot" style="background:#3b82f6"></span>Scrcpy' +
+        '<span class="dot" style="background:#3b82f6"></span><span class="topbar-btn-label">Scrcpy</span>' +
       '</button>' +
       '<button class="filter-btn" id="filter-offline">' +
-        '<span class="dot" style="background:#ef4444"></span>Offline' +
+        '<span class="dot" style="background:#ef4444"></span><span class="topbar-btn-label">Offline</span>' +
       '</button>',
 
     // Wire the 4 preset filter buttons. onFilter(id) is called with the selected filter id.
@@ -187,7 +187,7 @@
           '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
             '<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>' +
           '</svg>' +
-          'Config' +
+          '<span class="topbar-btn-label">Config</span>' +
           CHEVRON_SVG +
         '</button>' +
         '<div class="actions-dropdown" id="actions-dropdown">' +
