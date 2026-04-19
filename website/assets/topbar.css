@@ -248,3 +248,34 @@
 /* Hide filter bar and show compact button when topbar is too narrow */
 .topbar.compact .topbar-filters { display: none; }
 .topbar.compact .headset-compact { display: flex; align-items: center; }
+
+/* ── Light mode overrides ─────────────────────────────────────────────── */
+[data-theme="light"] {
+  --bar-bg:             #ffffff;
+  --bar-border:         #e5e5e5;
+  --brand-color:        #2563eb;
+  --sep-color:          #e5e5e5;
+  --filter-idle-bg:     #efefef;
+  --filter-idle-txt:    #666;
+  --drop-bg:            #ffffff;
+  --drop-border:        #e5e5e5;
+  --drop-item-hover:    #f5f5f5;
+  --drop-label-color:   #bbb;
+}
+[data-theme="light"] .topbar-brand:hover           { color: #1d4ed8; }
+[data-theme="light"] .actions-btn                  { color: #666; }
+[data-theme="light"] .actions-btn:hover            { background: #f5f5f5; color: #222; }
+[data-theme="light"] .actions-btn.open             { background: #f0f0f0; color: #111; }
+[data-theme="light"] .filter-label                 { color: #bbb; }
+[data-theme="light"] .filter-btn:hover             { background: #e5e5e5; color: #333; }
+[data-theme="light"] .drop-item                    { color: #555; }
+[data-theme="light"] .drop-item:hover              { color: #111; }
+[data-theme="light"] .actions-dropdown             { box-shadow: 0 10px 30px rgba(0,0,0,0.12); }
+[data-theme="light"] .headset-compact-btn          { color: #666; }
+[data-theme="light"] .headset-compact-btn:hover    { background: #f5f5f5; color: #222; }
+[data-theme="light"] .headset-compact-btn.open     { background: #f0f0f0; color: #111; }
+[data-theme="light"] .headset-compact-panel        { box-shadow: 0 10px 30px rgba(0,0,0,0.12); }
+[data-theme="light"] .headset-compact-item         { color: #555; }
+[data-theme="light"] .headset-compact-item:hover   { color: #111; }
+[data-theme="light"] .topbar-btn:hover             { background: #f5f5f5; color: #333; }
+[data-theme="light"] .topbar-title                 { color: #aaa; }
