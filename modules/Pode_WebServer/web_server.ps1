@@ -51,6 +51,8 @@ $adbPath    = $null
 $adbPort    = 5555
 $apkPath    = $null
 $apkPackage = 'tdg.oculuswirelessadb'
+$wifiSsid   = ''
+$wifiPwd    = ''
 try {
     $cfg = Get-Content $ConfigFilePath -Raw -ErrorAction Stop | ConvertFrom-Json
     if ($null -ne $cfg.WebServer.port)        { $port    = [int]$cfg.WebServer.port }
@@ -64,6 +66,8 @@ try {
                    Join-Path -ChildPath $cfg.apk.adbWirelessActivatorApk
     }
     if ($cfg.apk.adbWirelessActivatorPackageName) { $apkPackage = $cfg.apk.adbWirelessActivatorPackageName }
+    if ($cfg.WIFI.wifi_ssid) { $wifiSsid = $cfg.WIFI.wifi_ssid }
+    if ($cfg.WIFI.wifi_pwd)  { $wifiPwd  = $cfg.WIFI.wifi_pwd  }
 } catch {
     Write-Log ($msg.WebServerConfigReadFailed -f $port) -Level WARNING
 }
@@ -811,6 +815,58 @@ try {
             continue
         }
 
+        # API: POST /api/connectwifi  - connects USB device to the configured WiFi network
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/connectwifi') {
+            try {
+                $result = @{ ok = $false; error = '' }
+                if (-not ($adbPath -and (Test-Path $adbPath))) {
+                    $result.error = 'ADB not found.'
+                } elseif (-not $wifiSsid) {
+                    $result.error = 'No WiFi SSID configured.'
+                } else {
+                    # Find USB device
+                    $usbDeviceId = (& $adbPath devices 2>&1 |
+                        Where-Object { $_ -match '^\S+\s+device$' -and $_ -notmatch '^\*' -and $_ -notmatch '^\d+\.\d+' } |
+                        Select-Object -First 1) -replace '\s+device$', ''
+                    if (-not $usbDeviceId) {
+                        $result.error = 'No USB device found.'
+                    } else {
+                        $connectOut = & $adbPath -s $usbDeviceId shell cmd wifi connect-network `"$wifiSsid`" wpa2 `"$wifiPwd`" 2>&1
+                        if ($connectOut -match 'successfully|connected|Network connection initiated') {
+                            $result.ok = $true
+                        } else {
+                            # Try alternate: still mark ok if no error returned
+                            if ($LASTEXITCODE -eq 0 -and $connectOut -notmatch 'error|failed|unknown') {
+                                $result.ok = $true
+                            } else {
+                                $result.error = ($connectOut -join ' ').Trim()
+                                if (-not $result.error) { $result.error = 'Connection command failed.' }
+                            }
+                        }
+                    }
+                }
+                $jsonOut   = ConvertTo-Json $result -Compress
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonOut)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"Internal error"}')
+                    $response.StatusCode      = 200
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
         # API: GET /api/usbdeviceinfo  - returns full details of USB-connected ADB device
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/usbdeviceinfo') {
             try {
@@ -830,6 +886,7 @@ try {
                             model             = $details.Model
                             serialNumber      = $details.SerialNumber
                             ssid              = $details.WiFiSSID
+                            expectedSsid      = $wifiSsid
                             wifiAdbOpen       = $details.WifiAdbOpen
                             apkInstalled      = $details.ApkInstalled
                             alreadyRegistered = $alreadyReg

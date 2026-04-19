@@ -306,6 +306,7 @@
         </svg>
         Status
       </button>
+      <script>document.write(TopBar.manageDevicesBtnHTML)</script>
       <script>document.write(TopBar.configMenuHTML)</script>
     </div>
 
@@ -799,6 +800,7 @@
 
     // ── Boot ─────────────────────────────────────────────────────────────────
     TopBar.initCompact();
+    TopBar.initManageDevicesBtn();
     buildHeadsetToggles();
 
     var ro = new ResizeObserver(applyScale);

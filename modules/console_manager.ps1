@@ -50,6 +50,7 @@ function Show-MainMenu {
         Write-Host $msg.RecordingManagement -BackgroundColor DarkBlue -ForegroundColor White
         Write-Host $msg.VideoRecast -BackgroundColor DarkMagenta -ForegroundColor White
         Write-Host $msg.FilesFolders -BackgroundColor DarkCyan -ForegroundColor Black 
+        Write-Host $msg.ServicesManagement -BackgroundColor DarkGray -ForegroundColor White
         Write-Host $msg.Quit
         Write-Host $msg.AnyOtherKey
         Write-Host
@@ -123,6 +124,7 @@ function Show-MainMenu {
                 'F' { Write-Host $msg.FilesFoldersTitle
                         Show-SubMenu-FilesAndFolders
                     }
+                'W' { Show-SubMenu-Services }
                 '9' {
                     $ping = Test-Connection -ComputerName google.com -Count 2
                     if ($ping) {
@@ -803,6 +805,71 @@ function Show-SubMenu-ScrcpyOptions {
         } while ($opt -ne '0')
 
     } while ($true)
+}
+
+
+function Show-SubMenu-Services {
+    do {
+        Clear-Host
+        Write-Host $msg.ServicesTitle -ForegroundColor Cyan
+
+        # --- Web server status ---
+        $wsPidFile = Join-Path $global:ScriptPath "data\webserver.pid"
+        $wsPid     = $null
+        if (Test-Path $wsPidFile) {
+            $wsPid = [int](Get-Content $wsPidFile -Raw -ErrorAction SilentlyContinue)
+        }
+        $wsRunning = $wsPid -and (Get-Process -Id $wsPid -ErrorAction SilentlyContinue)
+        $wsStatus  = if ($wsRunning) { $msg.ServicesRunning -f $wsPid } else { $msg.ServicesStopped }
+        Write-Host ($msg.ServicesWebServerStatus -f $wsStatus) -ForegroundColor $(if ($wsRunning) { 'Green' } else { 'Red' })
+
+        # --- MediaMtx status ---
+        $mtxProc   = Get-Process -Name "mediamtx" -ErrorAction SilentlyContinue | Select-Object -First 1
+        $mtxStatus = if ($mtxProc) { $msg.ServicesRunning -f $mtxProc.Id } else { $msg.ServicesStopped }
+        Write-Host ($msg.ServicesMediaMtxStatus -f $mtxStatus) -ForegroundColor $(if ($mtxProc) { 'Green' } else { 'Red' })
+
+        Write-Host ""
+        Write-Host $msg.ServicesChoiceWebServer -BackgroundColor DarkBlue -ForegroundColor White
+        Write-Host $msg.ServicesChoiceStopWS    -BackgroundColor DarkBlue -ForegroundColor White
+        Write-Host $msg.ServicesChoiceMediaMtx  -BackgroundColor DarkMagenta -ForegroundColor White
+        Write-Host $msg.ServicesChoiceStopMtx   -BackgroundColor DarkMagenta -ForegroundColor White
+        Write-Host $msg.ServicesChoiceBack
+
+        $choice = Read-Host $msg.EnterChoice
+
+        switch ($choice) {
+            '1' {
+                Start-WebServer -Restart
+                Write-Log $msg.ServicesWebServerRestarted -Level SUCCESS
+                Start-Sleep -Seconds 1
+            }
+            '2' {
+                $wsPidFile2 = Join-Path $global:ScriptPath "data\webserver.pid"
+                if (Test-Path $wsPidFile2) {
+                    $pid2 = [int](Get-Content $wsPidFile2 -Raw -ErrorAction SilentlyContinue)
+                    if ($pid2 -and (Get-Process -Id $pid2 -ErrorAction SilentlyContinue)) {
+                        Stop-Process -Id $pid2 -Force -ErrorAction SilentlyContinue
+                    }
+                    Remove-Item $wsPidFile2 -Force -ErrorAction SilentlyContinue
+                }
+                $global:WebServerProcess = $null
+                Write-Log $msg.ServicesWebServerStopped -Level INFO
+                Start-Sleep -Seconds 1
+            }
+            '3' {
+                Stop-MediaMtx
+                Start-Sleep -Milliseconds 500
+                Start-MediaMtx
+                Write-Log $msg.ServicesMediaMtxRestarted -Level SUCCESS
+                Start-Sleep -Seconds 1
+            }
+            '4' {
+                Stop-MediaMtx
+                Write-Log $msg.ServicesMediaMtxStopped -Level INFO
+                Start-Sleep -Seconds 1
+            }
+        }
+    } while ($choice -ne '0')
 }
 
 
