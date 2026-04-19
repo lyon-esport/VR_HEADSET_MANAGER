@@ -332,15 +332,21 @@ function Show-SubMenu-EditHeadset { #CHOICE 3
     Update-HeadsetField -ID ([int]$idInput) -Field $field -NewValue $newValue
 } # OK
 
+function Get-FavoriteAppsCachePath {
+    param ([string]$headsetName)
+    return Join-Path $global:ScriptPath "data\$(Convert-Displayname $headsetName)_favorite_apps.csv"
+}
+
 function Get-FavoriteApps {
-    $csvPath = Join-Path $global:ScriptPath "data\favorite_apps.csv"
+    param ([string]$headsetName = '')
+    $csvPath = if ($headsetName) { Get-FavoriteAppsCachePath $headsetName } else { Join-Path $global:ScriptPath "data\favorite_apps.csv" }
     if (-not (Test-Path $csvPath)) { return @() }
     return @(Import-Csv -Path $csvPath -Delimiter ",")
 }
 
 function Save-FavoriteApps {
-    param ([array]$favorites)
-    $csvPath = Join-Path $global:ScriptPath "data\favorite_apps.csv"
+    param ([array]$favorites, [string]$headsetName = '')
+    $csvPath = if ($headsetName) { Get-FavoriteAppsCachePath $headsetName } else { Join-Path $global:ScriptPath "data\favorite_apps.csv" }
     if ($favorites.Count -eq 0) {
         Set-Content -Path $csvPath -Value '"PackageName","DisplayName"' -Encoding UTF8
     } else {
@@ -396,7 +402,7 @@ function Show-SubMenu-LaunchApp {
     }
 
     do {
-        $favorites = @(Get-FavoriteApps)
+        $favorites = @(Get-FavoriteApps -headsetName $headset.Name)
         $favPkgs   = $favorites | Select-Object -ExpandProperty PackageName
 
         # Build display list: Meta Home always first, then other favorites, then the rest
@@ -467,13 +473,13 @@ function Show-SubMenu-LaunchApp {
             if ($favPkgs -contains $targetApp.PackageName) {
                 # Remove from favorites
                 $favorites = @($favorites | Where-Object { $_.PackageName -ne $targetApp.PackageName })
-                Save-FavoriteApps -favorites $favorites
+                Save-FavoriteApps -favorites $favorites -headsetName $headset.Name
                 Write-Log ($msg.LaunchAppFavRemoved -f $targetApp.DisplayName) -Level INFO
                 Write-Host ($msg.LaunchAppFavRemoved -f $targetApp.DisplayName) -ForegroundColor DarkGray
             } else {
                 # Add to favorites
                 $favorites += [PSCustomObject]@{ PackageName = $targetApp.PackageName; DisplayName = $targetApp.DisplayName }
-                Save-FavoriteApps -favorites $favorites
+                Save-FavoriteApps -favorites $favorites -headsetName $headset.Name
                 Write-Log ($msg.LaunchAppFavAdded -f $targetApp.DisplayName) -Level INFO
                 Write-Host ($msg.LaunchAppFavAdded -f $targetApp.DisplayName) -ForegroundColor Yellow
             }

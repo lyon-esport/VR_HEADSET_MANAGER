@@ -533,7 +533,7 @@
       showAllBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg> Show all installed apps';
       document.getElementById('launch-modal').style.display = 'flex';
       renderLaunchList([]);
-      fetch('/api/favoriteapps')
+      fetch('/api/favoriteapps?name=' + encodeURIComponent(_launchDn))
         .then(function(r) { return r.json(); })
         .then(function(favs) {
           _favoritePackages = {};
@@ -590,7 +590,7 @@
           sb.className = 'lm-star-btn' + (newFav ? ' active' : '');
           sb.title = newFav ? 'Remove from favorites' : 'Add to favorites';
           sb.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="' + (newFav ? 'currentColor' : 'none') + '" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
-          fetch('/api/togglefavorite', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ package: a.package, displayName: a.displayName, favorite: newFav }) }).catch(function() {});
+          fetch('/api/togglefavorite', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: _launchDn, package: a.package, displayName: a.displayName, favorite: newFav }) }).catch(function() {});
         });
       })(app, starBtn);
 
@@ -782,6 +782,15 @@
       setInterval(pollCsv, REFRESH_MS);
       pollHeadsetsCsv();
       setInterval(pollHeadsetsCsv, 10000);
+      // Pre-load favorite app names per headset for running app badge name resolution
+      document.querySelectorAll('#grid .cell').forEach(function(cell) {
+        var dn = cell.dataset.display;
+        if (!dn) return;
+        fetch('/api/favoriteapps?name=' + encodeURIComponent(dn))
+          .then(function(r) { return r.json(); })
+          .then(function(favs) { favs.forEach(function(a) { if (a.package && a.displayName) appNameCache[a.package] = a.displayName; }); })
+          .catch(function() {});
+      });
     });
   </script>
 </body>

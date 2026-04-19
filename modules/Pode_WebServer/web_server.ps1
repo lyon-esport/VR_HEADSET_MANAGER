@@ -264,6 +264,11 @@ try {
                 if ($appsCachePath.StartsWith($dataRoot) -and (Test-Path $appsCachePath)) {
                     Remove-Item $appsCachePath -Force -ErrorAction SilentlyContinue
                 }
+                # Delete per-headset favorites file
+                $favCacheP = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\${safeName}_favorite_apps.csv"))
+                if ($favCacheP.StartsWith($dataRoot) -and (Test-Path $favCacheP)) {
+                    Remove-Item $favCacheP -Force -ErrorAction SilentlyContinue
+                }
 
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
                 $response.StatusCode      = 200
@@ -467,12 +472,19 @@ try {
             continue
         }
 
-        # API: GET /api/favoriteapps  - returns Meta Home + favorites as JSON
+        # API: GET /api/favoriteapps?name=Q3_BLUE  - returns Meta Home + per-headset favorites as JSON
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/favoriteapps') {
             try {
+                $rawQuery  = $request.Url.Query.TrimStart('?')
+                $nameParam = if ($rawQuery -match '(?:^|&)name=([^&]+)') { [Uri]::UnescapeDataString($Matches[1]) } else { '' }
+                $safeName  = [regex]::Match(($nameParam -replace ' ','_'), '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+
                 $metaHomePkg = 'com.oculus.vrshell'
                 $metaHomeObj = @{ package = $metaHomePkg; displayName = 'Meta Home' }
-                $favCsvPath  = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\favorite_apps.csv"))
+                $favCsvPath  = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\${safeName}_favorite_apps.csv"))
+                $dataRoot    = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data"))
+                if (-not $favCsvPath.StartsWith($dataRoot)) { throw "Path traversal denied" }
                 $favList     = @($metaHomeObj)
                 if (Test-Path $favCsvPath) {
                     $favRows = Import-Csv -Path $favCsvPath -Delimiter ","
@@ -523,7 +535,7 @@ try {
                 $dataRoot     = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data"))
                 $appNamesPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\app_names.csv"))
                 $cachePath    = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\${safeName}_installed_apps.csv"))
-                $favCsvPath   = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\favorite_apps.csv"))
+                $favCsvPath   = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\${safeName}_favorite_apps.csv"))
                 $metaHomePkg  = 'com.oculus.vrshell'
 
                 if (-not $cachePath.StartsWith($dataRoot)) { throw "Path traversal denied" }
@@ -635,15 +647,16 @@ try {
             continue
         }
 
-        # API: POST /api/togglefavorite  body: {"package":"com.pkg","displayName":"App","favorite":true}
+        # API: POST /api/togglefavorite  body: {"name":"Q3_BLUE","package":"com.pkg","displayName":"App","favorite":true}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/togglefavorite') {
             try {
                 $reader  = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
                 $body    = $reader.ReadToEnd()
                 $reader.Close()
-                $json    = $body | ConvertFrom-Json
-                $safePkg = [regex]::Match($json.package, '^[\w\.\-]+$').Value
-                if (-not $safePkg) { throw "Invalid package name" }
+                $json     = $body | ConvertFrom-Json
+                $safePkg  = [regex]::Match($json.package, '^[\w\.\-]+$').Value
+                $safeName = [regex]::Match(($json.name -replace ' ','_'), '^[\w\-]+$').Value
+                if (-not $safePkg -or -not $safeName) { throw "Invalid input" }
                 # Protect Meta Home from being unfavorited
                 if ($safePkg -eq 'com.oculus.vrshell') {
                     $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
@@ -653,7 +666,7 @@ try {
                     $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
                     continue
                 }
-                $favCsvPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\favorite_apps.csv"))
+                $favCsvPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\${safeName}_favorite_apps.csv"))
                 $dataRoot   = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data"))
                 if (-not $favCsvPath.StartsWith($dataRoot)) { throw "Path traversal denied" }
 
