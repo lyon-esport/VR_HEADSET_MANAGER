@@ -77,10 +77,25 @@ function ConvertTo-ScrcpyArguments {
 function Get-ScrcpyProcess {
     param(
         [Parameter(Mandatory=$true)]
-        [string]$displayName
+        [string]$displayName,
+        [string]$headsetIP = ''
     )
-    return Get-Process -Name "scrcpy" -ErrorAction SilentlyContinue |
+    # Primary: match by window title (works when window is on the active virtual desktop)
+    $byTitle = Get-Process -Name "scrcpy" -ErrorAction SilentlyContinue |
         Where-Object { $_.MainWindowTitle -eq $displayName } |
+        Select-Object -First 1
+    if ($byTitle) { return $byTitle }
+
+    # Fallback: match by command line - handles windows on inactive virtual desktops
+    # where MainWindowTitle is empty. Requires either displayName or headsetIP in the cmdline.
+    return Get-Process -Name "scrcpy" -ErrorAction SilentlyContinue |
+        Where-Object {
+            $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($_.Id)" -ErrorAction SilentlyContinue).CommandLine
+            if (-not $cmdLine) { return $false }
+            if ($headsetIP -and $cmdLine -match [regex]::Escape($headsetIP)) { return $true }
+            if ($cmdLine -match [regex]::Escape($displayName)) { return $true }
+            return $false
+        } |
         Select-Object -First 1
 }
 
@@ -209,7 +224,7 @@ function Watch-ScrcpyProcesses {
         $headsetInfos = Get-KnownHeadsetInfos $headset
         if ($headsetInfos.ADBWifi -eq $true) {
             Write-Log ($msg.ScrcpyCheckProcess -f $headset.Name, $headset.IPAddress) -Level DEBUG
-            $runningScrcpyProcess_forThisheadset = Get-ScrcpyProcess -displayName (Convert-Displayname $headset.Name)
+            $runningScrcpyProcess_forThisheadset = Get-ScrcpyProcess -displayName (Convert-Displayname $headset.Name) -headsetIP $headset.IPAddress
             
             Write-Log ($msg.ScrcpyProcessFound -f $runningScrcpyProcess_forThisheadset) -Level DEBUG
             if (-not $runningScrcpyProcess_forThisheadset) {
