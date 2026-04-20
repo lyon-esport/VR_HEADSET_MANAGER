@@ -23,8 +23,10 @@ Here, let's add a buttons to :
 - Open logs folder and another to display last logs dynamically/Paused
 
 
-
 While leaving, the app restarts by itself sometimes
+
+When scrcpy is already running, if I switch to anoter desktop on Windows 11, it automatically start new scrcpy windows. It shouldn't.
+
 
 Let's see if it's possible to know if the headset is charging or discharging, even if the headset is connected to power.
 Then try to identify how long the headset can remain up an running based on the battery level, and the discharging speed.
@@ -36,5 +38,5 @@ Prevent as much as possible to set a hard coded value, path or parameters. If yo
 Many time when trying to test an import, start or reading of files with powsershell console, it fails as there is an accent caracter in the path, ensure future calls don't have this issue.
 
 
-While clicking on "configuration" button in the video, it does open the parameters view for all headsets.
-Is it possible to filter only the headset that calls the config button ?
+    While clicking on "configuration" button in the video, it does open the parameters view for all headsets.
+    Is it possible to filter only the headset that calls the config button ?
