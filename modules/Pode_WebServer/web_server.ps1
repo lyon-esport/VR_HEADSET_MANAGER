@@ -539,6 +539,43 @@ try {
             continue
         }
 
+        # API: GET /api/headsets  - returns all known headsets as JSON (from Get-KnownHeadsets)
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/headsets') {
+            try {
+                $rows = Get-KnownHeadsets
+                $jsonItems = @($rows | ForEach-Object {
+                    $row = $_
+                    '{"ID":' + [int]$row.ID +
+                    ',"Name":' + ($row.Name         | ConvertTo-Json) +
+                    ',"IPAddress":' + ($row.IPAddress  | ConvertTo-Json) +
+                    ',"Model":' + ($row.Model         | ConvertTo-Json) +
+                    ',"SerialNumber":' + ($row.SerialNumber | ConvertTo-Json) +
+                    ',"ScrcpyProfile":' + ($row.ScrcpyProfile | ConvertTo-Json) +
+                    ',"scrcpy_AutoRestart":' + ($row.scrcpy_AutoRestart | ConvertTo-Json) +
+                    ',"Record":' + ($row.Record       | ConvertTo-Json) +
+                    '}'
+                })
+                $json = '[' + ($jsonItems -join ',') + ']'
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
         # API: GET /api/favoriteapps?name=Q3_BLUE  - returns Meta Home + per-headset favorites as JSON
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/favoriteapps') {
             try {
