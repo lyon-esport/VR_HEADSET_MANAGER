@@ -36,9 +36,5 @@ Prevent as much as possible to set a hard coded value, path or parameters. If yo
 Many time when trying to test an import, start or reading of files with powsershell console, it fails as there is an accent caracter in the path, ensure future calls don't have this issue.
 
 
-    - Under video_monitor.html the window size is a little bit larger than the capured video, and there are black bands on the left and the right.
-    - Can you adapt the screen capture to the video capture size dynamically ?
-    - If there is no video (= scrcpy is not running for the headset), let's create a smaller square corresponding to the empty video. to get the [monitoring] image + available icons on the right like when the video is running.
-        In this case only display OFFLINE in the background, but don't try to load continuousely the stream.
-    - If the [monitoring] image does not exists, add a text with the headset name instead.
-    - The minimum video size currently configured is OR for larger screens, but if the web page is shorter, the wide of the video capture should be adapted to the browser window size.
+While clicking on "configuration" button in the video, it does open the parameters view for all headsets.
+Is it possible to filter only the headset that calls the config button ?

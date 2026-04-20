@@ -112,6 +112,7 @@ function Update-OBSVideoFile {
 
         $videoInfo = @{
             name                  = $headset.Name
+            display_name          = Convert-Displayname $headset.Name
             stream_path           = $streamPath
             mediamtx_webrtc_port  = $global:mediamtxWebrtcPort
             mediamtx_hls_port     = $global:mediamtxHlsPort
