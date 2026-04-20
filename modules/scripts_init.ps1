@@ -222,6 +222,11 @@ function Start-WebServer {
         }
         Remove-Item $webServerPidFile -Force -ErrorAction SilentlyContinue
         $global:WebServerProcess = $null
+
+        # Regenerate video monitor page from template before restart
+        if ($global:knownHeadsets) {
+            Write-VideoMonitor $global:knownHeadsets
+        }
     }
 
     # -- Start phase ----------------------------------------------------------
