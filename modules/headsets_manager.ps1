@@ -396,6 +396,70 @@ function Update-HeadsetField {
     #return $headsets
 } # OK
 
+# Rename-Headset -OldName "Q3 BLUE" -NewName "Q3 Blue Lab"
+function Rename-Headset {
+    param (
+        [Parameter(Mandatory=$true)][string]$OldName,
+        [Parameter(Mandatory=$true)][string]$NewName,
+        [array]$headsets = (Import-Csv -Path $global:knownHeadsetsFilePath)
+    )
+
+    $headset = $headsets | Where-Object { $_.Name -eq $OldName }
+    if (-not $headset) {
+        Write-Log ($msg.HeadsetIdNotFound -f $OldName) -Level ERROR
+        return $false
+    }
+
+    $oldDisplayName = Convert-Displayname $OldName
+    $newDisplayName = Convert-Displayname $NewName
+
+    # 1. Gracefully close the running scrcpy window for this headset (if any)
+    $scrcpyProc = Get-ScrcpyProcess -displayName $oldDisplayName
+    if ($scrcpyProc) {
+        Write-Log ("Closing scrcpy window for '$oldDisplayName' before rename...") -Level INFO
+        $closed = $scrcpyProc.CloseMainWindow()
+        if ($closed) { $scrcpyProc.WaitForExit(5000) | Out-Null }
+        if (-not $scrcpyProc.HasExited) {
+            Stop-Process -Id $scrcpyProc.Id -Force -ErrorAction SilentlyContinue
+        }
+        Write-Log ("scrcpy closed for '$oldDisplayName'.") -Level INFO
+    }
+
+    # 2. Rename in the headsets list and save (triggers Write-htmlMonitor + Write-VideoMonitor)
+    $headset.Name = $NewName
+    Save-Headsets -headsets $headsets
+    Write-Log ("Headset renamed: '$OldName' -> '$NewName'") -Level INFO
+
+    # 3. Delete old per-headset HTML files (monitoring + video)
+    $websiteDir = Join-Path $global:ScriptPath "website"
+    foreach ($suffix in @('[monitoring].html', '[video].html')) {
+        $oldFile = Join-Path $websiteDir ($oldDisplayName + $suffix)
+        if (Test-Path -LiteralPath $oldFile) {
+            Remove-Item -LiteralPath $oldFile -Force -ErrorAction SilentlyContinue
+            Write-Log ("Deleted old HTML: $oldFile") -Level DEBUG
+        }
+    }
+
+    # 4. Regenerate [video].html for the new name
+    $renamedRow = $headsets | Where-Object { $_.Name -eq $NewName }
+    if ($renamedRow) {
+        Update-OBSVideoFile -knownHeadsetsInfo ([System.Collections.ArrayList]@($renamedRow))
+        Write-Log ("Regenerated [video].html for '$newDisplayName'.") -Level DEBUG
+    }
+
+    # 5. Rename data files (installed_apps + favorites) if they exist
+    foreach ($suffix in @('_installed_apps.csv', '_favorite_apps.csv')) {
+        $oldDataFile = Join-Path $global:ScriptPath "data\$oldDisplayName$suffix"
+        $newDataFile = Join-Path $global:ScriptPath "data\$newDisplayName$suffix"
+        if (Test-Path $oldDataFile) {
+            Rename-Item -LiteralPath $oldDataFile -NewName (Split-Path $newDataFile -Leaf) -Force -ErrorAction SilentlyContinue
+            Write-Log ("Renamed data file: $oldDataFile -> $newDataFile") -Level DEBUG
+        }
+    }
+
+    return $true
+} # OK
+
 function Remove-Headset {
     param (
         [array]$headsets = (Import-Csv -Path $global:knownHeadsetsFilePath),
