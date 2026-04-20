@@ -1,0 +1,25 @@
+Add icons of the running application before the name
+
+    While a headset is connected to USB, if it is already connected to a wifi network, start wireless adb without requesting action from the user.
+    This can be triggered on every loop of KNOWN HEADSETS MONITORING console.
+    If needed, create a function for calling this usage.
+    I'll later trigger multiple actions or checks while a USB headset is connected.
+
+If the headset is connected using USB cable, let's get stream and any other information from USB instead of Wifi connection.
+Maybe that needs to check first of the loop for connection to the headset object of it's connected in USB first, and the, 
+
+
+Setup few parametes to manage on the headset :
+- Time before shutting down the screen
+- proximity sensor activation/desactivation
+- Guardian : Change detection of the limit - stationary, Guardian, enable/disable travel mode
+- Switch to Passthrough / VR mode
+- Switch hand tracking/controllers
+
+
+While leaving, the app restarts by itself sometimes
+
+While triggering the Invoke-UsbHeadsetActions function, USB is doing up/down at every run. is that normal ?
+
+Let's see if it's possible to know if the headset is charging or discharging, even if the headset is connected to power.
+Then try to identify how long the headset can remain up an running based on the battery level, and the discharging speed.

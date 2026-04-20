@@ -469,6 +469,85 @@ function Enable-AdbTcpIp {
 }
 
 
+function Invoke-UsbHeadsetActions {
+    <#
+    .SYNOPSIS
+    Runs automated background actions on a USB-connected headset. No user prompts.
+    Called on every VRMonitor loop iteration.
+
+    .DESCRIPTION
+    - Silently checks for a USB ADB device (single attempt, no prompts).
+    - Returns $null immediately if no USB device is present.
+    - If a USB headset is found and already connected to WiFi, enables TCP/IP
+      wireless ADB automatically.
+    - Returns a result object for use by future actions added to this function.
+    #>
+    param (
+        [int]$AdbPort = $global:adbPort_default,
+        [string]$adb  = $global:adbPath
+    )
+
+    if (-not $adb -or -not (Test-Path $adb)) { return $null }
+
+    try {
+        # Single-attempt silent USB check - no prompts
+        $usbLine = & $adb devices 2>$null | Where-Object { $_ -match "`tdevice$" -and $_ -notmatch ':' }
+        if (-not $usbLine) { return $null }
+
+        $deviceId = ($usbLine -split "`t")[0].Trim()
+        $model    = ((& $adb -s $deviceId shell getprop ro.product.model 2>$null) -join '').Trim()
+        Write-Log ($msg.UsbHeadsetConnected -f $model, $deviceId) -Level INFO
+
+        # Check if the headset has a WiFi IP
+        $ip = ''
+        $ipOutput = & $adb -s $deviceId shell ip -f inet addr show wlan0 2>$null
+        foreach ($line in $ipOutput) {
+            if ($line -match 'inet\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/') {
+                $ip = $Matches[1]; break
+            }
+        }
+
+        $wifiAdbEnabled = $false
+        if ($ip) {
+            # Check if WiFi ADB is already active - avoid calling tcpip again (causes USB drop)
+            $wifiDeviceId = "${ip}:${AdbPort}"
+            $adbDeviceList = & $adb devices 2>$null
+            $alreadyConnected = $adbDeviceList | Where-Object { $_ -match ("^" + [regex]::Escape($wifiDeviceId) + "\s+device$") }
+
+            if (-not $alreadyConnected) {
+                # Enable TCP/IP mode - this disconnects USB momentarily (by design)
+                & $adb -s $deviceId tcpip $AdbPort 2>$null | Out-Null
+                Start-Sleep -Seconds 1
+                Write-Log ($msg.UsbWifiAdbEnabled -f $model, $ip, $AdbPort) -Level SUCCESS
+            } else {
+                Write-Log ($msg.AdbWifiAlreadyConnected -f $wifiDeviceId) -Level DEBUG
+            }
+            $wifiAdbEnabled = $true
+
+            # If the serial number is known but the IP differs, update it
+            $knownHeadsets = Get-KnownHeadsets
+            $match = $knownHeadsets | Where-Object { $_.SerialNumber -eq $deviceId } | Select-Object -First 1
+            if ($match -and $match.IPAddress -ne $ip) {
+                Write-Log ($msg.UsbHeadsetIpUpdated -f $model, $match.IPAddress, $ip) -Level SUCCESS
+                Update-HeadsetField -headsets $knownHeadsets -ID ([int]$match.ID) -Field 'IPAddress' -NewValue $ip
+            }
+        } else {
+            Write-Log ($msg.UsbHeadsetNoWifiIp -f $model) -Level DEBUG
+        }
+
+        return [PSCustomObject]@{
+            deviceId       = $deviceId
+            model          = $model
+            ip             = $ip
+            wifiAdbEnabled = $wifiAdbEnabled
+        }
+    } catch {
+        Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
+        return $null
+    }
+}
+
+
 function Get-AdbUsbDeviceDetails {
     <#
     .SYNOPSIS

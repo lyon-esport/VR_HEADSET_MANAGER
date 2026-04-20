@@ -110,6 +110,9 @@ function Start-VRMonitor {
 
             $knownHeadsetsInfo = [System.Collections.ArrayList]@()
 
+            # Run background actions on any USB-connected headset (no prompts)
+            Invoke-UsbHeadsetActions | Out-Null
+
             Write-Log ($msg.CheckingHeadsets -f $knownHeadsets.Count) -Level DEBUG
             foreach ($headset in $knownHeadsets){
                 $headsetInfo = Get-KnownHeadsetInfos -knownHeadset $headset

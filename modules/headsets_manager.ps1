@@ -95,7 +95,7 @@ function Show-HeadsetsConfig {
             [array]$FieldsToShow = @("ID","Name","IPAddress","scrcpy_AutoRestart","Record","ScrcpyProfile","Model","SerialNumber"),
             [bool]$UseColors = $true
         )
-    $knownHeadsetsConfig = @(Import-Csv -Path $global:knownHeadsetsFilePath -Delimiter "," )
+    $knownHeadsetsConfig = @(Get-KnownHeadsets)
 
     if (-not $knownHeadsetsConfig -or $knownHeadsetsConfig.Count -eq 0) {
         Write-Log ($msg.NoHeadsetFoundInFile -f $global:knownHeadsetsFilePath) -Level INFO
@@ -336,7 +336,7 @@ function Show-HeadsetsTableColored {
 #Add-Headset -IPAddress "192.168.1.223" -Name "Q3 Manu"
 function Add-Headset {
     param (
-        [array]$headsets = (Import-Csv -Path $global:knownHeadsetsFilePath),  # Default value: CSV file
+        [array]$headsets = (Get-KnownHeadsets),  # Default value: CSV file
         [Parameter(Mandatory = $true)][string]$IPAddress,
         [string]$Name = "New headset"#,
         #[int]$AdbPort = 5555
@@ -373,7 +373,7 @@ function Add-Headset {
 # Update-HeadsetField -ID ([int]"1") -Field "SerialNumber" -NewValue "ABC123"
 function Update-HeadsetField {
     param (
-        [array]$headsets = (Import-Csv -Path $global:knownHeadsetsFilePath),  # Default value: CSV file
+        [array]$headsets = (Get-KnownHeadsets),  # Default value: CSV file
         [int]$ID,
         [string]$Field,
         [string]$NewValue
@@ -401,7 +401,7 @@ function Rename-Headset {
     param (
         [Parameter(Mandatory=$true)][string]$OldName,
         [Parameter(Mandatory=$true)][string]$NewName,
-        [array]$headsets = (Import-Csv -Path $global:knownHeadsetsFilePath)
+        [array]$headsets = (Get-KnownHeadsets)
     )
 
     $headset = $headsets | Where-Object { $_.Name -eq $OldName }
@@ -462,7 +462,7 @@ function Rename-Headset {
 
 function Remove-Headset {
     param (
-        [array]$headsets = (Import-Csv -Path $global:knownHeadsetsFilePath),
+        [array]$headsets = (Get-KnownHeadsets),
         [int]$ID
     )
 
