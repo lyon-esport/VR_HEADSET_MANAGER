@@ -1,4 +1,4 @@
-
+﻿
 # VR Headset Manager - Static Web Server
 # Serves all files under the /website folder over HTTP using System.Net.HttpListener.
 # Does NOT require admin - relies on the URL ACL registered once by computer_setup.ps1:
@@ -158,6 +158,52 @@ try {
             continue
         }
 
+        # API: POST /api/renameheadset  body: {"name":"Q3_BLUE","newname":"Q3 Red"}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/renameheadset') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body    = $reader.ReadToEnd()
+                $reader.Close()
+                $json    = $body | ConvertFrom-Json
+
+                # name is the internal display_name (underscores), newname is raw
+                $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+
+                $newName = $json.newname.Trim()
+                # Allow letters, digits, spaces, hyphens, underscores (1-40 chars)
+                if (-not ($newName -match '^[\w\s\-]{1,40}$')) { throw "Invalid new name" }
+
+                # Resolve old (display) name from the CSV and delegate to Rename-Headset
+                $rows   = Get-KnownHeadsets
+                $oldRow = $rows | Where-Object { ($_.Name -replace ' ', '_') -eq $safeName } | Select-Object -First 1
+                if (-not $oldRow) { throw "Headset not found" }
+
+                $ok = Rename-Headset -OldName $oldRow.Name -NewName $newName -headsets $rows
+                if ($ok) {
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes(('{"ok":true,"newname":' + ($newName | ConvertTo-Json -Compress) + '}'))
+                } else {
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"not found"}')
+                }
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
         # API: POST /api/updateip  body: {"name":"Q3_BLUE","ip":"192.168.1.99"}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/updateip') {
             try {
@@ -172,22 +218,17 @@ try {
                 $safeIp = [regex]::Match($json.ip, '^(\d{1,3}\.){3}\d{1,3}$').Value
                 if (-not $safeIp) { throw "Invalid IP address" }
 
-                $csvPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_headsets.csv"))
-                $dataRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data"))
-                if (-not $csvPath.StartsWith($dataRoot)) { throw "Path traversal denied" }
-
-                $rows = Import-Csv -Path $csvPath
+                $rows = Get-KnownHeadsets
                 $updated = $false
                 foreach ($row in $rows) {
-                    $dn = ($row.Name -replace ' ', '_')
-                    if ($dn -eq $safeName) {
+                    if (($row.Name -replace ' ', '_') -eq $safeName) {
                         $row.IPAddress = $safeIp
                         $updated = $true
                         break
                     }
                 }
                 if ($updated) {
-                    $rows | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8 -Force
+                    Save-Headsets -headsets $rows
                     $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
                 } else {
                     $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"not found"}')
