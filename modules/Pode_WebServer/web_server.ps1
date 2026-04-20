@@ -1097,10 +1097,13 @@ try {
                 $ext      = [System.IO.Path]::GetExtension($resolvedFile).ToLower()
                 $mime     = if ($mimeTypes.ContainsKey($ext)) { $mimeTypes[$ext] } else { 'application/octet-stream' }
                 $bytes    = [System.IO.File]::ReadAllBytes($resolvedFile)
+                $lastMod  = [System.IO.File]::GetLastWriteTimeUtc($resolvedFile).ToString('R')
 
                 $response.StatusCode        = 200
                 $response.ContentType       = $mime
                 $response.ContentLength64   = $bytes.Length
+                $response.Headers.Add('Last-Modified', $lastMod)
+                $response.Headers.Add('Cache-Control', 'no-cache')
                 $response.OutputStream.Write($bytes, 0, $bytes.Length)
             } else {
                 $response.StatusCode = 404

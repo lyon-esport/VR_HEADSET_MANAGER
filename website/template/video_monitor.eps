@@ -318,7 +318,7 @@
       <div class="v-sep"></div>
       <button class="actions-btn" id="status-toggle" title="Toggle status overlay">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+          <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
         </svg>
         Status
       </button>
@@ -886,6 +886,26 @@
       setInterval(function() {
         document.querySelectorAll('#grid .cell:not(.no-stream)').forEach(adaptCellAspectRatio);
       }, 1500);
+
+      // Reload monitoring iframes when the file changes (Last-Modified polling)
+      var _monLastModified = {};
+      setInterval(function() {
+        document.querySelectorAll('#grid .cell .status-frame').forEach(function(fr) {
+          var cell = fr.closest('.cell');
+          if (!cell) return;
+          var dn  = cell.dataset.display;
+          var url = dn + '[monitoring].html';
+          fetch(url, { method: 'HEAD', cache: 'no-store' })
+            .then(function(r) {
+              var lm = r.headers.get('Last-Modified') || r.headers.get('ETag') || '';
+              if (lm && lm !== _monLastModified[dn]) {
+                _monLastModified[dn] = lm;
+                fr.src = url + '?_=' + Date.now();
+              }
+            })
+            .catch(function() {});
+        });
+      }, REFRESH_MS);
     });
   </script>
 </body>
