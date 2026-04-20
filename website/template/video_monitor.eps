@@ -55,16 +55,17 @@
       white-space: nowrap;
     }
 
-    /* Video grid */
+    /* Video grid - flexbox so streaming and offline tiles can have different sizes */
     .grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(var(--min-video-w), 1fr));
+      display: flex;
+      flex-wrap: wrap;
       gap: var(--grid-gap);
       padding: var(--grid-gap);
-      align-items: start;
+      align-content: flex-start;
+      align-items: flex-start;
     }
 
-    /* Cell */
+    /* Cell - streaming (default) */
     .cell {
       position: relative;
       aspect-ratio: 16 / 9;
@@ -72,8 +73,21 @@
       background: #000;
       border-radius: 3px;
       container-type: size;
+      flex: 1 1 var(--min-video-w);
+      min-width: min(var(--min-video-w), 100%);
+      max-width: 100%;
     }
     .cell.hidden { display: none; }
+
+    /* Compact offline tile - no video stream, monitoring frame fills cell */
+    .cell.no-stream {
+      flex: 0 0 auto;
+      width: min(360px, 100%);
+    }
+    .cell.no-stream .video-frame    { display: none; }
+    .cell.no-stream .status-wrapper { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 3px; }
+    .cell.no-stream .cell-actions   { opacity: 1; }
+    .cell.no-stream .running-app    { display: none !important; }
 
     /* Full-cell video iframe */
     .video-frame {
@@ -249,6 +263,8 @@
       pointer-events: none;
     }
     .cell.offline .offline-overlay { display: flex; }
+    /* In no-stream mode the OFFLINE label sits behind the monitoring frame */
+    .cell.no-stream .offline-overlay { z-index: 5; }
 
     /* ── Light mode ─────────────────────────────────────────────────────────── */
     [data-theme="light"] {
@@ -761,23 +777,68 @@
       });
     }
 
-    // ── Offline state update ──────────────────────────────────────────────────
+    // ── Video aspect ratio detection (removes black bands) ───────────────────
+    var _detectedRatios = {};
+    function adaptCellAspectRatio(cell) {
+      var dn = cell.dataset.display;
+      if (_detectedRatios[dn]) return; // already adapted
+      var frame = cell.querySelector('.video-frame');
+      if (!frame) return;
+      try {
+        var doc = frame.contentWindow && frame.contentWindow.document;
+        if (!doc) return;
+        var video = doc.querySelector('video');
+        if (video && video.videoWidth > 0 && video.videoHeight > 0) {
+          var ratio = (video.videoWidth / video.videoHeight).toFixed(4);
+          _detectedRatios[dn] = ratio;
+          cell.style.aspectRatio = ratio;
+          applyScale();
+        }
+      } catch(e) {}
+    }
+
+    // ── Offline / no-stream state update ─────────────────────────────────────
     function applyOfflineState() {
+      var scaleNeeded = false;
       document.querySelectorAll('#grid .cell').forEach(function(cell) {
-        var dn   = cell.dataset.display;
-        var stat = headsetStatus[dn] || { ping: false, scrcpy: false };
-        cell.classList.toggle('offline', !stat.ping);
+        var dn        = cell.dataset.display;
+        var stat      = headsetStatus[dn] || { ping: false, scrcpy: false };
+        var wasStream = !cell.classList.contains('no-stream');
+        var streaming = stat.scrcpy;
+
+        cell.classList.toggle('offline',   !stat.ping);
+        if (wasStream !== streaming) scaleNeeded = true;
+        cell.classList.toggle('no-stream', !streaming);
+
+        // Manage video-frame src: load only when streaming, clear otherwise
+        var videoFrame  = cell.querySelector('.video-frame');
+        var expectedSrc = dn + '[video].html';
+        if (videoFrame) {
+          var curSrc = videoFrame.getAttribute('src') || '';
+          if (streaming && curSrc !== expectedSrc) {
+            videoFrame.setAttribute('src', expectedSrc);
+            delete _detectedRatios[dn]; // reset so ratio is re-detected on new stream
+            cell.style.aspectRatio = '16 / 9'; // reset to default until detected
+          } else if (!streaming && curSrc !== '') {
+            videoFrame.setAttribute('src', ''); // stop loading stream
+          }
+        }
+
         var btn = document.querySelector('[data-headset="' + dn + '"]');
         if (btn) btn.classList.toggle('offline', !stat.scrcpy);
         var compactItem = document.querySelector('[data-compact-headset="' + dn + '"]');
         if (compactItem) compactItem.classList.toggle('offline', !stat.scrcpy);
       });
+      if (scaleNeeded) applyScale();
     }
 
     // ── Scale status overlays ────────────────────────────────────────────────
     function applyScale() {
       document.querySelectorAll('#grid .cell').forEach(function(cell) {
-        var scale = (cell.offsetWidth / 3) / NATURAL_W;
+        var isNoStream = cell.classList.contains('no-stream');
+        // Streaming: status overlay is 1/3 of cell width; no-stream: fills entire cell
+        var wrapperW = isNoStream ? cell.offsetWidth : (cell.offsetWidth / 3);
+        var scale = wrapperW / NATURAL_W;
         cell.querySelectorAll('.status-frame').forEach(function(fr) {
           fr.style.width     = NATURAL_W + 'px';
           fr.style.height    = NATURAL_H + 'px';
@@ -812,7 +873,7 @@
       setInterval(pollCsv, REFRESH_MS);
       pollHeadsetsCsv();
       setInterval(pollHeadsetsCsv, 10000);
-      // Pre-load favorite app names per headset for running app badge name resolution
+      // Check monitoring HTML existence and pre-load favorite app names
       document.querySelectorAll('#grid .cell').forEach(function(cell) {
         var dn = cell.dataset.display;
         if (!dn) return;
@@ -821,6 +882,10 @@
           .then(function(favs) { favs.forEach(function(a) { if (a.package && a.displayName) appNameCache[a.package] = a.displayName; }); })
           .catch(function() {});
       });
+      // Periodically detect actual video dimensions to eliminate black bands
+      setInterval(function() {
+        document.querySelectorAll('#grid .cell:not(.no-stream)').forEach(adaptCellAspectRatio);
+      }, 1500);
     });
   </script>
 </body>

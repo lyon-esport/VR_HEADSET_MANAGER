@@ -1,9 +1,5 @@
 Add icons of the running application before the name
 
-    While a headset is connected to USB, if it is already connected to a wifi network, start wireless adb without requesting action from the user.
-    This can be triggered on every loop of KNOWN HEADSETS MONITORING console.
-    If needed, create a function for calling this usage.
-    I'll later trigger multiple actions or checks while a USB headset is connected.
 
 If the headset is connected using USB cable, let's get stream and any other information from USB instead of Wifi connection.
 Maybe that needs to check first of the loop for connection to the headset object of it's connected in USB first, and the, 
@@ -16,10 +12,33 @@ Setup few parametes to manage on the headset :
 - Switch to Passthrough / VR mode
 - Switch hand tracking/controllers
 
+In config button in the top bar :
+Replace Headset Actions section by Help button.
+- In this new page, add a button to restart Web server, MediaMTX server, and list all links that can be usefull for troubleshooting web server or mediamtx app.
+- Add a link to the github web page : https://github.com/lyon-esport/VR_HEADSET_MANAGER
+Add anoter buttin in help button for app Configuration
+Here, let's add a buttons to :
+- Open and edit the config.json file
+- Configure path to records (and a way to open it)
+- Open logs folder and another to display last logs dynamically/Paused
+
+
 
 While leaving, the app restarts by itself sometimes
 
-While triggering the Invoke-UsbHeadsetActions function, USB is doing up/down at every run. is that normal ?
-
 Let's see if it's possible to know if the headset is charging or discharging, even if the headset is connected to power.
 Then try to identify how long the headset can remain up an running based on the battery level, and the discharging speed.
+
+Update the copilot-instructions :
+in the copilot-instruction file, list all available functions. This can maybe help to identfy functions exists already and use it for future needs.
+Ensure any new function created is listed into this list.
+Prevent as much as possible to set a hard coded value, path or parameters. If you are not sure, ask me if it's acceptable.
+Many time when trying to test an import, start or reading of files with powsershell console, it fails as there is an accent caracter in the path, ensure future calls don't have this issue.
+
+
+    - Under video_monitor.html the window size is a little bit larger than the capured video, and there are black bands on the left and the right.
+    - Can you adapt the screen capture to the video capture size dynamically ?
+    - If there is no video (= scrcpy is not running for the headset), let's create a smaller square corresponding to the empty video. to get the [monitoring] image + available icons on the right like when the video is running.
+        In this case only display OFFLINE in the background, but don't try to load continuousely the stream.
+    - If the [monitoring] image does not exists, add a text with the headset name instead.
+    - The minimum video size currently configured is OR for larger screens, but if the web page is shorter, the wide of the video capture should be adapted to the browser window size.
