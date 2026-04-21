@@ -241,20 +241,22 @@
             '</a>' +
           '</div>' +
 
+          '<div class="drop-divider"></div>' +
+
           '<div class="drop-section">' +
-            '<div class="drop-section-label">Headset actions</div>' +
-            '<button class="drop-item disabled">' +
+            '<a class="drop-item" href="/help.html">' +
               '<svg class="drop-item-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
-                '<path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/>' +
+                '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>' +
               '</svg>' +
-              'Connect headset<span class="soon">soon</span>' +
-            '</button>' +
-            '<button class="drop-item disabled">' +
+              'Help &amp; Diagnostics' +
+            '</a>' +
+            '<a class="drop-item" href="/app_config.html">' +
               '<svg class="drop-item-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
-                '<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>' +
+                '<circle cx="12" cy="12" r="3"/>' +
+                '<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>' +
               '</svg>' +
-              'Start streaming<span class="soon">soon</span>' +
-            '</button>' +
+              'App Configuration' +
+            '</a>' +
           '</div>' +
 
           '<div class="drop-section">' +
@@ -291,8 +293,7 @@
     });
 
     // Theme toggle
-    function _updateThemeBtn() {
-      var lbl = document.getElementById('theme-toggle-label');
+    function _updateThemeBtn() {      var lbl = document.getElementById('theme-toggle-label');
       var ico = document.getElementById('theme-toggle-icon');
       var isLight = document.documentElement.getAttribute('data-theme') === 'light';
       if (lbl) lbl.textContent = isLight ? 'Dark Mode' : 'Light Mode';
@@ -321,4 +322,31 @@
       });
     }
   });
+
+  // Utility for pages: TopBar.apiPost(url, label, btn) - POST with visual feedback
+  window.TopBar.apiPost = function(url, label, btn) {
+    if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; }
+    var origHTML = btn ? btn.innerHTML : '';
+    fetch(url, { method: 'POST' })
+      .then(function(r) { return r.json(); })
+      .then(function(j) {
+        if (j && j.ok) {
+          if (btn) btn.innerHTML = btn.innerHTML.replace(/>[^<]*(<\/button>)?$/, function(m) { return '>Done' + (m.indexOf('</') !== -1 ? '</button>' : ''); });
+          setTimeout(function() { if (btn) { btn.innerHTML = origHTML; btn.disabled = false; btn.style.opacity = ''; } }, 2000);
+        } else {
+          if (btn) { btn.disabled = false; btn.style.opacity = ''; }
+          alert((label || 'Action') + ' failed: ' + (j && j.error ? j.error : 'unknown error'));
+        }
+      })
+      .catch(function() {
+        if (btn) { btn.disabled = false; btn.style.opacity = ''; }
+        alert((label || 'Action') + ': server unreachable.');
+      });
+  };
+
+  // Placeholder kept for compatibility (modal moved to app_config.html)
+  function _openLogsModal() {
+    // Moved to app_config.html
+  }
+
 }());
