@@ -204,6 +204,44 @@ try {
             continue
         }
 
+        # API: POST /api/reorderheadsets  body: {"order":["Q3_BLUE","Q3_RED",...]}
+        # Delegates to Reorder-Headsets (headsets_manager.ps1) which saves CSV and regenerates HTML monitors.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/reorderheadsets') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body    = $reader.ReadToEnd()
+                $reader.Close()
+                $json    = $body | ConvertFrom-Json
+
+                if (-not $json.order -or $json.order.Count -eq 0) { throw "Empty order" }
+
+                # Validate each name token
+                foreach ($tok in $json.order) {
+                    if ($tok -notmatch '^[\w\-]+$') { throw "Invalid name token: $tok" }
+                }
+
+                Reorder-Headsets -OrderedDisplayNames ([string[]]$json.order)
+
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
         # API: POST /api/updateip  body: {"name":"Q3_BLUE","ip":"192.168.1.99"}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/updateip') {
             try {
