@@ -960,9 +960,10 @@ function Get-HeadsetForegroundApp {
 }
 
 
-# Resolves a Quest package name to its display name and icon URL.
+# Resolves a Quest package name to its display name, icon URL, and local icon path.
 # Checks data/app_names.csv first; on cache miss fetches from:
 #   https://github.com/threethan/MetaMetadata (updates daily, covers all Meta Store + SideQuest apps)
+# Icons are downloaded to website/assets/app_icons/ and served directly by the web server.
 # Unknown packages are cached with DisplayName = PackageName and empty IconUrl so the
 # network is never hit more than once per package.
 function Get-AppDisplayName {
@@ -974,36 +975,83 @@ function Get-AppDisplayName {
     $cacheFile = Join-Path $global:ScriptPath "data\app_names.csv"
 
     # Load cache into a hashtable keyed by PackageName
+    # Normalize every row to include LocalIconPath (backward compat with older CSV versions)
     $cache = @{}
     if (Test-Path $cacheFile) {
         foreach ($row in @(Import-Csv -Path $cacheFile -Delimiter ",")) {
+            if ($null -eq $row.PSObject.Properties['LocalIconPath']) {
+                Add-Member -InputObject $row -NotePropertyName 'LocalIconPath' -NotePropertyValue '' -Force
+            }
             $cache[$row.PackageName] = $row
         }
     }
 
-    # Return cached entry if present
+    # Return cached entry if present (including known-missing placeholder entries)
     if ($cache.ContainsKey($PackageName)) {
         return $cache[$PackageName]
     }
 
-    # Cache miss - fetch from MetaMetadata
-    $url = "https://raw.githubusercontent.com/threethan/MetaMetadata/main/data/common/$PackageName.json"
-    try {
-        $response = Invoke-RestMethod -Uri $url -TimeoutSec 8 -ErrorAction Stop
-        $newEntry = [PSCustomObject]@{
-            PackageName = $PackageName
-            DisplayName = $response.name
-            IconUrl     = if ($response.square) { $response.square } elseif ($response.icon) { $response.icon } else { "" }
+    # Cache miss - try each MetaMetadata subfolder in priority order
+    $baseUrl  = "https://raw.githubusercontent.com/threethan/MetaMetadata/main/data"
+    $folders  = @('common', 'oculus', 'oculus_public', 'oculusdb', 'sidequest')
+    $newEntry = $null
+
+    foreach ($folder in $folders) {
+        $url = "$baseUrl/$folder/$PackageName.json"
+        try {
+            $response = Invoke-RestMethod -Uri $url -TimeoutSec 8 -ErrorAction Stop
+            $newEntry = [PSCustomObject]@{
+                PackageName   = $PackageName
+                DisplayName   = if ($response.name) { $response.name } else { $PackageName }
+                IconUrl       = if ($response.square) { $response.square } elseif ($response.icon) { $response.icon } else { "" }
+                LocalIconPath = ""
+            }
+            Write-Log ($msg.AppDisplayNameResolved -f $PackageName, $newEntry.DisplayName) -Level DEBUG
+            break
+        } catch {
+            # Not in this folder, try next
         }
-        Write-Log ($msg.AppDisplayNameResolved -f $PackageName, $response.name) -Level DEBUG
-    } catch {
-        # Not found in repo (system app, sideloaded app, etc.) - store placeholder
+    }
+
+    if (-not $newEntry) {
+        # Not found in any folder - store placeholder so the network is not hit again
         $newEntry = [PSCustomObject]@{
-            PackageName = $PackageName
-            DisplayName = $PackageName
-            IconUrl     = ""
+            PackageName   = $PackageName
+            DisplayName   = $PackageName
+            IconUrl       = ""
+            LocalIconPath = ""
         }
         Write-Log ($msg.AppDisplayNameNotFound -f $PackageName) -Level DEBUG
+    }
+
+    # Download icon locally so the web UI can display it without hitting remote URLs
+    if ($newEntry.IconUrl -ne "") {
+        $iconDir = Join-Path $global:ScriptPath "website\assets\app_icons"
+        if (-not (Test-Path $iconDir)) {
+            New-Item -ItemType Directory -Path $iconDir -Force | Out-Null
+        }
+
+        # Derive extension from the remote URL; default to .png
+        $ext = '.png'
+        if ($newEntry.IconUrl -match '\.([a-zA-Z]{2,4})(?:[?#]|$)') {
+            $ext = '.' + $Matches[1].ToLower()
+        }
+        $iconFileName = "$PackageName$ext"
+        $iconFile     = Join-Path $iconDir $iconFileName
+
+        if (-not (Test-Path $iconFile)) {
+            try {
+                Invoke-WebRequest -Uri $newEntry.IconUrl -OutFile $iconFile -TimeoutSec 10 -ErrorAction Stop
+                Write-Log ($msg.AppDisplayNameResolved -f "Icon saved", $iconFileName) -Level DEBUG
+            } catch {
+                Write-Log ($msg.AppDisplayNameNotFound -f "Icon download failed: $PackageName") -Level DEBUG
+                $iconFileName = ""
+            }
+        }
+
+        if ($iconFileName -ne "") {
+            $newEntry.LocalIconPath = "/assets/app_icons/$iconFileName"
+        }
     }
 
     # Persist to cache

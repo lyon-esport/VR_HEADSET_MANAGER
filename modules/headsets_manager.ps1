@@ -112,20 +112,20 @@ function Show-HeadsetsConfig {
         $Padding = @{
             ID = 2
             Name = 15
-            IPAddress = 13
-            scrcpy_AutoRestart = 15
+            IPAddress = 15
+            scrcpy_AutoRestart = 11
             Record = 6
-            ScrcpyProfile = 14
-            SerialNumber = 20
-            Model = 15
+            ScrcpyProfile = 13
+            SerialNumber = 14
+            Model = 8
         }
         
         # Build the table header
         $header = ""
         foreach ($field in $FieldsToShow) {
-            $header += $field.PadRight($Padding[$field]).Substring(0,$Padding[$field]) + " | "
+            $header += $field.PadRight($Padding[$field]).Substring(0,$Padding[$field]) + " | " 
         }
-        Write-Host $header.Substring(0, [Math]::Min($header.Length, $consoleWidth))
+        Write-Host $header.Substring(0, [Math]::Min($header.Length, $consoleWidth)) -ForegroundColor Yellow
 
         # Display each row with appropriate formatting
         foreach ($headset in $knownHeadsetsConfig) {
@@ -469,6 +469,19 @@ function Remove-Headset {
     # Find the headset with the specified ID
     $headsetToRemove = $headsets | Where-Object { $_.ID -eq $ID }
 
+    # Gracefully close the running scrcpy window for this headset (if any)
+    $scrcpyProc = Get-ScrcpyProcess -displayName $headsetToRemove
+    if ($scrcpyProc) {
+        Write-Log ("Closing scrcpy window for '$headsetToRemove' before rename...") -Level INFO
+        $closed = $scrcpyProc.CloseMainWindow()
+        if ($closed) { $scrcpyProc.WaitForExit(5000) | Out-Null }
+        if (-not $scrcpyProc.HasExited) {
+            Stop-Process -Id $scrcpyProc.Id -Force -ErrorAction SilentlyContinue
+        }
+        Write-Log ("scrcpy closed for '$headsetToRemove'.") -Level INFO
+    }
+
+
     if ($headsetToRemove) {
         # Remove the headset from the list
         $headsets = $headsets | Where-Object { $_.ID -ne $ID }
@@ -549,38 +562,4 @@ function Reorder-Headsets {
 } #OK
 
 
-function Add-Headset-Manually {
-    # Clear the screen
-    Clear-Host
-    Start-Sleep -Milliseconds 200
-    Write-Host "=== MANUAL HEADSET ADDITION ===" -BackgroundColor Green -ForegroundColor Black
 
-    # Ask for the required information
-    $name = Read-Host "Headset name (mandatory)"
-    if (-not $name) {
-        Write-Host "The name is mandatory. Aborting." -ForegroundColor Red
-        return
-    }
-
-    $ip = Read-Host "Headset IP address (mandatory)"
-    if (-not (Test-ValidIPv4 $ip)) {
-        Write-Host "A valid IP address is mandatory. Aborting." -ForegroundColor Red
-        return
-    }
-
-    # Optional fields
-    #$adbPortInput = Read-Host "ADB port (optional, default: 5555)"
-
-    # Handle default values
-<#
-    if ([string]::IsNullOrWhiteSpace($adbPortInput)) {
-        $adbPort = 5555
-    } else {
-        $adbPort = [int]$adbPortInput
-    }
- #>
-    # Call the main function
-    Add-Headset -IPAddress $ip -Name $name #-adbPort $adbPort
-
-    Write-Host "Headset added successfully!" -ForegroundColor Cyan
-} #OK

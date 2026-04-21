@@ -31,3 +31,11 @@ Drag and drop works to re-order when getting from right to left, but not from le
 
 In the app_config.html implement a button to edit config.json in the web page.
 It should display each functions and values.
+
+While delete a headset, delete [headset]_installed_apps.csv and [headset]favorite_apps.csv
+
+
+DEBUG
+under headset_settings.htlm, you were implementing the drag and drop functionality.
+The implementation partially works, but you had a "fix drag-and-drop JS (mousedown toggle pattern)" step to manage, and you didn't finished this step. Can you check related code ?
+While dra drop to the left, it's working. While drag drop to the right, it's not reordering headsets
