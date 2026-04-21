@@ -14,16 +14,6 @@ Setup few parametes to manage on the headset :
 - Switch to Passthrough / VR mode
 - Switch hand tracking/controllers
 
-    In config button in the top bar :
-    Replace Headset Actions section by Help button.
-    - In this new page, add a button to restart Web server, MediaMTX server, and list all links that can be usefull for troubleshooting web server or mediamtx app.
-    - Add a link to the github web page : https://github.com/lyon-esport/VR_HEADSET_MANAGER
-    Add anoter buttin in help button for app Configuration
-    Here, let's add a buttons to :
-    - Open and edit the config.json file
-    - Configure path to records (and a way to open it)
-    - Open logs folder and another to display last logs dynamically/Paused
-
 
 While leaving, the app restarts by itself sometimes
 
@@ -36,7 +26,8 @@ Then try to identify how long the headset can remain up an running based on the 
 Implement in main video and on the focused video screen the timer based on the file placed in /website/timer
 Let's check with stream deck activity
 
+# video_monitor.html
+Drag and drop works to re-order when getting from right to left, but not from left to right.
 
-In headset_settings.html implement a way to reorder headsets (drag and drop of the headset parameters window ?)
-
-
+In the app_config.html implement a button to edit config.json in the web page.
+It should display each functions and values.

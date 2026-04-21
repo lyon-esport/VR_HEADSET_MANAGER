@@ -515,6 +515,40 @@ function Save-Headsets {
 } #OK
 
 
+function Reorder-Headsets {
+    <#
+    .SYNOPSIS
+    Reorders the headset registry to match the given list of display names.
+    Unlisted headsets are appended at the end. Triggers HTML monitor regeneration.
+    #>
+    param (
+        [Parameter(Mandatory=$true)][string[]]$OrderedDisplayNames,
+        [array]$headsets = (Get-KnownHeadsets)
+    )
+
+    # Build lookup: display name (spaces->underscores) -> row
+    $lookup = [ordered]@{}
+    foreach ($row in $headsets) {
+        $dn = $row.Name -replace ' ', '_'
+        $lookup[$dn] = $row
+    }
+
+    # Build ordered list: requested names first, then any unlisted remainder
+    $ordered = @()
+    foreach ($dn in $OrderedDisplayNames) {
+        if ($lookup.Contains($dn)) { $ordered += $lookup[$dn]; $lookup.Remove($dn) }
+    }
+    foreach ($remaining in $lookup.Values) { $ordered += $remaining }
+
+    # Pre-assign IDs in the desired order so Save-Headsets (Sort-Object ID) preserves it
+    $id = 1
+    foreach ($row in $ordered) { $row.ID = $id; $id++ }
+
+    Save-Headsets -headsets $ordered
+    Write-Log ("Headsets reordered: " + ($OrderedDisplayNames -join ', ')) -Level INFO
+} #OK
+
+
 function Add-Headset-Manually {
     # Clear the screen
     Clear-Host
