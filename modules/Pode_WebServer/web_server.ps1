@@ -1063,6 +1063,421 @@ try {
             continue
         }
 
+        # API: POST /api/restartmediamtx
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/restartmediamtx') {
+            try {
+                Stop-MediaMtx
+                Start-Sleep -Milliseconds 800
+                Start-MediaMtx
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/restartwebserver
+        # Sends a success response then spawns a delayed process that kills and restarts this server.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/restartwebserver') {
+            try {
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+                $response.Close()
+                $thisScript = $PSCommandPath
+                $spScriptPath = $ScriptPath
+                $spConfig     = $ConfigFilePath
+                $spPidFile    = $PidFile
+                $spLogFolder  = $LogFolder
+                $spLogFile    = $LogFile
+                $selfPid      = $PID
+                $cmd = "Start-Sleep -Seconds 2;" +
+                       "Stop-Process -Id $selfPid -Force -ErrorAction SilentlyContinue;" +
+                       "Start-Sleep -Milliseconds 500;" +
+                       "Start-Process powershell.exe -ArgumentList @('-NoExit','-File','`"$thisScript`"'," +
+                       "'-ScriptPath','`"$spScriptPath`"','-ConfigFilePath','`"$spConfig`"'," +
+                       "'-PidFile','`"$spPidFile`"','-LogFolder','`"$spLogFolder`"','-LogFile','`"$spLogFile`"') -WindowStyle Hidden"
+                Start-Process powershell.exe -ArgumentList @('-NoProfile', '-Command', $cmd) -WindowStyle Hidden
+                continue
+            } catch {
+                try { $response.Close() } catch {}
+            }
+            continue
+        }
+
+        # API: GET /api/openconfig  - opens config.json in the default editor (Notepad)
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/openconfig') {
+            try {
+                $cfgFile = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "config\config.json"))
+                if (Test-Path $cfgFile) {
+                    Start-Process notepad.exe -ArgumentList "`"$cfgFile`""
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                } else {
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"config.json not found"}')
+                }
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: GET /api/openfolder?target=logs|config|records  - opens folder in Explorer
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/openfolder') {
+            try {
+                $target = (New-Object System.Web.HttpUtility).ParseQueryString($request.Url.Query)['target']
+                $folderMap = @{
+                    'logs'    = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "logs"))
+                    'config'  = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "config"))
+                    'records' = $global:recordsPath
+                }
+                $folder = $folderMap[$target]
+                if ($folder -and (Test-Path $folder)) {
+                    Start-Process explorer.exe -ArgumentList "`"$folder`""
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                } else {
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"folder not found"}')
+                }
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: GET /api/logs?n=200  - returns last N lines of today's log file as JSON array
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/logs') {
+            try {
+                $qn      = (New-Object System.Web.HttpUtility).ParseQueryString($request.Url.Query)['n']
+                $maxLines = if ($qn -and $qn -match '^\d+$') { [int]$qn } else { 200 }
+                if ($maxLines -gt 2000) { $maxLines = 2000 }
+                $lines = @()
+                if ($LogFile -and (Test-Path $LogFile)) {
+                    $lines = (Get-Content -LiteralPath $LogFile -Tail $maxLines -ErrorAction SilentlyContinue) -replace '"', '\"'
+                } elseif ($LogFolder -and (Test-Path $LogFolder)) {
+                    $latest = Get-ChildItem -LiteralPath $LogFolder -Filter "log_*.txt" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+                    if ($latest) {
+                        $lines = (Get-Content -LiteralPath $latest.FullName -Tail $maxLines -ErrorAction SilentlyContinue) -replace '"', '\"'
+                    }
+                }
+                $jsonLines = '[' + (($lines | ForEach-Object { '"' + $_ + '"' }) -join ',') + ']'
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonLines)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('[]')
+                    $response.StatusCode      = 200
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
+        # Proxy: GET /proxy/mediamtx/* -> forwards to localhost MediaMTX API (avoids CORS/auth)
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -match '^/proxy/mediamtx(/.*)$') {
+            try {
+                $mtxPath  = $Matches[1]
+                $mtxQuery = $request.Url.Query
+                $mtxPort  = if ($global:mediamtxApiPort) { $global:mediamtxApiPort } else { 9997 }
+                $mtxUrl   = "http://127.0.0.1:$mtxPort$mtxPath$mtxQuery"
+                $wc = [System.Net.WebClient]::new()
+                $wc.Headers.Add('Accept', 'application/json')
+                $body = $wc.DownloadString($mtxUrl)
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errMsg = '{"error":"mediamtx unreachable or returned an error"}'
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes($errMsg)
+                    $response.StatusCode      = 502
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: GET /api/appinfo  - returns port info and useful URLs for the topbar Help section
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/appinfo') {
+            try {
+                $info = @{
+                    webServerPort      = $port
+                    mediamtxHlsPort    = if ($global:mediamtxHlsPort)    { $global:mediamtxHlsPort }    else { 8888 }
+                    mediamtxRtspPort   = if ($global:mediamtxRtspPort)   { $global:mediamtxRtspPort }   else { 8554 }
+                    mediamtxWebrtcPort = if ($global:mediamtxWebrtcPort) { $global:mediamtxWebrtcPort } else { 8889 }
+                    mediamtxApiPort    = if ($global:mediamtxApiPort)    { $global:mediamtxApiPort }    else { 9997 }
+                }
+                $jsonOut   = ConvertTo-Json $info -Compress
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonOut)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{}')
+                    $response.StatusCode      = 200
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/restartmediamtx') {
+            try {
+                Stop-MediaMtx
+                Start-Sleep -Milliseconds 800
+                Start-MediaMtx
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/restartwebserver
+        # Sends a success response then spawns a delayed process that kills and restarts this server.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/restartwebserver') {
+            try {
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+                $response.Close()
+                $thisScript = $PSCommandPath
+                $spScriptPath = $ScriptPath
+                $spConfig     = $ConfigFilePath
+                $spPidFile    = $PidFile
+                $spLogFolder  = $LogFolder
+                $spLogFile    = $LogFile
+                $selfPid      = $PID
+                $cmd = "Start-Sleep -Seconds 2;" +
+                       "Stop-Process -Id $selfPid -Force -ErrorAction SilentlyContinue;" +
+                       "Start-Sleep -Milliseconds 500;" +
+                       "Start-Process powershell.exe -ArgumentList @('-NoExit','-File','`"$thisScript`"'," +
+                       "'-ScriptPath','`"$spScriptPath`"','-ConfigFilePath','`"$spConfig`"'," +
+                       "'-PidFile','`"$spPidFile`"','-LogFolder','`"$spLogFolder`"','-LogFile','`"$spLogFile`"') -WindowStyle Hidden"
+                Start-Process powershell.exe -ArgumentList @('-NoProfile', '-Command', $cmd) -WindowStyle Hidden
+                continue
+            } catch {
+                try { $response.Close() } catch {}
+            }
+            continue
+        }
+
+        # API: GET /api/openconfig  - opens config.json in the default editor (Notepad)
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/openconfig') {
+            try {
+                $cfgFile = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "config\config.json"))
+                if (Test-Path $cfgFile) {
+                    Start-Process notepad.exe -ArgumentList "`"$cfgFile`""
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                } else {
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"config.json not found"}')
+                }
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: GET /api/openfolder?target=logs|config|records  - opens folder in Explorer
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/openfolder') {
+            try {
+                $target = (New-Object System.Web.HttpUtility).ParseQueryString($request.Url.Query)['target']
+                $folderMap = @{
+                    'logs'    = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "logs"))
+                    'config'  = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "config"))
+                    'records' = $global:recordsPath
+                }
+                $folder = $folderMap[$target]
+                if ($folder -and (Test-Path $folder)) {
+                    Start-Process explorer.exe -ArgumentList "`"$folder`""
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                } else {
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"folder not found"}')
+                }
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: GET /api/logs?n=200  - returns last N lines of today's log file as JSON array
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/logs') {
+            try {
+                $qn      = (New-Object System.Web.HttpUtility).ParseQueryString($request.Url.Query)['n']
+                $maxLines = if ($qn -and $qn -match '^\d+$') { [int]$qn } else { 200 }
+                if ($maxLines -gt 2000) { $maxLines = 2000 }
+                $lines = @()
+                if ($LogFile -and (Test-Path $LogFile)) {
+                    $lines = (Get-Content -LiteralPath $LogFile -Tail $maxLines -ErrorAction SilentlyContinue) -replace '"', '\"'
+                } elseif ($LogFolder -and (Test-Path $LogFolder)) {
+                    $latest = Get-ChildItem -LiteralPath $LogFolder -Filter "log_*.txt" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+                    if ($latest) {
+                        $lines = (Get-Content -LiteralPath $latest.FullName -Tail $maxLines -ErrorAction SilentlyContinue) -replace '"', '\"'
+                    }
+                }
+                $jsonLines = '[' + (($lines | ForEach-Object { '"' + $_ + '"' }) -join ',') + ']'
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonLines)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('[]')
+                    $response.StatusCode      = 200
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
+        # Proxy: GET /proxy/mediamtx/* -> forwards to localhost MediaMTX API (avoids CORS/auth)
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -match '^/proxy/mediamtx(/.*)$') {
+            try {
+                $mtxPath  = $Matches[1]
+                $mtxQuery = $request.Url.Query
+                $mtxPort  = if ($global:mediamtxApiPort) { $global:mediamtxApiPort } else { 9997 }
+                $mtxUrl   = "http://127.0.0.1:$mtxPort$mtxPath$mtxQuery"
+                $wc = [System.Net.WebClient]::new()
+                $wc.Headers.Add('Accept', 'application/json')
+                $body = $wc.DownloadString($mtxUrl)
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errMsg = '{"error":"mediamtx unreachable or returned an error"}'
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes($errMsg)
+                    $response.StatusCode      = 502
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: GET /api/appinfo  - returns port info and useful URLs for the topbar Help section
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/appinfo') {
+            try {
+                $info = @{
+                    webServerPort      = $port
+                    mediamtxHlsPort    = if ($global:mediamtxHlsPort)    { $global:mediamtxHlsPort }    else { 8888 }
+                    mediamtxRtspPort   = if ($global:mediamtxRtspPort)   { $global:mediamtxRtspPort }   else { 8554 }
+                    mediamtxWebrtcPort = if ($global:mediamtxWebrtcPort) { $global:mediamtxWebrtcPort } else { 8889 }
+                    mediamtxApiPort    = if ($global:mediamtxApiPort)    { $global:mediamtxApiPort }    else { 9997 }
+                }
+                $jsonOut   = ConvertTo-Json $info -Compress
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonOut)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{}')
+                    $response.StatusCode      = 200
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
         try {
             # Resolve URL path to a file.
             # /data/*.csv  -> served from <ScriptPath>\data\  (read-only CSV export)
