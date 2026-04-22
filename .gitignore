@@ -12,7 +12,9 @@ config/*
 known_headsets*.csv
 
 # ignore generated html files
-/website/*.html
+/website/*[video].html
+/website/*[monitoring].html
+/website/video_monitor.html
 !/website/template/
 
 # ignore records
