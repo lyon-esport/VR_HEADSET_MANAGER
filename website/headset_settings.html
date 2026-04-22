@@ -1,0 +1,2303 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VR Headsets - Settings</title>
+  <link rel="stylesheet" href="assets/topbar.css">
+  <script src="assets/topbar.js"></script>
+  <style>
+    :root {
+      --bg:                #111;
+      --muted:             #444;
+      --text:              #ccc;
+      --card-bg:           #161616;
+      --card-border:       #252525;
+      --card-hover:        #1c1c1e;
+      --ping-ok:           #22c55e;
+      --ping-ko:           #ef4444;
+      --scrcpy-ok:         #3b82f6;
+      --charging:          #facc15;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      background: var(--bg);
+      min-height: 100vh;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      color: var(--text);
+      overflow-x: hidden;
+    }
+
+    /* â”€â”€ Page content â”€â”€ */
+    .page { padding: 24px; }
+
+    /* â”€â”€ Cards grid â”€â”€ */
+    .cards-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 16px;
+    }
+
+    .headset-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      overflow: hidden;
+      transition: border-color 0.15s;
+    }
+    .headset-card:hover { border-color: #333; }
+    .headset-card.card-hidden { display: none; }
+
+    /* Card header */
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 14px 10px;
+      border-bottom: 1px solid var(--card-border);
+    }
+    .card-name-display {
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      overflow: hidden;
+    }
+    .card-name-display .card-row-edit-btn { flex-shrink: 0; }
+    .card-name {
+      font-size: 14px;
+      font-weight: 700;
+      color: #e0e0e0;
+      letter-spacing: 0.03em;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .card-dots {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .status-dot {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+    }
+    .dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: #333;
+      flex-shrink: 0;
+    }
+    .dot-green  { background: var(--ping-ok); }
+    .dot-red    { background: var(--ping-ko); }
+    .dot-blue   { background: var(--scrcpy-ok); }
+    .dot-grey   { background: #333; }
+
+    /* Card body */
+    .card-body {
+      padding: 12px 14px;
+      border-top: 1px solid var(--card-border);
+    }
+    .card-row {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      padding: 4px 0;
+      border-bottom: 1px solid #1c1c1c;
+      font-size: 12px;
+      gap: 8px;
+    }
+    .card-row:last-child { border-bottom: none; }
+    .card-row-label {
+      color: var(--muted);
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      font-size: 10px;
+      flex-shrink: 0;
+    }
+    .card-row-value {
+      color: #bbb;
+      font-family: monospace;
+      font-size: 12px;
+      text-align: right;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* Toggle row */
+    .card-toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 14px;
+      border-top: 1px solid var(--card-border);
+    }
+    .toggle-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #888;
+    }
+    .toggle-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      border-radius: 20px;
+      border: 1px solid rgba(239,68,68,0.45);
+      background: rgba(239,68,68,0.15);
+      color: var(--ping-ko);
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    .toggle-btn:hover { background: rgba(239,68,68,0.25); border-color: rgba(239,68,68,0.65); color: var(--ping-ko); }
+    .toggle-btn.on {
+      background: rgba(34,197,94,0.15);
+      color: var(--ping-ok);
+      border-color: rgba(34,197,94,0.4);
+    }
+    .toggle-btn.on:hover { background: rgba(34,197,94,0.25); }
+
+    /* Inline IP editor */
+    .card-row-edit-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 18px; height: 18px; padding: 0; margin-left: 6px;
+      background: transparent; border: 1px solid transparent;
+      border-radius: 4px; color: #444; cursor: pointer; flex-shrink: 0;
+      transition: color 0.12s, border-color 0.12s;
+    }
+    .card-row-edit-btn:hover { color: #888; border-color: #333; }
+    .card-row-ip-display { display: flex; align-items: center; justify-content: flex-end; min-width: 0; }
+    .card-row-ip-edit { display: none; align-items: center; gap: 4px; justify-content: flex-end; }
+    .card-row-ip-edit input {
+      width: 130px; padding: 2px 6px;
+      background: #0d0d0d; border: 1px solid #333; border-radius: 4px;
+      color: #ccc; font-family: monospace; font-size: 12px;
+      outline: none;
+    }
+    .card-row-ip-edit input:focus { border-color: #555; }
+    .ip-error {
+      position: absolute; top: 100%; left: 0;
+      margin-top: 3px; padding: 2px 6px;
+      background: #1a0a0a; border: 1px solid #5a1a1a; border-radius: 4px;
+      color: var(--ping-ko); font-size: 10px; font-weight: 600;
+      white-space: nowrap; pointer-events: none; z-index: 10;
+    }
+    .ip-error.warn { background: #1a1500; border-color: #5a4a00; color: var(--charging); }
+    .card-row-ip-edit { position: relative; }
+    .ip-action-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 20px; height: 20px; padding: 0;
+      background: transparent; border: 1px solid #333; border-radius: 4px;
+      color: #555; cursor: pointer; flex-shrink: 0;
+      transition: color 0.12s, border-color 0.12s, background 0.12s;
+    }
+    .ip-action-btn.save:hover { color: var(--ping-ok); border-color: rgba(34,197,94,0.5); }
+    .ip-action-btn.cancel:hover { color: var(--ping-ko); border-color: rgba(239,68,68,0.5); }
+
+    /* Scrcpy profile display */
+    .card-row-profile-display { display: flex; align-items: center; justify-content: flex-end; min-width: 0; }
+
+    /* Scrcpy profile modal */
+    .profile-modal {
+      position: fixed; inset: 0; z-index: 1000;
+      background: rgba(0,0,0,0.72);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .profile-modal-box {
+      background: #1a1a1a; border: 1px solid #333; border-radius: 10px;
+      min-width: 300px; padding: 22px 24px;
+      display: flex; flex-direction: column; gap: 18px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+    }
+    .profile-modal-title {
+      display: flex; flex-direction: column; gap: 3px;
+    }
+    .profile-modal-title .pm-headset {
+      font-size: 10px; font-weight: 700; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.06em;
+    }
+    .profile-modal-title .pm-subtitle {
+      font-size: 15px; font-weight: 700; color: #e0e0e0;
+    }
+    .profile-modal-body { display: flex; flex-direction: column; gap: 10px; }
+    .pm-field {
+      display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    }
+    .pm-field label {
+      font-size: 11px; font-weight: 600; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.04em; flex-shrink: 0;
+    }
+    .pm-field select,
+    .pm-field input[type=number] {
+      padding: 5px 8px; min-width: 160px;
+      background: #0d0d0d; border: 1px solid #333; border-radius: 5px;
+      color: #ccc; font-family: monospace; font-size: 13px; outline: none;
+    }
+    .pm-field select:focus,
+    .pm-field input[type=number]:focus { border-color: #555; }
+    .pm-field input[type=number] { -moz-appearance: textfield; }
+    .pm-field input[type=number]::-webkit-outer-spin-button,
+    .pm-field input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
+    .profile-modal-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
+    .pm-btn {
+      padding: 6px 18px; border-radius: 6px; border: 1px solid #333;
+      background: #222; color: #888; font-size: 12px; font-weight: 700;
+      cursor: pointer; font-family: inherit;
+      transition: background 0.12s, color 0.12s, border-color 0.12s;
+    }
+    .pm-btn:hover { color: #ccc; border-color: #444; }
+    .pm-btn.primary {
+      background: rgba(34,197,94,0.15); color: var(--ping-ok);
+      border-color: rgba(34,197,94,0.4);
+    }
+    .pm-btn.primary:hover { background: rgba(34,197,94,0.25); }
+
+    /* Power management row */
+    .card-power-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 14px;
+      border-top: 1px solid var(--card-border);
+    }
+    .power-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #888;
+    }
+    .power-btns { display: flex; gap: 6px; }
+    .power-btn {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 4px 10px; border-radius: 6px;
+      border: 1px solid #444; background: #2a2a2a;
+      color: #888; font-size: 11px; font-weight: 700;
+      cursor: pointer; font-family: inherit;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    .power-btn:hover { border-color: #666; color: #bbb; background: #333; }
+    .power-btn.reboot:hover {
+      background: rgba(251,191,36,0.20); color: #fbbf24;
+      border-color: rgba(251,191,36,0.6);
+    }
+    .power-btn.shutdown:hover {
+      background: rgba(239,68,68,0.20); color: var(--ping-ko);
+      border-color: rgba(239,68,68,0.6);
+    }
+
+    /* Power confirmation modal */
+    .power-modal {
+      position: fixed; inset: 0; z-index: 1000;
+      background: rgba(0,0,0,0.72);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .power-modal-box {
+      background: #1a1a1a; border: 1px solid #333; border-radius: 10px;
+      min-width: 280px; max-width: 340px; padding: 22px 24px;
+      display: flex; flex-direction: column; gap: 16px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+    }
+    .power-modal-icon {
+      display: flex; align-items: center; gap: 10px;
+    }
+    .power-modal-icon svg { flex-shrink: 0; }
+    .power-modal-icon .pwm-title {
+      font-size: 14px; font-weight: 700; color: #e0e0e0;
+    }
+    .power-modal-icon .pwm-sub {
+      font-size: 11px; color: var(--muted); margin-top: 2px;
+    }
+    .power-modal-footer { display: flex; justify-content: flex-end; gap: 8px; }
+
+    #empty-msg {
+      padding: 60px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    /* Drag-and-drop reordering */
+    .drag-handle {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 18px; height: 20px; flex-shrink: 0;
+      color: #2e2e2e; cursor: grab; margin-right: 4px;
+      transition: color .12s;
+    }
+    .drag-handle:active { cursor: grabbing; }
+    .headset-card:hover .drag-handle { color: #555; }
+    [data-theme="light"] .drag-handle { color: #ccc; }
+    [data-theme="light"] .headset-card:hover .drag-handle { color: #aaa; }
+    .headset-card.drag-over {
+      outline: 2px solid var(--accent);
+      outline-offset: -2px;
+    }
+    .headset-card.dragging {
+      opacity: 0.4;
+    }
+
+    /* Launch app row */
+    .card-row-app-display { display: flex; align-items: center; justify-content: flex-end; min-width: 0; gap: 6px; }
+    .card-launch-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 20px; height: 20px; padding: 0;
+      background: #2a2a2a; border: 1px solid #444; border-radius: 4px;
+      color: #888; cursor: pointer; flex-shrink: 0;
+      transition: color 0.12s, border-color 0.12s, background 0.12s;
+    }
+    .card-launch-btn:hover {
+      color: #3b82f6; border-color: rgba(59,130,246,0.5);
+      background: rgba(59,130,246,0.1);
+    }
+
+    /* App launcher modal */
+    .launch-modal {
+      position: fixed; inset: 0; z-index: 1000;
+      background: rgba(0,0,0,0.72);
+      display: flex; align-items: flex-start; justify-content: center;
+      padding-top: 0;
+    }
+    .launch-modal-box {
+      background: #1a1a1a; border: 1px solid #333; border-bottom-left-radius: 10px; border-bottom-right-radius: 10px;
+      width: 100%; max-width: 520px;
+      display: flex; flex-direction: column;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.7);
+      max-height: 80vh; overflow: hidden;
+    }
+    .lm-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 18px 12px; border-bottom: 1px solid #252525;
+      flex-shrink: 0;
+    }
+    .lm-title-wrap { display: flex; flex-direction: column; gap: 2px; }
+    .lm-headset-label {
+      font-size: 10px; font-weight: 700; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.06em;
+    }
+    .lm-title {
+      font-size: 14px; font-weight: 700; color: #e0e0e0;
+    }
+    .lm-close {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 26px; height: 26px; padding: 0;
+      background: transparent; border: 1px solid transparent; border-radius: 5px;
+      color: #555; cursor: pointer;
+      transition: color 0.12s, border-color 0.12s;
+    }
+    .lm-close:hover { color: #aaa; border-color: #333; }
+    .lm-list {
+      overflow-y: auto; flex: 1;
+      padding: 6px 0;
+    }
+    .lm-section-label {
+      padding: 8px 18px 4px;
+      font-size: 10px; font-weight: 700; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.06em;
+    }
+    .lm-app-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 7px 18px; cursor: default;
+      transition: background 0.1s;
+    }
+    .lm-app-row:hover { background: #202020; }
+    .lm-app-name {
+      flex: 1; font-size: 13px; color: #ccc;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .lm-app-row.is-meta .lm-app-name { color: #67e8f9; font-weight: 600; }
+    .lm-star-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 22px; height: 22px; padding: 0; flex-shrink: 0;
+      background: transparent; border: none; border-radius: 4px;
+      cursor: pointer; color: #3a3a3a;
+      transition: color 0.12s;
+    }
+    .lm-star-btn.active { color: #facc15; }
+    .lm-star-btn:hover { color: #facc15; }
+    .lm-app-row.is-meta .lm-star-btn { visibility: hidden; }
+    .lm-launch-btn {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 10px; border-radius: 5px;
+      border: 1px solid #444; background: #2a2a2a;
+      color: #888; font-size: 11px; font-weight: 700;
+      cursor: pointer; font-family: inherit; flex-shrink: 0;
+      transition: background 0.12s, border-color 0.12s, color 0.12s;
+    }
+    .lm-launch-btn:hover { background: rgba(59,130,246,0.22); border-color: #3b82f6; color: #3b82f6; }
+    .lm-footer {
+      border-top: 1px solid #252525; padding: 10px 18px;
+      flex-shrink: 0; display: flex; flex-direction: column; gap: 8px;
+    }
+    .lm-show-all-btn {
+      display: flex; align-items: center; justify-content: center; gap: 6px;
+      padding: 7px; border-radius: 6px;
+      border: 1px solid #333; background: #161616;
+      color: #666; font-size: 12px; font-weight: 600;
+      cursor: pointer; font-family: inherit; width: 100%;
+      transition: color 0.12s, border-color 0.12s;
+    }
+    .lm-show-all-btn:hover { color: #aaa; border-color: #444; }
+    .lm-status {
+      font-size: 11px; color: var(--muted); text-align: center;
+      min-height: 16px;
+    }
+    .lm-status.ok   { color: var(--ping-ok); }
+    .lm-status.err  { color: var(--ping-ko); }
+
+    /* Remove headset button (card header) */
+    .card-remove-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 20px; height: 20px; padding: 0; margin-left: 8px;
+      background: transparent; border: 1px solid transparent;
+      border-radius: 4px; color: #3a3a3a; cursor: pointer; flex-shrink: 0;
+      transition: color 0.12s, border-color 0.12s, background 0.12s;
+    }
+    .card-remove-btn:hover {
+      color: var(--ping-ko); border-color: rgba(239,68,68,0.4);
+      background: rgba(239,68,68,0.1);
+    }
+
+    /* Remove confirmation modal */
+    .remove-modal {
+      position: fixed; inset: 0; z-index: 1000;
+      background: rgba(0,0,0,0.72);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .remove-modal-box {
+      background: #1a1a1a; border: 1px solid #333; border-radius: 10px;
+      min-width: 300px; max-width: 380px; padding: 22px 24px;
+      display: flex; flex-direction: column; gap: 16px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+    }
+    .rm-header { display: flex; align-items: flex-start; gap: 12px; }
+    .rm-header svg { flex-shrink: 0; margin-top: 2px; }
+    .rm-title { font-size: 14px; font-weight: 700; color: #e0e0e0; }
+    .rm-sub { font-size: 11px; color: var(--muted); margin-top: 4px; line-height: 1.5; }
+    .rm-sub strong { color: #bbb; font-family: monospace; }
+    .rm-input-wrap { display: flex; align-items: center; gap: 6px; }
+    .rm-input-wrap input {
+      flex: 1; padding: 6px 9px;
+      background: #0d0d0d; border: 1px solid #333; border-radius: 5px;
+      color: #ccc; font-family: monospace; font-size: 13px; outline: none;
+    }
+    .rm-input-wrap input:focus { border-color: #555; }
+    .rm-copy-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 28px; height: 28px; padding: 0; flex-shrink: 0;
+      background: transparent; border: 1px solid #333; border-radius: 5px;
+      color: #555; cursor: pointer;
+      transition: color 0.12s, border-color 0.12s;
+    }
+    .rm-copy-btn:hover { color: #aaa; border-color: #555; }
+    .remove-modal-footer { display: flex; justify-content: flex-end; gap: 8px; }
+    .rm-confirm-btn {
+      background: rgba(239,68,68,0.15); color: var(--ping-ko);
+      border-color: rgba(239,68,68,0.4);
+    }
+    .rm-confirm-btn:hover:not(:disabled) { background: rgba(239,68,68,0.25); }
+    .rm-confirm-btn:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
+
+    /* â”€â”€ Enable WiFi ADB modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+    .wifi-modal-box {
+      background: #1a1a1a; border: 1px solid #333; border-radius: 10px;
+      width: 100%; max-width: 460px; padding: 22px 24px;
+      display: flex; flex-direction: column; gap: 18px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+    }
+    .wifi-modal-header { display: flex; align-items: flex-start; justify-content: space-between; }
+    .wifi-modal-label  { font-size: 10px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+    .wifi-modal-title  { font-size: 15px; font-weight: 700; color: #e0e0e0; margin-top: 2px; }
+    .wifi-modal-body   { display: flex; flex-direction: column; gap: 14px; }
+    .wifi-modal-footer { display: flex; justify-content: flex-end; gap: 8px; align-items: center; }
+    .wifi-step-row     { display: flex; align-items: flex-start; gap: 10px; font-size: 13px; color: #888; line-height: 1.5; }
+    .wifi-step-row svg { flex-shrink: 0; margin-top: 1px; }
+    .wifi-info-box {
+      background: #111; border: 1px solid #2a2a2a; border-radius: 6px;
+      padding: 10px 12px; display: flex; flex-direction: column; gap: 4px;
+    }
+    .wifi-info-model   { font-size: 13px; font-weight: 700; color: #ddd; }
+    .wifi-info-ip      { font-size: 12px; font-family: monospace; color: #3b82f6; }
+    .wifi-hint { font-size: 11px; color: #555; line-height: 1.5; }
+    [data-theme="light"] .wifi-modal-box  { background: #fff; border-color: #e0e0e0; box-shadow: 0 8px 32px rgba(0,0,0,0.12); }
+    [data-theme="light"] .wifi-modal-title { color: #111; }
+    [data-theme="light"] .wifi-info-box   { background: #f5f5f5; border-color: #e0e0e0; }
+    [data-theme="light"] .wifi-info-model  { color: #111; }
+    [data-theme="light"] .wifi-step-row   { color: #666; }
+    [data-theme="light"] .wifi-hint       { color: #aaa; }
+
+    /* â”€â”€ Add headset modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+    .add-modal-box {
+      background: #1a1a1a; border: 1px solid #333; border-radius: 10px;
+      width: 100%; max-width: 400px; padding: 22px 24px;
+      display: flex; flex-direction: column; gap: 18px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+    }
+    .add-modal-header { display: flex; align-items: flex-start; justify-content: space-between; }
+    .add-modal-label  { font-size: 10px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+    .add-modal-title  { font-size: 15px; font-weight: 700; color: #e0e0e0; margin-top: 2px; }
+    .add-modal-body   { display: flex; flex-direction: column; gap: 14px; }
+    .add-modal-footer { display: flex; justify-content: flex-end; gap: 8px; align-items: center; }
+    .add-detect-row   { display: flex; align-items: center; gap: 10px; font-size: 13px; color: #888; }
+    .add-info-box {
+      background: #111; border: 1px solid #2a2a2a; border-radius: 6px;
+      padding: 10px 12px; display: flex; flex-direction: column; gap: 4px;
+    }
+    .add-info-model   { font-size: 13px; font-weight: 700; color: #ddd; }
+    .add-info-ip      { font-size: 12px; font-family: monospace; color: #3b82f6; }
+    .add-field label  { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; display: block; margin-bottom: 5px; }
+    .add-field input  { width: 100%; padding: 6px 9px; background: #0d0d0d; border: 1px solid #333; border-radius: 5px; color: #ccc; font-family: monospace; font-size: 13px; outline: none; }
+    .add-field input:focus { border-color: #555; }
+    .add-field-error  { font-size: 11px; color: var(--ping-ko); margin-top: 4px; min-height: 15px; }
+    .add-manual-link  { font-size: 11px; color: #555; cursor: pointer; text-decoration: underline; background: none; border: none; font-family: inherit; margin-right: auto; padding: 0; }
+    .add-manual-link:hover { color: #888; }
+    @keyframes vrm-spin { to { transform: rotate(360deg); } }
+    .spinning { animation: vrm-spin 0.8s linear infinite; display: inline-block; }
+
+    /* â”€â”€ New Devices modal sections â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+    .ndm-section {
+      margin-top: 12px; padding-top: 10px;
+      border-top: 1px solid #252525;
+    }
+    .ndm-section-label {
+      font-size: 10px; font-weight: 700; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px;
+    }
+    .ndm-action-btn {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 12px; border-radius: 6px; width: 100%;
+      border: 1px solid #2a2a2a; background: #161616;
+      color: #bbb; font-size: 12px; font-weight: 600;
+      cursor: pointer; font-family: inherit; text-align: left;
+      transition: background 0.12s, border-color 0.12s;
+    }
+    .ndm-action-btn:hover:not(:disabled) { background: #1e1e1e; border-color: #383838; }
+    [data-theme="light"] .ndm-section     { border-color: #e8e8e8; }
+    [data-theme="light"] .ndm-action-btn  { background: #f5f5f5; border-color: #e0e0e0; color: #333; }
+    [data-theme="light"] .ndm-action-btn:hover:not(:disabled) { background: #ebebeb; border-color: #ccc; }
+
+    /* â”€â”€ Light mode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+    [data-theme="light"] {
+      --bg:          #f0f0f0;
+      --muted:       #999;
+      --text:        #222;
+      --card-bg:     #ffffff;
+      --card-border: #e0e0e0;
+      --card-hover:  #f5f5f5;
+    }
+    [data-theme="light"] .headset-card:hover   { border-color: #bbb; }
+    [data-theme="light"] .card-name            { color: #111; }
+    [data-theme="light"] .dot                  { background: #bbb; }
+    [data-theme="light"] .dot-grey             { background: #bbb; }
+    [data-theme="light"] .dot-green            { background: var(--ping-ok); }
+    [data-theme="light"] .dot-red              { background: var(--ping-ko); }
+    [data-theme="light"] .dot-blue             { background: var(--scrcpy-ok); }
+    [data-theme="light"] .card-row-label       { color: #777; }
+    [data-theme="light"] .card-row-value       { color: #222; }
+    [data-theme="light"] .section-header       { color: #999; border-color: #e0e0e0; }
+    [data-theme="light"] .toggle-btn.on        { background: rgba(34,197,94,0.15); color: var(--ping-ok); border-color: rgba(34,197,94,0.4); }
+    [data-theme="light"] .toggle-btn.on:hover  { background: rgba(34,197,94,0.25); }
+    [data-theme="light"] .action-btn           { background: #f0f0f0; border-color: #d8d8d8; color: #444; }
+    [data-theme="light"] .action-btn:hover:not(:disabled) { background: #e5e5e5; color: #111; border-color: #bbb; }
+    [data-theme="light"] .card-launch-btn      { background: #e8e8e8; border-color: #ccc; color: #666; }
+    [data-theme="light"] .card-launch-btn:hover { background: rgba(59,130,246,0.12); border-color: rgba(59,130,246,0.5); color: #2563eb; }
+    [data-theme="light"] .lm-launch-btn        { background: #e8e8e8; border-color: #ccc; color: #555; }
+    [data-theme="light"] .lm-launch-btn:hover  { background: rgba(59,130,246,0.12); border-color: #3b82f6; color: #2563eb; }
+    [data-theme="light"] .power-btn            { background: #e8e8e8; border-color: #ccc; color: #555; }
+    [data-theme="light"] .power-btn:hover      { background: #ddd; border-color: #aaa; color: #222; }
+    [data-theme="light"] .power-btn.reboot:hover   { background: rgba(251,191,36,0.20); color: #b45309; border-color: rgba(251,191,36,0.6); }
+    [data-theme="light"] .power-btn.shutdown:hover { background: rgba(239,68,68,0.20); color: var(--ping-ko); border-color: rgba(239,68,68,0.6); }
+    [data-theme="light"] .pm-btn              { background: #e8e8e8; border-color: #ccc; color: #444; }
+    [data-theme="light"] .pm-btn:hover        { background: #ddd; border-color: #aaa; color: #111; }
+    [data-theme="light"] .pm-btn.primary      { background: rgba(34,197,94,0.15); color: var(--ping-ok); border-color: rgba(34,197,94,0.4); }
+    [data-theme="light"] .pm-btn.primary:hover { background: rgba(34,197,94,0.25); }
+    [data-theme="light"] .modal-box,
+    [data-theme="light"] .remove-modal-box     { background: #fff; border-color: #e0e0e0; box-shadow: 0 8px 32px rgba(0,0,0,0.12); }
+    [data-theme="light"] .modal-header,
+    [data-theme="light"] .remove-modal-header  { border-color: #efefef; }
+    [data-theme="light"] .modal-footer,
+    [data-theme="light"] .remove-modal-footer  { border-color: #efefef; }
+    [data-theme="light"] .modal-label          { color: #bbb; }
+    [data-theme="light"] .modal-input,
+    [data-theme="light"] .modal-select         { background: #f5f5f5; border-color: #ddd; color: #111; }
+    [data-theme="light"] .modal-input:focus,
+    [data-theme="light"] .modal-select:focus   { border-color: #3b82f6; }
+    [data-theme="light"] .modal-close,
+    [data-theme="light"] .rm-close-btn         { color: #bbb; }
+    [data-theme="light"] .modal-close:hover,
+    [data-theme="light"] .rm-close-btn:hover   { color: #555; border-color: #ddd; }
+    [data-theme="light"] .modal-title,
+    [data-theme="light"] .remove-modal-title   { color: #111; }
+    [data-theme="light"] .rm-copy-btn          { border-color: #ddd; color: #999; }
+    [data-theme="light"] .rm-copy-btn:hover    { color: #333; border-color: #bbb; }
+    /* Launch modal */
+    [data-theme="light"] .launch-modal         { background: rgba(0,0,0,0.32); }
+    [data-theme="light"] .launch-modal-box     { background: #fff; border-color: #e0e0e0; box-shadow: 0 8px 32px rgba(0,0,0,0.12); }
+    [data-theme="light"] .lm-header            { border-color: #efefef; }
+    [data-theme="light"] .lm-title             { color: #111; }
+    [data-theme="light"] .lm-close             { color: #bbb; }
+    [data-theme="light"] .lm-close:hover       { color: #555; border-color: #ddd; }
+    [data-theme="light"] .lm-section-label     { color: #bbb; }
+    [data-theme="light"] .lm-app-row:hover     { background: #f5f5f5; }
+    [data-theme="light"] .lm-app-name          { color: #333; }
+    [data-theme="light"] .lm-app-row.is-meta .lm-app-name { color: #0e7490; }
+    [data-theme="light"] .lm-star-btn          { color: #ccc; }
+    [data-theme="light"] .lm-star-btn.active   { color: #facc15; }
+    [data-theme="light"] .lm-star-btn:hover    { color: #facc15; }
+    [data-theme="light"] .lm-footer            { border-color: #efefef; }
+    [data-theme="light"] .lm-show-all-btn      { background: #f5f5f5; border-color: #ddd; color: #666; }
+    [data-theme="light"] .lm-show-all-btn:hover { color: #222; border-color: #bbb; }
+    [data-theme="light"] .lm-status            { color: #aaa; }
+    /* Power modal */
+    [data-theme="light"] .power-modal          { background: rgba(0,0,0,0.32); }
+    [data-theme="light"] .power-modal-box      { background: #fff; border-color: #e0e0e0; box-shadow: 0 8px 32px rgba(0,0,0,0.12); }
+    [data-theme="light"] .power-modal-icon .pwm-title { color: #111; }
+    [data-theme="light"] .power-modal-icon .pwm-sub   { color: #999; }
+    /* Profile modal */
+    [data-theme="light"] .profile-modal        { background: rgba(0,0,0,0.32); }
+    [data-theme="light"] .profile-modal-box    { background: #fff; border-color: #e0e0e0; box-shadow: 0 8px 32px rgba(0,0,0,0.12); }
+    [data-theme="light"] .profile-modal-title .pm-subtitle { color: #111; }
+    [data-theme="light"] .pm-field label       { color: #999; }
+    [data-theme="light"] .pm-field select,
+    [data-theme="light"] .pm-field input[type=number] { background: #f5f5f5; border-color: #ddd; color: #111; }
+    [data-theme="light"] .pm-field select:focus,
+    [data-theme="light"] .pm-field input[type=number]:focus { border-color: #3b82f6; }
+    /* Remove modal */
+    [data-theme="light"] .remove-modal         { background: rgba(0,0,0,0.32); }
+    [data-theme="light"] .remove-modal-box     { background: #fff; border-color: #e0e0e0; box-shadow: 0 8px 32px rgba(0,0,0,0.12); }
+    [data-theme="light"] .rm-title             { color: #111; }
+    [data-theme="light"] .rm-sub               { color: #999; }
+    [data-theme="light"] .rm-sub strong        { color: #333; }
+    [data-theme="light"] .rm-input-wrap input  { background: #f5f5f5; border-color: #ddd; color: #111; }
+    [data-theme="light"] .rm-input-wrap input:focus { border-color: #3b82f6; }
+    [data-theme="light"] .remove-modal-footer  { border-color: #efefef; }
+    [data-theme="light"] .add-modal-box        { background: #fff; border-color: #e0e0e0; box-shadow: 0 8px 32px rgba(0,0,0,0.12); }
+    [data-theme="light"] .add-modal-title      { color: #111; }
+    [data-theme="light"] .add-info-box         { background: #f5f5f5; border-color: #e0e0e0; }
+    [data-theme="light"] .add-info-model       { color: #111; }
+    [data-theme="light"] .add-detect-row       { color: #777; }
+    [data-theme="light"] .add-field input      { background: #f5f5f5; border-color: #ddd; color: #111; }
+    [data-theme="light"] .add-field input:focus { border-color: #3b82f6; }
+    [data-theme="light"] .add-manual-link      { color: #aaa; }
+    [data-theme="light"] .add-manual-link:hover { color: #555; }
+  </style>
+</head>
+<body>
+
+  <header class="topbar">
+    <script>document.write(TopBar.brandHTML)</script>
+    <div class="v-sep"></div>
+    <!-- Compact picker (shown when topbar overflows) -->
+    <script>document.write(TopBar.compactDropdownHTML)</script>
+    <span class="topbar-title">Headset Settings</span>
+    <div class="topbar-filters" id="headset-toggles">
+      <span class="filter-label">Show:</span>
+      <script>document.write(TopBar.filtersHTML)</script>
+    </div>
+    <div class="topbar-right">
+      <script>document.write(TopBar.manageDevicesBtnHTML)</script>
+      <script>document.write(TopBar.configMenuHTML)</script>
+    </div>
+  </header>
+
+  <div class="page">
+    <div class="cards-grid" id="cards-grid">
+      <div id="empty-msg">Loading...</div>
+    </div>
+  </div>
+
+  <!-- Power confirmation modal -->
+  <div class="power-modal" id="power-modal" style="display:none">
+    <div class="power-modal-box">
+      <div class="power-modal-icon">
+        <svg id="pwm-icon" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>
+        </svg>
+        <div>
+          <div class="pwm-title" id="pwm-title">Confirm action</div>
+          <div class="pwm-sub" id="pwm-sub"></div>
+        </div>
+      </div>
+      <div class="power-modal-footer">
+        <button class="pm-btn" id="pwm-cancel">Cancel</button>
+        <button class="pm-btn" id="pwm-confirm">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scrcpy profile modal -->
+  <div class="profile-modal" id="profile-modal" style="display:none">    <div class="profile-modal-box">
+      <div class="profile-modal-title">
+        <span class="pm-headset" id="pm-headset"></span>
+        <span class="pm-subtitle">Scrcpy Profile</span>
+      </div>
+      <div class="profile-modal-body">
+        <div class="pm-field">
+          <label for="pm-eye">Eye</label>
+          <select id="pm-eye">
+            <option value="L">Left (L)</option>
+            <option value="R">Right (R)</option>
+          </select>
+        </div>
+        <div class="pm-field">
+          <label for="pm-audio">Audio</label>
+          <select id="pm-audio">
+            <option value="D">Duplicate (D)</option>
+            <option value="N">No audio (N)</option>
+          </select>
+        </div>
+        <div class="pm-field">
+          <label for="pm-fps">Max FPS</label>
+          <input type="number" id="pm-fps" min="1" max="120">
+        </div>
+        <div class="pm-field">
+          <label for="pm-bw">Bitrate (Mbps)</label>
+          <input type="number" id="pm-bw" min="1" max="500">
+        </div>
+      </div>
+      <div class="profile-modal-footer">
+        <button class="pm-btn" id="pm-cancel">Cancel</button>
+        <button class="pm-btn primary" id="pm-save">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Launch app modal -->
+  <div class="launch-modal" id="launch-modal" style="display:none">
+    <div class="launch-modal-box">
+      <div class="lm-header">
+        <div class="lm-title-wrap">
+          <span class="lm-headset-label" id="lm-headset-label"></span>
+          <span class="lm-title">Launch App</span>
+        </div>
+        <button class="lm-close" id="lm-close" title="Close">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+      <div class="lm-list" id="lm-list"></div>
+      <div class="lm-footer">
+        <button class="lm-show-all-btn" id="lm-show-all-btn">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>
+            <line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>
+          </svg>
+          Show all installed apps
+        </button>
+        <div class="lm-status" id="lm-status"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Remove headset confirmation modal -->
+  <div class="remove-modal" id="remove-modal" style="display:none">
+    <div class="remove-modal-box">
+      <div class="rm-header">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="3 6 5 6 21 6"/>
+          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+          <path d="M10 11v6"/><path d="M14 11v6"/>
+          <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+        </svg>
+        <div>
+          <div class="rm-title">Remove headset</div>
+          <div class="rm-sub">Type <strong id="rm-name-hint"></strong> to confirm removal</div>
+        </div>
+      </div>
+      <div class="rm-input-wrap">
+        <input type="text" id="rm-input" placeholder="Type headset name...">
+        <button class="rm-copy-btn" id="rm-copy" title="Paste headset name into field">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+          </svg>
+        </button>
+      </div>
+      <div class="remove-modal-footer">
+        <button class="pm-btn" id="rm-cancel">Cancel</button>
+        <button class="pm-btn rm-confirm-btn" id="rm-confirm" disabled>Remove</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Manage New Devices modal -->
+  <div class="profile-modal" id="wifi-adb-modal" style="display:none">
+    <div class="wifi-modal-box">
+      <div class="wifi-modal-header">
+        <div>
+          <div class="wifi-modal-label">New Devices</div>
+          <div class="wifi-modal-title" id="wifi-modal-title">Manage New Devices</div>
+        </div>
+        <button class="lm-close" id="wifi-modal-close" title="Close">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+      <div class="wifi-modal-body" id="wifi-modal-body"></div>
+      <div class="wifi-modal-footer" id="wifi-modal-footer"></div>
+    </div>
+  </div>
+
+  <script>
+    var HEADSETS_API_PATH = '/api/headsets';
+    var INFOS_CSV_PATH    = '../data/known_headsets_infos.csv';
+    var REFRESH_MS        = 5000;
+
+    var headsetConfig = {};
+    var headsetStatus = {};
+    var headsetVisible = {};
+    var cardsBuilt    = false;
+    var _editingField = false;
+    var appNameCache = {}; // package -> displayName, populated from /api/favoriteapps and /api/installedapps
+
+    // Wire shared preset filters
+    TopBar.initFilters(function(f) {
+      var dns = Object.keys(headsetVisible);
+      dns.forEach(function(dn) {
+        var s = headsetStatus[dn] || { ping: false, scrcpy: false };
+        var show = true;
+        if (f === 'online')  show = s.ping;
+        if (f === 'scrcpy')  show = s.scrcpy;
+        if (f === 'offline') show = !s.ping;
+        setHeadsetVisible(dn, show);
+      });
+    });
+    TopBar.initCompact();
+
+    function esc(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    function toDisplayName(name) {
+      return name.replace(/ /g, '_');
+    }
+
+    function parseCsvText(text, delimiter) {
+      text = text.replace(/^\uFEFF/, '');
+      var lines = text.trim().split(/\r?\n/);
+      if (lines.length < 2) return [];
+      var headers = lines[0].split(delimiter).map(function(h) { return h.replace(/^"|"$/g, '').trim(); });
+      return lines.slice(1).map(function(line) {
+        var cols = line.split(delimiter).map(function(c) { return c.replace(/^"|"$/g, '').trim(); });
+        var obj = {};
+        headers.forEach(function(h, i) { obj[h] = cols[i] !== undefined ? cols[i] : ''; });
+        return obj;
+      });
+    }
+
+    // â”€â”€ Filter / visibility â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    function setHeadsetVisible(dn, show) {
+      headsetVisible[dn] = show;
+      var card = document.querySelector('.headset-card[data-display="' + dn + '"]');
+      if (card) card.classList.toggle('card-hidden', !show);
+      TopBar.setCompactItemChecked(dn, show);
+    }
+
+    function buildFilters(displayNames) {
+      displayNames.forEach(function(dn) { headsetVisible[dn] = true; });
+    }
+
+    // â”€â”€ Card building â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    function buildCards(configs) {
+      var grid = document.getElementById('cards-grid');
+      grid.innerHTML = '';
+      if (!configs.length) {
+        grid.innerHTML = '<div id="empty-msg">No headsets found.</div>';
+        return;
+      }
+      var displayNames = configs.map(function(c) { return toDisplayName(c.Name); });
+      buildFilters(displayNames);
+
+      configs.forEach(function(cfg) {
+        var dn = toDisplayName(cfg.Name);
+        var card = document.createElement('div');
+        card.className = 'headset-card';
+        card.dataset.display = dn;
+
+        var arOn  = (cfg.scrcpy_AutoRestart || '').toLowerCase() === 'true';
+        var recOn = (cfg.Record || '').toLowerCase() === 'true';
+
+        card.innerHTML =
+          '<div class="card-header">' +
+            '<span class="drag-handle" title="Drag to reorder">' +
+              '<svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor">' +
+                '<circle cx="3" cy="2"  r="1.2"/><circle cx="7" cy="2"  r="1.2"/>' +
+                '<circle cx="3" cy="6"  r="1.2"/><circle cx="7" cy="6"  r="1.2"/>' +
+                '<circle cx="3" cy="10" r="1.2"/><circle cx="7" cy="10" r="1.2"/>' +
+              '</svg>' +
+            '</span>' +
+            '<span class="card-name-display" id="name-display-' + dn + '">' +
+              '<span class="card-name" id="name-val-' + dn + '">' + esc(cfg.Name) + '</span>' +
+              '<button class="card-row-edit-btn" data-edit-name="' + dn + '" title="Rename headset" style="margin-left:4px;opacity:0.5">' +
+                '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+                  '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>' +
+                  '<path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>' +
+                '</svg>' +
+              '</button>' +
+            '</span>' +
+            '<span class="card-name-edit" id="name-edit-' + dn + '" style="display:none;align-items:center;gap:4px;flex:1;min-width:0">' +
+              '<input type="text" id="name-input-' + dn + '" maxlength="40" style="flex:1;min-width:0;font-size:13px;font-weight:700;background:transparent;border:none;border-bottom:1px solid var(--ping-ok);color:inherit;outline:none;padding:0 2px">' +
+              '<button class="ip-action-btn save" data-name-save="' + dn + '" title="Save">' +
+                '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>' +
+              '</button>' +
+              '<button class="ip-action-btn cancel" data-name-cancel="' + dn + '" title="Cancel">' +
+                '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
+              '</button>' +
+            '</span>' +
+            '<div class="card-dots">' +
+              '<span class="status-dot" data-dot-ping="' + dn + '">' +
+                '<span class="dot dot-grey"></span>PING' +
+              '</span>' +
+              '<span class="status-dot" data-dot-adb="' + dn + '">' +
+                '<span class="dot dot-grey"></span>ADB' +
+              '</span>' +
+              '<span class="status-dot" data-dot-scrcpy="' + dn + '">' +
+                '<span class="dot dot-grey"></span>SCRCPY' +
+              '</span>' +
+            '</div>' +
+            '<button class="card-remove-btn" data-remove-headset="' + dn + '" data-remove-name="' + esc(cfg.Name) + '" title="Remove headset">' +
+              '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>' +
+            '</button>' +
+          '</div>' +
+          '<div class="card-toggle-row">' +
+            '<span class="toggle-label">' +
+              '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+                '<polygon points="5 3 19 12 5 21 5 3"/>' +
+              '</svg>' +
+              '<span id="app-name-' + dn + '" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">-</span>' +
+            '</span>' +
+            '<button class="card-launch-btn" data-launch-app="' + dn + '" title="Launch an app">' +
+              '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+                '<polygon points="5 3 19 12 5 21 5 3"/>' +
+              '</svg>' +
+            '</button>' +
+          '</div>' +
+          '<div class="card-body">' +
+            '<div class="card-row">' +
+              '<span class="card-row-label">IP Address</span>' +
+              '<span class="card-row-ip-display" id="ip-display-' + dn + '">' +
+                '<span class="card-row-value" id="ip-val-' + dn + '">' + esc(cfg.IPAddress || '-') + '</span>' +
+                '<button class="card-row-edit-btn" data-edit-ip="' + dn + '" title="Edit IP">' +
+                  '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+                    '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>' +
+                    '<path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>' +
+                  '</svg>' +
+                '</button>' +
+              '</span>' +
+              '<span class="card-row-ip-edit" id="ip-edit-' + dn + '">' +
+                '<input type="text" id="ip-input-' + dn + '" maxlength="39">' +
+                '<button class="ip-action-btn save" data-ip-save="' + dn + '" title="Save">' +
+                  '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>' +
+                '</button>' +
+                '<button class="ip-action-btn cancel" data-ip-cancel="' + dn + '" title="Cancel">' +
+                  '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
+                '</button>' +
+              '</span>' +
+            '</div>' +
+            '<div class="card-row"><span class="card-row-label">Model</span><span class="card-row-value" data-val-model="' + dn + '">' + esc(cfg.Model || '-') + '</span></div>' +
+            '<div class="card-row"><span class="card-row-label">Serial</span><span class="card-row-value">' + esc(cfg.SerialNumber || '-') + '</span></div>' +
+            '<div class="card-row"><span class="card-row-label">Scrcpy Profile</span>' +
+              '<span class="card-row-profile-display" id="profile-display-' + dn + '">' +
+                '<span class="card-row-value" id="profile-val-' + dn + '">' + esc(cfg.ScrcpyProfile || 'R-N-45-20') + '</span>' +
+                '<button class="card-row-edit-btn" data-edit-profile="' + dn + '" title="Edit profile">' +
+                  '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+                    '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>' +
+                    '<path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>' +
+                  '</svg>' +
+                '</button>' +
+              '</span>' +
+            '</div>' +
+          '</div>' +
+          '<div class="card-toggle-row">' +
+            '<span class="toggle-label">' +
+              '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+                '<polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.55"/>' +
+              '</svg>' +
+              'Auto-restart scrcpy' +
+            '</span>' +
+            '<button class="toggle-btn' + (arOn ? ' on' : '') + '" data-ar-headset="' + dn + '">' +
+              (arOn ? 'ON' : 'OFF') +
+            '</button>' +
+          '</div>' +
+          '<div class="card-toggle-row">' +
+            '<span class="toggle-label">' +
+              '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+                '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3" fill="currentColor"/>' +
+              '</svg>' +
+              'Recording' +
+            '</span>' +
+            '<button class="toggle-btn' + (recOn ? ' on' : '') + '" data-rec-headset="' + dn + '">' +
+              (recOn ? 'ON' : 'OFF') +
+            '</button>' +
+          '</div>' +
+          '<div class="card-power-row">' +
+            '<span class="power-label">' +
+              '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+                '<path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>' +
+              '</svg>' +
+              'Power' +
+            '</span>' +
+            '<div class="power-btns">' +
+              '<button class="power-btn reboot" data-power="reboot" data-power-headset="' + dn + '">' +
+                '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.55"/></svg>' +
+                'Reboot' +
+              '</button>' +
+              '<button class="power-btn shutdown" data-power="shutdown" data-power-headset="' + dn + '">' +
+                '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>' +
+                'Shutdown' +
+              '</button>' +
+            '</div>' +
+          '</div>';
+
+        card.setAttribute('draggable', 'false');
+        grid.appendChild(card);
+      });
+
+      // ── Drag-and-drop reordering ──────────────────────────────────────
+      // Pattern: only enable draggable on the card while the handle is held down.
+      // This prevents accidental drags when clicking buttons/inputs on the card.
+      var _dragSrc = null;
+
+      // Enable drag only when mousedown on the handle
+      grid.addEventListener('mousedown', function(e) {
+        var handle = e.target.closest('.drag-handle');
+        if (!handle) return;
+        var card = handle.closest('.headset-card');
+        if (card) card.setAttribute('draggable', 'true');
+      });
+
+      // Disable drag after mouse up (covers click-without-drag case)
+      grid.addEventListener('mouseup', function() {
+        grid.querySelectorAll('.headset-card[draggable="true"]').forEach(function(c) {
+          c.setAttribute('draggable', 'false');
+        });
+      });
+
+      grid.addEventListener('dragstart', function(e) {
+        var card = e.target.closest('.headset-card[draggable="true"]');
+        if (!card) return;
+        _dragSrc = card;
+        card.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', card.dataset.display);
+      });
+
+      grid.addEventListener('dragend', function(e) {
+        var card = e.target.closest('.headset-card');
+        if (card) {
+          card.classList.remove('dragging');
+          card.setAttribute('draggable', 'false');
+        }
+        grid.querySelectorAll('.headset-card').forEach(function(c) { c.classList.remove('drag-over'); });
+        _dragSrc = null;
+      });
+
+      grid.addEventListener('dragover', function(e) {
+        if (!_dragSrc) return;
+        var card = e.target.closest('.headset-card');
+        if (!card || card === _dragSrc) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        grid.querySelectorAll('.headset-card').forEach(function(c) { c.classList.remove('drag-over'); });
+        card.classList.add('drag-over');
+      });
+
+      grid.addEventListener('dragleave', function(e) {
+        // Only remove highlight if leaving the card entirely (not moving to a child)
+        var card = e.target.closest('.headset-card');
+        if (card && !card.contains(e.relatedTarget)) card.classList.remove('drag-over');
+      });
+
+      grid.addEventListener('drop', function(e) {
+        if (!_dragSrc) return;
+        var target = e.target.closest('.headset-card');
+        if (!target || target === _dragSrc) return;
+        e.preventDefault();
+        target.classList.remove('drag-over');
+
+        // Insert before or after target based on vertical midpoint
+        var rect = target.getBoundingClientRect();
+        if (e.clientY > rect.top + rect.height / 2) {
+          grid.insertBefore(_dragSrc, target.nextSibling);
+        } else {
+          grid.insertBefore(_dragSrc, target);
+        }
+
+        // Collect new order and persist
+        var order = [];
+        grid.querySelectorAll('.headset-card[data-display]').forEach(function(c) {
+          order.push(c.dataset.display);
+        });
+
+        fetch('/api/reorderheadsets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ order: order })
+        }).catch(function() {});
+      });
+      // ─────────────────────────────────────────────────────────────────
+
+      // Toggle + IP edit click handler
+      grid.addEventListener('click', function(e) {        // Remove headset button
+        var removeBtn = e.target.closest('[data-remove-headset]');
+        if (removeBtn) {
+          openRemoveModal(removeBtn.dataset.removeHeadset, removeBtn.dataset.removeName);
+          return;
+        }
+        // Launch app button
+        var launchBtn = e.target.closest('[data-launch-app]');
+        if (launchBtn) {
+          openLaunchModal(launchBtn.dataset.launchApp);
+          return;
+        }
+        // Scrcpy profile edit button
+        var editProfileBtn = e.target.closest('[data-edit-profile]');
+        if (editProfileBtn) {
+          openProfileModal(editProfileBtn.dataset.editProfile);
+          return;
+        }
+        // Name edit button
+        var editNameBtn = e.target.closest('[data-edit-name]');
+        if (editNameBtn) {
+          var dn = editNameBtn.dataset.editName;
+          var input = document.getElementById('name-input-' + dn);
+          input.value = document.getElementById('name-val-' + dn).textContent;
+          document.getElementById('name-display-' + dn).style.display = 'none';
+          var editEl = document.getElementById('name-edit-' + dn);
+          editEl.style.display = 'flex';
+          _editingField = true;
+          input.focus();
+          input.select();
+          return;
+        }
+        // Name cancel
+        var nameCancelBtn = e.target.closest('[data-name-cancel]');
+        if (nameCancelBtn) {
+          var dn = nameCancelBtn.dataset.nameCancel;
+          document.getElementById('name-display-' + dn).style.display = '';
+          document.getElementById('name-edit-' + dn).style.display = 'none';
+          _editingField = false;
+          return;
+        }
+        // Name save
+        var nameSaveBtn = e.target.closest('[data-name-save]');
+        if (nameSaveBtn) {
+          var dn      = nameSaveBtn.dataset.nameSave;
+          var input   = document.getElementById('name-input-' + dn);
+          var newName = input.value.trim();
+          if (!newName || !/^[\w\s\-]{1,40}$/.test(newName)) {
+            input.style.borderBottomColor = 'var(--ping-ko)';
+            setTimeout(function() { input.style.borderBottomColor = ''; }, 1200);
+            return;
+          }
+          nameSaveBtn.disabled = true;
+          fetch('/api/renameheadset', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: dn, newname: newName })
+          })
+          .then(function(r) { return r.json(); })
+          .then(function(j) {
+            if (j.ok) {
+              document.getElementById('name-val-' + dn).textContent = j.newname;
+              document.getElementById('name-display-' + dn).style.display = '';
+              document.getElementById('name-edit-' + dn).style.display = 'none';
+              _editingField = false;
+            } else {
+              input.style.borderBottomColor = 'var(--ping-ko)';
+              setTimeout(function() { input.style.borderBottomColor = ''; }, 1200);
+            }
+          })
+          .catch(function() {
+            input.style.borderBottomColor = 'var(--ping-ko)';
+            setTimeout(function() { input.style.borderBottomColor = ''; }, 1200);
+          })
+          .finally(function() { nameSaveBtn.disabled = false; });
+          return;
+        }
+        // IP edit button
+        var editBtn = e.target.closest('[data-edit-ip]');
+        if (editBtn) {
+          var dn = editBtn.dataset.editIp;
+          var display = document.getElementById('ip-display-' + dn);
+          var edit    = document.getElementById('ip-edit-' + dn);
+          var input   = document.getElementById('ip-input-' + dn);
+          var valEl   = document.getElementById('ip-val-' + dn);
+          input.value = valEl.textContent === '-' ? '' : valEl.textContent;
+          clearIpError(input);
+          display.style.display = 'none';
+          edit.style.display = 'flex';
+          _editingField = true;
+          input.focus();
+          input.select();
+          return;
+        }
+        // IP cancel
+        var cancelBtn = e.target.closest('[data-ip-cancel]');
+        if (cancelBtn) {
+          var dn = cancelBtn.dataset.ipCancel;
+          clearIpError(document.getElementById('ip-input-' + dn));
+          document.getElementById('ip-display-' + dn).style.display = '';
+          document.getElementById('ip-edit-' + dn).style.display = 'none';
+          _editingField = false;
+          return;
+        }
+        // IP save
+        var saveBtn = e.target.closest('[data-ip-save]');
+        if (saveBtn) {
+          var dn    = saveBtn.dataset.ipSave;
+          var input = document.getElementById('ip-input-' + dn);
+          var ip    = input.value.trim();
+
+          // Validate format and octet range (0-255)
+          var validIp = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip);
+          var octetsOk = validIp && validIp.slice(1).every(function(o) { return parseInt(o, 10) <= 255; });
+          if (!octetsOk) {
+            showIpError(input, 'Invalid IP address (e.g. 192.168.1.10)', false);
+            return;
+          }
+
+          // Prevent duplicate IP (another headset already has this IP)
+          var duplicate = false;
+          document.querySelectorAll('[id^="ip-val-"]').forEach(function(el) {
+            var otherDn = el.id.replace('ip-val-', '');
+            if (otherDn !== dn && el.textContent.trim() === ip) { duplicate = true; }
+          });
+          if (duplicate) {
+            showIpError(input, 'IP already used by another headset', true);
+            return;
+          }
+          saveBtn.disabled = true;
+          fetch('/api/updateip', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: dn, ip: ip })
+          })
+          .then(function(r) { return r.json(); })
+          .then(function(j) {
+            if (j.ok) {
+              document.getElementById('ip-val-' + dn).textContent = ip;
+              document.getElementById('ip-display-' + dn).style.display = '';
+              document.getElementById('ip-edit-' + dn).style.display = 'none';
+              _editingField = false;
+            } else {
+              input.style.borderColor = 'var(--ping-ko)';
+              setTimeout(function() { input.style.borderColor = ''; }, 1200);
+            }
+          })
+          .catch(function() {
+            input.style.borderColor = 'var(--ping-ko)';
+            setTimeout(function() { input.style.borderColor = ''; }, 1200);
+          })
+          .finally(function() { saveBtn.disabled = false; });
+          return;
+        }
+        // Auto-restart toggle
+        var btn = e.target.closest('[data-ar-headset]');
+        if (btn) {
+          var dn = btn.dataset.arHeadset;
+          var newVal = !btn.classList.contains('on');
+          btn.classList.toggle('on', newVal);
+          btn.textContent = newVal ? 'ON' : 'OFF';
+          fetch('/api/autorestart', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: dn, value: newVal })
+          })
+          .then(function(r) { return r.json(); })
+          .then(function(j) {
+            if (!j.ok) { btn.classList.toggle('on', !newVal); btn.textContent = !newVal ? 'ON' : 'OFF'; }
+          })
+          .catch(function() { btn.classList.toggle('on', !newVal); btn.textContent = !newVal ? 'ON' : 'OFF'; });
+          return;
+        }
+        var recBtn = e.target.closest('[data-rec-headset]');
+        if (recBtn) {
+          var dn = recBtn.dataset.recHeadset;
+          var newVal = !recBtn.classList.contains('on');
+          recBtn.classList.toggle('on', newVal);
+          recBtn.textContent = newVal ? 'ON' : 'OFF';
+          fetch('/api/recording', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: dn, value: newVal })
+          })
+          .then(function(r) { return r.json(); })
+          .then(function(j) {
+            if (!j.ok) { recBtn.classList.toggle('on', !newVal); recBtn.textContent = !newVal ? 'ON' : 'OFF'; }
+          })
+          .catch(function() { recBtn.classList.toggle('on', !newVal); recBtn.textContent = !newVal ? 'ON' : 'OFF'; });
+          return;
+        }
+        // Power buttons
+        var powerBtn = e.target.closest('[data-power]');
+        if (powerBtn) {
+          openPowerModal(powerBtn.dataset.powerHeadset, powerBtn.dataset.power);
+        }
+      });
+
+      // Enter / Escape on IP input and name input (delegated)
+      grid.addEventListener('keydown', function(e) {
+        var ipInput = e.target.closest('#cards-grid input[id^="ip-input-"]');
+        if (ipInput) {
+          var dn = ipInput.id.replace('ip-input-', '');
+          if (e.key === 'Enter')  { document.querySelector('[data-ip-save="'   + dn + '"]').click(); }
+          if (e.key === 'Escape') { document.querySelector('[data-ip-cancel="' + dn + '"]').click(); }
+          return;
+        }
+        var nameInput = e.target.closest('#cards-grid input[id^="name-input-"]');
+        if (nameInput) {
+          var dn = nameInput.id.replace('name-input-', '');
+          if (e.key === 'Enter')  { document.querySelector('[data-name-save="'   + dn + '"]').click(); }
+          if (e.key === 'Escape') { document.querySelector('[data-name-cancel="' + dn + '"]').click(); }
+        }
+      });
+
+      cardsBuilt = true;
+    }
+
+    // â”€â”€ IP error helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    function showIpError(input, msg, isWarn) {
+      clearIpError(input);
+      input.style.borderColor = isWarn ? 'var(--charging)' : 'var(--ping-ko)';
+      var err = document.createElement('span');
+      err.className = 'ip-error' + (isWarn ? ' warn' : '');
+      err.textContent = msg;
+      err._clearTimer = setTimeout(function() { clearIpError(input); }, 2500);
+      input.parentNode.appendChild(err);
+    }
+    function clearIpError(input) {
+      input.style.borderColor = '';
+      var existing = input.parentNode && input.parentNode.querySelector('.ip-error');
+      if (existing) { clearTimeout(existing._clearTimer); existing.remove(); }
+    }
+
+    // â”€â”€ Status dots update â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    function updateStatusDots() {
+      Object.keys(headsetStatus).forEach(function(dn) {
+        var s = headsetStatus[dn];
+
+        var pingDot = document.querySelector('[data-dot-ping="' + dn + '"] .dot');
+        if (pingDot) { pingDot.className = 'dot ' + (s.ping ? 'dot-green' : 'dot-red'); }
+
+        var adbDot = document.querySelector('[data-dot-adb="' + dn + '"] .dot');
+        if (adbDot) { adbDot.className = 'dot ' + (s.adb ? 'dot-green' : 'dot-grey'); }
+
+        var scrcpyDot = document.querySelector('[data-dot-scrcpy="' + dn + '"] .dot');
+        if (scrcpyDot) { scrcpyDot.className = 'dot ' + (s.scrcpy ? 'dot-blue' : 'dot-grey'); }
+
+        var modelEl = document.querySelector('[data-val-model="' + dn + '"]');
+        if (modelEl && s.model && s.model !== '-') {
+          // Only update from infos if config didn't already set a known value
+          if (!headsetConfig[dn] || !headsetConfig[dn].model) modelEl.textContent = s.model;
+        }
+
+        var appEl = document.getElementById('app-name-' + dn);
+        if (appEl) {
+          var pkg = s.runningApp || '';
+          var lbl = (appNameCache[pkg] || pkg || '-');
+          appEl.textContent = lbl;
+          appEl.title = pkg;
+        }
+      });
+    }
+
+    // â”€â”€ CSV polling â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    function pollHeadsetsCsv() {
+      fetch(HEADSETS_API_PATH + '?_=' + Date.now())
+        .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function(rows) {
+          if (_editingField) return; // don't touch DOM while user is editing
+          if (!cardsBuilt && rows.length) {
+            buildCards(rows);
+            // If opened with ?headset=X, show only that headset
+            if (_headsetFilter) {
+              Object.keys(headsetVisible).forEach(function(dn) {
+                setHeadsetVisible(dn, dn === _headsetFilter);
+              });
+            }
+          }
+          // Update fields that may change without rebuilding cards
+          rows.forEach(function(row) {
+            var dn  = toDisplayName(row.Name || '');
+            var btn = document.querySelector('[data-ar-headset="' + dn + '"]');
+            if (btn) {
+              var on = (row.scrcpy_AutoRestart || '').toLowerCase() === 'true';
+              btn.classList.toggle('on', on);
+              btn.textContent = on ? 'ON' : 'OFF';
+            }
+            var recBtn = document.querySelector('[data-rec-headset="' + dn + '"]');
+            if (recBtn) {
+              var on = (row.Record || '').toLowerCase() === 'true';
+              recBtn.classList.toggle('on', on);
+              recBtn.textContent = on ? 'ON' : 'OFF';
+            }
+            // Model from config CSV is authoritative when populated
+            if (row.Model) {
+              var modelEl = document.querySelector('[data-val-model="' + dn + '"]');
+              if (modelEl) modelEl.textContent = row.Model;
+              headsetConfig[dn] = headsetConfig[dn] || {};
+              headsetConfig[dn].model = row.Model;
+            }
+          });
+        })
+        .catch(function() {});
+    }
+
+    function pollInfosCsv() {
+      fetch(INFOS_CSV_PATH + '?_=' + Date.now())
+        .then(function(r) { if (!r.ok) throw new Error(r.status); return r.text(); })
+        .then(function(text) {
+          parseCsvText(text, ';').forEach(function(row) {
+            var dn = toDisplayName(row.Name || '');
+            if (!dn) return;
+            headsetStatus[dn] = {
+              ping:   (row.Ping    || '').toLowerCase() === 'true',
+              adb:    (row.ADBWifi || '').toLowerCase() === 'true',
+              scrcpy: (row.SCRCPY  || '').toLowerCase() === 'ok',
+              model:  row.Model || '',
+              runningApp: row.RunningApp || ''
+            };
+          });
+          if (cardsBuilt) updateStatusDots();
+        })
+        .catch(function() {});
+    }
+
+    // â”€â”€ Power modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    var _powerAction = null;
+    var _powerDn     = null;
+
+    function openPowerModal(dn, action) {
+      _powerDn     = dn;
+      _powerAction = action;
+      var isShutdown = action === 'shutdown';
+      var label      = dn.replace(/_/g, ' ');
+      document.getElementById('pwm-title').textContent = isShutdown ? 'Shut down ' + label + '?' : 'Reboot ' + label + '?';
+      document.getElementById('pwm-sub').textContent   = isShutdown
+        ? 'This will power off the headset. It will need to be manually turned back on.'
+        : 'This will reboot the headset. Scrcpy will need to reconnect.';
+      var icon = document.getElementById('pwm-icon');
+      icon.setAttribute('stroke', isShutdown ? '#ef4444' : '#fbbf24');
+      var confirmBtn = document.getElementById('pwm-confirm');
+      confirmBtn.className = 'pm-btn';
+      confirmBtn.style.cssText = isShutdown
+        ? 'background:rgba(239,68,68,0.15);color:#ef4444;border-color:rgba(239,68,68,0.4)'
+        : 'background:rgba(251,191,36,0.15);color:#fbbf24;border-color:rgba(251,191,36,0.4)';
+      confirmBtn.textContent = isShutdown ? 'Shut down' : 'Reboot';
+      document.getElementById('power-modal').style.display = 'flex';
+    }
+
+    function closePowerModal() {
+      document.getElementById('power-modal').style.display = 'none';
+      _powerDn = _powerAction = null;
+    }
+
+    document.getElementById('pwm-cancel').addEventListener('click', closePowerModal);
+    document.getElementById('power-modal').addEventListener('click', function(e) {
+      if (e.target === this) closePowerModal();
+    });
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape' && _powerDn) closePowerModal();
+    });
+    document.getElementById('pwm-confirm').addEventListener('click', function() {
+      var dn = _powerDn; var action = _powerAction;
+      if (!dn || !action) return;
+      closePowerModal();
+      fetch('/api/' + action, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: dn })
+      }).catch(function() {});
+    });
+
+    // â”€â”€ Profile modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    var _editingProfileDn = null;
+
+    function openProfileModal(dn) {
+      _editingProfileDn = dn;
+      var cur = (document.getElementById('profile-val-' + dn).textContent || 'R-N-45-20').split('-');
+      if (cur.length !== 4) cur = ['R', 'N', '45', '20'];
+      document.getElementById('pm-headset').textContent = dn.replace(/_/g, ' ');
+      document.getElementById('pm-eye').value   = cur[0].toUpperCase();
+      document.getElementById('pm-audio').value = cur[1].toUpperCase();
+      document.getElementById('pm-fps').value   = cur[2];
+      document.getElementById('pm-bw').value    = cur[3];
+      document.getElementById('profile-modal').style.display = 'flex';
+      document.getElementById('pm-fps').focus();
+    }
+
+    function closeProfileModal() {
+      document.getElementById('profile-modal').style.display = 'none';
+      _editingProfileDn = null;
+    }
+
+    document.getElementById('pm-cancel').addEventListener('click', closeProfileModal);
+    document.getElementById('profile-modal').addEventListener('click', function(e) {
+      if (e.target === this) closeProfileModal();
+    });
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape' && _editingProfileDn) closeProfileModal();
+    });
+    document.getElementById('pm-save').addEventListener('click', function() {
+      var dn = _editingProfileDn;
+      if (!dn) return;
+      var eye   = document.getElementById('pm-eye').value.toUpperCase();
+      var audio = document.getElementById('pm-audio').value.toUpperCase();
+      var fps   = parseInt(document.getElementById('pm-fps').value, 10);
+      var bw    = parseInt(document.getElementById('pm-bw').value, 10);
+      if (isNaN(fps) || fps < 1 || isNaN(bw) || bw < 1) { return; }
+      var newProfile = eye + '-' + audio + '-' + fps + '-' + bw;
+      var saveBtn = document.getElementById('pm-save');
+      saveBtn.disabled = true;
+      fetch('/api/updateprofile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: dn, profile: newProfile })
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(j) {
+        if (j.ok) {
+          document.getElementById('profile-val-' + dn).textContent = newProfile;
+          closeProfileModal();
+        }
+      })
+      .catch(function() {})
+      .finally(function() { saveBtn.disabled = false; });
+    });
+
+    // â”€â”€ Remove modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    var _removeDn   = null;
+    var _removeName = null;
+
+    function openRemoveModal(dn, name) {
+      _removeDn   = dn;
+      _removeName = name;
+      document.getElementById('rm-name-hint').textContent = name;
+      var input = document.getElementById('rm-input');
+      input.value = '';
+      input.style.borderColor = '';
+      document.getElementById('rm-confirm').disabled = true;
+      document.getElementById('remove-modal').style.display = 'flex';
+      input.focus();
+    }
+
+    function closeRemoveModal() {
+      document.getElementById('remove-modal').style.display = 'none';
+      _removeDn = _removeName = null;
+    }
+
+    document.getElementById('rm-input').addEventListener('input', function() {
+      document.getElementById('rm-confirm').disabled = (this.value !== _removeName);
+    });
+
+    document.getElementById('rm-copy').addEventListener('click', function() {
+      var input = document.getElementById('rm-input');
+      input.value = _removeName || '';
+      input.dispatchEvent(new Event('input'));
+      input.focus();
+    });
+
+    document.getElementById('rm-cancel').addEventListener('click', closeRemoveModal);
+    document.getElementById('remove-modal').addEventListener('click', function(e) {
+      if (e.target === this) closeRemoveModal();
+    });
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape' && _removeDn) closeRemoveModal();
+    });
+    document.getElementById('rm-confirm').addEventListener('click', function() {
+      var dn = _removeDn; var name = _removeName;
+      if (!dn || !name) return;
+      var btn = this; btn.disabled = true;
+      fetch('/api/removeheadset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: dn })
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(j) {
+        if (j.ok) {
+          closeRemoveModal();
+          var card = document.querySelector('.headset-card[data-display="' + dn + '"]');
+          if (card) card.remove();
+          delete headsetVisible[dn];
+          delete headsetStatus[dn];
+        } else {
+          btn.disabled = false;
+        }
+      })
+      .catch(function() { btn.disabled = false; });
+    });
+
+    // â”€â”€ Launch app modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    var _launchDn         = null;
+    var _allAppsLoaded    = false;
+    var _allApps          = [];
+    var _favoritePackages = {};   // package -> true
+
+    function openLaunchModal(dn) {
+      _launchDn      = dn;
+      _allAppsLoaded = false;
+      _allApps       = [];
+      document.getElementById('lm-headset-label').textContent = dn.replace(/_/g,' ');
+      document.getElementById('lm-status').textContent = '';
+      document.getElementById('lm-status').className   = 'lm-status';
+      document.getElementById('lm-show-all-btn').disabled = false;
+      document.getElementById('lm-show-all-btn').textContent = '';
+      document.getElementById('lm-show-all-btn').innerHTML =
+        '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg> Show all installed apps';
+      document.getElementById('launch-modal').style.display = 'flex';
+      renderLaunchList([]);
+      fetch('/api/favoriteapps?name=' + encodeURIComponent(_launchDn))
+        .then(function(r) { return r.json(); })
+        .then(function(favs) {
+          _favoritePackages = {};
+          favs.forEach(function(a) {
+            _favoritePackages[a.package] = true;
+            appNameCache[a.package] = a.displayName;
+          });
+          renderLaunchList(favs, true);
+        })
+        .catch(function() {
+          document.getElementById('lm-status').textContent = 'Could not load favorites.';
+          document.getElementById('lm-status').className   = 'lm-status err';
+        });
+    }
+
+    function closeLaunchModal() {
+      document.getElementById('launch-modal').style.display = 'none';
+      _launchDn = null;
+    }
+
+    function renderLaunchList(apps, isFavView) {
+      var list = document.getElementById('lm-list');
+      list.innerHTML = '';
+      var metaHomePkg = 'com.oculus.vrshell';
+      // Always ensure Meta Home is first
+      var hasMetaHome = apps.some(function(a) { return a.package === metaHomePkg; });
+      var displayApps = apps.slice();
+      if (!hasMetaHome && (isFavView || _allAppsLoaded)) {
+        displayApps.unshift({ package: metaHomePkg, displayName: 'Meta Home', favorite: true });
+      }
+
+      if (displayApps.length === 0) {
+        list.innerHTML = '<div class="lm-section-label" style="padding-top:14px;text-align:center">Loading...</div>';
+        return;
+      }
+
+      if (isFavView && !_allAppsLoaded) {
+        var sectionEl = document.createElement('div');
+        sectionEl.className = 'lm-section-label';
+        sectionEl.textContent = 'Favorites';
+        list.appendChild(sectionEl);
+      }
+
+      displayApps.forEach(function(app) {
+        var isMeta = app.package === metaHomePkg;
+        var isFav  = isMeta || !!_favoritePackages[app.package];
+        var row = document.createElement('div');
+        row.className = 'lm-app-row' + (isMeta ? ' is-meta' : '');
+
+        var starBtn = document.createElement('button');
+        starBtn.className = 'lm-star-btn' + (isFav ? ' active' : '');
+        starBtn.title = isFav ? 'Remove from favorites' : 'Add to favorites';
+        starBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="' + (isFav ? 'currentColor' : 'none') + '" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
+        starBtn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          if (isMeta) return;
+          var newFav = !_favoritePackages[app.package];
+          _favoritePackages[app.package] = newFav || undefined;
+          if (!newFav) delete _favoritePackages[app.package];
+          starBtn.className = 'lm-star-btn' + (newFav ? ' active' : '');
+          starBtn.title = newFav ? 'Remove from favorites' : 'Add to favorites';
+          starBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="' + (newFav ? 'currentColor' : 'none') + '" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
+          fetch('/api/togglefavorite', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: _launchDn, package: app.package, displayName: app.displayName, favorite: newFav })
+          }).catch(function() {});
+        });
+
+        var nameEl = document.createElement('span');
+        nameEl.className = 'lm-app-name';
+        nameEl.textContent = app.displayName || app.package;
+        nameEl.title = app.package;
+
+        var launchBtn = document.createElement('button');
+        launchBtn.className = 'lm-launch-btn';
+        launchBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg> Launch';
+        launchBtn.addEventListener('click', function() {
+          launchApp(_launchDn, app.package, app.displayName, launchBtn);
+        });
+
+        row.appendChild(starBtn);
+        row.appendChild(nameEl);
+        row.appendChild(launchBtn);
+        list.appendChild(row);
+      });
+    }
+
+    function launchApp(dn, pkg, displayName, btn) {
+      if (!dn || !pkg) return;
+      if (btn) btn.disabled = true;
+      var statusEl = document.getElementById('lm-status');
+      statusEl.textContent = 'Launching ' + (displayName || pkg) + '...';
+      statusEl.className   = 'lm-status';
+      fetch('/api/launchapp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: dn, package: pkg })
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(j) {
+        if (j.ok) {
+          statusEl.textContent = (displayName || pkg) + ' launched successfully.';
+          statusEl.className   = 'lm-status ok';
+        } else {
+          statusEl.textContent = 'Failed to launch ' + (displayName || pkg) + '.';
+          statusEl.className   = 'lm-status err';
+        }
+        if (btn) btn.disabled = false;
+        setTimeout(function() {
+          if (statusEl.textContent.indexOf('launched successfully') !== -1) {
+            statusEl.textContent = '';
+            statusEl.className = 'lm-status';
+          }
+        }, 3000);
+      })
+      .catch(function() {
+        statusEl.textContent = 'Error communicating with server.';
+        statusEl.className   = 'lm-status err';
+        if (btn) btn.disabled = false;
+      });
+    }
+
+    document.getElementById('lm-close').addEventListener('click', closeLaunchModal);
+    document.getElementById('launch-modal').addEventListener('click', function(e) {
+      if (e.target === this) closeLaunchModal();
+    });
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape' && _launchDn) closeLaunchModal();
+    });
+
+    document.getElementById('lm-show-all-btn').addEventListener('click', function() {
+      if (_allAppsLoaded || !_launchDn) return;
+      var btn = this;
+      btn.disabled = true;
+      btn.textContent = 'Loading installed apps...';
+      var statusEl = document.getElementById('lm-status');
+      statusEl.textContent = 'Fetching app list from headset...';
+      statusEl.className   = 'lm-status';
+      fetch('/api/installedapps?name=' + encodeURIComponent(_launchDn))
+        .then(function(r) { return r.json(); })
+        .then(function(apps) {
+          _allAppsLoaded = true;
+          _allApps = apps;
+          apps.forEach(function(a) {
+            if (a.displayName) appNameCache[a.package] = a.displayName;
+            if (a.favorite) _favoritePackages[a.package] = true;
+          });
+          btn.style.display = 'none';
+          statusEl.textContent = '';
+          statusEl.className   = 'lm-status';
+          var list = document.getElementById('lm-list');
+          list.innerHTML = '';
+
+          var metaHomePkg = 'com.oculus.vrshell';
+          var metaApp = apps.find(function(a) { return a.package === metaHomePkg; });
+          if (!metaApp) metaApp = { package: metaHomePkg, displayName: 'Meta Home', favorite: true };
+
+          var favApps = apps.filter(function(a) { return a.package !== metaHomePkg && _favoritePackages[a.package]; });
+          var otherApps = apps.filter(function(a) { return a.package !== metaHomePkg && !_favoritePackages[a.package]; });
+
+          function addSection(label) {
+            var s = document.createElement('div'); s.className = 'lm-section-label'; s.textContent = label; list.appendChild(s);
+          }
+          addSection('Meta Home');
+          renderAppRow(metaApp, list);
+          if (favApps.length) { addSection('Favorites'); favApps.forEach(function(a) { renderAppRow(a, list); }); }
+          if (otherApps.length) { addSection('All Apps'); otherApps.forEach(function(a) { renderAppRow(a, list); }); }
+        })
+        .catch(function() {
+          btn.disabled = false;
+          btn.textContent = 'Show all installed apps';
+          statusEl.textContent = 'Could not load app list.';
+          statusEl.className   = 'lm-status err';
+        });
+    });
+
+    function renderAppRow(app, list) {
+      var metaHomePkg = 'com.oculus.vrshell';
+      var isMeta = app.package === metaHomePkg;
+      var isFav  = isMeta || !!_favoritePackages[app.package];
+      var row = document.createElement('div');
+      row.className = 'lm-app-row' + (isMeta ? ' is-meta' : '');
+
+      var starBtn = document.createElement('button');
+      starBtn.className = 'lm-star-btn' + (isFav ? ' active' : '');
+      starBtn.title = isFav ? 'Remove from favorites' : 'Add to favorites';
+      starBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="' + (isFav ? 'currentColor' : 'none') + '" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
+      (function(a, sb) {
+        sb.addEventListener('click', function(e) {
+          e.stopPropagation();
+          if (isMeta) return;
+          var newFav = !_favoritePackages[a.package];
+          if (newFav) { _favoritePackages[a.package] = true; } else { delete _favoritePackages[a.package]; }
+          sb.className = 'lm-star-btn' + (newFav ? ' active' : '');
+          sb.title = newFav ? 'Remove from favorites' : 'Add to favorites';
+          sb.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="' + (newFav ? 'currentColor' : 'none') + '" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
+          fetch('/api/togglefavorite', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: _launchDn, package: a.package, displayName: a.displayName, favorite: newFav })
+          }).catch(function() {});
+        });
+      })(app, starBtn);
+
+      var nameEl = document.createElement('span');
+      nameEl.className = 'lm-app-name';
+      nameEl.textContent = app.displayName || app.package;
+      nameEl.title = app.package;
+
+      var launchBtn = document.createElement('button');
+      launchBtn.className = 'lm-launch-btn';
+      launchBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg> Launch';
+      (function(a, lb) {
+        lb.addEventListener('click', function() { launchApp(_launchDn, a.package, a.displayName, lb); });
+      })(app, launchBtn);
+
+      row.appendChild(starBtn);
+      row.appendChild(nameEl);
+      row.appendChild(launchBtn);
+      list.appendChild(row);
+    }
+
+    // â”€â”€ Boot â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    var _headsetFilter = (new URLSearchParams(location.search)).get('headset') || '';
+
+    pollHeadsetsCsv();
+    pollInfosCsv();
+    setInterval(pollHeadsetsCsv, 10000);
+    setInterval(pollInfosCsv, REFRESH_MS);
+
+    // â”€â”€ Manage New Devices modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    var _ndmData = null;  // USB device details from /api/usbdeviceinfo
+    var _ndmIp   = '';    // IP used for add-headset flow
+
+    var _spinSvg  = '<svg class="spinning" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>';
+    var _checkSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+    var _warnSvg  = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>';
+
+    function openNewDevicesModal() {
+      _ndmData = null;
+      _ndmIp   = '';
+      document.getElementById('wifi-adb-modal').style.display = 'flex';
+      renderNdmStep('detecting');
+      fetch('/api/usbdeviceinfo')
+        .then(function(r) { return r.json(); })
+        .then(function(d) { _ndmData = d.found ? d : null; renderNdmStep('main'); })
+        .catch(function() { renderNdmStep('main'); });
+    }
+
+    function closeNewDevicesModal() {
+      document.getElementById('wifi-adb-modal').style.display = 'none';
+    }
+
+    function _ndmSetTitle(t) {
+      var el = document.getElementById('wifi-modal-title');
+      if (el) el.textContent = t;
+    }
+
+    function renderNdmStep(step, data) {
+      var body   = document.getElementById('wifi-modal-body');
+      var footer = document.getElementById('wifi-modal-footer');
+      body.innerHTML   = '';
+      footer.innerHTML = '';
+
+      // â”€â”€ Detecting â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      if (step === 'detecting') {
+        _ndmSetTitle('Manage New Devices');
+        body.innerHTML = '<div class="wifi-step-row">' + _spinSvg + 'Detecting USB headset...</div>';
+        footer.innerHTML = '<button class="pm-btn" id="ndm-btn-cancel">Cancel</button>';
+        document.getElementById('ndm-btn-cancel').addEventListener('click', closeNewDevicesModal);
+
+      // â”€â”€ Main view â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      } else if (step === 'main') {
+        _ndmSetTitle('Manage New Devices');
+        var html = '';
+
+        if (_ndmData && _ndmData.found) {
+          // USB detected header
+          html += '<div class="wifi-step-row" style="color:#22c55e;margin-bottom:6px">' +
+                    _checkSvg + '<strong>USB headset detected</strong>' +
+                  '</div>';
+
+          // Device info box
+          var ssidLine = _ndmData.ssid
+            ? '<span style="font-size:11px;color:#888;font-family:monospace">WiFi: ' + esc(_ndmData.ssid) + '</span>' +
+              (_ndmData.ip ? '<span style="font-size:11px;color:#888;font-family:monospace">IP: ' + esc(_ndmData.ip) + '</span>' : '')
+            : (_ndmData.ip ? '<span class="wifi-info-ip">' + esc(_ndmData.ip) + '</span>'
+                           : '<span style="font-size:11px;color:#666">WiFi IP not detected</span>');
+          html += '<div class="wifi-info-box">' +
+                    '<span class="wifi-info-model">' + esc(_ndmData.model || 'Unknown model') + '</span>' +
+                    ssidLine +
+                    '<span style="font-size:11px;font-family:monospace;color:#666">SN: ' + esc(_ndmData.serialNumber || '-') + '</span>' +
+                  '</div>';
+
+          // Registration status
+          if (_ndmData.alreadyRegistered) {
+            html += '<div style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#22c55e;margin-top:6px">' +
+                      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>' +
+                      'Already registered in headsets list' +
+                    '</div>';
+          } else {
+            html += '<div style="margin-top:6px">' +
+                      '<button class="ndm-action-btn" id="ndm-btn-add-usb" style="color:#3b82f6;border-color:rgba(59,130,246,0.35);background:rgba(59,130,246,0.08)">' +
+                        '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>' +
+                        'Add this headset to the list' +
+                      '</button>' +
+                    '</div>';
+          }
+
+          // WiFi Connection section
+          var expectedSsid = (_ndmData.expectedSsid || '').trim();
+          var currentSsid  = (_ndmData.ssid || '').trim();
+          if (expectedSsid) {
+            html += '<div class="ndm-section"><div class="ndm-section-label">WiFi Connection</div>';
+            if (currentSsid && currentSsid === expectedSsid) {
+              html += '<div style="display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:#22c55e">' +
+                        '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>' +
+                        'Connected to ' + esc(expectedSsid) +
+                      '</div>';
+            } else {
+              var wifiWarnMsg = currentSsid
+                ? 'Currently on <strong>' + esc(currentSsid) + '</strong> - expected <strong>' + esc(expectedSsid) + '</strong>'
+                : 'WiFi network not detected - expected <strong>' + esc(expectedSsid) + '</strong>';
+              html += '<div style="font-size:11px;color:#f59e0b;margin-bottom:6px">' + wifiWarnMsg + '</div>' +
+                      '<button class="ndm-action-btn" id="ndm-btn-connect-wifi">' +
+                        '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>' +
+                        '<span><strong>Connect to ' + esc(expectedSsid) + '</strong><br><span style="font-size:11px;opacity:0.6">Switch headset to the configured network</span></span>' +
+                      '</button>';
+            }
+            html += '</div>';
+          }
+
+          // WiFi ADB section
+          html += '<div class="ndm-section"><div class="ndm-section-label">WiFi ADB</div>';
+          if (_ndmData.wifiAdbOpen) {
+            html += '<div style="display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:#22c55e">' +
+                      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>' +
+                      'WiFi ADB is already working' +
+                    '</div>';
+          } else {
+            html += '<button class="ndm-action-btn" id="ndm-btn-enable-wifi">' +
+                      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>' +
+                      '<span><strong>Enable WiFi ADB</strong><br><span style="font-size:11px;opacity:0.6">Run adb tcpip 5555 to allow wireless connection</span></span>' +
+                    '</button>';
+          }
+          html += '</div>';
+
+          // ADB WiFi App section
+          html += '<div class="ndm-section"><div class="ndm-section-label">ADB WiFi App</div>';
+          if (_ndmData.apkInstalled) {
+            html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px">' +
+                      '<div style="display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:#22c55e">' +
+                        '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>' +
+                        'App already installed' +
+                      '</div>' +
+                      '<button class="pm-btn" id="ndm-btn-reinstall" style="font-size:11px;padding:4px 12px;color:#3b82f6;border-color:rgba(59,130,246,0.35);background:rgba(59,130,246,0.08)">Reinstall</button>' +
+                    '</div>';
+          } else {
+            html += '<button class="ndm-action-btn" id="ndm-btn-install-apk">' +
+                      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>' +
+                      '<span><strong>Install ADB WiFi App</strong><br><span style="font-size:11px;opacity:0.6">Install, grant permissions and enable WiFi ADB</span></span>' +
+                    '</button>';
+          }
+          html += '</div>';
+
+        } else {
+          // No USB detected
+          html += '<div class="wifi-step-row" style="color:#ef4444;align-items:flex-start;gap:8px">' + _warnSvg +
+                    '<div>No USB headset detected.' +
+                      '<div style="font-size:11px;color:#555;margin-top:4px">Make sure the headset is plugged in via USB, USB Debugging is enabled, and you accepted the ADB authorization prompt.</div>' +
+                    '</div>' +
+                  '</div>';
+        }
+
+        // Always show Add manually section
+        html += '<div class="ndm-section">' +
+                  '<button class="ndm-action-btn" id="ndm-btn-add-manual">' +
+                    '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>' +
+                    'Add manually new headset with IP address' +
+                  '</button>' +
+                '</div>';
+
+        body.innerHTML = html;
+
+        // Wire buttons
+        var addUsbBtn = document.getElementById('ndm-btn-add-usb');
+        if (addUsbBtn) addUsbBtn.addEventListener('click', function() {
+          _ndmIp = (_ndmData && _ndmData.ip) ? _ndmData.ip : '';
+          _ndmIp ? renderNdmStep('add-name') : renderNdmStep('add-ip');
+        });
+        var enableWifiBtn = document.getElementById('ndm-btn-enable-wifi');
+        if (enableWifiBtn) enableWifiBtn.addEventListener('click', function() { renderNdmStep('enabling-tcpip'); submitEnableWifiAdb(); });
+        var connectWifiBtn = document.getElementById('ndm-btn-connect-wifi');
+        if (connectWifiBtn) connectWifiBtn.addEventListener('click', function() { submitConnectWifi(); });
+        var installBtn = document.getElementById('ndm-btn-install-apk');
+        if (installBtn) installBtn.addEventListener('click', function() { renderNdmStep('installing', { reinstall: false }); submitInstallAdbWifiApk(); });
+        var reinstallBtn = document.getElementById('ndm-btn-reinstall');
+        if (reinstallBtn) reinstallBtn.addEventListener('click', function() { renderNdmStep('installing', { reinstall: true }); submitInstallAdbWifiApk(); });
+        document.getElementById('ndm-btn-add-manual').addEventListener('click', function() { _ndmIp = ''; renderNdmStep('add-ip'); });
+
+        footer.innerHTML =
+          '<button class="pm-btn" id="ndm-btn-refresh" style="margin-right:auto">Refresh</button>' +
+          '<button class="pm-btn" id="ndm-btn-close">Close</button>';
+        document.getElementById('ndm-btn-refresh').addEventListener('click', function() {
+          _ndmData = null;
+          renderNdmStep('detecting');
+          fetch('/api/usbdeviceinfo')
+            .then(function(r) { return r.json(); })
+            .then(function(d) { _ndmData = d.found ? d : null; renderNdmStep('main'); })
+            .catch(function() { renderNdmStep('main'); });
+        });
+        document.getElementById('ndm-btn-close').addEventListener('click', closeNewDevicesModal);
+
+      // â”€â”€ Add headset: manual IP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      } else if (step === 'add-ip') {
+        _ndmSetTitle('Add Headset');
+        body.innerHTML =
+          '<div class="add-field">' +
+            '<label for="ndm-ip-input">IP Address</label>' +
+            '<input type="text" id="ndm-ip-input" placeholder="e.g. 192.168.1.100" maxlength="39" autocomplete="off">' +
+            '<div class="add-field-error" id="ndm-ip-error"></div>' +
+          '</div>';
+        footer.innerHTML =
+          '<button class="pm-btn" id="ndm-btn-back-ip">Back</button>' +
+          '<button class="pm-btn primary" id="ndm-btn-next-ip">Next</button>';
+        var ipInput = document.getElementById('ndm-ip-input');
+        if (_ndmIp) ipInput.value = _ndmIp;
+        ipInput.focus();
+        ipInput.addEventListener('keydown', function(e) { if (e.key === 'Enter') document.getElementById('ndm-btn-next-ip').click(); });
+        document.getElementById('ndm-btn-back-ip').addEventListener('click', function() { renderNdmStep('main'); });
+        document.getElementById('ndm-btn-next-ip').addEventListener('click', function() {
+          var ip = ipInput.value.trim();
+          var v = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip);
+          if (!v || !v.slice(1).every(function(o) { return parseInt(o, 10) <= 255; })) {
+            document.getElementById('ndm-ip-error').textContent = 'Enter a valid IP address (e.g. 192.168.1.100)'; return;
+          }
+          _ndmIp = ip; renderNdmStep('add-name');
+        });
+
+      // â”€â”€ Add headset: name â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      } else if (step === 'add-name') {
+        _ndmSetTitle('Add Headset');
+        body.innerHTML =
+          '<div class="add-detect-row" style="font-size:12px">' +
+            '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>' +
+            '<span style="font-family:monospace;color:#3b82f6">' + esc(_ndmIp) + '</span>' +
+          '</div>' +
+          '<div class="add-field" style="margin-top:8px">' +
+            '<label for="ndm-name-input">Headset Name</label>' +
+            '<input type="text" id="ndm-name-input" placeholder="e.g. Q3 Blue" maxlength="40" autocomplete="off">' +
+            '<div class="add-field-error" id="ndm-name-error"></div>' +
+          '</div>';
+        footer.innerHTML =
+          '<button class="pm-btn" id="ndm-btn-back-name">Back</button>' +
+          '<button class="pm-btn primary" id="ndm-btn-confirm-add">Add Headset</button>';
+        var nameInput = document.getElementById('ndm-name-input');
+        // Pre-fill with model when IP matches USB device
+        if (_ndmData && _ndmData.found && _ndmData.ip === _ndmIp && _ndmData.model) {
+          nameInput.value = _ndmData.model;
+        }
+        nameInput.focus(); nameInput.select();
+        nameInput.addEventListener('keydown', function(e) { if (e.key === 'Enter') document.getElementById('ndm-btn-confirm-add').click(); });
+        document.getElementById('ndm-btn-back-name').addEventListener('click', function() {
+          renderNdmStep((_ndmData && _ndmData.found && _ndmData.ip === _ndmIp) ? 'main' : 'add-ip');
+        });
+        document.getElementById('ndm-btn-confirm-add').addEventListener('click', function() {
+          var name = nameInput.value.trim();
+          if (!name || !/^[\w\s\-]{1,40}$/.test(name)) {
+            document.getElementById('ndm-name-error').textContent = 'Enter a valid name (letters, numbers, spaces, hyphens)'; return;
+          }
+          submitNdmAddHeadset(_ndmIp, name);
+        });
+
+      // â”€â”€ Add headset: saving â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      } else if (step === 'add-saving') {
+        _ndmSetTitle('Add Headset');
+        body.innerHTML = '<div class="wifi-step-row">' + _spinSvg + 'Adding headset...</div>';
+
+      // â”€â”€ Add headset: success â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      } else if (step === 'add-success') {
+        _ndmSetTitle('Headset Added');
+        body.innerHTML =
+          '<div class="wifi-step-row" style="color:#22c55e">' + _checkSvg +
+            '<strong>' + esc((data && data.name) || 'Headset') + '</strong>&nbsp;added successfully.' +
+          '</div>';
+        footer.innerHTML = '<button class="pm-btn primary" id="ndm-btn-done-add">Done</button>';
+        document.getElementById('ndm-btn-done-add').addEventListener('click', function() {
+          closeNewDevicesModal(); cardsBuilt = false; pollHeadsetsCsv();
+        });
+
+      // â”€â”€ Add headset: error â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      } else if (step === 'add-error') {
+        _ndmSetTitle('Add Headset');
+        body.innerHTML =
+          '<div class="wifi-step-row" style="color:#ef4444">' + _warnSvg +
+            esc((data && data.error) || 'An error occurred.') +
+          '</div>';
+        footer.innerHTML =
+          '<button class="pm-btn" id="ndm-btn-err-back">Back</button>' +
+          '<button class="pm-btn" id="ndm-btn-err-close">Close</button>';
+        document.getElementById('ndm-btn-err-back').addEventListener('click', function() { renderNdmStep('add-name'); });
+        document.getElementById('ndm-btn-err-close').addEventListener('click', closeNewDevicesModal);
+
+      // â”€â”€ Enable WiFi ADB: busy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      } else if (step === 'enabling-tcpip') {
+        _ndmSetTitle('Enable WiFi ADB');
+        body.innerHTML = '<div class="wifi-step-row">' + _spinSvg + 'Enabling TCP/IP mode... this may take a few seconds.</div>';
+
+      // â”€â”€ Enable WiFi ADB: success â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      } else if (step === 'success-tcpip') {
+        _ndmSetTitle('Enable WiFi ADB');
+        body.innerHTML =
+          '<div class="wifi-step-row" style="color:#22c55e">' + _checkSvg +
+            '<strong>' + esc((data && data.model) || 'Headset') + '</strong>&nbsp;WiFi ADB enabled.' +
+          '</div>' +
+          '<div class="wifi-info-box">' +
+            '<span class="wifi-info-model">' + esc((data && data.model) || '') + '</span>' +
+            '<span class="wifi-info-ip">' + esc((data && data.ip) || '') + ':' + esc(String((data && data.port) || '5555')) + '</span>' +
+          '</div>' +
+          '<div class="wifi-hint">You can now disconnect the USB cable.</div>';
+        footer.innerHTML =
+          '<button class="pm-btn" id="ndm-btn-back">Back</button>' +
+          '<button class="pm-btn primary" id="ndm-btn-done">Done</button>';
+        document.getElementById('ndm-btn-back').addEventListener('click', function() { renderNdmStep('main'); });
+        document.getElementById('ndm-btn-done').addEventListener('click', closeNewDevicesModal);
+
+      // â”€â”€ Install APK: busy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      } else if (step === 'installing') {
+        _ndmSetTitle('Install ADB WiFi App');
+        var isReinstall = data && data.reinstall;
+        body.innerHTML =
+          '<div class="wifi-step-row">' + _spinSvg + (isReinstall ? 'Reinstalling' : 'Installing') + ' ADB WiFi app... this may take ~15 seconds.</div>' +
+          '<div class="wifi-hint">The app will be installed, permissions granted, and WiFi ADB enabled automatically.</div>';
+
+      // â”€â”€ Install APK: success â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      } else if (step === 'success-install') {
+        _ndmSetTitle('Install ADB WiFi App');
+        body.innerHTML =
+          '<div class="wifi-step-row" style="color:#22c55e">' + _checkSvg +
+            ((data && data.reinstalled) ? 'Reinstalled' : 'Installed') + ' on <strong>' + esc((data && data.model) || 'Headset') + '</strong>.' +
+          '</div>' +
+          (data && data.ip ? '<div class="wifi-info-box">' +
+            '<span class="wifi-info-model">' + esc((data && data.model) || '') + '</span>' +
+            '<span class="wifi-info-ip">' + esc(data.ip) + ':' + esc(String(data.port || '5555')) +
+              (data.portOpen ? '' : ' <span style="color:#f59e0b;font-size:11px">(port not yet reachable)</span>') +
+            '</span>' +
+          '</div>' : '') +
+          '<div class="wifi-hint">App launched on headset. You can now disconnect the USB cable.</div>';
+        footer.innerHTML =
+          '<button class="pm-btn" id="ndm-btn-back">Back</button>' +
+          '<button class="pm-btn primary" id="ndm-btn-done">Done</button>';
+        document.getElementById('ndm-btn-back').addEventListener('click', function() { renderNdmStep('main'); });
+        document.getElementById('ndm-btn-done').addEventListener('click', closeNewDevicesModal);
+
+      // â”€â”€ General error â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      } else if (step === 'error') {
+        body.innerHTML =
+          '<div class="wifi-step-row" style="color:#ef4444">' + _warnSvg +
+            esc((data && data.error) || 'An error occurred.') +
+          '</div>';
+        footer.innerHTML =
+          '<button class="pm-btn" id="ndm-btn-back">Back</button>' +
+          '<button class="pm-btn" id="ndm-btn-err-close">Close</button>';
+        document.getElementById('ndm-btn-back').addEventListener('click', function() { renderNdmStep('main'); });
+        document.getElementById('ndm-btn-err-close').addEventListener('click', closeNewDevicesModal);
+      }
+    }
+
+    function submitNdmAddHeadset(ip, name) {
+      renderNdmStep('add-saving');
+      fetch('/api/addheadset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name, ip: ip })
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(j) {
+        if (j.ok) { renderNdmStep('add-success', { name: name }); }
+        else      { renderNdmStep('add-error',   { error: j.error || 'Failed to add headset.' }); }
+      })
+      .catch(function() { renderNdmStep('add-error', { error: 'Could not communicate with server.' }); });
+    }
+
+    function submitConnectWifi() {
+      var btn = document.getElementById('ndm-btn-connect-wifi');
+      if (btn) { btn.disabled = true; btn.style.opacity = '0.5'; }
+      fetch('/api/connectwifi', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          if (j.ok) {
+            // Refresh device info after connecting
+            renderNdmStep('detecting');
+            fetch('/api/usbdeviceinfo')
+              .then(function(r) { return r.json(); })
+              .then(function(d) { _ndmData = d.found ? d : null; renderNdmStep('main'); })
+              .catch(function() { renderNdmStep('main'); });
+          } else {
+            renderNdmStep('error', j);
+          }
+        })
+        .catch(function() { renderNdmStep('error', { error: 'Could not communicate with server.' }); });
+    }
+
+    function submitEnableWifiAdb() {
+      fetch('/api/enablewifiadb', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          if (j.ok) { renderNdmStep('success-tcpip', j); }
+          else      { renderNdmStep('error', j); }
+        })
+        .catch(function() { renderNdmStep('error', { error: 'Could not communicate with server.' }); });
+    }
+
+    function submitInstallAdbWifiApk() {
+      fetch('/api/installadbwifiapk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          if (j.ok) { renderNdmStep('success-install', j); }
+          else      { renderNdmStep('error', j); }
+        })
+        .catch(function() { renderNdmStep('error', { error: 'Could not communicate with server.' }); });
+    }
+
+    document.getElementById('wifi-modal-close').addEventListener('click', closeNewDevicesModal);
+    document.getElementById('wifi-adb-modal').addEventListener('click', function(e) { if (e.target === this) closeNewDevicesModal(); });
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape' && document.getElementById('wifi-adb-modal').style.display !== 'none') closeNewDevicesModal();
+    });
+    TopBar.initManageDevicesBtn(openNewDevicesModal);
+    if (window.location.hash === '#manage') { window.location.hash = ''; openNewDevicesModal(); }
+    if (window.location.hash === '#launch' && _headsetFilter) { window.location.hash = ''; openLaunchModal(_headsetFilter); }
+  </script>
+</body>
+</html>
+
+

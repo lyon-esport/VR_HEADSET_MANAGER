@@ -1,0 +1,526 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VR Headset Manager - Help &amp; Diagnostics</title>
+  <link rel="stylesheet" href="assets/topbar.css">
+  <script src="assets/topbar.js"></script>
+  <style>
+    :root {
+      --bg:          #111;
+      --text:        #ccc;
+      --card-bg:     #161616;
+      --card-border: #252525;
+      --accent:      #3b82f6;
+      --muted:       #555;
+      --row-hover:   #1c1c1e;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      background: var(--bg);
+      min-height: 100vh;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      color: var(--text);
+    }
+    [data-theme=light] {
+      --bg: #f3f4f6; --text: #1f2937; --card-bg: #fff; --card-border: #e5e7eb;
+      --muted: #9ca3af; --row-hover: #f0f4ff;
+    }
+    [data-theme=light] body { background: var(--bg); color: var(--text); }
+
+    .page { padding: 28px 32px; max-width: 860px; }
+    .page-title {
+      font-size: 20px; font-weight: 700; color: #e5e7eb;
+      margin-bottom: 6px; display: flex; align-items: center; gap: 10px;
+    }
+    [data-theme=light] .page-title { color: #111827; }
+    .page-subtitle { font-size: 13px; color: var(--muted); margin-bottom: 28px; }
+
+    .section { margin-bottom: 32px; }
+    .section-title {
+      font-size: 11px; font-weight: 600; letter-spacing: .08em;
+      text-transform: uppercase; color: var(--muted); margin-bottom: 12px;
+    }
+    .card {
+      background: var(--card-bg); border: 1px solid var(--card-border);
+      border-radius: 10px; overflow: hidden;
+    }
+    .card-pad { padding: 18px 20px; }
+
+    /* Two-column button grid */
+    .btn-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px;
+    }
+    .action-btn {
+      display: flex; align-items: center; gap: 10px; padding: 13px 16px;
+      background: #1e1e1e; border: 1px solid #2a2a2a; border-radius: 8px;
+      color: var(--text); font-size: 13px; font-weight: 500; cursor: pointer;
+      transition: background .15s, border-color .15s, opacity .15s; text-align: left;
+    }
+    [data-theme=light] .action-btn { background: #f9fafb; border-color: #d1d5db; }
+    .action-btn:hover { background: #252525; border-color: #3b82f6; }
+    [data-theme=light] .action-btn:hover { background: #eff6ff; border-color: #3b82f6; }
+    .action-btn:disabled { opacity: .5; cursor: default; }
+    .action-btn svg { flex-shrink: 0; stroke: var(--accent); }
+    .action-btn .btn-desc { font-size: 11px; color: var(--muted); margin-top: 2px; font-weight: 400; }
+
+    /* Status banner */
+    .status-banner {
+      display: flex; align-items: center; gap: 8px; padding: 8px 14px;
+      border-radius: 6px; font-size: 12px; margin-top: 10px;
+    }
+    .status-banner.info { background: #172554; border: 1px solid #1d4ed8; color: #93c5fd; }
+    [data-theme=light] .status-banner.info { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
+
+    /* Link table */
+    .link-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    .link-table thead th {
+      padding: 7px 14px; text-align: left; font-size: 11px; font-weight: 600;
+      letter-spacing: .06em; text-transform: uppercase;
+      color: var(--muted); border-bottom: 1px solid var(--card-border);
+      background: transparent;
+    }
+    .link-table tbody tr { border-bottom: 1px solid var(--card-border); transition: background .1s; }
+    .link-table tbody tr:last-child { border-bottom: none; }
+    .link-table tbody tr:hover { background: var(--row-hover); }
+    .link-table td { padding: 8px 14px; vertical-align: middle; }
+    .link-table td:first-child { width: 38px; text-align: center; }
+    .link-table .method {
+      display: inline-block; font-size: 10px; font-weight: 700; padding: 1px 5px;
+      border-radius: 3px; letter-spacing: .04em; white-space: nowrap;
+    }
+    .method-get  { background: #1c3a1a; color: #4ade80; }
+    .method-post { background: #1e2e4a; color: #60a5fa; }
+    [data-theme=light] .method-get  { background: #dcfce7; color: #15803d; }
+    [data-theme=light] .method-post { background: #dbeafe; color: #1d4ed8; }
+    .link-table a {
+      color: var(--accent); text-decoration: none; font-family: 'Cascadia Code','Consolas',monospace;
+      font-size: 12px;
+    }
+    .link-table a:hover { text-decoration: underline; }
+    .link-table .link-desc { color: var(--muted); font-size: 12px; }
+
+    /* Stream links */
+    .stream-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 16px; border-bottom: 1px solid var(--card-border);
+    }
+    .stream-header-left { display: flex; align-items: center; gap: 8px; }
+    .stream-header-left span { font-size: 12px; font-weight: 600; color: var(--text); }
+    .stream-refresh-btn {
+      font-size: 11px; padding: 3px 9px; border-radius: 4px;
+      border: 1px solid #333; background: #1a1a1a; color: #94a3b8; cursor: pointer;
+      transition: background .12s, color .12s;
+    }
+    [data-theme=light] .stream-refresh-btn { background: #f3f4f6; border-color: #d1d5db; color: #6b7280; }
+    .stream-refresh-btn:hover { background: #252525; color: #e5e7eb; }
+    .stream-row { padding: 10px 16px; border-bottom: 1px solid var(--card-border); }
+    .stream-row:last-child { border-bottom: none; }
+    .stream-name-row {
+      display: flex; align-items: center; gap: 7px; margin-bottom: 6px;
+    }
+    .stream-name {
+      font-size: 12px; font-weight: 600; color: var(--text);
+    }
+    .stream-badge {
+      font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 10px;
+      background: #14532d; color: #4ade80; letter-spacing: .03em;
+    }
+    .stream-badge.inactive { background: #2a2a2a; color: var(--muted); }
+    [data-theme=light] .stream-badge { background: #dcfce7; color: #15803d; }
+    [data-theme=light] .stream-badge.inactive { background: #f3f4f6; color: #9ca3af; }
+    .stream-url-row { display: flex; align-items: center; gap: 6px; margin-top: 3px; }
+    .app-tag {
+      display: inline-flex; align-items: center; gap: 3px;
+      font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 3px;
+      white-space: nowrap; flex-shrink: 0; user-select: none;
+    }
+    .app-tag-vlc  { background: #3d1f00; color: #ff7800; }
+    .app-tag-obs  { background: #1e1e1e; color: #e0e0e0; border: 1px solid #3a3a3a; }
+    [data-theme=light] .app-tag-vlc { background: #fff3e0; color: #e65100; }
+    [data-theme=light] .app-tag-obs { background: #f3f4f6; color: #374151; border-color: #d1d5db; }
+    .stream-proto {
+      font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 3px;
+      white-space: nowrap; min-width: 46px; text-align: center;
+    }
+    .proto-rtsp  { background: #1e2e4a; color: #60a5fa; }
+    .proto-hls   { background: #2a1e4a; color: #a78bfa; }
+    .proto-whep  { background: #1a3a2a; color: #34d399; }
+    [data-theme=light] .proto-rtsp  { background: #dbeafe; color: #1d4ed8; }
+    [data-theme=light] .proto-hls   { background: #ede9fe; color: #6d28d9; }
+    [data-theme=light] .proto-whep  { background: #dcfce7; color: #15803d; }
+    .stream-url {
+      flex: 1; font-family: 'Cascadia Code','Consolas',monospace; font-size: 11px;
+      color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .stream-copy-btn {
+      font-size: 11px; padding: 3px 9px; border-radius: 4px;
+      border: 1px solid #333; background: #1a1a1a; color: #94a3b8;
+      cursor: pointer; transition: background .12s, color .12s; flex-shrink: 0;
+    }
+    [data-theme=light] .stream-copy-btn { background: #f3f4f6; border-color: #d1d5db; color: #6b7280; }
+    .stream-copy-btn:hover { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+    .stream-status-txt { font-size: 11px; color: var(--muted); padding: 12px 16px; }
+
+    /* External links list */
+    .links-list { display: flex; flex-direction: column; }
+    .link-item {
+      display: flex; align-items: center; gap: 10px; padding: 10px 16px;
+      color: var(--text); font-size: 13px; text-decoration: none;
+      border-bottom: 1px solid var(--card-border); transition: background .1s;
+    }
+    .link-item:last-child { border-bottom: none; }
+    .link-item:hover { background: var(--row-hover); color: var(--accent); }
+    .link-item svg { flex-shrink: 0; }
+    .link-item .link-ext { margin-left: auto; color: var(--muted); font-size: 11px; }
+
+    /* Toast */
+    #toast {
+      position: fixed; bottom: 28px; left: 50%;
+      transform: translateX(-50%) translateY(20px);
+      background: #1e293b; border: 1px solid #334155; color: #e2e8f0;
+      font-size: 13px; padding: 10px 20px; border-radius: 8px;
+      opacity: 0; transition: opacity .2s, transform .2s;
+      pointer-events: none; z-index: 999; white-space: nowrap;
+    }
+    #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <script>document.write(TopBar.brandHTML)</script>
+    <div class="v-sep"></div>
+    <div class="topbar-right">
+      <script>document.write(TopBar.configMenuHTML)</script>
+    </div>
+  </header>
+
+  <main class="page">
+    <div class="page-title">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+      </svg>
+      Help &amp; Diagnostics
+    </div>
+    <p class="page-subtitle">Restart services and access troubleshooting resources.</p>
+
+    <!-- Web Server -->
+    <section class="section">
+      <div class="section-title">Web Server</div>
+      <div class="card card-pad">
+        <div class="btn-grid">
+          <button class="action-btn" id="btn-restart-webserver">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.55"/>
+            </svg>
+            <div>
+              <div>Restart Web Server</div>
+              <div class="btn-desc">Reloads the HTTP server process</div>
+            </div>
+          </button>
+        </div>
+        <div class="status-banner info" id="restart-ws-info" style="display:none">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          Web server is restarting - this page will be temporarily unreachable.
+        </div>
+      </div>
+    </section>
+
+    <!-- MediaMTX -->
+    <section class="section">
+      <div class="section-title">MediaMTX Streaming Server</div>
+      <div class="card card-pad" style="margin-bottom:10px">
+        <div class="btn-grid">
+          <button class="action-btn" id="btn-restart-mediamtx">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.55"/>
+            </svg>
+            <div>
+              <div>Restart MediaMTX</div>
+              <div class="btn-desc">Restarts the streaming relay service</div>
+            </div>
+          </button>
+        </div>
+        <div class="status-banner info" id="restart-mtx-info" style="display:none">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          MediaMTX is restarting - streams will reconnect automatically.
+        </div>
+      </div>
+
+      <!-- Stream links (VLC + OBS) -->
+      <div class="card" style="margin-bottom:10px">
+        <div class="stream-header">
+          <div class="stream-header-left">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#f97316" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+            </svg>
+            <span>Stream Links &mdash; VLC &amp; OBS</span>
+          </div>
+          <button class="stream-refresh-btn" id="btn-refresh-streams">Refresh</button>
+        </div>
+        <div id="stream-links-body"><div class="stream-status-txt">Loading...</div></div>
+      </div>
+
+      <!-- MediaMTX API debug links -->
+      <div class="card">
+        <table class="link-table">
+          <thead>
+            <tr>
+              <th></th>
+              <th>Method</th>
+              <th>Endpoint</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody id="mtx-links">
+            <!-- populated by JS -->
+          </tbody>
+        </table>
+      </div>
+      <div style="font-size:11.5px;color:var(--muted);margin-top:7px;padding-left:4px">
+        Links are proxied through the VR Headset Manager web server &mdash; they work from any machine on the network, no authentication required.
+      </div>
+    </section>
+
+    <!-- External docs -->
+    <section class="section">
+      <div class="section-title">Documentation &amp; Resources</div>
+      <div class="card">
+        <div class="links-list">
+          <a class="link-item" href="https://github.com/lyon-esport/VR_HEADSET_MANAGER" target="_blank">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/>
+            </svg>
+            VR Headset Manager - GitHub
+            <span class="link-ext">opens in new tab</span>
+          </a>
+          <a class="link-item" href="https://mediamtx.org/docs/features/control-api" target="_blank">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
+            </svg>
+            MediaMTX Control API Documentation
+            <span class="link-ext">opens in new tab</span>
+          </a>
+          <a class="link-item" href="https://github.com/bluenviron/mediamtx" target="_blank">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/>
+            </svg>
+            MediaMTX - GitHub
+            <span class="link-ext">opens in new tab</span>
+          </a>
+          <a class="link-item" href="https://github.com/Genymobile/scrcpy" target="_blank">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/>
+            </svg>
+            scrcpy - GitHub
+            <span class="link-ext">opens in new tab</span>
+          </a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast"></div>
+
+  <script>
+    var _mtxBase = '';
+
+    // MediaMTX API endpoints table definition
+    var MTX_LINKS = [
+      // General
+      { method: 'GET', path: '/v3/info',                        desc: 'Server info (version, uptime)' },
+      // Paths (active streams)
+      { method: 'GET', path: '/v3/paths/list',                  desc: 'All active stream paths' },
+      { method: 'GET', path: '/v3/config/paths/list',           desc: 'All configured path rules' },
+      { method: 'GET', path: '/v3/config/global/get',           desc: 'Global server configuration' },
+      // HLS
+      { method: 'GET', path: '/v3/hlsmuxers/list',              desc: 'Active HLS muxers' },
+      // WebRTC
+      { method: 'GET', path: '/v3/webrtcsessions/list',         desc: 'Active WebRTC sessions' },
+      // RTSP
+      { method: 'GET', path: '/v3/rtspsessions/list',           desc: 'Active RTSP sessions' },
+      { method: 'GET', path: '/v3/rtspconns/list',              desc: 'All RTSP connections' },
+      // RTMPS
+      { method: 'GET', path: '/v3/rtmpconns/list',              desc: 'Active RTMP connections' },
+      // SRT
+      { method: 'GET', path: '/v3/srtconns/list',               desc: 'Active SRT connections' },
+      // Recordings
+      { method: 'GET', path: '/v3/recordings/list',             desc: 'All recordings by path' },
+    ];
+
+    function buildLinks(apiPort) {
+      // Links go through the web server proxy (/proxy/mediamtx/*) so they work
+      // from any machine without CORS issues or MediaMTX auth prompts.
+      _mtxBase = '/proxy/mediamtx';
+      var externalBase = 'http://127.0.0.1:' + apiPort;
+      var tbody = document.getElementById('mtx-links');
+      tbody.innerHTML = MTX_LINKS.map(function(e) {
+        var url = _mtxBase + e.path;
+        var directUrl = externalBase + e.path;
+        var methodCls = e.method === 'GET' ? 'method-get' : 'method-post';
+        return '<tr>' +
+          '<td><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+            '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>' +
+            '<polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>' +
+          '</svg></td>' +
+          '<td><span class="method ' + methodCls + '">' + e.method + '</span></td>' +
+          '<td><a href="' + url + '" target="_blank">' + e.path + '</a></td>' +
+          '<td class="link-desc">' + e.desc + '</td>' +
+        '</tr>';
+      }).join('');
+    }
+
+    var _appInfo = { mediamtxRtspPort: 8554, mediamtxHlsPort: 8888, mediamtxWebrtcPort: 8889, mediamtxApiPort: 9997 };
+    var _knownHeadsetIds = '';
+    var _pollTimer = null;
+
+    fetch('/api/appinfo')
+      .then(function(r) { return r.json(); })
+      .then(function(info) {
+        _appInfo = info;
+        buildLinks(info.mediamtxApiPort || 9997);
+        loadStreamLinks();
+        _pollTimer = setInterval(loadStreamLinks, 5000);
+      })
+      .catch(function() { buildLinks(9997); loadStreamLinks(); _pollTimer = setInterval(loadStreamLinks, 5000); });
+
+    // Convert headset name to MediaMTX path (mirrors ConvertTo-RestreamPathName PS function)
+    function toStreamPath(name) {
+      return name.replace(/ /g, '_').toLowerCase();
+    }
+
+    function copyToClipboard(url, btn) {
+      var self = btn;
+      var orig = self.textContent;
+      var done = function() { self.textContent = 'Copied!'; setTimeout(function() { self.textContent = orig; }, 1500); };
+      if (navigator.clipboard) { navigator.clipboard.writeText(url).then(done).catch(done); }
+      else {
+        var ta = document.createElement('textarea');
+        ta.value = url; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+        done();
+      }
+    }
+
+    function loadStreamLinks() {
+      var host       = window.location.hostname;
+      var rtspPort   = _appInfo.mediamtxRtspPort   || 8554;
+      var hlsPort    = _appInfo.mediamtxHlsPort    || 8888;
+      var webrtcPort = _appInfo.mediamtxWebrtcPort || 8889;
+
+      Promise.all([
+        fetch('/api/headsets').then(function(r) { return r.json(); }),
+        fetch('/proxy/mediamtx/v3/paths/list').then(function(r) { return r.json(); }).catch(function() { return {items:[]}; })
+      ]).then(function(results) {
+        var headsets   = results[0];
+        var mtxPaths   = results[1];
+        if (!Array.isArray(headsets)) return;
+
+        // Detect headset list changes to avoid unnecessary full redraws
+        var ids = headsets.map(function(h) { return h.ID + ':' + h.Name; }).join(',');
+        var body = document.getElementById('stream-links-body');
+        if (!body) return;
+
+        // Build active path lookup
+        var activePaths = {};
+        ((mtxPaths && mtxPaths.items) || []).forEach(function(p) {
+          if (p.readyTime) activePaths[p.name] = true;
+        });
+
+        if (ids === _knownHeadsetIds && body.children.length > 0) {
+          // Headset list unchanged - just update active badges
+          headsets.forEach(function(h) {
+            var path  = toStreamPath(h.Name);
+            var badge = body.querySelector('[data-stream-badge="' + path + '"]');
+            if (badge) {
+              var isActive = !!activePaths[path];
+              badge.textContent = isActive ? 'LIVE' : 'OFFLINE';
+              badge.className   = 'stream-badge' + (isActive ? '' : ' inactive');
+            }
+          });
+          return;
+        }
+        _knownHeadsetIds = ids;
+
+        if (headsets.length === 0) {
+          body.innerHTML = '<div class="stream-status-txt">No headsets registered.</div>';
+          return;
+        }
+
+        body.innerHTML = headsets.map(function(h) {
+          var path      = toStreamPath(h.Name);
+          var isActive  = !!activePaths[path];
+          var rtspUrl   = 'rtsp://'  + host + ':' + rtspPort   + '/' + path;
+          var hlsUrl    = 'http://'  + host + ':' + hlsPort    + '/' + path + '/index.m3u8';
+          var whepUrl   = 'http://'  + host + ':' + webrtcPort + '/' + path;
+          // VLC icon: orange cone
+          var VLC_ICON = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" style="display:inline;vertical-align:middle">' +
+            '<polygon points="12,2 21,20 3,20" fill="#ff7800"/>' +
+            '<rect x="5" y="20" width="14" height="2" rx="1" fill="#ff7800"/>' +
+            '<rect x="8" y="14" width="8" height="1.5" rx="0.75" fill="rgba(255,255,255,0.7)"/>' +
+          '</svg>';
+          // OBS icon: simplified camera-lens rings
+          var OBS_ICON = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" style="display:inline;vertical-align:middle">' +
+            '<circle cx="12" cy="12" r="10" stroke="#e0e0e0" stroke-width="2"/>' +
+            '<circle cx="12" cy="12" r="5" fill="#e0e0e0"/>' +
+            '<circle cx="12" cy="12" r="2" fill="#1e1e1e"/>' +
+          '</svg>';
+          var TAG_VLC = '<span class="app-tag app-tag-vlc">' + VLC_ICON + ' VLC</span>';
+          var TAG_OBS = '<span class="app-tag app-tag-obs">' + OBS_ICON + ' OBS</span>';
+          function row(protoCls, protoLabel, url, appTag) {
+            return '<div class="stream-url-row">' +
+              '<span class="stream-proto ' + protoCls + '">' + protoLabel + '</span>' +
+              (appTag || '') +
+              '<span class="stream-url" title="' + url + '">' + url + '</span>' +
+              '<button class="stream-copy-btn" data-url="' + url + '">Copy</button>' +
+            '</div>';
+          }
+          return '<div class="stream-row">' +
+            '<div class="stream-name-row">' +
+              '<span class="stream-name">' + h.Name + '</span>' +
+              '<span class="stream-badge' + (isActive ? '' : ' inactive') + '" data-stream-badge="' + path + '">' +
+                (isActive ? 'LIVE' : 'OFFLINE') +
+              '</span>' +
+            '</div>' +
+            row('proto-rtsp', 'RTSP', rtspUrl, TAG_VLC) +
+            row('proto-hls',  'HLS',  hlsUrl,  TAG_VLC) +
+            row('proto-whep', 'WHEP', whepUrl, TAG_OBS) +
+          '</div>';
+        }).join('');
+
+        body.querySelectorAll('.stream-copy-btn').forEach(function(btn) {
+          btn.addEventListener('click', function() { copyToClipboard(this.getAttribute('data-url'), this); });
+        });
+      }).catch(function() {
+        var body = document.getElementById('stream-links-body');
+        if (body) body.innerHTML = '<div class="stream-status-txt" style="color:#f87171">Could not load headsets or MediaMTX is unreachable.</div>';
+      });
+    }
+
+    document.getElementById('btn-refresh-streams').addEventListener('click', loadStreamLinks);
+
+    function showInfo(id, msg) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      el.style.display = 'flex';
+      setTimeout(function() { el.style.display = 'none'; }, 5000);
+    }
+
+    document.getElementById('btn-restart-webserver').addEventListener('click', function() {
+      TopBar.apiPost('/api/restartwebserver', 'Restart Web Server', this);
+      showInfo('restart-ws-info');
+    });
+
+    document.getElementById('btn-restart-mediamtx').addEventListener('click', function() {
+      TopBar.apiPost('/api/restartmediamtx', 'Restart MediaMTX', this);
+      showInfo('restart-mtx-info');
+    });
+  </script>
+</body>
+</html>
+
