@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VR Headsets - Monitoring</title>
+  <link rel="stylesheet" href="assets/topbar.css">
+  <script src="assets/topbar.js"></script>
+  <style>
+    :root {
+      --bg:                 #111;
+      --muted:              #444;
+      --text:               #ccc;
+      --th-bg:              #1a1a1a;
+      --tr-hover:           #1c1c1e;
+      --border:             #222;
+      --ping-ok:            #22c55e;
+      --ping-ko:            #ef4444;
+      --scrcpy-ok:          #3b82f6;
+      --scrcpy-ko:          #a06030;
+      --charging:           #facc15;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      background: var(--bg);
+      min-height: 100vh;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      color: var(--text);
+      overflow-x: hidden;
+    }
+
+    #refresh-indicator { color: #3b82f6; }
+
+    /* ── Page content ── */
+    .page { padding: 24px; }
+    h1 {
+      font-size: 16px;
+      font-weight: 700;
+      color: #ddd;
+      margin-bottom: 16px;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    /* ── Table ── */
+    .table-wrap {
+      overflow-x: auto;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    thead th {
+      background: var(--th-bg);
+      padding: 9px 12px;
+      text-align: center;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    tbody tr { border-bottom: 1px solid var(--border); }
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: var(--tr-hover); }
+    td {
+      padding: 8px 12px;
+      color: var(--text);
+      white-space: nowrap;
+      text-align: center;
+    }
+
+    /* Launch app button in table */
+    .mon-launch-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 22px; height: 22px; padding: 0;
+      background: #1e1e1e; border: 1px solid #333; border-radius: 4px;
+      color: #555; cursor: pointer; text-decoration: none;
+      transition: color 0.12s, border-color 0.12s, background 0.12s;
+    }
+    .mon-launch-btn:hover {
+      color: #3b82f6; border-color: rgba(59,130,246,0.5);
+      background: rgba(59,130,246,0.1);
+    }
+
+    /* Status pills */
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 2px 9px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .pill-green  { background: rgba(34,197,94,0.15);  color: var(--ping-ok); }
+    .pill-red    { background: rgba(239,68,68,0.12);  color: var(--ping-ko); }
+    .pill-blue   { background: rgba(59,130,246,0.15); color: var(--scrcpy-ok); }
+    .pill-orange { background: rgba(160,96,48,0.18);  color: var(--scrcpy-ko); }
+    .pill-yellow { background: rgba(250,204,21,0.12); color: var(--charging); }
+
+    .dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    /* App icon */
+    .app-icon {
+      width: 20px; height: 20px;
+      border-radius: 4px;
+      vertical-align: middle;
+      margin-right: 6px;
+      object-fit: contain;
+    }
+    .app-name { vertical-align: middle; }
+
+    #empty-msg {
+      padding: 40px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    /* ── Light mode ─────────────────────────────────────────────────────────── */
+    [data-theme="light"] {
+      --bg:        #f0f0f0;
+      --muted:     #999;
+      --text:      #222;
+      --th-bg:     #e8e8e8;
+      --tr-hover:  #ececec;
+      --border:    #d8d8d8;
+    }
+    [data-theme="light"] h1                { color: #111; }
+    [data-theme="light"] .table-wrap       { border-color: var(--border); }
+    [data-theme="light"] thead th          { border-color: var(--border); }
+    [data-theme="light"] tbody tr          { border-color: var(--border); }
+    [data-theme="light"] .mon-launch-btn   { background: #e8e8e8; border-color: #c8c8c8; color: #555; }
+    [data-theme="light"] .mon-launch-btn:hover { background: rgba(59,130,246,0.1); border-color: rgba(59,130,246,0.5); color: #3b82f6; }
+  </style>
+</head>
+<body>
+
+  <header class="topbar">
+    <script>document.write(TopBar.brandHTML)</script>
+    <div class="v-sep"></div>
+    <!-- Compact picker (shown when topbar overflows) -->
+    <script>document.write(TopBar.compactDropdownHTML)</script>
+    <span class="topbar-title">Headsets Monitoring</span>
+
+    <!-- Center: status filters -->
+    <div class="topbar-filters" id="status-filters">
+      <span class="filter-label">Show:</span>
+      <script>document.write(TopBar.filtersHTML)</script>
+    </div>
+
+    <div class="topbar-right">
+      <span id="refresh-indicator" style="padding:0 14px;font-size:11px;display:none;">Refreshing...</span>
+      <script>document.write(TopBar.manageDevicesBtnHTML)</script>
+      <script>document.write(TopBar.configMenuHTML)</script>
+    </div>
+  </header>
+
+  <div class="page">
+    <div class="table-wrap">
+      <table id="headsets-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Name</th>
+            <th>IP Address</th>
+            <th>Ping</th>
+            <th>ADB WiFi</th>
+            <th>Scrcpy</th>
+            <th>Charging</th>
+            <th>Battery</th>
+            <th>Ctrl L</th>
+            <th>Ctrl R</th>
+            <th>Temp</th>
+            <th>Model</th>
+            <th>Running App</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="table-body">
+          <tr><td colspan="14" id="empty-msg">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    var CSV_PATH      = '../data/known_headsets_infos.csv';
+    var CSV_DELIMITER = ';';
+    var REFRESH_MS    = 2000;
+    var activeFilter  = 'all';
+    var lastRows      = [];
+
+    TopBar.initFilters(function(f) { activeFilter = f; applyFilter(); });
+    TopBar.initCompact();
+    TopBar.initManageDevicesBtn();
+
+    function applyFilter() {
+      var rows = document.querySelectorAll('#table-body tr[data-ping]');
+      rows.forEach(function(tr) {
+        var ping   = tr.dataset.ping   === 'true';
+        var scrcpy = tr.dataset.scrcpy === 'true';
+        var show = true;
+        if (activeFilter === 'online')  show = ping;
+        if (activeFilter === 'scrcpy')  show = scrcpy;
+        if (activeFilter === 'offline') show = !ping;
+        tr.style.display = show ? '' : 'none';
+      });
+    }
+
+    function parseCsv(text) {
+      text = text.replace(/^\uFEFF/, '');
+      var lines = text.trim().split(/\r?\n/);
+      if (lines.length < 2) return [];
+      var headers = lines[0].split(CSV_DELIMITER).map(function(h) {
+        return h.replace(/^"|"$/g, '').trim();
+      });
+      return lines.slice(1).map(function(line) {
+        var cols = line.split(CSV_DELIMITER).map(function(c) {
+          return c.replace(/^"|"$/g, '').trim();
+        });
+        var obj = {};
+        headers.forEach(function(h, i) { obj[h] = cols[i] !== undefined ? cols[i] : ''; });
+        return obj;
+      });
+    }
+
+    function pill(text, cls) {
+      return '<span class="pill ' + cls + '">' + esc(text) + '</span>';
+    }
+
+    function esc(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    function renderTable(rows) {
+      var body = document.getElementById('table-body');
+      if (!rows.length) {
+        body.innerHTML = '<tr><td colspan="14" id="empty-msg">No headsets found in CSV.</td></tr>';
+        return;
+      }
+      body.innerHTML = rows.map(function(r) {
+        var dn       = (r['Name'] || '').replace(/ /g, '_');
+        var pingOk   = (r['Ping']    || '').toLowerCase() === 'true';
+        var adbOk    = (r['ADBWifi'] || '').toLowerCase() === 'true';
+        var scrcpyOk = (r['SCRCPY']  || '').toLowerCase() === 'ok';
+        var charging = (r['Charging']|| '').toLowerCase() === 'true';
+        var chargingWattage = r['ChargingWattage'] || '';
+        var chargingLabel = (charging && chargingWattage && chargingWattage !== '-') ? chargingWattage + ' W' : (charging ? 'Yes' : 'No');
+
+        var appCell = '';
+        if (r['RunningApp'] && r['RunningApp'] !== '-') {
+          var icon = r['RunningAppIcon'] || '';
+          appCell = (icon ? '<img class="app-icon" src="' + esc(icon) + '" onerror="this.style.display=\'none\'">' : '') +
+                    '<span class="app-name">' + esc(r['RunningApp']) + '</span>';
+        } else {
+          appCell = '<span style="color:#333">-</span>';
+        }
+
+        var pingStr   = pingOk   ? 'true' : 'false';
+        var scrcpyStr = scrcpyOk ? 'true' : 'false';
+        return '<tr data-ping="' + pingStr + '" data-scrcpy="' + scrcpyStr + '">' +
+          '<td>' + esc(r['ID'] || '') + '</td>' +
+          '<td><strong>' + esc(r['Name'] || '') + '</strong></td>' +
+          '<td style="font-family:monospace;font-size:12px">' + esc(r['IPAddress'] || '') + '</td>' +
+          '<td class="center">' + pill(pingOk ? 'OK' : 'KO', pingOk ? 'pill-green' : 'pill-red') + '</td>' +
+          '<td class="center">' + pill(adbOk  ? 'OK' : 'KO', adbOk  ? 'pill-green' : 'pill-red') + '</td>' +
+          '<td class="center">' + pill(scrcpyOk ? 'OK' : 'OFF', scrcpyOk ? 'pill-blue' : 'pill-orange') + '</td>' +
+          '<td class="center">' + (charging ? pill(chargingLabel,'pill-green') : pill('No','pill-red')) + '</td>' +
+          '<td>' + esc(r['Battery'] || '-') + '</td>' +
+          '<td>' + esc(r['BatteryControllerLeft']  || '-') + '</td>' +
+          '<td>' + esc(r['BatteryControllerRight'] || '-') + '</td>' +
+          '<td>' + esc(r['Temp'] || '-') + (r['Temp'] && r['Temp'] !== '-' ? ' C' : '') + '</td>' +
+          '<td style="color:#666">' + esc(r['Model'] || '-') + '</td>' +
+          '<td>' + appCell + '</td>' +
+          '<td><a class="mon-launch-btn" href="headset_settings.html?headset=' + encodeURIComponent(dn) + '#launch" title="Launch an app on ' + esc(r['Name'] || '') + '">' +
+            '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>' +
+          '</a></td>' +
+        '</tr>';
+      }).join('');
+    }
+
+    function pollCsv() {
+      var ind = document.getElementById('refresh-indicator');
+      ind.style.display = 'inline';
+      fetch(CSV_PATH + '?_=' + Date.now())
+        .then(function(r) { if (!r.ok) throw new Error(r.status); return r.text(); })
+        .then(function(text) {
+          renderTable(parseCsv(text));
+          applyFilter();
+          ind.style.display = 'none';
+        })
+        .catch(function() { ind.style.display = 'none'; });
+    }
+
+    pollCsv();
+    setInterval(pollCsv, REFRESH_MS);
+  </script>
+</body>
+</html>
