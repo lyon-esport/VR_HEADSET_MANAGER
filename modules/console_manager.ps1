@@ -38,11 +38,7 @@ function Show-MainMenu {
         Start-Sleep -Milliseconds 200
         Write-Host $msg.MainMenuTitle -ForegroundColor Cyan
         Write-Host $msg.StreamHeadset -BackgroundColor Yellow -ForegroundColor Black
-        
-        #Write-Host " 3. Remove a headset " -BackgroundColor DarkMagenta -ForegroundColor White
-        #Write-Host " 4. USB headset management (Enable Wifi ADB and Applications) " -BackgroundColor Blue -ForegroundColor White
-        
-        #Write-Host " 9. Check internet connection " -BackgroundColor White -ForegroundColor Black
+        #Write-Host " I. Check internet connection " -BackgroundColor White -ForegroundColor Black
         Write-Host $msg.EnableWifiADB -BackgroundColor White -ForegroundColor Black
         Write-Host $msg.AddModifyHeadset -BackgroundColor Green -ForegroundColor DarkMagenta
         Write-Host $msg.ScrcpyTracking -BackgroundColor DarkRed -ForegroundColor White
@@ -125,7 +121,7 @@ function Show-MainMenu {
                         Show-SubMenu-FilesAndFolders
                     }
                 'W' { Show-SubMenu-Services }
-                '9' {
+                'I' {
                     $ping = Test-Connection -ComputerName google.com -Count 2
                     if ($ping) {
                         Write-Host ($msg.InternetOK -f (($ping | Measure-Object -Property ResponseTime -Average).Average)) -ForegroundColor Green
@@ -1004,3 +1000,40 @@ function Open-File {
         Write-Host ($msg.FileNotExist -f $filePath) -ForegroundColor Red
     }
 }
+
+
+function Add-Headset-Manually {
+    # Clear the screen
+    Clear-Host
+    Start-Sleep -Milliseconds 200
+    Write-Host "=== MANUAL HEADSET ADDITION ===" -BackgroundColor Green -ForegroundColor Black
+
+    # Ask for the required information
+    $name = Read-Host "Headset name (mandatory)"
+    if (-not $name) {
+
+        Write-Log "The name is mandatory. Aborting." -Level ERROR
+        return
+    }
+
+    $ip = Read-Host "Headset IP address (mandatory)"
+    if (-not (Test-ValidIPv4 $ip)) {
+        Write-Host "A valid IP address is mandatory. Aborting." -ForegroundColor Red
+        return
+    }
+
+    # Optional fields
+    $adbPortInput = Read-Host "ADB port (optional, default: 5555)"
+
+    # Handle default values
+    if ([string]::IsNullOrWhiteSpace($adbPortInput)) {
+        $adbPort = 5555
+    } else {
+        $adbPort = [int]$adbPortInput
+    }
+
+    # Call the main function
+    Add-Headset -IPAddress $ip -Name $name -adbPort $adbPort
+
+    Write-Host "Headset added successfully!" -ForegroundColor Cyan
+} #OK

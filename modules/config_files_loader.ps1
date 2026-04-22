@@ -100,6 +100,10 @@ function Get-Config {
     
     $global:knownHeadsetsFilePath       = Join-Path -Path $(Join-Path -Path $global:ScriptPath -ChildPath "data") -ChildPath $global:knownHeadsetsFile
     $global:knownHeadsetsInfosFilePath  = Join-Path -Path $(Join-Path -Path $global:ScriptPath -ChildPath "data") -ChildPath $($global:knownHeadsetsFile).Replace(".csv","_infos.csv")
+    
+    $global:AppCacheFileName = $configContent.Paths.AppCacheFileName
+    $global:AppCacheFilePath = Join-Path -Path $(Join-Path -Path $global:ScriptPath -ChildPath "data") -ChildPath $global:AppCacheFileName
+
 
     $global:knownHeadsetsSCRCPYFilePath = Join-Path -Path $(Join-Path -Path $global:ScriptPath -ChildPath "data") -ChildPath $($global:knownHeadsetsFile).Replace(".csv","_SCRCPY.csv")
     $global:scrcpyFolder = Join-Path -Path $sourcesPath -ChildPath $configContent.scrcpy.folder

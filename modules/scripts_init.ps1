@@ -83,9 +83,7 @@ $moduleFiles = Get-ChildItem -Path $ModulesPath -Filter "*.ps1" -File | Sort-Obj
         }
     }
 
-#TODO 
-    # install all config files in mydocuments if they do not exist : [environment]::GetFolderPath('MyDocuments')
-
+#TODO IDEA : install all config files in mydocuments or in local or roaming if they do not exist : [environment]::GetFolderPath('MyDocuments')
 
 
 
@@ -286,6 +284,7 @@ function Start-WebServer {
 if (-not $global:IsWebServerProcess) {
     Start-WebServer
 }
+
 
 
 
