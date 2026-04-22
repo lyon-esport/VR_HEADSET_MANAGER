@@ -797,6 +797,7 @@
           var ratio = (video.videoWidth / video.videoHeight).toFixed(4);
           _detectedRatios[dn] = ratio;
           cell.style.aspectRatio = ratio;
+          applyLayout();
           applyScale();
         }
       } catch(e) {}
@@ -823,8 +824,9 @@
           var curSrc = videoFrame.getAttribute('src') || '';
           if (streaming && curSrc !== expectedSrc) {
             videoFrame.setAttribute('src', expectedSrc);
+            var lastRatio = _detectedRatios[dn]; // keep as placeholder while re-detecting
             delete _detectedRatios[dn]; // reset so ratio is re-detected on new stream
-            cell.style.aspectRatio = '16 / 9'; // reset to default until detected
+            cell.style.aspectRatio = lastRatio ? String(lastRatio) : '16 / 9';
           } else if (!streaming && curSrc !== '') {
             videoFrame.setAttribute('src', ''); // stop loading stream
           }
@@ -868,17 +870,25 @@
       var N = streamCells.length;
       if (N === 0) return;
 
+      // Use the most constraining (smallest) detected ratio so every cell fits vertically.
+      var worstRatio = 16 / 9;
+      streamCells.forEach(function(cell) {
+        var dn = cell.dataset.display;
+        var detected = parseFloat(_detectedRatios[dn]);
+        if (detected > 0 && detected < worstRatio) worstRatio = detected;
+      });
+
       var bestArea = 0;
-      var bestCellW = Math.min(innerW, innerH * 16 / 9);
+      var bestCellW = Math.min(innerW, innerH * worstRatio);
 
       for (var c = 1; c <= N; c++) {
         var r = Math.ceil(N / c);
         var cellW = (innerW - gap * (c - 1)) / c;
-        var cellH = cellW * 9 / 16;
+        var cellH = cellW / worstRatio;
         if (cellH * r + gap * (r - 1) > innerH) {
           // Height-constrained: scale down to fit
           cellH = (innerH - gap * (r - 1)) / r;
-          cellW = cellH * 16 / 9;
+          cellW = cellH * worstRatio;
         }
         var area = cellW * cellH;
         if (area > bestArea) {
