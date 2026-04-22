@@ -24,6 +24,9 @@ scrcpy_manualScripts/
 # ignore large sources
 /sources/ffmpeg-8.1-essentials_build.zip
 
+#Web and app data
+/app_icons
+
 #Other...
 desktop.ini
 .vscode
@@ -31,3 +34,4 @@ OBS/timer/
 .gdoc
 /.github/
 *_test.ps1
+*.md
