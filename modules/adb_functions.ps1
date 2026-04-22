@@ -54,8 +54,6 @@ function Install-OculusWirelessAdbApk {
     .\adb.exe shell input keyevent 224 #Simulate Volume Down button press
     
 
-
-}
 #>
 
 function Start-AdbServer {
@@ -170,6 +168,7 @@ function Install-OculusWirelessAdbApk {
         # 5. Apply critical permissions
         Write-Log ($msg.ConfiguringPermissions) -Level INFO
         & $adb -s $deviceId shell pm grant $packageName android.permission.WRITE_SECURE_SETTINGS
+        & $adb -s $deviceId shell pm grant $packageName android.permission.READ_LOGS
 
         # 6. Launch app on headset
         & $adb -s $deviceId shell am start -n "$packageName/.MainActivity"
@@ -679,6 +678,8 @@ function Get-AdbWifiDevice {
     Replaces the pattern: $DeviceId = "IP:Port" + Connect-AdbWifi call inside every function.
     Returns a PSCustomObject with DeviceId, ConnectionType='WiFi', IP, Port - ready to pass
     to any device function (Get-HeadsetBatteryStatus, Invoke-HeadsetReboot, etc.).
+    .EXAMPLE
+    Get-AdbWifiDevice -headsetIP "192.168.1.243" -AdbPort 5555
     #>
     param (
         [Parameter(Mandatory=$true)]
@@ -972,93 +973,9 @@ function Get-AppDisplayName {
         [string]$PackageName
     )
 
-    $cacheFile = Join-Path $global:ScriptPath "data\app_names.csv"
+    $appInfo = Get-AppInfo -PackageName $PackageName -searchOnline $true
 
-    # Load cache into a hashtable keyed by PackageName
-    # Normalize every row to include LocalIconPath (backward compat with older CSV versions)
-    $cache = @{}
-    if (Test-Path $cacheFile) {
-        foreach ($row in @(Import-Csv -Path $cacheFile -Delimiter ",")) {
-            if ($null -eq $row.PSObject.Properties['LocalIconPath']) {
-                Add-Member -InputObject $row -NotePropertyName 'LocalIconPath' -NotePropertyValue '' -Force
-            }
-            $cache[$row.PackageName] = $row
-        }
-    }
-
-    # Return cached entry if present (including known-missing placeholder entries)
-    if ($cache.ContainsKey($PackageName)) {
-        return $cache[$PackageName]
-    }
-
-    # Cache miss - try each MetaMetadata subfolder in priority order
-    $baseUrl  = "https://raw.githubusercontent.com/threethan/MetaMetadata/main/data"
-    $folders  = @('common', 'oculus', 'oculus_public', 'oculusdb', 'sidequest')
-    $newEntry = $null
-
-    foreach ($folder in $folders) {
-        $url = "$baseUrl/$folder/$PackageName.json"
-        try {
-            $response = Invoke-RestMethod -Uri $url -TimeoutSec 8 -ErrorAction Stop
-            $newEntry = [PSCustomObject]@{
-                PackageName   = $PackageName
-                DisplayName   = if ($response.name) { $response.name } else { $PackageName }
-                IconUrl       = if ($response.square) { $response.square } elseif ($response.icon) { $response.icon } else { "" }
-                LocalIconPath = ""
-            }
-            Write-Log ($msg.AppDisplayNameResolved -f $PackageName, $newEntry.DisplayName) -Level DEBUG
-            break
-        } catch {
-            # Not in this folder, try next
-        }
-    }
-
-    if (-not $newEntry) {
-        # Not found in any folder - store placeholder so the network is not hit again
-        $newEntry = [PSCustomObject]@{
-            PackageName   = $PackageName
-            DisplayName   = $PackageName
-            IconUrl       = ""
-            LocalIconPath = ""
-        }
-        Write-Log ($msg.AppDisplayNameNotFound -f $PackageName) -Level DEBUG
-    }
-
-    # Download icon locally so the web UI can display it without hitting remote URLs
-    if ($newEntry.IconUrl -ne "") {
-        $iconDir = Join-Path $global:ScriptPath "website\assets\app_icons"
-        if (-not (Test-Path $iconDir)) {
-            New-Item -ItemType Directory -Path $iconDir -Force | Out-Null
-        }
-
-        # Derive extension from the remote URL; default to .png
-        $ext = '.png'
-        if ($newEntry.IconUrl -match '\.([a-zA-Z]{2,4})(?:[?#]|$)') {
-            $ext = '.' + $Matches[1].ToLower()
-        }
-        $iconFileName = "$PackageName$ext"
-        $iconFile     = Join-Path $iconDir $iconFileName
-
-        if (-not (Test-Path $iconFile)) {
-            try {
-                Invoke-WebRequest -Uri $newEntry.IconUrl -OutFile $iconFile -TimeoutSec 10 -ErrorAction Stop
-                Write-Log ($msg.AppDisplayNameResolved -f "Icon saved", $iconFileName) -Level DEBUG
-            } catch {
-                Write-Log ($msg.AppDisplayNameNotFound -f "Icon download failed: $PackageName") -Level DEBUG
-                $iconFileName = ""
-            }
-        }
-
-        if ($iconFileName -ne "") {
-            $newEntry.LocalIconPath = "/assets/app_icons/$iconFileName"
-        }
-    }
-
-    # Persist to cache
-    $cache[$PackageName] = $newEntry
-    $cache.Values | Export-Csv -Path $cacheFile -NoTypeInformation -Encoding UTF8
-
-    return $newEntry
+    return $appInfo
 }
 
 
@@ -1307,15 +1224,16 @@ function Get-HeadsetInstalledApps {
     ADB TCP port (default: global adbPort_default).
 
     .EXAMPLE
-    Get-HeadsetInstalledApps -headsetIP "192.168.1.243"
-    Get-HeadsetInstalledApps -headsetIP "192.168.1.243" -ThirdPartyOnly
-    Get-HeadsetInstalledApps -headsetIP "192.168.1.243" -ThirdPartyOnly -ResolveMissing
+
+    Get-HeadsetInstalledApps -device $Device -ThirdPartyOnly
+    Get-HeadsetInstalledApps -device $Device -ThirdPartyOnly -ResolveMissing
     #>
     param (
         [Parameter(Mandatory=$true)]
         [PSCustomObject]$Device,
-        [switch]$ThirdPartyOnly,
-        [switch]$ResolveMissing,
+        [string]$AppCacheFilePath = $global:AppCacheFilePath,
+        [switch]$ThirdPartyOnly = $true,
+        [switch]$ResolveMissing = $false,
         [string]$adb    = $global:adbPath
     )
     if (-not $Device) { return @() }
@@ -1329,53 +1247,37 @@ function Get-HeadsetInstalledApps {
             Write-Log ($msg.ErrorOccurred -f "No packages returned from $DeviceId") -Level WARNING
             return @()
         }
-
-        # Load app_names.csv cache into a hashtable for fast lookup
-        $cache = @{}
-        $cacheFile = Join-Path $global:ScriptPath "data\app_names.csv"
-        if (Test-Path $cacheFile) {
-            foreach ($row in @(Import-Csv -Path $cacheFile -Delimiter ",")) {
-                $cache[$row.PackageName] = $row
-            }
-        }
-
         # Collect all package names first
         $packages = foreach ($line in $rawLines) {
             if ($line -match '^package:(.+)$') { $Matches[1].Trim() }
         }
 
+        # Load app_names.csv cache into a hashtable for fast lookup
+        $cache = @{}
+        if (Test-Path $AppCacheFilePath) {
+            foreach ($row in @(Import-Csv -Path $AppCacheFilePath -Delimiter ",")) {
+                $cache[$row.PackageName] = $row
+            }
+        }
+
         # Resolve missing packages online if requested
+        
         if ($ResolveMissing) {
             $missing = @($packages | Where-Object { -not $cache.ContainsKey($_) })
             if ($missing.Count -gt 0) {
                 Write-Log ($msg.AppDisplayNameNotFound -f "$($missing.Count) unknown packages - fetching online...") -Level INFO
                 foreach ($pkg in $missing) {
                     # Get-AppDisplayName fetches metadata and updates app_names.csv automatically
-                    $entry = Get-AppDisplayName -PackageName $pkg
+                    $entry = Get-AppInfo -PackageName $pkg -searchOnline $true
                     $cache[$pkg] = $entry
                 }
             }
         }
 
-        $apps = foreach ($pkg in $packages) {
-            if ($cache.ContainsKey($pkg)) {
-                [PSCustomObject]@{
-                    PackageName = $pkg
-                    DisplayName = $cache[$pkg].DisplayName
-                    IconUrl     = $cache[$pkg].IconUrl
-                }
-            } else {
-                [PSCustomObject]@{
-                    PackageName = $pkg
-                    DisplayName = $pkg
-                    IconUrl     = ''
-                }
-            }
-        }
-
-        $apps = @($apps | Sort-Object PackageName)
+        $apps = @($apps | Sort-Object DisplayName)
         Write-Log ($msg.HeadsetDetected -f "$($apps.Count) apps", $DeviceId) -Level INFO
         return $apps
+
     }
     catch {
         Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
@@ -1384,4 +1286,216 @@ function Get-HeadsetInstalledApps {
 }
 
 
+function Get-AppInfo {
+    <#
+    .SYNOPSIS
+    Retrieves display name and icon URL for a given Android package name, using a local cache and online lookup.
+    .DESCRIPTION
+    Checks a local CSV cache file for the package information first. If not found or incomplete,
+    optionally searches online via the MetaMetadata GitHub repository and updates the cache.
+    Returns a PSCustomObject with PackageName, DisplayName, IconUrl, and LocalIconPath (if icon downloaded).
+    Update the cache file with any new information found online to minimize future lookups.
+    .PARAMETER PackageName
+    The Android package name to look up (e.g. "com.myapp.vr").
+    .PARAMETER AppCacheFilePath
+    Path to the local CSV cache file (default: global AppCacheFilePath).
+    .PARAMETER IconCacheDir
+    Directory to store downloaded icons (default: "website\assets\app_icons" under the script path).
+    .PARAMETER searchOnline
+    If set, performs an online search for missing packages and updates the cache (default: $true).
+    .EXAMPLE
+    Get-AppInfo -PackageName "com.myapp.vr"
+    Get-AppInfo -PackageName "com.cosmorama.tabletroopers"
+    Get-AppInfo -PackageName "com.mrf.pixeltoys.cabin" -searchOnline $true
+       #>
 
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$PackageName,
+        [string]$AppCacheFilePath = $global:AppCacheFilePath,
+        [string]$IconCacheDir = $(Join-Path $global:ScriptPath "website\assets\app_icons"),
+        [bool]$searchOnline = $false
+    )
+
+    # genreate package name without com. on the beginning without using match
+    if ($PackageName.StartsWith("com.")) {
+        $PackageName_short = $PackageName.Substring(4)
+    } else {
+        $PackageName_short = $PackageName
+    }
+    
+    $appInfos = [PSCustomObject]@{
+                PackageName = $PackageName
+                DisplayName = $PackageName_short
+                IconUrl     = ""
+                LocalIconPath = ""
+                }
+                
+
+    # 1. Check local cache first
+    $cache = @{}
+    if (Test-Path $AppCacheFilePath) {
+        foreach ($row in @(Import-Csv -Path $AppCacheFilePath -Delimiter ",")) {
+            $cache[$row.PackageName] = $row
+        }
+    }
+    # If the cache contains the package with all info let's return it !
+    if ($cache.ContainsKey($PackageName) -and $PackageName_short -notin $cache[$PackageName].DisplayName -and $cache[$PackageName].IconUrl) {
+        return $cache[$PackageName]
+    }
+    # fill the display name with cached value if already known, it may be added before of set manually by the user.
+    if ($cache[$PackageName].DisplayName -and $PackageName_short -in $cache[$PackageName].DisplayName) {
+        $appInfos.DisplayName = $cache[$PackageName].DisplayName
+    }
+
+    # Let's search online !
+    if ($searchOnline) {
+        $baseUrl = "https://raw.githubusercontent.com/threethan/MetaMetadata/main/data"
+        $folders = @('common', 'oculus', 'oculus_public', 'oculusdb', 'sidequest')
+    
+        
+        foreach ($folder in $folders) {
+            $url = "$baseUrl/$folder/$PackageName.json"
+            write-log ($msg.AppDisplayNameResolved -f $appInfos.DisplayName, "Online lookup on $url") -Level DEBUG
+            $response = $null
+            $icon = ""
+            try {
+                $response = Invoke-RestMethod -Uri $url -TimeoutSec 8 -ErrorAction Stop
+                $icon = ""
+                if ($response.square) { $icon = $response.square }
+                elseif ($response.icon) { $icon = $response.icon }
+                elseif ($response.landscape) { $icon = $response.landscape }
+                elseif ($response.portrait) { $icon = $response.portrait }
+                elseif ($response.hero) { $icon = $response.hero }
+                elseif ($response.logo) { $icon = $response.logo }
+            } catch {
+                # Not found in this folder, try next
+            }
+            if ($response.name) {$appInfos.DisplayName = $response.name}
+            if ($icon) {
+                $appInfos.IconUrl = $icon
+                break
+            }
+        }
+    
+        # Download icon locally so the web UI can display it without hitting remote URLs
+        if ($appInfos.IconUrl) {
+            if (-not (Test-Path $IconCacheDir)) {
+                New-Item -ItemType Directory -Path $IconCacheDir -Force | Out-Null
+            }
+
+            # Derive extension from the remote URL; default to .png
+            $ext = '.png'
+            if ($appInfos.IconUrl -match '\.([a-zA-Z]{2,4})(?:[?#]|$)') {
+                $ext = '.' + $Matches[1].ToLower()
+            }
+            $iconFileName = "$PackageName$ext"
+            $iconFile     = Join-Path $IconCacheDir $iconFileName
+
+            if (-not (Test-Path $iconFile)) {
+                try {
+                    Invoke-WebRequest -Uri $appInfos.IconUrl -OutFile $iconFile -TimeoutSec 10 -ErrorAction Stop
+                    Write-Log ($msg.AppDisplayNameResolved -f "Icon saved", $iconFileName) -Level DEBUG
+                } catch {
+                    Write-Log ($msg.AppDisplayNameNotFound -f "Icon download failed: $PackageName") -Level DEBUG
+                    $iconFileName = ""
+                }
+            }
+
+            if ($iconFileName -ne "") {
+                $appInfos.LocalIconPath = "/assets/app_icons/$iconFileName"
+            }
+        }
+    }
+
+
+    if (($appInfos.DisplayName -ne $cache[$PackageName].DisplayName) -and ($PackageName_short -eq $appInfos.DisplayName)){
+        $appInfos.DisplayName = $cache[$PackageName].DisplayName
+    }
+
+      # Update cache file if we got new info
+    if ($appInfos -notlike $cache[$PackageName]) {
+        $cache[$PackageName] = $appInfos
+        $cache.Values | Sort-Object DisplayName | Export-Csv -Path $AppCacheFilePath -NoTypeInformation -Encoding UTF8
+    }
+    return $appInfos
+}
+
+# Generate a function that will rebuild in background the app_names.csv cache file from the online MetaMetadata repository, iterating through all packages and fetching their metadata. This can be used to pre-populate the cache with known apps without needing to trigger lookups one by one.
+function Update-AppCacheFromMetaMetadata { #DOES NOT WORKS, UNDER INVESTIGATION
+    <#
+    .SYNOPSIS
+    Rebuilds the local app_names.csv cache file by fetching metadata for all packages listed in the MetaMetadata GitHub repository.
+    .DESCRIPTION
+    Iterates through all JSON files in the MetaMetadata data folders (common, oculus, oculus_public, oculusdb, sidequest) and extracts package names, display names and icon URLs. Updates the local app_names.csv cache file with this information, which can then be used for instant resolution of app display names and icons without needing to hit the network for each lookup.
+    .EXAMPLE
+    Update-AppCacheFromMetaMetadata
+       #>
+    param (
+        [string]$AppCacheFilePath = $global:AppCacheFilePath,
+        [string]$IconCacheDir = $(Join-Path $global:ScriptPath "website\assets\app_icons")
+    )
+
+    $baseUrl = "https://raw.githubusercontent.com/threethan/MetaMetadata/main/data"
+    $folders = @('common', 'oculus', 'oculus_public', 'oculusdb', 'sidequest')
+    $cache = @{}
+
+    foreach ($folder in $folders) {
+        $indexUrl = "$baseUrl/$folder/index.json"
+        try {
+            $index = Invoke-RestMethod -Uri $indexUrl -TimeoutSec 10 -ErrorAction Stop
+            foreach ($entry in $index) {
+                if ($entry.package) {
+                    $packageName = $entry.package
+                    if (-not $cache.ContainsKey($packageName)) {
+                        $displayName = if ($entry.name) { $entry.name } else { $packageName }
+                        $iconUrl = ""
+                        if ($entry.square) { $iconUrl = $entry.square }
+                        elseif ($entry.icon) { $iconUrl = $entry.icon }
+                        elseif ($entry.landscape) { $iconUrl = $entry.landscape }
+                        elseif ($entry.portrait) { $iconUrl = $entry.portrait }
+                        elseif ($entry.hero) { $iconUrl = $entry.hero }
+                        elseif ($entry.logo) { $iconUrl = $entry.logo }
+
+                        # Download icon locally
+                        $localIconPath = ""
+                        if ($iconUrl) {
+                            if (-not (Test-Path $IconCacheDir)) {
+                                New-Item -ItemType Directory -Path $IconCacheDir -Force | Out-Null
+                            }
+                            $ext = '.png'
+                            if ($iconUrl -match '\.([a-zA-Z]{2,4})(?:[?#]|$)') {
+                                $ext = '.' + $Matches[1].ToLower()
+                            }
+                            $iconFileName = "$packageName$ext"
+                            $iconFile = Join-Path $IconCacheDir $iconFileName
+                            if (-not (Test-Path $iconFile)) {
+                                try {
+                                    Invoke-WebRequest -Uri $iconUrl -OutFile $iconFile -TimeoutSec 10 -ErrorAction Stop
+                                    Write-Log ($msg.AppDisplayNameResolved -f "Icon saved", $iconFileName) -Level DEBUG
+                                } catch {
+                                    Write-Log ($msg.AppDisplayNameNotFound -f "Icon download failed: $packageName") -Level DEBUG
+                                    $iconFileName = ""
+                                }
+                            }
+                            if ($iconFileName -ne "") {
+                                $localIconPath = "/assets/app_icons/$iconFileName"
+                            }
+                        }
+                        $cache[$packageName] = [PSCustomObject]@{
+                            PackageName = $packageName
+                            DisplayName = $displayName
+                            IconUrl     = $iconUrl
+                            LocalIconPath = $localIconPath
+                        }
+                    }
+                }
+            }
+        } catch {
+            Write-Log ($msg.ErrorOccurred -f "Failed to fetch index from $indexUrl : $_") -Level ERROR
+        }
+    }
+    # Save cache to CSV
+    $cache.Values | Sort-Object DisplayName | Export-Csv -Path $AppCacheFilePath -NoTypeInformation -Encoding UTF8
+    Write-Log ($msg.AppDisplayNameResolved -f "Cache update complete", $cache.Count) -Level INFO
+}

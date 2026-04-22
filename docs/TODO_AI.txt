@@ -1,6 +1,56 @@
-Installed applications name missing : should be searched probably also in data/common : data/common/com.kluge.SynthRiders.json 
+
+## video_monitor.html ##
+
+Adapt videos size to the window in height and width to fit in the browser wepage.
+A standalone video cannot be larger to taller than the browser windows (-top bar)
+
+
+
+## APPLICATION MANAGEMENT ##
+
+Create functions to manage known applications
+- Known applications are listed in data/app_names.csv (information filled in config.json)
+Cached icons will be stored in website\assets\app_icons
+
+Get-HeadsetInstalledApps should connect to the headset and get an array of all apps installed (PackageName)
+
+<#
+Function Search-AppInfoOnTheWeb
+	input parameter is the PackageName and known application app_names file
+	It should search on the github repository "https://raw.githubusercontent.com/threethan/MetaMetadata/main/data" the $PackageName.json
+	If found, return the array with PackageName,DisplayName,IconUrl
+	The iconUrl should be square if exists. Otherwise let's find another icon.
+#>
+	
+Get-AppInfo will replace Get-AppDisplayName.
+	input parameter is the PackageName
+	Cache file will be stored in app_infos.csv by default, but this file name should be defined in config.json
+		it contains PackageName,DisplayName,IconUrl,LocalIconPath
+	Cached icons will be stored in website\assets\app_icons (static assignment)
+		
+	The function reads from cache files first. 		
+		While not found, or displayname = packageName or if missing raw value : search information using Search-AppInfoOnTheWeb
+			if result is different than cached values, update it
+			if icon is not already in app_icons cached folder, let's download it, and update LocalIconPath
+	
+	if found and raws have a value let's return the values array.
+	If not found, return array with DisplayName = (PackageName - "com." at the begining)
+	update the app_infos file
+
+
+Use Get-AppInfo while listing installed applications, while displaying the running application, or while listing apps to start on a headset.
+
+
+
+	
+
+
+
+
 
 Add icons of the running application before the name
+
+##########
 
 
 If the headset is connected using USB cable, let's get stream and any other information from USB instead of Wifi connection.
@@ -32,7 +82,7 @@ Drag and drop works to re-order when getting from right to left, but not from le
 In the app_config.html implement a button to edit config.json in the web page.
 It should display each functions and values.
 
-While delete a headset, delete [headset]_installed_apps.csv and [headset]favorite_apps.csv
+While delete a headset, delete [headset]_installed_apps.csv and [headset]favorite_apps.csv if not already done
 
 
 DEBUG
