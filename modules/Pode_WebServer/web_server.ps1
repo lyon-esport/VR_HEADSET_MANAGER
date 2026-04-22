@@ -666,11 +666,13 @@ try {
             continue
         }
 
-        # API: GET /api/installedapps?name=Q3_BLUE  - returns installed third-party apps as JSON
+
+        # API: GET /api/installedapps?name=Q3_BLUE[&refresh=1]  - returns installed third-party apps as JSON, optionally refreshes cache
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/installedapps') {
             try {
                 $rawQuery  = $request.Url.Query.TrimStart('?')
                 $nameParam = if ($rawQuery -match '(?:^|&)name=([^&]+)') { [Uri]::UnescapeDataString($Matches[1]) } else { '' }
+                $refresh   = ($rawQuery -match '(?:^|&)refresh=1')
                 $safeName  = [regex]::Match(($nameParam -replace ' ','_'), '^[\w\-]+$').Value
                 if (-not $safeName) { throw "Invalid headset name" }
 
@@ -686,6 +688,15 @@ try {
                 $favPkgs = @()
                 if (Test-Path $favCsvPath) {
                     $favPkgs = @(Import-Csv -Path $favCsvPath -Delimiter "," | Select-Object -ExpandProperty PackageName)
+                }
+
+                # If refresh requested, update cache from headset
+                if ($refresh) {
+                    $csvPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_headsets.csv"))
+                    $rows    = Import-Csv -Path $csvPath
+                    $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName }
+                    if (-not $headset) { throw "Headset not found" }
+                    Update-InstalledAppsCache -headsetName $headset.Name -headsetIP $headset.IPAddress
                 }
 
                 # Use cache if available

@@ -1803,7 +1803,7 @@
       var statusEl = document.getElementById('lm-status');
       statusEl.textContent = 'Fetching app list from headset...';
       statusEl.className   = 'lm-status';
-      fetch('/api/installedapps?name=' + encodeURIComponent(_launchDn))
+      fetch('/api/installedapps?name=' + encodeURIComponent(_launchDn) + '&refresh=1')
         .then(function(r) { return r.json(); })
         .then(function(apps) {
           _allAppsLoaded = true;
@@ -1812,7 +1812,8 @@
             if (a.displayName) appNameCache[a.package] = a.displayName;
             if (a.favorite) _favoritePackages[a.package] = true;
           });
-          btn.style.display = 'none';
+          btn.disabled = false;
+          btn.textContent = 'Show all installed apps';
           statusEl.textContent = '';
           statusEl.className   = 'lm-status';
           var list = document.getElementById('lm-list');
@@ -1871,7 +1872,8 @@
 
       var nameEl = document.createElement('span');
       nameEl.className = 'lm-app-name';
-      nameEl.textContent = app.displayName || app.package;
+      // Prefer appNameCache, then displayName, then package
+      nameEl.textContent = appNameCache[app.package] || app.displayName || app.package;
       nameEl.title = app.package;
 
       var launchBtn = document.createElement('button');

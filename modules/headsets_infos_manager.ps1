@@ -250,8 +250,8 @@ function Get-KnownHeadsetInfos {
         # Get running app
         $pkg = Get-HeadsetForegroundApp -Device $device -adb $adb
         if ($pkg) {
-            $appInfo = Get-AppDisplayName -PackageName $pkg
-            $result.RunningApp   = $appInfo.DisplayName
+            $appInfo = Get-AppInfo -PackageName $pkg -searchOnline $true
+            $result.RunningApp   = if ($appInfo.DisplayName) { $appInfo.DisplayName } else { $pkg }
             $result.RunningAppIcon = $appInfo.IconUrl
         }
 
@@ -323,7 +323,8 @@ function Update-InstalledAppsCache {
             $pkg = $_
             $dn  = if ($appNames.ContainsKey($pkg) -and $appNames[$pkg].DisplayName) { $appNames[$pkg].DisplayName } else { $pkg }
             $ico = if ($appNames.ContainsKey($pkg)) { $appNames[$pkg].IconUrl } else { '' }
-            [PSCustomObject]@{ PackageName = $pkg; DisplayName = $dn; IconUrl = $ico }
+            $icoPath = if ($appNames.ContainsKey($pkg)) { $appNames[$pkg].LocalIconPath } else { '' }
+            [PSCustomObject]@{ PackageName = $pkg; DisplayName = $dn; IconUrl = $ico; LocalIconPath = $icoPath }
         }
 
         # Compare with existing cache (by sorted package list only)
