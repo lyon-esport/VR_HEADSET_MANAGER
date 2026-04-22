@@ -65,7 +65,7 @@
       align-items: flex-start;
     }
 
-    /* Cell - streaming (default) */
+    /* Cell - streaming (default) - width set dynamically by applyLayout() */
     .cell {
       position: relative;
       aspect-ratio: 16 / 9;
@@ -73,8 +73,8 @@
       background: #000;
       border-radius: 3px;
       container-type: size;
-      flex: 1 1 var(--min-video-w);
-      min-width: min(var(--min-video-w), 100%);
+      flex: 0 0 auto;
+      min-width: 0;
       max-width: 100%;
     }
     .cell.hidden { display: none; }
@@ -469,10 +469,15 @@
     function setHeadsetVisible(dn, visible) {
       headsetVisible[dn] = visible;
       var cell = document.querySelector('#grid .cell[data-display="' + dn + '"]');
-      if (cell) cell.classList.toggle('hidden', !visible);
+      if (cell) {
+        cell.classList.toggle('hidden', !visible);
+        if (!visible) cell.style.width = '';
+      }
       var btn = document.querySelector('[data-headset="' + dn + '"]');
       if (btn) btn.classList.toggle('active', visible);
       TopBar.setCompactItemChecked(dn, visible);
+      applyLayout();
+      applyScale();
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -809,6 +814,7 @@
         cell.classList.toggle('offline',   !stat.ping);
         if (wasStream !== streaming) scaleNeeded = true;
         cell.classList.toggle('no-stream', !streaming);
+        if (!streaming) cell.style.width = ''; // clear layout width for compact offline tile
 
         // Manage video-frame src: load only when streaming, clear otherwise
         var videoFrame  = cell.querySelector('.video-frame');
@@ -829,7 +835,7 @@
         var compactItem = document.querySelector('[data-compact-headset="' + dn + '"]');
         if (compactItem) compactItem.classList.toggle('offline', !stat.scrcpy);
       });
-      if (scaleNeeded) applyScale();
+      if (scaleNeeded) { applyLayout(); applyScale(); }
     }
 
     // ── Scale status overlays ────────────────────────────────────────────────
@@ -845,6 +851,44 @@
           fr.style.transform = 'scale(' + scale + ')';
         });
       });
+    }
+
+    // ── Viewport-fit layout: compute optimal columns so videos fit in the window ─
+    function applyLayout() {
+      var topbar = document.querySelector('.topbar');
+      var topbarH = topbar ? (topbar.offsetHeight + 1) : 47;
+      var gap = 6;
+      var padding = gap;
+      var availW = window.innerWidth;
+      var availH = window.innerHeight - topbarH;
+      var innerW = availW - padding * 2;
+      var innerH = availH - padding * 2;
+
+      var streamCells = Array.from(document.querySelectorAll('#grid .cell:not(.hidden):not(.no-stream)'));
+      var N = streamCells.length;
+      if (N === 0) return;
+
+      var bestArea = 0;
+      var bestCellW = Math.min(innerW, innerH * 16 / 9);
+
+      for (var c = 1; c <= N; c++) {
+        var r = Math.ceil(N / c);
+        var cellW = (innerW - gap * (c - 1)) / c;
+        var cellH = cellW * 9 / 16;
+        if (cellH * r + gap * (r - 1) > innerH) {
+          // Height-constrained: scale down to fit
+          cellH = (innerH - gap * (r - 1)) / r;
+          cellW = cellH * 16 / 9;
+        }
+        var area = cellW * cellH;
+        if (area > bestArea) {
+          bestArea = area;
+          bestCellW = cellW;
+        }
+      }
+
+      var w = Math.floor(bestCellW);
+      streamCells.forEach(function(cell) { cell.style.width = w + 'px'; });
     }
 
     // ── Status overlay toggle ────────────────────────────────────────────────
@@ -864,10 +908,12 @@
     TopBar.initManageDevicesBtn();
     buildHeadsetToggles();
 
-    var ro = new ResizeObserver(applyScale);
+    var ro = new ResizeObserver(function() { applyLayout(); applyScale(); });
     ro.observe(document.getElementById('grid'));
+    window.addEventListener('resize', function() { applyLayout(); applyScale(); });
 
     document.addEventListener('DOMContentLoaded', function() {
+      applyLayout();
       applyScale();
       pollCsv();
       setInterval(pollCsv, REFRESH_MS);
