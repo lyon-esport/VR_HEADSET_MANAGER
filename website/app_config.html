@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VR Headset Manager - App Configuration</title>
+  <link rel="stylesheet" href="assets/topbar.css">
+  <script src="assets/topbar.js"></script>
+  <style>
+    :root {
+      --bg:          #111;
+      --text:        #ccc;
+      --card-bg:     #161616;
+      --card-border: #252525;
+      --accent:      #3b82f6;
+      --muted:       #555;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      background: var(--bg);
+      min-height: 100vh;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+    }
+    [data-theme=light] { --bg:#f3f4f6; --text:#1f2937; --card-bg:#fff; --card-border:#e5e7eb; --muted:#9ca3af; }
+    [data-theme=light] body { background: var(--bg); color: var(--text); }
+
+    .page { padding: 28px 32px; flex: 1; display: flex; flex-direction: column; max-width: 860px; width: 100%; }
+    .page-title {
+      font-size: 20px;
+      font-weight: 700;
+      color: #e5e7eb;
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    [data-theme=light] .page-title { color: #111827; }
+    .page-subtitle { font-size: 13px; color: var(--muted); margin-bottom: 28px; }
+
+    .section-title {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 12px;
+    }
+    .section { margin-bottom: 28px; }
+    .section.logs-section { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      padding: 20px 22px;
+    }
+
+    /* Action buttons grid */
+    /* TEST */
+    .btn-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 10px;
+    }
+    .action-btn {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 13px 16px;
+      background: #1e1e1e;
+      border: 1px solid #2a2a2a;
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background .15s, border-color .15s, opacity .15s;
+      text-align: left;
+    }
+    [data-theme=light] .action-btn { background: #f9fafb; border-color: #d1d5db; }
+    .action-btn:hover { background: #252525; border-color: #3b82f6; }
+    [data-theme=light] .action-btn:hover { background: #eff6ff; border-color: #3b82f6; }
+    .action-btn:disabled { opacity: .5; cursor: default; }
+    .action-btn svg { flex-shrink: 0; stroke: var(--accent); }
+    .action-btn .btn-desc { font-size: 11px; color: var(--muted); margin-top: 2px; font-weight: 400; }
+
+    /* Live logs panel */
+    .logs-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 280px;
+      overflow: hidden;
+    }
+    .logs-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 11px 16px;
+      border-bottom: 1px solid var(--card-border);
+      flex-shrink: 0;
+    }
+    .logs-header span { font-size: 13px; font-weight: 600; color: #e5e7eb; flex: 1; }
+    [data-theme=light] .logs-header span { color: #111827; }
+    .logs-ctrl-btn {
+      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: 5px;
+      border: 1px solid #333;
+      background: #1a1a1a;
+      color: #94a3b8;
+      cursor: pointer;
+      transition: background .15s, color .15s;
+    }
+    [data-theme=light] .logs-ctrl-btn { background: #f3f4f6; border-color: #d1d5db; color: #6b7280; }
+    .logs-ctrl-btn:hover, .logs-ctrl-btn.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+    .logs-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px 16px;
+      font-family: 'Cascadia Code', 'Consolas', 'Menlo', monospace;
+      font-size: 11.5px;
+      line-height: 1.65;
+      color: #94a3b8;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    [data-theme=light] .logs-body { color: #374151; }
+    .logs-body .log-err  { color: #f87171; }
+    .logs-body .log-warn { color: #fbbf24; }
+    .logs-body .log-ok   { color: #34d399; }
+    .logs-body .log-info { color: #60a5fa; }
+    .logs-body .log-dbg  { color: #64748b; }
+    .logs-status {
+      font-size: 11px;
+      padding: 4px 16px 8px;
+      color: var(--muted);
+      flex-shrink: 0;
+    }
+
+    /* Toast */
+    #toast {
+      position: fixed;
+      bottom: 28px;
+      left: 50%;
+      transform: translateX(-50%) translateY(20px);
+      background: #1e293b;
+      border: 1px solid #334155;
+      color: #e2e8f0;
+      font-size: 13px;
+      padding: 10px 20px;
+      border-radius: 8px;
+      opacity: 0;
+      transition: opacity .2s, transform .2s;
+      pointer-events: none;
+      z-index: 999;
+      white-space: nowrap;
+    }
+    #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <script>document.write(TopBar.brandHTML)</script>
+    <div class="v-sep"></div>
+    <div class="topbar-right">
+      <script>document.write(TopBar.configMenuHTML)</script>
+    </div>
+  </header>
+
+  <main class="page">
+    <div class="page-title">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+      App Configuration
+    </div>
+    <p class="page-subtitle">Edit configuration and access application files.</p>
+
+    <!-- Configuration files -->
+    <section class="section">
+      <div class="section-title">Configuration</div>
+      <div class="card">
+        <div class="btn-grid">
+          <button class="action-btn" id="btn-open-config">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+            </svg>
+            <div>
+              <div>Edit config.json</div>
+              <div class="btn-desc">Opens in Notepad</div>
+            </div>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Folders -->
+    <section class="section">
+      <div class="section-title">Folders</div>
+      <div class="card">
+        <div class="btn-grid">
+          <button class="action-btn" id="btn-open-logs">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+            </svg>
+            <div>
+              <div>Open Logs Folder</div>
+              <div class="btn-desc">Opens in Explorer</div>
+            </div>
+          </button>
+          <button class="action-btn" id="btn-open-records">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+            </svg>
+            <div>
+              <div>Open Records Folder</div>
+              <div class="btn-desc">Opens in Explorer</div>
+            </div>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Live logs -->
+    <section class="section logs-section">
+      <div class="section-title">Live Logs</div>
+      <div class="logs-card">
+        <div class="logs-header">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"/>
+          </svg>
+          <span>Live</span>
+          <div style="display:flex;gap:6px">
+            <button class="logs-ctrl-btn" id="logs-pause-btn">Pause</button>
+            <button class="logs-ctrl-btn" id="logs-clear-btn">Clear</button>
+            <button class="logs-ctrl-btn" id="logs-scroll-btn" title="Toggle auto-scroll">Scroll</button>
+          </div>
+        </div>
+        <div class="logs-body" id="logs-body"></div>
+        <div class="logs-status" id="logs-status">Loading...</div>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast"></div>
+
+  <script>
+    function showToast(msg, duration) {
+      var t = document.getElementById('toast');
+      t.textContent = msg;
+      t.classList.add('show');
+      setTimeout(function() { t.classList.remove('show'); }, duration || 2500);
+    }
+
+    // Config / folder buttons
+    document.getElementById('btn-open-config').addEventListener('click', function() {
+      fetch('/api/openconfig')
+        .then(function(r) { return r.json(); })
+        .then(function(j) { showToast(j.ok ? 'config.json opened in Notepad' : 'Could not open file'); })
+        .catch(function() { showToast('Server unreachable'); });
+    });
+
+    document.getElementById('btn-open-logs').addEventListener('click', function() {
+      fetch('/api/openfolder?target=logs')
+        .then(function(r) { return r.json(); })
+        .then(function(j) { showToast(j.ok ? 'Logs folder opened' : 'Folder not found'); })
+        .catch(function() { showToast('Server unreachable'); });
+    });
+
+    document.getElementById('btn-open-records').addEventListener('click', function() {
+      fetch('/api/openfolder?target=records')
+        .then(function(r) { return r.json(); })
+        .then(function(j) { showToast(j.ok ? 'Records folder opened' : 'Folder not found'); })
+        .catch(function() { showToast('Server unreachable'); });
+    });
+
+    // Live logs
+    var _paused     = false;
+    var _autoScroll = true;
+    var _lastLen    = 0;
+    var _timer      = null;
+
+    var logsBody      = document.getElementById('logs-body');
+    var logsStatus    = document.getElementById('logs-status');
+    var pauseBtn      = document.getElementById('logs-pause-btn');
+    var clearBtn      = document.getElementById('logs-clear-btn');
+    var scrollBtn     = document.getElementById('logs-scroll-btn');
+
+    pauseBtn.addEventListener('click', function() {
+      _paused = !_paused;
+      pauseBtn.textContent = _paused ? 'Resume' : 'Pause';
+      pauseBtn.classList.toggle('active', _paused);
+      if (!_paused) fetchLogs();
+    });
+
+    clearBtn.addEventListener('click', function() {
+      logsBody.innerHTML = '';
+      _lastLen = 0;
+    });
+
+    scrollBtn.addEventListener('click', function() {
+      _autoScroll = !_autoScroll;
+      scrollBtn.classList.toggle('active', _autoScroll);
+      if (_autoScroll) logsBody.scrollTop = logsBody.scrollHeight;
+    });
+    scrollBtn.classList.add('active');
+
+    logsBody.addEventListener('scroll', function() {
+      var atBottom = logsBody.scrollTop + logsBody.clientHeight >= logsBody.scrollHeight - 20;
+      if (!atBottom && _autoScroll) {
+        _autoScroll = false;
+        scrollBtn.classList.remove('active');
+      }
+    });
+
+    function formatLine(l) {
+      var cls = '';
+      if (/\[ERROR\]|\[ERREUR\]/i.test(l))  cls = 'log-err';
+      else if (/\[WARNING\]/i.test(l))       cls = 'log-warn';
+      else if (/\[SUCCESS\]/i.test(l))       cls = 'log-ok';
+      else if (/\[INFO\]/i.test(l))          cls = 'log-info';
+      else if (/\[DEBUG\]/i.test(l))         cls = 'log-dbg';
+      var safe = l.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      return cls ? '<span class="' + cls + '">' + safe + '</span>' : safe;
+    }
+
+    function fetchLogs() {
+      fetch('/api/logs?n=400')
+        .then(function(r) { return r.json(); })
+        .then(function(lines) {
+          if (!Array.isArray(lines)) return;
+          var atBottom = logsBody.scrollTop + logsBody.clientHeight >= logsBody.scrollHeight - 20;
+          if (lines.length !== _lastLen) {
+            _lastLen = lines.length;
+            logsBody.innerHTML = lines.map(formatLine).join('\n');
+            logsStatus.textContent = lines.length + ' lines - last updated ' + new Date().toLocaleTimeString();
+            if (_autoScroll || atBottom) logsBody.scrollTop = logsBody.scrollHeight;
+          }
+        })
+        .catch(function() {
+          logsStatus.textContent = 'Could not reach server.';
+        });
+    }
+
+    fetchLogs();
+    _timer = setInterval(function() { if (!_paused) fetchLogs(); }, 2000);
+  </script>
+</body>
+</html>
