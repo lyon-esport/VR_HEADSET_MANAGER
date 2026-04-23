@@ -101,8 +101,6 @@
     .status-wrapper {
       position: absolute;
       top: 0; left: 0;
-      width: 33.333%;
-      aspect-ratio: 16 / 9;
       overflow: hidden;
       z-index: 10;
       border-radius: 0 0 3px 0;
@@ -841,15 +839,28 @@
     }
 
     // ── Scale status overlays ────────────────────────────────────────────────
+    var MIN_OVERLAY_W = 200;
     function applyScale() {
       document.querySelectorAll('#grid .cell').forEach(function(cell) {
         var isNoStream = cell.classList.contains('no-stream');
-        // Streaming: status overlay is 1/3 of cell width; no-stream: fills entire cell
-        var wrapperW = isNoStream ? cell.offsetWidth : (cell.offsetWidth / 3);
-        var scale = wrapperW / NATURAL_W;
+        var cellW = cell.offsetWidth;
+        var cellH = cell.offsetHeight;
+        var wrapperW, wrapperH, scale;
+        if (isNoStream) {
+          wrapperW = cellW; wrapperH = cellH; scale = cellW / NATURAL_W;
+        } else {
+          var maxByW = Math.floor(cellW / 3);
+          var maxByH = cellH > 0 ? Math.floor(cellH / 3 * NATURAL_W / NATURAL_H) : maxByW;
+          var targetW = Math.min(maxByW, maxByH);
+          wrapperW = Math.max(targetW, MIN_OVERLAY_W);
+          wrapperH = Math.round(wrapperW * NATURAL_H / NATURAL_W);
+          scale    = wrapperW / NATURAL_W;
+        }
+        var wrapper = cell.querySelector('.status-wrapper');
+        if (wrapper) { wrapper.style.width = wrapperW + 'px'; wrapper.style.height = wrapperH + 'px'; }
         cell.querySelectorAll('.status-frame').forEach(function(fr) {
-          fr.style.width     = NATURAL_W + 'px';
-          fr.style.height    = NATURAL_H + 'px';
+          fr.style.width  = NATURAL_W + 'px';
+          fr.style.height = NATURAL_H + 'px';
           fr.style.transform = 'scale(' + scale + ')';
         });
       });
