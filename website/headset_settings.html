@@ -751,6 +751,14 @@
       </div>
       <div class="profile-modal-body">
         <div class="pm-field">
+          <label for="pm-view">View</label>
+          <select id="pm-view">
+            <option value="portrait">Portrait</option>
+            <option value="square">Square</option>
+            <option value="wide">Wide</option>
+          </select>
+        </div>
+        <div class="pm-field">
           <label for="pm-eye">Eye</label>
           <select id="pm-eye">
             <option value="L">Left (L)</option>
@@ -1027,7 +1035,7 @@
             '<div class="card-row"><span class="card-row-label">Serial</span><span class="card-row-value">' + esc(cfg.SerialNumber || '-') + '</span></div>' +
             '<div class="card-row"><span class="card-row-label">Scrcpy Profile</span>' +
               '<span class="card-row-profile-display" id="profile-display-' + dn + '">' +
-                '<span class="card-row-value" id="profile-val-' + dn + '">' + esc(cfg.ScrcpyProfile || 'R-N-45-20') + '</span>' +
+                '<span class="card-row-value" id="profile-val-' + dn + '">' + esc(cfg.ScrcpyProfile || 'portrait-R-N-45-20') + '</span>' +
                 '<button class="card-row-edit-btn" data-edit-profile="' + dn + '" title="Edit profile">' +
                   '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
                     '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>' +
@@ -1555,13 +1563,37 @@
 
     function openProfileModal(dn) {
       _editingProfileDn = dn;
-      var cur = (document.getElementById('profile-val-' + dn).textContent || 'R-N-45-20').split('-');
-      if (cur.length !== 4) cur = ['R', 'N', '45', '20'];
+      var raw = (document.getElementById('profile-val-' + dn).textContent || 'portrait-R-N-45-20').trim();
+      var cur = raw.split('-');
+      // Support legacy 4-part format (Eye-Audio-FPS-BW) -> prepend 'portrait'
+      if (cur.length === 4 && ['L','R'].indexOf(cur[0].toUpperCase()) >= 0) { cur = ['portrait'].concat(cur); }
+      if (cur.length !== 5) cur = ['portrait', 'R', 'N', '45', '20'];
       document.getElementById('pm-headset').textContent = dn.replace(/_/g, ' ');
-      document.getElementById('pm-eye').value   = cur[0].toUpperCase();
-      document.getElementById('pm-audio').value = cur[1].toUpperCase();
-      document.getElementById('pm-fps').value   = cur[2];
-      document.getElementById('pm-bw').value    = cur[3];
+
+      // Fetch available views for this headset's model and populate the select
+      var model = (headsetConfig[dn] && headsetConfig[dn].model) ? headsetConfig[dn].model : '';
+      var viewSel = document.getElementById('pm-view');
+      var currentView = cur[0].toLowerCase();
+      fetch('/api/scrcpyviews' + (model ? '?model=' + encodeURIComponent(model) : ''))
+        .then(function(r) { return r.json(); })
+        .then(function(views) {
+          viewSel.innerHTML = '';
+          views.forEach(function(v) {
+            var opt = document.createElement('option');
+            opt.value = v; opt.textContent = v.charAt(0).toUpperCase() + v.slice(1);
+            viewSel.appendChild(opt);
+          });
+          viewSel.value = currentView;
+        })
+        .catch(function() {
+          // Fallback: keep existing options
+          viewSel.value = currentView;
+        });
+
+      document.getElementById('pm-eye').value   = cur[1].toUpperCase();
+      document.getElementById('pm-audio').value = cur[2].toUpperCase();
+      document.getElementById('pm-fps').value   = cur[3];
+      document.getElementById('pm-bw').value    = cur[4];
       document.getElementById('profile-modal').style.display = 'flex';
       document.getElementById('pm-fps').focus();
     }
@@ -1581,12 +1613,13 @@
     document.getElementById('pm-save').addEventListener('click', function() {
       var dn = _editingProfileDn;
       if (!dn) return;
+      var view  = document.getElementById('pm-view').value.toLowerCase();
       var eye   = document.getElementById('pm-eye').value.toUpperCase();
       var audio = document.getElementById('pm-audio').value.toUpperCase();
       var fps   = parseInt(document.getElementById('pm-fps').value, 10);
       var bw    = parseInt(document.getElementById('pm-bw').value, 10);
       if (isNaN(fps) || fps < 1 || isNaN(bw) || bw < 1) { return; }
-      var newProfile = eye + '-' + audio + '-' + fps + '-' + bw;
+      var newProfile = view + '-' + eye + '-' + audio + '-' + fps + '-' + bw;
       var saveBtn = document.getElementById('pm-save');
       saveBtn.disabled = true;
       fetch('/api/updateprofile', {
