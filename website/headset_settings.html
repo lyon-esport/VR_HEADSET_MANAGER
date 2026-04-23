@@ -2295,9 +2295,13 @@
     document.addEventListener('keydown', function(e) {
       if (e.key === 'Escape' && document.getElementById('wifi-adb-modal').style.display !== 'none') closeNewDevicesModal();
     });
-    TopBar.initManageDevicesBtn(openNewDevicesModal);
-    if (window.location.hash === '#manage') { window.location.hash = ''; openNewDevicesModal(); }
-    if (window.location.hash === '#launch' && _headsetFilter) { window.location.hash = ''; openLaunchModal(_headsetFilter); }
+    TopBar.initManageDevicesBtn();
+    function _handleHash() {
+      if (window.location.hash === '#manage') { window.location.hash = ''; openNewDevicesModal(); }
+      if (window.location.hash === '#launch' && _headsetFilter) { window.location.hash = ''; openLaunchModal(_headsetFilter); }
+    }
+    _handleHash();
+    window.addEventListener('hashchange', _handleHash);
   </script>
 </body>
 </html>
