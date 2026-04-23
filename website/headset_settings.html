@@ -1130,9 +1130,9 @@
         e.preventDefault();
         target.classList.remove('drag-over');
 
-        // Insert before or after target based on vertical midpoint
-        var rect = target.getBoundingClientRect();
-        if (e.clientY > rect.top + rect.height / 2) {
+        // Insert before or after target based on DOM order
+        var cards = Array.from(grid.querySelectorAll('.headset-card'));
+        if (cards.indexOf(_dragSrc) < cards.indexOf(target)) {
           grid.insertBefore(_dragSrc, target.nextSibling);
         } else {
           grid.insertBefore(_dragSrc, target);
