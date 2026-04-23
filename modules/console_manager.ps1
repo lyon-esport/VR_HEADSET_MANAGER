@@ -702,7 +702,7 @@ function Show-SubMenu-ScrcpyOptions {
     do {
         Clear-Host
         Start-Sleep -Milliseconds 100
-        Write-Host $msg.ScrcpyOptionsTitle -ForegrprofileoundColor Cyan
+        Write-Host $msg.ScrcpyOptionsTitle -ForegroundColor Cyan
         Write-Host $msg.ScrcpyOptionsSelectHeadset
         Write-Host $msg.IDNameScrcpyProfile
         Write-Host $msg.Separator
@@ -725,61 +725,84 @@ function Show-SubMenu-ScrcpyOptions {
 
         # Inner loop: edit individual profile fields for the selected headset
         do {
-            $scrcpyProfile = if ($headset.ScrcpyProfile) { $headset.ScrcpyProfile } else { "R-N-45-20" }
+            $scrcpyProfile = if ($headset.ScrcpyProfile) { $headset.ScrcpyProfile } else { "portrait-R-N-45-20" }
             $parts = $scrcpyProfile -split '-'
-            if ($parts.Count -ne 4) { $parts = @('R','N','45','20') }
-            $eye  = $parts[0].ToUpper()
-            $audio = $parts[1].ToUpper()
-            $fps  = $parts[2]
-            $bw   = $parts[3]
+            # Backward compat: 4-part legacy (Eye-Audio-FPS-BW) -> prepend "portrait"
+            if ($parts.Count -eq 4 -and $parts[0] -in @('L','R')) { $parts = @('portrait') + $parts }
+            if ($parts.Count -ne 5) { $parts = @('portrait','R','N','45','20') }
+            $view  = $parts[0].ToLower()
+            $eye   = $parts[1].ToUpper()
+            $audio = $parts[2].ToUpper()
+            $fps   = $parts[3]
+            $bw    = $parts[4]
             $eyeLabel   = if ($eye   -eq 'L') { 'Left'      } else { 'Right' }
             $audioLabel = if ($audio -eq 'D') { 'Duplicate' } else { 'No audio' }
+
+            # Collect available view names for the headset model
+            $headsetModel   = ($headsets | Where-Object { $_.ID -eq $idInput }).Model
+            $availableViews = @()
+            if ($headsetModel -and $global:scrcpyParameters.$headsetModel -and $global:scrcpyParameters.$headsetModel.views) {
+                $availableViews = @($global:scrcpyParameters.$headsetModel.views | Get-Member -MemberType NoteProperty | Select-Object -ExpandProperty Name)
+            }
+            if ($availableViews.Count -eq 0) { $availableViews = @('portrait','square','wide') }
+            $viewList = $availableViews -join ', '
 
             Clear-Host
             Write-Host "$($msg.ScrcpyOptionsTitle) - $($headset.Name)" -ForegroundColor Cyan
             Write-Host $msg.Separator
             Write-Host " [#]  $($msg.ScrcpyOptTableHeader)"
             Write-Host $msg.Separator
-            Write-Host " [1]  $($msg.ScrcpyOptEyeLabel.PadRight(16)) : $eyeLabel"
-            Write-Host " [2]  $($msg.ScrcpyOptAudioLabel.PadRight(16)) : $audioLabel"
-            Write-Host " [3]  $($msg.ScrcpyOptFPSLabel.PadRight(16)) : $fps"
-            Write-Host " [4]  $($msg.ScrcpyOptBitrateLabel.PadRight(16)) : $bw"
+            Write-Host " [1]  $("View".PadRight(16)) : $view  ($viewList)"
+            Write-Host " [2]  $($msg.ScrcpyOptEyeLabel.PadRight(16)) : $eyeLabel"
+            Write-Host " [3]  $($msg.ScrcpyOptAudioLabel.PadRight(16)) : $audioLabel"
+            Write-Host " [4]  $($msg.ScrcpyOptFPSLabel.PadRight(16)) : $fps"
+            Write-Host " [5]  $($msg.ScrcpyOptBitrateLabel.PadRight(16)) : $bw"
             Write-Host " [0]  $($msg.Return)"
 
             $opt = Read-Host $msg.ScrcpyOptionsEnterOption
 
             switch ($opt) {
                 '1' {
+                    Write-Host "  Available views: $viewList"
+                    $val = (Read-Host "  View profile (current: $view)").ToLower()
+                    if ($val -in $availableViews) {
+                        $parts[0] = $val
+                    } else {
+                        Write-Host "  Invalid view. Choose from: $viewList" -ForegroundColor Red
+                        Start-Sleep -Seconds 2
+                    }
+                }
+                '2' {
                     $val = (Read-Host ($msg.ScrcpyOptionsEye -f $eye)).ToUpper()
                     if ($val -in @('L','R')) {
-                        $parts[0] = $val
+                        $parts[1] = $val
                     } else {
                         Write-Host $msg.ScrcpyOptionsInvalidEye -ForegroundColor Red
                         Start-Sleep -Seconds 2
                     }
                 }
-                '2' {
+                '3' {
                     $val = (Read-Host ($msg.ScrcpyOptionsAudio -f $audio)).ToUpper()
                     if ($val -in @('D','N')) {
-                        $parts[1] = $val
+                        $parts[2] = $val
                     } else {
                         Write-Host $msg.ScrcpyOptionsInvalidAudio -ForegroundColor Red
                         Start-Sleep -Seconds 2
                     }
                 }
-                '3' {
+                '4' {
                     $val = Read-Host ($msg.ScrcpyOptionsFPS -f $fps)
                     if ($val -match '^\d+$' -and [int]$val -gt 0) {
-                        $parts[2] = $val
+                        $parts[3] = $val
                     } else {
                         Write-Host $msg.ScrcpyOptionsInvalidNumber -ForegroundColor Red
                         Start-Sleep -Seconds 2
                     }
                 }
-                '4' {
+                '5' {
                     $val = Read-Host ($msg.ScrcpyOptionsBitrate -f $bw)
                     if ($val -match '^\d+$' -and [int]$val -gt 0) {
-                        $parts[3] = $val
+                        $parts[4] = $val
                     } else {
                         Write-Host $msg.ScrcpyOptionsInvalidNumber -ForegroundColor Red
                         Start-Sleep -Seconds 2
@@ -789,7 +812,7 @@ function Show-SubMenu-ScrcpyOptions {
                 default { }
             }
 
-            if ($opt -in @('1','2','3','4')) {
+            if ($opt -in @('1','2','3','4','5')) {
                 $newProfile = $parts -join '-'
                 $headset.ScrcpyProfile = $newProfile
                 Update-HeadsetField -ID ([int]$headset.ID) -Field "ScrcpyProfile" -NewValue $newProfile

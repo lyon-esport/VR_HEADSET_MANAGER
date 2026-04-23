@@ -111,19 +111,25 @@ function Show-HeadsetsConfig {
         # Define the padding lengths for each field and store them in a hashtable
         $Padding = @{
             ID = 2
-            Name = 15
+            Name = 17
             IPAddress = 15
-            scrcpy_AutoRestart = 11
+            scrcpy_AutoRestart = 4
             Record = 6
-            ScrcpyProfile = 13
+            ScrcpyProfile = 20
             SerialNumber = 14
             Model = 8
         }
-        
+
+        # Display name overrides (field name -> column header label)
+        $FieldLabels = @{
+            scrcpy_AutoRestart = "Cast"
+        }
+
         # Build the table header
         $header = ""
         foreach ($field in $FieldsToShow) {
-            $header += $field.PadRight($Padding[$field]).Substring(0,$Padding[$field]) + " | " 
+            $label = if ($FieldLabels.ContainsKey($field)) { $FieldLabels[$field] } else { $field }
+            $header += $label.PadRight($Padding[$field]).Substring(0,$Padding[$field]) + " | "
         }
         Write-Host $header.Substring(0, [Math]::Min($header.Length, $consoleWidth)) -ForegroundColor Yellow
 
