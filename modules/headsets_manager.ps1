@@ -240,7 +240,7 @@ function Show-HeadsetsTableColored {
                 $bgColor = "DarkYellow" # Battery < 30% and charging
             }
             elseif ($headset.Charging -eq $False) {
-                $bgColor = "DarkYellow" # Headset is not charging
+                $bgColor = "DarkBlue" # Headset is not charging
             }
             elseif (
                 ($headset.BatteryControllerLeft  -match '\d' -and [int]($headset.BatteryControllerLeft  -replace '[^\d]','') -lt 20) -or

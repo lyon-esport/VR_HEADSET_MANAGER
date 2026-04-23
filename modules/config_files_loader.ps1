@@ -209,6 +209,12 @@ function Get-Config {
         }
     }
 
+    # Battery config
+    $global:headset_charging_power_W = 13
+    if ($null -ne $configContent.Battery.headset_charging_power_W) {
+        $global:headset_charging_power_W = [double]$configContent.Battery.headset_charging_power_W
+    }
+
     # GLOBAL VARIABLES FOR SCRCPY PROCESS TRACKING AND AUTO-RESTART
     $global:scrcpyProcesses = @() #will keep track of launched scrcpy processes
     $global:scrcpyRestartAuto = $true

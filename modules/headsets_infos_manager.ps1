@@ -77,10 +77,23 @@ function Start-VRMonitor {
         $global:VRMonitor_refresh_timer = $using:VRMonitor_refresh_timer
 
         $i=1
+        # Hashtable: IP -> serialized history string, persists across loop iterations
+        $script:batteryHistory = @{}
+        # Pre-load history from existing CSV so estimates survive VRMonitor restarts
+        if (Test-Path -LiteralPath $global:knownHeadsetsInfosFilePath) {
+            try {
+                $prevCsv = Import-Csv -LiteralPath $global:knownHeadsetsInfosFilePath -Delimiter ";"
+                foreach ($row in $prevCsv) {
+                    if ($row.IPAddress -and $row.BatteryHistory) {
+                        $script:batteryHistory[$row.IPAddress] = $row.BatteryHistory
+                    }
+                }
+            } catch {}
+        }
 
         #Keep write-host for display to job output
-        Write-Host "Starting VRMonitor global:ConfigFilePath = $($global:ConfigFilePath)" -ForegroundColor Magenta 
-        
+        Write-Host "Starting VRMonitor global:ConfigFilePath = $($global:ConfigFilePath)" -ForegroundColor Magenta
+
         while($true) {
             #IMPORT ALL FUNCITONS...
             $scripts_init = Join-Path -Path $global:ScriptPath -ChildPath "\modules\scripts_init.ps1"
@@ -143,12 +156,37 @@ function Start-VRMonitor {
                     if ($device) { Update-InstalledAppsCache -Device $device -headsetName $headset.Name }
                 }
 
+                # Battery history tracking and time estimate
+                $ip = $headset.IPAddress
+                if ($headsetInfo.ADBWifi -eq $true -and $headsetInfo.Battery -ne "-") {
+                    $currentLevel = [int]($headsetInfo.Battery -replace ' %','')
+                    $nowStr       = [datetime]::Now.ToString("yyyy-MM-ddTHH:mm:ss")
+                    $newEntry     = "$nowStr=$currentLevel"
+
+                    # Append new reading only if battery % changed since last recorded entry
+                    $prevHistory = if ($script:batteryHistory.ContainsKey($ip)) { $script:batteryHistory[$ip] } else { "" }
+                    $allEntries  = @($prevHistory -split '\|' | Where-Object { $_ -match '=' })
+                    $lastLevel   = if ($allEntries.Count -gt 0) { [int](($allEntries[-1] -split '=')[1]) } else { -1 }
+                    if ($currentLevel -ne $lastLevel) { $allEntries += $newEntry }
+                    $updatedHistory = ($allEntries | Select-Object -Last 3) -join '|'
+
+                    $script:batteryHistory[$ip] = $updatedHistory
+                    $headsetInfo.BatteryHistory  = $updatedHistory
+
+                    $estimate = Get-BatteryTimeEstimate -HistoryString $updatedHistory
+                    if ($null -ne $estimate.PowerState) {
+                        $headsetInfo.PowerState = $estimate.PowerState
+                        Write-Log ($msg.BatteryPowerState -f $headset.Name, $headsetInfo.PowerState) -Level DEBUG
+                    }
+                    $headsetInfo.TimeRemainingMin = if ($null -ne $estimate.MinutesRemaining) { $estimate.MinutesRemaining } else { "-" }
+                }
 
             }
 
             Write-Log ($msg.JobInfoCollected -f $knownHeadsetsInfo.Count) -Level INFO
-            # Export vers CSV
-            $knownHeadsetsInfo | Export-Csv -Path $global:knownHeadsetsInfosFilePath -Delimiter ";" -Encoding UTF8 -NoTypeInformation
+            # Export vers CSV (exclude internal fields prefixed with _)
+            $knownHeadsetsInfo |
+                Export-Csv -Path $global:knownHeadsetsInfosFilePath -Delimiter ";" -Encoding UTF8 -NoTypeInformation
             
             # Update OBS status file
             Update-OBSFile -knownHeadsetsInfo $knownHeadsetsInfo
@@ -193,11 +231,14 @@ function Get-KnownHeadsetInfos {
         Temp            = "-"
         BatteryControllerLeft  = "-"
         BatteryControllerRight = "-"
-        SCRCPY          = "-"
-        Model           = "-"
-        SerialNumber    = "-"
-        RunningApp      = "-"
-        RunningAppIcon  = ""
+        PowerState       = "-"
+        TimeRemainingMin = "-"
+        BatteryHistory   = ""
+        SCRCPY           = "-"
+        Model            = "-"
+        SerialNumber     = "-"
+        RunningApp       = "-"
+        RunningAppIcon   = ""
     }
     $IPAddress = $knownHeadset.IPAddress
 

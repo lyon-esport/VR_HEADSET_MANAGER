@@ -47,9 +47,9 @@
         font-size: clamp(24px, 4.5vw, 34px);
         line-height: 1.3;
         display: inline-flex;
+        flex-direction: column;
         align-items: center;
-        gap: 16px;
-        white-space: nowrap;
+        gap: 12px;
         text-shadow: 0 2px 6px rgba(0,0,0,0.35);
       }
 
@@ -159,6 +159,15 @@
 
   # URL-encode model name for use in asset path (e.g., 'Quest 3' -> 'Quest%203')
   $assetModelPath = if ($model -and $model -ne "-") { [System.Uri]::EscapeDataString($model) } else { "" }
+
+  # Compute time display string from time_remaining_min
+  $timeDisplay = ""
+  if ($time_remaining_min -and $time_remaining_min -ne "") {
+    $_tm = [int]$time_remaining_min
+    $_th = [math]::Floor($_tm / 60)
+    $_tmm = $_tm % 60
+    $timeDisplay = if ($_th -gt 0) { "${_th}h ${_tmm}m" } else { "${_tmm}m" }
+  }
 %>
 <% if ($assetModelPath) { %>
         <div class="device-icons" aria-label="Device hardware status">
@@ -179,7 +188,7 @@
             <span class="muted">
               <% if ($charging) { %>⚡<% } else { %>🚫<% } %>
             </span>
-            
+            <% if ($timeDisplay) { %><span class="muted" style="font-size:0.75em;margin-left:4px">~<%= $timeDisplay %></span><% } %>
           </span>
           <span class="temp" aria-label="Temperature in Celsius">
             <span class="emoji" aria-hidden="true">
@@ -220,7 +229,7 @@
         const strong = temp.querySelector('strong');
         if (!strong) return;
 
-        // Ex: "52 °C" -> 52
+        // Ex: "52 °C" -> 52
         const t = parseInt((strong.textContent || '').replace(/\D/g, ''), 10);
         if (isNaN(t)) return;
 

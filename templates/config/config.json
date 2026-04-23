@@ -77,5 +77,8 @@
   "WebServer": {
     "enabled": true,
     "port": 8080
+  },
+  "Battery": {
+    "headset_charging_power_W": 13
   }
 }
