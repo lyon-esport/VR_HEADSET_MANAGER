@@ -639,10 +639,12 @@ try {
                 $appNamesPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\app_names.csv"))
                 if (Test-Path $appNamesPath) {
                     $appNames = @{}
-                    Import-Csv -Path $appNamesPath -Delimiter "," | ForEach-Object { $appNames[$_.PackageName] = $_.DisplayName }
+                    Import-Csv -Path $appNamesPath -Delimiter "," | ForEach-Object { $appNames[$_.PackageName] = $_ }
                     $favList = $favList | ForEach-Object {
-                        $dn = if ($appNames.ContainsKey($_.package) -and $appNames[$_.package]) { $appNames[$_.package] } else { $_.displayName }
-                        @{ package = $_.package; displayName = $dn }
+                        $entry = $appNames[$_.package]
+                        $dn    = if ($entry -and $entry.DisplayName) { $entry.DisplayName } else { $_.displayName }
+                        $icon  = if ($entry) { $entry.LocalIconPath } else { '' }
+                        @{ package = $_.package; displayName = $dn; localIconPath = $icon }
                     }
                 }
                 $json = ConvertTo-Json @($favList) -Compress
@@ -667,12 +669,13 @@ try {
         }
 
 
-        # API: GET /api/installedapps?name=Q3_BLUE[&refresh=1]  - returns installed third-party apps as JSON, optionally refreshes cache
+        # API: GET /api/installedapps?name=Q3_BLUE[&refresh=1][&resolveMissing=1]  - returns installed third-party apps as JSON, optionally refreshes cache
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/installedapps') {
             try {
-                $rawQuery  = $request.Url.Query.TrimStart('?')
-                $nameParam = if ($rawQuery -match '(?:^|&)name=([^&]+)') { [Uri]::UnescapeDataString($Matches[1]) } else { '' }
-                $refresh   = ($rawQuery -match '(?:^|&)refresh=1')
+                $rawQuery       = $request.Url.Query.TrimStart('?')
+                $nameParam      = if ($rawQuery -match '(?:^|&)name=([^&]+)') { [Uri]::UnescapeDataString($Matches[1]) } else { '' }
+                $refresh        = ($rawQuery -match '(?:^|&)refresh=1')
+                $resolveMissing = ($rawQuery -match '(?:^|&)resolveMissing=1')
                 $safeName  = [regex]::Match(($nameParam -replace ' ','_'), '^[\w\-]+$').Value
                 if (-not $safeName) { throw "Invalid headset name" }
 
@@ -696,16 +699,23 @@ try {
                     $rows    = Import-Csv -Path $csvPath
                     $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName }
                     if (-not $headset) { throw "Headset not found" }
-                    Update-InstalledAppsCache -headsetName $headset.Name -headsetIP $headset.IPAddress
+                    $device = Get-AdbWifiDevice -headsetIP $headset.IPAddress -AdbPort $adbPort
+                    if (-not $device) { throw "Could not connect to headset via ADB WiFi" }
+                    if ($resolveMissing) {
+                        Update-InstalledAppsCache -Device $device -headsetName $headset.Name -ResolveMissing
+                    } else {
+                        Update-InstalledAppsCache -Device $device -headsetName $headset.Name
+                    }
                 }
 
                 # Use cache if available
                 if (Test-Path $cachePath) {
                     $cachedRows = @(Import-Csv -Path $cachePath -Delimiter ",")
                     $appList = @($cachedRows | ForEach-Object {
-                        $pkg = $_.PackageName
-                        $dn  = if ($_.DisplayName -and $_.DisplayName -ne $pkg) { $_.DisplayName } else { $pkg }
-                        @{ package = $pkg; displayName = $dn; favorite = ($favPkgs -contains $pkg -or $pkg -eq $metaHomePkg) }
+                        $pkg  = $_.PackageName
+                        $dn   = if ($_.DisplayName -and $_.DisplayName -ne $pkg) { $_.DisplayName } else { $pkg }
+                        $icon = if ($_.LocalIconPath) { $_.LocalIconPath } else { '' }
+                        @{ package = $pkg; displayName = $dn; localIconPath = $icon; favorite = ($favPkgs -contains $pkg -or $pkg -eq $metaHomePkg) }
                     } | Sort-Object { $_.displayName })
                 } else {
                     # Fallback: live ADB call
@@ -719,7 +729,7 @@ try {
 
                     $installedApps = Get-HeadsetInstalledApps -Device $device -ThirdPartyOnly -adb $adbPath
                     $appList = @($installedApps | ForEach-Object {
-                        @{ package = $_.PackageName; displayName = $_.DisplayName; favorite = ($favPkgs -contains $_.PackageName -or $_.PackageName -eq $metaHomePkg) }
+                        @{ package = $_.PackageName; displayName = $_.DisplayName; localIconPath = $_.LocalIconPath; favorite = ($favPkgs -contains $_.PackageName -or $_.PackageName -eq $metaHomePkg) }
                     } | Sort-Object { $_.displayName })
                 }
 
