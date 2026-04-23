@@ -35,6 +35,8 @@ function Update-OBSFile {
             controllers_battery_criticalLevel = $global:OBS_controllers_battery_criticalLevel
             running_app     = if ($headset.RunningApp) { $headset.RunningApp } else { "-" }
             running_app_icon = if ($headset.RunningAppIcon) { $headset.RunningAppIcon } else { "" }
+            power_state     = if ($headset.PowerState -and $headset.PowerState -ne "-") { $headset.PowerState } else { "" }
+            time_remaining_min = if ($headset.TimeRemainingMin -and $headset.TimeRemainingMin -ne "-") { $headset.TimeRemainingMin } else { "" }
             #battery_emoji   = if ($([convert]::ToInt32($($headset.Battery -replace ' %','') , 10)) -lt 30) { [System.Char]::ConvertFromUtf32(0x1FAAB)  } else { [System.Char]::ConvertFromUtf32(0x1F50B) }
             #charging_emoji  = if ($headset.Charging -ne $true) { [System.Char]::ConvertFromUtf32(0x274C) } else { [System.Char]::ConvertFromUtf32(0x26A1) }
             #temp_emoji      = if ($headset.Temp -eq "-") { [System.Char]::ConvertFromUtf32(0x2753) } elseif ($headset.Temp -lt 50) { [System.Char]::ConvertFromUtf32(0x1F9CA) } else { [System.Char]::ConvertFromUtf32(0x1F525) }

@@ -715,7 +715,8 @@ try {
                         $pkg  = $_.PackageName
                         $dn   = if ($_.DisplayName -and $_.DisplayName -ne $pkg) { $_.DisplayName } else { $pkg }
                         $icon = if ($_.LocalIconPath) { $_.LocalIconPath } else { '' }
-                        @{ package = $pkg; displayName = $dn; localIconPath = $icon; favorite = ($favPkgs -contains $pkg -or $pkg -eq $metaHomePkg) }
+                        $ver  = if ($_.Version) { $_.Version } else { '' }
+                        @{ package = $pkg; displayName = $dn; localIconPath = $icon; version = $ver; favorite = ($favPkgs -contains $pkg -or $pkg -eq $metaHomePkg) }
                     } | Sort-Object { $_.displayName })
                 } else {
                     # Fallback: live ADB call
@@ -729,7 +730,7 @@ try {
 
                     $installedApps = Get-HeadsetInstalledApps -Device $device -ThirdPartyOnly -adb $adbPath
                     $appList = @($installedApps | ForEach-Object {
-                        @{ package = $_.PackageName; displayName = $_.DisplayName; localIconPath = $_.LocalIconPath; favorite = ($favPkgs -contains $_.PackageName -or $_.PackageName -eq $metaHomePkg) }
+                        @{ package = $_.PackageName; displayName = $_.DisplayName; localIconPath = $_.LocalIconPath; version = $_.Version; favorite = ($favPkgs -contains $_.PackageName -or $_.PackageName -eq $metaHomePkg) }
                     } | Sort-Object { $_.displayName })
                 }
 

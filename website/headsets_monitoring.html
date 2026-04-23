@@ -162,6 +162,7 @@
 
     <div class="topbar-right">
       <span id="refresh-indicator" style="padding:0 14px;font-size:11px;display:none;">Refreshing...</span>
+      <script>document.write(TopBar.monitoringBtnHTML)</script>
       <script>document.write(TopBar.manageDevicesBtnHTML)</script>
       <script>document.write(TopBar.configMenuHTML)</script>
     </div>
@@ -179,7 +180,9 @@
             <th>ADB WiFi</th>
             <th>Scrcpy</th>
             <th>Charging</th>
+            <th>Power</th>
             <th>Battery</th>
+            <th>Remaining Time</th>
             <th>Ctrl L</th>
             <th>Ctrl R</th>
             <th>Temp</th>
@@ -189,7 +192,7 @@
           </tr>
         </thead>
         <tbody id="table-body">
-          <tr><td colspan="14" id="empty-msg">Loading...</td></tr>
+          <tr><td colspan="16" id="empty-msg">Loading...</td></tr>
         </tbody>
       </table>
     </div>
@@ -240,6 +243,13 @@
       return '<span class="pill ' + cls + '">' + esc(text) + '</span>';
     }
 
+    function fmtMin(m) {
+      var n = parseInt(m, 10);
+      if (isNaN(n) || n <= 0) return '-';
+      var h = Math.floor(n / 60), mm = n % 60;
+      return h > 0 ? h + 'h ' + mm + 'm' : mm + 'm';
+    }
+
     function esc(s) {
       return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     }
@@ -247,7 +257,7 @@
     function renderTable(rows) {
       var body = document.getElementById('table-body');
       if (!rows.length) {
-        body.innerHTML = '<tr><td colspan="14" id="empty-msg">No headsets found in CSV.</td></tr>';
+        body.innerHTML = '<tr><td colspan="16" id="empty-msg">No headsets found in CSV.</td></tr>';
         return;
       }
       body.innerHTML = rows.map(function(r) {
@@ -258,6 +268,11 @@
         var charging = (r['Charging']|| '').toLowerCase() === 'true';
         var chargingWattage = r['ChargingWattage'] || '';
         var chargingLabel = (charging && chargingWattage && chargingWattage !== '-') ? chargingWattage + ' W' : (charging ? 'Yes' : 'No');
+        var powerState = (r['PowerState'] || '-').toLowerCase();
+        var powerPill  = powerState === 'charging'    ? pill('Charging',    'pill-green')
+                       : powerState === 'discharging' ? pill('Discharging', 'pill-orange')
+                       : '<span style="color:#333">-</span>';
+        var timeCell = fmtMin(r['TimeRemainingMin'] || '-');
 
         var appCell = '';
         if (r['RunningApp'] && r['RunningApp'] !== '-') {
@@ -278,7 +293,9 @@
           '<td class="center">' + pill(adbOk  ? 'OK' : 'KO', adbOk  ? 'pill-green' : 'pill-red') + '</td>' +
           '<td class="center">' + pill(scrcpyOk ? 'OK' : 'OFF', scrcpyOk ? 'pill-blue' : 'pill-orange') + '</td>' +
           '<td class="center">' + (charging ? pill(chargingLabel,'pill-green') : pill('No','pill-red')) + '</td>' +
+          '<td class="center">' + powerPill + '</td>' +
           '<td>' + esc(r['Battery'] || '-') + '</td>' +
+          '<td style="color:#888;font-size:12px">' + esc(timeCell) + '</td>' +
           '<td>' + esc(r['BatteryControllerLeft']  || '-') + '</td>' +
           '<td>' + esc(r['BatteryControllerRight'] || '-') + '</td>' +
           '<td>' + esc(r['Temp'] || '-') + (r['Temp'] && r['Temp'] !== '-' ? ' C' : '') + '</td>' +

@@ -918,6 +918,105 @@ function Get-HeadsetBatteryStatus {
 
 
 
+function Get-BatteryTimeEstimate {
+    <#
+    .SYNOPSIS
+    Estimates battery power state and remaining time from a serialized history string.
+
+    .DESCRIPTION
+    Requires exactly 3 entries with 3 distinct battery % levels within a 10% spread.
+    Power state is derived from the sign of % change across both intervals.
+    If the direction changes between intervals (non-linear), PowerState reflects the
+    last observed interval and MinutesRemaining is $null.
+    When monotonic, MinutesRemaining is the average of two interval-based projections.
+
+    .PARAMETER HistoryString
+    Pipe-separated entries, each "ISO8601timestamp=level".
+    Example: "2026-04-23T10:00:00=60|2026-04-23T10:15:00=61|2026-04-23T10:30:00=63"
+    #>
+    param (
+        [string]$HistoryString
+    )
+
+    $result = [PSCustomObject]@{
+        PowerState       = $null
+        MinutesRemaining = $null
+    }
+
+    if ([string]::IsNullOrWhiteSpace($HistoryString)) { return $result }
+
+    # Parse entries
+    $entries = @()
+    foreach ($part in ($HistoryString -split '\|')) {
+        $part = $part.Trim()
+        if ($part -notmatch '^(.+)=(\d+)$') { continue }
+        try {
+            $entries += [PSCustomObject]@{
+                Time  = [datetime]$Matches[1]
+                Level = [int]$Matches[2]
+            }
+        } catch { continue }
+    }
+
+    # Sort by time and keep last 3
+    $entries = @($entries | Sort-Object Time | Select-Object -Last 3)
+
+    # Need exactly 3 entries
+    if ($entries.Count -lt 3) { return $result }
+
+    $T0 = $entries[0]; $T1 = $entries[1]; $T2 = $entries[2]
+
+    # All three levels must be distinct
+    if ($T0.Level -eq $T1.Level -or $T1.Level -eq $T2.Level -or $T0.Level -eq $T2.Level) {
+        return $result
+    }
+
+    # Max spread must be <= 10%
+    $levels = @($T0.Level, $T1.Level, $T2.Level)
+    if (($levels | Measure-Object -Maximum).Maximum - ($levels | Measure-Object -Minimum).Minimum -gt 10) {
+        return $result
+    }
+
+    $d1 = $T1.Level - $T0.Level
+    $d2 = $T2.Level - $T1.Level
+
+    # Determine direction from last interval (used in all cases)
+    $result.PowerState = if ($d2 -gt 0) { 'charging' } else { 'discharging' }
+
+    # Non-linear: direction changed - cannot estimate time
+    if (($d1 -gt 0 -and $d2 -lt 0) -or ($d1 -lt 0 -and $d2 -gt 0)) {
+        return $result
+    }
+
+    # Monotonic - compute rates and average projected time
+    $targetLevel = if ($result.PowerState -eq 'charging') { 100 } else { 5 }
+
+    try {
+        $min01 = ([datetime]$T1.Time - [datetime]$T0.Time).TotalMinutes
+        $min12 = ([datetime]$T2.Time - [datetime]$T1.Time).TotalMinutes
+    } catch { return $result }
+
+    if ($min01 -le 0 -or $min12 -le 0) { return $result }
+
+    $rate01 = $d1 / $min01   # %/min
+    $rate12 = $d2 / $min12   # %/min
+
+    if ($rate01 -eq 0 -or $rate12 -eq 0) { return $result }
+
+    $remaining = $targetLevel - $T2.Level
+    $time01 = $remaining / $rate01
+    $time12 = $remaining / $rate12
+
+    if ($time01 -le 0 -or $time12 -le 0) { return $result }
+
+    $avg = ($time01 + $time12) / 2
+    $result.MinutesRemaining = [math]::Min([int][math]::Round($avg), 600)
+
+    Write-Log ($msg.BatteryTimeEstimate -f $T2.Level, $result.MinutesRemaining, $result.PowerState) -Level DEBUG
+    return $result
+}
+
+
 function Get-HeadsetForegroundApp {
     param (
         [Parameter(Mandatory=$true)]
@@ -1551,6 +1650,19 @@ function Update-InstalledAppsCache {
             }
         }
 
+        # Fetch version names for all installed packages in a single ADB call
+        # Format: "Package [com.pkg] (hash):" then "    versionName=x.y.z"
+        $versions   = @{}
+        $currentPkg = $null
+        foreach ($line in (& $adb -s $Device.DeviceId shell dumpsys package packages 2>$null)) {
+            if ($line -match '^\s{2}Package \[([^\]]+)\]') {
+                $currentPkg = $Matches[1]
+            } elseif ($currentPkg -and $line -match '^\s+versionName=(\S+)') {
+                $versions[$currentPkg] = $Matches[1]
+                $currentPkg = $null
+            }
+        }
+
         # Build new rows
         $newRows = $packages | ForEach-Object {
             $pkg     = $_
@@ -1558,7 +1670,8 @@ function Update-InstalledAppsCache {
             $dn      = if ($entry -and $entry.DisplayName -and $entry.DisplayName -ne $pkg) { $entry.DisplayName } else { $pkg }
             $ico     = if ($entry) { $entry.IconUrl }     else { '' }
             $icoPath = if ($entry) { $entry.LocalIconPath } else { '' }
-            [PSCustomObject]@{ PackageName = $pkg; DisplayName = $dn; IconUrl = $ico; LocalIconPath = $icoPath }
+            $ver     = if ($versions.ContainsKey($pkg)) { $versions[$pkg] } else { '' }
+            [PSCustomObject]@{ PackageName = $pkg; DisplayName = $dn; IconUrl = $ico; LocalIconPath = $icoPath; Version = $ver }
         }
 
         # Compare with existing cache (by sorted package list only); always write when -ResolveMissing

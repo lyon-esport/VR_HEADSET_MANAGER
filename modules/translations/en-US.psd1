@@ -324,6 +324,8 @@
     ScrcpyProcessCmdLine = "Found scrcpy process with command line: {0}"
     ScrcpyLookingFor = "Looking for IPAddress: {0} and ADBPort: {1}"
     ScrcpyRunningFor = "scrcpy is running for {0} ({1})"
+    BatteryPowerState    = "Battery power state for {0}: {1}"
+    BatteryTimeEstimate  = "Battery time estimate for {0}: {1} min ({2})"
     AdbInfoFailed = "Failed to get ADB info for {0}: {1}"
     AppDisplayNameResolved = "MetaMetadata: resolved '{0}' -> '{1}'"
     AppDisplayNameNotFound = "MetaMetadata: no entry for '{0}', cached as-is"

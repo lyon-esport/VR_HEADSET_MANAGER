@@ -429,6 +429,9 @@
     .lm-star-btn.active { color: #facc15; }
     .lm-star-btn:hover { color: #facc15; }
     .lm-app-row.is-meta .lm-star-btn { visibility: hidden; }
+    .lm-app-version {
+      font-size: 11px; color: #444; flex-shrink: 0; white-space: nowrap;
+    }
     .lm-launch-btn {
       display: inline-flex; align-items: center; gap: 5px;
       padding: 3px 10px; border-radius: 5px;
@@ -654,6 +657,7 @@
     [data-theme="light"] .lm-app-row:hover     { background: #f5f5f5; }
     [data-theme="light"] .lm-app-name          { color: #333; }
     [data-theme="light"] .lm-app-row.is-meta .lm-app-name { color: #0e7490; }
+    [data-theme="light"] .lm-app-version       { color: #bbb; }
     [data-theme="light"] .lm-star-btn          { color: #ccc; }
     [data-theme="light"] .lm-star-btn.active   { color: #facc15; }
     [data-theme="light"] .lm-star-btn:hover    { color: #facc15; }
@@ -708,6 +712,7 @@
       <script>document.write(TopBar.filtersHTML)</script>
     </div>
     <div class="topbar-right">
+      <script>document.write(TopBar.monitoringBtnHTML)</script>
       <script>document.write(TopBar.manageDevicesBtnHTML)</script>
       <script>document.write(TopBar.configMenuHTML)</script>
     </div>
@@ -1939,6 +1944,10 @@
       nameEl.textContent = appNameCache[app.package] || app.displayName || app.package;
       nameEl.title = app.package;
 
+      var verEl = document.createElement('span');
+      verEl.className = 'lm-app-version';
+      verEl.textContent = app.version || '';
+
       var launchBtn = document.createElement('button');
       launchBtn.className = 'lm-launch-btn';
       launchBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg> Launch';
@@ -1948,6 +1957,7 @@
 
       row.appendChild(starBtn);
       row.appendChild(nameEl);
+      row.appendChild(verEl);
       row.appendChild(launchBtn);
       list.appendChild(row);
     }
