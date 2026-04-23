@@ -139,7 +139,8 @@ function Start-VRMonitor {
                 }
 
                 if ($headsetInfo.ADBWifi -eq $true) {
-                    Update-InstalledAppsCache -headsetName $headset.Name -headsetIP $headset.IPAddress
+                    $device = Get-AdbWifiDevice -headsetIP $headset.IPAddress
+                    if ($device) { Update-InstalledAppsCache -Device $device -headsetName $headset.Name }
                 }
 
 
@@ -284,65 +285,3 @@ function Get-KnownHeadsetInfos {
     
     return $result
 }
-
-function Get-InstalledAppsCachePath {
-    param ([string]$headsetName)
-    return Join-Path $global:ScriptPath "data\$(Convert-Displayname $headsetName)_installed_apps.csv"
-}
-
-function Update-InstalledAppsCache {
-    param (
-        [string]$headsetName,
-        [string]$headsetIP,
-        [int]$ADBPort = 5555,
-        [string]$adb = $global:adbPath
-    )
-
-    try {
-        $cachePath    = Get-InstalledAppsCachePath -headsetName $headsetName
-        $appNamesPath = Join-Path $global:ScriptPath "data\app_names.csv"
-
-        # Connect (idempotent) and fetch third-party packages
-        $device = Get-AdbWifiDevice -headsetIP $headsetIP -AdbPort $ADBPort -adb $adb
-        if (-not $device) { return }
-        $rawOutput = & $adb -s $device.DeviceId shell pm list packages -3 2>$null
-        $packages  = @($rawOutput | ForEach-Object { ($_ -replace '^package:', '').Trim() } | Where-Object { $_ -ne '' } | Sort-Object)
-
-        if ($packages.Count -eq 0) { return }
-
-        # Load app_names lookup
-        $appNames = @{}
-        if (Test-Path $appNamesPath) {
-            Import-Csv -Path $appNamesPath -Delimiter "," | ForEach-Object {
-                if ($_.PackageName) { $appNames[$_.PackageName] = @{ DisplayName = $_.DisplayName; IconUrl = $_.IconUrl } }
-            }
-        }
-
-        # Build new rows
-        $newRows = $packages | ForEach-Object {
-            $pkg = $_
-            $dn  = if ($appNames.ContainsKey($pkg) -and $appNames[$pkg].DisplayName) { $appNames[$pkg].DisplayName } else { $pkg }
-            $ico = if ($appNames.ContainsKey($pkg)) { $appNames[$pkg].IconUrl } else { '' }
-            $icoPath = if ($appNames.ContainsKey($pkg)) { $appNames[$pkg].LocalIconPath } else { '' }
-            [PSCustomObject]@{ PackageName = $pkg; DisplayName = $dn; IconUrl = $ico; LocalIconPath = $icoPath }
-        }
-
-        # Compare with existing cache (by sorted package list only)
-        $changed = $true
-        if (Test-Path $cachePath) {
-            $existing = @(Import-Csv -Path $cachePath -Delimiter "," | Select-Object -ExpandProperty PackageName | Sort-Object)
-            if (($existing -join ',') -eq ($packages -join ',')) {
-                $changed = $false
-            }
-        }
-
-        if ($changed) {
-            $newRows | Export-Csv -Path $cachePath -NoTypeInformation -Delimiter "," -Encoding UTF8 -Force
-            Write-Log ($msg.InstalledAppsCacheUpdated -f $headsetName, $packages.Count) -Level DEBUG
-        }
-    }
-    catch {
-        Write-Log ($msg.InstalledAppsCacheFailed -f $headsetName, $_) -Level DEBUG
-    }
-}
-

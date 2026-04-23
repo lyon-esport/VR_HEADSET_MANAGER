@@ -1272,6 +1272,7 @@ function Get-HeadsetInstalledApps {
                     $cache[$pkg] = $entry
                 }
             }
+            Update-AppCacheFromMetaMetadata -CacheFilePath $AppCacheFilePath
         }
 
         $apps = @($apps | Sort-Object DisplayName)
@@ -1499,3 +1500,83 @@ function Update-AppCacheFromMetaMetadata { #DOES NOT WORKS, UNDER INVESTIGATION
     $cache.Values | Sort-Object DisplayName | Export-Csv -Path $AppCacheFilePath -NoTypeInformation -Encoding UTF8
     Write-Log ($msg.AppDisplayNameResolved -f "Cache update complete", $cache.Count) -Level INFO
 }
+
+
+function Get-InstalledAppsCachePath {
+    param ([string]$headsetName)
+    return Join-Path $global:ScriptPath "data\$(Convert-Displayname $headsetName)_installed_apps.csv"
+}
+
+function Update-InstalledAppsCache {
+    param (
+        [Parameter(Mandatory=$true)]
+        [PSCustomObject]$Device,
+        [string]$headsetName,
+        [switch]$ResolveMissing,
+        [string]$adb = $global:adbPath
+    )
+
+    try {
+        $cachePath    = Get-InstalledAppsCachePath -headsetName $headsetName
+        $appNamesPath = Join-Path $global:ScriptPath "data\app_names.csv"
+
+        # Fetch third-party packages from headset
+        $rawOutput = & $adb -s $Device.DeviceId shell pm list packages -3 2>$null
+        $packages  = @($rawOutput | ForEach-Object { ($_ -replace '^package:', '').Trim() } | Where-Object { $_ -ne '' } | Sort-Object)
+
+        if ($packages.Count -eq 0) { return }
+
+        # When -ResolveMissing: fetch online metadata for packages not yet fully resolved
+        if ($ResolveMissing) {
+            $appNames = @{}
+            if (Test-Path $appNamesPath) {
+                Import-Csv -Path $appNamesPath -Delimiter "," | ForEach-Object {
+                    if ($_.PackageName) { $appNames[$_.PackageName] = $_ }
+                }
+            }
+            foreach ($pkg in $packages) {
+                $cached = $appNames[$pkg]
+                $needsResolve = (-not $cached) -or (-not $cached.DisplayName) -or ($cached.DisplayName -eq $pkg) -or (-not $cached.IconUrl)
+                if ($needsResolve) {
+                    Get-AppInfo -PackageName $pkg -searchOnline $true | Out-Null
+                }
+            }
+        }
+
+        # Load app_names lookup (possibly updated above)
+        $appNames = @{}
+        if (Test-Path $appNamesPath) {
+            Import-Csv -Path $appNamesPath -Delimiter "," | ForEach-Object {
+                if ($_.PackageName) { $appNames[$_.PackageName] = $_ }
+            }
+        }
+
+        # Build new rows
+        $newRows = $packages | ForEach-Object {
+            $pkg     = $_
+            $entry   = $appNames[$pkg]
+            $dn      = if ($entry -and $entry.DisplayName -and $entry.DisplayName -ne $pkg) { $entry.DisplayName } else { $pkg }
+            $ico     = if ($entry) { $entry.IconUrl }     else { '' }
+            $icoPath = if ($entry) { $entry.LocalIconPath } else { '' }
+            [PSCustomObject]@{ PackageName = $pkg; DisplayName = $dn; IconUrl = $ico; LocalIconPath = $icoPath }
+        }
+
+        # Compare with existing cache (by sorted package list only); always write when -ResolveMissing
+        $changed = $ResolveMissing.IsPresent
+        if (-not $changed -and (Test-Path $cachePath)) {
+            $existing = @(Import-Csv -Path $cachePath -Delimiter "," | Select-Object -ExpandProperty PackageName | Sort-Object)
+            $changed  = ($existing -join ',') -ne ($packages -join ',')
+        } elseif (-not (Test-Path $cachePath)) {
+            $changed = $true
+        }
+
+        if ($changed) {
+            $newRows | Export-Csv -Path $cachePath -NoTypeInformation -Delimiter "," -Encoding UTF8 -Force
+            Write-Log ($msg.InstalledAppsCacheUpdated -f $headsetName, $packages.Count) -Level DEBUG
+        }
+    }
+    catch {
+        Write-Log ($msg.InstalledAppsCacheFailed -f $headsetName, $_) -Level DEBUG
+    }
+}
+

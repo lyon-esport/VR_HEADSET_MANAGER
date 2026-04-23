@@ -1,10 +1,10 @@
 
 ## video_monitor.html ##
 
-Adapt videos size to the window in height and width to fit in the browser wepage.
-A standalone video cannot be larger to taller than the browser windows (-top bar)
-
-
+	Adapt videos size to the window in height and width to fit in the browser wepage.
+	A standalone video cannot be larger to taller than the browser windows (-top bar)
+	Do not modify video_monitor.html but only video_monitor.eps as the html file is dynamically regenerated from the eps template.
+	only update the template file and ask me to regenerate the html template to check then if everything is ok
 
 ## APPLICATION MANAGEMENT ##
 
@@ -42,11 +42,6 @@ Use Get-AppInfo while listing installed applications, while displaying the runni
 
 
 
-	
-
-
-
-
 
 Add icons of the running application before the name
 
@@ -71,21 +66,23 @@ When scrcpy is already running, if I switch to anoter desktop on Windows 11, it 
 >> Tried but it failed
 
 Let's see if it's possible to know if the headset is charging or discharging, even if the headset is connected to power.
-Then try to identify how long the headset can remain up an running based on the battery level, and the discharging speed.
+Then try to identify how long the headset can remain up an running based on the battery level, and the discharging speed in Watt.
+Also, if the headset is charging, let's return the remaining time until the headset will be recharged at 100%.
+
+The headset is reachable by adb over wifi to 192.168.1.243:5555.
+adb path is "L:\Drive partagés\04 Equipe Technique\20 VR\VR_HEADSET_MANAGER\DEV_VERSION\VR_HEADSET_MANAGER\sources\scrcpy-win64-v3.3.4_patchedNoFlickering"
+You can try to request directly to the headset if you need to grab more live information.
+
 
 Implement in main video and on the focused video screen the timer based on the file placed in /website/timer
 Let's check with stream deck activity
 
-# video_monitor.html
-Drag and drop works to re-order when getting from right to left, but not from left to right.
+
+# headset_settings.html
+
 
 In the app_config.html implement a button to edit config.json in the web page.
-It should display each functions and values.
-
-While delete a headset, delete [headset]_installed_apps.csv and [headset]favorite_apps.csv if not already done
+It should display each option and possible values or example.
 
 
 DEBUG
-under headset_settings.htlm, you were implementing the drag and drop functionality.
-The implementation partially works, but you had a "fix drag-and-drop JS (mousedown toggle pattern)" step to manage, and you didn't finished this step. Can you check related code ?
-While dra drop to the left, it's working. While drag drop to the right, it's not reordering headsets

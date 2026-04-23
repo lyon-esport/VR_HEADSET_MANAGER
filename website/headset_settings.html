@@ -250,7 +250,7 @@
     .pm-field input[type=number]:focus { border-color: #555; }
     .pm-field input[type=number] { -moz-appearance: textfield; }
     .pm-field input[type=number]::-webkit-outer-spin-button,
-    .pm-field input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
+    .pm-field input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; appearance: none; }
     .profile-modal-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
     .pm-btn {
       padding: 6px 18px; border-radius: 6px; border: 1px solid #333;
@@ -798,6 +798,13 @@
           </svg>
           Show all installed apps
         </button>
+        <button class="lm-show-all-btn" id="lm-refresh-btn" style="display:none">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+          </svg>
+          Refresh application list
+        </button>
         <div class="lm-status" id="lm-status"></div>
       </div>
     </div>
@@ -864,6 +871,7 @@
     var cardsBuilt    = false;
     var _editingField = false;
     var appNameCache = {}; // package -> displayName, populated from /api/favoriteapps and /api/installedapps
+    var appIconCache = {}; // package -> localIconPath
 
     // Wire shared preset filters
     TopBar.initFilters(function(f) {
@@ -979,7 +987,8 @@
               '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
                 '<polygon points="5 3 19 12 5 21 5 3"/>' +
               '</svg>' +
-              '<span id="app-name-' + dn + '" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">-</span>' +
+              '<img id="app-icon-' + dn + '" style="width:14px;height:14px;border-radius:2px;object-fit:cover;flex-shrink:0;display:none" />' +
+              '<span id="app-name-' + dn + '" style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">-</span>' +
             '</span>' +
             '<button class="card-launch-btn" data-launch-app="' + dn + '" title="Launch an app">' +
               '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
@@ -1407,12 +1416,22 @@
           if (!headsetConfig[dn] || !headsetConfig[dn].model) modelEl.textContent = s.model;
         }
 
-        var appEl = document.getElementById('app-name-' + dn);
+        var appEl  = document.getElementById('app-name-' + dn);
+        var iconEl = document.getElementById('app-icon-' + dn);
         if (appEl) {
-          var pkg = s.runningApp || '';
-          var lbl = (appNameCache[pkg] || pkg || '-');
-          appEl.textContent = lbl;
+          var pkg  = s.runningApp || '';
+          appEl.textContent = appNameCache[pkg] || pkg || '-';
           appEl.title = pkg;
+          if (iconEl) {
+            var iconPath = pkg ? appIconCache[pkg] : '';
+            if (iconPath) {
+              iconEl.src = iconPath;
+              iconEl.style.display = '';
+            } else {
+              iconEl.src = '';
+              iconEl.style.display = 'none';
+            }
+          }
         }
       });
     }
@@ -1658,7 +1677,8 @@
       document.getElementById('lm-status').textContent = '';
       document.getElementById('lm-status').className   = 'lm-status';
       document.getElementById('lm-show-all-btn').disabled = false;
-      document.getElementById('lm-show-all-btn').textContent = '';
+      document.getElementById('lm-show-all-btn').style.display = '';
+      document.getElementById('lm-refresh-btn').style.display = 'none';
       document.getElementById('lm-show-all-btn').innerHTML =
         '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg> Show all installed apps';
       document.getElementById('launch-modal').style.display = 'flex';
@@ -1670,6 +1690,7 @@
           favs.forEach(function(a) {
             _favoritePackages[a.package] = true;
             appNameCache[a.package] = a.displayName;
+            if (a.localIconPath) appIconCache[a.package] = a.localIconPath;
           });
           renderLaunchList(favs, true);
         })
@@ -1795,49 +1816,91 @@
       if (e.key === 'Escape' && _launchDn) closeLaunchModal();
     });
 
+    function _renderAllApps(apps) {
+      apps.forEach(function(a) {
+        if (a.displayName) appNameCache[a.package] = a.displayName;
+        if (a.localIconPath) appIconCache[a.package] = a.localIconPath;
+        if (a.favorite) _favoritePackages[a.package] = true;
+      });
+      var list = document.getElementById('lm-list');
+      list.innerHTML = '';
+      var metaHomePkg = 'com.oculus.vrshell';
+      var metaApp = apps.find(function(a) { return a.package === metaHomePkg; });
+      if (!metaApp) metaApp = { package: metaHomePkg, displayName: 'Meta Home', favorite: true };
+      var favApps   = apps.filter(function(a) { return a.package !== metaHomePkg && _favoritePackages[a.package]; });
+      var otherApps = apps.filter(function(a) { return a.package !== metaHomePkg && !_favoritePackages[a.package]; });
+      function addSection(label) {
+        var s = document.createElement('div'); s.className = 'lm-section-label'; s.textContent = label; list.appendChild(s);
+      }
+      addSection('Meta Home');
+      renderAppRow(metaApp, list);
+      if (favApps.length)   { addSection('Favorites'); favApps.forEach(function(a)   { renderAppRow(a, list); }); }
+      if (otherApps.length) { addSection('All Apps');  otherApps.forEach(function(a) { renderAppRow(a, list); }); }
+    }
+
     document.getElementById('lm-show-all-btn').addEventListener('click', function() {
       if (_allAppsLoaded || !_launchDn) return;
       var btn = this;
       btn.disabled = true;
-      btn.textContent = 'Loading installed apps...';
       var statusEl = document.getElementById('lm-status');
-      statusEl.textContent = 'Fetching app list from headset...';
-      statusEl.className   = 'lm-status';
-      fetch('/api/installedapps?name=' + encodeURIComponent(_launchDn) + '&refresh=1')
+      var adbUp = headsetStatus[_launchDn] && headsetStatus[_launchDn].adb;
+      if (adbUp) {
+        btn.textContent = 'Loading installed apps...';
+        statusEl.textContent = 'Fetching app list from headset...';
+      } else {
+        btn.textContent = 'Loading cached apps...';
+        statusEl.textContent = 'ADB offline - loading cached list...';
+      }
+      statusEl.className = 'lm-status';
+      var url = '/api/installedapps?name=' + encodeURIComponent(_launchDn) + (adbUp ? '&refresh=1' : '');
+      fetch(url)
         .then(function(r) { return r.json(); })
         .then(function(apps) {
+          btn.disabled = false;
+          if (!apps || !apps.length) {
+            btn.textContent = 'Show all installed apps';
+            statusEl.textContent = adbUp ? 'No apps found.' : 'ADB offline and no cached list available.';
+            statusEl.className   = 'lm-status' + (adbUp ? '' : ' err');
+            return;
+          }
           _allAppsLoaded = true;
           _allApps = apps;
-          apps.forEach(function(a) {
-            if (a.displayName) appNameCache[a.package] = a.displayName;
-            if (a.favorite) _favoritePackages[a.package] = true;
-          });
-          btn.disabled = false;
-          btn.textContent = 'Show all installed apps';
-          statusEl.textContent = '';
+          statusEl.textContent = adbUp ? '' : 'Showing cached list (ADB offline).';
           statusEl.className   = 'lm-status';
-          var list = document.getElementById('lm-list');
-          list.innerHTML = '';
-
-          var metaHomePkg = 'com.oculus.vrshell';
-          var metaApp = apps.find(function(a) { return a.package === metaHomePkg; });
-          if (!metaApp) metaApp = { package: metaHomePkg, displayName: 'Meta Home', favorite: true };
-
-          var favApps = apps.filter(function(a) { return a.package !== metaHomePkg && _favoritePackages[a.package]; });
-          var otherApps = apps.filter(function(a) { return a.package !== metaHomePkg && !_favoritePackages[a.package]; });
-
-          function addSection(label) {
-            var s = document.createElement('div'); s.className = 'lm-section-label'; s.textContent = label; list.appendChild(s);
-          }
-          addSection('Meta Home');
-          renderAppRow(metaApp, list);
-          if (favApps.length) { addSection('Favorites'); favApps.forEach(function(a) { renderAppRow(a, list); }); }
-          if (otherApps.length) { addSection('All Apps'); otherApps.forEach(function(a) { renderAppRow(a, list); }); }
+          btn.style.display = 'none';
+          document.getElementById('lm-refresh-btn').style.display = '';
+          _renderAllApps(apps);
         })
         .catch(function() {
           btn.disabled = false;
           btn.textContent = 'Show all installed apps';
           statusEl.textContent = 'Could not load app list.';
+          statusEl.className   = 'lm-status err';
+        });
+    });
+
+    document.getElementById('lm-refresh-btn').addEventListener('click', function() {
+      if (!_launchDn) return;
+      var btn = this;
+      btn.disabled = true;
+      btn.textContent = 'Refreshing...';
+      var statusEl = document.getElementById('lm-status');
+      statusEl.textContent = 'Fetching app list and resolving names...';
+      statusEl.className   = 'lm-status';
+      fetch('/api/installedapps?name=' + encodeURIComponent(_launchDn) + '&refresh=1&resolveMissing=1')
+        .then(function(r) { return r.json(); })
+        .then(function(apps) {
+          _allApps = apps;
+          btn.disabled = false;
+          btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> Refresh application list';
+          statusEl.textContent = '';
+          statusEl.className   = 'lm-status';
+          _renderAllApps(apps);
+        })
+        .catch(function() {
+          btn.disabled = false;
+          btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> Refresh application list';
+          statusEl.textContent = 'Refresh failed.';
           statusEl.className   = 'lm-status err';
         });
     });
