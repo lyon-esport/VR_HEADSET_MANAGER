@@ -19,20 +19,28 @@ start-screenCopy -displayName $displayName -headsetIP $ip
 function ConvertTo-ScrcpyArguments {
     param(
         [string]$headsetModel,
-        [string]$scrcpyProfile = "R-N-45-20",
+        [string]$scrcpyProfile = "portrait-R-N-45-20",
         $modelTemplate = $null
     )
 
-    if ([string]::IsNullOrWhiteSpace($scrcpyProfile)) { $scrcpyProfile = "R-N-45-20" }
+    if ([string]::IsNullOrWhiteSpace($scrcpyProfile)) { $scrcpyProfile = "portrait-R-N-45-20" }
     $parts = $scrcpyProfile -split '-'
-    if ($parts.Count -ne 4) {
-        Write-Log ($msg.ScrcpyInvalidProfile -f $scrcpyProfile) -Level WARNING
-        $parts = @('R', 'N', '45', '20')
+
+    # Backward compat: 4-part legacy format (Eye-Audio-FPS-BW) -> prepend "portrait"
+    if ($parts.Count -eq 4 -and $parts[0] -in @('L','R')) {
+        $parts = @('portrait') + $parts
     }
-    $eye       = $parts[0].ToUpper()  # L or R
-    $audioPref = $parts[1].ToUpper()  # D=audio-dup, N=no-audio
-    $fps       = $parts[2]            # e.g. 45
-    $bw        = $parts[3]            # e.g. 20 (Mbps)
+
+    if ($parts.Count -ne 5) {
+        Write-Log ($msg.ScrcpyInvalidProfile -f $scrcpyProfile) -Level WARNING
+        $parts = @('portrait', 'R', 'N', '45', '20')
+    }
+
+    $viewName  = $parts[0].ToLower()  # e.g. portrait, square, wide
+    $eye       = $parts[1].ToUpper()  # L or R
+    $audioPref = $parts[2].ToUpper()  # D=audio-dup, N=no-audio
+    $fps       = $parts[3]            # e.g. 45
+    $bw        = $parts[4]            # e.g. 20 (Mbps)
 
     if ($null -eq $modelTemplate) {
         $modelTemplate = $global:scrcpyParameters.$headsetModel
@@ -50,9 +58,28 @@ function ConvertTo-ScrcpyArguments {
         return $modelTemplate
     }
 
-    # New object format: combine template with per-headset profile
-    $crop  = if ($eye -eq 'L') { $modelTemplate.crop_left  } else { $modelTemplate.crop_right  }
-    $angle = if ($eye -eq 'L') { $modelTemplate.angle_left } else { $modelTemplate.angle_right }
+    # New views-based format: look up named view, fall back to first available view
+    $crop  = $null
+    $angle = $null
+    if ($modelTemplate.views) {
+        $view = $modelTemplate.views.$viewName
+        if (-not $view) {
+            $firstKey = ($modelTemplate.views | Get-Member -MemberType NoteProperty | Select-Object -First 1).Name
+            $view = $modelTemplate.views.$firstKey
+            Write-Log ($msg.ScrcpyInvalidProfile -f "view '$viewName' not found, using '$firstKey'") -Level WARNING
+        }
+        if ($view) {
+            $eyeObj = if ($eye -eq 'L') { $view.left_eye } else { $view.right_eye }
+            if ($eyeObj) {
+                $crop  = $eyeObj.crop
+                $angle = $eyeObj.angle
+            }
+        }
+    } else {
+        # Legacy flat template (crop_left/crop_right/angle_left/angle_right)
+        $crop  = if ($eye -eq 'L') { $modelTemplate.crop_left  } else { $modelTemplate.crop_right  }
+        $angle = if ($eye -eq 'L') { $modelTemplate.angle_left } else { $modelTemplate.angle_right }
+    }
 
     $argParts = [System.Collections.Generic.List[string]]::new()
     if ($crop)  { $argParts.Add("--crop $crop") }

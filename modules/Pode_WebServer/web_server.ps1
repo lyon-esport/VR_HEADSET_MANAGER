@@ -469,7 +469,7 @@ try {
             continue
         }
 
-        # API: POST /api/updateprofile  body: {"name":"Q3_BLUE","profile":"R-N-45-20"}
+        # API: POST /api/updateprofile  body: {"name":"Q3_BLUE","profile":"portrait-R-N-45-20"}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/updateprofile') {
             try {
                 $reader  = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
@@ -481,11 +481,16 @@ try {
                 $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
                 if (-not $safeName) { throw "Invalid headset name" }
 
-                # Validate profile format: [L/R]-[D/N]-<posint>-<posint>
-                $safeProfile = [regex]::Match($json.profile, '^[LR]-[DN]-\d+-\d+$').Value
-                if (-not $safeProfile) { throw "Invalid profile format" }
+                # Validate profile format: <viewname>-[L/R]-[D/N]-<posint>-<posint>
+                # Also accept legacy 4-part format [L/R]-[D/N]-<posint>-<posint>
+                $safeProfile = [regex]::Match($json.profile, '^[\w]+-[LR]-[DN]-\d+-\d+$').Value
+                if (-not $safeProfile) {
+                    # Try legacy format and auto-upgrade
+                    $legacy = [regex]::Match($json.profile, '^[LR]-[DN]-\d+-\d+$').Value
+                    if ($legacy) { $safeProfile = "portrait-$legacy" } else { throw "Invalid profile format" }
+                }
                 $parts = $safeProfile -split '-'
-                if ([int]$parts[2] -lt 1 -or [int]$parts[3] -lt 1) { throw "FPS and bitrate must be positive" }
+                if ([int]$parts[3] -lt 1 -or [int]$parts[4] -lt 1) { throw "FPS and bitrate must be positive" }
 
                 $csvPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_headsets.csv"))
                 $dataRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data"))
@@ -516,6 +521,35 @@ try {
                 try {
                     $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
                     $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: GET /api/scrcpyviews?model=Quest+3  - returns view names for a headset model
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/scrcpyviews') {
+            try {
+                $modelParam = $request.QueryString['model']
+                $views = @('portrait','square','wide')
+                if ($modelParam -and $global:scrcpyParameters.$modelParam -and $global:scrcpyParameters.$modelParam.views) {
+                    $views = @($global:scrcpyParameters.$modelParam.views | Get-Member -MemberType NoteProperty | Select-Object -ExpandProperty Name)
+                }
+                $json = $views | ConvertTo-Json -Compress
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('["portrait","square","wide"]')
+                    $response.StatusCode      = 200
                     $response.ContentType     = 'application/json; charset=utf-8'
                     $response.ContentLength64 = $errBytes.Length
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)

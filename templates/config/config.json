@@ -29,20 +29,40 @@
 	  "recordFolder":"C:/DATA/MEDIA/OBS/Stream_Records",
 	  "parameters":{
 		"Quest 3":{
-			"crop_right":"1664:1304:2260:450",
-			"crop_left":"1664:1304:200:450",
-			"angle_right":-21,
-			"angle_left":22,
+			"views":{
+				"portrait":{
+					"left_eye":  { "crop": "1664:1304:200:450",  "angle":  22 },
+					"right_eye": { "crop": "1664:1304:2260:450", "angle": -21 }
+				},
+				"square":{
+					"left_eye":  { "crop": "1304:1304:380:450",  "angle":  22 },
+					"right_eye": { "crop": "1304:1304:2100:450", "angle": -21 }
+				},
+				"wide":{
+					"left_eye":  { "crop": "1920:1080:130:590",  "angle":  22 },
+					"right_eye": { "crop": "1920:1080:1990:590", "angle": -21 }
+				}
+			},
 			"video_codec":"h264",
 			"video_encoder":"OMX.qcom.video.encoder.avc",
 			"video_buffer":100,
 			"stay_awake":true
 		},
 		"Quest 2":{
-			"crop_right":"1550:1250:2000:280",
-			"crop_left":"1550:1250:0:280",
-			"angle_right":0,
-			"angle_left":0,
+			"views":{
+				"portrait":{
+					"left_eye":  { "crop": "1550:1250:0:280",    "angle": 0 },
+					"right_eye": { "crop": "1550:1250:2000:280",  "angle": 0 }
+				},
+				"square":{
+					"left_eye":  { "crop": "1250:1250:275:280",  "angle": 0 },
+					"right_eye": { "crop": "1250:1250:1875:280", "angle": 0 }
+				},
+				"wide":{
+					"left_eye":  { "crop": "1840:1080:0:395",    "angle": 0 },
+					"right_eye": { "crop": "1840:1080:1760:395",  "angle": 0 }
+				}
+			},
 			"video_codec":"h264",
 			"video_encoder":"",
 			"video_buffer":100,
