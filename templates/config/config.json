@@ -30,17 +30,21 @@
 	  "parameters":{
 		"Quest 3":{
 			"views":{
-				"portrait":{
+				"max":{
 					"left_eye":  { "crop": "1664:1304:200:450",  "angle":  22 },
 					"right_eye": { "crop": "1664:1304:2260:450", "angle": -21 }
 				},
+				"portrait":{
+					"left_eye":  { "crop": "1400:1800:350:200",  "angle":  22 },
+					"right_eye": { "crop": "1400:1800:2350:200", "angle": -21 }
+				},
 				"square":{
-					"left_eye":  { "crop": "1304:1304:380:450",  "angle":  22 },
-					"right_eye": { "crop": "1304:1304:2100:450", "angle": -21 }
+					"left_eye":  { "crop": "1580:1580:240:250",  "angle":  22 },
+					"right_eye": { "crop": "1580:1580:2300:250", "angle": -21 }
 				},
 				"wide":{
-					"left_eye":  { "crop": "1920:1080:130:590",  "angle":  22 },
-					"right_eye": { "crop": "1920:1080:1990:590", "angle": -21 }
+					"left_eye":  { "crop": "1700:1300:190:500",  "angle":  22 },
+					"right_eye": { "crop": "1700:1300:2240:290", "angle": -21 }
 				}
 			},
 			"video_codec":"h264",

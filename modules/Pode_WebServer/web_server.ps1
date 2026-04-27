@@ -1576,7 +1576,7 @@ try {
             # Resolve URL path to a file.
             # /data/*.csv  -> served from <ScriptPath>\data\  (read-only CSV export)
             # everything else -> served from <ScriptPath>\website\
-            $urlPath = $request.Url.LocalPath.TrimStart('/').Replace('/', [System.IO.Path]::DirectorySeparatorChar)
+            $urlPath = [Uri]::UnescapeDataString($request.Url.LocalPath).TrimStart('/').Replace('/', [System.IO.Path]::DirectorySeparatorChar)
             if ([string]::IsNullOrEmpty($urlPath)) { $urlPath = 'video_monitor.html' }
 
             $dataPath = Join-Path $ScriptPath "data"
