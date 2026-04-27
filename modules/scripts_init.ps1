@@ -216,6 +216,7 @@ function Start-WebServer {
         }
         if ($wsPid -and (Get-Process -Id $wsPid -ErrorAction SilentlyContinue)) {
             Stop-Process -Id $wsPid -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Milliseconds 800
             Write-Log $msg.WebServerStopped -Level INFO
         }
         Remove-Item $webServerPidFile -Force -ErrorAction SilentlyContinue
@@ -261,6 +262,10 @@ function Start-WebServer {
         # web_server.ps1 once it has its own PID.
         $PID | Set-Content $webServerPidFile -Force -ErrorAction SilentlyContinue
 
+        $dateStamp      = Get-Date -Format 'yyyy-MM-dd'
+        $wsOutLog       = Join-Path $global:logFolder "webserver_${dateStamp}_out.log"
+        $wsErrLog       = Join-Path $global:logFolder "webserver_${dateStamp}_err.log"
+
         $global:WebServerProcess = Start-Process powershell.exe -ArgumentList @(
             "-NoExit",
             "-File",
@@ -275,7 +280,9 @@ function Start-WebServer {
             "`"$global:logFolder`"",
             "-LogFile",
             "`"$global:logFile`""
-        ) -WindowStyle Hidden -PassThru
+        ) -WindowStyle Hidden -PassThru `
+          -RedirectStandardOutput $wsOutLog `
+          -RedirectStandardError  $wsErrLog
         Write-Log ($msg.WebServerStarted -f $global:WebServer_port) -Level INFO
     }
 }

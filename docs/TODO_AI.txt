@@ -86,3 +86,20 @@ It should display each option and possible values or example.
 
 
 DEBUG
+
+	Console : "Web Monitor available at :"
+		list @IP + interface : LAN/WAN (+ speed)
+	
+	Meta quest New UI :
+		Check apps names and update names in known apps.
+	
+	size of generated [monitor].html headset monitor data to fix (currently splitting to another line if remaining time is not correct...)
+	Maybe base the remaining time to the last 2 measures instead of 3 ?
+
+
+	
+	
+	To burn tokens...
+		Find a way to start adbwifi on headset startup...
+	
+	
