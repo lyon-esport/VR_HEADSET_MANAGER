@@ -167,6 +167,7 @@ function Invoke-AppShutdown {
     exits. Each step is wrapped defensively so a missing $msg or failed function does
     not prevent the remaining steps from running.
     #>
+    try { Stop-VRMonitor }             catch { }
     try { Stop-AllScrcpy }            catch { }
     try { Reset-AwakeMode }           catch { }
     try { Disconnect-ADBConnections }  catch { }
@@ -186,6 +187,7 @@ function Invoke-AppShutdown {
     Remove-Item $webServerPidFile -Force -ErrorAction SilentlyContinue
 
     try { Stop-MediaMtx } catch { }
+    exit 0
 }
 
 

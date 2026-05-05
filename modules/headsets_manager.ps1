@@ -361,7 +361,7 @@ function Add-Headset {
         IPAddress    = $IPAddress
         scrcpy_AutoRestart = "False"
         Record       = "False"
-        ScrcpyProfile = "R-N-45-20"
+        ScrcpyProfile = "square-R-N-45-20"
         Model        = ""
         SerialNumber = ""
         #AdbPort      = $AdbPort
