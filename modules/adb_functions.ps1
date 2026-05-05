@@ -475,10 +475,11 @@ function Invoke-UsbHeadsetActions {
     Called on every VRMonitor loop iteration.
 
     .DESCRIPTION
-    - Silently checks for a USB ADB device (single attempt, no prompts).
+    - Silently checks for a USB ADB device via Get-AdbUsbDeviceInfo (single attempt, no prompts).
     - Returns $null immediately if no USB device is present.
     - If a USB headset is found and already connected to WiFi, enables TCP/IP
       wireless ADB automatically.
+    - Matches the headset in known_headsets.csv by ro.serialno and updates its IP if it changed.
     - Returns a result object for use by future actions added to this function.
     #>
     param (
@@ -489,46 +490,45 @@ function Invoke-UsbHeadsetActions {
     if (-not $adb -or -not (Test-Path $adb)) { return $null }
 
     try {
-        # Single-attempt silent USB check - no prompts
-        $usbLine = & $adb devices 2>$null | Where-Object { $_ -match "`tdevice$" -and $_ -notmatch ':' }
-        if (-not $usbLine) { return $null }
+        $deviceInfo = Get-AdbUsbDeviceDetails -AdbPort $AdbPort -adb $adb
+        if (-not $deviceInfo) { return $null }
 
-        $deviceId = ($usbLine -split "`t")[0].Trim()
-        $model    = ((& $adb -s $deviceId shell getprop ro.product.model 2>$null) -join '').Trim()
+        $deviceId = $deviceInfo.DeviceId
+        $model    = $deviceInfo.Model
+        $ip       = $deviceInfo.IP
+        $serial   = $deviceInfo.SerialNumber
+
         Write-Log ($msg.UsbHeadsetConnected -f $model, $deviceId) -Level INFO
 
-        # Check if the headset has a WiFi IP
-        $ip = ''
-        $ipOutput = & $adb -s $deviceId shell ip -f inet addr show wlan0 2>$null
-        foreach ($line in $ipOutput) {
-            if ($line -match 'inet\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/') {
-                $ip = $Matches[1]; break
-            }
+        $wifiAdbEnabled = $false
+
+        # Resolve known headset entry first - we only enable WiFi ADB for known headsets
+        # to avoid repeated USB disconnect/reconnect cycles on unregistered devices.
+        $knownMatch = $null
+        if ($serial) {
+            $knownHeadsets = Get-KnownHeadsets
+            $knownMatch = $knownHeadsets | Where-Object { $_.SerialNumber -eq $serial } | Select-Object -First 1
         }
 
-        $wifiAdbEnabled = $false
         if ($ip) {
-            # Check if WiFi ADB is already active - avoid calling tcpip again (causes USB drop)
-            $wifiDeviceId = "${ip}:${AdbPort}"
-            $adbDeviceList = & $adb devices 2>$null
-            $alreadyConnected = $adbDeviceList | Where-Object { $_ -match ("^" + [regex]::Escape($wifiDeviceId) + "\s+device$") }
+            if ($knownMatch) {
+                if (-not $deviceInfo.WifiAdbOpen) {
+                    # Enable TCP/IP mode - this disconnects USB momentarily (by design)
+                    & $adb -s $deviceId tcpip $AdbPort 2>$null | Out-Null
+                    Start-Sleep -Seconds 1
+                    Write-Log ($msg.UsbWifiAdbEnabled -f $model, $ip, $AdbPort) -Level SUCCESS
+                } else {
+                    Write-Log ($msg.AdbWifiAlreadyConnected -f "${ip}:${AdbPort}") -Level DEBUG
+                }
+                $wifiAdbEnabled = $true
 
-            if (-not $alreadyConnected) {
-                # Enable TCP/IP mode - this disconnects USB momentarily (by design)
-                & $adb -s $deviceId tcpip $AdbPort 2>$null | Out-Null
-                Start-Sleep -Seconds 1
-                Write-Log ($msg.UsbWifiAdbEnabled -f $model, $ip, $AdbPort) -Level SUCCESS
+                # Update IP in CSV if it changed
+                if ($knownMatch.IPAddress -ne $ip) {
+                    Write-Log ($msg.UsbHeadsetIpUpdated -f $model, $knownMatch.IPAddress, $ip) -Level SUCCESS
+                    Update-HeadsetField -ID ([int]$knownMatch.ID) -Field 'IPAddress' -NewValue $ip
+                }
             } else {
-                Write-Log ($msg.AdbWifiAlreadyConnected -f $wifiDeviceId) -Level DEBUG
-            }
-            $wifiAdbEnabled = $true
-
-            # If the serial number is known but the IP differs, update it
-            $knownHeadsets = Get-KnownHeadsets
-            $match = $knownHeadsets | Where-Object { $_.SerialNumber -eq $deviceId } | Select-Object -First 1
-            if ($match -and $match.IPAddress -ne $ip) {
-                Write-Log ($msg.UsbHeadsetIpUpdated -f $model, $match.IPAddress, $ip) -Level SUCCESS
-                Update-HeadsetField -headsets $knownHeadsets -ID ([int]$match.ID) -Field 'IPAddress' -NewValue $ip
+                Write-Log ($msg.UsbHeadsetNoWifiIp -f $model) -Level DEBUG
             }
         } else {
             Write-Log ($msg.UsbHeadsetNoWifiIp -f $model) -Level DEBUG
@@ -538,6 +538,7 @@ function Invoke-UsbHeadsetActions {
             deviceId       = $deviceId
             model          = $model
             ip             = $ip
+            serialNumber   = $serial
             wifiAdbEnabled = $wifiAdbEnabled
         }
     } catch {
@@ -620,53 +621,6 @@ function Get-AdbUsbDeviceDetails {
     }
 }
 
-
-function Get-AdbUsbDeviceInfo {
-    <#
-    .SYNOPSIS
-    Silently detects a USB-connected ADB device in a single attempt (no interactive prompts).
-
-    .DESCRIPTION
-    Designed for programmatic use (e.g. web server API routes). Unlike Get-AdbUsbDevice,
-    this function makes one detection attempt with no retries or Read-Host prompts.
-    Returns a PSCustomObject with DeviceId, ConnectionType, IP and Model, or $null if none found.
-    IP is retrieved from the wlan0 interface of the connected device.
-    #>
-    param (
-        [string]$adb = $global:adbPath
-    )
-
-    if (-not $adb -or -not (Test-Path $adb)) { return $null }
-
-    try {
-        $usbLine = & $adb devices 2>$null | Where-Object { $_ -match "`tdevice$" -and $_ -notmatch ':' }
-        if (-not $usbLine) { return $null }
-
-        $deviceId = ($usbLine -split "`t")[0].Trim()
-
-        # Retrieve WiFi IP from wlan0
-        $ip = ''
-        $ipOutput = & $adb -s $deviceId shell ip -f inet addr show wlan0 2>$null
-        foreach ($line in $ipOutput) {
-            if ($line -match 'inet\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/') {
-                $ip = $Matches[1]; break
-            }
-        }
-
-        $model = ((& $adb -s $deviceId shell getprop ro.product.model 2>$null) -join '').Trim()
-
-        return [PSCustomObject]@{
-            DeviceId       = $deviceId
-            ConnectionType = 'USB'
-            IP             = $ip
-            Model          = $model
-            Port           = $null
-        }
-    } catch {
-        Write-Log ($msg.ADBExecutionFailed -f $_.Exception.Message) -Level ERROR
-        return $null
-    }
-}
 
 
 function Get-AdbWifiDevice {

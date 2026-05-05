@@ -888,7 +888,7 @@ try {
         # API: GET /api/detectusbheadset  - detects a USB-connected ADB device and returns its WiFi IP
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/detectusbheadset') {
             try {
-                $usbInfo = Get-AdbUsbDeviceInfo -adb $adbPath
+                $usbInfo = Get-AdbUsbDeviceDetails -adb $adbPath
                 $result = if ($usbInfo -and $usbInfo.IP -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') {
                     @{ found = $true; ip = $usbInfo.IP; model = $usbInfo.Model }
                 } else {
@@ -944,7 +944,7 @@ try {
         # API: POST /api/installadbwifiapk  - installs the WiFi ADB APK on the USB-connected headset
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/installadbwifiapk') {
             try {
-                $device = Get-AdbUsbDeviceInfo -adb $adbPath
+                $device = Get-AdbUsbDeviceDetails -adb $adbPath
                 if (-not $device) {
                     $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"No USB headset detected"}')
                     $response.StatusCode = 200
@@ -1122,7 +1122,7 @@ try {
                     IPAddress          = $safeIp
                     scrcpy_AutoRestart = 'False'
                     Record             = 'False'
-                    ScrcpyProfile      = 'R-N-45-20'
+                    ScrcpyProfile      = 'square-R-N-45-20'
                     Model              = ''
                     SerialNumber       = ''
                 }

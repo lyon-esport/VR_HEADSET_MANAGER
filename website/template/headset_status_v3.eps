@@ -2,6 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+	<meta http-equiv="refresh" content="5" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title><%= $name  %> VR Headset - Status</title>
 
@@ -23,33 +24,33 @@
         min-height: 100%;
         display: grid;
         place-items: center;
-        padding: 24px;
+        padding: 31px 25px;
       }
       .card {
-        width: min(720px, 92vw);
+        width: min(749px, 74vw);
         background: transparent;  /* no background for overlay */
         border: none;
         border-radius: 16px;
-        padding: 28px 32px;
+        padding: 36px 34px;
         box-shadow: none;
         backdrop-filter: none;
         text-align: center;
       }
       .title {
-        margin: 0 0 16px 0;
-        font-size: clamp(28px, 5vw, 38px);
+        margin: 0 0 21px 0;
+        font-size: clamp(36px, 6.5vw, 49px);
         font-weight: 800;
         letter-spacing: 0.6px;
         color: var(--accent);
         text-shadow: 0 2px 8px rgba(0,0,0,0.35);
       }
       .values {
-        font-size: clamp(24px, 4.5vw, 34px);
+        font-size: clamp(31px, 5.85vw, 44px);
         line-height: 1.3;
         display: inline-flex;
         flex-direction: column;
         align-items: center;
-        gap: 12px;
+        gap: 16px;
         text-shadow: 0 2px 6px rgba(0,0,0,0.35);
       }
 
@@ -57,8 +58,8 @@
       .batt, .temp {
         display: inline-flex;
         align-items: center;
-        gap: 10px;
-        padding: 10px 14px;
+        gap: 13px;
+        padding: 13px 18px;
         border-radius: 999px;
         border: 1px solid transparent;
         color: #fff; /* text always white by default */
@@ -103,11 +104,11 @@
         display: flex;
         justify-content: center;
         align-items: center;
-        gap: 20px;
-        margin: 10px 0 14px;
+        gap: 26px;
+        margin: 13px 0 18px;
       }
       .device-icon {
-        height: clamp(36px, 5.5vw, 52px);
+        height: clamp(47px, 7.15vw, 68px);
         width: auto;
         filter: drop-shadow(0 2px 4px rgba(0,0,0,0.35));
       }

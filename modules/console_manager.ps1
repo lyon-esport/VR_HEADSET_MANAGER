@@ -60,17 +60,23 @@ function Show-MainMenu {
 
         # Show web server LAN URLs if enabled
         if ($global:WebServer_enabled) {
-            $lanIPs = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            $lanEntries = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
                 Where-Object {
                     $_.IPAddress -match '^10\.' -or
                     $_.IPAddress -match '^172\.(1[6-9]|2[0-9]|3[01])\.' -or
                     $_.IPAddress -match '^192\.168\.'
-                }).IPAddress
-            if ($lanIPs) {
+                } | ForEach-Object {
+                    $adapter = Get-NetAdapter -InterfaceIndex $_.InterfaceIndex -ErrorAction SilentlyContinue
+                    if ($adapter -and $adapter.InterfaceDescription -notmatch 'Hyper-V|Virtual') {
+                        $label = if ($adapter.PhysicalMediaType -eq 'Native 802.11') { '[WiFi]' } else { '[LAN]' }
+                        [PSCustomObject]@{ IPAddress = $_.IPAddress; Label = $label }
+                    }
+                } | Where-Object { $_ }
+            if ($lanEntries) {
                 Write-Host ""
                 Write-Host $msg.WebServerLinksHeader -ForegroundColor DarkCyan
-                foreach ($ip in $lanIPs) {
-                    Write-Host ($msg.WebServerLinkLine -f $ip, $global:WebServer_port) -ForegroundColor Cyan
+                foreach ($entry in $lanEntries) {
+                    Write-Host ($msg.WebServerLinkLine -f $entry.IPAddress, $global:WebServer_port, $entry.Label) -ForegroundColor Cyan
                 }
             }
         }
@@ -136,7 +142,7 @@ function Show-MainMenu {
                 '0' {
                     Write-Host $msg.Goodbye -ForegroundColor Yellow
                     Invoke-AppShutdown
-                    break
+                    return
                 }
                 default {
                     Write-Host $msg.Refresh -ForegroundColor Red
