@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -98,6 +98,12 @@
       <button class="action-btn" id="btn-monitoring" title="Show monitoring" aria-label="Show monitoring" onclick="toggleMonitoring()">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
+        </svg>
+      </button>
+      <!-- Launch app -->
+      <button class="action-btn" id="btn-launch" title="Launch app" aria-label="Launch app" onclick="openLaunchModal('<%= $display_name %>')">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="5 3 19 12 5 21 5 3"/>
         </svg>
       </button>
     </div>
@@ -307,5 +313,6 @@
           .catch(function() {});
       }, 5000);
     </script>
+    <script src="/assets/app_launcher.js"></script>
   </body>
 </html>
