@@ -344,17 +344,17 @@ function Get-FavoriteAppsCachePath {
 function Get-FavoriteApps {
     param ([string]$headsetName = '')
     $csvPath = if ($headsetName) { Get-FavoriteAppsCachePath $headsetName } else { Join-Path $global:ScriptPath "data\favorite_apps.csv" }
-    if (-not (Test-Path $csvPath)) { return @() }
-    return @(Import-Csv -Path $csvPath -Delimiter ",")
+    if (-not (Test-Path -LiteralPath $csvPath)) { return @() }
+    return @(Import-Csv -LiteralPath $csvPath -Delimiter ",")
 }
 
 function Save-FavoriteApps {
     param ([array]$favorites, [string]$headsetName = '')
     $csvPath = if ($headsetName) { Get-FavoriteAppsCachePath $headsetName } else { Join-Path $global:ScriptPath "data\favorite_apps.csv" }
     if ($favorites.Count -eq 0) {
-        Set-Content -Path $csvPath -Value '"PackageName","DisplayName"' -Encoding UTF8
+        Set-Content -LiteralPath $csvPath -Value '"PackageName","DisplayName"' -Encoding UTF8
     } else {
-        $favorites | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8 -Force
+        $favorites | Export-Csv -LiteralPath $csvPath -NoTypeInformation -Encoding UTF8 -Force
     }
 }
 

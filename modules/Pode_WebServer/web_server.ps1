@@ -35,7 +35,7 @@ if ($LogFile)   { $global:logFile   = $LogFile   }
 # Flag prevents scripts_init from launching another web server or running computer setup
 $global:IsWebServerProcess = $true
 $scripts_init = Join-Path $ScriptPath "modules\scripts_init.ps1"
-if (Test-Path $scripts_init) {
+if (Test-Path -LiteralPath $scripts_init) {
     . $scripts_init
 } else {
     Write-Host "[WebServer] ERROR: scripts_init.ps1 not found at: $scripts_init" -ForegroundColor Red
@@ -77,7 +77,7 @@ if (-not $enabled) {
     exit 0
 }
 
-if (-not (Test-Path $websitePath)) {
+if (-not (Test-Path -LiteralPath $websitePath)) {
     Write-Log ($msg.WebServerWebsiteFolderNotFound -f $websitePath) -Level ERROR
     exit 1
 }
@@ -135,7 +135,7 @@ try {
     Write-Log ($msg.WebServerListenerFailed -f $port) -Level ERROR
     Write-Log $msg.WebServerUrlAclHint -Level WARNING
     Write-Log ($msg.WebServerListenerError -f $_) -Level ERROR
-    if ($PidFile -and (Test-Path $PidFile)) { Remove-Item $PidFile -Force -ErrorAction SilentlyContinue }
+    if ($PidFile -and (Test-Path -LiteralPath $PidFile)) { Remove-Item $PidFile -Force -ErrorAction SilentlyContinue }
     exit 1
 }
 
@@ -301,22 +301,11 @@ try {
                 $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
                 if (-not $safeName) { throw "Invalid headset name" }
 
-                $csvPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_headsets.csv"))
-                $dataRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data"))
-                if (-not $csvPath.StartsWith($dataRoot)) { throw "Path traversal denied" }
-
-                $rows = Import-Csv -Path $csvPath
-                $updated = $false
-                foreach ($row in $rows) {
-                    $dn = ($row.Name -replace ' ', '_')
-                    if ($dn -eq $safeName) {
-                        $row.Record = if ([string]$json.value -eq 'True' -or [string]$json.value -eq 'true') { 'True' } else { 'False' }
-                        $updated = $true
-                        break
-                    }
-                }
-                if ($updated) {
-                    $rows | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8 -Force
+                $rows = Get-KnownHeadsets
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                if ($headset) {
+                    $newVal = if ([string]$json.value -eq 'True' -or [string]$json.value -eq 'true') { 'True' } else { 'False' }
+                    Update-HeadsetField -headsets $rows -ID ([int]$headset.ID) -Field "Record" -NewValue $newVal
                     $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
                 } else {
                     $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"not found"}')
@@ -351,31 +340,10 @@ try {
                 $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
                 if (-not $safeName) { throw "Invalid headset name" }
 
-                $csvPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_headsets.csv"))
-                $dataRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data"))
-                if (-not $csvPath.StartsWith($dataRoot)) { throw "Path traversal denied" }
-
-                $rows = @(Import-Csv -Path $csvPath)
-                $match = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName }
+                $rows  = Get-KnownHeadsets
+                $match = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
                 if (-not $match) { throw "Headset not found" }
-
-                # Remove the matching row and reassign IDs
-                $rows = @($rows | Where-Object { ($_.Name -replace ' ','_') -ne $safeName })
-                $newId = 1
-                foreach ($row in $rows) { $row.ID = $newId; $newId++ }
-
-                $rows | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8 -Force
-
-                # Delete installed apps cache for this headset
-                $appsCachePath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\${safeName}_installed_apps.csv"))
-                if ($appsCachePath.StartsWith($dataRoot) -and (Test-Path $appsCachePath)) {
-                    Remove-Item $appsCachePath -Force -ErrorAction SilentlyContinue
-                }
-                # Delete per-headset favorites file
-                $favCacheP = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\${safeName}_favorite_apps.csv"))
-                if ($favCacheP.StartsWith($dataRoot) -and (Test-Path $favCacheP)) {
-                    Remove-Item $favCacheP -Force -ErrorAction SilentlyContinue
-                }
+                Remove-Headset -ID ([int]$match.ID)
 
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
                 $response.StatusCode      = 200
@@ -406,9 +374,8 @@ try {
                 $json    = $body | ConvertFrom-Json
                 $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
                 if (-not $safeName) { throw "Invalid headset name" }
-                $csvPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_headsets.csv"))
-                $rows = Import-Csv -Path $csvPath
-                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName }
+                $rows = Get-KnownHeadsets
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
                 if (-not $headset) { throw "Headset not found" }
                 $device = Get-AdbWifiDevice -headsetIP $headset.IPAddress -AdbPort $adbPort -adb $adbPath
                 if (-not $device) { throw "Could not connect to headset via ADB WiFi" }
@@ -442,9 +409,8 @@ try {
                 $json    = $body | ConvertFrom-Json
                 $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
                 if (-not $safeName) { throw "Invalid headset name" }
-                $csvPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_headsets.csv"))
-                $rows = Import-Csv -Path $csvPath
-                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName }
+                $rows = Get-KnownHeadsets
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
                 if (-not $headset) { throw "Headset not found" }
                 $device = Get-AdbWifiDevice -headsetIP $headset.IPAddress -AdbPort $adbPort -adb $adbPath
                 if (-not $device) { throw "Could not connect to headset via ADB WiFi" }
@@ -492,22 +458,10 @@ try {
                 $parts = $safeProfile -split '-'
                 if ([int]$parts[3] -lt 1 -or [int]$parts[4] -lt 1) { throw "FPS and bitrate must be positive" }
 
-                $csvPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_headsets.csv"))
-                $dataRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data"))
-                if (-not $csvPath.StartsWith($dataRoot)) { throw "Path traversal denied" }
-
-                $rows = Import-Csv -Path $csvPath
-                $updated = $false
-                foreach ($row in $rows) {
-                    $dn = ($row.Name -replace ' ', '_')
-                    if ($dn -eq $safeName) {
-                        $row.ScrcpyProfile = $safeProfile
-                        $updated = $true
-                        break
-                    }
-                }
-                if ($updated) {
-                    $rows | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8 -Force
+                $rows = Get-KnownHeadsets
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                if ($headset) {
+                    Update-HeadsetField -headsets $rows -ID ([int]$headset.ID) -Field "ScrcpyProfile" -NewValue $safeProfile
                     $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
                 } else {
                     $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"not found"}')
@@ -572,22 +526,11 @@ try {
                 $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
                 if (-not $safeName) { throw "Invalid headset name" }
 
-                $csvPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_headsets.csv"))
-                $dataRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data"))
-                if (-not $csvPath.StartsWith($dataRoot)) { throw "Path traversal denied" }
-
-                $rows = Import-Csv -Path $csvPath
-                $updated = $false
-                foreach ($row in $rows) {
-                    $dn = ($row.Name -replace ' ', '_')
-                    if ($dn -eq $safeName) {
-                        $row.scrcpy_AutoRestart = if ([string]$json.value -eq 'True' -or [string]$json.value -eq 'true') { 'True' } else { 'False' }
-                        $updated = $true
-                        break
-                    }
-                }
-                if ($updated) {
-                    $rows | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8 -Force
+                $rows = Get-KnownHeadsets
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                if ($headset) {
+                    $newVal = if ([string]$json.value -eq 'True' -or [string]$json.value -eq 'true') { 'True' } else { 'False' }
+                    Update-HeadsetField -headsets $rows -ID ([int]$headset.ID) -Field "scrcpy_AutoRestart" -NewValue $newVal
                     $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
                 } else {
                     $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"not found"}')
@@ -658,22 +601,17 @@ try {
 
                 $metaHomePkg = 'com.oculus.vrshell'
                 $metaHomeObj = @{ package = $metaHomePkg; displayName = 'Meta Home' }
-                $favCsvPath  = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\${safeName}_favorite_apps.csv"))
-                $dataRoot    = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data"))
-                if (-not $favCsvPath.StartsWith($dataRoot)) { throw "Path traversal denied" }
                 $favList     = @($metaHomeObj)
-                if (Test-Path $favCsvPath) {
-                    $favRows = Import-Csv -Path $favCsvPath -Delimiter ","
-                    foreach ($r in $favRows) {
-                        if ($r.PackageName -and $r.PackageName -ne $metaHomePkg) {
-                            $favList += @{ package = $r.PackageName; displayName = $r.DisplayName }
-                        }
+                $favRows     = Get-FavoriteApps -headsetName $safeName
+                foreach ($r in $favRows) {
+                    if ($r.PackageName -and $r.PackageName -ne $metaHomePkg) {
+                        $favList += @{ package = $r.PackageName; displayName = $r.DisplayName }
                     }
                 }
                 $appNamesPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\app_names.csv"))
-                if (Test-Path $appNamesPath) {
+                if (Test-Path -LiteralPath $appNamesPath) {
                     $appNames = @{}
-                    Import-Csv -Path $appNamesPath -Delimiter "," | ForEach-Object { $appNames[$_.PackageName] = $_ }
+                    Import-Csv -LiteralPath $appNamesPath -Delimiter "," | ForEach-Object { $appNames[$_.PackageName] = $_ }
                     $favList = $favList | ForEach-Object {
                         $entry = $appNames[$_.package]
                         $dn    = if ($entry -and $entry.DisplayName) { $entry.DisplayName } else { $_.displayName }
@@ -713,25 +651,17 @@ try {
                 $safeName  = [regex]::Match(($nameParam -replace ' ','_'), '^[\w\-]+$').Value
                 if (-not $safeName) { throw "Invalid headset name" }
 
-                $dataRoot     = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data"))
                 $appNamesPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\app_names.csv"))
                 $cachePath    = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\${safeName}_installed_apps.csv"))
-                $favCsvPath   = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\${safeName}_favorite_apps.csv"))
                 $metaHomePkg  = 'com.oculus.vrshell'
 
-                if (-not $cachePath.StartsWith($dataRoot)) { throw "Path traversal denied" }
-
                 # Load favorites
-                $favPkgs = @()
-                if (Test-Path $favCsvPath) {
-                    $favPkgs = @(Import-Csv -Path $favCsvPath -Delimiter "," | Select-Object -ExpandProperty PackageName)
-                }
+                $favPkgs = @(Get-FavoriteApps -headsetName $safeName | Select-Object -ExpandProperty PackageName)
 
                 # If refresh requested, update cache from headset
                 if ($refresh) {
-                    $csvPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_headsets.csv"))
-                    $rows    = Import-Csv -Path $csvPath
-                    $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName }
+                    $rows    = Get-KnownHeadsets
+                    $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
                     if (-not $headset) { throw "Headset not found" }
                     $device = Get-AdbWifiDevice -headsetIP $headset.IPAddress -AdbPort $adbPort
                     if (-not $device) { throw "Could not connect to headset via ADB WiFi" }
@@ -743,8 +673,8 @@ try {
                 }
 
                 # Use cache if available
-                if (Test-Path $cachePath) {
-                    $cachedRows = @(Import-Csv -Path $cachePath -Delimiter ",")
+                if (Test-Path -LiteralPath $cachePath) {
+                    $cachedRows = @(Import-Csv -LiteralPath $cachePath -Delimiter ",")
                     $appList = @($cachedRows | ForEach-Object {
                         $pkg  = $_.PackageName
                         $dn   = if ($_.DisplayName -and $_.DisplayName -ne $pkg) { $_.DisplayName } else { $pkg }
@@ -754,9 +684,8 @@ try {
                     } | Sort-Object { $_.displayName })
                 } else {
                     # Fallback: live ADB call
-                    $csvPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_headsets.csv"))
-                    $rows    = Import-Csv -Path $csvPath
-                    $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName }
+                    $rows    = Get-KnownHeadsets
+                    $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
                     if (-not $headset) { throw "Headset not found" }
 
                     $device = Get-AdbWifiDevice -headsetIP $headset.IPAddress -AdbPort $adbPort -adb $adbPath
@@ -800,9 +729,8 @@ try {
                 $safePkg  = [regex]::Match($json.package, '^[\w\.\-]+$').Value
                 if (-not $safeName -or -not $safePkg) { throw "Invalid input" }
 
-                $csvPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_headsets.csv"))
-                $rows    = Import-Csv -Path $csvPath
-                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName }
+                $rows    = Get-KnownHeadsets
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
                 if (-not $headset) { throw "Headset not found" }
                 $device = Get-AdbWifiDevice -headsetIP $headset.IPAddress -AdbPort $adbPort -adb $adbPath
                 if (-not $device) { throw "Could not connect to headset via ADB WiFi" }
@@ -846,13 +774,8 @@ try {
                     $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
                     continue
                 }
-                $favCsvPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\${safeName}_favorite_apps.csv"))
-                $dataRoot   = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data"))
-                if (-not $favCsvPath.StartsWith($dataRoot)) { throw "Path traversal denied" }
-
-                $favRows = @()
-                if (Test-Path $favCsvPath) { $favRows = @(Import-Csv -Path $favCsvPath -Delimiter ",") }
-                $addFav = [string]$json.favorite -eq 'True' -or [string]$json.favorite -eq 'true'
+                $favRows = @(Get-FavoriteApps -headsetName $safeName)
+                $addFav  = [string]$json.favorite -eq 'True' -or [string]$json.favorite -eq 'true'
                 if ($addFav) {
                     if (-not ($favRows | Where-Object { $_.PackageName -eq $safePkg })) {
                         $favRows += [PSCustomObject]@{ PackageName = $safePkg; DisplayName = $json.displayName }
@@ -860,11 +783,7 @@ try {
                 } else {
                     $favRows = @($favRows | Where-Object { $_.PackageName -ne $safePkg })
                 }
-                if ($favRows.Count -eq 0) {
-                    Set-Content -Path $favCsvPath -Value '"PackageName","DisplayName"' -Encoding UTF8
-                } else {
-                    $favRows | Export-Csv -Path $favCsvPath -NoTypeInformation -Encoding UTF8 -Force
-                }
+                Save-FavoriteApps -favorites $favRows -headsetName $safeName
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
                 $response.StatusCode      = 200
                 $response.ContentType     = 'application/json; charset=utf-8'
@@ -991,7 +910,7 @@ try {
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/connectwifi') {
             try {
                 $result = @{ ok = $false; error = '' }
-                if (-not ($adbPath -and (Test-Path $adbPath))) {
+                if (-not ($adbPath -and (Test-Path -LiteralPath $adbPath))) {
                     $result.error = 'ADB not found.'
                 } elseif (-not $wifiSsid) {
                     $result.error = 'No WiFi SSID configured.'
@@ -1043,13 +962,12 @@ try {
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/usbdeviceinfo') {
             try {
                 $result = @{ found = $false; ip = ''; model = ''; serialNumber = ''; ssid = ''; wifiAdbOpen = $false; apkInstalled = $false; alreadyRegistered = $false }
-                if ($adbPath -and (Test-Path $adbPath)) {
+                if ($adbPath -and (Test-Path -LiteralPath $adbPath)) {
                     $details = Get-AdbUsbDeviceDetails -adb $adbPath -AdbPort $adbPort -PackageName $apkPackage
                     if ($details) {
                         $alreadyReg = $false
-                        $csvPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_headsets.csv"))
-                        if ((Test-Path $csvPath) -and $details.SerialNumber) {
-                            $rows = Import-Csv -Path $csvPath
+                        if ($details.SerialNumber) {
+                            $rows = Get-KnownHeadsets
                             $alreadyReg = [bool]($rows | Where-Object { $_.SerialNumber -eq $details.SerialNumber })
                         }
                         $result = @{
@@ -1105,29 +1023,12 @@ try {
                 $octets = $safeIp -split '\.'
                 if ($octets | Where-Object { [int]$_ -gt 255 }) { throw "INVALID_IP" }
 
-                $csvPath  = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_headsets.csv"))
-                $dataRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data"))
-                if (-not $csvPath.StartsWith($dataRoot)) { throw "Path traversal denied" }
-
-                $rows = @()
-                if (Test-Path $csvPath) { $rows = @(Import-Csv -Path $csvPath) }
+                $rows = @(Get-KnownHeadsets)
 
                 if ($rows | Where-Object { $_.IPAddress -eq $safeIp })   { throw "IP_DUPLICATE" }
                 if ($rows | Where-Object { $_.Name      -eq $safeName }) { throw "NAME_DUPLICATE" }
 
-                $newId  = if ($rows.Count -gt 0) { $rows.Count + 1 } else { 1 }
-                $newRow = [PSCustomObject]@{
-                    ID                 = $newId
-                    Name               = $safeName
-                    IPAddress          = $safeIp
-                    scrcpy_AutoRestart = 'False'
-                    Record             = 'False'
-                    ScrcpyProfile      = 'square-R-N-45-20'
-                    Model              = ''
-                    SerialNumber       = ''
-                }
-                $rows += $newRow
-                $rows | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8 -Force
+                Add-Headset -headsets $rows -IPAddress $safeIp -Name $safeName
 
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
                 $response.StatusCode      = 200
@@ -1217,7 +1118,7 @@ try {
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/openconfig') {
             try {
                 $cfgFile = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "config\config.json"))
-                if (Test-Path $cfgFile) {
+                if (Test-Path -LiteralPath $cfgFile) {
                     Start-Process notepad.exe -ArgumentList "`"$cfgFile`""
                     $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
                 } else {
@@ -1250,7 +1151,7 @@ try {
                     'records' = $global:recordsPath
                 }
                 $folder = $folderMap[$target]
-                if ($folder -and (Test-Path $folder)) {
+                if ($folder -and (Test-Path -LiteralPath $folder)) {
                     Start-Process explorer.exe -ArgumentList "`"$folder`""
                     $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
                 } else {
@@ -1280,9 +1181,9 @@ try {
                 $maxLines = if ($qn -and $qn -match '^\d+$') { [int]$qn } else { 200 }
                 if ($maxLines -gt 2000) { $maxLines = 2000 }
                 $lines = @()
-                if ($LogFile -and (Test-Path $LogFile)) {
+                if ($LogFile -and (Test-Path -LiteralPath $LogFile)) {
                     $lines = (Get-Content -LiteralPath $LogFile -Tail $maxLines -ErrorAction SilentlyContinue) -replace '"', '\"'
-                } elseif ($LogFolder -and (Test-Path $LogFolder)) {
+                } elseif ($LogFolder -and (Test-Path -LiteralPath $LogFolder)) {
                     $latest = Get-ChildItem -LiteralPath $LogFolder -Filter "log_*.txt" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
                     if ($latest) {
                         $lines = (Get-Content -LiteralPath $latest.FullName -Tail $maxLines -ErrorAction SilentlyContinue) -replace '"', '\"'
@@ -1424,7 +1325,7 @@ try {
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/openconfig') {
             try {
                 $cfgFile = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "config\config.json"))
-                if (Test-Path $cfgFile) {
+                if (Test-Path -LiteralPath $cfgFile) {
                     Start-Process notepad.exe -ArgumentList "`"$cfgFile`""
                     $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
                 } else {
@@ -1457,7 +1358,7 @@ try {
                     'records' = $global:recordsPath
                 }
                 $folder = $folderMap[$target]
-                if ($folder -and (Test-Path $folder)) {
+                if ($folder -and (Test-Path -LiteralPath $folder)) {
                     Start-Process explorer.exe -ArgumentList "`"$folder`""
                     $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
                 } else {
@@ -1487,9 +1388,9 @@ try {
                 $maxLines = if ($qn -and $qn -match '^\d+$') { [int]$qn } else { 200 }
                 if ($maxLines -gt 2000) { $maxLines = 2000 }
                 $lines = @()
-                if ($LogFile -and (Test-Path $LogFile)) {
+                if ($LogFile -and (Test-Path -LiteralPath $LogFile)) {
                     $lines = (Get-Content -LiteralPath $LogFile -Tail $maxLines -ErrorAction SilentlyContinue) -replace '"', '\"'
-                } elseif ($LogFolder -and (Test-Path $LogFolder)) {
+                } elseif ($LogFolder -and (Test-Path -LiteralPath $LogFolder)) {
                     $latest = Get-ChildItem -LiteralPath $LogFolder -Filter "log_*.txt" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
                     if ($latest) {
                         $lines = (Get-Content -LiteralPath $latest.FullName -Tail $maxLines -ErrorAction SilentlyContinue) -replace '"', '\"'
@@ -1630,7 +1531,7 @@ try {
 } finally {
     $listener.Stop()
     $listener.Close()
-    if ($PidFile -and (Test-Path $PidFile)) {
+    if ($PidFile -and (Test-Path -LiteralPath $PidFile)) {
         Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
     }
     Write-Log $msg.WebServerStopped -Level INFO

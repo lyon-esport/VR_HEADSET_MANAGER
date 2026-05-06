@@ -243,7 +243,8 @@
 
       // Natural render dimensions of the monitoring iframe (must match headset_status template)
       var NATURAL_W = 480;
-      var NATURAL_H = 350;
+      var NATURAL_H = 480;
+      var _detectedH = NATURAL_H;   // updated on iframe load
 
       // Compute the actual rendered video rect inside the viewport (object-fit: contain letterboxing)
       function getVideoDisplayRect() {
@@ -264,7 +265,7 @@
         if (!overlay) return;
         var rect     = getVideoDisplayRect();
         var wrapperW = rect.width / 3;
-        var wrapperH = wrapperW * (NATURAL_H / NATURAL_W);
+        var wrapperH = wrapperW * (_detectedH / NATURAL_W);
         overlay.style.left   = rect.left + 'px';
         overlay.style.top    = rect.top  + 'px';
         overlay.style.width  = wrapperW  + 'px';
@@ -273,7 +274,7 @@
         if (iframe) {
           var s = wrapperW / NATURAL_W;
           iframe.style.width           = NATURAL_W + 'px';
-          iframe.style.height          = NATURAL_H + 'px';
+          iframe.style.height          = _detectedH + 'px';
           iframe.style.transform       = 'scale(' + s + ')';
           iframe.style.transformOrigin = 'top left';
         }
@@ -297,6 +298,19 @@
         if (_monitoringVisible) positionMonitoringOverlay();
       });
 
+      // Detect actual monitoring content height on iframe load; reposition overlay
+      function detectMonitoringHeight() {
+        var iframe = document.querySelector('#monitoring-overlay iframe');
+        if (!iframe) return;
+        try {
+          var doc = iframe.contentDocument || (iframe.contentWindow && iframe.contentWindow.document);
+          if (!doc || !doc.documentElement) return;
+          var h = doc.documentElement.scrollHeight;
+          if (h > 10) { _detectedH = h; if (_monitoringVisible) positionMonitoringOverlay(); }
+        } catch(e) {}
+      }
+      document.querySelector('#monitoring-overlay iframe').addEventListener('load', detectMonitoringHeight);
+
       // Reload monitoring iframe when the file changes (Last-Modified polling)
       var _monLastModified = null;
       var MON_URL = '<%= $display_name %>[monitoring].html';
@@ -307,7 +321,7 @@
             if (lm && lm !== _monLastModified) {
               _monLastModified = lm;
               var iframe = document.querySelector('#monitoring-overlay iframe');
-              if (iframe) iframe.src = MON_URL + '?_=' + Date.now();
+              if (iframe) { iframe.src = MON_URL + '?_=' + Date.now(); iframe.addEventListener('load', function onMon() { iframe.removeEventListener('load', onMon); detectMonitoringHeight(); }, { once: true }); }
             }
           })
           .catch(function() {});
