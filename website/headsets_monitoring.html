@@ -301,9 +301,9 @@
           '<td>' + esc(r['Temp'] || '-') + (r['Temp'] && r['Temp'] !== '-' ? ' C' : '') + '</td>' +
           '<td style="color:#666">' + esc(r['Model'] || '-') + '</td>' +
           '<td>' + appCell + '</td>' +
-          '<td><a class="mon-launch-btn" href="headset_settings.html?headset=' + encodeURIComponent(dn) + '#launch" title="Launch an app on ' + esc(r['Name'] || '') + '">' +
+          '<td><button class="mon-launch-btn" data-launch-app="' + dn + '" title="Launch an app on ' + esc(r['Name'] || '') + '">' +
             '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>' +
-          '</a></td>' +
+          '</button></td>' +
         '</tr>';
       }).join('');
     }
@@ -323,6 +323,12 @@
 
     pollCsv();
     setInterval(pollCsv, REFRESH_MS);
+
+    document.getElementById('headsets-table').addEventListener('click', function(e) {
+      var btn = e.target.closest('[data-launch-app]');
+      if (btn) openLaunchModal(btn.dataset.launchApp);
+    });
   </script>
+  <script src="assets/app_launcher.js"></script>
 </body>
 </html>

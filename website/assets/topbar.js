@@ -339,6 +339,19 @@
         _updateThemeBtn();
       });
     }
+
+    // Cross-tab theme sync: update this page when another tab changes the theme
+    try {
+      window.addEventListener('storage', function(e) {
+        if (e.key !== 'vrm-theme') return;
+        if (e.newValue === 'light') {
+          document.documentElement.setAttribute('data-theme', 'light');
+        } else {
+          document.documentElement.removeAttribute('data-theme');
+        }
+        _updateThemeBtn();
+      });
+    } catch(e) {}
   });
 
   // Utility for pages: TopBar.apiPost(url, label, btn) - POST with visual feedback

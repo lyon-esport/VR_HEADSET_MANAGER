@@ -17,14 +17,14 @@ function Get-KnownHeadsets {
     }
 
     # Check whether the file exists
-    if (-not (Test-Path $knownHeadsetsFilePath)) {
+    if (-not (Test-Path -LiteralPath $knownHeadsetsFilePath)) {
         Write-Log -Message ($msg.HeadsetCsvNotFound -f $knownHeadsetsFilePath) -Level "ERROR"
         return
     }
 
     # Read the CSV file and return data as PowerShell objects
     try {
-        $headsets = @(Import-Csv -Path $knownHeadsetsFilePath)
+        $headsets = @(Import-Csv -LiteralPath $knownHeadsetsFilePath)
         return $headsets
     }
     catch {
@@ -49,7 +49,7 @@ function Show-HeadsetsTable {
     )
 
     # Load headsets from the CSV file
-    $headsets = @(Import-Csv -Path $FilePath -Delimiter ";" )
+    $headsets = @(Import-Csv -LiteralPath $FilePath -Delimiter ";" )
 
     if ($headsets.Count -eq 0) {
         Write-Log $msg.NoHeadsetToDisplay -Level "INFO"
@@ -171,7 +171,7 @@ function Show-HeadsetsTableColored {
         [bool]$UseColors = $true
     )
 
-    $knownHeadsetsInfo = @(Import-Csv -Path $knownHeadsetsInfosFilePath -Delimiter ";" )
+    $knownHeadsetsInfo = @(Import-Csv -LiteralPath $knownHeadsetsInfosFilePath -Delimiter ";" )
     # Check whether data is present
     if (-not $knownHeadsetsInfo -or $knownHeadsetsInfo.Count -eq 0) {
         Write-Log ($msg.NoHeadsetInInfosFile -f $knownHeadsetsInfosFilePath) -Level WARNING
