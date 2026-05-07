@@ -69,8 +69,7 @@ while ($true) {
 # Note: $msg and other globals may not be available here (loop already exited),
 # so use Write-Host directly and call functions defensively.
 Write-Host "Stopping application services..." -ForegroundColor Yellow
-try { Stop-VRMonitor }       catch { }
-try { Invoke-AppShutdown }   catch { }
+try { Stop-VRMonitor } catch { }
 
 Write-Host "Closing dashboard window." -ForegroundColor Red
 Start-Sleep -Seconds 2

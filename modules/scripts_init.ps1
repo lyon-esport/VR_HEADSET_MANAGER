@@ -187,6 +187,16 @@ function Invoke-AppShutdown {
     Remove-Item $webServerPidFile -Force -ErrorAction SilentlyContinue
 
     try { Stop-MediaMtx } catch { }
+
+    # Kill the headsets dashboard window (child process of this PID)
+    try {
+        $dashProcs = Get-WmiObject -Class Win32_Process -Filter "ParentProcessId = $PID" |
+            Where-Object { $_.CommandLine -match "headsets_dashboard\.ps1" }
+        foreach ($dp in $dashProcs) {
+            Stop-Process -Id $dp.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+    } catch { }
+
     exit 0
 }
 
