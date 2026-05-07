@@ -1404,8 +1404,27 @@ function Get-HeadsetInstalledApps {
             }
             Update-AppCacheFromMetaMetadata -CacheFilePath $AppCacheFilePath
         }
+        
+        $apps = foreach ($pkg in $packages) {
+            if ($cache.ContainsKey($pkg)) {
+                [PSCustomObject]@{
+                    PackageName = $pkg
+                    DisplayName = $cache[$pkg].DisplayName
+                    IconUrl     = $cache[$pkg].IconUrl
+                }
+            } else {
+                [PSCustomObject]@{
+                    PackageName = $pkg
+                    DisplayName = $pkg
+                    IconUrl     = ''
+                }
+            }
+        }
 
-        $apps = @($apps | Sort-Object DisplayName)
+        # reorder apps alphabetically by DisplayName for better UX
+        $apps = $apps | Sort-Object DisplayName
+
+        
         Write-Log ($msg.HeadsetDetected -f "$($apps.Count) apps", $DeviceId) -Level INFO
         return $apps
 
@@ -1724,3 +1743,54 @@ function Update-InstalledAppsCache {
     }
 }
 
+function Uninstall-HeadsetApp {
+    <#
+    .SYNOPSIS
+    Uninstalls a third-party application from a VR headset via ADB.
+    .DESCRIPTION
+    Uses Get-HeadsetInstalledApps to verify the package is a third-party app before uninstalling.
+    Returns $false with a warning if the app is not found or is a system package.
+    #>
+    param (
+        [Parameter(Mandatory=$true)]
+        [PSCustomObject]$Device,
+        [Parameter(Mandatory=$true)]
+        [string]$PackageName,
+        [string]$adb = $global:adbPath
+    )
+    if (-not $Device) { Write-Log ($msg.AdbWifiConnectFailed -f 'unknown', 'no device') -Level ERROR; return $false }
+    $DeviceId = $Device.DeviceId
+
+    try {
+        # Check third-party apps only
+        $thirdPartyApps = Get-HeadsetInstalledApps -Device $Device -ThirdPartyOnly -adb $adb
+        $isThirdParty   = [bool]($thirdPartyApps | Where-Object { $_ -eq $PackageName })
+
+        if (-not $isThirdParty) {
+            # Distinguish: system app vs not installed at all
+            $allApps  = Get-HeadsetInstalledApps -Device $Device -ThirdPartyOnly:$false -adb $adb
+            $isSystem = [bool]($allApps | Where-Object { $_ -eq $PackageName })
+
+            if ($isSystem) {
+                Write-Log ($msg.AppNotThirdParty -f $PackageName, $DeviceId) -Level WARNING
+            } else {
+                Write-Log ($msg.AppNotFound -f $PackageName, $DeviceId) -Level WARNING
+            }
+            return $false
+        }
+
+        Write-Log ($msg.AppUninstalling -f $PackageName, $DeviceId) -Level INFO
+        $output = & $adb -s $DeviceId shell pm uninstall $PackageName 2>&1
+        if ($output -match "^Success") {
+            Write-Log ($msg.AppUninstallSuccess -f $PackageName, $DeviceId) -Level SUCCESS
+            return $true
+        } else {
+            Write-Log ($msg.AppUninstallFailed -f $PackageName, $DeviceId, ($output -join ' ')) -Level ERROR
+            return $false
+        }
+    }
+    catch {
+        Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
+        return $false
+    }
+}

@@ -78,6 +78,11 @@
     AdbWifiDevModeHint = "--> Check that developer mode is enabled and WiFi ADB is activated on the headset"
     AdbWifiConnected = "Connected to {0} via ADB WiFi"
     AdbWifiConnectFailed = "ADB WiFi connection failed to {0}: {1}"
+    AppNotFound         = "App '{0}' is not installed on {1}"
+    AppNotThirdParty    = "App '{0}' is a system app and cannot be uninstalled on {1}"
+    AppUninstalling     = "Uninstalling '{0}' from {1}..."
+    AppUninstallSuccess = "App '{0}' successfully uninstalled from {1}"
+    AppUninstallFailed  = "Failed to uninstall '{0}' from {1}: {2}"
 
     # ==========================================
     # console_manager.ps1

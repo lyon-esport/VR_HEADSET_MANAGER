@@ -78,6 +78,11 @@
     AdbWifiDevModeHint = "--> Verifiez que le mode developpeur est active et que le WiFi ADB est lance sur le casque"
     AdbWifiConnected = "Connecte a {0} via ADB WiFi"
     AdbWifiConnectFailed = "Echec de la connexion ADB WiFi a {0} : {1}"
+    AppNotFound         = "L'application '{0}' n'est pas installee sur {1}"
+    AppNotThirdParty    = "'{0}' est une application systeme et ne peut pas etre desinstallee sur {1}"
+    AppUninstalling     = "Desinstallation de '{0}' sur {1}..."
+    AppUninstallSuccess = "Application '{0}' desinstallee avec succes sur {1}"
+    AppUninstallFailed  = "Echec de la desinstallation de '{0}' sur {1} : {2}"
 
     # ==========================================
     # console_manager.ps1
