@@ -10,6 +10,57 @@ $displayName =  "Quest 3 Manu"
 start-screenCopy -displayName $displayName -headsetIP $ip
 #>
 
+# Parse a scrcpy profile string into a typed object.
+# Format: [view-]EYE-AUDIO-FPS-BW   (view defaults to 'portrait')
+#   view  = portrait | square | wide  (selects view in model template)
+#   EYE   = L | R                     (left or right eye)
+#   AUDIO = D | N                     (audio-dup or no-audio)
+#   FPS   = integer                   (max-fps)
+#   BW    = integer Mbps              (bitrate)
+# Returns @{ View; Eye; AudioDup; Fps; BitrateMbps; Raw } or $null on parse failure.
+function ConvertFrom-ScrcpyProfile {
+    param(
+        [string]$Profile = 'portrait-R-N-45-20'
+    )
+    if ([string]::IsNullOrWhiteSpace($Profile)) { $Profile = 'portrait-R-N-45-20' }
+    $parts = $Profile -split '-'
+
+    # Backward compat: 4-part legacy format (Eye-Audio-FPS-BW) -> prepend "portrait"
+    if ($parts.Count -eq 4 -and $parts[0] -in @('L','R')) {
+        $parts = @('portrait') + $parts
+    }
+    if ($parts.Count -ne 5) { return $null }
+
+    $fps = 0; $bw = 0
+    if (-not [int]::TryParse([string]$parts[3], [ref]$fps)) { return $null }
+    if (-not [int]::TryParse([string]$parts[4], [ref]$bw))  { return $null }
+
+    return @{
+        View        = $parts[0].ToLower()
+        Eye         = $parts[1].ToUpper()
+        AudioDup    = ($parts[2].ToUpper() -eq 'D')
+        Fps         = $fps
+        BitrateMbps = $bw
+        Raw         = $Profile
+    }
+}
+
+
+# Inverse of ConvertFrom-ScrcpyProfile. Builds the canonical "view-EYE-AUDIO-FPS-BW" string.
+function ConvertTo-ScrcpyProfile {
+    param(
+        [string]$View = 'portrait',
+        [ValidateSet('L','R')]
+        [string]$Eye = 'R',
+        [bool]$AudioDup = $false,
+        [int]$Fps = 45,
+        [int]$BitrateMbps = 20
+    )
+    $audio = if ($AudioDup) { 'D' } else { 'N' }
+    return ("{0}-{1}-{2}-{3}-{4}" -f $View.ToLower(), $Eye.ToUpper(), $audio, $Fps, $BitrateMbps)
+}
+
+
 # Build the scrcpy argument string from a model template (config.json) and a per-headset profile.
 # Profile format: [L/R]-[D/N]-FPS-BW  e.g. "R-N-45-20"
 #   L/R = Left or Right eye  (selects crop + angle from model template)
@@ -241,7 +292,7 @@ function Watch-ScrcpyProcesses {
     
     # Step 1: Retrieve scrcpy processes running on the machine
 
-    $knownHeadsets_with_autorestart = Get-KnownHeadsets | Where-Object { $_.scrcpy_AutoRestart -eq $True }
+    $knownHeadsets_with_autorestart = Get-KnownHeadsets | Where-Object { ConvertTo-BoolField $_.scrcpy_AutoRestart }
 
     # For each headset with autorestart, ensure there's a scrcpy process started
 
@@ -249,24 +300,26 @@ function Watch-ScrcpyProcesses {
         Write-Log ($msg.ScrcpyCheckHeadset -f $headset.Name, $headset.IPAddress) -Level DEBUG
 
         $headsetInfos = Get-KnownHeadsetInfos $headset
-        if ($headsetInfos.ADBWifi -eq $true) {
+        if (ConvertTo-BoolField $headsetInfos.ADBWifi) {
             Write-Log ($msg.ScrcpyCheckProcess -f $headset.Name, $headset.IPAddress) -Level DEBUG
             $runningScrcpyProcess_forThisheadset = Get-ScrcpyProcess -displayName (Convert-Displayname $headset.Name) -headsetIP $headset.IPAddress
             
             Write-Log ($msg.ScrcpyProcessFound -f $runningScrcpyProcess_forThisheadset) -Level DEBUG
             if (-not $runningScrcpyProcess_forThisheadset) {
                 $headsetProfile = if ($headset.ScrcpyProfile) { $headset.ScrcpyProfile } else { "R-N-45-20" }
-                start-screenCopy -displayName $headset.Name -headsetIP $headset.IPAddress -recording ($headset.Record -eq "True") -scrcpyProfile $headsetProfile
+                start-screenCopy -displayName $headset.Name -headsetIP $headset.IPAddress -recording (ConvertTo-BoolField $headset.Record) -scrcpyProfile $headsetProfile
             } else {
                 # scrcpy is running - check if parameters have changed
                 $shouldRestart = $false
                 $headsetProfile = if ($headset.ScrcpyProfile) { $headset.ScrcpyProfile } else { "R-N-45-20" }
                 $expectedRecording = ($headset.Record -eq "True")
 
-                $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($runningScrcpyProcess_forThisheadset.Id)").CommandLine
+                $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($runningScrcpyProcess_forThisheadset.Id)" -ErrorAction SilentlyContinue).CommandLine
 
-                # Check recording option mismatch
-                $hasRecord = $cmdLine -match "--record="
+                # Check recording option mismatch only when we could actually read the command line.
+                # If $cmdLine is null (process vanished from WMI), skip the check to avoid a
+                # spurious restart caused by $false -ne $true when recording is expected.
+                $hasRecord = if ($cmdLine) { [bool]($cmdLine -match "--record=") } else { $expectedRecording }
                 if ($hasRecord -ne $expectedRecording) {
                     Write-Log ($msg.ScrcpyRecordingChanged -f $headset.Name) -Level INFO
                     $shouldRestart = $true

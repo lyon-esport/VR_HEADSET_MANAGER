@@ -230,22 +230,22 @@ function Show-HeadsetsTableColored {
             # Determine the background color
             $bgColor = "$null"
             
-            if ($headset.Ping -eq $False) {
+            if (-not (ConvertTo-BoolField $headset.Ping)) {
                 $bgColor = "DarkGray" # Headset not responding
             }
-            elseif ($headset.ADBWifi -eq $False) {
+            elseif (-not (ConvertTo-BoolField $headset.ADBWifi)) {
                 $bgColor = "Black"  # Headset ADB not responding on the specified port
             }
             elseif ($headset.Temp -and [int]($headset.Temp -replace ',','.') -gt 55) {
-                $bgColor = "DarkRed" # Temperature > 50°
+                $bgColor = "DarkRed" # Temperature > 50 degrees
             }
-            elseif ($headset.Battery -and [int]($headset.Battery -replace '[^\d]','') -lt 40 -and $headset.Charging -eq $False) {
+            elseif ($headset.Battery -and [int]($headset.Battery -replace '[^\d]','') -lt 40 -and -not (ConvertTo-BoolField $headset.Charging)) {
                 $bgColor = "DarkRed" # Battery < 40% and not charging
             }
-            elseif ($headset.Battery -and [int]($headset.Battery -replace '[^\d]','') -lt 30 -and $headset.Charging -eq $True) {
+            elseif ($headset.Battery -and [int]($headset.Battery -replace '[^\d]','') -lt 30 -and (ConvertTo-BoolField $headset.Charging)) {
                 $bgColor = "DarkYellow" # Battery < 30% and charging
             }
-            elseif ($headset.Charging -eq $False) {
+            elseif (-not (ConvertTo-BoolField $headset.Charging)) {
                 $bgColor = "DarkBlue" # Headset is not charging
             }
             elseif (

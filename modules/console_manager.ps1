@@ -3,6 +3,77 @@
 # Translations are loaded centrally in scripts_init.ps1 into $global:msg
 
 
+# Read a single key and classify it into a structured choice.
+# Returns @{ Kind; Value; Raw }:
+#   Kind = 'Digit'  -> Value = [int]                   (0..9)
+#   Kind = 'F'      -> Value = [int] (function key 1..12)
+#   Kind = 'Char'   -> Value = [string] uppercase character
+#   Kind = 'Enter'  -> Value = $null
+#   Kind = 'Escape' -> Value = $null
+#   Kind = 'Other'  -> Value = $null
+# $Raw is the underlying [ConsoleKeyInfo].
+function Read-MenuChoice {
+    param(
+        [switch]$NoEcho
+    )
+    $key = [System.Console]::ReadKey($NoEcho.IsPresent)
+    $kind = 'Other'; $val = $null
+
+    if ($key.Key -ge [ConsoleKey]::F1 -and $key.Key -le [ConsoleKey]::F12) {
+        $kind = 'F'; $val = [int]($key.Key) - [int]([ConsoleKey]::F1) + 1
+    } elseif ($key.Key -eq [ConsoleKey]::Enter) {
+        $kind = 'Enter'
+    } elseif ($key.Key -eq [ConsoleKey]::Escape) {
+        $kind = 'Escape'
+    } elseif ($key.KeyChar -match '^\d$') {
+        $kind = 'Digit'; $val = [int]([string]$key.KeyChar)
+    } elseif ($key.KeyChar -match '^[A-Za-z]$') {
+        $kind = 'Char'; $val = ([string]$key.KeyChar).ToUpper()
+    }
+    return @{ Kind = $kind; Value = $val; Raw = $key }
+}
+
+
+# Picker scaffolding shared by every "show table -> pick a headset -> do action" sub-menu.
+# - Calls $RenderTable to draw the headset list (defaults to Show-HeadsetsTable).
+# - Reads a single key. Digits 1..9 select the matching headset (1-based ID).
+# - Escape / Q exits the loop; any other key triggers $RenderTable again.
+# - On a valid pick, $OnPick is invoked with the selected headset row as -Headset.
+# Returns when the user exits.
+function Show-HeadsetPickerMenu {
+    param(
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$OnPick,
+        [string]$Title = '',
+        [scriptblock]$RenderTable = $null
+    )
+    if (-not $RenderTable) { $RenderTable = { Show-HeadsetsTable } }
+
+    while ($true) {
+        Clear-Host
+        if ($Title) { Write-Host $Title }
+        & $RenderTable | Out-Null
+
+        $headsets = Get-KnownHeadsets
+        if (-not $headsets -or $headsets.Count -eq 0) {
+            Write-Host $msg.NoKnownHeadsets
+            Start-Sleep -Seconds 2
+            return
+        }
+
+        $choice = Read-MenuChoice
+        if ($choice.Kind -eq 'Escape' -or ($choice.Kind -eq 'Char' -and $choice.Value -eq 'Q')) {
+            return
+        }
+        if ($choice.Kind -eq 'Digit' -and $choice.Value -ge 1 -and $choice.Value -le $headsets.Count) {
+            $row = $headsets | Where-Object { [int]$_.ID -eq [int]$choice.Value } | Select-Object -First 1
+            if ($row) {
+                & $OnPick -Headset $row
+            }
+        }
+    }
+}
+
 
 function Show-MainMenu {
     do {

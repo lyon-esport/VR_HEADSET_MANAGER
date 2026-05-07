@@ -4,6 +4,82 @@
 
 # Translations are loaded centrally in scripts_init.ps1 into $global:msg
 
+
+# Format an ADB device id ("IP:Port") used by `adb -s <id> ...`.
+# Replaces "$ip`:$port" / "$ip:$port" interpolations scattered in the codebase.
+function Get-DeviceId {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$IPAddress,
+        [int]$AdbPort = $global:adbPort_default
+    )
+    if (-not $AdbPort) { $AdbPort = 5555 }
+    return ("{0}:{1}" -f $IPAddress, $AdbPort)
+}
+
+
+# Wrapper around `& $adb ...` that captures stdout, stderr, and exit code.
+# Returns @{ ExitCode; StdOut; StdErr; Ok }.
+# - StdOut / StdErr are arrays of lines (may be empty).
+# - Ok is $true when ExitCode is 0.
+# Callers should check .Ok before consuming output.
+function Invoke-Adb {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Arguments,
+        [string]$Adb = $global:adbPath,
+        [int]$TimeoutSeconds = 0
+    )
+
+    if (-not (Test-Path -LiteralPath $Adb)) {
+        return @{ ExitCode = -1; StdOut = @(); StdErr = @("adb not found at: $Adb"); Ok = $false }
+    }
+
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName               = $Adb
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError  = $true
+    $psi.UseShellExecute        = $false
+    $psi.CreateNoWindow         = $true
+    foreach ($arg in $Arguments) { [void]$psi.ArgumentList.Add($arg) }
+
+    $proc = [System.Diagnostics.Process]::new()
+    $proc.StartInfo = $psi
+
+    $stdoutSb = [System.Text.StringBuilder]::new()
+    $stderrSb = [System.Text.StringBuilder]::new()
+    $outHandler = {
+        param($s, $e)
+        if ($null -ne $e.Data) { [void]$Event.MessageData.AppendLine($e.Data) }
+    }
+    Register-ObjectEvent -InputObject $proc -EventName 'OutputDataReceived' -Action $outHandler -MessageData $stdoutSb | Out-Null
+    Register-ObjectEvent -InputObject $proc -EventName 'ErrorDataReceived'  -Action $outHandler -MessageData $stderrSb | Out-Null
+
+    try {
+        [void]$proc.Start()
+        $proc.BeginOutputReadLine()
+        $proc.BeginErrorReadLine()
+        if ($TimeoutSeconds -gt 0) {
+            if (-not $proc.WaitForExit($TimeoutSeconds * 1000)) {
+                try { $proc.Kill() } catch {}
+                return @{ ExitCode = -2; StdOut = @(); StdErr = @("adb timeout after $TimeoutSeconds s"); Ok = $false }
+            }
+        } else {
+            $proc.WaitForExit()
+        }
+    } finally {
+        Get-EventSubscriber | Where-Object { $_.SourceObject -eq $proc } | Unregister-Event
+    }
+
+    $stdout = $stdoutSb.ToString().TrimEnd("`r","`n").Split("`n") | ForEach-Object { $_.TrimEnd("`r") }
+    $stderr = $stderrSb.ToString().TrimEnd("`r","`n").Split("`n") | ForEach-Object { $_.TrimEnd("`r") }
+    if ($stdout.Count -eq 1 -and $stdout[0] -eq '') { $stdout = @() }
+    if ($stderr.Count -eq 1 -and $stderr[0] -eq '') { $stderr = @() }
+
+    $code = $proc.ExitCode
+    return @{ ExitCode = $code; StdOut = $stdout; StdErr = $stderr; Ok = ($code -eq 0) }
+}
+
 <#
 function Install-OculusWirelessAdbApk {
     Write-Log ($msg.FeatureNotImplemented) -Level WARNING
@@ -150,7 +226,8 @@ function Install-OculusWirelessAdbApk {
 
     try {
         # 3. Check for existing installation
-        $isInstalled = & $adb -s $deviceId shell pm list packages $packageName
+        $isInstalled = [bool](& $adb -s $deviceId shell pm list packages $packageName 2>$null |
+            Where-Object { $_ -match "^package:$([regex]::Escape($packageName))$" })
         if ($isInstalled) {
             $version = (& $adb -s $deviceId shell dumpsys package $packageName | Select-String "versionName") -split '=' | Select-Object -Last 1
             Write-Log ($msg.ApkAlreadyInstalled -f $packageName, $version) -Level INFO

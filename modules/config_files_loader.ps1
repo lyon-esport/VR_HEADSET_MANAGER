@@ -94,9 +94,9 @@ function Get-Config {
 
     # Load mandatory global variables from the JSON file
     $global:SelectedLanguage = $configContent.language
-    Write-Host "DEBUG global:SelectedLanguage = $($global:SelectedLanguage)" -Level DEBUG
+    Write-Host "Config: SelectedLanguage = $($global:SelectedLanguage)"
     $global:knownHeadsetsFile = $configContent.Paths.knownHeadsetsFile
-    Write-Host "DEBUG global:knownHeadsetsFile = $($global:knownHeadsetsFile)" -ForegroundColor Magenta
+    Write-Host "Config: knownHeadsetsFile = $($global:knownHeadsetsFile)"
     
     $global:knownHeadsetsFilePath       = Join-Path -Path $(Join-Path -Path $global:ScriptPath -ChildPath "data") -ChildPath $global:knownHeadsetsFile
     $global:knownHeadsetsInfosFilePath  = Join-Path -Path $(Join-Path -Path $global:ScriptPath -ChildPath "data") -ChildPath $($global:knownHeadsetsFile).Replace(".csv","_infos.csv")
