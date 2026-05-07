@@ -196,7 +196,7 @@ function Invoke-AppShutdown {
             Stop-Process -Id $dp.ProcessId -Force -ErrorAction SilentlyContinue
         }
     } catch { }
-
+    Remove-Variable moduleSnapshots -Scope Global -ErrorAction SilentlyContinue
     exit 0
 }
 

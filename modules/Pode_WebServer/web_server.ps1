@@ -101,6 +101,38 @@ $mimeTypes = @{
     '.txt'  = 'text/plain; charset=utf-8'
 }
 
+
+# Helper: send a JSON response with proper status code, content-type and length.
+# Replaces dozens of hand-built '{"ok":true,...}' string concatenations.
+# - $Response is the [System.Net.HttpListenerResponse].
+# - $Body can be a hashtable, PSCustomObject, array, or any ConvertTo-Json target.
+#   Use $Raw if you have a pre-built JSON string.
+function Send-JsonResponse {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Response,
+        $Body = $null,
+        [int]$StatusCode = 200,
+        [string]$Raw = $null,
+        [int]$Depth = 6
+    )
+    try {
+        $json = if ($Raw) { $Raw } else { $Body | ConvertTo-Json -Compress -Depth $Depth }
+        if ($null -eq $json) { $json = 'null' }
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+
+        $Response.StatusCode      = $StatusCode
+        $Response.ContentType     = 'application/json; charset=utf-8'
+        $Response.Headers.Add('Access-Control-Allow-Origin', '*')
+        $Response.ContentLength64 = $bytes.Length
+        $Response.OutputStream.Write($bytes, 0, $bytes.Length)
+    } catch {
+        # last-resort: try to set 500 if headers not yet sent
+        try { $Response.StatusCode = 500 } catch {}
+    }
+}
+
+
 # Show LAN URLs - RFC 1918 private ranges only
 $lanIPs = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
     Where-Object {
@@ -253,8 +285,12 @@ try {
                 $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
                 if (-not $safeName) { throw "Invalid headset name" }
 
-                $safeIp = [regex]::Match($json.ip, '^(\d{1,3}\.){3}\d{1,3}$').Value
-                if (-not $safeIp) { throw "Invalid IP address" }
+                $parsedIp = $null
+                if (-not [System.Net.IPAddress]::TryParse([string]$json.ip, [ref]$parsedIp) -or
+                    $parsedIp.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) {
+                    throw "Invalid IP address"
+                }
+                $safeIp = $parsedIp.ToString()
 
                 $rows = Get-KnownHeadsets
                 $updated = $false
@@ -823,7 +859,7 @@ try {
             } catch {
                 try {
                     $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"found":false}')
-                    $response.StatusCode      = 200
+                    $response.StatusCode      = 500
                     $response.ContentType     = 'application/json; charset=utf-8'
                     $response.Headers.Add('Access-Control-Allow-Origin', '*')
                     $response.ContentLength64 = $errBytes.Length
@@ -946,7 +982,7 @@ try {
             } catch {
                 try {
                     $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"Internal error"}')
-                    $response.StatusCode      = 200
+                    $response.StatusCode      = 500
                     $response.ContentType     = 'application/json; charset=utf-8'
                     $response.Headers.Add('Access-Control-Allow-Origin', '*')
                     $response.ContentLength64 = $errBytes.Length
@@ -993,7 +1029,7 @@ try {
             } catch {
                 try {
                     $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"found":false}')
-                    $response.StatusCode      = 200
+                    $response.StatusCode      = 500
                     $response.ContentType     = 'application/json; charset=utf-8'
                     $response.Headers.Add('Access-Control-Allow-Origin', '*')
                     $response.ContentLength64 = $errBytes.Length
@@ -1018,10 +1054,12 @@ try {
                 if (-not $safeName) { throw "INVALID_NAME" }
 
                 # Validate IP format and octet range
-                $safeIp = [regex]::Match($json.ip, '^(\d{1,3}\.){3}\d{1,3}$').Value
-                if (-not $safeIp) { throw "INVALID_IP" }
-                $octets = $safeIp -split '\.'
-                if ($octets | Where-Object { [int]$_ -gt 255 }) { throw "INVALID_IP" }
+                $parsedIp2 = $null
+                if (-not [System.Net.IPAddress]::TryParse([string]$json.ip, [ref]$parsedIp2) -or
+                    $parsedIp2.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) {
+                    throw "INVALID_IP"
+                }
+                $safeIp = $parsedIp2.ToString()
 
                 $rows = @(Get-KnownHeadsets)
 
@@ -1199,7 +1237,7 @@ try {
             } catch {
                 try {
                     $errBytes = [System.Text.Encoding]::UTF8.GetBytes('[]')
-                    $response.StatusCode      = 200
+                    $response.StatusCode      = 500
                     $response.ContentType     = 'application/json; charset=utf-8'
                     $response.ContentLength64 = $errBytes.Length
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
@@ -1257,7 +1295,7 @@ try {
             } catch {
                 try {
                     $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{}')
-                    $response.StatusCode      = 200
+                    $response.StatusCode      = 500
                     $response.ContentType     = 'application/json; charset=utf-8'
                     $response.ContentLength64 = $errBytes.Length
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
@@ -1406,7 +1444,7 @@ try {
             } catch {
                 try {
                     $errBytes = [System.Text.Encoding]::UTF8.GetBytes('[]')
-                    $response.StatusCode      = 200
+                    $response.StatusCode      = 500
                     $response.ContentType     = 'application/json; charset=utf-8'
                     $response.ContentLength64 = $errBytes.Length
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
@@ -1464,7 +1502,7 @@ try {
             } catch {
                 try {
                     $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{}')
-                    $response.StatusCode      = 200
+                    $response.StatusCode      = 500
                     $response.ContentType     = 'application/json; charset=utf-8'
                     $response.ContentLength64 = $errBytes.Length
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)

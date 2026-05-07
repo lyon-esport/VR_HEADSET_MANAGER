@@ -307,7 +307,7 @@ function Get-KnownHeadsetInfos {
                     $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($proc.Id)").CommandLine
                     Write-Log ($msg.ScrcpyProcessCmdLine -f $cmdLine) -Level DEBUG
                     Write-Log ($msg.ScrcpyLookingFor -f $IPAddress, $ADBPort) -Level DEBUG
-                    if ($cmdLine -match "$IPAddress(:$ADBPort)?") {
+                    if ($cmdLine -match ([regex]::Escape($IPAddress) + "(:$ADBPort)?")) {
                         $result.SCRCPY = "OK"
                         Write-Log ($msg.ScrcpyRunningFor -f $knownHeadset.Name, $IPAddress) -Level DEBUG
                         break
