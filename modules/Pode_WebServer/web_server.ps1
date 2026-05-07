@@ -1672,6 +1672,90 @@ try {
             continue
         }
 
+        # API: GET /api/config  - returns config.json content as JSON
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/config') {
+            try {
+                $cfgFile = Join-Path $ScriptPath "config\config.json"
+                if (Test-Path -LiteralPath $cfgFile) {
+                    $raw = Get-Content -LiteralPath $cfgFile -Raw
+                    # Strip UTF-8 BOM if present so JSON.parse() succeeds in the browser
+                    if ($raw -and $raw[0] -eq [char]0xFEFF) { $raw = $raw.Substring(1) }
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes($raw)
+                    $response.StatusCode = 200
+                } else {
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{}')
+                    $response.StatusCode = 404
+                }
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $eb = [System.Text.Encoding]::UTF8.GetBytes('{}')
+                    $response.StatusCode = 500; $response.ContentType = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
+                } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/config/save  - validates and writes the posted JSON as config.json
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/config/save') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body   = $reader.ReadToEnd(); $reader.Close()
+                # Validate JSON before touching disk
+                $null   = $body | ConvertFrom-Json
+                $cfgFile = Join-Path $ScriptPath "config\config.json"
+                $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+                [System.IO.File]::WriteAllText($cfgFile, $body, $utf8NoBom)
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errMsg = ($_ -replace '"',"'") -replace '[\r\n]',' '
+                    $eb = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"' + $errMsg + '"}')
+                    $response.StatusCode = 400; $response.ContentType = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
+                } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/config/reset  - archives config.json with timestamp, copies template
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/config/reset') {
+            try {
+                $cfgFile = Join-Path $ScriptPath "config\config.json"
+                $tplFile = Join-Path $ScriptPath "templates\config\config.json"
+                if (-not (Test-Path -LiteralPath $tplFile)) { throw "Template file not found" }
+                if (Test-Path -LiteralPath $cfgFile) {
+                    $stamp   = Get-Date -Format 'yyyy.MM.dd-HH.mm'
+                    $cfgDir  = [System.IO.Path]::GetDirectoryName($cfgFile)
+                    $archive = Join-Path $cfgDir "config_$stamp.json"
+                    Copy-Item -LiteralPath $cfgFile -Destination $archive -Force
+                }
+                Copy-Item -LiteralPath $tplFile -Destination $cfgFile -Force
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $eb = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode = 500; $response.ContentType = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
+                } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
         # ── /end Known Apps Management API ───────────────────────────────────────
 
         try {

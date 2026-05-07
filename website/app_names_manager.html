@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -38,10 +38,10 @@
 
     .page-wrap { display: flex; flex-direction: column; height: 100vh; }
 
-    /* ── Content area ────────────────────────────────────────────────────────── */
+    /* â”€â”€ Content area â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
     .content { flex: 1; overflow: hidden; display: flex; flex-direction: column; padding: 10px 14px 8px; gap: 8px; }
 
-    /* ── Action bar ──────────────────────────────────────────────────────────── */
+    /* â”€â”€ Action bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
     .action-bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; flex-shrink: 0; }
     .action-btn {
       display: inline-flex; align-items: center; gap: 6px;
@@ -53,7 +53,7 @@
     .action-btn.danger:hover:not(:disabled) { background: var(--danger); color: #fff; border-color: var(--danger); }
     .action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-    /* ── Table card ──────────────────────────────────────────────────────────── */
+    /* â”€â”€ Table card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
     .table-card {
       flex: 1; overflow: hidden; display: flex; flex-direction: column;
       background: var(--bg2); border: 1px solid var(--border); border-radius: 8px;
@@ -70,7 +70,7 @@
     .col-li  { width: 14%; }
     .col-er  { width: 34px; }
 
-    /* ── Sticky header ───────────────────────────────────────────────────────── */
+    /* â”€â”€ Sticky header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
     thead { position: sticky; top: 0; z-index: 4; }
 
     thead tr.hdr-row th {
@@ -91,7 +91,7 @@
     }
     thead tr.input-row input:focus { border-color: var(--accent); }
 
-    /* ── Data rows ───────────────────────────────────────────────────────────── */
+    /* â”€â”€ Data rows â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
     tbody tr { border-bottom: 1px solid var(--border); }
     tbody tr:last-child { border-bottom: none; }
     tbody tr:hover { background: var(--bg3); }
@@ -105,7 +105,7 @@
     td.dn-cell   { font-size: 12px; }
     td.url-cell  { font-size: 11px; color: var(--text2); }
 
-    /* ── Row buttons ─────────────────────────────────────────────────────────── */
+    /* â”€â”€ Row buttons â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
     .row-btn {
       display: inline-flex; align-items: center; justify-content: center;
       width: 26px; height: 26px; border-radius: 4px; border: 1px solid transparent;
@@ -127,7 +127,7 @@
     /* App icon thumbnail */
     .app-icon { width: 18px; height: 18px; border-radius: 3px; object-fit: cover; vertical-align: middle; margin-right: 5px; flex-shrink: 0; }
 
-    /* ── Status bar ──────────────────────────────────────────────────────────── */
+    /* â”€â”€ Status bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
     .status-bar {
       flex-shrink: 0; display: flex; align-items: center; gap: 7px;
       padding: 5px 10px; border-top: 1px solid var(--border);
@@ -138,7 +138,7 @@
     .status-dot.busy { background: var(--warn); }
     .status-dot.err  { background: var(--danger); }
 
-    /* ── Confirm overlay ─────────────────────────────────────────────────────── */
+    /* â”€â”€ Confirm overlay â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
     .overlay { position: fixed; inset: 0; z-index: 200; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; }
     .confirm-box { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 20px 22px; max-width: 360px; width: 90%; }
     .confirm-box p { margin: 0 0 14px; line-height: 1.5; }
@@ -147,7 +147,7 @@
     .btn-cancel  { padding: 6px 14px; border-radius: 5px; border: 1px solid var(--border); background: var(--bg3); color: var(--text); cursor: pointer; font-size: 12px; }
     .btn-del-confirm { padding: 6px 14px; border-radius: 5px; border: 1px solid var(--danger); background: var(--danger); color: #fff; cursor: pointer; font-size: 12px; }
 
-    /* ── Spinner ─────────────────────────────────────────────────────────────── */
+    /* â”€â”€ Spinner â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
     @keyframes spin { to { transform: rotate(360deg); } }
     .spin { display: inline-block; animation: spin 0.75s linear infinite; }
   </style>
@@ -162,6 +162,8 @@
       Known Apps Management
     </div>
     <div class="topbar-right">
+      <script>document.write(TopBar.monitoringBtnHTML)</script>
+      <script>document.write(TopBar.manageDevicesBtnHTML)</script>
       <script>document.write(TopBar.configMenuHTML)</script>
     </div>
   </header>
@@ -254,19 +256,19 @@
   var inIU   = document.getElementById('in-icon-url');
   var inLI   = document.getElementById('in-local');
 
-  // ── Status ────────────────────────────────────────────────────────────────
+  // â”€â”€ Status â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   function setStatus(msg, state) {
     document.getElementById('status-text').textContent = msg;
     document.getElementById('status-dot').className = 'status-dot' + (state ? ' ' + state : '');
   }
 
-  // ── Escape HTML ───────────────────────────────────────────────────────────
+  // â”€â”€ Escape HTML â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   function esc(s) {
     if (!s) return '';
     return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
-  // ── Load ──────────────────────────────────────────────────────────────────
+  // â”€â”€ Load â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   function loadApps() {
     setStatus('Loading...', 'busy');
     fetch('/api/appnames')
@@ -279,7 +281,7 @@
       .catch(function(e) { setStatus('Load failed: ' + e.message, 'err'); });
   }
 
-  // ── Adjust Package Name column to fit longest value ──────────────────────
+  // â”€â”€ Adjust Package Name column to fit longest value â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   var _measureCtx = (function() {
     var c = document.createElement('canvas');
     return c.getContext('2d');
@@ -296,7 +298,7 @@
     if (col) col.style.width = colPx + 'px';
   }
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  // â”€â”€ Render â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   function renderTable() {
     tbody.innerHTML = '';
     _apps.forEach(function(app) {
@@ -329,7 +331,7 @@
     adjustPkgColumnWidth();
   }
 
-  // ── Input row helpers ─────────────────────────────────────────────────────
+  // â”€â”€ Input row helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   function clearInputRow() {
     inPkg.value = ''; inDN.value = ''; inIU.value = ''; inLI.value = '';
     inPkg.readOnly = false;
@@ -355,7 +357,7 @@
     inDN.focus();
   }
 
-  // ── Save ──────────────────────────────────────────────────────────────────
+  // â”€â”€ Save â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   document.getElementById('btn-save').addEventListener('click', doSave);
 
   function doSave() {
@@ -381,7 +383,7 @@
     .catch(function(e) { setStatus('Save error: ' + e.message, 'err'); });
   }
 
-  // ── Table click delegation ────────────────────────────────────────────────
+  // â”€â”€ Table click delegation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   tbody.addEventListener('click', function(e) {
     var editBtn = e.target.closest('[data-edit]');
     if (editBtn) {
@@ -398,7 +400,7 @@
     }
   });
 
-  // ── Confirm delete ────────────────────────────────────────────────────────
+  // â”€â”€ Confirm delete â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   document.getElementById('confirm-cancel').addEventListener('click', closeConfirm);
   document.getElementById('confirm-ok').addEventListener('click', function() {
     if (!_delPkg) return;
@@ -429,12 +431,12 @@
     }
   });
 
-  // ── Enter key in input row ────────────────────────────────────────────────
+  // â”€â”€ Enter key in input row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   [inPkg, inDN, inIU, inLI].forEach(function(inp) {
     inp.addEventListener('keydown', function(e) { if (e.key === 'Enter') doSave(); });
   });
 
-  // ── Clear table ───────────────────────────────────────────────────────────
+  // â”€â”€ Clear table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   document.getElementById('btn-clear').addEventListener('click', function() {
     if (!confirm('Archive the current app names table and start fresh?\n\nThe current file will be renamed with a date suffix (_old_YYYY.MM.DD-HH.MM).')) return;
     setStatus('Archiving...', 'busy');
@@ -447,7 +449,7 @@
       .catch(function(e) { setStatus('Clear error: ' + e.message, 'err'); });
   });
 
-  // ── Refresh from web ──────────────────────────────────────────────────────
+  // â”€â”€ Refresh from web â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   document.getElementById('btn-refresh-web').addEventListener('click', function() {
     var btn = this;
     var origHTML = btn.innerHTML;
@@ -475,7 +477,7 @@
       });
   });
 
-  // ── Init ──────────────────────────────────────────────────────────────────
+  // â”€â”€ Init â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   loadApps();
 })();
 </script>
