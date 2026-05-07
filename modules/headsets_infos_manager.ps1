@@ -133,7 +133,7 @@ function Start-VRMonitor {
 
                 # Update Model in known_headsets.csv if ADB is reachable and the value has changed
                 $fetchedModel = $headsetInfo.Model
-                if ($headsetInfo.ADBWifi -eq $true `
+                if ((ConvertTo-BoolField $headsetInfo.ADBWifi) `
                     -and -not [string]::IsNullOrWhiteSpace($fetchedModel) `
                     -and $fetchedModel -ne "-" `
                     -and $fetchedModel -ne $headset.Model) {
@@ -143,7 +143,7 @@ function Start-VRMonitor {
 
                 # Update SerialNumber in known_headsets.csv if ADB is reachable and the value has changed
                 $fetchedSerial = $headsetInfo.SerialNumber
-                if ($headsetInfo.ADBWifi -eq $true `
+                if ((ConvertTo-BoolField $headsetInfo.ADBWifi) `
                     -and -not [string]::IsNullOrWhiteSpace($fetchedSerial) `
                     -and $fetchedSerial -ne "-" `
                     -and $fetchedSerial -ne $headset.SerialNumber) {
@@ -151,14 +151,14 @@ function Start-VRMonitor {
                     Update-HeadsetField -ID $headset.ID -Field "SerialNumber" -NewValue $fetchedSerial
                 }
 
-                if ($headsetInfo.ADBWifi -eq $true) {
+                if (ConvertTo-BoolField $headsetInfo.ADBWifi) {
                     $device = Get-AdbWifiDevice -headsetIP $headset.IPAddress
                     if ($device) { Update-InstalledAppsCache -Device $device -headsetName $headset.Name }
                 }
 
                 # Battery history tracking and time estimate
                 $ip = $headset.IPAddress
-                if ($headsetInfo.ADBWifi -eq $true -and $headsetInfo.Battery -ne "-") {
+                if ((ConvertTo-BoolField $headsetInfo.ADBWifi) -and $headsetInfo.Battery -ne "-") {
                     $currentLevel = [int]($headsetInfo.Battery -replace ' %','')
                     $nowStr       = [datetime]::Now.ToString("yyyy-MM-ddTHH:mm:ss")
                     $newEntry     = "$nowStr=$currentLevel"

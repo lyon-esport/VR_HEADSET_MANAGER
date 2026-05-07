@@ -694,7 +694,7 @@ function Show-SubMenu-scrcpyTracking { #CHOICE 5
         Write-Host $msg.Separator
         $headsets | ForEach-Object {
             $autoRestartText = $_.scrcpy_AutoRestart
-            $autoRestartColor = if ($autoRestartText -eq $true) { "Green" } else { "Red" }
+            $autoRestartColor = if (ConvertTo-BoolField $autoRestartText) { "Green" } else { "Red" }
             
             Write-Host "$($_.ID) `t $($_.Name) `t`t " -NoNewline
             Write-Host $autoRestartText -ForegroundColor $autoRestartColor
@@ -706,7 +706,7 @@ function Show-SubMenu-scrcpyTracking { #CHOICE 5
     $choice = Read-Host $msg.Choice
 
     if ($choice -in $headsets.ID){
-        if ($headsets[$choice-1].scrcpy_AutoRestart -eq $true) {
+        if (ConvertTo-BoolField $headsets[$choice-1].scrcpy_AutoRestart) {
             Write-Log -Message ($msg.DeactivateAutoTracking -f $choice, $headsets[$choice-1].Name) -Level "INFO"
             $headsets[$choice-1].scrcpy_AutoRestart = $false
         } else {
@@ -739,7 +739,7 @@ function Show-SubMenu-Recording { #CHOICE 6
         Write-Host $msg.Separator
         $headsets | ForEach-Object {
             $recordingText = $_.Record
-            $recordingColor = if ($recordingText -eq $true) { "Green" } else { "Red" }
+            $recordingColor = if (ConvertTo-BoolField $recordingText) { "Green" } else { "Red" }
             
             Write-Host "$($_.ID) `t $($_.Name) `t " -NoNewline
             Write-Host $recordingText -ForegroundColor $recordingColor
@@ -751,7 +751,7 @@ function Show-SubMenu-Recording { #CHOICE 6
     $choice = Read-Host $msg.Choice
 
     if ($choice -in $headsets.ID){
-        if ($headsets[$choice-1].Record -eq $true) {
+        if (ConvertTo-BoolField $headsets[$choice-1].Record) {
             Write-Log -Message ($msg.DeactivateRecording -f $choice, $headsets[$choice-1].Name) -Level "INFO"
             $headsets[$choice-1].Record = $false
         } else {
