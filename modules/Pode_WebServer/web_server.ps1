@@ -1473,6 +1473,207 @@ try {
             continue
         }
 
+        # ── Known Apps Management API ─────────────────────────────────────────────
+
+        # API: GET /api/appnames  - returns all rows from app_names.csv as JSON
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/appnames') {
+            try {
+                $appCsvPath = if ($global:AppCacheFilePath) { $global:AppCacheFilePath } else {
+                    [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\app_names.csv"))
+                }
+                $appObjects = @()
+                if (Test-Path -LiteralPath $appCsvPath) {
+                    $appObjects = @(Import-Csv -LiteralPath $appCsvPath -Delimiter "," |
+                        ForEach-Object {
+                            [PSCustomObject]@{
+                                PackageName   = [string]$_.PackageName
+                                DisplayName   = [string]$_.DisplayName
+                                IconUrl       = [string]$_.IconUrl
+                                LocalIconPath = [string]$_.LocalIconPath
+                            }
+                        })
+                }
+                $appsJson = $appObjects | ConvertTo-Json -Compress -Depth 2
+                if ($appObjects.Count -eq 0) { $appsJson = '[]' }
+                elseif ($appObjects.Count -eq 1) { $appsJson = '[' + $appsJson + ']' }
+                $json = '{"apps":' + $appsJson + '}'
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $eb = [System.Text.Encoding]::UTF8.GetBytes('{"apps":[]}')
+                    $response.StatusCode = 200; $response.ContentType = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
+                } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/appnames/save  - upsert a row (key = PackageName)
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/appnames/save') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body   = $reader.ReadToEnd(); $reader.Close()
+                $json   = $body | ConvertFrom-Json
+
+                $pkg = ($json.PackageName -replace '[^\w\.\-]','').Trim()
+                if (-not $pkg) { throw "Invalid PackageName" }
+
+                $appCsvPath = if ($global:AppCacheFilePath) { $global:AppCacheFilePath } else {
+                    [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\app_names.csv"))
+                }
+
+                $rows  = @()
+                $cache = [ordered]@{}
+                if (Test-Path -LiteralPath $appCsvPath) {
+                    foreach ($r in @(Import-Csv -LiteralPath $appCsvPath -Delimiter ",")) {
+                        $cache[$r.PackageName] = $r
+                    }
+                }
+                $cache[$pkg] = [PSCustomObject]@{
+                    PackageName   = $pkg
+                    DisplayName   = [string]$json.DisplayName
+                    IconUrl       = [string]$json.IconUrl
+                    LocalIconPath = [string]$json.LocalIconPath
+                }
+                $cache.Values | Sort-Object DisplayName |
+                    Export-Csv -LiteralPath $appCsvPath -NoTypeInformation -Encoding UTF8 -Force
+
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $eb = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode = 500; $response.ContentType = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
+                } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/appnames/delete  - remove a row by PackageName
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/appnames/delete') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body   = $reader.ReadToEnd(); $reader.Close()
+                $json   = $body | ConvertFrom-Json
+
+                $pkg = ($json.PackageName -replace '[^\w\.\-]','').Trim()
+                if (-not $pkg) { throw "Invalid PackageName" }
+
+                $appCsvPath = if ($global:AppCacheFilePath) { $global:AppCacheFilePath } else {
+                    [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\app_names.csv"))
+                }
+
+                if (Test-Path -LiteralPath $appCsvPath) {
+                    $rows = @(Import-Csv -LiteralPath $appCsvPath -Delimiter ",") |
+                            Where-Object { $_.PackageName -ne $pkg }
+                    if ($rows.Count -gt 0) {
+                        $rows | Export-Csv -LiteralPath $appCsvPath -NoTypeInformation -Encoding UTF8 -Force
+                    } else {
+                        '"PackageName","DisplayName","IconUrl","LocalIconPath"' |
+                            Set-Content -LiteralPath $appCsvPath -Encoding UTF8 -Force
+                    }
+                }
+
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $eb = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode = 500; $response.ContentType = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
+                } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/appnames/clear  - archive current file, create empty replacement
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/appnames/clear') {
+            try {
+                $appCsvPath = if ($global:AppCacheFilePath) { $global:AppCacheFilePath } else {
+                    [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\app_names.csv"))
+                }
+
+                if (Test-Path -LiteralPath $appCsvPath) {
+                    $stamp   = Get-Date -Format 'yyyy.MM.dd-HH.mm'
+                    $dir     = Split-Path $appCsvPath -Parent
+                    $base    = [System.IO.Path]::GetFileNameWithoutExtension($appCsvPath)
+                    $ext     = [System.IO.Path]::GetExtension($appCsvPath)
+                    $archive = Join-Path $dir ($base + '_old_' + $stamp + $ext)
+                    Rename-Item -LiteralPath $appCsvPath -NewName $archive -Force -ErrorAction Stop
+                }
+
+                '"PackageName","DisplayName","IconUrl","LocalIconPath"' |
+                    Set-Content -LiteralPath $appCsvPath -Encoding UTF8 -Force
+
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $eb = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"' + ($_ -replace '"',"'") + '"}')
+                    $response.StatusCode = 500; $response.ContentType = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
+                } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/appnames/refresh - call Get-AppInfo for apps missing display name or icon
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/appnames/refresh') {
+            try {
+                $appCsvPath = if ($global:AppCacheFilePath) { $global:AppCacheFilePath } else {
+                    [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\app_names.csv"))
+                }
+                $updated = 0
+                if (Test-Path -LiteralPath $appCsvPath) {
+                    $rows = @(Import-Csv -LiteralPath $appCsvPath -Delimiter ",")
+                    foreach ($row in $rows) {
+                        $needsUpdate = ([string]::IsNullOrWhiteSpace($row.DisplayName) -or
+                                        $row.DisplayName -eq ($row.PackageName -replace '^com\.','') -or
+                                        [string]::IsNullOrWhiteSpace($row.IconUrl))
+                        if ($needsUpdate) {
+                            try {
+                                $info = Get-AppInfo -PackageName $row.PackageName -AppCacheFilePath $appCsvPath -searchOnline $true
+                                if ($info) { $updated++ }
+                            } catch {}
+                        }
+                    }
+                }
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true,"updated":' + $updated + '}')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $eb = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode = 500; $response.ContentType = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
+                } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
+        # ── /end Known Apps Management API ───────────────────────────────────────
+
         try {
             # Resolve URL path to a file.
             # /data/*.csv  -> served from <ScriptPath>\data\  (read-only CSV export)

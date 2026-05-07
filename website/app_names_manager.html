@@ -1,0 +1,483 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Known Apps - VR Headset Manager</title>
+  <link rel="stylesheet" href="assets/topbar.css">
+  <script src="assets/topbar.js"></script>
+  <style>
+    :root {
+      --bg:         #1a1a1a;
+      --bg2:        #242424;
+      --bg3:        #2e2e2e;
+      --bg4:        #383838;
+      --border:     #3a3a3a;
+      --text:       #e8e8e8;
+      --text2:      #999;
+      --accent:     #3b82f6;
+      --success:    #22c55e;
+      --danger:     #ef4444;
+      --warn:       #f59e0b;
+    }
+    [data-theme="light"] {
+      --bg:         #f0f0f0;
+      --bg2:        #ffffff;
+      --bg3:        #f5f5f5;
+      --bg4:        #e8e8e8;
+      --border:     #d8d8d8;
+      --text:       #111111;
+      --text2:      #666666;
+      --accent:     #2563eb;
+      --success:    #16a34a;
+      --danger:     #dc2626;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, sans-serif; font-size: 13px; }
+
+    .page-wrap { display: flex; flex-direction: column; height: 100vh; }
+
+    /* ── Content area ────────────────────────────────────────────────────────── */
+    .content { flex: 1; overflow: hidden; display: flex; flex-direction: column; padding: 10px 14px 8px; gap: 8px; }
+
+    /* ── Action bar ──────────────────────────────────────────────────────────── */
+    .action-bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; flex-shrink: 0; }
+    .action-btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 6px 13px; border-radius: 6px; border: 1px solid var(--border);
+      background: var(--bg3); color: var(--text); cursor: pointer; font-size: 12px;
+      transition: background 0.14s, color 0.14s, border-color 0.14s;
+    }
+    .action-btn:hover:not(:disabled) { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .action-btn.danger:hover:not(:disabled) { background: var(--danger); color: #fff; border-color: var(--danger); }
+    .action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* ── Table card ──────────────────────────────────────────────────────────── */
+    .table-card {
+      flex: 1; overflow: hidden; display: flex; flex-direction: column;
+      background: var(--bg2); border: 1px solid var(--border); border-radius: 8px;
+    }
+    .table-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; }
+
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+
+    /* Column widths */
+    .col-el  { width: 34px; }
+    .col-pkg { width: auto; min-width: 120px; }
+    .col-dn  { width: 24%; }
+    .col-iu  { width: 24%; }
+    .col-li  { width: 14%; }
+    .col-er  { width: 34px; }
+
+    /* ── Sticky header ───────────────────────────────────────────────────────── */
+    thead { position: sticky; top: 0; z-index: 4; }
+
+    thead tr.hdr-row th {
+      background: var(--bg3); border-bottom: 1px solid var(--border);
+      padding: 7px 6px; text-align: left;
+      font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+      color: var(--text2); white-space: nowrap; overflow: hidden;
+    }
+
+    thead tr.input-row td {
+      background: var(--bg2); border-bottom: 2px solid var(--accent);
+      padding: 4px 4px;
+    }
+    thead tr.input-row input {
+      width: 100%; background: var(--bg3); border: 1px solid var(--border);
+      color: var(--text); padding: 5px 7px; border-radius: 4px; font-size: 12px;
+      outline: none; transition: border-color 0.12s;
+    }
+    thead tr.input-row input:focus { border-color: var(--accent); }
+
+    /* ── Data rows ───────────────────────────────────────────────────────────── */
+    tbody tr { border-bottom: 1px solid var(--border); }
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: var(--bg3); }
+    tbody tr.editing { background: rgba(59,130,246,0.07); }
+
+    tbody td {
+      padding: 5px 6px; vertical-align: middle;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    td.pkg-cell  { font-size: 12px; font-family: 'Consolas', monospace; }
+    td.dn-cell   { font-size: 12px; }
+    td.url-cell  { font-size: 11px; color: var(--text2); }
+
+    /* ── Row buttons ─────────────────────────────────────────────────────────── */
+    .row-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 26px; height: 26px; border-radius: 4px; border: 1px solid transparent;
+      background: transparent; color: var(--text2); cursor: pointer; padding: 0;
+      transition: background 0.12s, color 0.12s, border-color 0.12s;
+    }
+    .row-btn.edit:hover  { background: rgba(59,130,246,0.14); color: var(--accent); border-color: var(--accent); }
+    .row-btn.del:hover   { background: rgba(239,68,68,0.14);  color: var(--danger); border-color: var(--danger); }
+
+    /* Save button in input row */
+    .save-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 26px; height: 26px; border-radius: 4px; border: 1px solid var(--success);
+      background: transparent; color: var(--success); cursor: pointer; padding: 0;
+      transition: background 0.12s;
+    }
+    .save-btn:hover { background: rgba(34,197,94,0.14); }
+
+    /* App icon thumbnail */
+    .app-icon { width: 18px; height: 18px; border-radius: 3px; object-fit: cover; vertical-align: middle; margin-right: 5px; flex-shrink: 0; }
+
+    /* ── Status bar ──────────────────────────────────────────────────────────── */
+    .status-bar {
+      flex-shrink: 0; display: flex; align-items: center; gap: 7px;
+      padding: 5px 10px; border-top: 1px solid var(--border);
+      font-size: 11px; color: var(--text2);
+    }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text2); flex-shrink: 0; transition: background 0.2s; }
+    .status-dot.ok   { background: var(--success); }
+    .status-dot.busy { background: var(--warn); }
+    .status-dot.err  { background: var(--danger); }
+
+    /* ── Confirm overlay ─────────────────────────────────────────────────────── */
+    .overlay { position: fixed; inset: 0; z-index: 200; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; }
+    .confirm-box { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 20px 22px; max-width: 360px; width: 90%; }
+    .confirm-box p { margin: 0 0 14px; line-height: 1.5; }
+    .confirm-box .pkg-label { font-family: monospace; font-size: 12px; color: var(--danger); word-break: break-all; }
+    .confirm-row { display: flex; gap: 8px; justify-content: flex-end; }
+    .btn-cancel  { padding: 6px 14px; border-radius: 5px; border: 1px solid var(--border); background: var(--bg3); color: var(--text); cursor: pointer; font-size: 12px; }
+    .btn-del-confirm { padding: 6px 14px; border-radius: 5px; border: 1px solid var(--danger); background: var(--danger); color: #fff; cursor: pointer; font-size: 12px; }
+
+    /* ── Spinner ─────────────────────────────────────────────────────────────── */
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spin { display: inline-block; animation: spin 0.75s linear infinite; }
+  </style>
+</head>
+<body>
+<div class="page-wrap">
+
+  <header class="topbar">
+    <script>document.write(TopBar.brandHTML)</script>
+    <div class="v-sep"></div>
+    <div style="flex:1; padding:0 12px; font-size:13px; color:var(--topbar-muted,#888); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+      Known Apps Management
+    </div>
+    <div class="topbar-right">
+      <script>document.write(TopBar.configMenuHTML)</script>
+    </div>
+  </header>
+
+  <div class="content">
+
+    <!-- Action bar -->
+    <div class="action-bar">
+      <button class="action-btn" id="btn-refresh-web">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.55"/></svg>
+        Search and update applications information from the web
+      </button>
+      <button class="action-btn danger" id="btn-clear">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+        Clear known applications table
+      </button>
+    </div>
+
+    <!-- Table card -->
+    <div class="table-card">
+      <div class="table-scroll" id="table-scroll">
+        <table id="apps-table">
+          <colgroup>
+            <col class="col-el">
+            <col class="col-pkg">
+            <col class="col-dn">
+            <col class="col-iu">
+            <col class="col-li">
+            <col class="col-er">
+          </colgroup>
+          <thead>
+            <!-- Header row -->
+            <tr class="hdr-row">
+              <th class="col-el"></th>
+              <th class="col-pkg">Package Name</th>
+              <th class="col-dn">Display Name</th>
+              <th class="col-iu">Icon URL</th>
+              <th class="col-li">Local Icon</th>
+              <th class="col-er"></th>
+            </tr>
+            <!-- Input / add row -->
+            <tr class="input-row" id="input-row">
+              <td style="text-align:center">
+                <button class="save-btn" id="btn-save" title="Save (Enter)">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                </button>
+              </td>
+              <td><input type="text" id="in-pkg"     placeholder="com.example.app"   autocomplete="off" spellcheck="false"></td>
+              <td><input type="text" id="in-display" placeholder="Display Name"       autocomplete="off"></td>
+              <td><input type="text" id="in-icon-url" placeholder="https://..."       autocomplete="off" spellcheck="false"></td>
+              <td><input type="text" id="in-local"   placeholder="/assets/app_icons/" autocomplete="off" spellcheck="false"></td>
+              <td></td>
+            </tr>
+          </thead>
+          <tbody id="apps-body">
+            <!-- data rows injected by JS -->
+          </tbody>
+        </table>
+      </div>
+
+      <div class="status-bar">
+        <span class="status-dot" id="status-dot"></span>
+        <span id="status-text">Loading...</span>
+      </div>
+    </div>
+
+  </div><!-- .content -->
+</div><!-- .page-wrap -->
+
+<!-- Delete confirm overlay -->
+<div class="overlay" id="confirm-overlay" style="display:none">
+  <div class="confirm-box">
+    <p>Delete app entry<br><span class="pkg-label" id="confirm-pkg"></span>?<br>This cannot be undone.</p>
+    <div class="confirm-row">
+      <button class="btn-cancel" id="confirm-cancel">Cancel</button>
+      <button class="btn-del-confirm" id="confirm-ok">Delete</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var _apps    = [];
+  var _editPkg = null;
+  var _delPkg  = null;
+
+  var tbody  = document.getElementById('apps-body');
+  var inPkg  = document.getElementById('in-pkg');
+  var inDN   = document.getElementById('in-display');
+  var inIU   = document.getElementById('in-icon-url');
+  var inLI   = document.getElementById('in-local');
+
+  // ── Status ────────────────────────────────────────────────────────────────
+  function setStatus(msg, state) {
+    document.getElementById('status-text').textContent = msg;
+    document.getElementById('status-dot').className = 'status-dot' + (state ? ' ' + state : '');
+  }
+
+  // ── Escape HTML ───────────────────────────────────────────────────────────
+  function esc(s) {
+    if (!s) return '';
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // ── Load ──────────────────────────────────────────────────────────────────
+  function loadApps() {
+    setStatus('Loading...', 'busy');
+    fetch('/api/appnames')
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        _apps = d.apps || [];
+        renderTable();
+        setStatus(_apps.length + ' apps', 'ok');
+      })
+      .catch(function(e) { setStatus('Load failed: ' + e.message, 'err'); });
+  }
+
+  // ── Adjust Package Name column to fit longest value ──────────────────────
+  var _measureCtx = (function() {
+    var c = document.createElement('canvas');
+    return c.getContext('2d');
+  })();
+
+  function adjustPkgColumnWidth() {
+    if (!_apps.length) return;
+    _measureCtx.font = '12px Consolas, monospace';
+    var maxW = _apps.reduce(function(m, app) {
+      return Math.max(m, _measureCtx.measureText(app.PackageName || '').width);
+    }, _measureCtx.measureText('Package Name').width);  // never narrower than header
+    var colPx = Math.ceil(maxW) + 12;  // 6px padding each side
+    var col = document.querySelector('#apps-table col.col-pkg');
+    if (col) col.style.width = colPx + 'px';
+  }
+
+  // ── Render ────────────────────────────────────────────────────────────────
+  function renderTable() {
+    tbody.innerHTML = '';
+    _apps.forEach(function(app) {
+      var tr = document.createElement('tr');
+      tr.dataset.pkg = app.PackageName;
+      if (_editPkg === app.PackageName) tr.classList.add('editing');
+
+      var iconHtml = app.LocalIconPath
+        ? '<img src="' + esc(app.LocalIconPath) + '" class="app-icon" onerror="this.style.display=\'none\'">'
+        : '';
+
+      tr.innerHTML =
+        '<td class="col-el" style="text-align:center">' +
+          '<button class="row-btn edit" data-edit="' + esc(app.PackageName) + '" title="Edit">' +
+            '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>' +
+          '</button>' +
+        '</td>' +
+        '<td class="col-pkg pkg-cell" title="' + esc(app.PackageName) + '">' + esc(app.PackageName) + '</td>' +
+        '<td class="col-dn  dn-cell"  title="' + esc(app.DisplayName)  + '">' + iconHtml + esc(app.DisplayName) + '</td>' +
+        '<td class="col-iu  url-cell" title="' + esc(app.IconUrl)       + '">' + esc(app.IconUrl)       + '</td>' +
+        '<td class="col-li  url-cell" title="' + esc(app.LocalIconPath) + '">' + esc(app.LocalIconPath) + '</td>' +
+        '<td class="col-er" style="text-align:center">' +
+          '<button class="row-btn del" data-del="' + esc(app.PackageName) + '" title="Delete">' +
+            '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
+          '</button>' +
+        '</td>';
+
+      tbody.appendChild(tr);
+    });
+    adjustPkgColumnWidth();
+  }
+
+  // ── Input row helpers ─────────────────────────────────────────────────────
+  function clearInputRow() {
+    inPkg.value = ''; inDN.value = ''; inIU.value = ''; inLI.value = '';
+    inPkg.readOnly = false;
+    inPkg.style.opacity = '';
+    _editPkg = null;
+    tbody.querySelectorAll('tr.editing').forEach(function(r) { r.classList.remove('editing'); });
+  }
+
+  function loadRow(app) {
+    inPkg.value = app.PackageName || '';
+    inDN.value  = app.DisplayName || '';
+    inIU.value  = app.IconUrl     || '';
+    inLI.value  = app.LocalIconPath || '';
+    inPkg.readOnly = true;
+    inPkg.style.opacity = '0.6';
+    _editPkg = app.PackageName;
+    // Highlight editing row
+    tbody.querySelectorAll('tr').forEach(function(r) {
+      r.classList.toggle('editing', r.dataset.pkg === app.PackageName);
+    });
+    // Scroll to input row
+    document.getElementById('table-scroll').scrollTo({ top: 0, behavior: 'smooth' });
+    inDN.focus();
+  }
+
+  // ── Save ──────────────────────────────────────────────────────────────────
+  document.getElementById('btn-save').addEventListener('click', doSave);
+
+  function doSave() {
+    var pkg = inPkg.value.trim();
+    if (!pkg) { inPkg.focus(); return; }
+    var payload = {
+      PackageName:   pkg,
+      DisplayName:   inDN.value.trim(),
+      IconUrl:       inIU.value.trim(),
+      LocalIconPath: inLI.value.trim()
+    };
+    setStatus('Saving...', 'busy');
+    fetch('/api/appnames/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.ok) { clearInputRow(); loadApps(); }
+      else { setStatus('Save failed: ' + (d.error || ''), 'err'); }
+    })
+    .catch(function(e) { setStatus('Save error: ' + e.message, 'err'); });
+  }
+
+  // ── Table click delegation ────────────────────────────────────────────────
+  tbody.addEventListener('click', function(e) {
+    var editBtn = e.target.closest('[data-edit]');
+    if (editBtn) {
+      var pkg = editBtn.dataset.edit;
+      var app = _apps.find(function(a) { return a.PackageName === pkg; });
+      if (app) loadRow(app);
+      return;
+    }
+    var delBtn = e.target.closest('[data-del]');
+    if (delBtn) {
+      _delPkg = delBtn.dataset.del;
+      document.getElementById('confirm-pkg').textContent = _delPkg;
+      document.getElementById('confirm-overlay').style.display = 'flex';
+    }
+  });
+
+  // ── Confirm delete ────────────────────────────────────────────────────────
+  document.getElementById('confirm-cancel').addEventListener('click', closeConfirm);
+  document.getElementById('confirm-ok').addEventListener('click', function() {
+    if (!_delPkg) return;
+    closeConfirm();
+    var pkg = _delPkg; _delPkg = null;
+    setStatus('Deleting...', 'busy');
+    fetch('/api/appnames/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ PackageName: pkg })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.ok) { if (_editPkg === pkg) clearInputRow(); loadApps(); }
+      else { setStatus('Delete failed: ' + (d.error || ''), 'err'); }
+    })
+    .catch(function(e) { setStatus('Delete error: ' + e.message, 'err'); });
+  });
+
+  function closeConfirm() {
+    document.getElementById('confirm-overlay').style.display = 'none';
+  }
+
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      if (document.getElementById('confirm-overlay').style.display !== 'none') { closeConfirm(); _delPkg = null; }
+      else { clearInputRow(); }
+    }
+  });
+
+  // ── Enter key in input row ────────────────────────────────────────────────
+  [inPkg, inDN, inIU, inLI].forEach(function(inp) {
+    inp.addEventListener('keydown', function(e) { if (e.key === 'Enter') doSave(); });
+  });
+
+  // ── Clear table ───────────────────────────────────────────────────────────
+  document.getElementById('btn-clear').addEventListener('click', function() {
+    if (!confirm('Archive the current app names table and start fresh?\n\nThe current file will be renamed with a date suffix (_old_YYYY.MM.DD-HH.MM).')) return;
+    setStatus('Archiving...', 'busy');
+    fetch('/api/appnames/clear', { method: 'POST' })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.ok) { clearInputRow(); loadApps(); }
+        else { setStatus('Clear failed: ' + (d.error || ''), 'err'); }
+      })
+      .catch(function(e) { setStatus('Clear error: ' + e.message, 'err'); });
+  });
+
+  // ── Refresh from web ──────────────────────────────────────────────────────
+  document.getElementById('btn-refresh-web').addEventListener('click', function() {
+    var btn = this;
+    var origHTML = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML =
+      '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.55"/></svg>' +
+      ' Searching online...';
+    setStatus('Querying MetaMetadata for missing app info - this may take a few minutes...', 'busy');
+    fetch('/api/appnames/refresh', { method: 'POST' })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        btn.disabled = false;
+        btn.innerHTML = origHTML;
+        if (d.ok) {
+          setStatus('Updated ' + (d.updated || 0) + ' app(s) from web', 'ok');
+          loadApps();
+        } else {
+          setStatus('Refresh failed: ' + (d.error || ''), 'err');
+        }
+      })
+      .catch(function(e) {
+        btn.disabled = false;
+        btn.innerHTML = origHTML;
+        setStatus('Refresh error: ' + e.message, 'err');
+      });
+  });
+
+  // ── Init ──────────────────────────────────────────────────────────────────
+  loadApps();
+})();
+</script>
+</body>
+</html>
