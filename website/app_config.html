@@ -29,24 +29,15 @@
 
     .page { padding: 28px 32px; flex: 1; display: flex; flex-direction: column; max-width: 860px; width: 100%; }
     .page-title {
-      font-size: 20px;
-      font-weight: 700;
-      color: #e5e7eb;
-      margin-bottom: 6px;
-      display: flex;
-      align-items: center;
-      gap: 10px;
+      font-size: 20px; font-weight: 700; color: #e5e7eb;
+      margin-bottom: 6px; display: flex; align-items: center; gap: 10px;
     }
     [data-theme=light] .page-title { color: #111827; }
     .page-subtitle { font-size: 13px; color: var(--muted); margin-bottom: 28px; }
 
     .section-title {
-      font-size: 11px;
-      font-weight: 600;
-      letter-spacing: .08em;
-      text-transform: uppercase;
-      color: var(--muted);
-      margin-bottom: 12px;
+      font-size: 11px; font-weight: 600; letter-spacing: .08em;
+      text-transform: uppercase; color: var(--muted); margin-bottom: 12px;
     }
     .section { margin-bottom: 28px; }
     .section.logs-section { flex: 1; display: flex; flex-direction: column; min-height: 0; }
@@ -58,24 +49,17 @@
       padding: 20px 22px;
     }
 
-    /* Action buttons grid */
     .btn-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
       gap: 10px;
     }
     .action-btn {
-      display: flex;
-      align-items: center;
-      gap: 10px;
+      display: flex; align-items: center; gap: 10px;
       padding: 13px 16px;
-      background: #1e1e1e;
-      border: 1px solid #2a2a2a;
-      border-radius: 8px;
-      color: var(--text);
-      font-size: 13px;
-      font-weight: 500;
-      cursor: pointer;
+      background: #1e1e1e; border: 1px solid #2a2a2a;
+      border-radius: 8px; color: var(--text);
+      font-size: 13px; font-weight: 500; cursor: pointer;
       transition: background .15s, border-color .15s, opacity .15s;
       text-align: left;
     }
@@ -84,51 +68,33 @@
     [data-theme=light] .action-btn:hover { background: #eff6ff; border-color: #3b82f6; }
     .action-btn:disabled { opacity: .5; cursor: default; }
     .action-btn svg { flex-shrink: 0; stroke: var(--accent); }
+    .action-btn.danger svg { stroke: #ef4444; }
     .action-btn .btn-desc { font-size: 11px; color: var(--muted); margin-top: 2px; font-weight: 400; }
 
-    /* Live logs panel */
+    /* Live logs */
     .logs-card {
-      background: var(--card-bg);
-      border: 1px solid var(--card-border);
-      border-radius: 10px;
-      display: flex;
-      flex-direction: column;
-      flex: 1;
-      min-height: 280px;
-      overflow: hidden;
+      background: var(--card-bg); border: 1px solid var(--card-border);
+      border-radius: 10px; display: flex; flex-direction: column;
+      flex: 1; min-height: 280px; overflow: hidden;
     }
     .logs-header {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 11px 16px;
-      border-bottom: 1px solid var(--card-border);
-      flex-shrink: 0;
+      display: flex; align-items: center; gap: 8px;
+      padding: 11px 16px; border-bottom: 1px solid var(--card-border); flex-shrink: 0;
     }
     .logs-header span { font-size: 13px; font-weight: 600; color: #e5e7eb; flex: 1; }
     [data-theme=light] .logs-header span { color: #111827; }
     .logs-ctrl-btn {
-      font-size: 11px;
-      padding: 4px 10px;
-      border-radius: 5px;
-      border: 1px solid #333;
-      background: #1a1a1a;
-      color: #94a3b8;
-      cursor: pointer;
-      transition: background .15s, color .15s;
+      font-size: 11px; padding: 4px 10px; border-radius: 5px;
+      border: 1px solid #333; background: #1a1a1a; color: #94a3b8;
+      cursor: pointer; transition: background .15s, color .15s;
     }
     [data-theme=light] .logs-ctrl-btn { background: #f3f4f6; border-color: #d1d5db; color: #6b7280; }
     .logs-ctrl-btn:hover, .logs-ctrl-btn.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
     .logs-body {
-      flex: 1;
-      overflow-y: auto;
-      padding: 10px 16px;
+      flex: 1; overflow-y: auto; padding: 10px 16px;
       font-family: 'Cascadia Code', 'Consolas', 'Menlo', monospace;
-      font-size: 11.5px;
-      line-height: 1.65;
-      color: #94a3b8;
-      white-space: pre-wrap;
-      word-break: break-all;
+      font-size: 11.5px; line-height: 1.65; color: #94a3b8;
+      white-space: pre-wrap; word-break: break-all;
     }
     [data-theme=light] .logs-body { color: #374151; }
     .logs-body .log-err  { color: #f87171; }
@@ -136,32 +102,267 @@
     .logs-body .log-ok   { color: #34d399; }
     .logs-body .log-info { color: #60a5fa; }
     .logs-body .log-dbg  { color: #64748b; }
-    .logs-status {
-      font-size: 11px;
-      padding: 4px 16px 8px;
-      color: var(--muted);
-      flex-shrink: 0;
-    }
+    .logs-status { font-size: 11px; padding: 4px 16px 8px; color: var(--muted); flex-shrink: 0; }
 
     /* Toast */
     #toast {
-      position: fixed;
-      bottom: 28px;
-      left: 50%;
+      position: fixed; bottom: 28px; left: 50%;
       transform: translateX(-50%) translateY(20px);
-      background: #1e293b;
-      border: 1px solid #334155;
-      color: #e2e8f0;
-      font-size: 13px;
-      padding: 10px 20px;
-      border-radius: 8px;
-      opacity: 0;
+      background: #1e293b; border: 1px solid #334155;
+      color: #e2e8f0; font-size: 13px; padding: 10px 20px;
+      border-radius: 8px; opacity: 0;
       transition: opacity .2s, transform .2s;
-      pointer-events: none;
-      z-index: 999;
-      white-space: nowrap;
+      pointer-events: none; z-index: 999; white-space: nowrap;
     }
     #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    /* ── Config editor modal ─────────────────────────────────────────────────── */
+    .cfg-overlay {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,.65);
+      z-index: 1000;
+      display: flex; align-items: center; justify-content: center;
+      padding: 24px;
+    }
+    .cfg-panel {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      width: clamp(700px, 80vw, 1200px); max-height: 90vh;
+      display: flex; flex-direction: column;
+      box-shadow: 0 24px 64px rgba(0,0,0,.55);
+    }
+    .cfg-panel-head {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 18px 22px;
+      border-bottom: 1px solid var(--card-border);
+      flex-shrink: 0;
+    }
+    .cfg-panel-title {
+      font-size: 15px; font-weight: 700; color: #e5e7eb;
+      display: flex; align-items: center; gap: 10px;
+    }
+    [data-theme=light] .cfg-panel-title { color: #111827; }
+    .cfg-panel-body { flex: 1; overflow-y: auto; padding-bottom: 8px; }
+    .cfg-panel-foot {
+      padding: 14px 22px;
+      border-top: 1px solid var(--card-border);
+      display: flex; justify-content: flex-end; gap: 8px;
+      flex-shrink: 0;
+    }
+    .cfg-section-title {
+      font-size: 10px; font-weight: 700; letter-spacing: .1em;
+      text-transform: uppercase; color: var(--muted);
+      padding: 16px 22px 4px;
+    }
+    .cfg-row {
+      display: flex; align-items: flex-start; gap: 20px;
+      padding: 10px 22px;
+      border-bottom: 1px solid var(--card-border);
+    }
+    .cfg-row:last-of-type { border-bottom: none; }
+    .cfg-label-col { flex: 0 0 clamp(180px, 22%, 280px); }
+    .cfg-input-col { flex: 1; display: flex; align-items: center; padding-top: 2px; }
+    .cfg-label { font-size: 13px; font-weight: 500; color: #e5e7eb; }
+    [data-theme=light] .cfg-label { color: #111827; }
+    .cfg-unit { font-size: 11px; color: var(--muted); font-weight: 400; }
+    .cfg-desc { font-size: 11px; color: var(--muted); margin-top: 3px; line-height: 1.45; }
+    .cfg-input {
+      width: 100%;
+      background: #1a1a1a; border: 1px solid #333;
+      border-radius: 6px; padding: 7px 10px;
+      color: #e5e7eb; font-size: 13px; outline: none;
+      transition: border-color .15s;
+    }
+    .cfg-input:focus { border-color: var(--accent); }
+    [data-theme=light] .cfg-input { background: #fff; border-color: #d1d5db; color: #111827; }
+    [data-theme=light] .cfg-input:focus { border-color: var(--accent); }
+    .cfg-input-sm { width: 110px; }
+    /* Toggle switch */
+    .cfg-toggle { display: inline-flex; align-items: center; cursor: pointer; }
+    .cfg-toggle input { display: none; }
+    .cfg-toggle-track {
+      width: 40px; height: 22px; background: #333;
+      border-radius: 11px; position: relative; transition: background .2s;
+    }
+    .cfg-toggle input:checked + .cfg-toggle-track { background: var(--accent); }
+    .cfg-toggle-thumb {
+      position: absolute; top: 3px; left: 3px;
+      width: 16px; height: 16px; background: #fff;
+      border-radius: 50%; transition: left .2s;
+    }
+    .cfg-toggle input:checked + .cfg-toggle-track .cfg-toggle-thumb { left: 21px; }
+    /* Buttons inside modal */
+    .cfg-save-btn {
+      padding: 8px 22px; border-radius: 7px;
+      background: var(--accent); border: none;
+      color: #fff; font-size: 13px; font-weight: 600;
+      cursor: pointer; transition: background .15s;
+    }
+    .cfg-save-btn:hover { background: #2563eb; }
+    .cfg-cancel-btn {
+      padding: 8px 16px; border-radius: 7px;
+      background: transparent; border: 1px solid #444;
+      color: var(--text); font-size: 13px;
+      cursor: pointer; transition: background .15s, border-color .15s;
+    }
+    [data-theme=light] .cfg-cancel-btn { border-color: #d1d5db; }
+    .cfg-cancel-btn:hover { background: #222; }
+    [data-theme=light] .cfg-cancel-btn:hover { background: #f3f4f6; }
+    /* Confirm box */
+    .cfg-confirm-box {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 12px; max-width: 460px; width: 100%;
+      padding: 28px 28px 22px;
+      box-shadow: 0 24px 64px rgba(0,0,0,.55);
+    }
+    .cfg-confirm-title { font-size: 16px; font-weight: 700; color: #ef4444; margin-bottom: 12px; }
+    .cfg-confirm-text { font-size: 13px; color: var(--text); line-height: 1.65; }
+    .cfg-danger-btn {
+      padding: 8px 20px; border-radius: 7px;
+      background: #dc2626; border: none;
+      color: #fff; font-size: 13px; font-weight: 600;
+      cursor: pointer; transition: background .15s;
+    }
+    .cfg-danger-btn:hover { background: #b91c1c; }
+    .cfg-notice {
+      font-size: 11px; color: var(--muted); padding: 10px 22px 0;
+      border-top: 1px solid var(--card-border); margin-top: 4px;
+    }
+
+    /* ── Scrcpy section ─────────────────────────────────────────────────────── */
+    .scrcpy-folder-row { display: flex; align-items: flex-start; gap: 20px; }
+    .scrcpy-folder-label { flex: 0 0 260px; }
+    .scrcpy-folder-ctrl  { flex: 1; display: flex; gap: 8px; align-items: center; }
+    .scrcpy-lbl { font-size: 13px; font-weight: 500; color: #e5e7eb; }
+    [data-theme=light] .scrcpy-lbl { color: #111827; }
+    .scrcpy-sub { font-size: 11px; color: var(--muted); margin-top: 3px; line-height: 1.45; }
+    .scrcpy-divider { border: none; border-top: 1px solid var(--card-border); margin: 18px 0 16px; }
+
+    /* ── Profiles modal ─────────────────────────────────────────────────────── */
+    .pro-panel {
+      background: var(--card-bg); border: 1px solid var(--card-border);
+      border-radius: 12px; width: 100%; max-width: 940px; max-height: 90vh;
+      display: flex; flex-direction: column;
+      box-shadow: 0 24px 64px rgba(0,0,0,.55);
+    }
+    .pro-panel-head {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 18px 22px; border-bottom: 1px solid var(--card-border); flex-shrink: 0;
+    }
+    .pro-panel-title { font-size: 15px; font-weight: 700; color: #e5e7eb; display: flex; align-items: center; gap: 10px; }
+    [data-theme=light] .pro-panel-title { color: #111827; }
+    .pro-tabs-wrap { flex-shrink: 0; border-bottom: 1px solid var(--card-border); }
+    .pro-tabs { display: flex; align-items: flex-end; gap: 3px; padding: 8px 22px 0; flex-wrap: wrap; }
+    .pro-tab {
+      padding: 7px 18px; border-radius: 7px 7px 0 0;
+      border: 1px solid transparent; border-bottom: none;
+      background: transparent; color: var(--muted);
+      font-size: 13px; font-weight: 500; cursor: pointer;
+      transition: background .15s, color .15s; white-space: nowrap;
+    }
+    .pro-tab:hover { background: #1e1e1e; color: var(--text); }
+    [data-theme=light] .pro-tab:hover { background: #f3f4f6; }
+    .pro-tab-active {
+      background: var(--card-bg); color: #e5e7eb;
+      border-color: var(--card-border); position: relative; z-index: 1; margin-bottom: -1px;
+    }
+    [data-theme=light] .pro-tab-active { color: #111827; background: #fff; }
+    .pro-tab-add {
+      color: var(--accent); font-size: 12px;
+      border: 1px dashed #3b82f6; border-radius: 6px;
+      padding: 5px 12px; margin-left: 6px; margin-bottom: 2px;
+    }
+    .pro-tab-add:hover { background: rgba(59,130,246,.08); }
+    .pro-add-model-form {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 22px; background: rgba(59,130,246,.04);
+      border-top: 1px solid var(--card-border);
+    }
+    .pro-add-model-lbl { font-size: 12px; color: var(--muted); white-space: nowrap; }
+    .pro-panel-body { flex: 1; overflow-y: auto; padding-bottom: 8px; }
+    .pro-panel-foot {
+      padding: 14px 22px; border-top: 1px solid var(--card-border);
+      display: flex; align-items: center; flex-shrink: 0;
+    }
+    .pro-section-hd {
+      font-size: 10px; font-weight: 700; letter-spacing: .1em;
+      text-transform: uppercase; color: var(--muted);
+      padding: 16px 22px 6px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .pro-section-hd button {
+      font-size: 11px; color: var(--accent); background: none;
+      border: 1px solid #333; border-radius: 5px;
+      padding: 3px 10px; cursor: pointer;
+      text-transform: none; letter-spacing: 0; font-weight: 500;
+    }
+    [data-theme=light] .pro-section-hd button { border-color: #d1d5db; }
+    .pro-section-hd button:hover { background: rgba(59,130,246,.1); }
+    .pro-model-bar {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 22px; border-bottom: 1px solid var(--card-border);
+    }
+    .pro-rename-row {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 22px; background: rgba(59,130,246,.04);
+      border-bottom: 1px solid var(--card-border);
+    }
+    .pro-rename-lbl { font-size: 12px; color: var(--muted); white-space: nowrap; }
+    .pro-del-btn {
+      padding: 5px 13px; border-radius: 6px; background: none;
+      border: 1px solid #444; color: #ef4444; font-size: 12px; font-weight: 500; cursor: pointer;
+    }
+    .pro-del-btn:hover { background: rgba(239,68,68,.1); border-color: #ef4444; }
+    .pro-small-btn {
+      padding: 5px 13px; border-radius: 6px; background: none;
+      border: 1px solid #444; color: var(--muted); font-size: 12px; cursor: pointer;
+    }
+    [data-theme=light] .pro-small-btn { border-color: #d1d5db; }
+    .pro-small-btn:hover { background: #1e1e1e; color: var(--text); }
+    [data-theme=light] .pro-small-btn:hover { background: #f3f4f6; }
+    .pro-general-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 12px; padding: 6px 22px 14px;
+    }
+    .pro-gen-item { display: flex; flex-direction: column; gap: 5px; }
+    .pro-gen-lbl { font-size: 11px; color: var(--muted); font-weight: 600; }
+    .pro-encoder-row { padding: 0 22px 14px; display: flex; flex-direction: column; gap: 5px; }
+    .pro-table-wrap { padding: 0 22px 8px; overflow-x: auto; }
+    .pro-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .pro-table th {
+      text-align: left; padding: 7px 8px; color: var(--muted);
+      font-weight: 600; font-size: 11px;
+      border-bottom: 1px solid var(--card-border); white-space: nowrap;
+    }
+    .pro-table td {
+      padding: 6px 8px; border-bottom: 1px solid var(--card-border);
+      color: var(--text); vertical-align: middle;
+    }
+    .pro-table tr:last-child td { border-bottom: none; }
+    .pro-table tr:hover > td { background: rgba(255,255,255,.025); }
+    [data-theme=light] .pro-table tr:hover > td { background: rgba(0,0,0,.02); }
+    .pro-td-name { font-weight: 600; white-space: nowrap; min-width: 80px; }
+    .pro-td-crop { font-family: 'Consolas', monospace; font-size: 11px; white-space: nowrap; }
+    .pro-td-angle { text-align: right; white-space: nowrap; min-width: 52px; }
+    .pro-td-actions { white-space: nowrap; text-align: right; }
+    .pro-icon-btn {
+      padding: 3px 8px; border-radius: 4px; background: none;
+      border: 1px solid #333; color: var(--muted); font-size: 12px; cursor: pointer;
+      transition: background .12s, color .12s, border-color .12s;
+    }
+    [data-theme=light] .pro-icon-btn { border-color: #e5e7eb; }
+    .pro-icon-btn + .pro-icon-btn { margin-left: 4px; }
+    .pro-icon-btn:hover { background: #222; color: var(--text); }
+    [data-theme=light] .pro-icon-btn:hover { background: #f3f4f6; }
+    .pro-icon-del:hover { border-color: #ef4444; color: #ef4444; background: rgba(239,68,68,.1); }
+    .pro-icon-ok:hover  { border-color: #22c55e; color: #22c55e; background: rgba(34,197,94,.1);  }
+    .pro-crop-inp  { width: 148px; font-family: 'Consolas', monospace; font-size: 11px; }
+    .pro-angle-inp { width: 64px; }
+    .pro-name-inp  { width: 96px; }
+    .pro-empty { padding: 32px; text-align: center; color: var(--muted); font-size: 12px; }
+    .pro-unsaved { font-size: 11px; color: #fbbf24; margin-right: auto; }
   </style>
 </head>
 <body>
@@ -169,6 +370,8 @@
     <script>document.write(TopBar.brandHTML)</script>
     <div class="v-sep"></div>
     <div class="topbar-right">
+      <script>document.write(TopBar.monitoringBtnHTML)</script>
+      <script>document.write(TopBar.manageDevicesBtnHTML)</script>
       <script>document.write(TopBar.configMenuHTML)</script>
     </div>
   </header>
@@ -188,6 +391,15 @@
       <div class="section-title">Configuration</div>
       <div class="card">
         <div class="btn-grid">
+          <button class="action-btn" id="btn-edit-config">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="12" y2="17"/>
+            </svg>
+            <div>
+              <div>Edit in Web UI</div>
+              <div class="btn-desc">Edit settings in the browser</div>
+            </div>
+          </button>
           <button class="action-btn" id="btn-open-config">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
@@ -198,7 +410,44 @@
               <div class="btn-desc">Opens in Notepad</div>
             </div>
           </button>
+          <button class="action-btn danger" id="btn-reset-config">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.69"/>
+            </svg>
+            <div>
+              <div>Reset to Template</div>
+              <div class="btn-desc">Archive &amp; restore defaults</div>
+            </div>
+          </button>
         </div>
+      </div>
+    </section>
+
+    <!-- Scrcpy -->
+    <section class="section">
+      <div class="section-title">Scrcpy</div>
+      <div class="card">
+        <div class="scrcpy-folder-row">
+          <div class="scrcpy-folder-label">
+            <div class="scrcpy-lbl">Binaries Folder</div>
+            <div class="scrcpy-sub">Subfolder (relative to the app root) containing scrcpy.exe and adb.exe. Applies to both scrcpy and ADB settings.</div>
+          </div>
+          <div class="scrcpy-folder-ctrl">
+            <input type="text" id="scrcpy-folder-input" class="cfg-input" placeholder="e.g. scrcpy-win64-v3.3.4">
+            <button id="scrcpy-folder-save" class="cfg-save-btn">Save</button>
+          </div>
+        </div>
+        <hr class="scrcpy-divider">
+        <button class="action-btn" id="btn-profiles">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+            <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
+          </svg>
+          <div>
+            <div>Manage Headset Profiles</div>
+            <div class="btn-desc">Add, edit and delete scrcpy profiles per headset model</div>
+          </div>
+        </button>
       </div>
     </section>
 
@@ -252,6 +501,91 @@
 
   <div id="toast"></div>
 
+  <!-- Config editor modal -->
+  <div id="cfg-modal" class="cfg-overlay" style="display:none" role="dialog" aria-modal="true">
+    <div class="cfg-panel">
+      <div class="cfg-panel-head">
+        <div class="cfg-panel-title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+          Edit Configuration
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="cfg-save-btn" id="cfg-save-top">Save</button>
+          <button class="cfg-cancel-btn" id="cfg-close-top">Cancel</button>
+        </div>
+      </div>
+      <div class="cfg-panel-body" id="cfg-panel-body">
+        <div style="padding:48px;text-align:center;color:var(--muted)">Loading...</div>
+      </div>
+      <div class="cfg-notice">
+        Changes take effect after restarting the application. Port and language changes require a full restart.
+      </div>
+      <div class="cfg-panel-foot">
+        <button class="cfg-cancel-btn" id="cfg-close-bot">Cancel</button>
+        <button class="cfg-save-btn" id="cfg-save-bot">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Reset confirm modal -->
+  <div id="reset-modal" class="cfg-overlay" style="display:none" role="dialog" aria-modal="true">
+    <div class="cfg-confirm-box">
+      <div class="cfg-confirm-title">Reset Configuration?</div>
+      <p class="cfg-confirm-text">
+        The current <strong>config.json</strong> will be archived as
+        <strong>config_yyyy.mm.dd-hh.mm.json</strong> in the config folder,
+        then replaced with the template defaults.<br><br>
+        You will need to re-enter your WiFi credentials and other settings,
+        then restart the application.
+      </p>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:20px">
+        <button class="cfg-cancel-btn" id="reset-cancel">Cancel</button>
+        <button class="cfg-danger-btn" id="reset-confirm">Reset to Template</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Headset Profiles modal -->
+  <div id="pro-modal" class="cfg-overlay" style="display:none" role="dialog" aria-modal="true">
+    <div class="pro-panel">
+      <div class="pro-panel-head">
+        <div class="pro-panel-title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+            <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
+          </svg>
+          Headset Profiles
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="cfg-save-btn" id="pro-save-top">Save</button>
+          <button class="cfg-cancel-btn" id="pro-close-top">Cancel</button>
+        </div>
+      </div>
+      <div class="pro-tabs-wrap">
+        <div class="pro-tabs" id="pro-tabs"></div>
+        <div class="pro-add-model-form" id="pro-add-model-form" style="display:none">
+          <span class="pro-add-model-lbl">New model name:</span>
+          <input type="text" id="pro-new-model-input" class="cfg-input" placeholder="e.g. Quest Pro" style="width:200px">
+          <button class="cfg-save-btn" id="pro-add-model-confirm" style="padding:6px 14px">Add</button>
+          <button class="cfg-cancel-btn" id="pro-add-model-cancel" style="padding:6px 10px">Cancel</button>
+        </div>
+      </div>
+      <div class="pro-panel-body" id="pro-body">
+        <div class="pro-empty">Loading...</div>
+      </div>
+      <div class="pro-panel-foot">
+        <span class="pro-unsaved" id="pro-unsaved-notice" style="display:none">Unsaved changes</span>
+        <div style="display:flex;gap:8px;margin-left:auto">
+          <button class="cfg-cancel-btn" id="pro-close-bot">Cancel</button>
+          <button class="cfg-save-btn" id="pro-save-bot">Save All Changes</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script>
     function showToast(msg, duration) {
       var t = document.getElementById('toast');
@@ -286,13 +620,11 @@
     var _paused     = false;
     var _autoScroll = true;
     var _lastLen    = 0;
-    var _timer      = null;
-
-    var logsBody      = document.getElementById('logs-body');
-    var logsStatus    = document.getElementById('logs-status');
-    var pauseBtn      = document.getElementById('logs-pause-btn');
-    var clearBtn      = document.getElementById('logs-clear-btn');
-    var scrollBtn     = document.getElementById('logs-scroll-btn');
+    var logsBody    = document.getElementById('logs-body');
+    var logsStatus  = document.getElementById('logs-status');
+    var pauseBtn    = document.getElementById('logs-pause-btn');
+    var clearBtn    = document.getElementById('logs-clear-btn');
+    var scrollBtn   = document.getElementById('logs-scroll-btn');
 
     pauseBtn.addEventListener('click', function() {
       _paused = !_paused;
@@ -300,25 +632,16 @@
       pauseBtn.classList.toggle('active', _paused);
       if (!_paused) fetchLogs();
     });
-
-    clearBtn.addEventListener('click', function() {
-      logsBody.innerHTML = '';
-      _lastLen = 0;
-    });
-
+    clearBtn.addEventListener('click', function() { logsBody.innerHTML = ''; _lastLen = 0; });
     scrollBtn.addEventListener('click', function() {
       _autoScroll = !_autoScroll;
       scrollBtn.classList.toggle('active', _autoScroll);
       if (_autoScroll) logsBody.scrollTop = logsBody.scrollHeight;
     });
     scrollBtn.classList.add('active');
-
     logsBody.addEventListener('scroll', function() {
       var atBottom = logsBody.scrollTop + logsBody.clientHeight >= logsBody.scrollHeight - 20;
-      if (!atBottom && _autoScroll) {
-        _autoScroll = false;
-        scrollBtn.classList.remove('active');
-      }
+      if (!atBottom && _autoScroll) { _autoScroll = false; scrollBtn.classList.remove('active'); }
     });
 
     function formatLine(l) {
@@ -328,10 +651,9 @@
       else if (/\[SUCCESS\]/i.test(l))       cls = 'log-ok';
       else if (/\[INFO\]/i.test(l))          cls = 'log-info';
       else if (/\[DEBUG\]/i.test(l))         cls = 'log-dbg';
-      var safe = l.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      var safe = l.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
       return cls ? '<span class="' + cls + '">' + safe + '</span>' : safe;
     }
-
     function fetchLogs() {
       fetch('/api/logs?n=400')
         .then(function(r) { return r.json(); })
@@ -345,13 +667,604 @@
             if (_autoScroll || atBottom) logsBody.scrollTop = logsBody.scrollHeight;
           }
         })
+        .catch(function() { logsStatus.textContent = 'Could not reach server.'; });
+    }
+    fetchLogs();
+    setInterval(function() { if (!_paused) fetchLogs(); }, 2000);
+
+    // ── Config editor ────────────────────────────────────────────────────────
+    var _cfgData = null;
+
+    var CFG_SECTIONS = [
+      { title: 'General', fields: [
+        { path: 'language', label: 'Language', type: 'select',
+          options: ['en-US', 'fr-FR'],
+          desc: 'Interface language for the application.' }
+      ]},
+      { title: 'WiFi', fields: [
+        { path: 'WIFI.wifi_ssid', label: 'WiFi SSID', type: 'text',
+          desc: 'SSID of the network the headsets are connected to.' },
+        { path: 'WIFI.wifi_pwd', label: 'WiFi Password', type: 'text',
+          desc: 'Password used for automatic WiFi ADB connection.' }
+      ]},
+      { title: 'Logging', fields: [
+        { path: 'Logging.debugLevelToFile', label: 'File Log Level', type: 'select',
+          options: ['DEBUG','INFO','SUCCESS','WARNING','ERROR','NONE'],
+          desc: 'Minimum severity level written to the log file.' },
+        { path: 'Logging.debugLevelToConsole', label: 'Console Log Level', type: 'select',
+          options: ['DEBUG','INFO','SUCCESS','WARNING','ERROR','NONE'],
+          desc: 'Minimum severity level shown in the PowerShell console.' }
+      ]},
+      { title: 'VR Monitor', fields: [
+        { path: 'VRMonitor.refresh_timer', label: 'Refresh Timer', type: 'number',
+          min: 1, max: 120, unit: 'seconds',
+          desc: 'How often the dashboard polls headset status.' }
+      ]},
+      { title: 'ADB', fields: [
+        { path: 'ADB.adbPort_default', label: 'ADB Port', type: 'number',
+          min: 1, max: 65535,
+          desc: 'Default TCP port for WiFi ADB connections. Usually 5555.' }
+      ]},
+      { title: 'Scrcpy', fields: [
+        { path: 'scrcpy.recordFolder', label: 'Record Folder', type: 'text',
+          desc: 'Folder where scrcpy recordings are saved. Use forward slashes, e.g. D:/DATA/Records.' }
+      ]},
+      { title: 'Battery Thresholds', fields: [
+        { path: 'OBS.headsets_triggers.headset_battery_warningLevel', label: 'Headset Warning', type: 'number',
+          min: 0, max: 100, unit: '%',
+          desc: 'Headset battery % at which a warning colour is shown on the overlay.' },
+        { path: 'OBS.headsets_triggers.headset_battery_criticalLevel', label: 'Headset Critical', type: 'number',
+          min: 0, max: 100, unit: '%',
+          desc: 'Headset battery % at which a critical alert colour is shown.' },
+        { path: 'OBS.headsets_triggers.controllers_battery_warningLevel', label: 'Controllers Warning', type: 'number',
+          min: 0, max: 100, unit: '%',
+          desc: 'Controller battery % at which a warning colour is shown.' },
+        { path: 'OBS.headsets_triggers.controllers_battery_criticalLevel', label: 'Controllers Critical', type: 'number',
+          min: 0, max: 100, unit: '%',
+          desc: 'Controller battery % at which a critical alert colour is shown.' },
+        { path: 'OBS.headsets_triggers.temperature_highLevel', label: 'High Temperature', type: 'number',
+          min: 30, max: 80, unit: '°C',
+          desc: 'Headset temperature at which a heat warning is shown on the overlay.' }
+      ]},
+      { title: 'MediaMTX Streaming', fields: [
+        { path: 'mediamtx.enabled', label: 'Enabled', type: 'boolean',
+          desc: 'Enable MediaMTX for RTSP / HLS / WebRTC restreaming.' },
+        { path: 'mediamtx.rtsp_port', label: 'RTSP Port', type: 'number',
+          min: 1, max: 65535,
+          desc: 'Port for RTSP streams. Default: 8554.' },
+        { path: 'mediamtx.hls_port', label: 'HLS Port', type: 'number',
+          min: 1, max: 65535,
+          desc: 'Port for HLS streams. Default: 8888.' },
+        { path: 'mediamtx.webrtc_port', label: 'WebRTC Port', type: 'number',
+          min: 1, max: 65535,
+          desc: 'Port for WebRTC / WHEP streams. Default: 8889.' },
+        { path: 'mediamtx.api_port', label: 'API Port', type: 'number',
+          min: 1, max: 65535,
+          desc: 'Port for the MediaMTX management API. Default: 9997.' },
+        { path: 'mediamtx.stream_framerate', label: 'Stream Framerate', type: 'number',
+          min: 1, max: 120, unit: 'fps',
+          desc: 'Target framerate for restreamed content.' },
+        { path: 'mediamtx.stream_bitrate', label: 'Stream Bitrate', type: 'text',
+          desc: 'Target bitrate for restreamed content. Examples: 4M, 6M, 8M.' }
+      ]},
+      { title: 'Web Server', fields: [
+        { path: 'WebServer.enabled', label: 'Enabled', type: 'boolean',
+          desc: 'Enable the built-in HTTP web server.' },
+        { path: 'WebServer.port', label: 'Port', type: 'number',
+          min: 1, max: 65535,
+          desc: 'HTTP port for the web UI. Default: 8080. Full restart required to take effect.' }
+      ]},
+      { title: 'Battery Charging', fields: [
+        { path: 'Battery.headset_charging_power_W', label: 'Charging Power', type: 'number',
+          min: 1, max: 200, unit: 'W',
+          desc: 'Expected charging wattage used for battery time-remaining estimates.' }
+      ]}
+    ];
+
+    function cfgGet(obj, path) {
+      return path.split('.').reduce(function(o, k) { return o != null ? o[k] : undefined; }, obj);
+    }
+    function cfgSet(obj, path, val) {
+      var parts = path.split('.');
+      var o = obj;
+      for (var i = 0; i < parts.length - 1; i++) {
+        if (o[parts[i]] == null) o[parts[i]] = {};
+        o = o[parts[i]];
+      }
+      o[parts[parts.length - 1]] = val;
+    }
+    function cfgEsc(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function renderCfgEditor(config) {
+      var html = '';
+      CFG_SECTIONS.forEach(function(sec) {
+        html += '<div class="cfg-section-title">' + sec.title + '</div>';
+        sec.fields.forEach(function(f) {
+          var id  = 'cfg-' + f.path.replace(/\./g, '-');
+          var val = cfgGet(config, f.path);
+          if (val == null) val = '';
+          html += '<div class="cfg-row">';
+          html += '<div class="cfg-label-col"><div class="cfg-label">' + f.label;
+          if (f.unit) html += ' <span class="cfg-unit">(' + cfgEsc(f.unit) + ')</span>';
+          html += '</div><div class="cfg-desc">' + f.desc + '</div></div>';
+          html += '<div class="cfg-input-col">';
+          if (f.type === 'select') {
+            html += '<select id="' + id + '" class="cfg-input" data-path="' + f.path + '">';
+            f.options.forEach(function(opt) {
+              html += '<option value="' + opt + '"' + (val === opt ? ' selected' : '') + '>' + opt + '</option>';
+            });
+            html += '</select>';
+          } else if (f.type === 'boolean') {
+            html += '<label class="cfg-toggle">'
+              + '<input type="checkbox" id="' + id + '" data-path="' + f.path + '"' + (val ? ' checked' : '') + '>'
+              + '<span class="cfg-toggle-track"><span class="cfg-toggle-thumb"></span></span>'
+              + '</label>';
+          } else if (f.type === 'number') {
+            html += '<input type="number" id="' + id + '" class="cfg-input cfg-input-sm" data-path="' + f.path + '" value="' + cfgEsc(String(val)) + '"'
+              + (f.min != null ? ' min="' + f.min + '"' : '')
+              + (f.max != null ? ' max="' + f.max + '"' : '') + '>';
+          } else {
+            html += '<input type="text" id="' + id + '" class="cfg-input" data-path="' + f.path + '" value="' + cfgEsc(String(val)) + '">';
+          }
+          html += '</div></div>';
+        });
+      });
+      document.getElementById('cfg-panel-body').innerHTML = html;
+    }
+
+    function collectCfgValues() {
+      var updated = JSON.parse(JSON.stringify(_cfgData));
+      CFG_SECTIONS.forEach(function(sec) {
+        sec.fields.forEach(function(f) {
+          var el = document.getElementById('cfg-' + f.path.replace(/\./g, '-'));
+          if (!el) return;
+          var val;
+          if (f.type === 'boolean') {
+            val = el.checked;
+          } else if (f.type === 'number') {
+            val = parseFloat(el.value);
+            if (isNaN(val)) val = cfgGet(_cfgData, f.path);
+          } else {
+            val = el.value;
+          }
+          cfgSet(updated, f.path, val);
+        });
+      });
+      return updated;
+    }
+
+    function closeCfgModal() {
+      document.getElementById('cfg-modal').style.display = 'none';
+    }
+    function saveCfg() {
+      var updated = collectCfgValues();
+      fetch('/api/config/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updated, null, 2)
+      })
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          if (j.ok) {
+            closeCfgModal();
+            showToast('Configuration saved. Restart the app to apply changes.', 3500);
+          } else {
+            showToast('Save failed: ' + (j.error || 'unknown error'), 4000);
+          }
+        })
+        .catch(function() { showToast('Server unreachable', 2500); });
+    }
+
+    document.getElementById('btn-edit-config').addEventListener('click', function() {
+      document.getElementById('cfg-panel-body').innerHTML =
+        '<div style="padding:48px;text-align:center;color:var(--muted)">Loading...</div>';
+      document.getElementById('cfg-modal').style.display = 'flex';
+      fetch('/api/config')
+        .then(function(r) { return r.json(); })
+        .then(function(cfg) {
+          _cfgData = cfg;
+          renderCfgEditor(cfg);
+        })
         .catch(function() {
-          logsStatus.textContent = 'Could not reach server.';
+          document.getElementById('cfg-panel-body').innerHTML =
+            '<div style="padding:48px;text-align:center;color:#f87171">Failed to load config.json</div>';
+        });
+    });
+
+    document.getElementById('cfg-save-top').addEventListener('click', saveCfg);
+    document.getElementById('cfg-save-bot').addEventListener('click', saveCfg);
+    document.getElementById('cfg-close-top').addEventListener('click', closeCfgModal);
+    document.getElementById('cfg-close-bot').addEventListener('click', closeCfgModal);
+    document.getElementById('cfg-modal').addEventListener('click', function(e) {
+      if (e.target === this) closeCfgModal();
+    });
+
+    // Reset to template
+    document.getElementById('btn-reset-config').addEventListener('click', function() {
+      document.getElementById('reset-modal').style.display = 'flex';
+    });
+    document.getElementById('reset-cancel').addEventListener('click', function() {
+      document.getElementById('reset-modal').style.display = 'none';
+    });
+    document.getElementById('reset-confirm').addEventListener('click', function() {
+      fetch('/api/config/reset', { method: 'POST' })
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          document.getElementById('reset-modal').style.display = 'none';
+          if (j.ok) {
+            showToast('Config reset to template. Previous config archived.', 4000);
+          } else {
+            showToast('Reset failed: ' + (j.error || 'unknown error'), 3500);
+          }
+        })
+        .catch(function() { showToast('Server unreachable', 2500); });
+    });
+    document.getElementById('reset-modal').addEventListener('click', function(e) {
+      if (e.target === this) document.getElementById('reset-modal').style.display = 'none';
+    });
+
+    // ── Scrcpy folder ────────────────────────────────────────────────────────
+    fetch('/api/config')
+      .then(function(r) { return r.json(); })
+      .then(function(cfg) {
+        var f = (cfg.scrcpy && cfg.scrcpy.folder) ? cfg.scrcpy.folder : '';
+        document.getElementById('scrcpy-folder-input').value = f;
+      })
+      .catch(function() {});
+
+    document.getElementById('scrcpy-folder-save').addEventListener('click', function() {
+      var val = document.getElementById('scrcpy-folder-input').value.trim();
+      if (!val) { showToast('Folder name cannot be empty', 2500); return; }
+      fetch('/api/config')
+        .then(function(r) { return r.json(); })
+        .then(function(cfg) {
+          if (!cfg.scrcpy) cfg.scrcpy = {};
+          cfg.scrcpy.folder = val;
+          if (!cfg.ADB) cfg.ADB = {};
+          cfg.ADB.folder = val;
+          return fetch('/api/config/save', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(cfg, null, 2)
+          });
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          showToast(j.ok ? 'Scrcpy folder saved. Restart required.' : 'Save failed: ' + (j.error || 'error'), 3000);
+        })
+        .catch(function() { showToast('Server unreachable', 2500); });
+    });
+
+    // ── Profiles manager ─────────────────────────────────────────────────────
+    var _proCfg      = null;
+    var _proData     = null;
+    var _proModel    = null;
+    var _proEditView = null;
+    var _proNewView  = false;
+    var _proDirty    = false;
+
+    function proEsc(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function openProModal() {
+      document.getElementById('pro-modal').style.display = 'flex';
+      document.getElementById('pro-body').innerHTML = '<div class="pro-empty">Loading...</div>';
+      document.getElementById('pro-tabs').innerHTML = '';
+      document.getElementById('pro-add-model-form').style.display = 'none';
+      _proEditView = null; _proNewView = false; _proDirty = false;
+      fetch('/api/config')
+        .then(function(r) { return r.json(); })
+        .then(function(cfg) {
+          _proCfg  = cfg;
+          if (!cfg.scrcpy) cfg.scrcpy = {};
+          if (!cfg.scrcpy.parameters) cfg.scrcpy.parameters = {};
+          _proData = cfg.scrcpy.parameters;
+          var models = Object.keys(_proData);
+          _proModel = models.length > 0 ? models[0] : null;
+          renderProTabs();
+          renderProBody();
+        })
+        .catch(function() {
+          document.getElementById('pro-body').innerHTML =
+            '<div class="pro-empty" style="color:#f87171">Failed to load config.json</div>';
         });
     }
 
-    fetchLogs();
-    _timer = setInterval(function() { if (!_paused) fetchLogs(); }, 2000);
+    function renderProTabs() {
+      var html = '';
+      Object.keys(_proData).forEach(function(m) {
+        html += '<button class="pro-tab' + (_proModel === m ? ' pro-tab-active' : '')
+          + '" data-action="select-model" data-model="' + proEsc(m) + '">' + proEsc(m) + '</button>';
+      });
+      html += '<button class="pro-tab pro-tab-add" data-action="show-add-model">+ Add Model</button>';
+      document.getElementById('pro-tabs').innerHTML = html;
+      document.getElementById('pro-unsaved-notice').style.display = _proDirty ? '' : 'none';
+    }
+
+    function renderProBody() {
+      if (!_proModel || !_proData[_proModel]) {
+        document.getElementById('pro-body').innerHTML =
+          '<div class="pro-empty">No headset models defined. Use "+ Add Model" above to create one.</div>';
+        return;
+      }
+      var model  = _proData[_proModel];
+      var views  = model.views || {};
+      var codec  = model.video_codec || 'h264';
+      var html   = '';
+
+      // Model action bar
+      html += '<div class="pro-model-bar">'
+        + '<button class="pro-small-btn" data-action="start-rename">Rename Model</button>'
+        + '<button class="pro-del-btn" data-action="delete-model">Delete Model</button>'
+        + '</div>';
+
+      // General settings
+      html += '<div class="pro-section-hd"><span>General Settings</span></div>'
+        + '<div class="pro-general-grid">'
+        + '<div class="pro-gen-item"><label class="pro-gen-lbl">Max Size (px)</label>'
+        + '<input type="number" id="pro-max-size" class="cfg-input" value="' + (model.max_size != null ? model.max_size : 0) + '" min="0" placeholder="0 = unlimited"></div>'
+        + '<div class="pro-gen-item"><label class="pro-gen-lbl">Video Codec</label>'
+        + '<select id="pro-video-codec" class="cfg-input">'
+        + '<option value="h264"' + (codec==='h264'?' selected':'') + '>h264</option>'
+        + '<option value="h265"' + (codec==='h265'?' selected':'') + '>h265</option>'
+        + '<option value="av1"'  + (codec==='av1' ?' selected':'') + '>av1</option>'
+        + '</select></div>'
+        + '<div class="pro-gen-item"><label class="pro-gen-lbl">Video Buffer (ms)</label>'
+        + '<input type="number" id="pro-video-buffer" class="cfg-input" value="' + (model.video_buffer != null ? model.video_buffer : 50) + '" min="0" max="5000"></div>'
+        + '<div class="pro-gen-item"><label class="pro-gen-lbl">Stay Awake</label>'
+        + '<label class="cfg-toggle"><input type="checkbox" id="pro-stay-awake"' + (model.stay_awake ? ' checked' : '') + '>'
+        + '<span class="cfg-toggle-track"><span class="cfg-toggle-thumb"></span></span></label></div>'
+        + '</div>'
+        + '<div class="pro-encoder-row"><label class="pro-gen-lbl">Video Encoder</label>'
+        + '<input type="text" id="pro-video-encoder" class="cfg-input" value="' + proEsc(model.video_encoder || '') + '" placeholder="Leave empty to use the default encoder"></div>';
+
+      // Views table
+      html += '<div class="pro-section-hd"><span>Views</span>'
+        + '<button data-action="add-view">+ Add View</button></div>'
+        + '<div class="pro-table-wrap"><table class="pro-table"><thead><tr>'
+        + '<th>View Name</th><th>Left Eye Crop</th><th>L Angle</th>'
+        + '<th>Right Eye Crop</th><th>R Angle</th><th></th>'
+        + '</tr></thead><tbody>';
+
+      var vnames = Object.keys(views);
+      vnames.forEach(function(vn) {
+        var le = (views[vn] && views[vn].left_eye)  || {};
+        var re = (views[vn] && views[vn].right_eye) || {};
+        html += (_proEditView === vn)
+          ? proViewEditRow(vn, le, re)
+          : proViewReadRow(vn, le, re);
+      });
+      if (_proNewView) html += proViewNewRow();
+      html += '</tbody></table>';
+      if (vnames.length === 0 && !_proNewView)
+        html += '<div class="pro-empty">No views defined. Click "+ Add View" to create one.</div>';
+      html += '</div>';
+
+      document.getElementById('pro-body').innerHTML = html;
+    }
+
+    function proViewReadRow(vn, le, re) {
+      return '<tr>'
+        + '<td class="pro-td-name">' + proEsc(vn) + '</td>'
+        + '<td class="pro-td-crop">' + proEsc(le.crop || '') + '</td>'
+        + '<td class="pro-td-angle">' + (le.angle != null ? le.angle : 0) + '</td>'
+        + '<td class="pro-td-crop">' + proEsc(re.crop || '') + '</td>'
+        + '<td class="pro-td-angle">' + (re.angle != null ? re.angle : 0) + '</td>'
+        + '<td class="pro-td-actions">'
+        + '<button class="pro-icon-btn" data-action="edit-view" data-view="' + proEsc(vn) + '" title="Edit">&#9998;</button>'
+        + '<button class="pro-icon-btn pro-icon-del" data-action="delete-view" data-view="' + proEsc(vn) + '" title="Delete">&#10005;</button>'
+        + '</td></tr>';
+    }
+    function proViewEditRow(vn, le, re) {
+      return '<tr>'
+        + '<td><input id="ev-name" class="cfg-input pro-name-inp" value="' + proEsc(vn) + '"></td>'
+        + '<td><input id="ev-le-crop" class="cfg-input pro-crop-inp" value="' + proEsc(le.crop||'') + '" placeholder="w:h:x:y"></td>'
+        + '<td><input type="number" id="ev-le-angle" class="cfg-input pro-angle-inp" value="' + (le.angle!=null?le.angle:0) + '"></td>'
+        + '<td><input id="ev-re-crop" class="cfg-input pro-crop-inp" value="' + proEsc(re.crop||'') + '" placeholder="w:h:x:y"></td>'
+        + '<td><input type="number" id="ev-re-angle" class="cfg-input pro-angle-inp" value="' + (re.angle!=null?re.angle:0) + '"></td>'
+        + '<td class="pro-td-actions">'
+        + '<button class="pro-icon-btn pro-icon-ok" data-action="confirm-edit-view" data-oldview="' + proEsc(vn) + '" title="Confirm">&#10003;</button>'
+        + '<button class="pro-icon-btn" data-action="cancel-edit-view" title="Cancel">&#10005;</button>'
+        + '</td></tr>';
+    }
+    function proViewNewRow() {
+      return '<tr>'
+        + '<td><input id="nv-name" class="cfg-input pro-name-inp" placeholder="e.g. wide"></td>'
+        + '<td><input id="nv-le-crop" class="cfg-input pro-crop-inp" placeholder="w:h:x:y"></td>'
+        + '<td><input type="number" id="nv-le-angle" class="cfg-input pro-angle-inp" value="0"></td>'
+        + '<td><input id="nv-re-crop" class="cfg-input pro-crop-inp" placeholder="w:h:x:y"></td>'
+        + '<td><input type="number" id="nv-re-angle" class="cfg-input pro-angle-inp" value="0"></td>'
+        + '<td class="pro-td-actions">'
+        + '<button class="pro-icon-btn pro-icon-ok" data-action="confirm-new-view" title="Add">&#10003;</button>'
+        + '<button class="pro-icon-btn" data-action="cancel-new-view" title="Cancel">&#10005;</button>'
+        + '</td></tr>';
+    }
+
+    function collectProGeneralSettings() {
+      if (!_proModel || !_proData[_proModel]) return;
+      var m  = _proData[_proModel];
+      var ms = document.getElementById('pro-max-size');
+      var vc = document.getElementById('pro-video-codec');
+      var vb = document.getElementById('pro-video-buffer');
+      var sa = document.getElementById('pro-stay-awake');
+      var ve = document.getElementById('pro-video-encoder');
+      if (ms) m.max_size     = parseInt(ms.value) || 0;
+      if (vc) m.video_codec  = vc.value;
+      if (vb) m.video_buffer = parseInt(vb.value) || 0;
+      if (sa) m.stay_awake   = sa.checked;
+      if (ve) m.video_encoder = ve.value.trim();
+    }
+
+    // All events inside the profiles modal via delegation
+    document.getElementById('pro-modal').addEventListener('click', function(e) {
+      if (e.target === this) { closeProModal(); return; }
+      var btn = e.target.closest('[data-action]');
+      if (!btn) return;
+      var action = btn.dataset.action;
+      var vn     = btn.dataset.view;
+
+      if (action === 'select-model') {
+        collectProGeneralSettings();
+        _proModel = btn.dataset.model;
+        _proEditView = null; _proNewView = false;
+        renderProTabs(); renderProBody();
+        return;
+      }
+      if (action === 'show-add-model') {
+        var form = document.getElementById('pro-add-model-form');
+        var visible = form.style.display !== 'none';
+        form.style.display = visible ? 'none' : 'flex';
+        if (!visible) { document.getElementById('pro-new-model-input').value = ''; document.getElementById('pro-new-model-input').focus(); }
+        return;
+      }
+      if (action === 'start-rename') {
+        if (document.getElementById('pro-rename-inline')) return;
+        btn.closest('.pro-model-bar').insertAdjacentHTML('afterend',
+          '<div class="pro-rename-row" id="pro-rename-inline">'
+          + '<span class="pro-rename-lbl">Rename to:</span>'
+          + '<input type="text" id="pro-rename-input" class="cfg-input" value="' + proEsc(_proModel) + '" style="width:180px">'
+          + '<button class="cfg-save-btn" data-action="confirm-rename" style="padding:6px 14px">Rename</button>'
+          + '<button class="cfg-cancel-btn" data-action="cancel-rename" style="padding:6px 10px">Cancel</button>'
+          + '</div>'
+        );
+        document.getElementById('pro-rename-input').focus();
+        return;
+      }
+      if (action === 'confirm-rename') {
+        var inp = document.getElementById('pro-rename-input');
+        var newName = inp ? inp.value.trim() : '';
+        if (!newName || newName === _proModel) { var r = document.getElementById('pro-rename-inline'); if (r) r.remove(); return; }
+        if (_proData[newName]) { showToast('A model named "' + newName + '" already exists.', 2500); return; }
+        _proData[newName] = _proData[_proModel];
+        delete _proData[_proModel];
+        _proModel = newName;
+        _proDirty = true;
+        renderProTabs(); renderProBody();
+        return;
+      }
+      if (action === 'cancel-rename') {
+        var row = document.getElementById('pro-rename-inline'); if (row) row.remove(); return;
+      }
+      if (action === 'delete-model') {
+        if (!confirm('Delete model "' + _proModel + '"? This cannot be undone.')) return;
+        delete _proData[_proModel];
+        var rem = Object.keys(_proData);
+        _proModel = rem.length > 0 ? rem[0] : null;
+        _proDirty = true; _proEditView = null; _proNewView = false;
+        renderProTabs(); renderProBody();
+        return;
+      }
+      if (action === 'add-view') {
+        collectProGeneralSettings();
+        _proNewView = true; _proEditView = null;
+        renderProBody();
+        var ni = document.getElementById('nv-name'); if (ni) ni.focus();
+        return;
+      }
+      if (action === 'edit-view') {
+        collectProGeneralSettings();
+        _proEditView = vn; _proNewView = false;
+        renderProBody();
+        var ei = document.getElementById('ev-name'); if (ei) ei.focus();
+        return;
+      }
+      if (action === 'delete-view') {
+        var mdl = _proData[_proModel];
+        if (mdl && mdl.views && mdl.views[vn]) {
+          delete mdl.views[vn]; _proDirty = true;
+          _proEditView = null; _proNewView = false;
+          renderProBody();
+        }
+        return;
+      }
+      if (action === 'confirm-edit-view') {
+        var oldVn = btn.dataset.oldview;
+        var newVn = (document.getElementById('ev-name').value || '').trim();
+        if (!newVn) return;
+        var leCrop  = (document.getElementById('ev-le-crop').value  || '').trim();
+        var leAngle = parseFloat(document.getElementById('ev-le-angle').value) || 0;
+        var reCrop  = (document.getElementById('ev-re-crop').value  || '').trim();
+        var reAngle = parseFloat(document.getElementById('ev-re-angle').value) || 0;
+        var m2 = _proData[_proModel];
+        if (!m2.views) m2.views = {};
+        if (oldVn !== newVn) delete m2.views[oldVn];
+        m2.views[newVn] = { left_eye: { crop: leCrop, angle: leAngle }, right_eye: { crop: reCrop, angle: reAngle } };
+        _proDirty = true; _proEditView = null;
+        renderProBody();
+        return;
+      }
+      if (action === 'cancel-edit-view') { _proEditView = null; renderProBody(); return; }
+      if (action === 'confirm-new-view') {
+        var nn = (document.getElementById('nv-name').value || '').trim();
+        if (!nn) { showToast('View name is required', 2000); return; }
+        var m3 = _proData[_proModel];
+        if (!m3.views) m3.views = {};
+        if (m3.views[nn]) { showToast('A view named "' + nn + '" already exists', 2000); return; }
+        var lc = (document.getElementById('nv-le-crop').value  || '').trim();
+        var la = parseFloat(document.getElementById('nv-le-angle').value) || 0;
+        var rc = (document.getElementById('nv-re-crop').value  || '').trim();
+        var ra = parseFloat(document.getElementById('nv-re-angle').value) || 0;
+        m3.views[nn] = { left_eye: { crop: lc, angle: la }, right_eye: { crop: rc, angle: ra } };
+        _proDirty = true; _proNewView = false;
+        renderProBody();
+        return;
+      }
+      if (action === 'cancel-new-view') { _proNewView = false; renderProBody(); }
+    });
+
+    // Add model form
+    document.getElementById('pro-add-model-confirm').addEventListener('click', function() {
+      var name = document.getElementById('pro-new-model-input').value.trim();
+      if (!name) { showToast('Model name is required', 2000); return; }
+      if (_proData[name]) { showToast('A model named "' + name + '" already exists', 2000); return; }
+      _proData[name] = { views: {}, max_size: 0, video_codec: 'h264', video_encoder: '', video_buffer: 50, stay_awake: true };
+      _proModel = name;
+      document.getElementById('pro-add-model-form').style.display = 'none';
+      document.getElementById('pro-new-model-input').value = '';
+      _proDirty = true;
+      renderProTabs(); renderProBody();
+    });
+    document.getElementById('pro-add-model-cancel').addEventListener('click', function() {
+      document.getElementById('pro-add-model-form').style.display = 'none';
+      document.getElementById('pro-new-model-input').value = '';
+    });
+    document.getElementById('pro-new-model-input').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter')  document.getElementById('pro-add-model-confirm').click();
+      if (e.key === 'Escape') document.getElementById('pro-add-model-cancel').click();
+    });
+
+    function closeProModal() {
+      if (_proDirty && !confirm('You have unsaved changes. Close without saving?')) return;
+      document.getElementById('pro-modal').style.display = 'none';
+    }
+    function saveProfiles() {
+      collectProGeneralSettings();
+      _proCfg.scrcpy.parameters = _proData;
+      fetch('/api/config/save', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(_proCfg, null, 2)
+      })
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          if (j.ok) {
+            _proDirty = false;
+            document.getElementById('pro-modal').style.display = 'none';
+            showToast('Profiles saved. Restart the app to apply changes.', 3500);
+          } else {
+            showToast('Save failed: ' + (j.error || 'error'), 3500);
+          }
+        })
+        .catch(function() { showToast('Server unreachable', 2500); });
+    }
+
+    document.getElementById('btn-profiles').addEventListener('click', openProModal);
+    document.getElementById('pro-save-top').addEventListener('click', saveProfiles);
+    document.getElementById('pro-save-bot').addEventListener('click', saveProfiles);
+    document.getElementById('pro-close-top').addEventListener('click', closeProModal);
+    document.getElementById('pro-close-bot').addEventListener('click', closeProModal);
   </script>
 </body>
 </html>

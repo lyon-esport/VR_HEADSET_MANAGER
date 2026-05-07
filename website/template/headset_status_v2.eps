@@ -10,13 +10,13 @@
       :root {
         --text: #e5e7eb;     /* gris clair */
         --accent: #60a5fa;   /* bleu */
-        --muted: #94a3b8;    /* gris bleuté */
+        --muted: #94a3b8;    /* gris bleut- */
       }
       * { box-sizing: border-box; }
       html, body {
         height: 100%;
         margin: 0;
-        background: transparent !important; /* clé pour OBS */
+        background: transparent !important; /* cl- pour OBS */
         color: var(--text);
         font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
       }
@@ -62,20 +62,20 @@
         padding: 10px 14px;
         border-radius: 999px;
         border: 1px solid transparent;
-        color: #fff; /* texte toujours blanc par défaut */
+        color: #fff; /* texte toujours blanc par d-faut */
       }
       .batt .emoji, .temp .emoji {
         filter: drop-shadow(0 2px 4px rgba(0,0,0,0.25));
       }
       .muted { color: var(--muted); font-weight: 500; }
 
-      /* États batterie (fond/bordure uniquement, texte reste blanc) */
+      /* -tats batterie (fond/bordure uniquement, texte reste blanc) */
       .batt--low {                       /* <= 30% : rouge */
         background: rgba(239, 68, 68, 0.18);
         border-color: rgba(239, 68, 68, 0.35);
 		color: red;
       }
-      .batt--mid {                       /* 31–59% : orange */
+      .batt--mid {                       /* 31-59% : orange */
         background: rgba(245, 158, 11, 0.18);
         border-color: rgba(245, 158, 11, 0.35);
 		color: orange;
@@ -86,13 +86,13 @@
 		color: white;
       }
 
-      /* Température normale (bleu) */
+      /* Temp-rature normale (bleu) */
       .temp {
         background: rgba(96,165,250,0.12);
         border-color: rgba(96,165,250,0.25);
 		color: white;
       }
-      /* Température chaude > 50 °C : fond + texte rouges */
+      /* Temp-rature chaude > 50 -C : fond + texte rouges */
       .temp--hot {
         background: rgba(239, 68, 68, 0.20);
         border-color: rgba(239, 68, 68, 0.45);
@@ -105,25 +105,25 @@
       <main class="card" role="main" aria-label="Statut <%= $name %>">
         <h1 class="title"><%= $name %>
            <span class="muted">
-            <% if (-not $ping) { %>☠️<% } elseif ( ($temp -gt $temperature_highLevel) -or ($battery -lt $headset_battery_criticalLevel) -or (-not $charging) ) { %>⚠️<% } else { %>✅<% } %>
+            <% if (-not $ping) { %>--<% } elseif ( ($temp -gt $temperature_highLevel) -or ($battery -lt $headset_battery_criticalLevel) -or (-not $charging) ) { %>--<% } else { %>-<% } %>
         </span>
         </h1>
         <div class="values" aria-live="polite">
           <span class="batt" aria-label="Batterie en pourcent">
             <span class="emoji" aria-hidden="true">
-            <% if ($battery -lt $headset_battery_criticalLevel) { %>🪫<% } else { %>🔋<% } %>
+            <% if ($battery -lt $headset_battery_criticalLevel) { %>--<% } else { %>--<% } %>
             </span>
             <strong><%= $battery %> %</strong>
             <span class="muted">
-              <% if ($charging) { %>⚡<% } else { %>🚫<% } %>
+              <% if ($charging) { %>-<% } else { %>--<% } %>
             </span>
             
           </span>
-          <span class="temp" aria-label="Température en Celsius">
+          <span class="temp" aria-label="Temp-rature en Celsius">
             <span class="emoji" aria-hidden="true">
-              <% if ($temp -gt $temperature_highLevel) { %>🔥<% } else { %>❄️<% } %>
+              <% if ($temp -gt $temperature_highLevel) { %>--<% } else { %>--<% } %>
             </span>
-            <strong><%= $temp %>&nbsp;°C</strong>
+            <strong><%= $temp %>&nbsp;-C</strong>
           </span>
         </div>
       </main>
@@ -158,7 +158,7 @@
         const strong = temp.querySelector('strong');
         if (!strong) return;
 
-        // Ex: "52 °C" -> 52
+        // Ex: "52--C" -> 52
         const t = parseInt((strong.textContent || '').replace(/\D/g, ''), 10);
         if (isNaN(t)) return;
 

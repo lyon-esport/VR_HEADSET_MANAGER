@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="assets/topbar.css">
   <script src="assets/topbar.js"></script>
   <style>
-    /* ─── Configuration ─────────────────────────────────────────────────────── */
+    /* --------- Configuration --------------------------------------------------------------------------------------------------------------------------------------------------------------------- */
     :root {
       --min-video-w:        640px;  /* minimum width per video cell */
       --grid-gap:           6px;
@@ -17,7 +17,7 @@
       --dot-stream:         #3b82f6;
       --muted:              #333;
     }
-    /* ─────────────────────────────────────────────────────────────────────── */
+    /* --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- */
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
@@ -270,7 +270,7 @@
     /* In no-stream mode the OFFLINE label sits behind the monitoring frame */
     .cell.no-stream .offline-overlay { z-index: 5; }
 
-    /* ── Light mode ─────────────────────────────────────────────────────────── */
+    /* ------ Light mode --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- */
     [data-theme="light"] {
       --bg:    #eaeaea;
       --muted: #999;
@@ -327,6 +327,7 @@
         </svg>
         Status
       </button>
+      <script>document.write(TopBar.monitoringBtnHTML)</script>
       <script>document.write(TopBar.manageDevicesBtnHTML)</script>
       <script>document.write(TopBar.configMenuHTML)</script>
     </div>
@@ -404,7 +405,7 @@
   </div>
 
   <script>
-    // ── Configuration ────────────────────────────────────────────────────────
+    // ------ Configuration ------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     var CSV_PATH      = '../data/known_headsets_infos.csv';
     var CSV_DELIMITER = ';';
     var REFRESH_MS    = 5000;   // CSV poll interval in ms
@@ -412,14 +413,14 @@
     var NO_STREAM_W   = 240;    // CSS width of offline tile (matches min() in .cell.no-stream)    // natural render width of the status iframe
     var NATURAL_H     = 260;    // fallback render height of the status iframe
     var naturalHeights = {};    // detected per-headset content height in px
-    // ─────────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
     var HEADSETS_CSV_PATH = '../data/known_headsets.csv';
     var headsetStatus = {};
     var autoRestartState = {};
     var initialFilterApplied = false;
 
-    // ── Per-headset visibility toggles ──────────────────────────────────────────
+    // ------ Per-headset visibility toggles ------------------------------------------------------------------------------------------------------------------------------
     var headsetVisible = {};
 
     TopBar.initFilters(function(f) {
@@ -487,7 +488,7 @@
       applyAll();
     }
 
-    // ── Helpers ──────────────────────────────────────────────────────────────
+    // ------ Helpers ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
     // Parse semicolon-delimited CSV, strip surrounding quotes from every cell
     function parseCsv(text) {
@@ -570,7 +571,7 @@
       if (launchBtn) openLaunchModal(launchBtn.dataset.launchApp);
     });
 
-    // ── Launch app modal ─────────────────────────────────────────────────────
+    // ------ Launch app modal ---------------------------------------------------------------------------------------------------------------------------------------------------------------
     var _launchDn         = null;
     var _allAppsLoaded    = false;
     var _allApps          = [];
@@ -733,7 +734,7 @@
         });
     });
 
-    // ── CSV polling ──────────────────────────────────────────────────────────
+    // ------ CSV polling ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     function pollCsv() {
       fetch(CSV_PATH + '?_=' + Date.now())
         .then(function(r) { if (!r.ok) throw new Error(r.status); return r.text(); })
@@ -772,7 +773,7 @@
         .catch(function() { /* keep last known state on network error */ });;
     }
 
-    // ── Running app badges ────────────────────────────────────────────────────
+    // ------ Running app badges ------------------------------------------------------------------------------------------------------------------------------------------------------------
     function updateRunningApps() {
       document.querySelectorAll('.running-app').forEach(function(el) {
         var dn  = el.dataset.runningApp;
@@ -789,7 +790,7 @@
       });
     }
 
-    // ── Video aspect ratio detection (removes black bands) ───────────────────
+    // ------ Video aspect ratio detection (removes black bands) ---------------------------------------------------------
     var _detectedRatios = {};
     function adaptCellAspectRatio(cell) {
       var dn = cell.dataset.display;
@@ -809,7 +810,7 @@
       } catch(e) {}
     }
 
-    // ── Offline / no-stream state update ─────────────────────────────────────
+    // ------ Offline / no-stream state update ---------------------------------------------------------------------------------------------------------------
     function applyOfflineState() {
       var scaleNeeded = false;
       document.querySelectorAll('#grid .cell').forEach(function(cell) {
@@ -846,7 +847,7 @@
       if (scaleNeeded) { applyAll(); }
     }
 
-    // ── Scale status overlays ────────────────────────────────────────────────
+    // ------ Scale status overlays ------------------------------------------------------------------------------------------------------------------------------------------------
     // Detect natural height of monitoring iframes for accurate no-stream scaling
     function detectFrameHeight(fr, cell) {
       var dn = cell ? cell.dataset.display : null;
@@ -893,7 +894,7 @@
       });
     }
 
-    // ── Viewport-fit layout: compute optimal columns so videos fit in the window ─
+    // ------ Viewport-fit layout: compute optimal columns so videos fit in the window ---
     function applyLayout() {
       var topbar = document.querySelector('.topbar');
       var topbarH = topbar ? (topbar.offsetHeight + 1) : 47;
@@ -956,7 +957,7 @@
       streamCells.forEach(function(cell) { cell.style.width = w + 'px'; });
     }
 
-    // ── Status overlay toggle ────────────────────────────────────────────────
+    // ------ Status overlay toggle ------------------------------------------------------------------------------------------------------------------------------------------------
     var statusVisible = true;
     var statusToggleBtn = document.getElementById('status-toggle');
     statusToggleBtn.style.color = 'var(--filter-active-bg)';
@@ -978,7 +979,7 @@
       finally { _applyingAll = false; }
     }
 
-    // ── Boot ─────────────────────────────────────────────────────────────────
+    // ------ Boot ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     TopBar.initCompact();
     TopBar.initManageDevicesBtn();
     buildHeadsetToggles();
