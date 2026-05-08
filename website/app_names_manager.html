@@ -101,7 +101,14 @@
     }
     td.pkg-cell  { font-size: 12px; font-family: 'Consolas', monospace; }
     td.dn-cell   { font-size: 12px; }
-    td.url-cell  { font-size: 11px; color: var(--text2); }
+    td.url-cell  { font-size: 11px; color: var(--text2); position: relative; padding-right: 28px; }
+
+    .copy-btn {
+      position: absolute; right: 3px; top: 50%; transform: translateY(-50%);
+      display: none;
+    }
+    .copy-btn:hover { background: rgba(59,130,246,0.14); color: var(--accent); border-color: var(--accent); }
+    tbody tr:hover .copy-btn { display: inline-flex; }
 
     .row-btn {
       display: inline-flex; align-items: center; justify-content: center;
@@ -338,8 +345,18 @@
         '</td>' +
         '<td class="col-pkg pkg-cell" title="' + esc(app.PackageName) + '">' + esc(app.PackageName) + '</td>' +
         '<td class="col-dn  dn-cell"  title="' + esc(app.DisplayName)  + '">' + iconHtml + esc(app.DisplayName) + '</td>' +
-        '<td class="col-iu  url-cell" title="' + esc(app.IconUrl)       + '">' + esc(app.IconUrl)       + '</td>' +
-        '<td class="col-li  url-cell" title="' + esc(app.LocalIconPath) + '">' + esc(app.LocalIconPath) + '</td>' +
+        '<td class="col-iu url-cell" title="' + esc(app.IconUrl) + '">' +
+          esc(app.IconUrl) +
+          '<button class="row-btn copy-btn" data-copy="' + esc(app.IconUrl) + '" title="Copy">' +
+            '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>' +
+          '</button>' +
+        '</td>' +
+        '<td class="col-li url-cell" title="' + esc(app.LocalIconPath) + '">' +
+          esc(app.LocalIconPath) +
+          '<button class="row-btn copy-btn" data-copy="' + esc(app.LocalIconPath) + '" title="Copy">' +
+            '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>' +
+          '</button>' +
+        '</td>' +
         '<td class="col-er" style="text-align:center">' +
           '<button class="row-btn del" data-del="' + esc(app.PackageName) + '" title="Delete">' +
             '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
@@ -415,6 +432,12 @@
   });
 
   tbody.addEventListener('click', function(e) {
+    var copyBtn = e.target.closest('[data-copy]');
+    if (copyBtn) {
+      var text = copyBtn.dataset.copy;
+      if (text) navigator.clipboard.writeText(text);
+      return;
+    }
     var editBtn = e.target.closest('[data-edit]');
     if (editBtn) {
       var pkg = editBtn.dataset.edit;
