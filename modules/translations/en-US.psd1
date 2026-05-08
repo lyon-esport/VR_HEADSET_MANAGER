@@ -78,11 +78,23 @@
     AdbWifiDevModeHint = "--> Check that developer mode is enabled and WiFi ADB is activated on the headset"
     AdbWifiConnected = "Connected to {0} via ADB WiFi"
     AdbWifiConnectFailed = "ADB WiFi connection failed to {0}: {1}"
+    AdbCmdDeviceNull = "Invoke-AdbCommand: Device parameter is null"
+    AdbCmdPingFailed = "Device {0} is not reachable (ping failed)"
+    AdbCmdPortClosed = "ADB port {1} is closed on {0} - verify developer mode is enabled"
+    AdbCmdWifiNotConnected = "ADB WiFi not connected to {0} after connect attempt"
+    AdbCmdUsbNotDetected = "No USB ADB device detected"
+    AdbCmdUsbUnauthorized = "USB debugging not authorized on {0} - accept the prompt on the headset"
+    AdbCmdFailed = "ADB command failed on {0} (exit {2}): '{1}' -> {3}"
     AppNotFound         = "App '{0}' is not installed on {1}"
     AppNotThirdParty    = "App '{0}' is a system app and cannot be uninstalled on {1}"
     AppUninstalling     = "Uninstalling '{0}' from {1}..."
     AppUninstallSuccess = "App '{0}' successfully uninstalled from {1}"
     AppUninstallFailed  = "Failed to uninstall '{0}' from {1}: {2}"
+    ApkFileNotFound     = "No .apk file found in: {0}"
+    ApkInstallSuccess   = "App '{0}' installed successfully on {1}"
+    ObbFolderFound      = "OBB data folder found for '{0}', uploading to headset..."
+    ObbPushSuccess      = "OBB data for '{0}' pushed successfully to {1}"
+    ObbPushFailed       = "Failed to push OBB data for '{0}' to {1}: {2}"
 
     # ==========================================
     # console_manager.ps1
