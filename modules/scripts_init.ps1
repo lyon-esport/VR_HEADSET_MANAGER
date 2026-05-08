@@ -228,7 +228,22 @@ function Start-WebServer {
         }
         if ($wsPid -and (Get-Process -Id $wsPid -ErrorAction SilentlyContinue)) {
             Stop-Process -Id $wsPid -Force -ErrorAction SilentlyContinue
-            Start-Sleep -Milliseconds 800
+            $portFree = $false
+            $deadline = (Get-Date).AddSeconds(5)
+            while ((Get-Date) -lt $deadline) {
+                try {
+                    $testListener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, $global:WebServer_port)
+                    $testListener.Start()
+                    $testListener.Stop()
+                    $portFree = $true
+                    break
+                } catch {
+                    Start-Sleep -Milliseconds 200
+                }
+            }
+            if (-not $portFree) {
+                Write-Log "Web server port $global:WebServer_port still busy after 5s, starting anyway" -Level WARNING
+            }
             Write-Log $msg.WebServerStopped -Level INFO
         }
         Remove-Item $webServerPidFile -Force -ErrorAction SilentlyContinue
@@ -266,13 +281,30 @@ function Start-WebServer {
         }
     }
 
+    # 3. Orphan guard: port already bound by a process not tracked by our PID file
+    #    (happens when the app crashed without clean shutdown and a stale web server is
+    #    still listening). Adopt it so we don't spawn a second instance that would fail.
+    if (-not $webServerRunning) {
+        $orphanConn = Get-NetTCPConnection -LocalPort $global:WebServer_port -State Listen -ErrorAction SilentlyContinue |
+                      Select-Object -First 1
+        if ($orphanConn) {
+            $orphanProc = Get-Process -Id $orphanConn.OwningProcess -ErrorAction SilentlyContinue
+            if ($orphanProc) {
+                $orphanProc.Id | Set-Content -LiteralPath $webServerPidFile -Force -ErrorAction SilentlyContinue
+                $global:WebServerProcess = $orphanProc
+                Write-Log ("Web server adopted existing process (PID {0}) on port {1}" -f $orphanProc.Id, $global:WebServer_port) -Level INFO
+                $webServerRunning = $true
+            }
+        }
+    }
+
     if (-not $webServerRunning) {
         $web_server_script = Join-Path $global:ScriptPath "modules\Pode_WebServer\web_server.ps1"
 
         # Write a placeholder PID entry BEFORE launching so concurrent callers
         # see the file and skip. Use current PID as sentinel; overwritten by
         # web_server.ps1 once it has its own PID.
-        $PID | Set-Content $webServerPidFile -Force -ErrorAction SilentlyContinue
+        $PID | Set-Content -LiteralPath $webServerPidFile -Force -ErrorAction SilentlyContinue
 
         $dateStamp      = Get-Date -Format 'yyyy-MM-dd'
         $wsOutLog       = Join-Path $global:logFolder "webserver_${dateStamp}_out.log"

@@ -153,7 +153,7 @@ if ($lanIPs) {
 
 # Write own PID to lock file so scripts_init.ps1 can detect us across reloads
 if ($PidFile) {
-    $PID | Set-Content $PidFile -Force -ErrorAction SilentlyContinue
+    $PID | Set-Content -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
 }
 
 # Start HttpListener

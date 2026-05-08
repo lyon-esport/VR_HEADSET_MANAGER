@@ -1,8 +1,7 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-	<meta http-equiv="refresh" content="5" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title><%= $name  %> VR Headset - Status</title>
 
@@ -55,6 +54,7 @@
       }
 
       /* Common styles */
+      .batt *, .temp * { white-space: nowrap; }
       .batt, .temp {
         display: inline-flex;
         align-items: center;
@@ -255,6 +255,26 @@
         const moTemp = new MutationObserver(applyTempClass);
         moTemp.observe(tempTarget, { characterData: true, childList: true, subtree: true });
       }
+
+  (function () {
+    var INTERVAL_MS = 1000;
+    function refresh() {
+      fetch(window.location.href, { cache: 'no-store' })
+        .then(function (r) { return r.text(); })
+        .then(function (html) {
+          var doc = new DOMParser().parseFromString(html, 'text/html');
+          var newCard = doc.querySelector('.card');
+          var curCard = document.querySelector('.card');
+          if (newCard && curCard) {
+            curCard.innerHTML = newCard.innerHTML;
+            applyBatteryClass();
+            applyTempClass();
+          }
+        })
+        .catch(function () {});
+    }
+    setInterval(refresh, INTERVAL_MS);
+  })();
     </script>
   </body>
 </html>

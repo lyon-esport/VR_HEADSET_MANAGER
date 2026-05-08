@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -742,30 +742,6 @@
       setInterval(function() {
         document.querySelectorAll('#grid .cell:not(.no-stream)').forEach(adaptCellAspectRatio);
       }, 1500);
-
-      // Reload monitoring iframes when the file changes (Last-Modified polling)
-      var _monLastModified = {};
-      setInterval(function() {
-        document.querySelectorAll('#grid .cell .status-frame').forEach(function(fr) {
-          var cell = fr.closest('.cell');
-          if (!cell) return;
-          var dn  = cell.dataset.display;
-          var url = dn + '[monitoring].html';
-          fetch(url, { method: 'HEAD', cache: 'no-store' })
-            .then(function(r) {
-              var lm = r.headers.get('Last-Modified') || r.headers.get('ETag') || '';
-              if (lm && lm !== _monLastModified[dn]) {
-                _monLastModified[dn] = lm;
-                fr.src = url + '?_=' + Date.now();
-                fr.addEventListener('load', function onReload() {
-                  fr.removeEventListener('load', onReload);
-                  detectFrameHeight(fr, fr.closest('.cell'));
-                }, { once: true });
-              }
-            })
-            .catch(function() {});
-        });
-      }, REFRESH_MS);
     });
   </script>
   <script src="assets/app_launcher.js"></script>
