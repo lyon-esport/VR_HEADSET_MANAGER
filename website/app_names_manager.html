@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -38,10 +38,8 @@
 
     .page-wrap { display: flex; flex-direction: column; height: 100vh; }
 
-    /* â”€â”€ Content area â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
     .content { flex: 1; overflow: hidden; display: flex; flex-direction: column; padding: 10px 14px 8px; gap: 8px; }
 
-    /* â”€â”€ Action bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
     .action-bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; flex-shrink: 0; }
     .action-btn {
       display: inline-flex; align-items: center; gap: 6px;
@@ -53,7 +51,6 @@
     .action-btn.danger:hover:not(:disabled) { background: var(--danger); color: #fff; border-color: var(--danger); }
     .action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-    /* â”€â”€ Table card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
     .table-card {
       flex: 1; overflow: hidden; display: flex; flex-direction: column;
       background: var(--bg2); border: 1px solid var(--border); border-radius: 8px;
@@ -70,7 +67,6 @@
     .col-li  { width: 14%; }
     .col-er  { width: 34px; }
 
-    /* â”€â”€ Sticky header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
     thead { position: sticky; top: 0; z-index: 4; }
 
     thead tr.hdr-row th {
@@ -84,6 +80,9 @@
       background: var(--bg2); border-bottom: 2px solid var(--accent);
       padding: 4px 4px;
     }
+    thead tr.input-row td.edit-mode-indicator {
+      border-bottom-color: var(--warn);
+    }
     thead tr.input-row input {
       width: 100%; background: var(--bg3); border: 1px solid var(--border);
       color: var(--text); padding: 5px 7px; border-radius: 4px; font-size: 12px;
@@ -91,7 +90,6 @@
     }
     thead tr.input-row input:focus { border-color: var(--accent); }
 
-    /* â”€â”€ Data rows â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
     tbody tr { border-bottom: 1px solid var(--border); }
     tbody tr:last-child { border-bottom: none; }
     tbody tr:hover { background: var(--bg3); }
@@ -105,7 +103,6 @@
     td.dn-cell   { font-size: 12px; }
     td.url-cell  { font-size: 11px; color: var(--text2); }
 
-    /* â”€â”€ Row buttons â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
     .row-btn {
       display: inline-flex; align-items: center; justify-content: center;
       width: 26px; height: 26px; border-radius: 4px; border: 1px solid transparent;
@@ -115,19 +112,18 @@
     .row-btn.edit:hover  { background: rgba(59,130,246,0.14); color: var(--accent); border-color: var(--accent); }
     .row-btn.del:hover   { background: rgba(239,68,68,0.14);  color: var(--danger); border-color: var(--danger); }
 
-    /* Save button in input row */
     .save-btn {
       display: inline-flex; align-items: center; justify-content: center;
-      width: 26px; height: 26px; border-radius: 4px; border: 1px solid var(--success);
-      background: transparent; color: var(--success); cursor: pointer; padding: 0;
-      transition: background 0.12s;
+      width: 26px; height: 26px; border-radius: 4px; border: 1px solid var(--text2);
+      background: transparent; color: var(--text2); cursor: pointer; padding: 0;
+      transition: background 0.12s, border-color 0.12s, color 0.12s;
     }
-    .save-btn:hover { background: rgba(34,197,94,0.14); }
+    .save-btn.mode-edit { border-color: var(--success); color: var(--success); }
+    .save-btn.mode-edit:hover { background: rgba(34,197,94,0.14); }
+    .save-btn.mode-search:hover { background: var(--bg3); border-color: var(--accent); color: var(--accent); }
 
-    /* App icon thumbnail */
     .app-icon { width: 18px; height: 18px; border-radius: 3px; object-fit: cover; vertical-align: middle; margin-right: 5px; flex-shrink: 0; }
 
-    /* â”€â”€ Status bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
     .status-bar {
       flex-shrink: 0; display: flex; align-items: center; gap: 7px;
       padding: 5px 10px; border-top: 1px solid var(--border);
@@ -138,7 +134,6 @@
     .status-dot.busy { background: var(--warn); }
     .status-dot.err  { background: var(--danger); }
 
-    /* â”€â”€ Confirm overlay â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
     .overlay { position: fixed; inset: 0; z-index: 200; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; }
     .confirm-box { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 20px 22px; max-width: 360px; width: 90%; }
     .confirm-box p { margin: 0 0 14px; line-height: 1.5; }
@@ -147,7 +142,6 @@
     .btn-cancel  { padding: 6px 14px; border-radius: 5px; border: 1px solid var(--border); background: var(--bg3); color: var(--text); cursor: pointer; font-size: 12px; }
     .btn-del-confirm { padding: 6px 14px; border-radius: 5px; border: 1px solid var(--danger); background: var(--danger); color: #fff; cursor: pointer; font-size: 12px; }
 
-    /* â”€â”€ Spinner â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
     @keyframes spin { to { transform: rotate(360deg); } }
     .spin { display: inline-block; animation: spin 0.75s linear infinite; }
   </style>
@@ -204,17 +198,17 @@
               <th class="col-li">Local Icon</th>
               <th class="col-er"></th>
             </tr>
-            <!-- Input / add row -->
+            <!-- Search / edit row (dual-purpose) -->
             <tr class="input-row" id="input-row">
               <td style="text-align:center">
-                <button class="save-btn" id="btn-save" title="Save (Enter)">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                <button class="save-btn mode-search" id="btn-save" title="Clear search">
+                  <svg id="btn-save-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                 </button>
               </td>
-              <td><input type="text" id="in-pkg"     placeholder="com.example.app"   autocomplete="off" spellcheck="false"></td>
-              <td><input type="text" id="in-display" placeholder="Display Name"       autocomplete="off"></td>
-              <td><input type="text" id="in-icon-url" placeholder="https://..."       autocomplete="off" spellcheck="false"></td>
-              <td><input type="text" id="in-local"   placeholder="/assets/app_icons/" autocomplete="off" spellcheck="false"></td>
+              <td><input type="text" id="in-pkg"      placeholder="Search package..."      autocomplete="off" spellcheck="false"></td>
+              <td><input type="text" id="in-display"  placeholder="Search display name..."  autocomplete="off"></td>
+              <td><input type="text" id="in-icon-url" placeholder="Search icon URL..."      autocomplete="off" spellcheck="false"></td>
+              <td><input type="text" id="in-local"    placeholder="Search local icon..."    autocomplete="off" spellcheck="false"></td>
               <td></td>
             </tr>
           </thead>
@@ -247,28 +241,43 @@
 <script>
 (function () {
   var _apps    = [];
-  var _editPkg = null;
+  var _editPkg = null;   // null = search mode, string = package being edited
   var _delPkg  = null;
 
-  var tbody  = document.getElementById('apps-body');
-  var inPkg  = document.getElementById('in-pkg');
-  var inDN   = document.getElementById('in-display');
-  var inIU   = document.getElementById('in-icon-url');
-  var inLI   = document.getElementById('in-local');
+  var tbody   = document.getElementById('apps-body');
+  var btnSave = document.getElementById('btn-save');
+  var inPkg   = document.getElementById('in-pkg');
+  var inDN    = document.getElementById('in-display');
+  var inIU    = document.getElementById('in-icon-url');
+  var inLI    = document.getElementById('in-local');
 
-  // â”€â”€ Status â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  var SVG_SEARCH = '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>';
+  var SVG_CHECK  = '<polyline points="20 6 9 17 4 12"/>';
+
   function setStatus(msg, state) {
     document.getElementById('status-text').textContent = msg;
     document.getElementById('status-dot').className = 'status-dot' + (state ? ' ' + state : '');
   }
 
-  // â”€â”€ Escape HTML â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   function esc(s) {
     if (!s) return '';
     return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
-  // â”€â”€ Load â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // Switch button icon and styling between search and edit modes
+  function syncBtn() {
+    var icon = document.getElementById('btn-save-icon');
+    if (_editPkg !== null) {
+      btnSave.className = 'save-btn mode-edit';
+      btnSave.title = 'Save changes';
+      icon.innerHTML = SVG_CHECK;
+    } else {
+      btnSave.className = 'save-btn mode-search';
+      btnSave.title = 'Clear search';
+      icon.innerHTML = SVG_SEARCH;
+    }
+  }
+
   function loadApps() {
     setStatus('Loading...', 'busy');
     fetch('/api/appnames')
@@ -281,7 +290,6 @@
       .catch(function(e) { setStatus('Load failed: ' + e.message, 'err'); });
   }
 
-  // â”€â”€ Adjust Package Name column to fit longest value â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   var _measureCtx = (function() {
     var c = document.createElement('canvas');
     return c.getContext('2d');
@@ -292,16 +300,28 @@
     _measureCtx.font = '12px Consolas, monospace';
     var maxW = _apps.reduce(function(m, app) {
       return Math.max(m, _measureCtx.measureText(app.PackageName || '').width);
-    }, _measureCtx.measureText('Package Name').width);  // never narrower than header
-    var colPx = Math.ceil(maxW) + 12;  // 6px padding each side
+    }, _measureCtx.measureText('Package Name').width);
     var col = document.querySelector('#apps-table col.col-pkg');
-    if (col) col.style.width = colPx + 'px';
+    if (col) col.style.width = (Math.ceil(maxW) + 12) + 'px';
   }
 
-  // â”€â”€ Render â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // Render table, applying search filters when in search mode
   function renderTable() {
+    var fPkg = inPkg.value.trim().toLowerCase();
+    var fDN  = inDN.value.trim().toLowerCase();
+    var fIU  = inIU.value.trim().toLowerCase();
+    var fLI  = inLI.value.trim().toLowerCase();
+    var filtering = (_editPkg === null);
+
     tbody.innerHTML = '';
     _apps.forEach(function(app) {
+      if (filtering) {
+        if (fPkg && !(app.PackageName   || '').toLowerCase().includes(fPkg)) return;
+        if (fDN  && !(app.DisplayName   || '').toLowerCase().includes(fDN))  return;
+        if (fIU  && !(app.IconUrl       || '').toLowerCase().includes(fIU))  return;
+        if (fLI  && !(app.LocalIconPath || '').toLowerCase().includes(fLI))  return;
+      }
+
       var tr = document.createElement('tr');
       tr.dataset.pkg = app.PackageName;
       if (_editPkg === app.PackageName) tr.classList.add('editing');
@@ -331,34 +351,33 @@
     adjustPkgColumnWidth();
   }
 
-  // â”€â”€ Input row helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // Reset to search mode (clear all inputs and filters)
   function clearInputRow() {
     inPkg.value = ''; inDN.value = ''; inIU.value = ''; inLI.value = '';
     inPkg.readOnly = false;
     inPkg.style.opacity = '';
     _editPkg = null;
     tbody.querySelectorAll('tr.editing').forEach(function(r) { r.classList.remove('editing'); });
+    syncBtn();
+    renderTable();
   }
 
+  // Load a row's values and switch to edit mode
   function loadRow(app) {
-    inPkg.value = app.PackageName || '';
-    inDN.value  = app.DisplayName || '';
-    inIU.value  = app.IconUrl     || '';
+    inPkg.value = app.PackageName   || '';
+    inDN.value  = app.DisplayName   || '';
+    inIU.value  = app.IconUrl       || '';
     inLI.value  = app.LocalIconPath || '';
     inPkg.readOnly = true;
     inPkg.style.opacity = '0.6';
     _editPkg = app.PackageName;
-    // Highlight editing row
+    syncBtn();
     tbody.querySelectorAll('tr').forEach(function(r) {
       r.classList.toggle('editing', r.dataset.pkg === app.PackageName);
     });
-    // Scroll to input row
     document.getElementById('table-scroll').scrollTo({ top: 0, behavior: 'smooth' });
     inDN.focus();
   }
-
-  // â”€â”€ Save â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  document.getElementById('btn-save').addEventListener('click', doSave);
 
   function doSave() {
     var pkg = inPkg.value.trim();
@@ -383,7 +402,18 @@
     .catch(function(e) { setStatus('Save error: ' + e.message, 'err'); });
   }
 
-  // â”€â”€ Table click delegation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // Tick = save in edit mode; search icon = clear filters in search mode
+  btnSave.addEventListener('click', function() {
+    if (_editPkg !== null) { doSave(); } else { clearInputRow(); }
+  });
+
+  // Live search: only active when not editing a row
+  [inPkg, inDN, inIU, inLI].forEach(function(inp) {
+    inp.addEventListener('input', function() {
+      if (_editPkg === null) renderTable();
+    });
+  });
+
   tbody.addEventListener('click', function(e) {
     var editBtn = e.target.closest('[data-edit]');
     if (editBtn) {
@@ -400,7 +430,6 @@
     }
   });
 
-  // â”€â”€ Confirm delete â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   document.getElementById('confirm-cancel').addEventListener('click', closeConfirm);
   document.getElementById('confirm-ok').addEventListener('click', function() {
     if (!_delPkg) return;
@@ -426,17 +455,14 @@
 
   document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
-      if (document.getElementById('confirm-overlay').style.display !== 'none') { closeConfirm(); _delPkg = null; }
-      else { clearInputRow(); }
+      if (document.getElementById('confirm-overlay').style.display !== 'none') {
+        closeConfirm(); _delPkg = null;
+      } else if (_editPkg !== null) {
+        clearInputRow();
+      }
     }
   });
 
-  // â”€â”€ Enter key in input row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  [inPkg, inDN, inIU, inLI].forEach(function(inp) {
-    inp.addEventListener('keydown', function(e) { if (e.key === 'Enter') doSave(); });
-  });
-
-  // â”€â”€ Clear table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   document.getElementById('btn-clear').addEventListener('click', function() {
     if (!confirm('Archive the current app names table and start fresh?\n\nThe current file will be renamed with a date suffix (_old_YYYY.MM.DD-HH.MM).')) return;
     setStatus('Archiving...', 'busy');
@@ -449,7 +475,6 @@
       .catch(function(e) { setStatus('Clear error: ' + e.message, 'err'); });
   });
 
-  // â”€â”€ Refresh from web â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   document.getElementById('btn-refresh-web').addEventListener('click', function() {
     var btn = this;
     var origHTML = btn.innerHTML;
@@ -477,7 +502,7 @@
       });
   });
 
-  // â”€â”€ Init â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  syncBtn();
   loadApps();
 })();
 </script>

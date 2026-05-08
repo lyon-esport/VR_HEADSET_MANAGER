@@ -1,0 +1,835 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>App Catalogue - VR Headset Manager</title>
+  <link rel="stylesheet" href="assets/topbar.css">
+  <script src="assets/topbar.js"></script>
+  <style>
+    :root {
+      --bg:      #1a1a1a;
+      --bg2:     #242424;
+      --bg3:     #2e2e2e;
+      --bg4:     #383838;
+      --border:  #3a3a3a;
+      --text:    #e8e8e8;
+      --text2:   #999;
+      --accent:  #3b82f6;
+      --success: #22c55e;
+      --danger:  #ef4444;
+      --warn:    #f59e0b;
+    }
+    [data-theme="light"] {
+      --bg:      #f0f0f0;
+      --bg2:     #ffffff;
+      --bg3:     #f5f5f5;
+      --bg4:     #e8e8e8;
+      --border:  #d8d8d8;
+      --text:    #111111;
+      --text2:   #666666;
+      --accent:  #2563eb;
+      --success: #16a34a;
+      --danger:  #dc2626;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, sans-serif; font-size: 13px; }
+
+    .page-wrap { display: flex; flex-direction: column; height: 100vh; }
+    .content    { flex: 1; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; padding: 10px 14px 14px; gap: 10px; }
+
+    /* -- Headset selector ------------------------------------------------- */
+    .headset-bar {
+      display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+      padding: 8px 12px; background: var(--bg2); border: 1px solid var(--border); border-radius: 8px;
+    }
+    .headset-bar label { font-size: 12px; color: var(--text2); white-space: nowrap; }
+    .headset-bar select {
+      background: var(--bg3); border: 1px solid var(--border); color: var(--text);
+      padding: 5px 8px; border-radius: 5px; font-size: 12px; cursor: pointer; outline: none;
+      min-width: 200px; transition: border-color 0.12s;
+    }
+    .headset-bar select:focus { border-color: var(--accent); }
+
+    /* -- Warning banner --------------------------------------------------- */
+    .warning-banner {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 12px;
+      background: #451a03; border: 1px solid #92400e; border-left: 3px solid #d97706;
+      border-radius: 6px; color: #fef3c7; font-size: 12px; flex-shrink: 0;
+    }
+    .warning-banner svg { flex-shrink: 0; color: #d97706; }
+    [data-theme="light"] .warning-banner { background: #fffbeb; border-color: #fcd34d; border-left-color: #d97706; color: #78350f; }
+
+    /* -- Install card ----------------------------------------------------- */
+    .install-card {
+      background: var(--bg2); border: 1px solid var(--border); border-radius: 8px;
+      padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; flex-shrink: 0;
+    }
+    .install-card-title { font-size: 12px; font-weight: 700; color: var(--text2); text-transform: uppercase; letter-spacing: 0.05em; }
+
+    /* -- Install spinner overlay ------------------------------------------ */
+    .install-card { position: relative; }
+    .install-spinner-overlay {
+      display: none; position: absolute; inset: 0; z-index: 20;
+      background: rgba(0,0,0,0.45); border-radius: 8px;
+      align-items: center; justify-content: center; flex-direction: column; gap: 10px;
+    }
+    .install-spinner-overlay.visible { display: flex; }
+    [data-theme="light"] .install-spinner-overlay { background: rgba(255,255,255,0.6); }
+    .spinner-ring {
+      width: 44px; height: 44px;
+      border: 3px solid rgba(59,130,246,0.2);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: vrm-spin 0.75s linear infinite;
+    }
+    @keyframes vrm-spin { to { transform: rotate(360deg); } }
+    .spinner-label { font-size: 12px; color: var(--text); opacity: 0.85; }
+
+    .drop-zone {
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      padding: 18px 12px;
+      border: 2px dashed var(--border); border-radius: 6px;
+      background: var(--bg3); color: var(--text2); font-size: 12px;
+      cursor: pointer; transition: border-color 0.15s, background 0.15s;
+      text-align: center;
+    }
+    .drop-zone.drag-over { border-color: var(--accent); background: rgba(59,130,246,0.08); color: var(--text); }
+    .drop-zone svg { flex-shrink: 0; }
+    .browse-lbl {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 4px 10px; border-radius: 4px; border: 1px solid var(--border);
+      background: var(--bg4); color: var(--text); cursor: pointer; font-size: 12px;
+      transition: background 0.12s, border-color 0.12s;
+    }
+    .browse-lbl:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .browse-lbl input { display: none; }
+
+    .selected-file-row {
+      display: none; align-items: center; gap: 8px; font-size: 12px;
+      padding: 6px 10px; background: var(--bg3); border-radius: 5px; border: 1px solid var(--border);
+    }
+    .selected-file-row .file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .selected-file-row .clear-btn { background: none; border: none; color: var(--text2); cursor: pointer; padding: 0; line-height: 1; }
+    .selected-file-row .clear-btn:hover { color: var(--danger); }
+
+    .or-row { text-align: center; color: var(--text2); font-size: 11px; position: relative; }
+    .or-row::before, .or-row::after {
+      content: ''; position: absolute; top: 50%; width: 42%; height: 1px; background: var(--border);
+    }
+    .or-row::before { left: 0; }
+    .or-row::after  { right: 0; }
+
+    .folder-row { display: flex; gap: 6px; align-items: center; }
+    .folder-row input[type="text"] {
+      flex: 1; background: var(--bg3); border: 1px solid var(--border); color: var(--text);
+      padding: 6px 8px; border-radius: 5px; font-size: 12px; outline: none;
+      transition: border-color 0.12s;
+    }
+    .folder-row input[type="text"]:focus { border-color: var(--accent); }
+
+    /* -- Shared buttons --------------------------------------------------- */
+    .action-btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border);
+      background: var(--bg3); color: var(--text); cursor: pointer; font-size: 12px; white-space: nowrap;
+      transition: background 0.14s, color 0.14s, border-color 0.14s;
+    }
+    .action-btn:hover:not(:disabled) { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .action-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .action-btn.danger:hover:not(:disabled) { background: var(--danger); color: #fff; border-color: var(--danger); }
+
+    /* -- Install status --------------------------------------------------- */
+    .install-status { font-size: 12px; min-height: 20px; }
+    .install-status.ok   { color: var(--success); }
+    .install-status.err  { color: var(--danger); }
+    .install-status.busy { color: var(--text2); }
+
+    /* -- Overwrite confirm ------------------------------------------------ */
+    .overwrite-confirm {
+      display: none; align-items: center; gap: 8px; flex-wrap: wrap;
+      padding: 8px 10px; background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.4);
+      border-radius: 6px; font-size: 12px;
+    }
+    .overwrite-confirm .msg { flex: 1; }
+    .overwrite-confirm button { padding: 5px 10px; border-radius: 5px; border: 1px solid var(--border); cursor: pointer; font-size: 12px; background: var(--bg3); color: var(--text); }
+    .overwrite-confirm .ow-confirm-btn { background: var(--danger); color: #fff; border-color: var(--danger); }
+    .overwrite-confirm .ow-cancel-btn:hover  { border-color: var(--text2); }
+    .overwrite-confirm .ow-confirm-btn:hover { opacity: 0.85; }
+
+    /* -- Apps toolbar ----------------------------------------------------- */
+    .apps-toolbar {
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex-shrink: 0;
+    }
+    .global-search {
+      display: flex; align-items: center; gap: 6px;
+      padding: 5px 9px; background: var(--bg3); border: 1px solid var(--border); border-radius: 6px;
+      flex: 1; min-width: 160px; max-width: 320px;
+      transition: border-color 0.12s;
+    }
+    .global-search:focus-within { border-color: var(--accent); }
+    .global-search input { background: none; border: none; color: var(--text); font-size: 12px; outline: none; width: 100%; }
+    .global-search svg { color: var(--text2); flex-shrink: 0; }
+
+    /* -- Table card ------------------------------------------------------- */
+    .table-card {
+      flex: 1; min-height: 0; display: flex; flex-direction: column;
+      background: var(--bg2); border: 1px solid var(--border); border-radius: 8px;
+      overflow: hidden;
+    }
+    .table-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+
+    .col-icon    { width: 40px; }
+    .col-name    { width: auto; min-width: 130px; }
+    .col-version { width: 100px; }
+    .col-type    { width: 90px; }
+    .col-action  { width: 38px; }
+
+    thead { position: sticky; top: 0; z-index: 4; }
+
+    thead tr.hdr-row th {
+      background: var(--bg3); border-bottom: 1px solid var(--border);
+      padding: 7px 6px; text-align: left;
+      font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+      color: var(--text2); white-space: nowrap; overflow: hidden; cursor: default;
+    }
+    thead tr.hdr-row th.sortable { cursor: pointer; user-select: none; }
+    thead tr.hdr-row th.sortable:hover { color: var(--text); }
+    .sort-icon { display: inline-block; width: 10px; text-align: center; color: var(--text2); }
+    th.sort-asc  .sort-icon { color: var(--accent); }
+    th.sort-desc .sort-icon { color: var(--accent); }
+
+    thead tr.filter-row td {
+      background: var(--bg2); border-bottom: 2px solid var(--accent); padding: 3px 4px;
+    }
+    thead tr.filter-row input {
+      width: 100%; background: var(--bg3); border: 1px solid var(--border);
+      color: var(--text); padding: 4px 6px; border-radius: 4px; font-size: 11px;
+      outline: none; transition: border-color 0.12s;
+    }
+    thead tr.filter-row input:focus { border-color: var(--accent); }
+
+    tbody tr { border-bottom: 1px solid var(--border); }
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: var(--bg3); }
+
+    tbody td { padding: 5px 6px; vertical-align: middle; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+    td.col-icon { text-align: center; padding: 3px 6px; }
+    .app-icon { width: 28px; height: 28px; border-radius: 5px; object-fit: cover; vertical-align: middle; }
+    .app-icon-placeholder { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 5px; background: var(--bg4); color: var(--text2); font-size: 11px; }
+
+    .badge {
+      display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600;
+    }
+    .badge.third-party { background: rgba(59,130,246,0.15); color: #93c5fd; }
+    .badge.built-in    { background: rgba(156,163,175,0.15); color: var(--text2); }
+    [data-theme="light"] .badge.third-party { background: rgba(37,99,235,0.1); color: #1d4ed8; }
+    [data-theme="light"] .badge.built-in    { background: rgba(107,114,128,0.1); color: #6b7280; }
+
+    .del-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 24px; height: 24px; border-radius: 4px; border: 1px solid transparent;
+      background: transparent; color: var(--text2); cursor: pointer; padding: 0; font-size: 14px;
+      transition: background 0.12s, color 0.12s, border-color 0.12s;
+    }
+    .del-btn:hover { background: rgba(239,68,68,0.14); color: var(--danger); border-color: var(--danger); }
+
+    /* -- Status bar ------------------------------------------------------- */
+    .status-bar {
+      display: flex; align-items: center; gap: 7px;
+      padding: 5px 10px; background: var(--bg3); border-top: 1px solid var(--border);
+      font-size: 11px; color: var(--text2); flex-shrink: 0;
+    }
+    .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text2); flex-shrink: 0; }
+    .status-dot.ok   { background: var(--success); }
+    .status-dot.busy { background: var(--warn); }
+    .status-dot.err  { background: var(--danger); }
+
+    /* -- Inline uninstall confirm ----------------------------------------- */
+    .uninstall-overlay {
+      display: none; position: fixed; inset: 0; z-index: 100;
+      background: rgba(0,0,0,0.55); align-items: center; justify-content: center;
+    }
+    .uninstall-overlay.open { display: flex; }
+    .confirm-box {
+      background: var(--bg2); border: 1px solid var(--border); border-radius: 10px;
+      padding: 20px 22px; max-width: 360px; width: 90%;
+      display: flex; flex-direction: column; gap: 14px;
+    }
+    .confirm-box .cb-title { font-size: 14px; font-weight: 600; }
+    .confirm-box .cb-sub   { font-size: 12px; color: var(--text2); }
+    .confirm-box .cb-pkg   { font-family: monospace; font-size: 11px; color: var(--accent); word-break: break-all; }
+    .confirm-box .cb-btns  { display: flex; gap: 8px; justify-content: flex-end; }
+    .confirm-box .cb-btns button { padding: 6px 14px; border-radius: 6px; border: 1px solid var(--border); cursor: pointer; font-size: 12px; background: var(--bg3); color: var(--text); transition: background 0.12s; }
+    .confirm-box .cb-btns .cb-confirm { background: var(--danger); color: #fff; border-color: var(--danger); }
+    .confirm-box .cb-btns .cb-confirm:hover { opacity: 0.85; }
+    .confirm-box .cb-btns .cb-cancel:hover  { background: var(--bg4); }
+
+    /* -- Empty / hidden state --------------------------------------------- */
+    .hidden { display: none !important; }
+    .empty-msg { text-align: center; padding: 40px 12px; color: var(--text2); font-size: 12px; }
+  </style>
+</head>
+<body>
+<div class="page-wrap">
+
+  <header class="topbar">
+    <script>document.write(TopBar.brandHTML)</script>
+    <div class="v-sep"></div>
+    <div style="flex:1;padding:0 12px;font-size:13px;font-weight:600;">App Catalogue</div>
+    <div class="topbar-right">
+      <script>document.write(TopBar.monitoringBtnHTML)</script>
+      <script>document.write(TopBar.manageDevicesBtnHTML)</script>
+      <script>document.write(TopBar.configMenuHTML)</script>
+    </div>
+  </header>
+
+  <div class="content">
+
+    <!-- Section 1: Headset selector -->
+    <div class="headset-bar">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--text2)"><rect x="2" y="3" width="20" height="14" rx="2"/><polyline points="8 21 12 17 16 21"/></svg>
+      <label for="headset-select">Headset:</label>
+      <select id="headset-select">
+        <option value="">-- Select a headset --</option>
+      </select>
+      <span id="headset-status" style="font-size:11px;color:var(--text2);"></span>
+    </div>
+
+    <!-- Section 2: Install (hidden until headset selected) -->
+    <div id="install-section" class="hidden">
+
+      <div class="warning-banner">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <span>This functionality is only available on the computer running the VR Headset Manager application.</span>
+      </div>
+
+      <div class="install-card">
+        <div class="install-spinner-overlay" id="install-spinner">
+          <div class="spinner-ring"></div>
+          <span class="spinner-label" id="spinner-label">Installing...</span>
+        </div>
+        <div class="install-card-title">Install Application</div>
+
+        <!-- APK drop / browse -->
+        <div class="drop-zone" id="apk-drop-zone">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          <span>Drop .apk file here or</span>
+          <label class="browse-lbl">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            Browse
+            <input type="file" id="apk-file-input" accept=".apk">
+          </label>
+        </div>
+
+        <div class="selected-file-row" id="selected-file-row">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;color:var(--accent)"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          <span class="file-name" id="selected-file-name"></span>
+          <button class="clear-btn" id="clear-apk-btn" title="Clear">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+          <button class="action-btn" id="install-apk-btn">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Install APK
+          </button>
+        </div>
+
+        <div class="or-row">OR</div>
+
+        <!-- Folder path -->
+        <div class="folder-row">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;color:var(--text2)"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          <input type="text" id="folder-path-input" placeholder="Local folder path containing .apk (and optional OBB data)...">
+          <button class="action-btn" id="install-folder-btn">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Install Folder
+          </button>
+        </div>
+
+        <div class="install-status" id="install-status"></div>
+
+        <!-- Overwrite confirmation -->
+        <div class="overwrite-confirm" id="overwrite-confirm">
+          <span class="msg">App <strong id="ow-pkg"></strong> (v<span id="ow-ver"></span>) is already installed. Overwrite?</span>
+          <button class="ow-cancel-btn" id="ow-cancel-btn">Cancel</button>
+          <button class="ow-confirm-btn" id="ow-confirm-btn">Overwrite</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Section 3: App list (hidden until headset selected) -->
+    <div id="apps-section" class="hidden" style="flex:1;display:flex;flex-direction:column;gap:8px;min-height:0;">
+
+      <div class="apps-toolbar">
+        <button class="action-btn" id="refresh-btn">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          Refresh App List
+        </button>
+        <button class="action-btn" id="toggle-system-btn" data-active="false">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
+          Show Built-in Apps
+        </button>
+        <div class="global-search">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" id="global-search-input" placeholder="Search apps...">
+        </div>
+      </div>
+
+      <div class="table-card" id="apps-table-card">
+        <div class="table-scroll">
+          <table id="apps-table">
+            <colgroup>
+              <col class="col-icon">
+              <col class="col-name">
+              <col class="col-version">
+              <col class="col-type">
+              <col class="col-action">
+            </colgroup>
+            <thead>
+              <tr class="hdr-row">
+                <th class="col-icon"></th>
+                <th class="col-name sortable" data-col="name" data-dir="none">
+                  App Name <span class="sort-icon">&#8597;</span>
+                </th>
+                <th class="col-version sortable" data-col="version" data-dir="none">
+                  Version <span class="sort-icon">&#8597;</span>
+                </th>
+                <th class="col-type sortable" data-col="type" data-dir="none">
+                  Type <span class="sort-icon">&#8597;</span>
+                </th>
+                <th class="col-action"></th>
+              </tr>
+              <tr class="filter-row">
+                <td></td>
+                <td><input type="text" id="filter-name" placeholder="Filter name..."></td>
+                <td><input type="text" id="filter-version" placeholder="Filter version..."></td>
+                <td><input type="text" id="filter-type" placeholder="3rd / built-in..."></td>
+                <td></td>
+              </tr>
+            </thead>
+            <tbody id="apps-body">
+              <tr><td colspan="5" class="empty-msg">Select a headset to view installed apps.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="status-bar">
+          <span class="status-dot" id="status-dot"></span>
+          <span id="status-text">No headset selected.</span>
+        </div>
+      </div>
+
+    </div><!-- /apps-section -->
+
+  </div><!-- /content -->
+</div><!-- /page-wrap -->
+
+<!-- Uninstall confirmation overlay -->
+<div class="uninstall-overlay" id="uninstall-overlay">
+  <div class="confirm-box">
+    <div class="cb-title">Uninstall Application</div>
+    <div class="cb-sub">This will remove the app from the headset. This action cannot be undone.</div>
+    <div class="cb-pkg" id="cb-pkg-name"></div>
+    <div class="cb-btns">
+      <button class="cb-cancel" id="cb-cancel-btn">Cancel</button>
+      <button class="cb-confirm" id="cb-confirm-btn">Uninstall</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var selectedHeadset = '';
+  var allApps = [];
+  var sortCol = 'name';
+  var sortDir = 'asc';
+  var showSystem = false;
+  var pendingOverwrite = null; // {type:'apk'|'folder', tempId, path, file}
+
+  // -- Helpers ---------------------------------------------------------------
+  function $id(id) { return document.getElementById(id); }
+  function setStatus(msg, state) {
+    $id('status-dot').className = 'status-dot' + (state ? ' ' + state : '');
+    $id('status-text').textContent = msg;
+  }
+  function setInstallStatus(msg, cls) {
+    var el = $id('install-status');
+    el.className = 'install-status' + (cls ? ' ' + cls : '');
+    el.textContent = msg;
+    var spinner = $id('install-spinner');
+    if (cls === 'busy') {
+      $id('spinner-label').textContent = msg || 'Installing...';
+      spinner.classList.add('visible');
+    } else {
+      spinner.classList.remove('visible');
+    }
+  }
+
+  // -- Headset selector ------------------------------------------------------
+  fetch('/api/headsets')
+    .then(function (r) { return r.json(); })
+    .then(function (headsets) {
+      var sel = $id('headset-select');
+      headsets.forEach(function (h) {
+        var opt = document.createElement('option');
+        opt.value = (h.Name || '').replace(/ /g, '_');
+        opt.textContent = h.Name || h.DisplayName || opt.value;
+        sel.appendChild(opt);
+      });
+    })
+    .catch(function () {});
+
+  $id('headset-select').addEventListener('change', function () {
+    selectedHeadset = this.value;
+    if (!selectedHeadset) {
+      $id('install-section').classList.add('hidden');
+      $id('apps-section').classList.add('hidden');
+      return;
+    }
+    $id('install-section').classList.remove('hidden');
+    $id('apps-section').classList.remove('hidden');
+    loadApps(false);
+  });
+
+  // -- Load apps -------------------------------------------------------------
+  function loadApps(refresh) {
+    if (!selectedHeadset) return;
+    setStatus('Loading...', 'busy');
+    $id('apps-body').innerHTML = '<tr><td colspan="5" class="empty-msg">Loading...</td></tr>';
+    var url = '/api/installedapps?name=' + encodeURIComponent(selectedHeadset);
+    if (showSystem)  url += '&includeSystem=1';
+    if (refresh)     url += '&refresh=1';
+    fetch(url)
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        allApps = data || [];
+        renderTable();
+        setStatus(allApps.length + ' app(s) loaded.', 'ok');
+      })
+      .catch(function (e) {
+        setStatus('Failed to load apps.', 'err');
+        $id('apps-body').innerHTML = '<tr><td colspan="5" class="empty-msg">Could not load apps. Is the headset reachable?</td></tr>';
+      });
+  }
+
+  // -- Render table ----------------------------------------------------------
+  function renderTable() {
+    var nameFilter    = ($id('filter-name').value    || '').toLowerCase();
+    var versionFilter = ($id('filter-version').value || '').toLowerCase();
+    var typeFilter    = ($id('filter-type').value    || '').toLowerCase();
+    var globalFilter  = ($id('global-search-input').value || '').toLowerCase();
+
+    var rows = allApps.filter(function (app) {
+      var dn  = (app.displayName || '').toLowerCase();
+      var pkg = (app.package     || '').toLowerCase();
+      var ver = (app.version     || '').toLowerCase();
+      var typ = app.thirdParty ? '3rd party' : 'built-in';
+      if (globalFilter  && dn.indexOf(globalFilter)  === -1 && pkg.indexOf(globalFilter)  === -1) return false;
+      if (nameFilter    && dn.indexOf(nameFilter)    === -1 && pkg.indexOf(nameFilter)    === -1) return false;
+      if (versionFilter && ver.indexOf(versionFilter) === -1) return false;
+      if (typeFilter    && typ.indexOf(typeFilter)    === -1) return false;
+      return true;
+    });
+
+    rows.sort(function (a, b) {
+      var va, vb;
+      if (sortCol === 'name') {
+        va = (a.displayName || a.package || '').toLowerCase();
+        vb = (b.displayName || b.package || '').toLowerCase();
+      } else if (sortCol === 'version') {
+        va = (a.version || '').toLowerCase();
+        vb = (b.version || '').toLowerCase();
+      } else {
+        va = a.thirdParty ? '0' : '1';
+        vb = b.thirdParty ? '0' : '1';
+      }
+      if (va < vb) return sortDir === 'asc' ? -1 : 1;
+      if (va > vb) return sortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+
+    if (rows.length === 0) {
+      $id('apps-body').innerHTML = '<tr><td colspan="5" class="empty-msg">No apps match your filters.</td></tr>';
+      return;
+    }
+
+    var html = '';
+    rows.forEach(function (app) {
+      var icon = app.localIconPath
+        ? '<img class="app-icon" src="' + escHtml(app.localIconPath) + '" alt="" onerror="this.style.display=\'none\';this.nextSibling.style.display=\'inline-flex\'">' +
+          '<span class="app-icon-placeholder" style="display:none">' + escHtml((app.displayName || '?').charAt(0).toUpperCase()) + '</span>'
+        : '<span class="app-icon-placeholder">' + escHtml((app.displayName || '?').charAt(0).toUpperCase()) + '</span>';
+
+      var badge = app.thirdParty
+        ? '<span class="badge third-party">3rd Party</span>'
+        : '<span class="badge built-in">Built-in</span>';
+
+      var delBtn = app.thirdParty
+        ? '<button class="del-btn" data-pkg="' + escHtml(app.package) + '" data-dn="' + escHtml(app.displayName || app.package) + '" title="Uninstall">' +
+          '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
+          '</button>'
+        : '';
+
+      html +=
+        '<tr>' +
+        '<td class="col-icon">' + icon + '</td>' +
+        '<td class="col-name" title="' + escHtml(app.package) + '">' + escHtml(app.displayName || app.package) + '<br><span style="font-size:10px;color:var(--text2);font-family:monospace">' + escHtml(app.package) + '</span></td>' +
+        '<td class="col-version" style="color:var(--text2)">' + escHtml(app.version || '') + '</td>' +
+        '<td class="col-type">' + badge + '</td>' +
+        '<td class="col-action" style="text-align:center">' + delBtn + '</td>' +
+        '</tr>';
+    });
+    $id('apps-body').innerHTML = html;
+
+    // Wire uninstall buttons
+    $id('apps-body').querySelectorAll('.del-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () { openUninstallConfirm(this.dataset.pkg, this.dataset.dn); });
+    });
+  }
+
+  function escHtml(str) {
+    return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // -- Sort ------------------------------------------------------------------
+  document.querySelectorAll('th.sortable').forEach(function (th) {
+    th.addEventListener('click', function () {
+      var col = this.dataset.col;
+      var dir = this.dataset.dir;
+      // cycle: none -> asc -> desc -> asc
+      dir = (dir === 'none' || dir === 'desc') ? 'asc' : 'desc';
+      // reset others
+      document.querySelectorAll('th.sortable').forEach(function (h) {
+        h.dataset.dir = 'none';
+        h.classList.remove('sort-asc', 'sort-desc');
+        h.querySelector('.sort-icon').innerHTML = '&#8597;';
+      });
+      this.dataset.dir = dir;
+      this.classList.add(dir === 'asc' ? 'sort-asc' : 'sort-desc');
+      this.querySelector('.sort-icon').innerHTML = dir === 'asc' ? '&#8593;' : '&#8595;';
+      sortCol = col;
+      sortDir = dir;
+      renderTable();
+    });
+  });
+  // set initial sort indicator
+  (function () {
+    var th = document.querySelector('th[data-col="name"]');
+    if (th) { th.dataset.dir = 'asc'; th.classList.add('sort-asc'); th.querySelector('.sort-icon').innerHTML = '&#8593;'; }
+  }());
+
+  // -- Filters ---------------------------------------------------------------
+  ['filter-name', 'filter-version', 'filter-type', 'global-search-input'].forEach(function (id) {
+    $id(id).addEventListener('input', renderTable);
+  });
+
+  // -- Refresh ---------------------------------------------------------------
+  $id('refresh-btn').addEventListener('click', function () { loadApps(true); });
+
+  // -- Toggle system apps ----------------------------------------------------
+
+  // -- APK drag & drop / file input ------------------------------------------
+  var selectedFile = null;
+
+  var dropZone = $id('apk-drop-zone');
+  dropZone.addEventListener('dragover', function (e) { e.preventDefault(); dropZone.classList.add('drag-over'); });
+  dropZone.addEventListener('dragleave', function () { dropZone.classList.remove('drag-over'); });
+  dropZone.addEventListener('drop', function (e) {
+    e.preventDefault();
+    dropZone.classList.remove('drag-over');
+    var file = e.dataTransfer.files[0];
+    if (file && file.name.toLowerCase().endsWith('.apk')) { selectApkFile(file); }
+    else { setInstallStatus('Please drop a valid .apk file.', 'err'); }
+  });
+
+  $id('apk-file-input').addEventListener('change', function () {
+    if (this.files[0]) selectApkFile(this.files[0]);
+  });
+
+  function selectApkFile(file) {
+    selectedFile = file;
+    $id('selected-file-name').textContent = file.name;
+    $id('selected-file-row').style.display = 'flex';
+    dropZone.style.display = 'none';
+    setInstallStatus('', '');
+    hideOverwrite();
+  }
+
+  $id('clear-apk-btn').addEventListener('click', function () {
+    selectedFile = null;
+    $id('apk-file-input').value = '';
+    $id('selected-file-row').style.display = 'none';
+    dropZone.style.display = 'flex';
+    setInstallStatus('', '');
+    hideOverwrite();
+  });
+
+  // -- Install APK -----------------------------------------------------------
+  $id('install-apk-btn').addEventListener('click', function () {
+    if (!selectedFile || !selectedHeadset) return;
+    doInstallApk(selectedFile, false, null);
+  });
+
+  function doInstallApk(file, overwrite, tempId) {
+    hideOverwrite();
+    setInstallStatus('Uploading and installing...', 'busy');
+    $id('install-apk-btn').disabled = true;
+
+    var headers = {
+      'Content-Type': 'application/octet-stream',
+      'X-Headset-Name': selectedHeadset,
+      'X-File-Name': file.name
+    };
+
+    var body;
+    if (tempId) {
+      // overwrite confirmation: send JSON
+      body = JSON.stringify({ name: selectedHeadset, tempId: tempId, overwrite: true });
+      headers = { 'Content-Type': 'application/json' };
+    } else {
+      body = file;
+    }
+
+    fetch('/api/installapk', { method: 'POST', headers: headers, body: body })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        $id('install-apk-btn').disabled = false;
+        if (j.alreadyInstalled) {
+          showOverwrite(j.package, j.installedVersion, 'apk', j.tempId, file, null);
+        } else if (j.ok) {
+          setInstallStatus('Installed ' + j.package + ' v' + (j.version || '') + ' successfully.', 'ok');
+          loadApps(true);
+        } else {
+          setInstallStatus('Install failed: ' + (j.error || 'unknown error'), 'err');
+        }
+      })
+      .catch(function () {
+        $id('install-apk-btn').disabled = false;
+        setInstallStatus('Server unreachable.', 'err');
+      });
+  }
+
+  // -- Install folder --------------------------------------------------------
+  $id('install-folder-btn').addEventListener('click', function () {
+    var path = $id('folder-path-input').value.trim();
+    if (!path || !selectedHeadset) return;
+    doInstallFolder(path, false);
+  });
+
+  function doInstallFolder(path, overwrite) {
+    hideOverwrite();
+    setInstallStatus('Installing from folder...', 'busy');
+    $id('install-folder-btn').disabled = true;
+    fetch('/api/installapk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: selectedHeadset, path: path, overwrite: overwrite })
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        $id('install-folder-btn').disabled = false;
+        if (j.alreadyInstalled) {
+          showOverwrite(j.package, j.installedVersion, 'folder', null, null, path);
+        } else if (j.ok) {
+          setInstallStatus('Installed ' + j.package + ' v' + (j.version || '') + ' successfully.', 'ok');
+          loadApps(true);
+        } else {
+          setInstallStatus('Install failed: ' + (j.error || 'unknown error'), 'err');
+        }
+      })
+      .catch(function () {
+        $id('install-folder-btn').disabled = false;
+        setInstallStatus('Server unreachable.', 'err');
+      });
+  }
+
+  // -- Overwrite confirm -----------------------------------------------------
+  function showOverwrite(pkg, ver, type, tempId, file, path) {
+    pendingOverwrite = { type: type, tempId: tempId, file: file, path: path };
+    $id('ow-pkg').textContent = pkg;
+    $id('ow-ver').textContent = ver || '?';
+    $id('overwrite-confirm').style.display = 'flex';
+    setInstallStatus('', '');
+  }
+
+  function hideOverwrite() {
+    pendingOverwrite = null;
+    $id('overwrite-confirm').style.display = 'none';
+  }
+
+  $id('ow-cancel-btn').addEventListener('click', function () {
+    hideOverwrite();
+    setInstallStatus('Installation cancelled.', '');
+  });
+
+  $id('ow-confirm-btn').addEventListener('click', function () {
+    if (!pendingOverwrite) return;
+    if (pendingOverwrite.type === 'apk') {
+      doInstallApk(pendingOverwrite.file, true, pendingOverwrite.tempId);
+    } else {
+      doInstallFolder(pendingOverwrite.path, true);
+    }
+  });
+
+  // -- Uninstall confirm overlay --------------------------------------------
+  var pendingUninstallPkg = '';
+
+  function openUninstallConfirm(pkg, dn) {
+    pendingUninstallPkg = pkg;
+    $id('cb-pkg-name').textContent = dn + ' (' + pkg + ')';
+    $id('uninstall-overlay').classList.add('open');
+  }
+
+  $id('cb-cancel-btn').addEventListener('click', function () {
+    pendingUninstallPkg = '';
+    $id('uninstall-overlay').classList.remove('open');
+  });
+
+  $id('uninstall-overlay').addEventListener('click', function (e) {
+    if (e.target === this) { pendingUninstallPkg = ''; this.classList.remove('open'); }
+  });
+
+  $id('cb-confirm-btn').addEventListener('click', function () {
+    if (!pendingUninstallPkg || !selectedHeadset) return;
+    var pkg = pendingUninstallPkg;
+    $id('uninstall-overlay').classList.remove('open');
+    pendingUninstallPkg = '';
+    setStatus('Uninstalling ' + pkg + '...', 'busy');
+    fetch('/api/uninstallapp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: selectedHeadset, package: pkg })
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (j.ok) {
+          allApps = allApps.filter(function (a) { return a.package !== pkg; });
+          renderTable();
+          setStatus('Uninstalled ' + pkg + '.', 'ok');
+        } else {
+          setStatus('Uninstall failed: ' + (j.error || 'unknown'), 'err');
+        }
+      })
+      .catch(function () { setStatus('Server unreachable.', 'err'); });
+  });
+
+  // -- Toggle system button --------------------------------------------------
+  $id('toggle-system-btn').addEventListener('click', function () {
+    showSystem = !showSystem;
+    this.classList.toggle('active', showSystem);
+    var svg = this.querySelector('svg');
+    this.innerHTML = '';
+    if (svg) this.appendChild(svg);
+    this.appendChild(document.createTextNode(' ' + (showSystem ? 'Hide Built-in Apps' : 'Show Built-in Apps')));
+    loadApps(false);
+  });
+
+}());
+</script>
+</body>
+</html>
