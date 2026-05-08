@@ -1,7 +1,8 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title><%= $name %> - Live Video</title>
 
     <style>
@@ -42,7 +43,7 @@
         z-index: 40;
         display: flex;
         flex-direction: column;
-        gap: 5px;
+        gap: 8px;
         opacity: 0;
         transition: opacity 0.15s;
       }
@@ -63,6 +64,13 @@
       }
       .action-btn:hover { background: rgba(59,130,246,0.80); color: #fff; border-color: rgba(59,130,246,0.6); }
       .action-btn.active { background: rgba(59,130,246,0.55); color: #fff; border-color: rgba(59,130,246,0.6); }
+      .btn-icon { width: 14px; height: 14px; display: block; }
+      /* Touch devices: larger tap targets, always-visible buttons */
+      @media (pointer: coarse) {
+        #actions { opacity: 1; gap: 10px; top: 14px; right: 14px; }
+        .action-btn { width: 48px; height: 48px; border-radius: 10px; }
+        .btn-icon { width: 20px; height: 20px; }
+      }
 
       /* Monitoring overlay - sized/positioned by JS over the actual video rect */
       #monitoring-overlay {
@@ -89,20 +97,20 @@
     <div id="actions">
       <!-- Fullscreen -->
       <button class="action-btn" id="btn-fullscreen" title="Fullscreen" aria-label="Fullscreen" onclick="toggleFullscreen()">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
           <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
         </svg>
       </button>
       <!-- Monitoring overlay -->
       <button class="action-btn" id="btn-monitoring" title="Show monitoring" aria-label="Show monitoring" onclick="toggleMonitoring()">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
         </svg>
       </button>
       <!-- Launch app -->
       <button class="action-btn" id="btn-launch" title="Launch app" aria-label="Launch app" onclick="openLaunchModal('<%= $display_name %>')">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <polygon points="5 3 19 12 5 21 5 3"/>
         </svg>
       </button>
@@ -310,22 +318,6 @@
         } catch(e) {}
       }
       document.querySelector('#monitoring-overlay iframe').addEventListener('load', detectMonitoringHeight);
-
-      // Reload monitoring iframe when the file changes (Last-Modified polling)
-      var _monLastModified = null;
-      var MON_URL = '<%= $display_name %>[monitoring].html';
-      setInterval(function() {
-        fetch(MON_URL, { method: 'HEAD', cache: 'no-store' })
-          .then(function(r) {
-            var lm = r.headers.get('Last-Modified') || r.headers.get('ETag') || '';
-            if (lm && lm !== _monLastModified) {
-              _monLastModified = lm;
-              var iframe = document.querySelector('#monitoring-overlay iframe');
-              if (iframe) { iframe.src = MON_URL + '?_=' + Date.now(); iframe.addEventListener('load', function onMon() { iframe.removeEventListener('load', onMon); detectMonitoringHeight(); }, { once: true }); }
-            }
-          })
-          .catch(function() {});
-      }, 5000);
     </script>
     <script src="/assets/app_launcher.js"></script>
     <script>appLauncher.setStatusResolver(function() { return true; });</script>
