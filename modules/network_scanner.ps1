@@ -64,10 +64,10 @@ function Add-Headset-ScanNetwork {
 
         $connectOutput = & $adbPath connect $adbTarget 2>&1
         if ($connectOutput -match 'connected to') {
-            $model = & $adbPath -s $adbTarget shell getprop ro.product.model 2>$null | Out-String
-            $serial = & $adbPath -s $adbTarget shell getprop ro.serialno 2>$null | Out-String
+            $model  = (Invoke-AdbCmd -Device $adbTarget -Command "shell getprop ro.product.model"  -adb $adbPath) -join ''
+            $serial = (Invoke-AdbCmd -Device $adbTarget -Command "shell getprop ro.serialno"        -adb $adbPath) -join ''
             if (-not $serial -or $serial.Trim() -eq "") {
-                $serial = & $adbPath -s $adbTarget shell getprop ro.boot.serialno 2>$null | Out-String
+                $serial = (Invoke-AdbCmd -Device $adbTarget -Command "shell getprop ro.boot.serialno" -adb $adbPath) -join ''
             }
 
             # Clean up the data
