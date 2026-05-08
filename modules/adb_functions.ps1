@@ -1501,19 +1501,24 @@ function Get-HeadsetInstalledApps {
             Update-AppCacheFromMetaMetadata -CacheFilePath $AppCacheFilePath
         }
         
+        # When returning all packages, determine which are third-party with a second ADB call
+        $thirdPartySet = @{}
+        if (-not $ThirdPartyOnly) {
+            $tp = Invoke-AdbCmd -Device $Device -Command "shell pm list packages -3" -adb $adb
+            foreach ($line in $tp) {
+                if ($line -match '^package:(.+)$') { $thirdPartySet[$Matches[1].Trim()] = $true }
+            }
+        }
+
         $apps = foreach ($pkg in $packages) {
-            if ($cache.ContainsKey($pkg)) {
-                [PSCustomObject]@{
-                    PackageName = $pkg
-                    DisplayName = $cache[$pkg].DisplayName
-                    IconUrl     = $cache[$pkg].IconUrl
-                }
-            } else {
-                [PSCustomObject]@{
-                    PackageName = $pkg
-                    DisplayName = $pkg
-                    IconUrl     = ''
-                }
+            $entry = if ($cache.ContainsKey($pkg)) { $cache[$pkg] } else { $null }
+            [PSCustomObject]@{
+                PackageName   = $pkg
+                DisplayName   = if ($entry -and $entry.DisplayName -and $entry.DisplayName -ne $pkg) { $entry.DisplayName } else { $pkg }
+                IconUrl       = if ($entry) { $entry.IconUrl }       else { '' }
+                LocalIconPath = if ($entry) { $entry.LocalIconPath } else { '' }
+                Version       = if ($entry) { $entry.Version }       else { '' }
+                ThirdParty    = if ($ThirdPartyOnly) { $true } else { $thirdPartySet.ContainsKey($pkg) }
             }
         }
 
@@ -1911,7 +1916,7 @@ function Install-HeadsetApp {
         [switch]$Overwrite,
         [string]$adb = $global:adbPath
     )
-    if (-not $Device) { Write-Log ($msg.AdbWifiConnectFailed -f 'unknown', 'no device') -Level ERROR; return $false }
+    if (-not $Device) { Write-Log ($msg.AdbWifiConnectFailed -f 'unknown', 'no device') -Level ERROR; return [PSCustomObject]@{ Ok = $false; Error = 'No device' } }
     $DeviceId = $Device.DeviceId
 
     try {
@@ -1922,14 +1927,14 @@ function Install-HeadsetApp {
         if (-not $isFolder) {
             if (-not ($path -match '\.apk$') -or -not (Test-Path -LiteralPath $path)) {
                 Write-Log ($msg.ApkNotFound -f $path) -Level ERROR
-                return $false
+                return [PSCustomObject]@{ Ok = $false; Error = "APK not found: $path" }
             }
             $apkPath = $path
         } else {
             $apkFiles = @(Get-ChildItem -LiteralPath $path -Filter '*.apk' -File)
             if ($apkFiles.Count -eq 0) {
                 Write-Log ($msg.ApkFileNotFound -f $path) -Level ERROR
-                return $false
+                return [PSCustomObject]@{ Ok = $false; Error = "No .apk file found in folder: $path" }
             }
             $apkPath = $apkFiles[0].FullName
         }
@@ -1940,25 +1945,27 @@ function Install-HeadsetApp {
         $allApps     = Get-HeadsetInstalledApps -Device $Device -ThirdPartyOnly:$false -adb $adb
         $isInstalled = [bool]($allApps | Where-Object { $_.PackageName -eq $packageName })
         if ($isInstalled) {
-            $installedVersion = ((Invoke-AdbCmd -Device $Device -Command "shell dumpsys package $packageName" -adb $adb |
-                Select-String 'versionName') -split '=' | Select-Object -Last 1).Trim()
+            $verMatch         = Invoke-AdbCmd -Device $Device -Command "shell dumpsys package $packageName" -adb $adb | Select-String 'versionName' | Select-Object -Last 1
+            $installedVersion = if ($verMatch -and "$verMatch" -match 'versionName=(\S+)') { $Matches[1] } else { '' }
             Write-Log ($msg.ApkAlreadyInstalled -f $packageName, $installedVersion) -Level INFO
             if (-not $Overwrite) {
                 Write-Log ($msg.UserCancelled) -Level INFO
-                return $false
+                return [PSCustomObject]@{ Ok = $false; Error = 'Already installed'; PackageName = $packageName; InstalledVersion = $installedVersion }
             }
         }
 
         # --- Step 1: Install APK ---
         Write-Log ($msg.InstallingApk) -Level INFO
-        $installResult = Invoke-AdbCmd -Device $Device -Command "install -r `"$apkPath`"" -TimeoutSeconds 120 -adb $adb
-        if ($installResult -eq $false) {
+        $installOutput = Invoke-AdbCmd -Device $Device -Command "install -r `"$apkPath`"" -TimeoutSeconds 120 -adb $adb
+        $outputText    = if ($installOutput -ne $false) { ($installOutput -join ' ').Trim() } else { '' }
+        if ($installOutput -eq $false -or $outputText -match 'Failure|INSTALL_FAILED') {
+            $errDetail = if ($outputText -match '(INSTALL_FAILED_\S+|\[.+\])') { $Matches[1] } elseif ($outputText) { $outputText } else { 'ADB install command failed' }
             Write-Log ($msg.ApkInstallFailed) -Level ERROR
-            return $false
+            return [PSCustomObject]@{ Ok = $false; Error = $errDetail }
         }
 
-        $installedVersion = ((Invoke-AdbCmd -Device $Device -Command "shell dumpsys package $packageName" -adb $adb |
-            Select-String 'versionName') -split '=' | Select-Object -Last 1).Trim()
+        $verMatchPost     = Invoke-AdbCmd -Device $Device -Command "shell dumpsys package $packageName" -adb $adb | Select-String 'versionName' | Select-Object -Last 1
+        $installedVersion = if ($verMatchPost -and "$verMatchPost" -match 'versionName=(\S+)') { $Matches[1] } else { '' }
         Write-Log ($msg.ApkInstallSuccess -f $packageName, $DeviceId) -Level SUCCESS
 
         # --- Step 2: Push OBB folder (folder input only) ---
@@ -1970,16 +1977,16 @@ function Install-HeadsetApp {
                 $pushResult = Invoke-AdbCmd -Device $Device -Command "push `"$obbFolder`" /sdcard/Android/obb/$packageName" -TimeoutSeconds 300 -adb $adb
                 if ($pushResult -eq $false) {
                     Write-Log ($msg.ObbPushFailed -f $packageName, $DeviceId, 'ADB push failed') -Level ERROR
-                    return $false
+                    return [PSCustomObject]@{ Ok = $false; Error = 'OBB data push failed' }
                 }
                 Write-Log ($msg.ObbPushSuccess -f $packageName, $DeviceId) -Level SUCCESS
             }
         }
 
-        return [PSCustomObject]@{ PackageName = $packageName; Version = $installedVersion }
+        return [PSCustomObject]@{ Ok = $true; PackageName = $packageName; Version = $installedVersion }
     }
     catch {
         Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
-        return $false
+        return [PSCustomObject]@{ Ok = $false; Error = $_.ToString() }
     }
 }

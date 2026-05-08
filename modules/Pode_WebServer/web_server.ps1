@@ -677,13 +677,15 @@ try {
         }
 
 
-        # API: GET /api/installedapps?name=Q3_BLUE[&refresh=1][&resolveMissing=1]  - returns installed third-party apps as JSON, optionally refreshes cache
+        # API: GET /api/installedapps?name=Q3_BLUE[&refresh=1][&resolveMissing=1][&includeSystem=1]
+        # Returns installed apps as JSON. Default: third-party only (cached). includeSystem=1: all apps (live).
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/installedapps') {
             try {
                 $rawQuery       = $request.Url.Query.TrimStart('?')
                 $nameParam      = if ($rawQuery -match '(?:^|&)name=([^&]+)') { [Uri]::UnescapeDataString($Matches[1]) } else { '' }
                 $refresh        = ($rawQuery -match '(?:^|&)refresh=1')
                 $resolveMissing = ($rawQuery -match '(?:^|&)resolveMissing=1')
+                $includeSystem  = ($rawQuery -match '(?:^|&)includeSystem=1')
                 $safeName  = [regex]::Match(($nameParam -replace ' ','_'), '^[\w\-]+$').Value
                 if (-not $safeName) { throw "Invalid headset name" }
 
@@ -694,43 +696,86 @@ try {
                 # Load favorites
                 $favPkgs = @(Get-FavoriteApps -headsetName $safeName | Select-Object -ExpandProperty PackageName)
 
-                # If refresh requested, update cache from headset
-                if ($refresh) {
+                # Load app_names.csv as the live source of truth for display names and icons
+                $appNamesLookup = @{}
+                if (Test-Path -LiteralPath $appNamesPath) {
+                    @(Import-Csv -LiteralPath $appNamesPath -Delimiter ",") | ForEach-Object {
+                        if ($_.PackageName) { $appNamesLookup[$_.PackageName] = $_ }
+                    }
+                }
+
+                if ($includeSystem) {
+                    # All apps (third-party + built-in) -- always a live call, no cache
                     $rows    = Get-KnownHeadsets
                     $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
                     if (-not $headset) { throw "Headset not found" }
                     $device = Get-AdbWifiDevice -headsetIP $headset.IPAddress -AdbPort $adbPort
                     if (-not $device) { throw "Could not connect to headset via ADB WiFi" }
-                    if ($resolveMissing) {
-                        Update-InstalledAppsCache -Device $device -headsetName $headset.Name -ResolveMissing
-                    } else {
-                        Update-InstalledAppsCache -Device $device -headsetName $headset.Name
-                    }
-                }
+                    $installedApps = Get-HeadsetInstalledApps -Device $device -ThirdPartyOnly:$false
 
-                # Use cache if available
-                if (Test-Path -LiteralPath $cachePath) {
-                    $cachedRows = @(Import-Csv -LiteralPath $cachePath -Delimiter ",")
-                    $appList = @($cachedRows | ForEach-Object {
-                        $pkg  = $_.PackageName
-                        $dn   = if ($_.DisplayName -and $_.DisplayName -ne $pkg) { $_.DisplayName } else { $pkg }
-                        $icon = if ($_.LocalIconPath) { $_.LocalIconPath } else { '' }
-                        $ver  = if ($_.Version) { $_.Version } else { '' }
-                        @{ package = $pkg; displayName = $dn; localIconPath = $icon; version = $ver; favorite = ($favPkgs -contains $pkg -or $pkg -eq $metaHomePkg) }
+                    # Build version lookup from the per-headset cache (has ADB-reported versions)
+                    $versionLookup = @{}
+                    if (Test-Path -LiteralPath $cachePath) {
+                        @(Import-Csv -LiteralPath $cachePath -Delimiter ",") | ForEach-Object {
+                            if ($_.PackageName -and $_.Version) { $versionLookup[$_.PackageName] = $_.Version }
+                        }
+                    }
+
+                    $appList = @($installedApps | ForEach-Object {
+                        $pkg    = $_.PackageName
+                        $entry  = if ($appNamesLookup.ContainsKey($pkg)) { $appNamesLookup[$pkg] } else { $null }
+                        $dn     = if ($entry -and $entry.DisplayName -and $entry.DisplayName -ne $pkg) { $entry.DisplayName } elseif ($_.DisplayName -and $_.DisplayName -ne $pkg) { $_.DisplayName } else { $pkg }
+                        $icon   = if ($entry -and $entry.LocalIconPath) { $entry.LocalIconPath } elseif ($_.LocalIconPath) { $_.LocalIconPath } else { '' }
+                        $ver    = if ($versionLookup.ContainsKey($pkg)) { $versionLookup[$pkg] } elseif ($_.Version) { $_.Version } else { '' }
+                        @{ package = $pkg; displayName = $dn; localIconPath = $icon; version = $ver; favorite = ($favPkgs -contains $pkg -or $pkg -eq $metaHomePkg); thirdParty = [bool]$_.ThirdParty }
                     } | Sort-Object { $_.displayName })
                 } else {
-                    # Fallback: live ADB call
-                    $rows    = Get-KnownHeadsets
-                    $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
-                    if (-not $headset) { throw "Headset not found" }
+                    # Third-party apps only
 
-                    $device = Get-AdbWifiDevice -headsetIP $headset.IPAddress -AdbPort $adbPort -adb $adbPath
-                    if (-not $device) { throw "Could not connect to headset via ADB WiFi" }
+                    # If refresh requested, update cache from headset
+                    if ($refresh) {
+                        $rows    = Get-KnownHeadsets
+                        $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                        if (-not $headset) { throw "Headset not found" }
+                        $device = Get-AdbWifiDevice -headsetIP $headset.IPAddress -AdbPort $adbPort
+                        if (-not $device) { throw "Could not connect to headset via ADB WiFi" }
+                        if ($resolveMissing) {
+                            Update-InstalledAppsCache -Device $device -headsetName $headset.Name -ResolveMissing
+                        } else {
+                            Update-InstalledAppsCache -Device $device -headsetName $headset.Name
+                        }
+                    }
 
-                    $installedApps = Get-HeadsetInstalledApps -Device $device -ThirdPartyOnly -adb $adbPath
-                    $appList = @($installedApps | ForEach-Object {
-                        @{ package = $_.PackageName; displayName = $_.DisplayName; localIconPath = $_.LocalIconPath; version = $_.Version; favorite = ($favPkgs -contains $_.PackageName -or $_.PackageName -eq $metaHomePkg) }
-                    } | Sort-Object { $_.displayName })
+                    # Use cache if available
+                    if (Test-Path -LiteralPath $cachePath) {
+                        $cachedRows = @(Import-Csv -LiteralPath $cachePath -Delimiter ",")
+                        $appList = @($cachedRows | ForEach-Object {
+                            $pkg   = $_.PackageName
+                            # Prefer live app_names.csv for display name and icon (stays current without a cache refresh)
+                            $entry = if ($appNamesLookup.ContainsKey($pkg)) { $appNamesLookup[$pkg] } else { $null }
+                            $dn    = if ($entry -and $entry.DisplayName -and $entry.DisplayName -ne $pkg) { $entry.DisplayName } elseif ($_.DisplayName -and $_.DisplayName -ne $pkg) { $_.DisplayName } else { $pkg }
+                            $icon  = if ($entry -and $entry.LocalIconPath) { $entry.LocalIconPath } elseif ($_.LocalIconPath) { $_.LocalIconPath } else { '' }
+                            $ver   = if ($_.Version) { $_.Version } else { '' }
+                            @{ package = $pkg; displayName = $dn; localIconPath = $icon; version = $ver; favorite = ($favPkgs -contains $pkg -or $pkg -eq $metaHomePkg); thirdParty = $true }
+                        } | Sort-Object { $_.displayName })
+                    } else {
+                        # Fallback: live ADB call
+                        $rows    = Get-KnownHeadsets
+                        $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                        if (-not $headset) { throw "Headset not found" }
+
+                        $device = Get-AdbWifiDevice -headsetIP $headset.IPAddress -AdbPort $adbPort -adb $adbPath
+                        if (-not $device) { throw "Could not connect to headset via ADB WiFi" }
+
+                        $installedApps = Get-HeadsetInstalledApps -Device $device -ThirdPartyOnly -adb $adbPath
+                        $appList = @($installedApps | ForEach-Object {
+                            $pkg   = $_.PackageName
+                            $entry = if ($appNamesLookup.ContainsKey($pkg)) { $appNamesLookup[$pkg] } else { $null }
+                            $dn    = if ($entry -and $entry.DisplayName -and $entry.DisplayName -ne $pkg) { $entry.DisplayName } elseif ($_.DisplayName -and $_.DisplayName -ne $pkg) { $_.DisplayName } else { $pkg }
+                            $icon  = if ($entry -and $entry.LocalIconPath) { $entry.LocalIconPath } elseif ($_.LocalIconPath) { $_.LocalIconPath } else { '' }
+                            @{ package = $pkg; displayName = $dn; localIconPath = $icon; version = $_.Version; favorite = ($favPkgs -contains $pkg -or $pkg -eq $metaHomePkg); thirdParty = $true }
+                        } | Sort-Object { $_.displayName })
+                    }
                 }
 
                 $json = ConvertTo-Json @($appList) -Compress
@@ -743,6 +788,181 @@ try {
             } catch {
                 try {
                     $errBytes = [System.Text.Encoding]::UTF8.GetBytes('[]')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/uninstallapp  body: {"name":"Q3_BLUE","package":"com.beatgames.beatsaber"}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/uninstallapp') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body    = $reader.ReadToEnd()
+                $reader.Close()
+                $json     = $body | ConvertFrom-Json
+                $safeName = [regex]::Match(($json.name -replace ' ','_'), '^[\w\-]+$').Value
+                $safePkg  = [regex]::Match($json.package, '^[\w\.\-]+$').Value
+                if (-not $safeName -or -not $safePkg) { throw "Invalid input" }
+
+                $rows    = Get-KnownHeadsets
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                if (-not $headset) { throw "Headset not found" }
+                $device = Get-AdbWifiDevice -headsetIP $headset.IPAddress -AdbPort $adbPort
+                if (-not $device) { throw "Could not connect to headset via ADB WiFi" }
+                $ok = Uninstall-HeadsetApp -Device $device -PackageName $safePkg
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($(if ($ok) { '{"ok":true}' } else { '{"ok":false,"error":"Uninstall failed or app not found"}' }))
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errJson  = '{"ok":false,"error":' + ($_.Exception.Message | ConvertTo-Json) + '}'
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes($errJson)
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/installapk
+        # Mode A (binary upload): Content-Type: application/octet-stream, headers X-Headset-Name + X-File-Name
+        # Mode B (overwrite confirm): JSON body {"name","tempId","overwrite":true}
+        # Mode C (local folder path): JSON body {"name","path"[,"overwrite":true]}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/installapk') {
+            try {
+                $contentType = $request.ContentType -replace ';.*','' | ForEach-Object { $_.Trim() }
+
+                if ($contentType -eq 'application/octet-stream') {
+                    # Mode A: binary APK upload
+                    $safeNameRaw  = $request.Headers['X-Headset-Name']
+                    $safeFileName = [regex]::Match($request.Headers['X-File-Name'], '^[\w\.\-]+\.apk$').Value
+                    $safeName     = [regex]::Match(($safeNameRaw -replace ' ','_'), '^[\w\-]+$').Value
+                    if (-not $safeName -or -not $safeFileName) { throw "Invalid upload headers" }
+
+                    $rows    = Get-KnownHeadsets
+                    $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                    if (-not $headset) { throw "Headset not found" }
+                    $device = Get-AdbWifiDevice -headsetIP $headset.IPAddress -AdbPort $adbPort
+                    if (-not $device) { throw "Could not connect to headset via ADB WiFi" }
+
+                    # Read binary body
+                    $ms     = [System.IO.MemoryStream]::new()
+                    $buf    = [byte[]]::new(65536)
+                    $stream = $request.InputStream
+                    while (($read = $stream.Read($buf, 0, $buf.Length)) -gt 0) { $ms.Write($buf, 0, $read) }
+                    $bytes    = $ms.ToArray()
+                    $tempPath = [System.IO.Path]::Combine($env:TEMP, "vrmapk_${safeName}_${safeFileName}")
+                    [System.IO.File]::WriteAllBytes($tempPath, $bytes)
+
+                    # Check if already installed
+                    $pkgName      = [System.IO.Path]::GetFileNameWithoutExtension($safeFileName)
+                    $pmOut        = Invoke-AdbCmd -Device $device -Command "shell pm list packages $pkgName"
+                    $isInstalled  = $pmOut -ne $false -and ($pmOut -match "package:$([regex]::Escape($pkgName))")
+                    if ($isInstalled) {
+                        $verLine = (Invoke-AdbCmd -Device $device -Command "shell dumpsys package $pkgName" | Select-String 'versionName') | Select-Object -First 1
+                        $curVer  = if ($verLine -match 'versionName=(\S+)') { $Matches[1] } else { '' }
+                        $tempId  = "vrmapk_${safeName}_${safeFileName}"
+                        $respJson = "{`"ok`":false,`"alreadyInstalled`":true,`"package`":`"$pkgName`",`"installedVersion`":`"$curVer`",`"tempId`":`"$tempId`"}"
+                        $respBytes = [System.Text.Encoding]::UTF8.GetBytes($respJson)
+                        $response.StatusCode      = 200
+                        $response.ContentType     = 'application/json; charset=utf-8'
+                        $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                        $response.ContentLength64 = $respBytes.Length
+                        $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+                    } else {
+                        $result = Install-HeadsetApp -Device $device -path $tempPath -Overwrite
+                        Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+                        if ($result.Ok) {
+                            $respJson  = "{`"ok`":true,`"package`":`"$($result.PackageName)`",`"version`":`"$($result.Version)`"}"
+                        } else {
+                            $safeErr   = ($result.Error -replace '"',"'") -replace '[^\x20-\x7E]',''
+                            $respJson  = "{`"ok`":false,`"error`":`"$safeErr`"}"
+                        }
+                        $respBytes = [System.Text.Encoding]::UTF8.GetBytes($respJson)
+                        $response.StatusCode      = 200
+                        $response.ContentType     = 'application/json; charset=utf-8'
+                        $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                        $response.ContentLength64 = $respBytes.Length
+                        $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+                    }
+                } else {
+                    # Mode B or C: JSON body
+                    $reader  = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                    $body    = $reader.ReadToEnd()
+                    $reader.Close()
+                    $json     = $body | ConvertFrom-Json
+                    $safeName = [regex]::Match(($json.name -replace ' ','_'), '^[\w\-]+$').Value
+                    if (-not $safeName) { throw "Invalid headset name" }
+
+                    $rows    = Get-KnownHeadsets
+                    $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                    if (-not $headset) { throw "Headset not found" }
+                    $device = Get-AdbWifiDevice -headsetIP $headset.IPAddress -AdbPort $adbPort
+                    if (-not $device) { throw "Could not connect to headset via ADB WiFi" }
+
+                    if ($json.tempId) {
+                        # Mode B: overwrite confirmation for a previously uploaded APK
+                        $safeTempId = [regex]::Match($json.tempId, '^vrmapk_[\w\-]+_[\w\.\-]+\.apk$').Value
+                        if (-not $safeTempId) { throw "Invalid tempId" }
+                        $tempPath = [System.IO.Path]::Combine($env:TEMP, $safeTempId)
+                        if (-not (Test-Path -LiteralPath $tempPath)) { throw "Temp file not found or expired" }
+                        $result = Install-HeadsetApp -Device $device -path $tempPath -Overwrite
+                        Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+                        if ($result.Ok) {
+                            $respJson = "{`"ok`":true,`"package`":`"$($result.PackageName)`",`"version`":`"$($result.Version)`"}"
+                        } else {
+                            $safeErr  = ($result.Error -replace '"',"'") -replace '[^\x20-\x7E]',''
+                            $respJson = "{`"ok`":false,`"error`":`"$safeErr`"}"
+                        }
+                    } elseif ($json.path) {
+                        # Mode C: local folder/file path (user-supplied local path; Test-RequestPath
+                        # is intentionally NOT used here as it limits paths to $ScriptPath).
+                        # Basic safety: reject null bytes and unparseable paths only.
+                        $rawPath = [string]$json.path
+                        if ($rawPath -match "`0" -or $rawPath.Trim() -eq '') { throw "Invalid path" }
+                        try { $safePath = [System.IO.Path]::GetFullPath($rawPath) } catch { throw "Invalid path" }
+                        if (-not $safePath) { throw "Invalid path" }
+                        $overwrite = [bool]$json.overwrite
+                        if ($overwrite) {
+                            $result = Install-HeadsetApp -Device $device -path $safePath -Overwrite
+                        } else {
+                            $result = Install-HeadsetApp -Device $device -path $safePath
+                        }
+                        if ($result.Error -eq 'Already installed' -and -not $overwrite) {
+                            $respJson = "{`"ok`":false,`"alreadyInstalled`":true,`"package`":`"$($result.PackageName)`",`"installedVersion`":`"$($result.InstalledVersion)`"}"
+                        } elseif ($result.Ok) {
+                            $respJson = "{`"ok`":true,`"package`":`"$($result.PackageName)`",`"version`":`"$($result.Version)`"}"
+                        } else {
+                            $safeErr  = ($result.Error -replace '"',"'") -replace '[^\x20-\x7E]',''
+                            $respJson = "{`"ok`":false,`"error`":`"$safeErr`"}"
+                        }
+                    } else {
+                        throw "Missing tempId or path"
+                    }
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes($respJson)
+                    $response.StatusCode      = 200
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                    $response.ContentLength64 = $respBytes.Length
+                    $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+                }
+            } catch {
+                try {
+                    $errJson  = '{"ok":false,"error":' + ($_.Exception.Message | ConvertTo-Json) + '}'
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes($errJson)
                     $response.StatusCode      = 500
                     $response.ContentType     = 'application/json; charset=utf-8'
                     $response.ContentLength64 = $errBytes.Length
