@@ -78,11 +78,23 @@
     AdbWifiDevModeHint = "--> Verifiez que le mode developpeur est active et que le WiFi ADB est lance sur le casque"
     AdbWifiConnected = "Connecte a {0} via ADB WiFi"
     AdbWifiConnectFailed = "Echec de la connexion ADB WiFi a {0} : {1}"
+    AdbCmdDeviceNull = "Invoke-AdbCommand : le parametre Device est null"
+    AdbCmdPingFailed = "Le peripherique {0} n'est pas joignable (ping echoue)"
+    AdbCmdPortClosed = "Le port ADB {1} est ferme sur {0} - verifiez que le mode developpeur est active"
+    AdbCmdWifiNotConnected = "ADB WiFi non connecte a {0} apres tentative de connexion"
+    AdbCmdUsbNotDetected = "Aucun peripherique ADB USB detecte"
+    AdbCmdUsbUnauthorized = "Debug USB non autorise sur {0} - acceptez l'invite sur le casque"
+    AdbCmdFailed = "Commande ADB echouee sur {0} (code {2}) : '{1}' -> {3}"
     AppNotFound         = "L'application '{0}' n'est pas installee sur {1}"
     AppNotThirdParty    = "'{0}' est une application systeme et ne peut pas etre desinstallee sur {1}"
     AppUninstalling     = "Desinstallation de '{0}' sur {1}..."
     AppUninstallSuccess = "Application '{0}' desinstallee avec succes sur {1}"
     AppUninstallFailed  = "Echec de la desinstallation de '{0}' sur {1} : {2}"
+    ApkFileNotFound     = "Aucun fichier .apk trouve dans : {0}"
+    ApkInstallSuccess   = "Application '{0}' installee avec succes sur {1}"
+    ObbFolderFound      = "Dossier OBB trouve pour '{0}', envoi vers le casque..."
+    ObbPushSuccess      = "Donnees OBB pour '{0}' envoyees avec succes vers {1}"
+    ObbPushFailed       = "Echec de l'envoi des donnees OBB pour '{0}' vers {1} : {2}"
 
     # ==========================================
     # console_manager.ps1

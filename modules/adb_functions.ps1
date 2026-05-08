@@ -41,7 +41,7 @@ function Invoke-Adb {
     $psi.RedirectStandardError  = $true
     $psi.UseShellExecute        = $false
     $psi.CreateNoWindow         = $true
-    foreach ($arg in $Arguments) { [void]$psi.ArgumentList.Add($arg) }
+    $psi.Arguments = ($Arguments | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } }) -join ' '
 
     $proc = [System.Diagnostics.Process]::new()
     $proc.StartInfo = $psi
@@ -79,6 +79,101 @@ function Invoke-Adb {
     $code = $proc.ExitCode
     return @{ ExitCode = $code; StdOut = $stdout; StdErr = $stderr; Ok = ($code -eq 0) }
 }
+
+
+function Invoke-AdbCmd {
+    <#
+    .SYNOPSIS
+    Validates device reachability then executes an ADB command, returning stdout on success.
+    .DESCRIPTION
+    - $Device: PSCustomObject from Get-AdbWifiDevice/Get-AdbUsbDevice, OR a plain "IP:Port" string.
+    - $Command is a string of ADB arguments after -s <DeviceId>
+      e.g. "shell getprop ro.product.model"  or  "install -r `"C:\path with spaces\app.apk`""
+    - Throws a descriptive exception for infrastructure failures (unreachable, unauthorized).
+    - Returns $false when the command runs but exits with a non-zero exit code.
+    - Returns a string array (may be empty @()) on success.
+    #>
+    param (
+        [Parameter(Mandatory=$true)]
+        $Device,
+        [Parameter(Mandatory=$true)]
+        [string]$Command,
+        [int]$TimeoutSeconds = 7,
+        [string]$adb = $global:adbPath
+    )
+
+    if (-not $Device) { throw ($msg.AdbCmdDeviceNull) }
+
+    # Accept plain "IP:Port" string — coerce to a minimal WiFi device object
+    if ($Device -is [string]) {
+        $parts = $Device -split ':'
+        $Device = [PSCustomObject]@{
+            DeviceId       = $Device
+            ConnectionType = 'WiFi'
+            IP             = $parts[0]
+            Port           = if ($parts.Count -gt 1) { [int]$parts[1] } else { $global:adbPort_default }
+        }
+    }
+
+    if (-not (Test-Path -LiteralPath $adb)) {
+        throw ($msg.ADBExecutableNotFound -f $adb)
+    }
+
+    $deviceId = $Device.DeviceId
+
+    if ($Device.ConnectionType -eq 'WiFi') {
+        $ip   = $Device.IP
+        $port = if ($Device.Port) { $Device.Port } else { $global:adbPort_default }
+
+        # Fast path: already connected — skip all network checks
+        $isConnected = [bool](& $adb devices 2>$null |
+            Where-Object { $_ -match ("^" + [regex]::Escape($deviceId) + "\s+device$") })
+
+        if (-not $isConnected) {
+            # Only run network checks when ADB is not yet connected
+            $portOpen = (Test-Port -hostname $ip -port $port).open
+            if (-not $portOpen) {
+                $pingOk = Test-Connection -ComputerName $ip -Count 1 -Quiet -ErrorAction SilentlyContinue
+                if (-not $pingOk) {
+                    throw ($msg.AdbCmdPingFailed -f $ip)
+                }
+                throw ($msg.AdbCmdPortClosed -f $ip, $port)
+            }
+
+            & $adb connect $deviceId 2>$null | Out-Null
+            $isConnected = [bool](& $adb devices 2>$null |
+                Where-Object { $_ -match ("^" + [regex]::Escape($deviceId) + "\s+device$") })
+            if (-not $isConnected) {
+                throw ($msg.AdbCmdWifiNotConnected -f $deviceId)
+            }
+        }
+
+    } elseif ($Device.ConnectionType -eq 'USB') {
+        $devicesOutput = @(& $adb devices 2>$null | Where-Object { $_ -notmatch '^List of devices' -and $_ -ne '' })
+
+        if ($devicesOutput | Where-Object { $_ -match 'unauthorized' }) {
+            $serial = (($devicesOutput | Where-Object { $_ -match 'unauthorized' } | Select-Object -First 1) -split "`t")[0].Trim()
+            throw ($msg.AdbCmdUsbUnauthorized -f $serial)
+        }
+        if (-not ($devicesOutput | Where-Object { $_ -match "`tdevice$" -and $_ -notmatch ':' })) {
+            throw ($msg.AdbCmdUsbNotDetected)
+        }
+    }
+
+    # Split $Command preserving quoted segments (handles paths with spaces)
+    $tokens = [regex]::Matches($Command, '"[^"]*"|\S+') | ForEach-Object { $_.Value.Trim('"') }
+
+    $result = Invoke-Adb -Arguments (@('-s', $deviceId) + $tokens) `
+                         -TimeoutSeconds $TimeoutSeconds -Adb $adb
+
+    if (-not $result.Ok) {
+        $errDetail = ($result.StdErr + $result.StdOut) -join ' '
+        Write-Log ($msg.AdbCmdFailed -f $Device.DeviceId, $Command, $result.ExitCode, $errDetail) -Level WARNING
+        return $false
+    }
+    return $result.StdOut
+}
+
 
 <#
 function Install-OculusWirelessAdbApk {
@@ -1764,12 +1859,12 @@ function Uninstall-HeadsetApp {
     try {
         # Check third-party apps only
         $thirdPartyApps = Get-HeadsetInstalledApps -Device $Device -ThirdPartyOnly -adb $adb
-        $isThirdParty   = [bool]($thirdPartyApps | Where-Object { $_ -eq $PackageName })
+        $isThirdParty   = [bool]($thirdPartyApps.PackageName | Where-Object { $_ -eq $PackageName })
 
         if (-not $isThirdParty) {
             # Distinguish: system app vs not installed at all
             $allApps  = Get-HeadsetInstalledApps -Device $Device -ThirdPartyOnly:$false -adb $adb
-            $isSystem = [bool]($allApps | Where-Object { $_ -eq $PackageName })
+            $isSystem = [bool]($allApps.PackageName | Where-Object { $_ -eq $PackageName })
 
             if ($isSystem) {
                 Write-Log ($msg.AppNotThirdParty -f $PackageName, $DeviceId) -Level WARNING
@@ -1780,14 +1875,107 @@ function Uninstall-HeadsetApp {
         }
 
         Write-Log ($msg.AppUninstalling -f $PackageName, $DeviceId) -Level INFO
-        $output = & $adb -s $DeviceId shell pm uninstall $PackageName 2>&1
-        if ($output -match "^Success") {
+        $output = Invoke-AdbCmd -Device $Device -Command "shell pm uninstall $PackageName" -adb $adb
+        if ($output -isnot [bool] -and ($output -match "^Success")) {
             Write-Log ($msg.AppUninstallSuccess -f $PackageName, $DeviceId) -Level SUCCESS
             return $true
         } else {
             Write-Log ($msg.AppUninstallFailed -f $PackageName, $DeviceId, ($output -join ' ')) -Level ERROR
             return $false
         }
+    }
+    catch {
+        Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
+        return $false
+    }
+}
+
+
+function Install-HeadsetApp {
+    <#
+    .SYNOPSIS
+    Installs an APK (and optional OBB data folder) onto a VR headset via ADB.
+    .DESCRIPTION
+    $path can be a direct .apk file path, or a folder whose root contains:
+      - <packagename>.apk  (installed via adb install -r)
+      - <packagename>/     (optional OBB data, pushed to /sdcard/Android/obb/<packagename>/)
+    Returns [PSCustomObject]@{PackageName; Version} on success, $false on error or skipped install.
+    If the app is already installed and -Overwrite is not set, returns $false.
+    #>
+    param (
+        [Parameter(Mandatory=$true)]
+        [PSCustomObject]$Device,
+        [Parameter(Mandatory=$true)]
+        [string]$path,
+        [switch]$Overwrite,
+        [string]$adb = $global:adbPath
+    )
+    if (-not $Device) { Write-Log ($msg.AdbWifiConnectFailed -f 'unknown', 'no device') -Level ERROR; return $false }
+    $DeviceId = $Device.DeviceId
+
+    try {
+        # --- Resolve APK file ---
+        $isFolder = Test-Path -LiteralPath $path -PathType Container
+        $apkPath  = $null
+
+        if (-not $isFolder) {
+            if (-not ($path -match '\.apk$') -or -not (Test-Path -LiteralPath $path)) {
+                Write-Log ($msg.ApkNotFound -f $path) -Level ERROR
+                return $false
+            }
+            $apkPath = $path
+        } else {
+            $apkFiles = @(Get-ChildItem -LiteralPath $path -Filter '*.apk' -File)
+            if ($apkFiles.Count -eq 0) {
+                Write-Log ($msg.ApkFileNotFound -f $path) -Level ERROR
+                return $false
+            }
+            $apkPath = $apkFiles[0].FullName
+        }
+
+        $packageName = [System.IO.Path]::GetFileNameWithoutExtension($apkPath)
+
+        # --- Pre-check: already installed? ---
+        $allApps     = Get-HeadsetInstalledApps -Device $Device -ThirdPartyOnly:$false -adb $adb
+        $isInstalled = [bool]($allApps | Where-Object { $_.PackageName -eq $packageName })
+        if ($isInstalled) {
+            $installedVersion = ((Invoke-AdbCmd -Device $Device -Command "shell dumpsys package $packageName" -adb $adb |
+                Select-String 'versionName') -split '=' | Select-Object -Last 1).Trim()
+            Write-Log ($msg.ApkAlreadyInstalled -f $packageName, $installedVersion) -Level INFO
+            if (-not $Overwrite) {
+                Write-Log ($msg.UserCancelled) -Level INFO
+                return $false
+            }
+        }
+
+        # --- Step 1: Install APK ---
+        Write-Log ($msg.InstallingApk) -Level INFO
+        $installResult = Invoke-AdbCmd -Device $Device -Command "install -r `"$apkPath`"" -TimeoutSeconds 120 -adb $adb
+        if ($installResult -eq $false) {
+            Write-Log ($msg.ApkInstallFailed) -Level ERROR
+            return $false
+        }
+
+        $installedVersion = ((Invoke-AdbCmd -Device $Device -Command "shell dumpsys package $packageName" -adb $adb |
+            Select-String 'versionName') -split '=' | Select-Object -Last 1).Trim()
+        Write-Log ($msg.ApkInstallSuccess -f $packageName, $DeviceId) -Level SUCCESS
+
+        # --- Step 2: Push OBB folder (folder input only) ---
+        if ($isFolder) {
+            $obbFolder = Join-Path $path $packageName
+            if (Test-Path -LiteralPath $obbFolder -PathType Container) {
+                Write-Log ($msg.ObbFolderFound -f $packageName) -Level INFO
+                Invoke-AdbCmd -Device $Device -Command "shell mkdir -p /sdcard/Android/obb/$packageName" -adb $adb | Out-Null
+                $pushResult = Invoke-AdbCmd -Device $Device -Command "push `"$obbFolder`" /sdcard/Android/obb/$packageName" -TimeoutSeconds 300 -adb $adb
+                if ($pushResult -eq $false) {
+                    Write-Log ($msg.ObbPushFailed -f $packageName, $DeviceId, 'ADB push failed') -Level ERROR
+                    return $false
+                }
+                Write-Log ($msg.ObbPushSuccess -f $packageName, $DeviceId) -Level SUCCESS
+            }
+        }
+
+        return [PSCustomObject]@{ PackageName = $packageName; Version = $installedVersion }
     }
     catch {
         Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
