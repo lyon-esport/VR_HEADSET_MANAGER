@@ -913,11 +913,11 @@ try {
                     $ip    = ''
                     $model = ''
                     $portOpen = $false
-                    $ipOutput = & $adbPath -s $device.DeviceId shell ip -f inet addr show wlan0 2>$null
+                    $ipOutput = Invoke-AdbCmd -Device $device -Command "shell ip -f inet addr show wlan0" -adb $adbPath
                     foreach ($line in $ipOutput) {
                         if ($line -match 'inet\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/') { $ip = $Matches[1]; break }
                     }
-                    $model = ((& $adbPath -s $device.DeviceId shell getprop ro.product.model 2>$null) -join '').Trim()
+                    $model = ((Invoke-AdbCmd -Device $device -Command "shell getprop ro.product.model" -adb $adbPath) -join '').Trim()
                     if ($ip) { $portOpen = (Test-Port -hostname $ip -port $adbPort).open }
                     $resultObj = @{ ok = [bool]$ok; model = $model; ip = $ip; port = $adbPort; portOpen = $portOpen; reinstalled = $true }
                     $json = ConvertTo-Json $resultObj -Compress
@@ -958,12 +958,13 @@ try {
                     if (-not $usbDeviceId) {
                         $result.error = 'No USB device found.'
                     } else {
-                        $connectOut = & $adbPath -s $usbDeviceId shell cmd wifi connect-network `"$wifiSsid`" wpa2 `"$wifiPwd`" 2>&1
-                        if ($connectOut -match 'successfully|connected|Network connection initiated') {
+                        $usbDev    = [PSCustomObject]@{ DeviceId = $usbDeviceId; ConnectionType = 'USB'; IP = $null; Port = $null }
+                        $connectOut = Invoke-AdbCmd -Device $usbDev -Command "shell cmd wifi connect-network `"$wifiSsid`" wpa2 `"$wifiPwd`"" -adb $adbPath
+                        if ($connectOut -ne $false -and ($connectOut -match 'successfully|connected|Network connection initiated')) {
                             $result.ok = $true
                         } else {
                             # Try alternate: still mark ok if no error returned
-                            if ($LASTEXITCODE -eq 0 -and $connectOut -notmatch 'error|failed|unknown') {
+                            if ($connectOut -ne $false -and $connectOut -notmatch 'error|failed|unknown') {
                                 $result.ok = $true
                             } else {
                                 $result.error = ($connectOut -join ' ').Trim()

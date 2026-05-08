@@ -272,12 +272,12 @@ function Get-KnownHeadsetInfos {
         }
 
         # Get device model
-        $model = & $adb -s $device.DeviceId shell "getprop ro.product.model"
-        if ($model) { $result.Model = $model.Trim() }
+        $model = Invoke-AdbCmd -Device $device -Command "shell getprop ro.product.model" -adb $adb
+        if ($model) { $result.Model = ($model -join '').Trim() }
 
         # Get serial number
-        $serial = & $adb -s $device.DeviceId shell "getprop ro.serialno"
-        if ($serial) { $result.SerialNumber = $serial.Trim() }
+        $serial = Invoke-AdbCmd -Device $device -Command "shell getprop ro.serialno" -adb $adb
+        if ($serial) { $result.SerialNumber = ($serial -join '').Trim() }
 
         # Get battery info (headset + controllers)
         $batteryInfo = Get-HeadsetBatteryStatus -Device $device -adb $adb

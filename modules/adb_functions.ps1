@@ -316,22 +316,22 @@ function Install-OculusWirelessAdbApk {
     $deviceId = $Device.DeviceId
 
     # Retrieve the model
-    $headsetModel = (& $adb -s $deviceId shell getprop ro.product.model 2>$null).Trim()
+    $headsetModel = ((Invoke-AdbCmd -Device $Device -Command "shell getprop ro.product.model" -adb $adb) -join '').Trim()
     Write-Log ($msg.HeadsetDetected -f $headsetModel, $deviceId) -Level INFO
 
     try {
         # 3. Check for existing installation
-        $isInstalled = [bool](& $adb -s $deviceId shell pm list packages $packageName 2>$null |
-            Where-Object { $_ -match "^package:$([regex]::Escape($packageName))$" })
+        $pmOut = Invoke-AdbCmd -Device $Device -Command "shell pm list packages $packageName" -adb $adb
+        $isInstalled = $pmOut -ne $false -and ($pmOut -match "^package:$([regex]::Escape($packageName))$")
         if ($isInstalled) {
-            $version = (& $adb -s $deviceId shell dumpsys package $packageName | Select-String "versionName") -split '=' | Select-Object -Last 1
+            $version = ((Invoke-AdbCmd -Device $Device -Command "shell dumpsys package $packageName" -adb $adb | Select-String "versionName") -split '=' | Select-Object -Last 1)
             Write-Log ($msg.ApkAlreadyInstalled -f $packageName, $version) -Level INFO
             Write-Log ($msg.Reinstalling) -Level INFO
         } else {
             # 4. Installation if missing
             Write-Log ($msg.InstallingApk) -Level INFO
-            & $adb -s $deviceId install -r $apkPath
-            if ($LASTEXITCODE -ne 0) {
+            $installResult = Invoke-AdbCmd -Device $Device -Command "install -r `"$apkPath`"" -TimeoutSeconds 120 -adb $adb
+            if ($installResult -eq $false) {
                 Write-Log ($msg.ApkInstallFailed) -Level ERROR
                 return $false
             }
@@ -339,15 +339,15 @@ function Install-OculusWirelessAdbApk {
 
         # 5. Apply critical permissions
         Write-Log ($msg.ConfiguringPermissions) -Level INFO
-        & $adb -s $deviceId shell pm grant $packageName android.permission.WRITE_SECURE_SETTINGS
-        & $adb -s $deviceId shell pm grant $packageName android.permission.READ_LOGS
+        Invoke-AdbCmd -Device $Device -Command "shell pm grant $packageName android.permission.WRITE_SECURE_SETTINGS" -adb $adb | Out-Null
+        Invoke-AdbCmd -Device $Device -Command "shell pm grant $packageName android.permission.READ_LOGS" -adb $adb | Out-Null
 
         # 6. Launch app on headset
-        & $adb -s $deviceId shell am start -n "$packageName/.MainActivity"
+        Invoke-AdbCmd -Device $Device -Command "shell am start -n `"$packageName/.MainActivity`"" -adb $adb | Out-Null
 
         # 7. Activate TCP/IP
         Write-Log ($msg.ActivatingWifiAdbMode) -Level INFO
-        & $adb -s $deviceId tcpip 5555
+        Invoke-AdbCmd -Device $Device -Command "tcpip 5555" -adb $adb | Out-Null
         Start-Sleep -Seconds 2
 
         return $true
@@ -454,11 +454,11 @@ function Enable-WiFiADB {
 
         $deviceId = $usbDevice.DeviceId
         # Retrieve the model:
-        $headsetModel = (& $adb -s $deviceId shell getprop ro.product.model 2>$null).Trim()
+        $headsetModel = ((Invoke-AdbCmd -Device $usbDevice -Command "shell getprop ro.product.model" -adb $adb) -join '').Trim()
         Write-Log ($msg.HeadsetDetected -f $headsetModel, $deviceId) -Level INFO
 
         # Step 3: Check SSID (filter in PowerShell to avoid shell pipe issues on some Android builds)
-        $wifiInfo = (& $adb -s $deviceId shell dumpsys wifi 2>$null) | Select-String 'mWifiInfo'
+        $wifiInfo = (Invoke-AdbCmd -Device $usbDevice -Command "shell dumpsys wifi" -adb $adb) | Select-String 'mWifiInfo'
 
         if ($wifiInfo -match 'SSID: "([^"]+)"') {
             $currentSSID = $matches[1]  # Returns the SSID without quotes
@@ -472,8 +472,8 @@ function Enable-WiFiADB {
             $switchChoice = (Read-Host ($msg.SwitchToSsidPrompt -f $wifi_ssid)).ToUpper()
             if ($switchChoice -eq 'Y') {
                 try {
-                    & $adb -s $deviceId shell "svc wifi enable"
-                    & $adb -s $deviceId shell cmd -w wifi connect-network $wifi_ssid wpa2 $wifi_pwd -r none
+                    Invoke-AdbCmd -Device $usbDevice -Command "shell svc wifi enable" -adb $adb | Out-Null
+                    Invoke-AdbCmd -Device $usbDevice -Command "shell cmd -w wifi connect-network $wifi_ssid wpa2 $wifi_pwd -r none" -adb $adb | Out-Null
 
                     Write-Log ($msg.ActivatingWifiNetwork -f $wifi_ssid, $headsetModel, $deviceId) -Level INFO
                     Start-Sleep -Seconds 5
@@ -492,8 +492,8 @@ function Enable-WiFiADB {
 
         # 3. Retrieve WiFi IP
         Write-Log ($msg.RetrievingIp) -Level INFO
-        $ipInfo = & $adb -s $deviceId shell ip -f inet addr show wlan0 | 
-                  Select-String 'inet' | 
+        $ipInfo = (Invoke-AdbCmd -Device $usbDevice -Command "shell ip -f inet addr show wlan0" -adb $adb) |
+                  Select-String 'inet' |
                   ForEach-Object { ($_ -split '\s+')[2] -split '/' | Select-Object -First 1 }
 
         if (-not $ipInfo) {
@@ -511,7 +511,7 @@ function Enable-WiFiADB {
         # 5. Enable TCP/IP mode
 
             Write-Log ($msg.ActivatingWifiAdbPort -f $AdbPort) -Level INFO
-            & $adb -s $deviceId tcpip $AdbPort
+            Invoke-AdbCmd -Device $usbDevice -Command "tcpip $AdbPort" -adb $adb | Out-Null
         }
         Start-Sleep -Seconds 5  # Wait for initialization
         # 6. Port verification
@@ -614,17 +614,18 @@ function Enable-AdbTcpIp {
         if (-not $usbLine) {
             return [PSCustomObject]@{ ok = $false; error = "No USB headset detected" }
         }
-        $deviceId = ($usbLine -split "`t")[0].Trim()
+        $deviceId  = ($usbLine -split "`t")[0].Trim()
+        $usbDevice = [PSCustomObject]@{ DeviceId = $deviceId; ConnectionType = 'USB'; IP = $null; Port = $null }
 
-        $model = ((& $adb -s $deviceId shell getprop ro.product.model 2>$null) -join '').Trim()
+        $model = ((Invoke-AdbCmd -Device $usbDevice -Command "shell getprop ro.product.model" -adb $adb) -join '').Trim()
 
         # Enable TCP/IP mode
-        & $adb -s $deviceId tcpip $AdbPort 2>$null | Out-Null
+        Invoke-AdbCmd -Device $usbDevice -Command "tcpip $AdbPort" -adb $adb | Out-Null
         Start-Sleep -Seconds 2
 
         # Retrieve WiFi IP
         $ip = ''
-        $ipOutput = & $adb -s $deviceId shell ip -f inet addr show wlan0 2>$null
+        $ipOutput = Invoke-AdbCmd -Device $usbDevice -Command "shell ip -f inet addr show wlan0" -adb $adb
         foreach ($line in $ipOutput) {
             if ($line -match 'inet\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/') {
                 $ip = $Matches[1]; break
@@ -686,7 +687,7 @@ function Invoke-UsbHeadsetActions {
             if ($knownMatch) {
                 if (-not $deviceInfo.WifiAdbOpen) {
                     # Enable TCP/IP mode - this disconnects USB momentarily (by design)
-                    & $adb -s $deviceId tcpip $AdbPort 2>$null | Out-Null
+                    Invoke-AdbCmd -Device $deviceInfo -Command "tcpip $AdbPort" -adb $adb | Out-Null
                     Start-Sleep -Seconds 1
                     Write-Log ($msg.UsbWifiAdbEnabled -f $model, $ip, $AdbPort) -Level SUCCESS
                 } else {
@@ -742,23 +743,24 @@ function Get-AdbUsbDeviceDetails {
         $usbLine = & $adb devices 2>$null | Where-Object { $_ -match "`tdevice$" -and $_ -notmatch ':' }
         if (-not $usbLine) { return $null }
 
-        $deviceId = ($usbLine -split "`t")[0].Trim()
+        $deviceId  = ($usbLine -split "`t")[0].Trim()
+        $usbDevice = [PSCustomObject]@{ DeviceId = $deviceId; ConnectionType = 'USB'; IP = $null; Port = $null }
 
         # WiFi IP from wlan0
         $ip = ''
-        $ipOutput = & $adb -s $deviceId shell ip -f inet addr show wlan0 2>$null
+        $ipOutput = Invoke-AdbCmd -Device $usbDevice -Command "shell ip -f inet addr show wlan0" -adb $adb
         foreach ($line in $ipOutput) {
             if ($line -match 'inet\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/') {
                 $ip = $Matches[1]; break
             }
         }
 
-        $model        = ((& $adb -s $deviceId shell getprop ro.product.model 2>$null) -join '').Trim()
-        $serialNumber = ((& $adb -s $deviceId shell getprop ro.serialno 2>$null) -join '').Trim()
+        $model        = ((Invoke-AdbCmd -Device $usbDevice -Command "shell getprop ro.product.model" -adb $adb) -join '').Trim()
+        $serialNumber = ((Invoke-AdbCmd -Device $usbDevice -Command "shell getprop ro.serialno" -adb $adb) -join '').Trim()
 
         # Current WiFi SSID
         $ssid = ''
-        $wifiInfo = (& $adb -s $deviceId shell dumpsys wifi 2>$null) | Select-String 'mWifiInfo'
+        $wifiInfo = (Invoke-AdbCmd -Device $usbDevice -Command "shell dumpsys wifi" -adb $adb) | Select-String 'mWifiInfo'
         if ($wifiInfo -match 'SSID: "([^"]+)"') { $ssid = $Matches[1] }
 
         # WiFi ADB already open on IP:Port?
@@ -772,8 +774,8 @@ function Get-AdbUsbDeviceDetails {
         # APK installed?
         $apkInstalled = $false
         if ($PackageName) {
-            $pmResult     = & $adb -s $deviceId shell pm list packages $PackageName 2>$null
-            $apkInstalled = [bool]($pmResult | Where-Object { $_ -match "package:$([regex]::Escape($PackageName))" })
+            $pmResult     = Invoke-AdbCmd -Device $usbDevice -Command "shell pm list packages $PackageName" -adb $adb
+            $apkInstalled = $pmResult -ne $false -and [bool]($pmResult | Where-Object { $_ -match "package:$([regex]::Escape($PackageName))" })
         }
 
         return [PSCustomObject]@{
@@ -869,7 +871,7 @@ function Get-HeadsetModel {
         [string]$adb = $global:adbPath
     )
     if (-not $Device) { return $null }
-    $headsetModel = (& $adb -s $Device.DeviceId shell getprop ro.product.model).Trim()
+    $headsetModel = ((Invoke-AdbCmd -Device $Device -Command "shell getprop ro.product.model" -adb $adb) -join '').Trim()
     return $headsetModel
 }
 
@@ -907,7 +909,7 @@ function Get-QuestControllerBatteryStatus {
     try {
         Write-Log ($msg.QueryControllerStatus -f $DeviceId) -Level DEBUG
 
-        $dump = & $adb -s $DeviceId shell dumpsys OVRRemoteService 2>$null
+        $dump = Invoke-AdbCmd -Device $Device -Command "shell dumpsys OVRRemoteService" -adb $adb
         if (-not $dump) {
             Write-Log ($msg.ControllerStatusFailed -f "No output") -Level WARNING
             return $result
@@ -982,7 +984,7 @@ function Get-HeadsetBatteryStatus {
     try {
         Write-Log ($msg.BatteryStatusQuery -f $DeviceId) -Level DEBUG
 
-        $batteryInfo = & $adb -s $DeviceId shell dumpsys battery 2>$null
+        $batteryInfo = Invoke-AdbCmd -Device $Device -Command "shell dumpsys battery" -adb $adb
 
         if (-not $batteryInfo) {
             Write-Log ($msg.NoBatteryData -f $DeviceId) -Level WARNING
@@ -1150,10 +1152,9 @@ function Get-HeadsetForegroundApp {
         [string]$adb = $global:adbPath
     )
     if (-not $Device) { return $null }
-    $DeviceId = $Device.DeviceId
 
     try {
-        $dumpLines = @(& $adb -s $DeviceId shell dumpsys activity activities 2>$null)
+        $dumpLines = @(Invoke-AdbCmd -Device $Device -Command "shell dumpsys activity activities" -adb $adb)
 
         # Quest 3 / Android 12+: the ActivityRecord wraps across two lines:
         #   line N  : "  topResumedActivity=ActivityRecord{hash u0 "
@@ -1239,7 +1240,7 @@ function Invoke-HeadsetReboot {
 
     try {
         Write-Log ($msg.HeadsetRebooting -f $DeviceId) -Level INFO
-        & $adb -s $DeviceId reboot 2>$null
+        Invoke-AdbCmd -Device $Device -Command "reboot" -adb $adb | Out-Null
         return $true
     }
     catch {
@@ -1284,7 +1285,7 @@ function Invoke-HeadsetRecenter {
 
     try {
         Write-Log ($msg.HeadsetRecentering -f $DeviceId) -Level INFO
-        & $adb -s $DeviceId shell am broadcast -a com.oculus.vrpowermanager.prox_close 2>$null
+        Invoke-AdbCmd -Device $Device -Command "shell am broadcast -a com.oculus.vrpowermanager.prox_close" -adb $adb | Out-Null
         return $true
     }
     catch {
@@ -1309,7 +1310,7 @@ function Invoke-HeadsetShutdown {
 
     try {
         Write-Log ($msg.HeadsetShuttingDown -f $DeviceId) -Level INFO
-        & $adb -s $DeviceId reboot -p 2>$null
+        Invoke-AdbCmd -Device $Device -Command "reboot -p" -adb $adb | Out-Null
         return $true
     }
     catch {
@@ -1388,8 +1389,8 @@ function Invoke-HeadsetApp {
     # 2. Device already connected - no Connect-AdbWifi needed
 
     # 3. Verify the app is installed on the headset
-    $installed = & $adb -s $DeviceId shell pm list packages $PackageName 2>$null
-    if (-not ($installed -match [regex]::Escape("package:$PackageName"))) {
+    $installed = Invoke-AdbCmd -Device $Device -Command "shell pm list packages $PackageName" -adb $adb
+    if ($installed -eq $false -or -not ($installed -match [regex]::Escape("package:$PackageName"))) {
         Write-Log ($msg.ErrorOccurred -f "App '$PackageName' is not installed on $DeviceId.") -Level ERROR
         return $false
     }
@@ -1399,15 +1400,15 @@ function Invoke-HeadsetApp {
         Write-Log ($msg.HeadsetDetected -f $PackageName, $DeviceId) -Level INFO
         # Meta Home (vrshell) is a system launcher - monkey cannot inject into it; use HOME intent
         if ($PackageName -eq 'com.oculus.vrshell') {
-            $launchOutput = & $adb -s $DeviceId shell am start -a android.intent.action.MAIN -c android.intent.category.HOME 2>&1
-            if ($launchOutput -match "error|Error|Exception") {
+            $launchOutput = Invoke-AdbCmd -Device $Device -Command "shell am start -a android.intent.action.MAIN -c android.intent.category.HOME" -adb $adb
+            if ($launchOutput -eq $false -or ($launchOutput -match "error|Error|Exception")) {
                 Write-Log ($msg.ErrorOccurred -f "Failed to launch Meta Home: $launchOutput") -Level ERROR
                 return $false
             }
             return $true
         }
-        $launchOutput = & $adb -s $DeviceId shell monkey -p $PackageName -c android.intent.category.LAUNCHER 1 2>&1
-        if ($launchOutput -match "error|Error|Exception") {
+        $launchOutput = Invoke-AdbCmd -Device $Device -Command "shell monkey -p $PackageName -c android.intent.category.LAUNCHER 1" -adb $adb
+        if ($launchOutput -eq $false -or ($launchOutput -match "error|Error|Exception")) {
             Write-Log ($msg.ErrorOccurred -f "Failed to launch '$PackageName': $launchOutput") -Level ERROR
             return $false
         }
@@ -1466,7 +1467,7 @@ function Get-HeadsetInstalledApps {
 
     try {
         $pmArgs = if ($ThirdPartyOnly) { 'list packages -3' } else { 'list packages' }
-        $rawLines = & $adb -s $DeviceId shell pm $pmArgs 2>$null
+        $rawLines = Invoke-AdbCmd -Device $Device -Command "shell pm $pmArgs" -adb $adb
 
         if (-not $rawLines) {
             Write-Log ($msg.ErrorOccurred -f "No packages returned from $DeviceId") -Level WARNING
@@ -1765,7 +1766,7 @@ function Update-InstalledAppsCache {
         $appNamesPath = Join-Path $global:ScriptPath "data\app_names.csv"
 
         # Fetch third-party packages from headset
-        $rawOutput = & $adb -s $Device.DeviceId shell pm list packages -3 2>$null
+        $rawOutput = Invoke-AdbCmd -Device $Device -Command "shell pm list packages -3" -adb $adb
         $packages  = @($rawOutput | ForEach-Object { ($_ -replace '^package:', '').Trim() } | Where-Object { $_ -ne '' } | Sort-Object)
 
         if ($packages.Count -eq 0) { return }
@@ -1799,7 +1800,7 @@ function Update-InstalledAppsCache {
         # Format: "Package [com.pkg] (hash):" then "    versionName=x.y.z"
         $versions   = @{}
         $currentPkg = $null
-        foreach ($line in (& $adb -s $Device.DeviceId shell dumpsys package packages 2>$null)) {
+        foreach ($line in (Invoke-AdbCmd -Device $Device -Command "shell dumpsys package packages" -TimeoutSeconds 60 -adb $adb)) {
             if ($line -match '^\s{2}Package \[([^\]]+)\]') {
                 $currentPkg = $Matches[1]
             } elseif ($currentPkg -and $line -match '^\s+versionName=(\S+)') {
