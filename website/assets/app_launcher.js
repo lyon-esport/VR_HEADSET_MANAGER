@@ -37,6 +37,10 @@
     '.lm-status{font-size:11px;color:#555;text-align:center;min-height:16px;}',
     '.lm-status.ok{color:#22c55e;}',
     '.lm-status.err{color:#ef4444;}',
+    /* Search */
+    '.lm-search-wrap{display:flex;align-items:center;gap:4px;flex:1;margin:0 12px;}',
+    '.lm-search{flex:1;background:#111;border:1px solid #333;border-radius:5px;color:#ccc;font-family:inherit;font-size:12px;padding:4px 8px;outline:none;min-width:0;}',
+    '.lm-search:focus{border-color:#555;}',
     /* Light mode */
     '[data-theme="light"] .app-launcher{background:rgba(0,0,0,0.32);}',
     '[data-theme="light"] .app-launcher-box{background:#fff;border-color:#e0e0e0;box-shadow:0 8px 32px rgba(0,0,0,0.12);}',
@@ -58,7 +62,9 @@
     '[data-theme="light"] .lm-launch-btn:hover{background:rgba(59,130,246,0.12);border-color:#3b82f6;color:#2563eb;}',
     '[data-theme="light"] .lm-show-all-btn{background:#f5f5f5;border-color:#ddd;color:#666;}',
     '[data-theme="light"] .lm-show-all-btn:hover{color:#222;border-color:#bbb;}',
-    '[data-theme="light"] .lm-status{color:#aaa;}'
+    '[data-theme="light"] .lm-status{color:#aaa;}',
+    '[data-theme="light"] .lm-search{background:#f5f5f5;border-color:#ccc;color:#222;}',
+    '[data-theme="light"] .lm-search:focus{border-color:#999;}'
   ].join('');
   document.head.appendChild(style);
 
@@ -71,6 +77,9 @@
           '<div class="lm-title-wrap">' +
             '<span class="lm-headset-label" id="lm-headset-label"></span>' +
             '<span class="lm-title">Launch App</span>' +
+          '</div>' +
+          '<div class="lm-search-wrap" id="lm-search-wrap" style="display:none">' +
+            '<input class="lm-search" id="lm-search" type="search" placeholder="Search apps..." autocomplete="off" spellcheck="false">' +
           '</div>' +
           '<button class="lm-close" id="lm-close" title="Close">' +
             '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
@@ -128,6 +137,8 @@
       '<line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>' +
       '</svg> Show all installed apps';
     document.getElementById('lm-refresh-btn').style.display = 'none';
+    document.getElementById('lm-search-wrap').style.display = 'none';
+    document.getElementById('lm-search').value = '';
     document.getElementById('app-launcher').style.display = 'flex';
     renderLaunchList([]);
     fetch('/api/favoriteapps?name=' + encodeURIComponent(_launchDn))
@@ -239,6 +250,16 @@
     if (otherApps.length) { addSection('All Apps');  otherApps.forEach(function (a) { renderAppRow(a, list); }); }
   }
 
+  function _applySearch(query) {
+    if (!_allAppsLoaded) return;
+    var q = query.toLowerCase();
+    var filtered = q ? _allApps.filter(function (a) {
+      return (a.package || '').toLowerCase().indexOf(q) !== -1 ||
+             ((_appNameCache[a.package] || a.displayName || '')).toLowerCase().indexOf(q) !== -1;
+    }) : _allApps;
+    _renderAllApps(filtered);
+  }
+
   function launchApp(dn, pkg, displayName, btn) {
     if (!dn || !pkg) return;
     if (btn) btn.disabled = true;
@@ -277,6 +298,8 @@
   // ---- Event wiring (deferred until DOM ready) ----
   function init() {
     document.getElementById('lm-close').addEventListener('click', closeLaunchModal);
+    document.getElementById('lm-search').addEventListener('input', function () { _applySearch(this.value.trim()); });
+    document.getElementById('lm-search').addEventListener('search', function () { _applySearch(this.value.trim()); });
     document.getElementById('app-launcher').addEventListener('click', function (e) { if (e.target === this) closeLaunchModal(); });
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && _launchDn) closeLaunchModal(); });
 
@@ -311,6 +334,8 @@
           statusEl.className   = 'lm-status';
           btn.style.display = 'none';
           document.getElementById('lm-refresh-btn').style.display = '';
+          document.getElementById('lm-search-wrap').style.display = '';
+          document.getElementById('lm-search').value = '';
           _renderAllApps(apps);
         })
         .catch(function () {
