@@ -1,11 +1,11 @@
 
-#Update-OBSFile -knownHeadsetsInfo $knownHeadsetsInfo -obsTemplatePath (Join-Path -Path $global:ScriptPath -ChildPath "\website\template\headset_status_v2.eps") # $global:obsTemplatePath -obsOutputPath $global:obsOutputPath
+#Update-OBSFile -knownHeadsetsInfo $knownHeadsetsInfo -obsTemplatePath (Join-Path -Path $global:ScriptPath -ChildPath "\website\template\headset_status_v2.pshtml") # $global:obsTemplatePath -obsOutputPath $global:obsOutputPath
 function Update-OBSFile {
     param(
         [Parameter(Mandatory=$true)]
         [System.Collections.ArrayList]$knownHeadsetsInfo,
 
-        #[string]$obsTemplatePath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\template\headset_status_v2.eps") ,
+        #[string]$obsTemplatePath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\template\headset_status_v2.pshtml") ,
         [string]$obsTemplatePath = $global:OBS_headsetTemplate ,
 
         [string]$obsOutputPath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\")
@@ -68,7 +68,7 @@ function Write-htmlMonitor {
     param(
         [Parameter(Mandatory=$true)]
         [System.Collections.ArrayList]$knownHeadsets,
-        [string]$obsMonitorTemplatePath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\template\monitor.eps"),
+        [string]$obsMonitorTemplatePath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\template\monitor.pshtml"),
 
         [string]$obsOutputPath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\monitor.html")
     )
@@ -129,14 +129,14 @@ function Update-OBSVideoFile {
     }
 }
 
-# Generates website/video_monitor.html from the video_monitor.eps template.
+# Generates website/video_monitor.html from the video_monitor.pshtml template.
 # Lists every headset in $knownHeadsets; the page JS polls the CSV at runtime
 # to filter cells by All / Reachable (ping) / Streaming (scrcpy).
 function Write-VideoMonitor {
     param(
         [Parameter(Mandatory=$true)]
         [System.Collections.ArrayList]$knownHeadsets,
-        [string]$templatePath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\template\video_monitor.eps"),
+        [string]$templatePath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\template\video_monitor.pshtml"),
         [string]$outputPath   = (Join-Path -Path $global:ScriptPath -ChildPath "\website\video_monitor.html")
     )
 

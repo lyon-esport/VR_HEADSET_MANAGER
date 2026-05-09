@@ -413,8 +413,8 @@ try {
                 $rows = Get-KnownHeadsets
                 $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
                 if (-not $headset) { throw "Headset not found" }
-                $device = Get-AdbWifiDevice -headsetIP $headset.IPAddress -AdbPort $adbPort -adb $adbPath
-                if (-not $device) { throw "Could not connect to headset via ADB WiFi" }
+                $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort -adb $adbPath
+                if (-not $device) { throw "Could not connect to headset via ADB" }
                 Invoke-HeadsetReboot -Device $device -adb $adbPath | Out-Null
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
                 $response.StatusCode      = 200
@@ -448,8 +448,8 @@ try {
                 $rows = Get-KnownHeadsets
                 $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
                 if (-not $headset) { throw "Headset not found" }
-                $device = Get-AdbWifiDevice -headsetIP $headset.IPAddress -AdbPort $adbPort -adb $adbPath
-                if (-not $device) { throw "Could not connect to headset via ADB WiFi" }
+                $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort -adb $adbPath
+                if (-not $device) { throw "Could not connect to headset via ADB" }
                 Invoke-HeadsetShutdown -Device $device -adb $adbPath | Out-Null
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
                 $response.StatusCode      = 200
@@ -709,8 +709,8 @@ try {
                     $rows    = Get-KnownHeadsets
                     $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
                     if (-not $headset) { throw "Headset not found" }
-                    $device = Get-AdbWifiDevice -headsetIP $headset.IPAddress -AdbPort $adbPort
-                    if (-not $device) { throw "Could not connect to headset via ADB WiFi" }
+                    $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort
+                    if (-not $device) { throw "Could not connect to headset via ADB" }
                     $installedApps = Get-HeadsetInstalledApps -Device $device -ThirdPartyOnly:$false
 
                     # Build version lookup from the per-headset cache (has ADB-reported versions)
@@ -737,8 +737,8 @@ try {
                         $rows    = Get-KnownHeadsets
                         $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
                         if (-not $headset) { throw "Headset not found" }
-                        $device = Get-AdbWifiDevice -headsetIP $headset.IPAddress -AdbPort $adbPort
-                        if (-not $device) { throw "Could not connect to headset via ADB WiFi" }
+                        $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort
+                        if (-not $device) { throw "Could not connect to headset via ADB" }
                         if ($resolveMissing) {
                             Update-InstalledAppsCache -Device $device -headsetName $headset.Name -ResolveMissing
                         } else {
@@ -764,8 +764,8 @@ try {
                         $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
                         if (-not $headset) { throw "Headset not found" }
 
-                        $device = Get-AdbWifiDevice -headsetIP $headset.IPAddress -AdbPort $adbPort -adb $adbPath
-                        if (-not $device) { throw "Could not connect to headset via ADB WiFi" }
+                        $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort -adb $adbPath
+                        if (-not $device) { throw "Could not connect to headset via ADB" }
 
                         $installedApps = Get-HeadsetInstalledApps -Device $device -ThirdPartyOnly -adb $adbPath
                         $appList = @($installedApps | ForEach-Object {
@@ -813,8 +813,8 @@ try {
                 $rows    = Get-KnownHeadsets
                 $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
                 if (-not $headset) { throw "Headset not found" }
-                $device = Get-AdbWifiDevice -headsetIP $headset.IPAddress -AdbPort $adbPort
-                if (-not $device) { throw "Could not connect to headset via ADB WiFi" }
+                $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort
+                if (-not $device) { throw "Could not connect to headset via ADB" }
                 $ok = Uninstall-HeadsetApp -Device $device -PackageName $safePkg
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes($(if ($ok) { '{"ok":true}' } else { '{"ok":false,"error":"Uninstall failed or app not found"}' }))
                 $response.StatusCode      = 200
@@ -855,8 +855,8 @@ try {
                     $rows    = Get-KnownHeadsets
                     $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
                     if (-not $headset) { throw "Headset not found" }
-                    $device = Get-AdbWifiDevice -headsetIP $headset.IPAddress -AdbPort $adbPort
-                    if (-not $device) { throw "Could not connect to headset via ADB WiFi" }
+                    $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort
+                    if (-not $device) { throw "Could not connect to headset via ADB" }
 
                     # Read binary body
                     $ms     = [System.IO.MemoryStream]::new()
@@ -910,8 +910,8 @@ try {
                     $rows    = Get-KnownHeadsets
                     $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
                     if (-not $headset) { throw "Headset not found" }
-                    $device = Get-AdbWifiDevice -headsetIP $headset.IPAddress -AdbPort $adbPort
-                    if (-not $device) { throw "Could not connect to headset via ADB WiFi" }
+                    $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort
+                    if (-not $device) { throw "Could not connect to headset via ADB" }
 
                     if ($json.tempId) {
                         # Mode B: overwrite confirmation for a previously uploaded APK
@@ -988,8 +988,8 @@ try {
                 $rows    = Get-KnownHeadsets
                 $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
                 if (-not $headset) { throw "Headset not found" }
-                $device = Get-AdbWifiDevice -headsetIP $headset.IPAddress -AdbPort $adbPort -adb $adbPath
-                if (-not $device) { throw "Could not connect to headset via ADB WiFi" }
+                $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort -adb $adbPath
+                if (-not $device) { throw "Could not connect to headset via ADB" }
                 $ok = Invoke-HeadsetApp -Device $device -PackageName $safePkg -adb $adbPath
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes($(if ($ok) { '{"ok":true}' } else { '{"ok":false}' }))
                 $response.StatusCode      = 200

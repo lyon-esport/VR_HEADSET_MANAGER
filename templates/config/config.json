@@ -75,8 +75,8 @@
 	  }
   },
   "OBS":{
-	 "HeadsetTemplate":"headset_status.eps",
-	 "VideoTemplate":"headset_scrcpy.eps",
+	 "HeadsetTemplate":"headset_status.pshtml",
+	 "VideoTemplate":"headset_scrcpy.pshtml",
 	 "headsets_triggers":{
 		"headset_battery_warningLevel": 40,
 		"headset_battery_criticalLevel": 30,
