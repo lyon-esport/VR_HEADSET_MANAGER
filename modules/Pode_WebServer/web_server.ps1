@@ -2246,7 +2246,7 @@ try {
                     $headsetId = [int]$qParams['id']
                 } elseif ($qParams.ContainsKey('name') -and $qParams['name'] -ne '') {
                     $safeName = Convert-Displayname $qParams['name']
-                    $matched = @(Get-KnownHeadsets) | Where-Object { (Convert-Displayname $_.DisplayName) -eq $safeName } | Select-Object -First 1
+                    $matched = @(Get-KnownHeadsets) | Where-Object { (Convert-Displayname $_.Name) -eq $safeName } | Select-Object -First 1
                     if ($matched) { $headsetId = [int]$matched.ID }
                 }
                 $action = if ($qParams.ContainsKey('action')) { $qParams['action'].ToLower() } else { '' }
