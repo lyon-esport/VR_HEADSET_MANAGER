@@ -202,6 +202,35 @@
     .timer-overlay.visible { display: block; }
     .timer-hidden .timer-overlay { display: none !important; }
 
+    /* Timer control button - bottom-left of cell, hourglass icon, only when timer is visible */
+    .cell-timer-btn {
+      display: none;
+      position: absolute;
+      bottom: 6px;
+      left: 6px;
+      z-index: 30;
+      touch-action: manipulation;
+      width: 5.5cqw;
+      height: 5.5cqw;
+      min-width: 22px;
+      min-height: 22px;
+      border-radius: 6px;
+      background: rgba(0,0,0,0.60);
+      border: 1px solid rgba(255,255,255,0.15);
+      color: rgba(255,255,255,0.80);
+      cursor: pointer;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      transition: background 0.12s, color 0.12s, border-color 0.12s;
+    }
+    .cell-timer-btn svg { width: 40%; height: 40%; display: block; }
+    .cell-timer-btn:hover { background: rgba(59,130,246,0.75); color: #fff; border-color: rgba(59,130,246,0.6); }
+    .cell-timer-btn.running { background: rgba(239,68,68,0.45); border-color: rgba(239,68,68,0.6); color: #f87171; }
+    .cell-timer-btn.running:hover { background: rgba(239,68,68,0.65); border-color: rgba(239,68,68,0.8); }
+    .cell-timer-btn.paused  { background: rgba(234,179,8,0.40);  border-color: rgba(234,179,8,0.6);  color: #fbbf24; }
+    .cell-timer-btn.paused:hover  { background: rgba(234,179,8,0.60);  border-color: rgba(234,179,8,0.8); }
+    .timer-hidden .cell-timer-btn { display: none !important; }
 
     /* Offline dimming overlay */
     .offline-overlay {
@@ -355,6 +384,11 @@
         <span class="running-app-name"></span>
       </div>
       <div class="timer-overlay" data-timer-cell="<%= $headset.id %>"></div>
+      <button class="cell-timer-btn" data-timer-cell="<%= $headset.id %>" title="Start timer (long press: reset)" aria-label="Timer control">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5 2h14M5 22h14M7 2v5l5 5-5 5v5M17 2v5l-5 5 5 5v5"/>
+        </svg>
+      </button>
       <div class="offline-overlay">OFFLINE</div>
     </div>
 <% } %>
@@ -822,22 +856,50 @@
       this.style.color = timerGlobalVisible ? 'var(--filter-active-bg)' : '';
       document.querySelectorAll('.timer-overlay[data-timer-cell]').forEach(function(overlay) {
         var tid = overlay.dataset.timerCell;
-        if (timerGlobalVisible) { startCellTimerPoll(tid); }
-        else { stopCellTimerPoll(tid); }
+        if (timerGlobalVisible) {
+          startCellTimerPoll(tid);
+          syncCellTimerBtn(tid);
+          var btn = document.querySelector('.cell-timer-btn[data-timer-cell="' + tid + '"]');
+          if (btn) btn.style.display = 'flex';
+        } else {
+          stopCellTimerPoll(tid);
+          var btn = document.querySelector('.cell-timer-btn[data-timer-cell="' + tid + '"]');
+          if (btn) btn.style.display = 'none';
+        }
       });
     });
+
+    function syncCellTimerBtn(tid) {
+      fetch('/api/timer?id=' + tid + '&action=status')
+        .then(function(r) { return r.ok ? r.json() : null; })
+        .then(function(j) {
+          if (!j) return;
+          var btn = document.querySelector('.cell-timer-btn[data-timer-cell="' + tid + '"]');
+          if (!btn) return;
+          btn.classList.remove('running', 'paused');
+          if (j.active) { btn.classList.add('running'); }
+          else if (j.paused) { btn.classList.add('paused'); }
+        }).catch(function() {});
+    }
 
     function startCellTimerPoll(tid) {
       stopCellTimerPoll(tid);
       function poll() {
-        fetch('/timer/' + tid + '.txt?_=' + Date.now())
-          .then(function(r) { return r.ok ? r.text() : ''; })
-          .then(function(t) {
-            var v = (t || '').trim();
+        fetch('/api/timer?id=' + tid + '&action=status&_=' + Date.now())
+          .then(function(r) { return r.ok ? r.json() : null; })
+          .then(function(j) {
+            if (!j) return;
             var overlay = document.querySelector('.timer-overlay[data-timer-cell="' + tid + '"]');
+            var btn = document.querySelector('.cell-timer-btn[data-timer-cell="' + tid + '"]');
+            var v = (j.value || '').trim();
             if (overlay) {
               if (v) { overlay.textContent = v; overlay.classList.add('visible'); }
               else   { overlay.classList.remove('visible'); }
+            }
+            if (btn) {
+              btn.classList.remove('running', 'paused');
+              if (j.active) { btn.classList.add('running'); }
+              else if (j.paused) { btn.classList.add('paused'); }
             }
           }).catch(function() {});
       }
@@ -848,6 +910,84 @@
     function stopCellTimerPoll(tid) {
       if (timerIntervals[tid]) { clearInterval(timerIntervals[tid]); delete timerIntervals[tid]; }
     }
+
+    // ---- Timer cell button click/long-press (delegated) ----
+    (function() {
+      var _lpTimer = null;
+      var _longPressed = false;
+      var _lpBtn = null;
+
+      function doTimerAction(btn) {
+        var tid = btn.dataset.timerCell;
+        if (btn.classList.contains('running')) {
+          fetch('/api/timer?id=' + tid + '&action=pause')
+            .then(function(r) { return r.json(); })
+            .then(function(j) {
+              if (j.ok) { btn.classList.remove('running'); btn.classList.add('paused'); }
+            }).catch(function() {});
+        } else if (btn.classList.contains('paused')) {
+          fetch('/api/timer?id=' + tid + '&action=resume')
+            .then(function(r) { return r.json(); })
+            .then(function(j) {
+              if (j.ok) { btn.classList.remove('paused'); btn.classList.add('running'); }
+            }).catch(function() {});
+        } else {
+          fetch('/api/timer?id=' + tid + '&action=start')
+            .then(function(r) { return r.json(); })
+            .then(function(j) {
+              if (j.ok) { btn.classList.add('running'); }
+            }).catch(function() {});
+        }
+      }
+
+      function startLongPress(btn) {
+        _lpBtn = btn;
+        _longPressed = false;
+        _lpTimer = setTimeout(function() {
+          _lpTimer = null;
+          _longPressed = true;
+          var tid = btn.dataset.timerCell;
+          fetch('/api/timer?id=' + tid + '&action=reset')
+            .then(function(r) { return r.json(); })
+            .then(function(j) {
+              if (j.ok) { btn.classList.remove('running', 'paused'); }
+            }).catch(function() {});
+        }, 800);
+      }
+      function cancelLongPress() {
+        if (_lpTimer) { clearTimeout(_lpTimer); _lpTimer = null; }
+      }
+
+      // Mouse: long press + click
+      document.getElementById('grid').addEventListener('mousedown', function(e) {
+        var btn = e.target.closest('.cell-timer-btn[data-timer-cell]');
+        if (btn) startLongPress(btn);
+      });
+      document.getElementById('grid').addEventListener('mouseup',    cancelLongPress);
+      document.getElementById('grid').addEventListener('mouseleave', cancelLongPress);
+      document.getElementById('grid').addEventListener('click', function(e) {
+        var btn = e.target.closest('.cell-timer-btn[data-timer-cell]');
+        if (!btn) return;
+        if (_longPressed) { _longPressed = false; return; }
+        doTimerAction(btn);
+      });
+
+      // Touch: long press via touchstart; tap via touchend (avoids 300ms delay)
+      document.getElementById('grid').addEventListener('touchstart', function(e) {
+        var btn = e.target.closest('.cell-timer-btn[data-timer-cell]');
+        if (btn) { e.stopPropagation(); startLongPress(btn); }
+      }, { passive: true });
+      document.getElementById('grid').addEventListener('touchend', function(e) {
+        var btn = e.target.closest('.cell-timer-btn[data-timer-cell]');
+        if (!btn) return;
+        e.preventDefault();
+        if (_lpTimer) {
+          cancelLongPress();
+          doTimerAction(btn);
+        }
+      }, { passive: false });
+      document.getElementById('grid').addEventListener('touchcancel', cancelLongPress);
+    })();
 
     // Run scale then layout then scale again so no-stream heights are known before streaming layout
     var _applyingAll = false;

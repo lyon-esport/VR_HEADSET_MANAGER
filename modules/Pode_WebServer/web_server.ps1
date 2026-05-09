@@ -2261,12 +2261,12 @@ try {
                         $respJson = '{"ok":true}'
                     }
                     'pause' {
-                        Suspend-HeadsetTimer -headsetId $headsetId
-                        $respJson = '{"ok":true}'
+                        $pauseOk = Suspend-HeadsetTimer -headsetId $headsetId
+                        $respJson = if ($pauseOk -ne $false) { '{"ok":true}' } else { '{"ok":false,"error":"timer not found"}' }
                     }
                     'resume' {
-                        Resume-HeadsetTimer -headsetId $headsetId
-                        $respJson = '{"ok":true}'
+                        $resumeOk = Resume-HeadsetTimer -headsetId $headsetId
+                        $respJson = if ($resumeOk -ne $false) { '{"ok":true}' } else { '{"ok":false,"error":"timer not found or not paused"}' }
                     }
                     'reset' {
                         Stop-HeadsetTimer -headsetId $headsetId
