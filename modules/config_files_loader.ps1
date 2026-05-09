@@ -130,7 +130,7 @@ function Get-Config {
 
 
     $global:OBS_headsetTemplate = Join-Path -Path $global:ScriptPath -ChildPath ("\website\template\"+$configContent.OBS.HeadsetTemplate)
-    $videoTemplateName = if ($configContent.OBS.VideoTemplate) { $configContent.OBS.VideoTemplate } else { "headset_scrcpy.eps" }
+    $videoTemplateName = if ($configContent.OBS.VideoTemplate) { $configContent.OBS.VideoTemplate } else { "headset_scrcpy.pshtml" }
     $global:OBS_videoTemplate    = Join-Path -Path $global:ScriptPath -ChildPath ("\website\template\"+$videoTemplateName)
     $global:OBS_temperature_highLevel = $configContent.OBS.headsets_triggers.temperature_highLevel
     $global:OBS_headset_battery_warningLevel      = if ($null -ne $configContent.OBS.headsets_triggers.headset_battery_warningLevel)      { [int]$configContent.OBS.headsets_triggers.headset_battery_warningLevel      } else { 40 }

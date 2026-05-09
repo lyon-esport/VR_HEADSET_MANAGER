@@ -594,6 +594,36 @@ function Get-AdbUsbDevice {
 }
 
 
+function Get-BestAdbDevice {
+    <#
+    .SYNOPSIS
+    Returns the fastest available ADB device for a known headset: USB if connected, WiFi otherwise.
+    #>
+    param (
+        [Parameter(Mandatory=$true)] $Headset,
+        [string]$adb = $global:adbPath,
+        [int]$AdbPort = 5555
+    )
+
+    if ($Headset.SerialNumber) {
+        try {
+            $usbLine = & $adb devices 2>$null | Where-Object { $_ -match "`tdevice$" -and $_ -notmatch ':' }
+            if ($usbLine) {
+                $serial = ($usbLine -split "`t")[0].Trim()
+                if ($serial -eq $Headset.SerialNumber) {
+                    Write-Log "USB connection preferred for $($Headset.Name) (serial $serial)" -Level DEBUG
+                    return [PSCustomObject]@{ DeviceId = $serial; ConnectionType = 'USB'; IP = $null; Port = $null }
+                }
+            }
+        } catch {
+            Write-Log ($msg.ADBExecutionFailed -f $_.Exception.Message) -Level ERROR
+        }
+    }
+
+    return Get-AdbWifiDevice -headsetIP $Headset.IPAddress -AdbPort $AdbPort -adb $adb
+}
+
+
 function Enable-AdbTcpIp {
     <#
     .SYNOPSIS
