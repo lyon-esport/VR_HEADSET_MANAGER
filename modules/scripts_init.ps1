@@ -155,6 +155,31 @@ $moduleFiles = Get-ChildItem -Path $ModulesPath -Filter "*.ps1" -File | Sort-Obj
     Write-Log ($msg.TranslationsLoaded -f $global:SelectedLanguage) -Level DEBUG
 
 
+function Stop-WebServer {
+    $webServerPidFile = Join-Path $global:ScriptPath "data\webserver.pid"
+    $wsPid = $null
+    try {
+        if ($global:WebServerProcess -and -not $global:WebServerProcess.HasExited) {
+            $wsPid = $global:WebServerProcess.Id
+        }
+    } catch { }
+    if (-not $wsPid -and (Test-Path $webServerPidFile)) {
+        $rawPid = Get-Content $webServerPidFile -Raw -ErrorAction SilentlyContinue
+        if ($rawPid) { $wsPid = [int]$rawPid }
+    }
+    if ($wsPid -and (Get-Process -Id $wsPid -ErrorAction SilentlyContinue)) {
+        Stop-Process -Id $wsPid -Force -ErrorAction SilentlyContinue
+        $deadline = (Get-Date).AddSeconds(3)
+        while ((Get-Date) -lt $deadline -and (Get-Process -Id $wsPid -ErrorAction SilentlyContinue)) {
+            Start-Sleep -Milliseconds 100
+        }
+        try { Write-Log $msg.WebServerStopped -Level INFO } catch { Write-Host "[App] Web server stopped." }
+    }
+    Remove-Item $webServerPidFile -Force -ErrorAction SilentlyContinue
+    $global:WebServerProcess = $null
+}
+
+
 function Invoke-AppShutdown {
     <#
     .SYNOPSIS
@@ -172,19 +197,7 @@ function Invoke-AppShutdown {
     try { Reset-AwakeMode }           catch { }
     try { Disconnect-ADBConnections }  catch { }
 
-    # Stop web server - try process object first, then PID file as cross-process fallback
-    $webServerPidFile = Join-Path $global:ScriptPath "data\webserver.pid"
-    $wsPid = $null
-    if ($global:WebServerProcess -and -not $global:WebServerProcess.HasExited) {
-        $wsPid = $global:WebServerProcess.Id
-    } elseif (Test-Path $webServerPidFile) {
-        $wsPid = [int](Get-Content $webServerPidFile -Raw -ErrorAction SilentlyContinue)
-    }
-    if ($wsPid -and (Get-Process -Id $wsPid -ErrorAction SilentlyContinue)) {
-        Stop-Process -Id $wsPid -Force -ErrorAction SilentlyContinue
-        try { Write-Log $msg.WebServerStopped -Level INFO } catch { Write-Host "[App] Web server stopped." }
-    }
-    Remove-Item $webServerPidFile -Force -ErrorAction SilentlyContinue
+    try { Stop-WebServer } catch { }
 
     try { Stop-MediaMtx } catch { }
 
@@ -220,34 +233,7 @@ function Start-WebServer {
 
     # -- Stop phase (only when -Restart is requested) -------------------------
     if ($Restart) {
-        $wsPid = $null
-        if ($global:WebServerProcess -and -not $global:WebServerProcess.HasExited) {
-            $wsPid = $global:WebServerProcess.Id
-        } elseif (Test-Path $webServerPidFile) {
-            $wsPid = [int](Get-Content $webServerPidFile -Raw -ErrorAction SilentlyContinue)
-        }
-        if ($wsPid -and (Get-Process -Id $wsPid -ErrorAction SilentlyContinue)) {
-            Stop-Process -Id $wsPid -Force -ErrorAction SilentlyContinue
-            $portFree = $false
-            $deadline = (Get-Date).AddSeconds(5)
-            while ((Get-Date) -lt $deadline) {
-                try {
-                    $testListener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, $global:WebServer_port)
-                    $testListener.Start()
-                    $testListener.Stop()
-                    $portFree = $true
-                    break
-                } catch {
-                    Start-Sleep -Milliseconds 200
-                }
-            }
-            if (-not $portFree) {
-                Write-Log "Web server port $global:WebServer_port still busy after 5s, starting anyway" -Level WARNING
-            }
-            Write-Log $msg.WebServerStopped -Level INFO
-        }
-        Remove-Item $webServerPidFile -Force -ErrorAction SilentlyContinue
-        $global:WebServerProcess = $null
+        Stop-WebServer
 
         # Regenerate video monitor page from template before restart
         if ($global:knownHeadsets) {
@@ -263,12 +249,16 @@ function Start-WebServer {
     $webServerRunning = $false
 
     # 1. In-process guard (fastest path - same PS session)
-    if ($global:WebServerProcess -and -not $global:WebServerProcess.HasExited) {
-        $webServerRunning = $true
-        Write-Log ($msg.WebServerAlreadyRunning -f $global:WebServer_port) -Level DEBUG
-    }
+    try {
+        if ($global:WebServerProcess -and -not $global:WebServerProcess.HasExited) {
+            $webServerRunning = $true
+            Write-Log ($msg.WebServerAlreadyRunning -f $global:WebServer_port) -Level DEBUG
+        }
+    } catch { }
 
     # 2. PID-file guard (cross-process: dashboard loop, module reload, parallel calls)
+    # NOTE: Get-NetTCPConnection cannot be used to detect the web server - HttpListener
+    # uses HTTP.sys which always shows as PID 4 (System), not the powershell.exe process.
     if (-not $webServerRunning -and (Test-Path $webServerPidFile)) {
         $storedPid = [int](Get-Content $webServerPidFile -Raw -ErrorAction SilentlyContinue)
         if ($storedPid -and (Get-Process -Id $storedPid -ErrorAction SilentlyContinue)) {
@@ -278,23 +268,6 @@ function Start-WebServer {
         } else {
             # Stale PID file from a previous crashed run - remove it
             Remove-Item $webServerPidFile -Force -ErrorAction SilentlyContinue
-        }
-    }
-
-    # 3. Orphan guard: port already bound by a process not tracked by our PID file
-    #    (happens when the app crashed without clean shutdown and a stale web server is
-    #    still listening). Adopt it so we don't spawn a second instance that would fail.
-    if (-not $webServerRunning) {
-        $orphanConn = Get-NetTCPConnection -LocalPort $global:WebServer_port -State Listen -ErrorAction SilentlyContinue |
-                      Select-Object -First 1
-        if ($orphanConn) {
-            $orphanProc = Get-Process -Id $orphanConn.OwningProcess -ErrorAction SilentlyContinue
-            if ($orphanProc) {
-                $orphanProc.Id | Set-Content -LiteralPath $webServerPidFile -Force -ErrorAction SilentlyContinue
-                $global:WebServerProcess = $orphanProc
-                Write-Log ("Web server adopted existing process (PID {0}) on port {1}" -f $orphanProc.Id, $global:WebServer_port) -Level INFO
-                $webServerRunning = $true
-            }
         }
     }
 
@@ -311,7 +284,6 @@ function Start-WebServer {
         $wsErrLog       = Join-Path $global:logFolder "webserver_${dateStamp}_err.log"
 
         $global:WebServerProcess = Start-Process powershell.exe -ArgumentList @(
-            "-NoExit",
             "-File",
             "`"$web_server_script`"",
             "-ScriptPath",

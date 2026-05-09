@@ -189,7 +189,7 @@
             <span class="muted">
               <% if ($charging) { %>⚡<% } else { %>🚫<% } %>
             </span>
-            <% if ($timeDisplay) { %><span class="muted" style="font-size:0.75em;margin-left:4px">~<%= $timeDisplay %></span><% } %>
+            <% if ($timeDisplay) { %><% if ($power_state) { %><span style="font-size:0.85em;margin-left:4px;color:<% if ($power_state -eq 'charging') { %>limegreen<% } else { %>crimson<% } %>;font-weight:bold"><% if ($power_state -eq 'charging') { %>&#x2197;<% } else { %>&#x2198;<% } %></span><% } %><span class="muted" style="font-size:0.75em;margin-left:2px">~<%= $timeDisplay %></span><% } %>
           </span>
           <span class="temp" aria-label="Temperature in Celsius">
             <span class="emoji" aria-hidden="true">

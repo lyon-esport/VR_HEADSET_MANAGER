@@ -940,15 +940,7 @@ function Show-SubMenu-Services {
                 Start-Sleep -Seconds 1
             }
             '2' {
-                $wsPidFile2 = Join-Path $global:ScriptPath "data\webserver.pid"
-                if (Test-Path $wsPidFile2) {
-                    $pid2 = [int](Get-Content $wsPidFile2 -Raw -ErrorAction SilentlyContinue)
-                    if ($pid2 -and (Get-Process -Id $pid2 -ErrorAction SilentlyContinue)) {
-                        Stop-Process -Id $pid2 -Force -ErrorAction SilentlyContinue
-                    }
-                    Remove-Item $wsPidFile2 -Force -ErrorAction SilentlyContinue
-                }
-                $global:WebServerProcess = $null
+                Stop-WebServer
                 Write-Log $msg.ServicesWebServerStopped -Level INFO
                 Start-Sleep -Seconds 1
             }
