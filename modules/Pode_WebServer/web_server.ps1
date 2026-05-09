@@ -173,6 +173,126 @@ try {
 
 Write-Log ($msg.WebServerListening -f $port) -Level SUCCESS
 
+# Tracks active install background jobs by jobId
+$script:installJobs = @{}
+
+# Background job script block for async app installs.
+# Runs in a NEW PowerShell process - no access to web server functions.
+# Calls adb.exe directly and writes progress JSON to a temp file.
+$installJobBlock = {
+    param(
+        [string]$adbExe,
+        [string]$deviceId,
+        [string]$installPath,
+        [bool]$isFolder,
+        [string]$obbPath,
+        [string]$pkgName,
+        [string]$progressFile,
+        [bool]$cleanupApk
+    )
+
+    function Set-InstProg {
+        param([string]$step, [int]$pct=0, [string]$file='', [string]$err='', [int]$pid2=0,
+              [double]$obbMB=0, [double]$totalSec=0, [double]$obbSec=0, [double]$bwMBs=0)
+        $safeErr  = ($err  -replace '"',"'") -replace '[^\x20-\x7E]',''
+        $safeFile = ($file -replace '"',"'") -replace '[^\x20-\x7E]',''
+        $json = "{`"step`":`"$step`",`"pct`":$pct,`"file`":`"$safeFile`",`"error`":`"$safeErr`",`"adbPid`":$pid2," +
+                "`"obbMB`":$obbMB,`"totalSec`":$totalSec,`"obbSec`":$obbSec,`"bwMBs`":$bwMBs}"
+        try { [System.IO.File]::WriteAllText($progressFile, $json) } catch {}
+    }
+
+    function Run-AdbExe {
+        param([string]$args2)
+        $psi = [System.Diagnostics.ProcessStartInfo]::new()
+        $psi.FileName               = $adbExe
+        $psi.Arguments              = $args2
+        $psi.UseShellExecute        = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError  = $true
+        $psi.CreateNoWindow         = $true
+        $proc = [System.Diagnostics.Process]::new()
+        $proc.StartInfo = $psi
+        $proc.Start() | Out-Null
+        $outTask = $proc.StandardOutput.ReadToEndAsync()
+        $errTask = $proc.StandardError.ReadToEndAsync()
+        $proc.WaitForExit()
+        $out = $outTask.GetAwaiter().GetResult()
+        $err = $errTask.GetAwaiter().GetResult()
+        return @{ ExitCode = $proc.ExitCode; Output = "$out $err".Trim(); Ok = ($proc.ExitCode -eq 0) }
+    }
+
+    try {
+        $installStart = [datetime]::UtcNow
+        Set-InstProg 'apk_installing' 0
+
+        # Resolve APK path
+        $apkPath = if ($isFolder) {
+            $apks = @(Get-ChildItem -LiteralPath $installPath -Filter '*.apk' -File -ErrorAction SilentlyContinue)
+            if ($apks.Count -eq 0) { Set-InstProg 'error' 0 '' 'No APK file found in folder'; return }
+            $apks[0].FullName
+        } else { $installPath }
+
+        # Install APK
+        $r = Run-AdbExe "-s `"$deviceId`" install -r `"$apkPath`""
+        if (-not $r.Ok -or $r.Output -match 'Failure|INSTALL_FAILED') {
+            $detail = if ($r.Output -match '(INSTALL_FAILED_\S+)') { $Matches[1] } else { 'APK install failed' }
+            Set-InstProg 'error' 0 '' $detail
+            if ($cleanupApk -and (Test-Path -LiteralPath $installPath)) { Remove-Item -LiteralPath $installPath -Force -ErrorAction SilentlyContinue }
+            return
+        }
+        if ($cleanupApk -and (Test-Path -LiteralPath $installPath)) { Remove-Item -LiteralPath $installPath -Force -ErrorAction SilentlyContinue }
+
+        Set-InstProg 'apk_done' 100
+
+        # OBB push (folder mode only, when OBB subfolder exists)
+        $obbMB   = 0
+        $obbSec  = 0
+        $bwMBs   = 0
+        if ($isFolder -and $obbPath -and (Test-Path -LiteralPath $obbPath -PathType Container)) {
+            $obbSizeBytes = (Get-ChildItem -LiteralPath $obbPath -Recurse -File -ErrorAction SilentlyContinue |
+                Measure-Object -Property Length -Sum).Sum
+            $obbMB = [math]::Round($obbSizeBytes / 1MB, 1)
+
+            Run-AdbExe "-s `"$deviceId`" shell mkdir -p /sdcard/Android/obb/$pkgName" | Out-Null
+
+            $psi2 = [System.Diagnostics.ProcessStartInfo]::new()
+            $psi2.FileName               = $adbExe
+            $psi2.Arguments              = "-s `"$deviceId`" push `"$obbPath`" /sdcard/Android/obb/$pkgName"
+            $psi2.UseShellExecute        = $false
+            $psi2.RedirectStandardOutput = $true
+            $psi2.RedirectStandardError  = $true
+            $psi2.CreateNoWindow         = $true
+            $pushProc = [System.Diagnostics.Process]::new()
+            $pushProc.StartInfo = $psi2
+            $pushProc.Start() | Out-Null
+
+            $obbStart = [datetime]::UtcNow
+            Set-InstProg 'obb_push' 0 '' '' $pushProc.Id -obbMB $obbMB
+
+            $outTask2 = $pushProc.StandardOutput.ReadToEndAsync()
+            $errTask2 = $pushProc.StandardError.ReadToEndAsync()
+            $pushProc.WaitForExit()
+            $outTask2.GetAwaiter().GetResult() | Out-Null
+            $errTask2.GetAwaiter().GetResult() | Out-Null
+
+            if ($pushProc.ExitCode -ne 0) {
+                Set-InstProg 'error' 0 '' 'OBB data push failed'
+                return
+            }
+
+            $obbSec = [math]::Round(([datetime]::UtcNow - $obbStart).TotalSeconds, 1)
+            $bwMBs  = if ($obbSec -gt 0) { [math]::Round($obbMB / $obbSec, 1) } else { 0 }
+        }
+
+        $totalSec = [math]::Round(([datetime]::UtcNow - $installStart).TotalSeconds, 1)
+        Set-InstProg 'done' 100 '' '' 0 -obbMB $obbMB -totalSec $totalSec -obbSec $obbSec -bwMBs $bwMBs
+
+    } catch {
+        $m = ($_.Exception.Message -replace '"',"'") -replace '[^\x20-\x7E]',''
+        Set-InstProg 'error' 0 '' $m
+    }
+}
+
 try {
     while ($listener.IsListening) {
         # GetContext() blocks until a request arrives
@@ -837,6 +957,99 @@ try {
             continue
         }
 
+        # API: POST /api/headset-connection-check  body: {"name":"Q3_Blue"}
+        # Returns: {"usb":bool,"wifi":bool}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/headset-connection-check') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body = $reader.ReadToEnd(); $reader.Close()
+                $json = $body | ConvertFrom-Json
+                $safeName = [regex]::Match(($json.name -replace ' ','_'), '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+
+                $rows    = Get-KnownHeadsets
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                if (-not $headset) { throw "Headset not found" }
+
+                $usbAvailable = $false
+                $usbSpeed     = $null
+                if ($headset.SerialNumber -and $adbPath -and (Test-Path -LiteralPath $adbPath)) {
+                    try {
+                        $usbLine = & $adbPath devices 2>$null | Where-Object { $_ -match "`tdevice$" -and $_ -notmatch ':' }
+                        if ($usbLine) {
+                            $serial = ($usbLine -split "`t")[0].Trim()
+                            if ($serial -eq $headset.SerialNumber) {
+                                $usbAvailable = $true
+                                $usbSpeed     = Get-UsbDeviceSpeed -Serial $serial
+                            }
+                        }
+                    } catch {}
+                }
+
+                $wifiAvailable = $false
+                if ($headset.IPAddress) {
+                    $wifiAvailable = (Test-Port -hostname $headset.IPAddress -port $adbPort).open
+                }
+
+                Send-JsonResponse -Response $response -Body @{ usb = $usbAvailable; usbSpeed = $usbSpeed; wifi = $wifiAvailable }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ error = $_.Exception.Message }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: GET /api/install-progress?jobId=xxx
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/install-progress') {
+            try {
+                $jobId = [regex]::Match($request.Url.Query, '[?&]?jobId=([a-f0-9]+)').Groups[1].Value
+                if (-not $jobId) { throw "Missing jobId" }
+                $pFile = [System.IO.Path]::Combine($env:TEMP, "vrm_install_$jobId.json")
+                if (Test-Path -LiteralPath $pFile) {
+                    $raw = [System.IO.File]::ReadAllText($pFile)
+                    Send-JsonResponse -Response $response -Raw $raw
+                } else {
+                    Send-JsonResponse -Response $response -StatusCode 404 -Body @{ error = "Job not found" }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ error = $_.Exception.Message }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/install-cancel  body: {"jobId":"xxx"}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/install-cancel') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body = $reader.ReadToEnd(); $reader.Close()
+                $json  = $body | ConvertFrom-Json
+                $jobId = [regex]::Match([string]$json.jobId, '^[a-f0-9]+$').Value
+                if (-not $jobId) { throw "Invalid jobId" }
+
+                if ($script:installJobs.ContainsKey($jobId)) {
+                    $j = $script:installJobs[$jobId]
+                    try { Stop-Job  -Job $j -ErrorAction SilentlyContinue } catch {}
+                    try { Remove-Job -Job $j -Force -ErrorAction SilentlyContinue } catch {}
+                    $script:installJobs.Remove($jobId)
+                }
+
+                $pFile = [System.IO.Path]::Combine($env:TEMP, "vrm_install_$jobId.json")
+                if (Test-Path -LiteralPath $pFile) {
+                    try {
+                        $prog = [System.IO.File]::ReadAllText($pFile) | ConvertFrom-Json
+                        if ($prog.adbPid -and $prog.adbPid -gt 0) {
+                            Stop-Process -Id $prog.adbPid -Force -ErrorAction SilentlyContinue
+                        }
+                    } catch {}
+                    [System.IO.File]::WriteAllText($pFile, '{"step":"cancelled","pct":0,"file":"","error":"","adbPid":0}')
+                }
+
+                Send-JsonResponse -Response $response -Body @{ ok = $true }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ error = $_.Exception.Message }
+            } finally { $response.Close() }
+            continue
+        }
+
         # API: POST /api/installapk
         # Mode A (binary upload): Content-Type: application/octet-stream, headers X-Headset-Name + X-File-Name
         # Mode B (overwrite confirm): JSON body {"name","tempId","overwrite":true}
@@ -844,6 +1057,33 @@ try {
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/installapk') {
             try {
                 $contentType = $request.ContentType -replace ';.*','' | ForEach-Object { $_.Trim() }
+                $transport   = $request.Headers['X-Transport']  # 'usb', 'wifi', or empty (auto)
+
+                # Helper: resolve device by transport preference
+                $resolveDevice = {
+                    param($headset2)
+                    if ($transport -eq 'usb' -and $headset2.SerialNumber -and $adbPath -and (Test-Path -LiteralPath $adbPath)) {
+                        $usbLine = & $adbPath devices 2>$null | Where-Object { $_ -match "`tdevice$" -and $_ -notmatch ':' }
+                        $serial  = if ($usbLine) { ($usbLine -split "`t")[0].Trim() } else { $null }
+                        if ($serial -eq $headset2.SerialNumber) {
+                            return [PSCustomObject]@{ DeviceId = $serial; ConnectionType = 'USB'; IP = $null; Port = $null }
+                        }
+                    } elseif ($transport -eq 'wifi') {
+                        return Get-AdbWifiDevice -headsetIP $headset2.IPAddress -AdbPort $adbPort -adb $adbPath
+                    }
+                    return Get-BestAdbDevice -Headset $headset2 -AdbPort $adbPort -adb $adbPath
+                }
+
+                # Helper: start the install background job and respond with jobId
+                $startJob = {
+                    param($deviceId2, $installPath2, $isFolder2, $obbPath2, $pkgName2, $cleanupApk2)
+                    $jobId    = [guid]::NewGuid().ToString('N')
+                    $pFile    = [System.IO.Path]::Combine($env:TEMP, "vrm_install_$jobId.json")
+                    [System.IO.File]::WriteAllText($pFile, '{"step":"queued","pct":0,"file":"","error":"","adbPid":0}')
+                    $job = Start-Job -ScriptBlock $installJobBlock -ArgumentList $adbPath, $deviceId2, $installPath2, $isFolder2, $obbPath2, $pkgName2, $pFile, $cleanupApk2
+                    $script:installJobs[$jobId] = $job
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; jobId = $jobId }
+                }
 
                 if ($contentType -eq 'application/octet-stream') {
                     # Mode A: binary APK upload
@@ -855,54 +1095,33 @@ try {
                     $rows    = Get-KnownHeadsets
                     $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
                     if (-not $headset) { throw "Headset not found" }
-                    $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort
+                    $device = & $resolveDevice $headset
                     if (-not $device) { throw "Could not connect to headset via ADB" }
 
-                    # Read binary body
+                    # Read and save binary body
                     $ms     = [System.IO.MemoryStream]::new()
                     $buf    = [byte[]]::new(65536)
                     $stream = $request.InputStream
                     while (($read = $stream.Read($buf, 0, $buf.Length)) -gt 0) { $ms.Write($buf, 0, $read) }
-                    $bytes    = $ms.ToArray()
                     $tempPath = [System.IO.Path]::Combine($env:TEMP, "vrmapk_${safeName}_${safeFileName}")
-                    [System.IO.File]::WriteAllBytes($tempPath, $bytes)
+                    [System.IO.File]::WriteAllBytes($tempPath, $ms.ToArray())
 
-                    # Check if already installed
-                    $pkgName      = [System.IO.Path]::GetFileNameWithoutExtension($safeFileName)
-                    $pmOut        = Invoke-AdbCmd -Device $device -Command "shell pm list packages $pkgName"
-                    $isInstalled  = $pmOut -ne $false -and ($pmOut -match "package:$([regex]::Escape($pkgName))")
+                    $pkgName     = [System.IO.Path]::GetFileNameWithoutExtension($safeFileName)
+                    $pmOut       = Invoke-AdbCmd -Device $device -Command "shell pm list packages $pkgName"
+                    $isInstalled = $pmOut -ne $false -and ($pmOut -match "package:$([regex]::Escape($pkgName))")
                     if ($isInstalled) {
                         $verLine = (Invoke-AdbCmd -Device $device -Command "shell dumpsys package $pkgName" | Select-String 'versionName') | Select-Object -First 1
                         $curVer  = if ($verLine -match 'versionName=(\S+)') { $Matches[1] } else { '' }
                         $tempId  = "vrmapk_${safeName}_${safeFileName}"
-                        $respJson = "{`"ok`":false,`"alreadyInstalled`":true,`"package`":`"$pkgName`",`"installedVersion`":`"$curVer`",`"tempId`":`"$tempId`"}"
-                        $respBytes = [System.Text.Encoding]::UTF8.GetBytes($respJson)
-                        $response.StatusCode      = 200
-                        $response.ContentType     = 'application/json; charset=utf-8'
-                        $response.Headers.Add('Access-Control-Allow-Origin', '*')
-                        $response.ContentLength64 = $respBytes.Length
-                        $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+                        Send-JsonResponse -Response $response -Body @{ ok = $false; alreadyInstalled = $true; package = $pkgName; installedVersion = $curVer; tempId = $tempId }
                     } else {
-                        $result = Install-HeadsetApp -Device $device -path $tempPath -Overwrite
-                        Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
-                        if ($result.Ok) {
-                            $respJson  = "{`"ok`":true,`"package`":`"$($result.PackageName)`",`"version`":`"$($result.Version)`"}"
-                        } else {
-                            $safeErr   = ($result.Error -replace '"',"'") -replace '[^\x20-\x7E]',''
-                            $respJson  = "{`"ok`":false,`"error`":`"$safeErr`"}"
-                        }
-                        $respBytes = [System.Text.Encoding]::UTF8.GetBytes($respJson)
-                        $response.StatusCode      = 200
-                        $response.ContentType     = 'application/json; charset=utf-8'
-                        $response.Headers.Add('Access-Control-Allow-Origin', '*')
-                        $response.ContentLength64 = $respBytes.Length
-                        $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+                        & $startJob $device.DeviceId $tempPath $false '' $pkgName $true
                     }
+
                 } else {
                     # Mode B or C: JSON body
-                    $reader  = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
-                    $body    = $reader.ReadToEnd()
-                    $reader.Close()
+                    $reader = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                    $body   = $reader.ReadToEnd(); $reader.Close()
                     $json     = $body | ConvertFrom-Json
                     $safeName = [regex]::Match(($json.name -replace ' ','_'), '^[\w\-]+$').Value
                     if (-not $safeName) { throw "Invalid headset name" }
@@ -910,64 +1129,58 @@ try {
                     $rows    = Get-KnownHeadsets
                     $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
                     if (-not $headset) { throw "Headset not found" }
-                    $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort
+                    $device = & $resolveDevice $headset
                     if (-not $device) { throw "Could not connect to headset via ADB" }
 
                     if ($json.tempId) {
-                        # Mode B: overwrite confirmation for a previously uploaded APK
+                        # Mode B: overwrite-confirmed APK (temp file already on disk)
                         $safeTempId = [regex]::Match($json.tempId, '^vrmapk_[\w\-]+_[\w\.\-]+\.apk$').Value
                         if (-not $safeTempId) { throw "Invalid tempId" }
                         $tempPath = [System.IO.Path]::Combine($env:TEMP, $safeTempId)
                         if (-not (Test-Path -LiteralPath $tempPath)) { throw "Temp file not found or expired" }
-                        $result = Install-HeadsetApp -Device $device -path $tempPath -Overwrite
-                        Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
-                        if ($result.Ok) {
-                            $respJson = "{`"ok`":true,`"package`":`"$($result.PackageName)`",`"version`":`"$($result.Version)`"}"
-                        } else {
-                            $safeErr  = ($result.Error -replace '"',"'") -replace '[^\x20-\x7E]',''
-                            $respJson = "{`"ok`":false,`"error`":`"$safeErr`"}"
-                        }
+                        $pkgName  = [System.IO.Path]::GetFileNameWithoutExtension(([System.IO.Path]::GetFileName($safeTempId) -replace '^vrmapk_[\w\-]+_',''))
+                        & $startJob $device.DeviceId $tempPath $false '' $pkgName $true
+
                     } elseif ($json.path) {
-                        # Mode C: local folder/file path (user-supplied local path; Test-RequestPath
-                        # is intentionally NOT used here as it limits paths to $ScriptPath).
-                        # Basic safety: reject null bytes and unparseable paths only.
+                        # Mode C: local folder/file path
                         $rawPath = [string]$json.path
                         if ($rawPath -match "`0" -or $rawPath.Trim() -eq '') { throw "Invalid path" }
                         try { $safePath = [System.IO.Path]::GetFullPath($rawPath) } catch { throw "Invalid path" }
                         if (-not $safePath) { throw "Invalid path" }
                         $overwrite = [bool]$json.overwrite
-                        if ($overwrite) {
-                            $result = Install-HeadsetApp -Device $device -path $safePath -Overwrite
+                        $isFolder  = Test-Path -LiteralPath $safePath -PathType Container
+
+                        # Find APK to determine package name
+                        $pkgName = if ($isFolder) {
+                            $apks = @(Get-ChildItem -LiteralPath $safePath -Filter '*.apk' -File -ErrorAction SilentlyContinue)
+                            if ($apks.Count -eq 0) { throw "No APK file found in folder" }
+                            [System.IO.Path]::GetFileNameWithoutExtension($apks[0].Name)
                         } else {
-                            $result = Install-HeadsetApp -Device $device -path $safePath
+                            [System.IO.Path]::GetFileNameWithoutExtension($safePath)
                         }
-                        if ($result.Error -eq 'Already installed' -and -not $overwrite) {
-                            $respJson = "{`"ok`":false,`"alreadyInstalled`":true,`"package`":`"$($result.PackageName)`",`"installedVersion`":`"$($result.InstalledVersion)`"}"
-                        } elseif ($result.Ok) {
-                            $respJson = "{`"ok`":true,`"package`":`"$($result.PackageName)`",`"version`":`"$($result.Version)`"}"
-                        } else {
-                            $safeErr  = ($result.Error -replace '"',"'") -replace '[^\x20-\x7E]',''
-                            $respJson = "{`"ok`":false,`"error`":`"$safeErr`"}"
+
+                        # Pre-check: already installed?
+                        if (-not $overwrite) {
+                            $allApps     = Get-HeadsetInstalledApps -Device $device -ThirdPartyOnly:$false -adb $adbPath
+                            $isInstalled = [bool]($allApps | Where-Object { $_.PackageName -eq $pkgName })
+                            if ($isInstalled) {
+                                $verMatch = Invoke-AdbCmd -Device $device -Command "shell dumpsys package $pkgName" -adb $adbPath | Select-String 'versionName' | Select-Object -Last 1
+                                $curVer   = if ($verMatch -and "$verMatch" -match 'versionName=(\S+)') { $Matches[1] } else { '' }
+                                Send-JsonResponse -Response $response -Body @{ ok = $false; alreadyInstalled = $true; package = $pkgName; installedVersion = $curVer }
+                                continue  # finally will close response
+                            }
                         }
+
+                        $obbPath = if ($isFolder) { Join-Path $safePath $pkgName } else { '' }
+
+                        & $startJob $device.DeviceId $safePath $isFolder $obbPath $pkgName $false
+
                     } else {
                         throw "Missing tempId or path"
                     }
-                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes($respJson)
-                    $response.StatusCode      = 200
-                    $response.ContentType     = 'application/json; charset=utf-8'
-                    $response.Headers.Add('Access-Control-Allow-Origin', '*')
-                    $response.ContentLength64 = $respBytes.Length
-                    $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
                 }
             } catch {
-                try {
-                    $errJson  = '{"ok":false,"error":' + ($_.Exception.Message | ConvertTo-Json) + '}'
-                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes($errJson)
-                    $response.StatusCode      = 500
-                    $response.ContentType     = 'application/json; charset=utf-8'
-                    $response.ContentLength64 = $errBytes.Length
-                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
-                } catch {}
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
                 $response.Close()
             }

@@ -594,6 +594,47 @@ function Get-AdbUsbDevice {
 }
 
 
+function Get-UsbDeviceSpeed {
+    <#
+    .SYNOPSIS
+    Returns "USB 3" or "USB 2.0" for a connected USB device identified by ADB serial number,
+    by walking the PnP parent chain to find whether the host controller is xHCI (USB 3) or EHCI (USB 2).
+    Returns $null if the device is not found or the controller type cannot be determined.
+    #>
+    param([string]$Serial)
+    if (-not $Serial) { return $null }
+    try {
+        $device = Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue |
+            Where-Object { $_.InstanceId -like "USB\*\$Serial" } |
+            Select-Object -First 1
+        if (-not $device) { return $null }
+
+        $currentId = $device.InstanceId
+        for ($i = 0; $i -lt 8; $i++) {
+            $prop = Get-PnpDeviceProperty -InstanceId $currentId -KeyName 'DEVPKEY_Device_Parent' -ErrorAction SilentlyContinue
+            if (-not $prop -or -not $prop.Data) { break }
+            $parentId = $prop.Data
+
+            # InstanceId of the controller often contains the controller type
+            if ($parentId -match 'xHCI|XHCI') { return 'USB 3.0' }
+            if ($parentId -match 'EHCI|ehci')  { return 'USB 2.0' }
+
+            # Fall back to device friendly name / description
+            $parentDev = Get-PnpDevice -InstanceId $parentId -ErrorAction SilentlyContinue
+            if ($parentDev) {
+                $name = "$($parentDev.FriendlyName) $($parentDev.Description)"
+                if ($name -match 'xHCI|SuperSpeed|USB 3') { return 'USB 3.0' }
+                if ($name -match 'EHCI|USB 2')             { return 'USB 2.0' }
+            }
+            $currentId = $parentId
+        }
+        return $null
+    } catch {
+        return $null
+    }
+}
+
+
 function Get-BestAdbDevice {
     <#
     .SYNOPSIS

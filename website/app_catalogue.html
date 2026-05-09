@@ -51,6 +51,14 @@
       min-width: 200px; transition: border-color 0.12s;
     }
     .headset-bar select:focus { border-color: var(--accent); }
+    .adb-conn-bar { display:none; align-items:center; gap:6px; margin-left:auto; }
+    .adb-conn-label { font-size:11px; color:var(--text2); white-space:nowrap; }
+    .adb-badge {
+      font-size:11px; font-weight:600; padding:3px 8px; border-radius:4px; cursor:default;
+      border:1px solid transparent; transition:background 0.2s, color 0.2s;
+    }
+    .adb-badge.unavailable { background:#3a3a3a; color:#888; border-color:#555; }
+    .adb-badge.available   { background:#166534; color:#86efac; border-color:#15803d; }
 
     /* -- Warning banner --------------------------------------------------- */
     .warning-banner {
@@ -87,6 +95,61 @@
     }
     @keyframes vrm-spin { to { transform: rotate(360deg); } }
     .spinner-label { font-size: 12px; color: var(--text); opacity: 0.85; }
+    .spinner-sublabel { font-size: 11px; color: var(--text2); max-width: 260px; text-align: center; word-break: break-all; }
+    .install-prog-bar {
+      width: 240px; height: 6px; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden;
+    }
+    .install-prog-fill {
+      height: 100%; background: var(--accent); border-radius: 3px;
+      transition: width 0.3s ease;
+    }
+    .install-prog-fill.indeterminate {
+      width: 40% !important;
+      animation: vrm-indeterminate 1.2s ease-in-out infinite;
+    }
+    @keyframes vrm-indeterminate {
+      0%   { transform: translateX(-100%); }
+      100% { transform: translateX(350%); }
+    }
+    .cancel-inst-btn {
+      margin-top: 4px; padding: 5px 14px;
+      background: transparent; border: 1px solid rgba(255,255,255,0.25); border-radius: 5px;
+      color: var(--text); font-size: 11px; cursor: pointer; transition: background 0.15s;
+    }
+    .cancel-inst-btn:hover { background: rgba(255,255,255,0.08); }
+    [data-theme="light"] .cancel-inst-btn { border-color: rgba(0,0,0,0.2); }
+
+    /* -- Connection picker overlay ------------------------------------------ */
+    .conn-overlay {
+      display: none; position: fixed; inset: 0; z-index: 100;
+      background: rgba(0,0,0,0.55); align-items: center; justify-content: center;
+    }
+    .conn-overlay.open { display: flex; }
+    .modal-close-btn {
+      position: absolute; top: 10px; right: 12px;
+      background: none; border: none; cursor: pointer; padding: 4px;
+      color: var(--text2); line-height: 1; font-size: 18px; border-radius: 4px;
+      transition: color 0.12s, background 0.12s;
+    }
+    .modal-close-btn:hover { color: var(--text); background: var(--bg4); }
+
+    .conn-box {
+      position: relative;
+      background: var(--bg2); border: 1px solid var(--border); border-radius: 10px;
+      padding: 20px 22px; max-width: 340px; width: 90%;
+      display: flex; flex-direction: column; gap: 14px;
+    }
+    .conn-box .cb-title { font-size: 14px; font-weight: 600; }
+    .conn-box .cb-sub   { font-size: 12px; color: var(--text2); line-height: 1.5; }
+    .conn-box .cb-btns  { display: flex; gap: 8px; justify-content: flex-end; }
+    .conn-box .cb-btns button {
+      padding: 6px 16px; border-radius: 6px; border: 1px solid var(--border);
+      cursor: pointer; font-size: 12px; background: var(--bg3); color: var(--text);
+      transition: background 0.12s;
+    }
+    .conn-box .cb-btns .cb-usb  { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .conn-box .cb-btns .cb-usb:hover  { opacity: 0.85; }
+    .conn-box .cb-btns .cb-wifi:hover { background: var(--bg4); }
 
     .drop-zone {
       display: flex; align-items: center; justify-content: center; gap: 8px;
@@ -148,17 +211,32 @@
     .install-status.err  { color: var(--danger); }
     .install-status.busy { color: var(--text2); }
 
-    /* -- Overwrite confirm ------------------------------------------------ */
-    .overwrite-confirm {
-      display: none; align-items: center; gap: 8px; flex-wrap: wrap;
-      padding: 8px 10px; background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.4);
-      border-radius: 6px; font-size: 12px;
+    /* -- Overwrite confirm overlay ---------------------------------------- */
+    .overwrite-overlay {
+      display: none; position: fixed; inset: 0; z-index: 100;
+      background: rgba(0,0,0,0.55); align-items: center; justify-content: center;
     }
-    .overwrite-confirm .msg { flex: 1; }
-    .overwrite-confirm button { padding: 5px 10px; border-radius: 5px; border: 1px solid var(--border); cursor: pointer; font-size: 12px; background: var(--bg3); color: var(--text); }
-    .overwrite-confirm .ow-confirm-btn { background: var(--danger); color: #fff; border-color: var(--danger); }
-    .overwrite-confirm .ow-cancel-btn:hover  { border-color: var(--text2); }
-    .overwrite-confirm .ow-confirm-btn:hover { opacity: 0.85; }
+    .overwrite-overlay.open { display: flex; }
+    .overwrite-box {
+      position: relative;
+      background: var(--bg2); border: 1px solid rgba(239,68,68,0.5);
+      border-top: 3px solid var(--danger);
+      border-radius: 10px; padding: 20px 22px; max-width: 380px; width: 90%;
+      display: flex; flex-direction: column; gap: 14px;
+    }
+    .overwrite-box .ow-title { font-size: 14px; font-weight: 600; color: var(--danger); }
+    .overwrite-box .ow-sub   { font-size: 12px; color: var(--text2); line-height: 1.5; }
+    .overwrite-box .ow-pkg   { font-family: monospace; font-size: 11px; color: var(--accent); word-break: break-all; }
+    .overwrite-box .ow-ver   { font-family: monospace; font-size: 11px; color: var(--text2); }
+    .overwrite-box .ow-btns  { display: flex; gap: 8px; justify-content: flex-end; }
+    .overwrite-box .ow-btns button {
+      padding: 6px 14px; border-radius: 6px; border: 1px solid var(--border);
+      cursor: pointer; font-size: 12px; background: var(--bg3); color: var(--text);
+      transition: background 0.12s, opacity 0.12s;
+    }
+    .overwrite-box .ow-confirm-btn { background: var(--danger); color: #fff; border-color: var(--danger); }
+    .overwrite-box .ow-confirm-btn:hover { background: #dc2626; border-color: #dc2626; opacity: 1; }
+    .overwrite-box .ow-cancel-btn:hover  { background: var(--bg4); }
 
     /* -- Apps toolbar ----------------------------------------------------- */
     .apps-toolbar {
@@ -298,6 +376,11 @@
         <option value="">-- Select a headset --</option>
       </select>
       <span id="headset-status" style="font-size:11px;color:var(--text2);"></span>
+      <span class="adb-conn-bar" id="adb-conn-bar">
+        <span class="adb-conn-label">ADB connectivity</span>
+        <span class="adb-badge unavailable" id="adb-usb-badge">USB</span>
+        <span class="adb-badge unavailable" id="adb-wifi-badge">WIFI</span>
+      </span>
     </div>
 
     <!-- Section 2: Install (hidden until headset selected) -->
@@ -312,6 +395,11 @@
         <div class="install-spinner-overlay" id="install-spinner">
           <div class="spinner-ring"></div>
           <span class="spinner-label" id="spinner-label">Installing...</span>
+          <div class="install-prog-bar" id="install-prog-bar" style="display:none">
+            <div class="install-prog-fill" id="install-prog-fill"></div>
+          </div>
+          <span class="spinner-sublabel" id="spinner-sublabel"></span>
+          <button class="cancel-inst-btn" id="cancel-inst-btn" style="display:none">Cancel</button>
         </div>
         <div class="install-card-title">Install Application</div>
 
@@ -352,12 +440,6 @@
 
         <div class="install-status" id="install-status"></div>
 
-        <!-- Overwrite confirmation -->
-        <div class="overwrite-confirm" id="overwrite-confirm">
-          <span class="msg">App <strong id="ow-pkg"></strong> (v<span id="ow-ver"></span>) is already installed. Overwrite?</span>
-          <button class="ow-cancel-btn" id="ow-cancel-btn">Cancel</button>
-          <button class="ow-confirm-btn" id="ow-confirm-btn">Overwrite</button>
-        </div>
       </div>
     </div>
 
@@ -427,6 +509,34 @@
   </div><!-- /content -->
 </div><!-- /page-wrap -->
 
+<!-- Overwrite confirmation overlay -->
+<div class="overwrite-overlay" id="overwrite-overlay">
+  <div class="overwrite-box">
+    <button class="modal-close-btn" id="ow-close-btn" title="Close">&#x2715;</button>
+    <div class="ow-title">Application Already Installed</div>
+    <div class="ow-sub">This app is already installed on the headset. Do you want to overwrite it?</div>
+    <div class="ow-pkg" id="ow-pkg"></div>
+    <div class="ow-ver">Installed version: <span id="ow-ver"></span></div>
+    <div class="ow-btns">
+      <button class="ow-cancel-btn"  id="ow-cancel-btn">Cancel</button>
+      <button class="ow-confirm-btn" id="ow-confirm-btn">Overwrite</button>
+    </div>
+  </div>
+</div>
+
+<!-- Connection picker overlay -->
+<div class="conn-overlay" id="conn-overlay">
+  <div class="conn-box">
+    <button class="modal-close-btn" id="conn-close-btn" title="Close">&#x2715;</button>
+    <div class="cb-title">Choose Transfer Method</div>
+    <div class="cb-sub">Both USB and Wi-Fi ADB connections are available for this headset. USB is generally faster for large transfers.</div>
+    <div class="cb-btns">
+      <button class="cb-wifi" id="conn-wifi-btn">Wi-Fi</button>
+      <button class="cb-usb"  id="conn-usb-btn">USB</button>
+    </div>
+  </div>
+</div>
+
 <!-- Uninstall confirmation overlay -->
 <div class="uninstall-overlay" id="uninstall-overlay">
   <div class="confirm-box">
@@ -450,6 +560,10 @@
   var sortDir = 'asc';
   var showSystem = false;
   var pendingOverwrite = null; // {type:'apk'|'folder', tempId, path, file}
+  var chosenTransport = 'auto';  // 'usb', 'wifi', or 'auto'
+  var activeJobId = null;
+  var pollTimer = null;
+  var pendingInstallFn = null;  // stored install callback while picker is shown
 
   // -- Helpers ---------------------------------------------------------------
   function $id(id) { return document.getElementById(id); }
@@ -484,15 +598,52 @@
     })
     .catch(function () {});
 
+  var adbConnTimer = null;
+
+  function updateAdbBadges(usb, wifi, usbSpeed) {
+    var usbBadge = $id('adb-usb-badge');
+    usbBadge.className  = 'adb-badge ' + (usb  ? 'available' : 'unavailable');
+    usbBadge.textContent = usb && usbSpeed ? usbSpeed : 'USB';
+    $id('adb-wifi-badge').className = 'adb-badge ' + (wifi ? 'available' : 'unavailable');
+  }
+
+  function pollAdbConnectivity() {
+    if (!selectedHeadset) return;
+    fetch('/api/headset-connection-check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: selectedHeadset.replace(/_/g, ' ') })
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { updateAdbBadges(d.usb, d.wifi, d.usbSpeed); })
+      .catch(function () { updateAdbBadges(false, false); });
+  }
+
+  function startAdbPolling() {
+    stopAdbPolling();
+    var bar = $id('adb-conn-bar');
+    bar.style.display = 'flex';
+    updateAdbBadges(false, false, null);
+    pollAdbConnectivity();
+    adbConnTimer = setInterval(pollAdbConnectivity, 5000);
+  }
+
+  function stopAdbPolling() {
+    if (adbConnTimer) { clearInterval(adbConnTimer); adbConnTimer = null; }
+    $id('adb-conn-bar').style.display = 'none';
+  }
+
   $id('headset-select').addEventListener('change', function () {
     selectedHeadset = this.value;
     if (!selectedHeadset) {
       $id('install-section').classList.add('hidden');
       $id('apps-section').classList.add('hidden');
+      stopAdbPolling();
       return;
     }
     $id('install-section').classList.remove('hidden');
     $id('apps-section').classList.remove('hidden');
+    startAdbPolling();
     loadApps(false);
   });
 
@@ -669,28 +820,162 @@
     hideOverwrite();
   });
 
+  // -- Connection check + picker ---------------------------------------------
+  function checkConnectionThenInstall(installFn) {
+    if (!selectedHeadset) return;
+    fetch('/api/headset-connection-check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: selectedHeadset })
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (j.usb && j.wifi) {
+          pendingInstallFn = installFn;
+          $id('conn-overlay').classList.add('open');
+        } else {
+          chosenTransport = j.usb ? 'usb' : 'wifi';
+          installFn(chosenTransport);
+        }
+      })
+      .catch(function () { installFn('auto'); });
+  }
+
+  $id('conn-usb-btn').addEventListener('click', function () {
+    $id('conn-overlay').classList.remove('open');
+    chosenTransport = 'usb';
+    if (pendingInstallFn) { pendingInstallFn('usb'); pendingInstallFn = null; }
+  });
+  $id('conn-wifi-btn').addEventListener('click', function () {
+    $id('conn-overlay').classList.remove('open');
+    chosenTransport = 'wifi';
+    if (pendingInstallFn) { pendingInstallFn('wifi'); pendingInstallFn = null; }
+  });
+  $id('conn-close-btn').addEventListener('click', function () {
+    $id('conn-overlay').classList.remove('open');
+    pendingInstallFn = null;
+    resetInstallUI();
+  });
+
+  // -- Progress polling ------------------------------------------------------
+  function showProgressOverlay(label, sublabel, showBar) {
+    $id('spinner-label').textContent = label || 'Installing...';
+    $id('spinner-sublabel').textContent = sublabel || '';
+    var bar  = $id('install-prog-bar');
+    var fill = $id('install-prog-fill');
+    if (showBar) {
+      bar.style.display = 'block';
+      fill.classList.add('indeterminate');
+    } else {
+      bar.style.display = 'none';
+      fill.classList.remove('indeterminate');
+    }
+    $id('cancel-inst-btn').style.display = activeJobId ? 'block' : 'none';
+    $id('install-spinner').classList.add('visible');
+  }
+
+  function fmtSec(s) {
+    s = Math.round(s);
+    return s >= 60 ? Math.floor(s / 60) + 'm ' + (s % 60) + 's' : s + 's';
+  }
+
+  function stopPolling() {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+
+  function resetInstallUI() {
+    stopPolling();
+    activeJobId = null;
+    $id('install-spinner').classList.remove('visible');
+    $id('install-apk-btn').disabled = false;
+    $id('install-folder-btn').disabled = false;
+  }
+
+  function startPolling(jobId) {
+    activeJobId = jobId;
+    showProgressOverlay('Preparing...', '', false);
+    pollTimer = setInterval(function () {
+      fetch('/api/install-progress?jobId=' + jobId)
+        .then(function (r) { return r.json(); })
+        .then(function (p) {
+          var step = p.step || '';
+          if (step === 'queued' || step === 'apk_installing') {
+            showProgressOverlay('Installing APK...', '', false);
+          } else if (step === 'apk_done') {
+            showProgressOverlay('APK installed. Preparing OBB upload...', '', false);
+          } else if (step === 'obb_push') {
+            var sizeStr = p.obbMB ? ' (' + p.obbMB + ' MB)' : '';
+            showProgressOverlay('Uploading OBB data...' + sizeStr, '', false);
+          } else if (step === 'done') {
+            resetInstallUI();
+            var doneMsg = 'Application installed successfully.';
+            if (p.totalSec) {
+              doneMsg += ' Total: ' + fmtSec(p.totalSec);
+              if (p.obbSec) {
+                doneMsg += ' | OBB: ' + fmtSec(p.obbSec);
+                if (p.bwMBs) doneMsg += ' at ' + p.bwMBs + ' MB/s';
+              }
+            }
+            setInstallStatus(doneMsg, 'ok');
+            loadApps(true);
+          } else if (step === 'error') {
+            resetInstallUI();
+            setInstallStatus('Install failed: ' + (p.error || 'unknown error'), 'err');
+          } else if (step === 'cancelled') {
+            resetInstallUI();
+            setInstallStatus('Installation cancelled.', '');
+          }
+        })
+        .catch(function () {});
+    }, 800);
+  }
+
+  $id('cancel-inst-btn').addEventListener('click', function () {
+    if (!activeJobId) return;
+    var jobId = activeJobId;
+    stopPolling();
+    activeJobId = null;
+    // Show "Cancelling..." in the spinner overlay and keep buttons blocked
+    $id('cancel-inst-btn').style.display = 'none';
+    $id('spinner-label').textContent = 'Cancelling...';
+    $id('spinner-sublabel').textContent = '';
+    $id('install-prog-bar').style.display = 'none';
+    $id('install-spinner').classList.add('visible');
+    fetch('/api/install-cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jobId: jobId })
+    })
+      .then(function () { resetInstallUI(); setInstallStatus('Installation cancelled.', ''); })
+      .catch(function () { resetInstallUI(); setInstallStatus('Installation cancelled.', ''); });
+  });
+
   // -- Install APK -----------------------------------------------------------
   $id('install-apk-btn').addEventListener('click', function () {
     if (!selectedFile || !selectedHeadset) return;
-    doInstallApk(selectedFile, false, null);
+    checkConnectionThenInstall(function (transport) {
+      doInstallApk(selectedFile, false, null, transport);
+    });
   });
 
-  function doInstallApk(file, overwrite, tempId) {
+  function doInstallApk(file, overwrite, tempId, transport) {
     hideOverwrite();
-    setInstallStatus('Uploading and installing...', 'busy');
+    $id('conn-overlay').classList.remove('open');
     $id('install-apk-btn').disabled = true;
+    showProgressOverlay('Uploading APK...', '', false);
 
     var headers = {
       'Content-Type': 'application/octet-stream',
       'X-Headset-Name': selectedHeadset,
       'X-File-Name': file.name
     };
+    if (transport && transport !== 'auto') headers['X-Transport'] = transport;
 
     var body;
     if (tempId) {
-      // overwrite confirmation: send JSON
-      body = JSON.stringify({ name: selectedHeadset, tempId: tempId, overwrite: true });
       headers = { 'Content-Type': 'application/json' };
+      if (transport && transport !== 'auto') headers['X-Transport'] = transport;
+      body = JSON.stringify({ name: selectedHeadset, tempId: tempId, overwrite: true });
     } else {
       body = file;
     }
@@ -698,18 +983,18 @@
     fetch('/api/installapk', { method: 'POST', headers: headers, body: body })
       .then(function (r) { return r.json(); })
       .then(function (j) {
-        $id('install-apk-btn').disabled = false;
         if (j.alreadyInstalled) {
+          resetInstallUI();
           showOverwrite(j.package, j.installedVersion, 'apk', j.tempId, file, null);
-        } else if (j.ok) {
-          setInstallStatus('Installed ' + j.package + ' v' + (j.version || '') + ' successfully.', 'ok');
-          loadApps(true);
+        } else if (j.jobId) {
+          startPolling(j.jobId);
         } else {
+          resetInstallUI();
           setInstallStatus('Install failed: ' + (j.error || 'unknown error'), 'err');
         }
       })
       .catch(function () {
-        $id('install-apk-btn').disabled = false;
+        resetInstallUI();
         setInstallStatus('Server unreachable.', 'err');
       });
   }
@@ -718,32 +1003,39 @@
   $id('install-folder-btn').addEventListener('click', function () {
     var path = $id('folder-path-input').value.trim();
     if (!path || !selectedHeadset) return;
-    doInstallFolder(path, false);
+    checkConnectionThenInstall(function (transport) {
+      doInstallFolder(path, false, transport);
+    });
   });
 
-  function doInstallFolder(path, overwrite) {
+  function doInstallFolder(path, overwrite, transport) {
     hideOverwrite();
-    setInstallStatus('Installing from folder...', 'busy');
+    $id('conn-overlay').classList.remove('open');
     $id('install-folder-btn').disabled = true;
+    showProgressOverlay('Connecting to headset...', '', false);
+
+    var headers = { 'Content-Type': 'application/json' };
+    if (transport && transport !== 'auto') headers['X-Transport'] = transport;
+
     fetch('/api/installapk', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: headers,
       body: JSON.stringify({ name: selectedHeadset, path: path, overwrite: overwrite })
     })
       .then(function (r) { return r.json(); })
       .then(function (j) {
-        $id('install-folder-btn').disabled = false;
         if (j.alreadyInstalled) {
+          resetInstallUI();
           showOverwrite(j.package, j.installedVersion, 'folder', null, null, path);
-        } else if (j.ok) {
-          setInstallStatus('Installed ' + j.package + ' v' + (j.version || '') + ' successfully.', 'ok');
-          loadApps(true);
+        } else if (j.jobId) {
+          startPolling(j.jobId);
         } else {
+          resetInstallUI();
           setInstallStatus('Install failed: ' + (j.error || 'unknown error'), 'err');
         }
       })
       .catch(function () {
-        $id('install-folder-btn').disabled = false;
+        resetInstallUI();
         setInstallStatus('Server unreachable.', 'err');
       });
   }
@@ -753,14 +1045,19 @@
     pendingOverwrite = { type: type, tempId: tempId, file: file, path: path };
     $id('ow-pkg').textContent = pkg;
     $id('ow-ver').textContent = ver || '?';
-    $id('overwrite-confirm').style.display = 'flex';
+    $id('overwrite-overlay').classList.add('open');
     setInstallStatus('', '');
   }
 
   function hideOverwrite() {
     pendingOverwrite = null;
-    $id('overwrite-confirm').style.display = 'none';
+    $id('overwrite-overlay').classList.remove('open');
   }
+
+  $id('ow-close-btn').addEventListener('click', function () {
+    hideOverwrite();
+    resetInstallUI();
+  });
 
   $id('ow-cancel-btn').addEventListener('click', function () {
     hideOverwrite();
@@ -770,9 +1067,9 @@
   $id('ow-confirm-btn').addEventListener('click', function () {
     if (!pendingOverwrite) return;
     if (pendingOverwrite.type === 'apk') {
-      doInstallApk(pendingOverwrite.file, true, pendingOverwrite.tempId);
+      doInstallApk(pendingOverwrite.file, true, pendingOverwrite.tempId, chosenTransport);
     } else {
-      doInstallFolder(pendingOverwrite.path, true);
+      doInstallFolder(pendingOverwrite.path, true, chosenTransport);
     }
   });
 
