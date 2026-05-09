@@ -46,6 +46,7 @@ I personally use it during showrooms and gaming exhibitions to capture the live 
 6. **Modify VR HEADSET MANAGER parameters**
    - You can adapt configuration in the ./config/config.json file following [this guide](/docs/docs_config.md)
    - Optionnally you can start the script with another custom config file by passing it as a parameter
+   - Control per-headset timers from any external tool (Stream Deck, OBS, curl...) using the [Timer API](/docs/docs_timer_api.md)
 
 ---
 

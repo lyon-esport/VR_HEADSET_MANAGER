@@ -506,13 +506,6 @@ function Remove-Headset {
         }
         # Stop timer job and delete timer files (.txt and .run)
         Stop-HeadsetTimer -headsetId ([int]$headsetToRemove.ID)
-        foreach ($ext in @('.txt', '.run')) {
-            $timerFile = Join-Path $global:ScriptPath ("website\timer\" + $headsetToRemove.ID + $ext)
-            if (Test-Path -LiteralPath $timerFile) {
-                Remove-Item -LiteralPath $timerFile -Force -ErrorAction SilentlyContinue
-                Write-Log ("Deleted timer file: $timerFile") -Level DEBUG
-            }
-        }
         # Remove headset row from timer.csv
         $timerCsv = Join-Path $global:ScriptPath "data\timer.csv"
         if (Test-Path -LiteralPath $timerCsv) {

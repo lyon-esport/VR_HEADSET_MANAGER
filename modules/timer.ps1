@@ -1,21 +1,28 @@
 
 # Per-headset timers. Timer state is stored in $script:activeTimers so it
 # persists across API calls within the same process (web server or main console).
-# Timer files live in website\timer\<headsetId>.txt and are served as static files.
+# Timer files live in website\timer\<DisplayName>.txt and are served as static files.
 # The elapsed handler runs in a Start-Job child process to avoid PS runspace conflicts.
-# A run-token file (<id>.run) lets orphaned jobs from previous processes stop themselves
+# A run-token file (<DisplayName>.run) lets orphaned jobs from previous processes stop themselves
 # when a new timer starts: the job exits as soon as its token no longer matches the file.
 
 $script:activeTimers = @{}   # key: int headsetId, value: @{job; filePath; paused; pausedRemaining; mode; startTime; totalSecs}
 
+function Get-TimerSafeName {
+    param([int]$headsetId)
+    $h = @(Get-KnownHeadsets) | Where-Object { [int]$_.ID -eq $headsetId } | Select-Object -First 1
+    if ($h -and $h.DisplayName) { return Convert-Displayname $h.DisplayName }
+    return [string]$headsetId
+}
+
 function Get-TimerFilePath {
     param([int]$headsetId)
-    return Join-Path $global:ScriptPath ("website\timer\" + $headsetId + ".txt")
+    return Join-Path $global:ScriptPath ("website\timer\" + (Get-TimerSafeName $headsetId) + ".txt")
 }
 
 function Get-TimerRunFilePath {
     param([int]$headsetId)
-    return Join-Path $global:ScriptPath ("website\timer\" + $headsetId + ".run")
+    return Join-Path $global:ScriptPath ("website\timer\" + (Get-TimerSafeName $headsetId) + ".run")
 }
 
 function Get-TimerCsvPath {
@@ -62,6 +69,18 @@ function Initialize-TimerFiles {
     }
     if ($count -gt 0) {
         Write-Log ($msg.TimerFilesInitialized -f $count) -Level DEBUG
+    }
+
+    # Migrate old numeric-named files to display-name files (one-time, non-destructive)
+    foreach ($h in $headsets) {
+        $id = [int]$h.ID
+        foreach ($suffix in @('.txt', '.run')) {
+            $oldFile = Join-Path $global:ScriptPath ("website\timer\" + $id + $suffix)
+            $newFile = if ($suffix -eq '.txt') { Get-TimerFilePath -headsetId $id } else { Get-TimerRunFilePath -headsetId $id }
+            if ((Test-Path -LiteralPath $oldFile) -and ($oldFile -ne $newFile) -and (-not (Test-Path -LiteralPath $newFile))) {
+                Rename-Item -LiteralPath $oldFile -NewName (Split-Path $newFile -Leaf) -Force -ErrorAction SilentlyContinue
+            }
+        }
     }
 }
 

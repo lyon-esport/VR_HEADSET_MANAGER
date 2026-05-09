@@ -2230,7 +2230,7 @@ try {
 
         # ── /end Known Apps Management API ───────────────────────────────────────
 
-        # API: GET /api/timer?id=<headsetID>&action=start|stop|pause|resume|reset|status|config[&minutes=N&seconds=N&mode=dec|inc]
+        # API: GET /api/timer?id=<headsetID>&action=... OR ?name=<displayName>&action=...
         # All actions use GET so Stream Deck and browser links work without POST/CORS setup.
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/timer') {
             try {
@@ -2244,6 +2244,10 @@ try {
                 $headsetId = 0
                 if ($qParams.ContainsKey('id') -and $qParams['id'] -match '^\d+$') {
                     $headsetId = [int]$qParams['id']
+                } elseif ($qParams.ContainsKey('name') -and $qParams['name'] -ne '') {
+                    $safeName = Convert-Displayname $qParams['name']
+                    $matched = @(Get-KnownHeadsets) | Where-Object { (Convert-Displayname $_.DisplayName) -eq $safeName } | Select-Object -First 1
+                    if ($matched) { $headsetId = [int]$matched.ID }
                 }
                 $action = if ($qParams.ContainsKey('action')) { $qParams['action'].ToLower() } else { '' }
 
