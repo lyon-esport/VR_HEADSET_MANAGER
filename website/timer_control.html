@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Timer Control</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #111;
+      color: #ccc;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 24px;
+    }
+    .card {
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 10px;
+      padding: 28px 32px;
+      min-width: 260px;
+      max-width: 340px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      text-align: center;
+    }
+    .card-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: #888;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    #result-icon { font-size: 2em; }
+    #result-msg  { font-size: 13px; font-weight: 600; color: #aaa; }
+    #result-val  { font-size: 2em; font-weight: 700; font-family: monospace; color: #fff; min-height: 1.2em; }
+    .info-row    { font-size: 11px; color: #555; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="card-title">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+      </svg>
+      Timer Control
+    </div>
+    <div id="result-icon">&#8987;</div>
+    <div id="result-msg">Processing...</div>
+    <div id="result-val"></div>
+    <div id="info-row" class="info-row"></div>
+  </div>
+
+  <script>
+    var params = new URLSearchParams(location.search);
+    var id     = params.get('id')     || '';
+    var action = params.get('action') || '';
+
+    var iconEl = document.getElementById('result-icon');
+    var msgEl  = document.getElementById('result-msg');
+    var valEl  = document.getElementById('result-val');
+    var infoEl = document.getElementById('info-row');
+
+    infoEl.textContent = 'id=' + id + '  action=' + action;
+
+    if (!id || !action) {
+      iconEl.textContent = '⚠';
+      msgEl.textContent  = 'Missing parameters';
+      valEl.textContent  = '';
+    } else {
+      var url = '/api/timer?id=' + encodeURIComponent(id) + '&action=' + encodeURIComponent(action);
+      fetch(url)
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          if (j.ok) {
+            iconEl.textContent = '✅';
+            if (action === 'status') {
+              msgEl.textContent = j.active ? 'Timer running' : 'Timer stopped';
+              valEl.textContent = j.value || '--:--';
+            } else {
+              msgEl.textContent = 'Action "' + action + '" successful';
+              valEl.textContent = '';
+            }
+          } else {
+            iconEl.textContent = '❌';
+            msgEl.textContent  = j.error || 'Error';
+            valEl.textContent  = '';
+          }
+        })
+        .catch(function(err) {
+          iconEl.textContent = '❌';
+          msgEl.textContent  = 'Network error';
+          valEl.textContent  = '';
+        });
+    }
+  </script>
+</body>
+</html>

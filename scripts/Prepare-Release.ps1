@@ -9,6 +9,7 @@
       - All log files
       - Generated HTML overlays and monitor pages
       - App icon cache
+      - Timer files (website\timer\*.txt, *.run) and data\timer.csv
       - Data caches (installed apps, favorite apps, app names, live status CSV)
       - PID file and mediamtx generated config
       - Scratch test files under docs\
@@ -107,6 +108,11 @@ Remove-GlobSafe -Directory $websiteDir -Pattern "*[video].html"      -Label "web
 Remove-ItemSafe -Path (Join-Path $websiteDir "monitor.html")       -Label "website\monitor.html"
 Remove-ItemSafe -Path (Join-Path $websiteDir "video_monitor.html") -Label "website\video_monitor.html"
 
+# --- TIMER FILES ---
+Write-Host "[ Timer files ]" -ForegroundColor Gray
+$timerDir = Join-Path $websiteDir "timer"
+Remove-FolderContents -Directory $timerDir -Label "website\timer\"
+
 # --- APP ICON CACHE ---
 Write-Host "[ App icon cache ]" -ForegroundColor Gray
 $iconCacheDir = Join-Path $websiteDir "assets\app_icons"
@@ -119,6 +125,7 @@ Remove-GlobSafe -Directory $dataDir -Pattern "*_installed_apps.csv" -Label "data
 Remove-GlobSafe -Directory $dataDir -Pattern "*_favorite_apps.csv"  -Label "data\"
 Remove-ItemSafe -Path (Join-Path $dataDir "app_names.csv")          -Label "data\app_names.csv"
 Remove-ItemSafe -Path (Join-Path $dataDir "known_headsets_infos.csv") -Label "data\known_headsets_infos.csv"
+Remove-ItemSafe -Path (Join-Path $dataDir "timer.csv")               -Label "data\timer.csv"
 Remove-ItemSafe -Path (Join-Path $dataDir "webserver.pid")          -Label "data\webserver.pid"
 
 # Data backup CSVs (versioned copies created by the user)

@@ -303,6 +303,11 @@ function Start-WebServer {
     }
 }
 
+# Only run at startup (main process or web server), never inside VRMonitor job loop
+if (-not $global:IsVRMonitorJob) {
+    Initialize-TimerFiles
+}
+
 # Start the Pode web server in a separate PowerShell window (guarded: skip if already running)
 if (-not $global:IsWebServerProcess) {
     Start-WebServer

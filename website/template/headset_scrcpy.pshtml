@@ -36,8 +36,18 @@
         display: none;
       }
 
-      /* Hover action buttons - top-right corner */
-      #actions {
+      /* Hover action buttons */
+      #actions-left {
+        position: absolute;
+        top: 10px; left: 10px;
+        z-index: 40;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        opacity: 0;
+        transition: opacity 0.15s;
+      }
+      #actions-right {
         position: absolute;
         top: 10px; right: 10px;
         z-index: 40;
@@ -47,7 +57,8 @@
         opacity: 0;
         transition: opacity 0.15s;
       }
-      body:hover #actions { opacity: 1; }
+      body:hover #actions-left,
+      body:hover #actions-right { opacity: 1; }
       .action-btn {
         display: flex;
         align-items: center;
@@ -67,10 +78,30 @@
       .btn-icon { width: 14px; height: 14px; display: block; }
       /* Touch devices: larger tap targets, always-visible buttons */
       @media (pointer: coarse) {
-        #actions { opacity: 1; gap: 10px; top: 14px; right: 14px; }
+        #actions-left  { opacity: 1; gap: 10px; top: 14px; left: 14px; }
+        #actions-right { opacity: 1; gap: 10px; top: 14px; right: 14px; }
         .action-btn { width: 48px; height: 48px; border-radius: 10px; }
         .btn-icon { width: 20px; height: 20px; }
       }
+
+      /* Timer overlay - white text centered at the bottom of the video rect */
+      #timer-overlay {
+        position: absolute;
+        bottom: 8%;
+        left: 50%;
+        transform: translateX(-50%);
+        color: #fff;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        font-size: 2.4em;
+        font-weight: 700;
+        text-shadow: 0 2px 8px rgba(0,0,0,0.9);
+        pointer-events: none;
+        display: none;
+        white-space: nowrap;
+        z-index: 35;
+        letter-spacing: 0.03em;
+      }
+      #timer-overlay.visible { display: block; }
 
       /* Monitoring overlay - sized/positioned by JS over the actual video rect */
       #monitoring-overlay {
@@ -94,18 +125,26 @@
     <video id="stream" autoplay muted playsinline></video>
     <div id="status"></div>
 
-    <div id="actions">
+    <div id="actions-left">
+      <!-- Monitoring overlay -->
+      <button class="action-btn" id="btn-monitoring" title="Show monitoring" aria-label="Show monitoring" onclick="toggleMonitoring()">
+        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
+        </svg>
+      </button>
+      <!-- Timer overlay -->
+      <button class="action-btn" id="btn-timer" title="Show timer" aria-label="Show timer" onclick="toggleTimer()">
+        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+        </svg>
+      </button>
+    </div>
+    <div id="actions-right">
       <!-- Fullscreen -->
       <button class="action-btn" id="btn-fullscreen" title="Fullscreen" aria-label="Fullscreen" onclick="toggleFullscreen()">
         <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
           <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
-        </svg>
-      </button>
-      <!-- Monitoring overlay -->
-      <button class="action-btn" id="btn-monitoring" title="Show monitoring" aria-label="Show monitoring" onclick="toggleMonitoring()">
-        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
         </svg>
       </button>
       <!-- Launch app -->
@@ -115,6 +154,8 @@
         </svg>
       </button>
     </div>
+
+    <div id="timer-overlay"></div>
 
     <div id="monitoring-overlay">
       <iframe src="<%= $display_name %>[monitoring].html" scrolling="no" allow="autoplay"></iframe>
@@ -228,7 +269,17 @@
         connect();
         // Hide action buttons when embedded in an iframe (e.g. video_monitor.html)
         if (window.self !== window.top) {
-          document.getElementById('actions').style.display = 'none';
+          document.getElementById('actions-left').style.display  = 'none';
+          document.getElementById('actions-right').style.display = 'none';
+        } else {
+          // Default both overlays visible; only hide if user explicitly turned them off
+          try {
+            if (localStorage.getItem('mon-vis-'   + TIMER_ID) !== '0') { toggleMonitoring(); }
+            if (localStorage.getItem('timer-vis-' + TIMER_ID) !== '0') { toggleTimer(); }
+          } catch(_e) {
+            toggleMonitoring();
+            toggleTimer();
+          }
         }
       });
 
@@ -295,6 +346,7 @@
         overlay.classList.toggle('visible', _monitoringVisible);
         btn.classList.toggle('active', _monitoringVisible);
         if (_monitoringVisible) positionMonitoringOverlay();
+        try { localStorage.setItem('mon-vis-' + TIMER_ID, _monitoringVisible ? '1' : '0'); } catch(_e) {}
       }
 
       window.addEventListener('resize', function() {
@@ -318,6 +370,40 @@
         } catch(e) {}
       }
       document.querySelector('#monitoring-overlay iframe').addEventListener('load', detectMonitoringHeight);
+
+      // ---- Timer overlay ----
+      var TIMER_ID = '<%= $headset_id %>';
+      var _timerVisible = false;
+      var _timerInterval = null;
+
+      function toggleTimer() {
+        _timerVisible = !_timerVisible;
+        document.getElementById('timer-overlay').classList.toggle('visible', _timerVisible);
+        document.getElementById('btn-timer').classList.toggle('active', _timerVisible);
+        if (_timerVisible) { startTimerPoll(); } else { stopTimerPoll(); }
+        try { localStorage.setItem('timer-vis-' + TIMER_ID, _timerVisible ? '1' : '0'); } catch(_e) {}
+      }
+
+      function startTimerPoll() {
+        stopTimerPoll();
+        function poll() {
+          fetch('/timer/' + TIMER_ID + '.txt?_=' + Date.now())
+            .then(function(r) { return r.ok ? r.text() : ''; })
+            .then(function(t) {
+              var v = (t || '').trim();
+              var el = document.getElementById('timer-overlay');
+              if (v) { el.textContent = v; el.classList.add('visible'); }
+              else   { el.classList.remove('visible'); }
+            }).catch(function() {});
+        }
+        poll();
+        _timerInterval = setInterval(poll, 1000);
+      }
+
+      function stopTimerPoll() {
+        if (_timerInterval) { clearInterval(_timerInterval); _timerInterval = null; }
+      }
+
     </script>
     <script src="/assets/app_launcher.js"></script>
     <script>appLauncher.setStatusResolver(function() { return true; });</script>

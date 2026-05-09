@@ -425,4 +425,11 @@
     WebServerUrlAclRegistering = "Enregistrement de l'ACL HTTP pour le serveur web sur le port {0} (autorisation de binding sans admin)"
     WebServerUrlAclExists = "L'ACL HTTP du serveur web est deja enregistree pour le port {0}"
     WebServerUrlAclFailed = "Echec de l'enregistrement de l'ACL HTTP du serveur web : {0}"
+
+    # timer.ps1
+    TimerStarted          = "Minuterie demarree pour le casque {0} ({1}s, mode {2})"
+    TimerStopped          = "Minuterie arretee pour le casque {0}"
+    TimerExpired          = "Minuterie expiree pour le casque {0}"
+    TimerFilesInitialized = "Fichiers minuterie initialises ({0} casques)"
+    TimerFolderCreated    = "Dossier minuterie cree : {0}"
 }
