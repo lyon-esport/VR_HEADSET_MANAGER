@@ -1,55 +1,27 @@
 
 ## video_monitor.html ##
 
-	Adapt videos size to the window in height and width to fit in the browser wepage.
-	A standalone video cannot be larger to taller than the browser windows (-top bar)
-	Do not modify video_monitor.html but only video_monitor.eps as the html file is dynamically regenerated from the eps template.
-	only update the template file and ask me to regenerate the html template to check then if everything is ok
+Create a new functionaility (and a new ps1 module for all future related functions) named timer.
+For each headset, let's generate a timer based on a text file. The timer file name is based on the headset id, and is stored in /website/timer
+in headset_settings.html let's add a new section in each headset, between recording and power sections
+This timer section should :
+- Define the timer value in min:sec
+- Have a switch button if it's a incremental of decremental timer (pressing displays inc (0 to end of timer) or dec (timer value to 0)), and a button to press for starting the update.
+- Have a button to start the timer
+
+Everytime the button is pressed, the text in the file should update with the remaining time like 06:30, 06:29 etc, and must be updated every seconds until 0. At 0 (or timer value reached if inc mode) it should display "Time's up !" 
+
+Add the visibility of the timer in [video].html genreated captures, and in the main video_monitor.html generated file.
+The visibility should read the text file and update dynamically the value on screen while the timer file content changes.
+The timer will be only white text, centered, on the botom of the video capture.
+Timer visibility should be enabled or disabled with a new button (with a clock icon) like monitoring information.
+
 
 ## APPLICATION MANAGEMENT ##
-
-Create functions to manage known applications
-- Known applications are listed in data/app_names.csv (information filled in config.json)
-Cached icons will be stored in website\assets\app_icons
-
-Get-HeadsetInstalledApps should connect to the headset and get an array of all apps installed (PackageName)
-
-<#
-Function Search-AppInfoOnTheWeb
-	input parameter is the PackageName and known application app_names file
-	It should search on the github repository "https://raw.githubusercontent.com/threethan/MetaMetadata/main/data" the $PackageName.json
-	If found, return the array with PackageName,DisplayName,IconUrl
-	The iconUrl should be square if exists. Otherwise let's find another icon.
-#>
-	
-Get-AppInfo will replace Get-AppDisplayName.
-	input parameter is the PackageName
-	Cache file will be stored in app_infos.csv by default, but this file name should be defined in config.json
-		it contains PackageName,DisplayName,IconUrl,LocalIconPath
-	Cached icons will be stored in website\assets\app_icons (static assignment)
-		
-	The function reads from cache files first. 		
-		While not found, or displayname = packageName or if missing raw value : search information using Search-AppInfoOnTheWeb
-			if result is different than cached values, update it
-			if icon is not already in app_icons cached folder, let's download it, and update LocalIconPath
-	
-	if found and raws have a value let's return the values array.
-	If not found, return array with DisplayName = (PackageName - "com." at the begining)
-	update the app_infos file
-
-
-Use Get-AppInfo while listing installed applications, while displaying the running application, or while listing apps to start on a headset.
-
-
-
 
 Add icons of the running application before the name
 
 ##########
-
-
-If the headset is connected using USB cable, let's get stream and any other information from USB instead of Wifi connection.
-Maybe that needs to check first of the loop for connection to the headset object of it's connected in USB first, and the, 
 
 
 Setup few parametes to manage on the headset :
@@ -60,29 +32,24 @@ Setup few parametes to manage on the headset :
 - Switch hand tracking/controllers
 
 
-While leaving, the app restarts by itself sometimes
-
 When scrcpy is already running, if I switch to anoter desktop on Windows 11, it automatically start new scrcpy windows. It shouldn't.
 >> Tried but it failed
+>> Maybe by ensuring the page is always in all desktops?
+>> Also try to get these pages in background while starting, 
 
 Let's see if it's possible to know if the headset is charging or discharging, even if the headset is connected to power.
 Then try to identify how long the headset can remain up an running based on the battery level, and the discharging speed in Watt.
 Also, if the headset is charging, let's return the remaining time until the headset will be recharged at 100%.
 
-The headset is reachable by adb over wifi to 192.168.1.243:5555.
-adb path is "L:\Drive partagés\04 Equipe Technique\20 VR\VR_HEADSET_MANAGER\DEV_VERSION\VR_HEADSET_MANAGER\sources\scrcpy-win64-v3.3.4_patchedNoFlickering"
-You can try to request directly to the headset if you need to grab more live information.
 
 
-Implement in main video and on the focused video screen the timer based on the file placed in /website/timer
 Let's check with stream deck activity
+
+
 
 
 # headset_settings.html
 
-
-In the app_config.html implement a button to edit config.json in the web page.
-It should display each option and possible values or example.
 
 
 DEBUG
