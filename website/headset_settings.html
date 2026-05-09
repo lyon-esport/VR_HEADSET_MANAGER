@@ -1781,13 +1781,18 @@
       document.querySelectorAll('.timer-display[data-timer-id]').forEach(function(disp) {
         var tid = disp.dataset.timerId;
         var startBtn = document.querySelector('.timer-start-btn[data-timer-id="' + tid + '"]');
-        if (!startBtn || !startBtn.classList.contains('running')) return;
-        fetch('/timer/' + tid + '.txt?_=' + Date.now())
-          .then(function(r) { return r.ok ? r.text() : ''; })
-          .then(function(t) {
-            var v = (t || '').trim();
-            if (v === "Time's up !") { startBtn.classList.remove('running', 'paused'); startBtn.textContent = 'Start'; }
+        fetch('/api/timer?id=' + tid + '&action=status&_=' + Date.now())
+          .then(function(r) { return r.ok ? r.json() : null; })
+          .then(function(j) {
+            if (!j) return;
+            var v = (j.value || '').trim();
             disp.textContent = v || '--:--';
+            if (startBtn) {
+              startBtn.classList.remove('running', 'paused');
+              if (j.active)      { startBtn.classList.add('running'); startBtn.textContent = 'Pause'; }
+              else if (j.paused) { startBtn.classList.add('paused');  startBtn.textContent = 'Resume'; }
+              else               { startBtn.textContent = 'Start'; }
+            }
           }).catch(function() {});
       });
     }

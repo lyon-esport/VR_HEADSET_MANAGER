@@ -6,7 +6,7 @@
 # A run-token file (<id>.run) lets orphaned jobs from previous processes stop themselves
 # when a new timer starts: the job exits as soon as its token no longer matches the file.
 
-$script:activeTimers = @{}   # key: int headsetId, value: @{job; filePath; paused; pausedRemaining; mode}
+$script:activeTimers = @{}   # key: int headsetId, value: @{job; filePath; paused; pausedRemaining; mode; startTime; totalSecs}
 
 function Get-TimerFilePath {
     param([int]$headsetId)
@@ -128,7 +128,7 @@ function Set-TimerConfig {
 # Checks the run-token file on every tick: exits immediately if the token
 # changed (a new timer started or Stop-HeadsetTimer was called).
 $script:timerJobBlock = {
-    param([string]$filePath, [string]$runFilePath, [string]$runToken, [int]$totalSecs, [string]$mode)
+    param([string]$filePath, [string]$runFilePath, [string]$runToken, [int]$totalSecs, [string]$mode, [int]$startAt = 0)
     $utf8NoBom = New-Object System.Text.UTF8Encoding $false
 
     function Test-StillOwner {
@@ -139,9 +139,11 @@ $script:timerJobBlock = {
     }
 
     if ($mode -eq 'inc') {
-        for ($i = 0; $i -le $totalSecs; $i++) {
+        # startAt = total seconds already elapsed before this segment (display offset)
+        $end = $startAt + $totalSecs
+        for ($i = $startAt; $i -le $end; $i++) {
             if (-not (Test-StillOwner)) { return }
-            if ($i -eq $totalSecs) {
+            if ($i -eq $end) {
                 [System.IO.File]::WriteAllText($filePath, "Time's up !", $utf8NoBom)
             } else {
                 $m = [int][Math]::Floor($i / 60)
@@ -192,31 +194,35 @@ function Start-HeadsetTimer {
         [System.IO.File]::WriteAllText($filePath, ('{0:D2}:{1:D2}' -f $initM, $initS), $utf8NoBom)
     }
 
-    $job = Start-Job -ScriptBlock $script:timerJobBlock -ArgumentList $filePath, $runFilePath, $runToken, $totalSecs, $config.mode
-    $script:activeTimers[$headsetId] = @{ job = $job; filePath = $filePath; paused = $false; pausedRemaining = 0; mode = $config.mode }
+    $job = Start-Job -ScriptBlock $script:timerJobBlock -ArgumentList $filePath, $runFilePath, $runToken, $totalSecs, $config.mode, 0
+    $script:activeTimers[$headsetId] = @{
+        job             = $job
+        filePath        = $filePath
+        paused          = $false
+        pausedRemaining = 0
+        mode            = $config.mode
+        startTime       = [DateTime]::UtcNow
+        totalSecs       = $totalSecs
+        elapsedBefore   = 0
+    }
     Write-Log ($msg.TimerStarted -f $headsetId, $totalSecs, $config.mode) -Level INFO
 }
 
 function Suspend-HeadsetTimer {
     param([int]$headsetId)
-    if (-not $script:activeTimers.ContainsKey($headsetId)) { return }
+    if (-not $script:activeTimers.ContainsKey($headsetId)) { return $false }
     $entry = $script:activeTimers[$headsetId]
-    if ($entry.paused) { return }
+    if ($entry.paused) { return $true }
 
-    # Read current remaining value from file before stopping the job
-    $filePath = Get-TimerFilePath -headsetId $headsetId
-    $currentValue = ''
-    if (Test-Path -LiteralPath $filePath) {
-        $currentValue = ([System.IO.File]::ReadAllText($filePath)).Trim()
-    }
+    # Calculate remaining from stored start time to avoid a race with the background job's file writes.
+    # The job uses WriteAllText (truncate + write) every second; reading the file at the same moment
+    # can yield an empty string, which would reset pausedRemaining to 0 and corrupt the resume.
+    $segmentElapsed  = [int]([DateTime]::UtcNow - $entry.startTime).TotalSeconds
+    $elapsedBefore   = if ($entry.ContainsKey('elapsedBefore')) { $entry.elapsedBefore } else { 0 }
+    $totalElapsed    = [Math]::Min($elapsedBefore + $segmentElapsed, $entry.totalSecs)
+    $remainingSecs   = $entry.totalSecs - $totalElapsed
 
-    # Parse MM:SS back to seconds
-    $remainingSecs = 0
-    if ($currentValue -match '^(\d+):(\d{2})$') {
-        $remainingSecs = [int]$Matches[1] * 60 + [int]$Matches[2]
-    }
-
-    # Stop the job but keep file value as-is (don't clear)
+    # Stop the job but keep file value as-is (don't clear - user sees the frozen time)
     try { Stop-Job  -Job $entry.job -ErrorAction SilentlyContinue } catch {}
     try { Remove-Job -Job $entry.job -Force -ErrorAction SilentlyContinue } catch {}
 
@@ -227,18 +233,21 @@ function Suspend-HeadsetTimer {
     $entry.job             = $null
     $entry.paused          = $true
     $entry.pausedRemaining = $remainingSecs
+    $entry.elapsedBefore   = $totalElapsed   # total elapsed at pause; used as inc display offset on resume
     $script:activeTimers[$headsetId] = $entry
     Write-Log ($msg.TimerStopped -f $headsetId) -Level INFO
+    return $true
 }
 
 function Resume-HeadsetTimer {
     param([int]$headsetId)
-    if (-not $script:activeTimers.ContainsKey($headsetId)) { return }
+    if (-not $script:activeTimers.ContainsKey($headsetId)) { return $false }
     $entry = $script:activeTimers[$headsetId]
-    if (-not $entry.paused) { return }
+    if (-not $entry.paused) { return $false }
 
-    $totalSecs = $entry.pausedRemaining
-    if ($totalSecs -le 0) { $totalSecs = 1 }
+    $remaining    = $entry.pausedRemaining
+    $elapsedSoFar = if ($entry.ContainsKey('elapsedBefore')) { $entry.elapsedBefore } else { 0 }
+    $originalTotal = $entry.totalSecs
 
     $filePath    = Get-TimerFilePath    -headsetId $headsetId
     $runFilePath = Get-TimerRunFilePath -headsetId $headsetId
@@ -250,20 +259,37 @@ function Resume-HeadsetTimer {
     $mode = $entry.mode
     if (-not $mode) { $mode = 'dec' }
 
-    # Write current value immediately
     if ($mode -eq 'inc') {
-        $shownSecs = $totalSecs  # for inc, remaining means elapsed at pause
-        $m = [int][Math]::Floor($shownSecs / 60)
-        $s = $shownSecs % 60
+        # For inc: job resumes counting from elapsedSoFar, for 'remaining' more seconds
+        # Display offset = elapsedSoFar so the clock shows the correct elapsed time
+        $startAt   = $elapsedSoFar
+        $jobTotal  = if ($remaining -le 0) { 1 } else { $remaining }
+        $shownM    = [int][Math]::Floor($elapsedSoFar / 60)
+        $shownS    = $elapsedSoFar % 60
     } else {
-        $m = [int][Math]::Floor($totalSecs / 60)
-        $s = $totalSecs % 60
+        # For dec: job counts down from remaining to 0
+        $startAt   = 0
+        $jobTotal  = if ($remaining -le 0) { 1 } else { $remaining }
+        $shownM    = [int][Math]::Floor($remaining / 60)
+        $shownS    = $remaining % 60
     }
-    [System.IO.File]::WriteAllText($filePath, ('{0:D2}:{1:D2}' -f $m, $s), $utf8NoBom)
 
-    $job = Start-Job -ScriptBlock $script:timerJobBlock -ArgumentList $filePath, $runFilePath, $runToken, $totalSecs, $mode
-    $script:activeTimers[$headsetId] = @{ job = $job; filePath = $filePath; paused = $false; pausedRemaining = 0; mode = $mode }
-    Write-Log ($msg.TimerStarted -f $headsetId, $totalSecs, $mode) -Level INFO
+    # Write current display value immediately so overlay updates at once
+    [System.IO.File]::WriteAllText($filePath, ('{0:D2}:{1:D2}' -f $shownM, $shownS), $utf8NoBom)
+
+    $job = Start-Job -ScriptBlock $script:timerJobBlock -ArgumentList $filePath, $runFilePath, $runToken, $jobTotal, $mode, $startAt
+    $script:activeTimers[$headsetId] = @{
+        job             = $job
+        filePath        = $filePath
+        paused          = $false
+        pausedRemaining = 0
+        mode            = $mode
+        startTime       = [DateTime]::UtcNow
+        totalSecs       = $originalTotal
+        elapsedBefore   = $elapsedSoFar
+    }
+    Write-Log ($msg.TimerStarted -f $headsetId, $jobTotal, $mode) -Level INFO
+    return $true
 }
 
 function Stop-HeadsetTimer {
