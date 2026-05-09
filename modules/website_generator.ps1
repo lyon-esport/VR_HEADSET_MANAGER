@@ -1,18 +1,18 @@
 
-#Update-OBSFile -knownHeadsetsInfo $knownHeadsetsInfo -obsTemplatePath (Join-Path -Path $global:ScriptPath -ChildPath "\website\template\headset_status_v2.pshtml") # $global:obsTemplatePath -obsOutputPath $global:obsOutputPath
-function Update-OBSFile {
+#Update-HeadsetMonitoringFile -knownHeadsetsInfo $knownHeadsetsInfo -templatePath (Join-Path -Path $global:ScriptPath -ChildPath "\website\template\headset_status_v2.pshtml") # $global:Monitoring_headsetTemplate -outputPath $global:outputPath
+function Update-HeadsetMonitoringFile {
     param(
         [Parameter(Mandatory=$true)]
         [System.Collections.ArrayList]$knownHeadsetsInfo,
 
-        #[string]$obsTemplatePath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\template\headset_status_v2.pshtml") ,
-        [string]$obsTemplatePath = $global:OBS_headsetTemplate ,
+        #[string]$templatePath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\template\headset_status_v2.pshtml") ,
+        [string]$templatePath = $global:Monitoring_headsetTemplate ,
 
-        [string]$obsOutputPath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\")
+        [string]$outputPath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\")
     )
 
-    if (-not (Test-Path -Path $obsTemplatePath)) {
-        Write-Host "Error: The OBS template file does not exist at path $obsTemplatePath" -ForegroundColor Red
+    if (-not (Test-Path -Path $templatePath)) {
+        Write-Host "Error: The headset monitoring template file does not exist at path $templatePath" -ForegroundColor Red
         return
     }
 
@@ -27,12 +27,12 @@ function Update-OBSFile {
             battery_ctrl_right = if ($headset.BatteryControllerRight -ne "-") { [convert]::ToInt32($($headset.BatteryControllerRight -replace ' %','') , 10) } else { $headset.BatteryControllerRight }
             charging        = [bool]$headset.Charging
             temp            = if ($headset.Temp -ne "-"){ ([int]($headset.Temp -replace ',','.')) } else { $headset.Temp } # convert to int
-            temperature_highLevel             = $global:OBS_temperature_highLevel
+            temperature_highLevel             = $global:Monitoring_temperature_highLevel
             model                            = if ($headset.Model -and $headset.Model -ne "-") { $headset.Model } else { "" }
-            headset_battery_warningLevel     = $global:OBS_headset_battery_warningLevel
-            headset_battery_criticalLevel    = $global:OBS_headset_battery_criticalLevel
-            controllers_battery_warningLevel  = $global:OBS_controllers_battery_warningLevel
-            controllers_battery_criticalLevel = $global:OBS_controllers_battery_criticalLevel
+            headset_battery_warningLevel     = $global:Monitoring_headset_battery_warningLevel
+            headset_battery_criticalLevel    = $global:Monitoring_headset_battery_criticalLevel
+            controllers_battery_warningLevel  = $global:Monitoring_controllers_battery_warningLevel
+            controllers_battery_criticalLevel = $global:Monitoring_controllers_battery_criticalLevel
             running_app     = if ($headset.RunningApp) { $headset.RunningApp } else { "-" }
             running_app_icon = if ($headset.RunningAppIcon) { $headset.RunningAppIcon } else { "" }
             power_state     = if ($headset.PowerState -and $headset.PowerState -ne "-") { $headset.PowerState } else { "" }
@@ -41,7 +41,7 @@ function Update-OBSFile {
             #charging_emoji  = if ($headset.Charging -ne $true) { [System.Char]::ConvertFromUtf32(0x274C) } else { [System.Char]::ConvertFromUtf32(0x26A1) }
             #temp_emoji      = if ($headset.Temp -eq "-") { [System.Char]::ConvertFromUtf32(0x2753) } elseif ($headset.Temp -lt 50) { [System.Char]::ConvertFromUtf32(0x1F9CA) } else { [System.Char]::ConvertFromUtf32(0x1F525) }
         }
-        $headsetsHtml = Invoke-EpsTemplate -Path $obsTemplatePath -Safe -binding $deviceInfo #$headset
+        $headsetsHtml = Invoke-EpsTemplate -Path $templatePath -Safe -binding $deviceInfo #$headset
         <#
         [System.Char]::ConvertFromUtf32(0x1F50B) # battery emoji
         [System.Char]::ConvertFromUtf32(0x1FAAB) # low battery emoji
@@ -57,7 +57,7 @@ function Update-OBSFile {
 #>
         # write html to $output/$name[monitoring].html
         # $value =  @{ Name = "Quest3 BLEU" }
-        $outputFile = Join-Path -Path $obsOutputPath -ChildPath ((Convert-Displayname($headset.Name)) + "[monitoring].html")
+        $outputFile = Join-Path -Path $outputPath -ChildPath ((Convert-Displayname($headset.Name)) + "[monitoring].html")
         $headsetsHtml | Out-File -LiteralPath $outputFile -Encoding UTF8
 
     }
@@ -68,41 +68,41 @@ function Write-htmlMonitor {
     param(
         [Parameter(Mandatory=$true)]
         [System.Collections.ArrayList]$knownHeadsets,
-        [string]$obsMonitorTemplatePath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\template\monitor.pshtml"),
+        [string]$templatePath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\template\monitor.pshtml"),
 
-        [string]$obsOutputPath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\monitor.html")
+        [string]$outputPath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\monitor.html")
     )
 
-    if (-not (Test-Path -Path $obsMonitorTemplatePath)) {
-        Write-Host "Error: The OBS monitor template file does not exist at path $obsMonitorTemplatePath" -ForegroundColor Red
+    if (-not (Test-Path -Path $templatePath)) {
+        Write-Host "Error: The monitor template file does not exist at path $templatePath" -ForegroundColor Red
         return
     }
-    
-   
-    
+
+
+
     $TemplateVariables = @{
         headsets = $knownHeadsets | ForEach-Object { Convert-Displayname $_.Name }
     }
-    $headsetsHtml = Invoke-EpsTemplate -Path $obsMonitorTemplatePath -Safe -binding $TemplateVariables
-    $headsetsHtml | Out-File -FilePath $obsOutputPath -Encoding UTF8
+    $headsetsHtml = Invoke-EpsTemplate -Path $templatePath -Safe -binding $TemplateVariables
+    $headsetsHtml | Out-File -FilePath $outputPath -Encoding UTF8
 }
 
 # Generates one [video].html per headset using the scrcpy WHEP video template.
 # Each file embeds a WebRTC player (WHEP) that connects to the mediamtx stream
 # on demand (mediamtx starts ffmpeg GDI capture of the scrcpy window when a viewer connects).
 # Output file naming: <DisplayName>[video].html  e.g. Q3_BLUE[video].html
-function Update-OBSVideoFile {
+function Update-HeadsetVideoFile {
     param(
         [Parameter(Mandatory=$true)]
         [System.Collections.ArrayList]$knownHeadsetsInfo,
 
-        [string]$obsVideoTemplatePath = $global:OBS_videoTemplate,
+        [string]$templatePath = $global:Monitoring_videoTemplate,
 
-        [string]$obsOutputPath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\")
+        [string]$outputPath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\")
     )
 
-    if (-not (Test-Path -Path $obsVideoTemplatePath)) {
-        Write-Log ("Video template not found: $obsVideoTemplatePath") -Level WARNING
+    if (-not (Test-Path -Path $templatePath)) {
+        Write-Log ("Video template not found: $templatePath") -Level WARNING
         return
     }
 
@@ -124,11 +124,11 @@ function Update-OBSVideoFile {
             headset_id            = if ($km) { [int]$km.ID } else { 0 }
         }
 
-        $videoHtml = Invoke-EpsTemplate -Path $obsVideoTemplatePath -Safe -binding $videoInfo
+        $videoHtml = Invoke-EpsTemplate -Path $templatePath -Safe -binding $videoInfo
 
         # Write to <DisplayName>[video].html  e.g. Q3_BLUE[video].html
         # Use -LiteralPath because brackets in filenames are misread as wildcards by -FilePath.
-        $outputFile = Join-Path -Path $obsOutputPath -ChildPath ((Convert-Displayname $headset.Name) + "[video].html")
+        $outputFile = Join-Path -Path $outputPath -ChildPath ((Convert-Displayname $headset.Name) + "[video].html")
         $videoHtml | Out-File -LiteralPath $outputFile -Encoding UTF8
     }
 }
