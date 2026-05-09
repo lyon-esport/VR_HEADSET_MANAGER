@@ -1,10 +1,12 @@
 {
+  "language": "en-US",
   "WIFI":{
     "wifi_ssid": "YourWifiSSIDHere",
     "wifi_pwd": "YourWifiPassword"
   },
   "Paths":{
-    "knownHeadsetsFile": "known_headsets.csv"
+    "knownHeadsetsFile": "known_headsets.csv",
+    "AppCacheFileName": "app_names.csv"
   },
   "apk":{
 	"adbWirelessActivatorFolder": "ADB Wireless activator",
@@ -47,6 +49,7 @@
 					"right_eye": { "crop": "1700:1300:2240:290", "angle": -21 }
 				}
 			},
+			"max_size":0,
 			"video_codec":"h264",
 			"video_encoder":"OMX.qcom.video.encoder.avc",
 			"video_buffer":100,
@@ -67,6 +70,7 @@
 					"right_eye": { "crop": "1840:1080:1760:395",  "angle": 0 }
 				}
 			},
+			"max_size":640,
 			"video_codec":"h264",
 			"video_encoder":"",
 			"video_buffer":100,
@@ -75,7 +79,7 @@
 	  }
   },
   "OBS":{
-	 "HeadsetTemplate":"headset_status.pshtml",
+	 "HeadsetTemplate":"headset_status_v3.pshtml",
 	 "VideoTemplate":"headset_scrcpy.pshtml",
 	 "headsets_triggers":{
 		"headset_battery_warningLevel": 40,
