@@ -189,11 +189,11 @@ function Start-VRMonitor {
             $knownHeadsetsInfo |
                 Export-Csv -Path $global:knownHeadsetsInfosFilePath -Delimiter ";" -Encoding UTF8 -NoTypeInformation
             
-            # Update OBS status file
-            Update-OBSFile -knownHeadsetsInfo $knownHeadsetsInfo
+            # Update headset monitoring status files
+            Update-HeadsetMonitoringFile -knownHeadsetsInfo $knownHeadsetsInfo
 
-            # Update OBS video HTML files (WHEP player per headset, static - only changes when headset list changes)
-            Update-OBSVideoFile -knownHeadsetsInfo $knownHeadsetsInfo
+            # Update headset video HTML files (WHEP player per headset, static - only changes when headset list changes)
+            Update-HeadsetVideoFile -knownHeadsetsInfo $knownHeadsetsInfo
 
             # Sync mediamtx restream paths with current headsets
             Sync-RestreamPaths

@@ -35,9 +35,9 @@
 		"Quest 2_Cropped":"--crop=1550:1250:2000:280 --max-size=800 --video-bit-rate=10M --max-fps 60 --video-buffer=50 --video-codec=h265" 
 	  }
   },
-  "OBS":{
+  "Monitoring":{
 	 "HeadsetTemplate":"headset_status_v2.eps",
-	 "headsets_triggers":{
+	 "thresholds":{
 		"headset_battery_warningLevel": 40,
 		"headset_battery_criticalLevel": 30,
 		"controllers_battery_warningLevel": 30,

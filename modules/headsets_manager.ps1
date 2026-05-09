@@ -449,7 +449,7 @@ function Rename-Headset {
     # 4. Regenerate [video].html for the new name
     $renamedRow = $headsets | Where-Object { $_.Name -eq $NewName }
     if ($renamedRow) {
-        Update-OBSVideoFile -knownHeadsetsInfo ([System.Collections.ArrayList]@($renamedRow))
+        Update-HeadsetVideoFile -knownHeadsetsInfo ([System.Collections.ArrayList]@($renamedRow))
         Write-Log ("Regenerated [video].html for '$newDisplayName'.") -Level DEBUG
     }
 
