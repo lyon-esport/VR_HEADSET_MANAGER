@@ -106,11 +106,14 @@ function Update-OBSVideoFile {
         return
     }
 
+    $allKnown = Get-KnownHeadsets
     foreach ($headset in $knownHeadsetsInfo) {
         # Compute the mediamtx stream path from the headset name.
         # Matches ConvertTo-RestreamPathName in restream.ps1:
         #   Convert-Displayname replaces spaces with underscores, then lowercase.
         $streamPath = (Convert-Displayname -displayName $headset.Name).ToLower()
+
+        $km = $allKnown | Where-Object { $_.Name -eq $headset.Name } | Select-Object -First 1
 
         $videoInfo = @{
             name                  = $headset.Name
@@ -118,6 +121,7 @@ function Update-OBSVideoFile {
             stream_path           = $streamPath
             mediamtx_webrtc_port  = $global:mediamtxWebrtcPort
             mediamtx_hls_port     = $global:mediamtxHlsPort
+            headset_id            = if ($km) { [int]$km.ID } else { 0 }
         }
 
         $videoHtml = Invoke-EpsTemplate -Path $obsVideoTemplatePath -Safe -binding $videoInfo
@@ -150,6 +154,7 @@ function Write-VideoMonitor {
         $null = $headsetData.Add(@{
             name        = $h.Name
             displayName = Convert-Displayname $h.Name
+            id          = [int]$h.ID
         })
     }
 

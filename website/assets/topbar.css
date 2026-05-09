@@ -280,6 +280,16 @@
 [data-theme="light"] .topbar-btn:hover             { background: #f5f5f5; color: #333; }
 [data-theme="light"] .topbar-title                 { color: #aaa; }
 
+/* ── Overlay toggles: always visible, even when topbar is compact ── */
+.topbar-overlay-toggles {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+/* In compact mode hide label but keep icon */
+.topbar.compact .topbar-overlay-toggles .topbar-btn-label { display: none; }
+.topbar.compact .topbar-overlay-toggles .actions-btn { padding: 0 10px; }
+
 /* ── Responsive: keep topbar from overflowing ── */
 .topbar-right { flex-shrink: 0; }
 

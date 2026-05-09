@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -29,10 +29,10 @@
       overflow-x: hidden;
     }
 
-    /* â”€â”€ Page content â”€â”€ */
+    /* â"€â"€ Page content â"€â"€ */
     .page { padding: 24px; }
 
-    /* â”€â”€ Cards grid â”€â”€ */
+    /* â"€â"€ Cards grid â"€â"€ */
     .cards-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
@@ -300,6 +300,90 @@
       border-color: rgba(239,68,68,0.6);
     }
 
+    /* Timer section */
+    .card-timer-section {
+      border-top: 1px solid var(--card-border);
+    }
+    .card-timer-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 14px;
+    }
+    .card-timer-controls {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 6px 14px 10px;
+    }
+    .timer-display {
+      font-size: 12px;
+      font-weight: 700;
+      font-family: monospace;
+      color: #aaa;
+      min-width: 44px;
+      text-align: right;
+    }
+    .timer-input {
+      width: 52px;
+      padding: 3px 6px;
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 5px;
+      color: #ccc;
+      font-size: 12px;
+      font-family: monospace;
+      text-align: center;
+      outline: none;
+    }
+    .timer-input:focus { border-color: #555; }
+    .timer-sep { color: #666; font-weight: 700; font-size: 13px; }
+    .timer-mode-btn {
+      padding: 3px 9px;
+      border-radius: 5px;
+      border: 1px solid #444;
+      background: #222;
+      color: #888;
+      font-size: 10px;
+      font-weight: 700;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.12s, color 0.12s, border-color 0.12s;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .timer-mode-btn:hover { background: #2e2e2e; border-color: #555; color: #bbb; }
+    .timer-start-btn {
+      margin-left: auto;
+      padding: 4px 12px;
+      border-radius: 20px;
+      border: 1px solid rgba(59,130,246,0.45);
+      background: rgba(59,130,246,0.15);
+      color: #60a5fa;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.12s, color 0.12s, border-color 0.12s;
+    }
+    .timer-start-btn:hover { background: rgba(59,130,246,0.28); border-color: rgba(59,130,246,0.7); }
+    .timer-start-btn.running {
+      border-color: rgba(239,68,68,0.45);
+      background: rgba(239,68,68,0.15);
+      color: #f87171;
+    }
+    .timer-start-btn.running:hover { background: rgba(239,68,68,0.28); border-color: rgba(239,68,68,0.7); }
+    .timer-start-btn.paused {
+      border-color: rgba(234,179,8,0.5);
+      background: rgba(234,179,8,0.15);
+      color: #fbbf24;
+    }
+    .timer-start-btn.paused:hover { background: rgba(234,179,8,0.28); border-color: rgba(234,179,8,0.7); }
+    [data-theme="light"] .timer-input { background: #f0f0f0; border-color: #ccc; color: #333; }
+    [data-theme="light"] .timer-mode-btn { background: #e8e8e8; border-color: #ccc; color: #555; }
+    [data-theme="light"] .timer-mode-btn:hover { background: #ddd; }
+    [data-theme="light"] .timer-start-btn { background: rgba(59,130,246,0.12); }
+
     /* Power confirmation modal */
     .power-modal {
       position: fixed; inset: 0; z-index: 1000;
@@ -417,7 +501,7 @@
     .rm-confirm-btn:hover:not(:disabled) { background: rgba(239,68,68,0.25); }
     .rm-confirm-btn:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
 
-    /* â”€â”€ Enable WiFi ADB modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+    /* â"€â"€ Enable WiFi ADB modal â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€ */
     .wifi-modal-box {
       background: #1a1a1a; border: 1px solid #333; border-radius: 10px;
       width: 100%; max-width: 460px; padding: 22px 24px;
@@ -445,7 +529,7 @@
     [data-theme="light"] .wifi-step-row   { color: #666; }
     [data-theme="light"] .wifi-hint       { color: #aaa; }
 
-    /* â”€â”€ Add headset modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+    /* â"€â"€ Add headset modal â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€ */
     .add-modal-box {
       background: #1a1a1a; border: 1px solid #333; border-radius: 10px;
       width: 100%; max-width: 400px; padding: 22px 24px;
@@ -473,7 +557,7 @@
     @keyframes vrm-spin { to { transform: rotate(360deg); } }
     .spinning { animation: vrm-spin 0.8s linear infinite; display: inline-block; }
 
-    /* â”€â”€ New Devices modal sections â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+    /* â"€â"€ New Devices modal sections â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€ */
     .ndm-section {
       margin-top: 12px; padding-top: 10px;
       border-top: 1px solid #252525;
@@ -495,7 +579,7 @@
     [data-theme="light"] .ndm-action-btn  { background: #f5f5f5; border-color: #e0e0e0; color: #333; }
     [data-theme="light"] .ndm-action-btn:hover:not(:disabled) { background: #ebebeb; border-color: #ccc; }
 
-    /* â”€â”€ Light mode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+    /* â"€â"€ Light mode â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€ */
     [data-theme="light"] {
       --bg:          #f0f0f0;
       --muted:       #999;
@@ -768,7 +852,7 @@
       });
     }
 
-    // â”€â”€ Filter / visibility â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Filter / visibility â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     function setHeadsetVisible(dn, show) {
       headsetVisible[dn] = show;
       var card = document.querySelector('.headset-card[data-display="' + dn + '"]');
@@ -780,7 +864,7 @@
       displayNames.forEach(function(dn) { headsetVisible[dn] = true; });
     }
 
-    // â”€â”€ Card building â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Card building â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     function buildCards(configs) {
       var grid = document.getElementById('cards-grid');
       grid.innerHTML = '';
@@ -913,6 +997,24 @@
             '<button class="toggle-btn' + (recOn ? ' on' : '') + '" data-rec-headset="' + dn + '">' +
               (recOn ? 'ON' : 'OFF') +
             '</button>' +
+          '</div>' +
+          '<div class="card-timer-section">' +
+            '<div class="card-timer-header">' +
+              '<span class="toggle-label">' +
+                '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+                  '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>' +
+                '</svg>' +
+                'Timer' +
+              '</span>' +
+              '<span class="timer-display" data-timer-id="' + cfg.ID + '">--:--</span>' +
+            '</div>' +
+            '<div class="card-timer-controls">' +
+              '<input type="number" class="timer-input timer-min-input" data-timer-id="' + cfg.ID + '" value="5" min="0" max="99">' +
+              '<span class="timer-sep">:</span>' +
+              '<input type="number" class="timer-input timer-sec-input" data-timer-id="' + cfg.ID + '" value="0" min="0" max="59">' +
+              '<button class="timer-mode-btn" data-mode="dec" data-timer-id="' + cfg.ID + '">DEC</button>' +
+              '<button class="timer-start-btn" data-timer-id="' + cfg.ID + '" data-dn="' + dn + '" title="Long press to reset">Start</button>' +
+            '</div>' +
           '</div>' +
           '<div class="card-power-row">' +
             '<span class="power-label">' +
@@ -1213,6 +1315,58 @@
           .catch(function() { recBtn.classList.toggle('on', !newVal); recBtn.textContent = !newVal ? 'ON' : 'OFF'; });
           return;
         }
+        // Timer mode toggle
+        var modeBtn = e.target.closest('[data-timer-id][data-mode]');
+        if (modeBtn && modeBtn.classList.contains('timer-mode-btn')) {
+          var newMode = modeBtn.dataset.mode === 'dec' ? 'inc' : 'dec';
+          modeBtn.dataset.mode = newMode;
+          modeBtn.textContent = newMode.toUpperCase();
+          var tid = modeBtn.dataset.timerId;
+          saveTimerConfig(tid);
+          return;
+        }
+        // Timer start/pause/resume (short click) — long press is handled by mousedown/mouseup
+        var startBtn = e.target.closest('.timer-start-btn[data-timer-id]');
+        if (startBtn) {
+          if (startBtn._longPressed) { startBtn._longPressed = false; return; }
+          var tid = startBtn.dataset.timerId;
+          if (startBtn.classList.contains('running')) {
+            // Running -> Pause
+            fetch('/api/timer?id=' + tid + '&action=pause')
+              .then(function(r) { return r.json(); })
+              .then(function(j) {
+                if (j.ok) {
+                  startBtn.classList.remove('running');
+                  startBtn.classList.add('paused');
+                  startBtn.textContent = 'Resume';
+                }
+              }).catch(function() {});
+          } else if (startBtn.classList.contains('paused')) {
+            // Paused -> Resume
+            fetch('/api/timer?id=' + tid + '&action=resume')
+              .then(function(r) { return r.json(); })
+              .then(function(j) {
+                if (j.ok) {
+                  startBtn.classList.remove('paused');
+                  startBtn.classList.add('running');
+                  startBtn.textContent = 'Pause';
+                }
+              }).catch(function() {});
+          } else {
+            // Idle -> Start
+            saveTimerConfig(tid, function() {
+              fetch('/api/timer?id=' + tid + '&action=start')
+                .then(function(r) { return r.json(); })
+                .then(function(j) {
+                  if (j.ok) {
+                    startBtn.classList.add('running');
+                    startBtn.textContent = 'Pause';
+                  }
+                }).catch(function() {});
+            });
+          }
+          return;
+        }
         // Power buttons
         var powerBtn = e.target.closest('[data-power]');
         if (powerBtn) {
@@ -1237,10 +1391,54 @@
         }
       });
 
+      // Long-press on timer button (500ms) -> reset timer
+      var _lpTimer = null;
+      grid.addEventListener('mousedown', function(e) {
+        var btn = e.target.closest('.timer-start-btn[data-timer-id]');
+        if (!btn) return;
+        _lpTimer = setTimeout(function() {
+          _lpTimer = null;
+          btn._longPressed = true;
+          var tid = btn.dataset.timerId;
+          fetch('/api/timer?id=' + tid + '&action=reset')
+            .then(function(r) { return r.json(); })
+            .then(function(j) {
+              if (j.ok) {
+                btn.classList.remove('running', 'paused');
+                btn.textContent = 'Start';
+                var disp = document.querySelector('.timer-display[data-timer-id="' + tid + '"]');
+                if (disp) disp.textContent = '--:--';
+              }
+            }).catch(function() {});
+        }, 500);
+      });
+      grid.addEventListener('mouseup',    function(e) { if (_lpTimer) { clearTimeout(_lpTimer); _lpTimer = null; } });
+      grid.addEventListener('mouseleave', function(e) { if (_lpTimer) { clearTimeout(_lpTimer); _lpTimer = null; } });
+      grid.addEventListener('touchstart', function(e) {
+        var btn = e.target.closest('.timer-start-btn[data-timer-id]');
+        if (!btn) return;
+        _lpTimer = setTimeout(function() {
+          _lpTimer = null;
+          btn._longPressed = true;
+          var tid = btn.dataset.timerId;
+          fetch('/api/timer?id=' + tid + '&action=reset')
+            .then(function(r) { return r.json(); })
+            .then(function(j) {
+              if (j.ok) {
+                btn.classList.remove('running', 'paused');
+                btn.textContent = 'Start';
+                var disp = document.querySelector('.timer-display[data-timer-id="' + tid + '"]');
+                if (disp) disp.textContent = '--:--';
+              }
+            }).catch(function() {});
+        }, 500);
+      }, { passive: true });
+      grid.addEventListener('touchend',   function(e) { if (_lpTimer) { clearTimeout(_lpTimer); _lpTimer = null; } });
+
       cardsBuilt = true;
     }
 
-    // â”€â”€ IP error helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ IP error helper â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     function showIpError(input, msg, isWarn) {
       clearIpError(input);
       input.style.borderColor = isWarn ? 'var(--charging)' : 'var(--ping-ko)';
@@ -1256,7 +1454,7 @@
       if (existing) { clearTimeout(existing._clearTimer); existing.remove(); }
     }
 
-    // â”€â”€ Status dots update â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Status dots update â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     function updateStatusDots() {
       Object.keys(headsetStatus).forEach(function(dn) {
         var s = headsetStatus[dn];
@@ -1296,7 +1494,7 @@
       });
     }
 
-    // â”€â”€ CSV polling â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ CSV polling â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     function pollHeadsetsCsv() {
       fetch(HEADSETS_API_PATH + '?_=' + Date.now())
         .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
@@ -1304,6 +1502,7 @@
           if (_editingField) return; // don't touch DOM while user is editing
           if (!cardsBuilt && rows.length) {
             buildCards(rows);
+            initTimerStates(rows);
             // If opened with ?headset=X, show only that headset
             if (_headsetFilter) {
               Object.keys(headsetVisible).forEach(function(dn) {
@@ -1358,7 +1557,7 @@
         .catch(function() {});
     }
 
-    // â”€â”€ Power modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Power modal â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     var _powerAction = null;
     var _powerDn     = null;
 
@@ -1405,7 +1604,7 @@
       }).catch(function() {});
     });
 
-    // â”€â”€ Profile modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Profile modal â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     var _editingProfileDn = null;
 
     function openProfileModal(dn) {
@@ -1485,7 +1684,7 @@
       .finally(function() { saveBtn.disabled = false; });
     });
 
-    // â”€â”€ Remove modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Remove modal â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     var _removeDn   = null;
     var _removeName = null;
 
@@ -1548,7 +1747,7 @@
       .catch(function() { btn.disabled = false; });
     });
 
-    // â”€â”€ Boot â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Boot â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     var _headsetFilter = (new URLSearchParams(location.search)).get('headset') || '';
 
     pollHeadsetsCsv();
@@ -1556,7 +1755,80 @@
     setInterval(pollHeadsetsCsv, 10000);
     setInterval(pollInfosCsv, REFRESH_MS);
 
-    // â”€â”€ Manage New Devices modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Timer helpers
+
+    var _timerConfigDebounce = {};
+
+    function saveTimerConfig(tid, callback) {
+      var minInput = document.querySelector('.timer-min-input[data-timer-id="' + tid + '"]');
+      var secInput = document.querySelector('.timer-sec-input[data-timer-id="' + tid + '"]');
+      var modeBtn  = document.querySelector('.timer-mode-btn[data-timer-id="' + tid + '"]');
+      if (!minInput || !secInput || !modeBtn) { if (callback) callback(); return; }
+      var mins = Math.min(99, Math.max(0, parseInt(minInput.value, 10) || 0));
+      var secs = Math.min(59, Math.max(0, parseInt(secInput.value, 10) || 0));
+      var mode = modeBtn.dataset.mode || 'dec';
+      fetch('/api/timer?id=' + tid + '&action=config&minutes=' + mins + '&seconds=' + secs + '&mode=' + mode)
+        .then(function() { if (callback) callback(); })
+        .catch(function() { if (callback) callback(); });
+    }
+
+    function saveTimerConfigDebounced(tid) {
+      if (_timerConfigDebounce[tid]) { clearTimeout(_timerConfigDebounce[tid]); }
+      _timerConfigDebounce[tid] = setTimeout(function() { saveTimerConfig(tid); }, 500);
+    }
+
+    function pollTimerDisplays() {
+      document.querySelectorAll('.timer-display[data-timer-id]').forEach(function(disp) {
+        var tid = disp.dataset.timerId;
+        var startBtn = document.querySelector('.timer-start-btn[data-timer-id="' + tid + '"]');
+        if (!startBtn || !startBtn.classList.contains('running')) return;
+        fetch('/timer/' + tid + '.txt?_=' + Date.now())
+          .then(function(r) { return r.ok ? r.text() : ''; })
+          .then(function(t) {
+            var v = (t || '').trim();
+            if (v === "Time's up !") { startBtn.classList.remove('running', 'paused'); startBtn.textContent = 'Start'; }
+            disp.textContent = v || '--:--';
+          }).catch(function() {});
+      });
+    }
+
+    function initTimerStates(configs) {
+      configs.forEach(function(cfg) {
+        var tid = cfg.ID;
+        if (!tid) return;
+        fetch('/api/timer?id=' + tid + '&action=status')
+          .then(function(r) { return r.json(); })
+          .then(function(j) {
+            if (!j.ok) return;
+            var minInput = document.querySelector('.timer-min-input[data-timer-id="' + tid + '"]');
+            var secInput = document.querySelector('.timer-sec-input[data-timer-id="' + tid + '"]');
+            var modeBtn  = document.querySelector('.timer-mode-btn[data-timer-id="' + tid + '"]');
+            var startBtn = document.querySelector('.timer-start-btn[data-timer-id="' + tid + '"]');
+            var disp     = document.querySelector('.timer-display[data-timer-id="' + tid + '"]');
+            if (minInput) minInput.value = j.minutes;
+            if (secInput) secInput.value = j.seconds;
+            if (modeBtn)  { modeBtn.dataset.mode = j.mode; modeBtn.textContent = (j.mode || 'dec').toUpperCase(); }
+            if (startBtn) {
+              if (j.active)       { startBtn.classList.remove('paused'); startBtn.classList.add('running'); startBtn.textContent = 'Pause'; }
+              else if (j.paused)  { startBtn.classList.remove('running'); startBtn.classList.add('paused'); startBtn.textContent = 'Resume'; }
+              else                { startBtn.classList.remove('running', 'paused'); startBtn.textContent = 'Start'; }
+            }
+            if (disp && j.value) disp.textContent = j.value;
+          }).catch(function() {});
+      });
+    }
+
+    // Debounce-save config when inputs change (delegated)
+    document.getElementById('cards-grid').addEventListener('input', function(e) {
+      var minInput = e.target.closest('.timer-min-input[data-timer-id]');
+      if (minInput) { saveTimerConfigDebounced(minInput.dataset.timerId); return; }
+      var secInput = e.target.closest('.timer-sec-input[data-timer-id]');
+      if (secInput) { saveTimerConfigDebounced(secInput.dataset.timerId); return; }
+    });
+
+    setInterval(pollTimerDisplays, 1000);
+
+    // Manage New Devices modal â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     var _ndmData = null;  // USB device details from /api/usbdeviceinfo
     var _ndmIp   = '';    // IP used for add-headset flow
 
@@ -1590,14 +1862,14 @@
       body.innerHTML   = '';
       footer.innerHTML = '';
 
-      // â”€â”€ Detecting â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // â"€â"€ Detecting â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
       if (step === 'detecting') {
         _ndmSetTitle('Manage New Devices');
         body.innerHTML = '<div class="wifi-step-row">' + _spinSvg + 'Detecting USB headset...</div>';
         footer.innerHTML = '<button class="pm-btn" id="ndm-btn-cancel">Cancel</button>';
         document.getElementById('ndm-btn-cancel').addEventListener('click', closeNewDevicesModal);
 
-      // â”€â”€ Main view â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // â"€â"€ Main view â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
       } else if (step === 'main') {
         _ndmSetTitle('Manage New Devices');
         var html = '';
@@ -1739,7 +2011,7 @@
         });
         document.getElementById('ndm-btn-close').addEventListener('click', closeNewDevicesModal);
 
-      // â”€â”€ Add headset: manual IP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // â"€â"€ Add headset: manual IP â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
       } else if (step === 'add-ip') {
         _ndmSetTitle('Add Headset');
         body.innerHTML =
@@ -1765,7 +2037,7 @@
           _ndmIp = ip; renderNdmStep('add-name');
         });
 
-      // â”€â”€ Add headset: name â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // â"€â"€ Add headset: name â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
       } else if (step === 'add-name') {
         _ndmSetTitle('Add Headset');
         body.innerHTML =
@@ -1799,12 +2071,12 @@
           submitNdmAddHeadset(_ndmIp, name);
         });
 
-      // â”€â”€ Add headset: saving â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // â"€â"€ Add headset: saving â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
       } else if (step === 'add-saving') {
         _ndmSetTitle('Add Headset');
         body.innerHTML = '<div class="wifi-step-row">' + _spinSvg + 'Adding headset...</div>';
 
-      // â”€â”€ Add headset: success â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // â"€â"€ Add headset: success â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
       } else if (step === 'add-success') {
         _ndmSetTitle('Headset Added');
         body.innerHTML =
@@ -1816,7 +2088,7 @@
           location.reload();
         });
 
-      // â”€â”€ Add headset: error â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // â"€â"€ Add headset: error â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
       } else if (step === 'add-error') {
         _ndmSetTitle('Add Headset');
         body.innerHTML =
@@ -1829,12 +2101,12 @@
         document.getElementById('ndm-btn-err-back').addEventListener('click', function() { renderNdmStep('add-name'); });
         document.getElementById('ndm-btn-err-close').addEventListener('click', closeNewDevicesModal);
 
-      // â”€â”€ Enable WiFi ADB: busy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // â"€â"€ Enable WiFi ADB: busy â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
       } else if (step === 'enabling-tcpip') {
         _ndmSetTitle('Enable WiFi ADB');
         body.innerHTML = '<div class="wifi-step-row">' + _spinSvg + 'Enabling TCP/IP mode... this may take a few seconds.</div>';
 
-      // â”€â”€ Enable WiFi ADB: success â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // â"€â"€ Enable WiFi ADB: success â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
       } else if (step === 'success-tcpip') {
         _ndmSetTitle('Enable WiFi ADB');
         body.innerHTML =
@@ -1852,7 +2124,7 @@
         document.getElementById('ndm-btn-back').addEventListener('click', function() { renderNdmStep('main'); });
         document.getElementById('ndm-btn-done').addEventListener('click', closeNewDevicesModal);
 
-      // â”€â”€ Install APK: busy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // â"€â"€ Install APK: busy â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
       } else if (step === 'installing') {
         _ndmSetTitle('Install ADB WiFi App');
         var isReinstall = data && data.reinstall;
@@ -1860,7 +2132,7 @@
           '<div class="wifi-step-row">' + _spinSvg + (isReinstall ? 'Reinstalling' : 'Installing') + ' ADB WiFi app... this may take ~15 seconds.</div>' +
           '<div class="wifi-hint">The app will be installed, permissions granted, and WiFi ADB enabled automatically.</div>';
 
-      // â”€â”€ Install APK: success â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // â"€â"€ Install APK: success â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
       } else if (step === 'success-install') {
         _ndmSetTitle('Install ADB WiFi App');
         body.innerHTML =
@@ -1880,7 +2152,7 @@
         document.getElementById('ndm-btn-back').addEventListener('click', function() { renderNdmStep('main'); });
         document.getElementById('ndm-btn-done').addEventListener('click', closeNewDevicesModal);
 
-      // â”€â”€ General error â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // â"€â"€ General error â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
       } else if (step === 'error') {
         body.innerHTML =
           '<div class="wifi-step-row" style="color:#ef4444">' + _warnSvg +

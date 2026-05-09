@@ -182,6 +182,26 @@
     .cell-action-btn.ar-on { background: rgba(34,197,94,0.28); color: #22c55e; border-color: rgba(34,197,94,0.5); }
     .cell-action-btn.ar-on:hover { background: rgba(34,197,94,0.50); }
 
+    /* Timer overlay - white text at bottom center of the cell */
+    .timer-overlay {
+      position: absolute;
+      bottom: 8%;
+      left: 50%;
+      transform: translateX(-50%);
+      color: #fff;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      font-size: 6cqw;
+      font-weight: 700;
+      text-shadow: 0 2px 8px rgba(0,0,0,0.9);
+      pointer-events: none;
+      display: none;
+      white-space: nowrap;
+      z-index: 25;
+      letter-spacing: 0.03em;
+    }
+    .timer-overlay.visible { display: block; }
+    .timer-hidden .timer-overlay { display: none !important; }
+
 
     /* Offline dimming overlay */
     .offline-overlay {
@@ -201,6 +221,45 @@
     .cell.offline .offline-overlay { display: flex; }
     /* In no-stream mode the OFFLINE label sits behind the monitoring frame */
     .cell.no-stream .offline-overlay { z-index: 5; }
+
+    /* Override topbar-filters for this page: shrink to content, allow dropdowns to escape */
+    .topbar-filters { flex: 0 0 auto; overflow: visible; }
+
+    /* ------ Headsets filter dropdown ------------------------------------------------------------------------------------------------------------------------------------------------------------- */
+    .headsets-filter-dropdown { position: relative; flex-shrink: 0; }
+    .headsets-filter-btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 10px 4px 12px; border-radius: 20px; border: 1px solid transparent;
+      cursor: pointer; font-size: 12px; font-weight: 600;
+      background: var(--filter-idle-bg); color: var(--filter-idle-txt);
+      transition: background 0.15s, color 0.15s; white-space: nowrap; font-family: inherit;
+    }
+    .headsets-filter-btn:hover { background: #242424; color: #888; }
+    .headsets-filter-btn.open  { background: #242424; color: #aaa; }
+    .headsets-filter-btn.has-hidden { background: rgba(59,130,246,0.15); color: #60a5fa; border-color: rgba(59,130,246,0.3); }
+    .headsets-filter-btn .hf-chevron { opacity: 0.4; transition: transform 0.15s; }
+    .headsets-filter-btn.open .hf-chevron { transform: rotate(180deg); }
+    .headsets-filter-panel {
+      display: none; position: fixed;
+      min-width: 160px; background: var(--drop-bg); border: 1px solid var(--drop-border);
+      border-radius: 6px; box-shadow: 0 10px 30px rgba(0,0,0,0.6); z-index: 300; padding: 4px 0;
+    }
+    .headsets-filter-panel.open { display: block; }
+    .headsets-filter-item {
+      display: flex; align-items: center; gap: 9px;
+      width: 100%; padding: 7px 13px; background: transparent; border: none;
+      color: #888; font-size: 13px; font-family: inherit; text-align: left; cursor: pointer;
+      transition: background 0.1s, color 0.1s;
+    }
+    .headsets-filter-item:hover { background: var(--drop-item-hover); color: #ddd; }
+    .headsets-filter-item .hf-check { width: 13px; flex-shrink: 0; opacity: 0; }
+    .headsets-filter-item.checked .hf-check { opacity: 1; color: var(--filter-active-bg); }
+    .headsets-filter-item.offline { opacity: 0.45; }
+    [data-theme="light"] .headsets-filter-btn:hover { background: #e5e5e5; color: #333; }
+    [data-theme="light"] .headsets-filter-btn.open  { background: #f0f0f0; color: #111; }
+    [data-theme="light"] .headsets-filter-item { color: #555; }
+    [data-theme="light"] .headsets-filter-item:hover { color: #111; }
+    [data-theme="light"] .headsets-filter-panel { box-shadow: 0 10px 30px rgba(0,0,0,0.12); }
 
     /* ------ Light mode --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- */
     [data-theme="light"] {
@@ -227,21 +286,31 @@
     <!-- Compact headset picker (shown when topbar overflows) -->
     <script>document.write(TopBar.compactDropdownHTML)</script>
 
-    <!-- Center: per-headset visibility toggles (buttons injected by JS) -->
+    <!-- Center: preset filters + headsets dropdown (per-headset buttons injected by JS) -->
     <div class="topbar-filters" id="headset-toggles">
       <span class="filter-label">Show:</span>
       <script>document.write(TopBar.filtersHTML)</script>
     </div>
 
-    <!-- Right: status toggle + shared Config dropdown -->
-    <div class="topbar-right">
-      <div class="v-sep"></div>
+    <!-- Overlay toggles: always visible even in compact mode -->
+    <div class="topbar-overlay-toggles" id="overlay-toggles">
+      <div class="v-sep" style="margin: 8px 0; align-self: stretch;"></div>
       <button class="actions-btn" id="status-toggle" title="Toggle status overlay">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
         </svg>
-        Status
+        <span class="topbar-btn-label">Status</span>
       </button>
+      <button class="actions-btn" id="timer-toggle" title="Toggle timer overlay">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+        </svg>
+        <span class="topbar-btn-label">Timer</span>
+      </button>
+    </div>
+
+    <!-- Right: shared Config dropdown -->
+    <div class="topbar-right">
       <script>document.write(TopBar.monitoringBtnHTML)</script>
       <script>document.write(TopBar.manageDevicesBtnHTML)</script>
       <script>document.write(TopBar.configMenuHTML)</script>
@@ -285,6 +354,7 @@
       <div class="running-app hidden" data-running-app="<%= $headset.displayName %>">
         <span class="running-app-name"></span>
       </div>
+      <div class="timer-overlay" data-timer-cell="<%= $headset.id %>"></div>
       <div class="offline-overlay">OFFLINE</div>
     </div>
 <% } %>
@@ -324,34 +394,72 @@
       });
     });
 
+    var CHECK_SVG_HF =
+      '<svg class="hf-check" width="12" height="12" viewBox="0 0 24 24" fill="none"' +
+      ' stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">' +
+      '<polyline points="20 6 9 17 4 12"/></svg>';
+
+    var CHEVRON_SVG_HF =
+      '<svg class="hf-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none"' +
+      ' stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+      '<polyline points="6 9 12 15 18 9"/></svg>';
+
     function buildHeadsetToggles() {
       var container = document.getElementById('headset-toggles');
 
-      // Shared preset buttons already injected; add separator then per-headset buttons
-      var sep = document.createElement('span');
-      sep.className = 'v-sep';
-      sep.style.cssText = 'margin: 8px 6px; height: auto; align-self: stretch;';
-      container.appendChild(sep);
+      // Build a "Headsets" dropdown after the preset filter buttons
+      var wrapper = document.createElement('div');
+      wrapper.className = 'headsets-filter-dropdown';
+      wrapper.id = 'headsets-filter-dropdown';
+
+      var toggleBtn = document.createElement('button');
+      toggleBtn.className = 'headsets-filter-btn';
+      toggleBtn.id = 'headsets-filter-btn';
+      toggleBtn.innerHTML = 'Headsets ' + CHEVRON_SVG_HF;
+      wrapper.appendChild(toggleBtn);
+
+      var panel = document.createElement('div');
+      panel.className = 'headsets-filter-panel';
+      panel.id = 'headsets-filter-panel';
+      wrapper.appendChild(panel);
 
       document.querySelectorAll('#grid .cell').forEach(function(cell) {
         var dn   = cell.dataset.display;
         var name = cell.dataset.name || dn;
         headsetVisible[dn] = true;
 
-        var btn = document.createElement('button');
-        btn.className = 'filter-btn';
-        btn.dataset.headset = dn;
-        btn.textContent = name;
-        btn.addEventListener('click', function() {
+        var item = document.createElement('button');
+        item.className = 'headsets-filter-item checked';
+        item.dataset.headset = dn;
+        item.innerHTML = CHECK_SVG_HF + name;
+        item.addEventListener('click', function(e) {
+          e.stopPropagation();
           setHeadsetVisible(dn, !headsetVisible[dn]);
-          var allOn  = Object.keys(headsetVisible).every(function(k) { return headsetVisible[k]; });
-          if (allOn)  { TopBar.setActiveFilter('all'); }
+          var allOn = Object.keys(headsetVisible).every(function(k) { return headsetVisible[k]; });
+          if (allOn) { TopBar.setActiveFilter('all'); }
           else { TopBar.clearPresetFilters(); }
         });
-        container.appendChild(btn);
+        panel.appendChild(item);
       });
 
-      // Add per-headset items to compact dropdown
+      toggleBtn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var open = panel.classList.toggle('open');
+        toggleBtn.classList.toggle('open', open);
+        if (open) {
+          var r = toggleBtn.getBoundingClientRect();
+          panel.style.top  = (r.bottom + 2) + 'px';
+          panel.style.left = r.left + 'px';
+        }
+      });
+      document.addEventListener('click', function() {
+        panel.classList.remove('open');
+        toggleBtn.classList.remove('open');
+      });
+
+      container.appendChild(wrapper);
+
+      // Also add per-headset items to the compact dropdown (narrow mode)
       TopBar.addCompactDivider();
       document.querySelectorAll('#grid .cell').forEach(function(cell) {
         var dn   = cell.dataset.display;
@@ -372,9 +480,12 @@
         cell.classList.toggle('hidden', !visible);
         if (!visible) cell.style.width = '';
       }
-      var btn = document.querySelector('[data-headset="' + dn + '"]');
-      if (btn) btn.classList.toggle('active', visible);
+      var btn = document.querySelector('.headsets-filter-item[data-headset="' + dn + '"]');
+      if (btn) btn.classList.toggle('checked', visible);
       TopBar.setCompactItemChecked(dn, visible);
+      var allOn = Object.keys(headsetVisible).every(function(k) { return headsetVisible[k]; });
+      var hfBtn = document.getElementById('headsets-filter-btn');
+      if (hfBtn) hfBtn.classList.toggle('has-hidden', !allOn);
       applyAll();
     }
 
@@ -567,7 +678,7 @@
           }
         }
 
-        var btn = document.querySelector('[data-headset="' + dn + '"]');
+        var btn = document.querySelector('.headsets-filter-item[data-headset="' + dn + '"]');
         if (btn) btn.classList.toggle('offline', !stat.scrcpy);
         var compactItem = document.querySelector('[data-compact-headset="' + dn + '"]');
         if (compactItem) compactItem.classList.toggle('offline', !stat.scrcpy);
@@ -698,6 +809,46 @@
     });
 
 
+    // ---- Timer overlay management ----
+    var timerIntervals = {};  // keyed by headset numeric id
+    var timerGlobalVisible = false;
+
+    var timerToggleBtn = document.getElementById('timer-toggle');
+    timerToggleBtn.addEventListener('click', function() {
+      timerGlobalVisible = !timerGlobalVisible;
+      document.querySelectorAll('#grid .cell').forEach(function(cell) {
+        cell.classList.toggle('timer-hidden', !timerGlobalVisible);
+      });
+      this.style.color = timerGlobalVisible ? 'var(--filter-active-bg)' : '';
+      document.querySelectorAll('.timer-overlay[data-timer-cell]').forEach(function(overlay) {
+        var tid = overlay.dataset.timerCell;
+        if (timerGlobalVisible) { startCellTimerPoll(tid); }
+        else { stopCellTimerPoll(tid); }
+      });
+    });
+
+    function startCellTimerPoll(tid) {
+      stopCellTimerPoll(tid);
+      function poll() {
+        fetch('/timer/' + tid + '.txt?_=' + Date.now())
+          .then(function(r) { return r.ok ? r.text() : ''; })
+          .then(function(t) {
+            var v = (t || '').trim();
+            var overlay = document.querySelector('.timer-overlay[data-timer-cell="' + tid + '"]');
+            if (overlay) {
+              if (v) { overlay.textContent = v; overlay.classList.add('visible'); }
+              else   { overlay.classList.remove('visible'); }
+            }
+          }).catch(function() {});
+      }
+      poll();
+      timerIntervals[tid] = setInterval(poll, 1000);
+    }
+
+    function stopCellTimerPoll(tid) {
+      if (timerIntervals[tid]) { clearInterval(timerIntervals[tid]); delete timerIntervals[tid]; }
+    }
+
     // Run scale then layout then scale again so no-stream heights are known before streaming layout
     var _applyingAll = false;
     function applyAll() {
@@ -711,6 +862,22 @@
     TopBar.initCompact();
     TopBar.initManageDevicesBtn();
     buildHeadsetToggles();
+
+    // Override compact detection: topbar-filters is flex:0 so scrollWidth check doesn't work.
+    // Instead check if the overlay-toggles right edge overlaps the topbar-right left edge.
+    document.addEventListener('DOMContentLoaded', function() {
+      var topbar        = document.querySelector('.topbar');
+      var overlayEl     = document.getElementById('overlay-toggles');
+      var rightSection  = document.querySelector('.topbar-right');
+      if (!topbar || !overlayEl || !rightSection) return;
+      var checkCompact = function() {
+        topbar.classList.remove('compact');
+        var r1 = overlayEl.getBoundingClientRect().right;
+        var r2 = rightSection.getBoundingClientRect().left;
+        topbar.classList.toggle('compact', r1 > r2 - 4);
+      };
+      new ResizeObserver(checkCompact).observe(topbar);
+    });
 
 
     // Attach height-detection listeners to all status-frames

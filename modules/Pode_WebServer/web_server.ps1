@@ -2230,6 +2230,86 @@ try {
 
         # ── /end Known Apps Management API ───────────────────────────────────────
 
+        # API: GET /api/timer?id=<headsetID>&action=start|stop|pause|resume|reset|status|config[&minutes=N&seconds=N&mode=dec|inc]
+        # All actions use GET so Stream Deck and browser links work without POST/CORS setup.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/timer') {
+            try {
+                $rawQuery = $request.Url.Query.TrimStart('?')
+                $qParams  = @{}
+                foreach ($pair in $rawQuery -split '&') {
+                    $kv = $pair -split '=', 2
+                    if ($kv.Count -eq 2) { $qParams[[Uri]::UnescapeDataString($kv[0])] = [Uri]::UnescapeDataString($kv[1]) }
+                }
+
+                $headsetId = 0
+                if ($qParams.ContainsKey('id') -and $qParams['id'] -match '^\d+$') {
+                    $headsetId = [int]$qParams['id']
+                }
+                $action = if ($qParams.ContainsKey('action')) { $qParams['action'].ToLower() } else { '' }
+
+                if ($headsetId -le 0 -or -not $action) { throw 'Missing id or action' }
+
+                $respJson = '{"ok":false,"error":"unknown action"}'
+
+                switch ($action) {
+                    'start' {
+                        Start-HeadsetTimer -headsetId $headsetId
+                        $respJson = '{"ok":true}'
+                    }
+                    'stop' {
+                        Stop-HeadsetTimer -headsetId $headsetId
+                        $respJson = '{"ok":true}'
+                    }
+                    'pause' {
+                        Suspend-HeadsetTimer -headsetId $headsetId
+                        $respJson = '{"ok":true}'
+                    }
+                    'resume' {
+                        Resume-HeadsetTimer -headsetId $headsetId
+                        $respJson = '{"ok":true}'
+                    }
+                    'reset' {
+                        Stop-HeadsetTimer -headsetId $headsetId
+                        $respJson = '{"ok":true}'
+                    }
+                    'status' {
+                        $st = Get-TimerStatus -headsetId $headsetId
+                        $activeStr = if ($st.active)  { 'true' } else { 'false' }
+                        $pausedStr = if ($st.paused)  { 'true' } else { 'false' }
+                        $valueJson = $st.value  | ConvertTo-Json
+                        $modeJson  = $st.mode   | ConvertTo-Json
+                        $respJson  = '{"ok":true,"active":' + $activeStr +
+                                     ',"paused":' + $pausedStr +
+                                     ',"value":'   + $valueJson +
+                                     ',"minutes":' + $st.minutes +
+                                     ',"seconds":' + $st.seconds +
+                                     ',"mode":'    + $modeJson + '}'
+                    }
+                    'config' {
+                        $min  = if ($qParams.ContainsKey('minutes') -and $qParams['minutes'] -match '^\d+$') { [int]$qParams['minutes'] } else { 5 }
+                        $sec  = if ($qParams.ContainsKey('seconds') -and $qParams['seconds'] -match '^\d+$') { [int]$qParams['seconds'] } else { 0 }
+                        $mode = if ($qParams.ContainsKey('mode')    -and $qParams['mode'] -match '^(dec|inc)$') { $qParams['mode'] } else { 'dec' }
+                        Set-TimerConfig -headsetId $headsetId -minutes $min -seconds $sec -mode $mode
+                        $respJson = '{"ok":true}'
+                    }
+                }
+
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($respJson)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $eb = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"' + ($_.Exception.Message -replace '"',"'") + '"}')
+                    $response.StatusCode = 400; $response.ContentType = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
+                } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
         try {
             # Resolve URL path to a file.
             # /data/*.csv  -> served from <ScriptPath>\data\  (read-only CSV export)

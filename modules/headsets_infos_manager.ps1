@@ -94,6 +94,7 @@ function Start-VRMonitor {
         #Keep write-host for display to job output
         Write-Host "Starting VRMonitor global:ConfigFilePath = $($global:ConfigFilePath)" -ForegroundColor Magenta
 
+        $global:IsVRMonitorJob = $true
         while($true) {
             #IMPORT ALL FUNCITONS...
             $scripts_init = Join-Path -Path $global:ScriptPath -ChildPath "\modules\scripts_init.ps1"

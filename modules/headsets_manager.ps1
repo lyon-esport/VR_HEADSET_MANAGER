@@ -504,6 +504,21 @@ function Remove-Headset {
             Remove-Item $favPath -Force -ErrorAction SilentlyContinue
             Write-Log ("Deleted favorites cache: $favPath") -Level DEBUG
         }
+        # Stop timer job and delete timer files (.txt and .run)
+        Stop-HeadsetTimer -headsetId ([int]$headsetToRemove.ID)
+        foreach ($ext in @('.txt', '.run')) {
+            $timerFile = Join-Path $global:ScriptPath ("website\timer\" + $headsetToRemove.ID + $ext)
+            if (Test-Path -LiteralPath $timerFile) {
+                Remove-Item -LiteralPath $timerFile -Force -ErrorAction SilentlyContinue
+                Write-Log ("Deleted timer file: $timerFile") -Level DEBUG
+            }
+        }
+        # Remove headset row from timer.csv
+        $timerCsv = Join-Path $global:ScriptPath "data\timer.csv"
+        if (Test-Path -LiteralPath $timerCsv) {
+            $rows = @(Import-Csv -LiteralPath $timerCsv) | Where-Object { [int]$_.HeadsetID -ne [int]$headsetToRemove.ID }
+            $rows | Export-Csv -LiteralPath $timerCsv -NoTypeInformation -Encoding UTF8 -Force
+        }
     } else {
         Write-Log ($msg.HeadsetIdNotFound -f $ID) -Level ERROR
     }
@@ -531,6 +546,8 @@ function Save-Headsets {
     Write-Log ($msg.HeadsetsSaved -f $FilePath) -Level INFO
     Write-htmlMonitor $newHeadsets
     Write-VideoMonitor $newHeadsets
+    # Create timer files for any newly added headsets (non-destructive: skips existing files)
+    Initialize-TimerFiles
 } #OK
 
 

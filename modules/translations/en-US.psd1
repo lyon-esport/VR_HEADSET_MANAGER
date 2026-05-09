@@ -433,4 +433,11 @@
     WebServerUrlAclRegistering = "Registering HTTP URL ACL for web server port {0} (allows non-admin binding)"
     WebServerUrlAclExists = "Web server URL ACL already registered for port {0}"
     WebServerUrlAclFailed = "Failed to register web server URL ACL: {0}"
+
+    # timer.ps1
+    TimerStarted          = "Timer started for headset {0} ({1}s, {2} mode)"
+    TimerStopped          = "Timer stopped for headset {0}"
+    TimerExpired          = "Timer expired for headset {0}"
+    TimerFilesInitialized = "Timer files initialized ({0} headsets)"
+    TimerFolderCreated    = "Timer folder created: {0}"
 }
