@@ -1,28 +1,28 @@
 
 # Per-headset timers. Timer state is stored in $script:activeTimers so it
 # persists across API calls within the same process (web server or main console).
-# Timer files live in website\timer\<DisplayName>.txt and are served as static files.
+# Timer files live in website\timer\<DisplayName>[timer].txt and are served as static files.
 # The elapsed handler runs in a Start-Job child process to avoid PS runspace conflicts.
-# A run-token file (<DisplayName>.run) lets orphaned jobs from previous processes stop themselves
-# when a new timer starts: the job exits as soon as its token no longer matches the file.
+# A run-token file (<DisplayName>[timer].run) lets orphaned jobs from previous processes stop
+# themselves when a new timer starts: the job exits as soon as its token no longer matches the file.
 
 $script:activeTimers = @{}   # key: int headsetId, value: @{job; filePath; paused; pausedRemaining; mode; startTime; totalSecs}
 
 function Get-TimerSafeName {
     param([int]$headsetId)
     $h = @(Get-KnownHeadsets) | Where-Object { [int]$_.ID -eq $headsetId } | Select-Object -First 1
-    if ($h -and $h.DisplayName) { return Convert-Displayname $h.DisplayName }
+    if ($h -and $h.Name) { return Convert-Displayname $h.Name }
     return [string]$headsetId
 }
 
 function Get-TimerFilePath {
     param([int]$headsetId)
-    return Join-Path $global:ScriptPath ("website\timer\" + (Get-TimerSafeName $headsetId) + ".txt")
+    return Join-Path $global:ScriptPath ("website\timer\" + (Get-TimerSafeName $headsetId) + "[timer].txt")
 }
 
 function Get-TimerRunFilePath {
     param([int]$headsetId)
-    return Join-Path $global:ScriptPath ("website\timer\" + (Get-TimerSafeName $headsetId) + ".run")
+    return Join-Path $global:ScriptPath ("website\timer\" + (Get-TimerSafeName $headsetId) + "[timer].run")
 }
 
 function Get-TimerCsvPath {
@@ -71,14 +71,22 @@ function Initialize-TimerFiles {
         Write-Log ($msg.TimerFilesInitialized -f $count) -Level DEBUG
     }
 
-    # Migrate old numeric-named files to display-name files (one-time, non-destructive)
+    # Clean up any old numeric or intermediate-named files; ensure only [timer]-named files remain
     foreach ($h in $headsets) {
         $id = [int]$h.ID
+        $safeName = Get-TimerSafeName $id
         foreach ($suffix in @('.txt', '.run')) {
-            $oldFile = Join-Path $global:ScriptPath ("website\timer\" + $id + $suffix)
-            $newFile = if ($suffix -eq '.txt') { Get-TimerFilePath -headsetId $id } else { Get-TimerRunFilePath -headsetId $id }
-            if ((Test-Path -LiteralPath $oldFile) -and ($oldFile -ne $newFile) -and (-not (Test-Path -LiteralPath $newFile))) {
-                Rename-Item -LiteralPath $oldFile -NewName (Split-Path $newFile -Leaf) -Force -ErrorAction SilentlyContinue
+            $timerSuffix = if ($suffix -eq '.txt') { '[timer].txt' } else { '[timer].run' }
+            $correctFile = Join-Path $global:ScriptPath ("website\timer\" + $safeName + $timerSuffix)
+            foreach ($oldName in @(([string]$id + $suffix), ($safeName + $suffix))) {
+                $oldFile = Join-Path $global:ScriptPath ("website\timer\" + $oldName)
+                if ((Test-Path -LiteralPath $oldFile) -and ($oldFile -ne $correctFile)) {
+                    if (Test-Path -LiteralPath $correctFile) {
+                        Remove-Item -LiteralPath $oldFile -Force -ErrorAction SilentlyContinue
+                    } else {
+                        Rename-Item -LiteralPath $oldFile -NewName (Split-Path $correctFile -Leaf) -Force -ErrorAction SilentlyContinue
+                    }
+                }
             }
         }
     }

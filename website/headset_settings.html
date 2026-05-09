@@ -1012,7 +1012,7 @@
               '<input type="number" class="timer-input timer-min-input" data-timer-id="' + cfg.ID + '" value="5" min="0" max="99">' +
               '<span class="timer-sep">:</span>' +
               '<input type="number" class="timer-input timer-sec-input" data-timer-id="' + cfg.ID + '" value="0" min="0" max="59">' +
-              '<button class="timer-mode-btn" data-mode="dec" data-timer-id="' + cfg.ID + '">DEC</button>' +
+              '<button class="timer-mode-btn" data-mode="dec" data-timer-id="' + cfg.ID + '">CountDOWN</button>' +
               '<button class="timer-start-btn" data-timer-id="' + cfg.ID + '" data-dn="' + dn + '" title="Long press to reset">Start</button>' +
             '</div>' +
           '</div>' +
@@ -1319,6 +1319,7 @@
         var modeBtn = e.target.closest('[data-timer-id][data-mode]');
         if (modeBtn && modeBtn.classList.contains('timer-mode-btn')) {
           var newMode = modeBtn.dataset.mode === 'dec' ? 'inc' : 'dec';
+          modeBtn.textContent = newMode === 'dec' ? 'CountDOWN' : 'CountUP';
           modeBtn.dataset.mode = newMode;
           modeBtn.textContent = newMode.toUpperCase();
           var tid = modeBtn.dataset.timerId;
@@ -1812,7 +1813,7 @@
             var disp     = document.querySelector('.timer-display[data-timer-id="' + tid + '"]');
             if (minInput) minInput.value = j.minutes;
             if (secInput) secInput.value = j.seconds;
-            if (modeBtn)  { modeBtn.dataset.mode = j.mode; modeBtn.textContent = (j.mode || 'dec').toUpperCase(); }
+            if (modeBtn)  { modeBtn.dataset.mode = j.mode; modeBtn.textContent = (j.mode || 'dec') === 'dec' ? 'CountDOWN' : 'CountUP'; }
             if (startBtn) {
               if (j.active)       { startBtn.classList.remove('paused'); startBtn.classList.add('running'); startBtn.textContent = 'Pause'; }
               else if (j.paused)  { startBtn.classList.remove('running'); startBtn.classList.add('paused'); startBtn.textContent = 'Resume'; }
