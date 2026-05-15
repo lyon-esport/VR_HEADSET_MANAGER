@@ -16,7 +16,7 @@ places:
 | `website/timer/<DisplayName>[timer].run` | Run-token used to kill orphaned background jobs |
 
 `<DisplayName>` is the headset's display name with spaces replaced by underscores
-(e.g. `Q3 RED` → `Q3_RED`), consistent with `Q3_RED[video].html` and `Q3_RED[monitoring].html`. Timer configuration (duration, mode) is stored per-headset
+(e.g. `Headset Name` → `<headset-name>`), consistent with `<headset-name>[video].html` and `<headset-name>[monitoring].html`. Timer configuration (duration, mode) is stored per-headset
 in `data/timer.csv`.
 
 ---
@@ -45,7 +45,7 @@ Every request must identify the target headset using **one** of:
 | Parameter | Format | Example |
 |---|---|---|
 | `id` | Numeric headset ID (from `known_headsets.csv`) | `id=1` |
-| `name` | Headset display name (spaces allowed or replaced by `_`) | `name=Q3_RED` or `name=Q3 RED` |
+| `name` | Headset display name (spaces allowed or replaced by `_`) | `name=<headset-name>` or `name=<Headset Name>` |
 
 ---
 
@@ -57,7 +57,7 @@ Starts the timer using the currently saved configuration. If a timer is already 
 is stopped first and restarted from the beginning.
 
 ```
-GET /api/timer?name=Q3_RED&action=start
+GET /api/timer?name=<headset-name>&action=start
 ```
 
 Response:
@@ -73,7 +73,7 @@ Freezes the timer at its current value. The display file retains the frozen time
 stays visible in OBS overlays.
 
 ```
-GET /api/timer?name=Q3_RED&action=pause
+GET /api/timer?name=<headset-name>&action=pause
 ```
 
 Response (success):
@@ -94,7 +94,7 @@ Continues counting from where the timer was paused. Works correctly for both `de
 modes.
 
 ```
-GET /api/timer?name=Q3_RED&action=resume
+GET /api/timer?name=<headset-name>&action=resume
 ```
 
 Response (success):
@@ -114,7 +114,7 @@ Response (timer not paused):
 Stops the timer and clears the display file. The overlay disappears.
 
 ```
-GET /api/timer?name=Q3_RED&action=reset
+GET /api/timer?name=<headset-name>&action=reset
 ```
 
 Response:
@@ -130,7 +130,7 @@ Returns the full current state of the timer. All pages poll this endpoint every 
 keep button colours and the displayed value in sync across all open windows.
 
 ```
-GET /api/timer?name=Q3_RED&action=status
+GET /api/timer?name=<headset-name>&action=status
 ```
 
 Response:
@@ -163,7 +163,7 @@ Sets the duration and mode. The new values are stored in `data/timer.csv` and us
 time `start` is called. Does **not** affect a currently running timer.
 
 ```
-GET /api/timer?name=Q3_RED&action=config&minutes=10&seconds=0&mode=dec
+GET /api/timer?name=<headset-name>&action=config&minutes=10&seconds=0&mode=dec
 ```
 
 | Parameter | Required | Default | Description |
@@ -198,7 +198,7 @@ The display value is also available as a plain-text static file served by the we
 GET /timer/<DisplayName>[timer].txt
 ```
 
-Example: `http://192.168.1.37:8080/timer/Q3_RED[timer].txt` → `04:32`
+Example: `http://<your-server-ip>:<your-server-port>/timer/<headset-name>[timer].txt` → `04:32`
 
 The file is overwritten every second while the timer runs. It is cleared (empty) when the
 timer is stopped or reset. This is useful for OBS text sources that read from a URL.
@@ -213,36 +213,36 @@ timer is stopped or reset. This is useful for OBS text sources that read from a 
 #### curl (Linux / macOS / Windows)
 
 ```bash
-# Start a 5-minute countdown on Q3 RED
-curl "http://192.168.1.37:8080/api/timer?name=Q3_RED&action=start"
+# Start a 5-minute countdown on <Headset Name>
+curl "http://<your-server-ip>:<your-server-port>/api/timer?name=<headset-name>&action=start"
 
 # Pause it
-curl "http://192.168.1.37:8080/api/timer?name=Q3_RED&action=pause"
+curl "http://<your-server-ip>:<your-server-port>/api/timer?name=<headset-name>&action=pause"
 
 # Resume
-curl "http://192.168.1.37:8080/api/timer?name=Q3_RED&action=resume"
+curl "http://<your-server-ip>:<your-server-port>/api/timer?name=<headset-name>&action=resume"
 
 # Check status
-curl "http://192.168.1.37:8080/api/timer?name=Q3_RED&action=status"
+curl "http://<your-server-ip>:<your-server-port>/api/timer?name=<headset-name>&action=status"
 
 # Set a 10-minute count-up timer, then start it
-curl "http://192.168.1.37:8080/api/timer?name=Q3_RED&action=config&minutes=10&seconds=0&mode=inc"
-curl "http://192.168.1.37:8080/api/timer?name=Q3_RED&action=start"
+curl "http://<your-server-ip>:<your-server-port>/api/timer?name=<headset-name>&action=config&minutes=10&seconds=0&mode=inc"
+curl "http://<your-server-ip>:<your-server-port>/api/timer?name=<headset-name>&action=start"
 ```
 
 #### PowerShell
 
 ```powershell
-$base = "http://192.168.1.37:8080/api/timer"
-Invoke-RestMethod "$base?name=Q3_RED&action=start"
-Invoke-RestMethod "$base?name=Q3_RED&action=status"
+$base = "http://<your-server-ip>:<your-server-port>/api/timer"
+Invoke-RestMethod "$base?name=<headset-name>&action=start"
+Invoke-RestMethod "$base?name=<headset-name>&action=status"
 ```
 
 #### Stream Deck (URL action plugin)
 
 Configure a URL action button pointing to:
 ```
-http://192.168.1.37:8080/api/timer?name=Q3_RED&action=start
+http://<your-server-ip>:<your-server-port>/api/timer?name=<headset-name>&action=start
 ```
 
 One button per action (start / pause / resume / reset). Because all actions are plain GET
@@ -251,9 +251,9 @@ requests there is no authentication or content-type header required.
 #### OBS text source (read timer file)
 
 In OBS, add a **Text (GDI+)** source, enable **"Read from file"**, and point it to the
-`website/timer/Q3_RED.txt` file on disk, or use a **Browser** source with the URL:
+`website/timer/<headset-name>.txt` file on disk, or use a **Browser** source with the URL:
 ```
-http://192.168.1.37:8080/timer/Q3_RED.txt
+http://<your-server-ip>:<your-server-port>/timer/<headset-name>.txt
 ```
 
 ---
