@@ -1319,9 +1319,8 @@
         var modeBtn = e.target.closest('[data-timer-id][data-mode]');
         if (modeBtn && modeBtn.classList.contains('timer-mode-btn')) {
           var newMode = modeBtn.dataset.mode === 'dec' ? 'inc' : 'dec';
-          modeBtn.textContent = newMode === 'dec' ? 'CountDOWN' : 'CountUP';
           modeBtn.dataset.mode = newMode;
-          modeBtn.textContent = newMode.toUpperCase();
+          modeBtn.textContent = newMode === 'dec' ? 'CountDOWN' : 'CountUP';
           var tid = modeBtn.dataset.timerId;
           saveTimerConfig(tid);
           return;
