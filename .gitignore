@@ -32,6 +32,11 @@ scrcpy_manualScripts/
 #Web and app data
 /app_icons
 
+Exclude .md files bur include docs md files
+*.md
+!/docs/*.md
+!/README.md
+
 #Other...
 desktop.ini
 .vscode
@@ -39,4 +44,4 @@ OBS/timer/
 .gdoc
 /.github/
 *_test.ps1
-*.md
+
