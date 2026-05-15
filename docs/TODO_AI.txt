@@ -52,6 +52,16 @@ Let's check with stream deck activity
 
 
 
+
+#### RELEASE ####
+	Clear all local files (see scripts/Prepare-Release.ps1)
+	Clear useless Sources files
+	Check a way to dl ffmpeg directly while lauching the app on the first time, and install it on computer ?
+	Find a way to install the software, or have a better fw checks while launching and starting as admin automatically in another page.
+	If ports changes, need to remove previous fw entry, and recreate entries with the new rules
+	
+
+
 DEBUG
 
 	Console : "Web Monitor available at :"
