@@ -67,10 +67,6 @@ Before using the tool, make sure the following requirements are met:
 ## Roadmap 🎯
 
 ### 🐞Known issues
-- [x] When stream auto restart is enabled, the headset stream starts sometimes 2 times if the fist stream didn't had time to start (duplicate scrcpy process)
-- [x] known_headsets.csv : Do not update correctly the serial number
-- [ ] Bug on adding a headset from the IP address
-	> Test every combination by adding/modifying/deleting headset...
 
 ### Improvements
 #### 🏃Startup checks
@@ -79,13 +75,11 @@ Before using the tool, make sure the following requirements are met:
 - [ ] Setup powershell execution >> To test on fresh installed pc
 - [ ] If no headset in the known headset file, propose to add it or search over the network (mdns scan ? usb ?)
 - [ ] Check available json config files in /config folder, and propose to select the right one if any
-- [x] Test if the app is not already running... If yes, warn the user and ask if he really wants to start it...
 
 #### 🛠️ Backend
 - [x] [🔄 IN TEST] include a json validator or tester (and warn config json is broken, and open a web page with json validator...) then propose to try reload or create a new file based on the template (overwrite existing file)
-- [X] ⚠️ Scan if modules files have changed despite reloading it every 5s.
 - [ ] :key: Save by a secured manner the Wifi Password with [Marshal](https://www.secureideas.com/blog/secure-password-management-in-powershell-best-practices) (ConvertTo-SecureString / ConvertFrom-SecureString)
-- [ ] REST API to provide a web page to manage it from a phone, or by Stream Deck hitself ?
+- [ ] REST API to provide a web page to manage it from a phone, or by Stream Deck (already done for timers)
 
 
 #### ⚙️ Headsets management (Headset Management Console)
@@ -93,46 +87,31 @@ Before using the tool, make sure the following requirements are met:
 	> - Install config : Do you want to modify headset parameters ? Y/N and test it on a brand new headset
  		> - Test pushing parameters using ADB Wifi
  		> - Provide parameters customization for each headset using the HMC
-	> - if headset has the same serial : update the IP in the known headsets (need to manage serial in known_headets.csv)
-	> - If headset is connected to usb, propose to add it automatically...
- 		> - If the headset is not connected to the right Wifi, let's propose to connect to...
-    > - If not installed, propose to install oculus-wireless-adb
 - [ ] Scan network process to review
   > mdns to test for a headset in developper mode enabled
   > check all devices availabiel with 5555 opened
 
 #### 📺 VR Headset Screen capture
-- [X] [OK] Manage scrcpy profiles for each headset
-  - Save these parameters in known_headsets.csv (Left/right eye; audio duplicate or not ; bandwidth ; FPS ) [L/R]-[D/N]-45-20
-  - Parameters in config.json defines only template parameters common parameters like crop, angle, video codec, video encoder and video buffer and stay awake for each headset type
-  - Restart the current headset stream if template changed
+
 
 #### 🎨 UI and Visual customization
-- [ ] ⚠️ Add controllers battery level for OBS view
-- [ ] Web page to allow configuration and screen miroring visualization
 
-#### Headset info scrapping and interraction
+#### Headset info scrapping and interaction
 - [ ] Force the screen to get out of the game and switch to passthrough mode
 - [ ] Force recenter
-- [ ] Grab currently running application (also if back to home/QGO ?)
 
 #### 🧪 New functionalities
-
-- [ ] ⚠️ [⛏️ IN PROCESS] implement a local resteam functionality that allows to give access to the headset screen from any other computer or phone
-  > [mediamtx](https://github.com/bluenviron/mediamtx)
 
 - [ ] ⚠️ [⛏️ IN PROCESS] Dev of a Stream deck plugin
   > - Manage communication with Stream Deck Plugin...
   > - [Named Pipe ?](https://rkeithhill.wordpress.com/2014/11/01/windows-powershell-and-named-pipes/)
 
-- [ ] Detect while a new headset is connected on the USB port and propose to start adding process
-
+#### Translations
+- [x] [DONE] Translate all text (IHM + comments) in [EN] instead of [FR] - To do by IA... [like this](/docs/translation_fr.xml)
+- [ ] Translation of the website
 
 ### Code improvement
-- [ ] Review all powershell code with PSScriptAnalyzer
-- [x] [DONE] Translate all text (IHM + comments) in [EN] instead of [FR] - To do by IA... [like this](/docs/translation_fr.xml)
-- [x] [DONE] Review adb_functions.ps1 to pass device adb object in parameter of all request functions, to allow either USB or Wifi ADB device (Get-HeadsetModel, Get-QuestControllerBatteryStatus, Get-HeadsetBatteryStatus...)
-    Note : Implemented for ADB Wifi only, not for USB.
+- [ ] Review all powershell code with PSScriptAnalyzer and claude code...
 
 ---
 
