@@ -2,7 +2,7 @@
 
 ## Overview
 
-**VR HEADSET MANAGER** is a PowerShell-based automation tool designed to manage, monitor, and capture screens of **Meta Quest VR headsets** on flat screen using **ADB** and **scrcpy**.
+**VR HEADSET MANAGER** is a PowerShell-based automation tool designed to manage, monitor, and capture screens of **Meta Quest VR headsets** on flat screen using **ADB** over wifi and [**scrcpy**](https://github.com/Genymobile/scrcpy).
 
 It has been developped exclusively to manage Meta Quests headsets (Quest 2 and Quest 3), but should work for many more headsets based on Android (as it's using ADB Wifi).
 
@@ -10,7 +10,7 @@ Please contact me if you need to add support of a new headset model/brands. If y
 
 It provides:
 - Headsets screen capture (thanks scrcpy) with auto-restart and streaming over a web page, WHEP, RTSP or HLS
-- Optional screen caputre session recording
+- Optional screen capture session recording
 - Web page to manage headsets, display screen captures with extra low latency
 - Graphic reporting of each headset (headsets and controllers batteries, charge status, temperature), with HTML generation for OBS integration
 - Timer for each headset (for limiting gaming sessions for players)
@@ -66,7 +66,7 @@ I personally use it during showrooms and gaming exhibitions to capture the live 
 Before using the tool, make sure the following requirements are met:
 - ✅ This program folder must include **VR_HEADSET_MANAGER** in the name
 - ✅ The Meta Quest headset must be in **Developer Mode**
-- ✅ The Meta Quest headset must be connecter over WIFI, and reachable from the computer where you execute the script
+- ✅ The Meta Quest headset must be connected over WIFI, and reachable from the computer where you execute the script
   *Note : To limit lacencies I recommand a dedicated WIFI SSID and channels for headsets only, and an ethernet connexion for the computer which is executing VR HEADSET MANAGER.*
 - ✅ **ADB over WiFi must be enabled** on the headset >> [You can follow this process to enable it !](/docs/docs_HowToEnableADBWifi.md)
 
