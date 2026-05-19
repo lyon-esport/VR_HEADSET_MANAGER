@@ -2,16 +2,19 @@
 
 ## Overview
 
-**VR HEADSET MANAGER** is a PowerShell-based automation tool designed to manage, monitor, and capture screens of **Meta Quest VR headsets** on flat screen using **ADB** and **scrcpy**.
+**VR HEADSET MANAGER** is a PowerShell-based automation tool designed to manage, monitor, and capture screens of **Meta Quest VR headsets** on flat screen using **ADB** over wifi and [**scrcpy**](https://github.com/Genymobile/scrcpy).
+
+It has been developped exclusively to manage Meta Quests headsets (Quest 2 and Quest 3), but should work for many more headsets based on Android (as it's using ADB Wifi).
+
+Please contact me if you need to add support of a new headset model/brands. If you wana offer me a different headset, i'll be pleased to support it in a next realase :laughing:.
 
 It provides:
-- 
-- Automated wireless ADB activation
-- Headset detection over local network (with developper mode and ADB Wifi already enabled)
-- Scrcpy streaming with auto-restart
-- Optional session recording
-- Log management
-- Graphic reporting of each headset with HTML generation for OBS integration
+- Headsets screen capture (thanks scrcpy) with auto-restart and streaming over a web page, WHEP, RTSP or HLS
+- Optional screen capture session recording
+- Web page to manage headsets, display screen captures with extra low latency
+- Graphic reporting of each headset (headsets and controllers batteries, charge status, temperature), with HTML generation for OBS integration
+- Timer for each headset (for limiting gaming sessions for players)
+- Automated wireless ADB activation while connecting the headset to the computer with USB
 - CSV-based headset configuration management
 
 The tool is intended for **VR labs, demo environments, training centers, and multi-headset deployments**.
@@ -31,19 +34,27 @@ I personally use it during showrooms and gaming exhibitions to capture the live 
    >   - add Windows Firewall exceptions to allow mediamtx to restream over the network.
    >   - add Windows Firewall exceptions to allow the programm to scan mdns headsets over the network.
    >   - create a config file from the template
+
+4. **Open the web page**
+   > - The webserver is automatically started once the application is running.
+   > - Let's open the web page - the link is provided on the main console - by default : **http://<your_server_ip>:8080**
    
-3. **Add headset**
+4. **Add headset**
    > - Connect with USB your Meta Quest Headset (⚠️ Developper mode must be already enabled)
+   > - In the web server go to the tab [CONFIG] >> Manage New Devices
+   OR
    > - In the [Headset Management Console], press **A** to add a headset
    > - Follow the instructions to add your headset (IP address, Firendly name...)
    > - Installation of [oculus-wireless-adb](https://github.com/thedroidgeek/oculus-wireless-adb) is proposed to start ADB Wifi from the headset without USB connection required.
    
-4. **Press the key corresponding to the ID if the headset to start screen miroring (scrcpy) manually**
-
-5. **Modify headset parameters**
+5. **in CLI, press the key corresponding to the ID if the headset to start screen miroring (scrcpy) manually**
+5. **in Web server, enable Auto-restart scrcpy to start screen capture automatically when the headset is available**
+   
+6. **Modify headset parameters**
    - Use different options to manage you headsets. You can enable recording, enable the auto-restart of the screen miroring, etc...
 
-6. **Modify VR HEADSET MANAGER parameters**
+7. **Modify VR HEADSET MANAGER parameters**
+   - Use the web server to adapt parameters as you want.
    - You can adapt configuration in the ./config/config.json file following [this guide](/docs/docs_config.md)
    - Optionnally you can start the script with another custom config file by passing it as a parameter
    - Control per-headset timers from any external tool (Stream Deck, OBS, curl...) using the [Timer API](/docs/docs_timer_api.md)
@@ -55,7 +66,7 @@ I personally use it during showrooms and gaming exhibitions to capture the live 
 Before using the tool, make sure the following requirements are met:
 - ✅ This program folder must include **VR_HEADSET_MANAGER** in the name
 - ✅ The Meta Quest headset must be in **Developer Mode**
-- ✅ The Meta Quest headset must be connecter over WIFI, and reachable from the computer you execute the script
+- ✅ The Meta Quest headset must be connected over WIFI, and reachable from the computer where you execute the script
   *Note : To limit lacencies I recommand a dedicated WIFI SSID and channels for headsets only, and an ethernet connexion for the computer which is executing VR HEADSET MANAGER.*
 - ✅ **ADB over WiFi must be enabled** on the headset >> [You can follow this process to enable it !](/docs/docs_HowToEnableADBWifi.md)
 
@@ -63,14 +74,21 @@ Before using the tool, make sure the following requirements are met:
 > Without these prerequisites, the headset will not be reachable over the network and scrcpy streaming will not work.
 
 ---
+## WEBSITE & API
+A dedicated website is available to manage your heasets and handle many options in addition of the CLI.
+I recommand to use the web interface to interract with your headsets as I added many functionalities (like headsets applications management and launcher).
 
+The web server is enabled by default to port 8080. This port can be modified in the config.json file.
+
+---
+## HEADSETS VIDEO CAPURE AND RESTREAM
+
+
+---
 ## Roadmap 🎯
 
 ### 🐞Known issues
-- [x] When stream auto restart is enabled, the headset stream starts sometimes 2 times if the fist stream didn't had time to start (duplicate scrcpy process)
-- [x] known_headsets.csv : Do not update correctly the serial number
-- [ ] Bug on adding a headset from the IP address
-	> Test every combination by adding/modifying/deleting headset...
+- At the moment it seems stable, let's report issues using Github Issues section
 
 ### Improvements
 #### 🏃Startup checks
@@ -79,13 +97,11 @@ Before using the tool, make sure the following requirements are met:
 - [ ] Setup powershell execution >> To test on fresh installed pc
 - [ ] If no headset in the known headset file, propose to add it or search over the network (mdns scan ? usb ?)
 - [ ] Check available json config files in /config folder, and propose to select the right one if any
-- [x] Test if the app is not already running... If yes, warn the user and ask if he really wants to start it...
 
 #### 🛠️ Backend
 - [x] [🔄 IN TEST] include a json validator or tester (and warn config json is broken, and open a web page with json validator...) then propose to try reload or create a new file based on the template (overwrite existing file)
-- [X] ⚠️ Scan if modules files have changed despite reloading it every 5s.
 - [ ] :key: Save by a secured manner the Wifi Password with [Marshal](https://www.secureideas.com/blog/secure-password-management-in-powershell-best-practices) (ConvertTo-SecureString / ConvertFrom-SecureString)
-- [ ] REST API to provide a web page to manage it from a phone, or by Stream Deck hitself ?
+- [ ] REST API to provide a web page to manage it from a phone, or by Stream Deck (already done for timers)
 
 
 #### ⚙️ Headsets management (Headset Management Console)
@@ -93,46 +109,31 @@ Before using the tool, make sure the following requirements are met:
 	> - Install config : Do you want to modify headset parameters ? Y/N and test it on a brand new headset
  		> - Test pushing parameters using ADB Wifi
  		> - Provide parameters customization for each headset using the HMC
-	> - if headset has the same serial : update the IP in the known headsets (need to manage serial in known_headets.csv)
-	> - If headset is connected to usb, propose to add it automatically...
- 		> - If the headset is not connected to the right Wifi, let's propose to connect to...
-    > - If not installed, propose to install oculus-wireless-adb
 - [ ] Scan network process to review
   > mdns to test for a headset in developper mode enabled
   > check all devices availabiel with 5555 opened
 
 #### 📺 VR Headset Screen capture
-- [X] [OK] Manage scrcpy profiles for each headset
-  - Save these parameters in known_headsets.csv (Left/right eye; audio duplicate or not ; bandwidth ; FPS ) [L/R]-[D/N]-45-20
-  - Parameters in config.json defines only template parameters common parameters like crop, angle, video codec, video encoder and video buffer and stay awake for each headset type
-  - Restart the current headset stream if template changed
+
 
 #### 🎨 UI and Visual customization
-- [ ] ⚠️ Add controllers battery level for OBS view
-- [ ] Web page to allow configuration and screen miroring visualization
 
-#### Headset info scrapping and interraction
+#### Headset info scrapping and interaction
 - [ ] Force the screen to get out of the game and switch to passthrough mode
 - [ ] Force recenter
-- [ ] Grab currently running application (also if back to home/QGO ?)
 
 #### 🧪 New functionalities
-
-- [ ] ⚠️ [⛏️ IN PROCESS] implement a local resteam functionality that allows to give access to the headset screen from any other computer or phone
-  > [mediamtx](https://github.com/bluenviron/mediamtx)
 
 - [ ] ⚠️ [⛏️ IN PROCESS] Dev of a Stream deck plugin
   > - Manage communication with Stream Deck Plugin...
   > - [Named Pipe ?](https://rkeithhill.wordpress.com/2014/11/01/windows-powershell-and-named-pipes/)
 
-- [ ] Detect while a new headset is connected on the USB port and propose to start adding process
-
+#### 📚 Translations
+- [x] [DONE] Translate all text (IHM + comments) in [EN] instead of [FR] - To do by IA... [like this](/docs/translation_fr.xml)
+- [ ] Translation of the website
 
 ### Code improvement
-- [ ] Review all powershell code with PSScriptAnalyzer
-- [x] [DONE] Translate all text (IHM + comments) in [EN] instead of [FR] - To do by IA... [like this](/docs/translation_fr.xml)
-- [x] [DONE] Review adb_functions.ps1 to pass device adb object in parameter of all request functions, to allow either USB or Wifi ADB device (Get-HeadsetModel, Get-QuestControllerBatteryStatus, Get-HeadsetBatteryStatus...)
-    Note : Implemented for ADB Wifi only, not for USB.
+- [ ] Review all powershell code with PSScriptAnalyzer and claude code...
 
 ---
 
