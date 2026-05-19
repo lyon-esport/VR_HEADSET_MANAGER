@@ -138,6 +138,7 @@ function Get-Config {
     # mediamtx restream server
     if ($configContent.mediamtx) {
         $global:mediamtxEnabled      = [bool]$configContent.mediamtx.enabled
+        $global:mediamtxLogLevel     = if ($configContent.mediamtx.log_level) { $configContent.mediamtx.log_level } else { 'info' }
         $global:mediamtxFolder       = Join-Path -Path $sourcesPath -ChildPath $configContent.mediamtx.folder
         $global:mediamtxFilePath     = Join-Path -Path $global:mediamtxFolder -ChildPath "mediamtx.exe"
         $global:mediamtxYmlPath      = Join-Path -Path $global:ScriptPath -ChildPath "config\mediamtx_headsets.yml"

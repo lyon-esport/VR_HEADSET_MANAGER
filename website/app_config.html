@@ -71,41 +71,6 @@
     .action-btn.danger svg { stroke: #ef4444; }
     .action-btn .btn-desc { font-size: 11px; color: var(--muted); margin-top: 2px; font-weight: 400; }
 
-    /* Live logs */
-    .logs-card {
-      background: var(--card-bg); border: 1px solid var(--card-border);
-      border-radius: 10px; display: flex; flex-direction: column;
-      flex: 1; min-height: 280px; overflow: hidden;
-    }
-    .logs-header {
-      display: flex; align-items: center; gap: 8px;
-      padding: 11px 16px; border-bottom: 1px solid var(--card-border); flex-shrink: 0;
-    }
-    .logs-header span { font-size: 13px; font-weight: 600; color: #e5e7eb; flex: 1; }
-    [data-theme=light] .logs-header span { color: #111827; }
-    .logs-ctrl-btn {
-      font-size: 11px; padding: 4px 10px; border-radius: 5px;
-      border: 1px solid #333; background: #1a1a1a; color: #94a3b8;
-      cursor: pointer; transition: background .15s, color .15s;
-    }
-    [data-theme=light] .logs-ctrl-btn { background: #f3f4f6; border-color: #d1d5db; color: #6b7280; }
-    .logs-ctrl-btn:hover, .logs-ctrl-btn.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
-    .logs-body {
-      flex: 1; overflow-y: auto; padding: 10px 16px;
-      font-family: 'Cascadia Code', 'Consolas', 'Menlo', monospace;
-      font-size: 11.5px; line-height: 1.65; color: #94a3b8;
-      white-space: pre-wrap; word-break: break-all;
-    }
-    [data-theme=light] .logs-body { color: #374151; }
-    .logs-body .log-err  { color: #f87171; }
-    .logs-body .log-warn { color: #fbbf24; }
-    .logs-body .log-ok   { color: #34d399; }
-    .logs-body .log-info { color: #60a5fa; }
-    .logs-body .log-dbg  { color: #64748b; }
-    .logs-footer { padding: 6px 16px; display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
-    .logs-footer span { font-size: 11px; color: var(--muted); }
-    .logs-status { font-size: 11px; padding: 4px 16px 8px; color: var(--muted); flex-shrink: 0; }
-
     /* Toast */
     #toast {
       position: fixed; bottom: 28px; left: 50%;
@@ -505,6 +470,7 @@
           <div class="scrcpy-folder-ctrl" style="flex-direction:column;align-items:flex-start">
             <div style="display:flex;gap:8px;align-items:center;width:100%">
               <input type="text" id="scrcpy-record-input" class="cfg-input" placeholder="e.g. D:/DATA/Records">
+              <button class="cfg-cancel-btn" style="white-space:nowrap" onclick="browseFolder('scrcpy-record-input')">Browse...</button>
               <button id="scrcpy-record-save" class="cfg-save-btn">Save</button>
             </div>
             <button class="action-btn" id="btn-open-records" style="margin-top:8px">
@@ -529,40 +495,6 @@
             <button id="scrcpy-folder-save" class="cfg-save-btn">Save</button>
           </div>
         </div>
-      </div>
-    </section>
-
-    <!-- Live logs -->
-    <section class="section logs-section">
-      <div class="section-title">Live Logs</div>
-      <button class="action-btn" id="btn-open-logs" style="margin-bottom:8px">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-        </svg>
-        <div>
-          <div>Open Logs Folder</div>
-          <div class="btn-desc">Opens in Explorer</div>
-        </div>
-      </button>
-      <div class="logs-card">
-        <div class="logs-header">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="3"/>
-          </svg>
-          <span>Live</span>
-          <div style="display:flex;gap:6px">
-            <button class="logs-ctrl-btn" id="logs-pause-btn">Pause</button>
-            <button class="logs-ctrl-btn" id="logs-clear-btn">Clear</button>
-            <button class="logs-ctrl-btn" id="logs-scroll-btn" title="Toggle auto-scroll">Scroll</button>
-            <button class="logs-ctrl-btn" id="logs-reverse-btn" title="Toggle order">Newest first</button>
-          </div>
-        </div>
-        <div class="logs-body" id="logs-body"></div>
-        <div class="logs-footer">
-          <button class="logs-ctrl-btn" id="logs-more-btn">Load 400 more</button>
-          <span id="logs-more-status"></span>
-        </div>
-        <div class="logs-status" id="logs-status">Loading...</div>
       </div>
     </section>
   </main>
@@ -666,101 +598,12 @@
         .catch(function() { showToast('Server unreachable'); });
     });
 
-    document.getElementById('btn-open-logs').addEventListener('click', function() {
-      fetch('/api/openfolder?target=logs')
-        .then(function(r) { return r.json(); })
-        .then(function(j) { showToast(j.ok ? 'Logs folder opened' : 'Folder not found'); })
-        .catch(function() { showToast('Server unreachable'); });
-    });
-
     document.getElementById('btn-open-records').addEventListener('click', function() {
       fetch('/api/openfolder?target=records')
         .then(function(r) { return r.json(); })
         .then(function(j) { showToast(j.ok ? 'Records folder opened' : 'Folder not found'); })
         .catch(function() { showToast('Server unreachable'); });
     });
-
-    // Live logs
-    var _paused     = false;
-    var _autoScroll = true;
-    var _lastNewest = '';
-    var _reversed   = true;
-    var _fetchCount = 400;
-    var logsBody    = document.getElementById('logs-body');
-    var logsStatus  = document.getElementById('logs-status');
-    var pauseBtn    = document.getElementById('logs-pause-btn');
-    var clearBtn    = document.getElementById('logs-clear-btn');
-    var scrollBtn   = document.getElementById('logs-scroll-btn');
-
-    pauseBtn.addEventListener('click', function() {
-      _paused = !_paused;
-      pauseBtn.textContent = _paused ? 'Resume' : 'Pause';
-      pauseBtn.classList.toggle('active', _paused);
-      if (!_paused) fetchLogs();
-    });
-    clearBtn.addEventListener('click', function() { logsBody.innerHTML = ''; _lastLen = 0; });
-    scrollBtn.addEventListener('click', function() {
-      _autoScroll = !_autoScroll;
-      scrollBtn.classList.toggle('active', _autoScroll);
-      if (_autoScroll) logsBody.scrollTop = logsBody.scrollHeight;
-    });
-    scrollBtn.classList.add('active');
-    logsBody.addEventListener('scroll', function() {
-      var atLive = _reversed
-        ? logsBody.scrollTop <= 20
-        : logsBody.scrollTop + logsBody.clientHeight >= logsBody.scrollHeight - 20;
-      if (!atLive && _autoScroll) { _autoScroll = false; scrollBtn.classList.remove('active'); }
-    });
-
-    var reverseBtn = document.getElementById('logs-reverse-btn');
-    reverseBtn.classList.add('active');
-    reverseBtn.addEventListener('click', function() {
-      _reversed = !_reversed;
-      reverseBtn.textContent = _reversed ? 'Newest first' : 'Oldest first';
-      reverseBtn.classList.toggle('active', _reversed);
-      _lastNewest = '';
-      fetchLogs();
-    });
-
-    var moreBtn = document.getElementById('logs-more-btn');
-    moreBtn.addEventListener('click', function() {
-      _fetchCount += 400;
-      _lastNewest = '';
-      fetchLogs();
-      document.getElementById('logs-more-status').textContent = 'Showing up to ' + _fetchCount + ' lines';
-    });
-
-    function formatLine(l) {
-      var cls = '';
-      if (/\[ERROR\]|\[ERREUR\]/i.test(l))  cls = 'log-err';
-      else if (/\[WARNING\]/i.test(l))       cls = 'log-warn';
-      else if (/\[SUCCESS\]/i.test(l))       cls = 'log-ok';
-      else if (/\[INFO\]/i.test(l))          cls = 'log-info';
-      else if (/\[DEBUG\]/i.test(l))         cls = 'log-dbg';
-      var safe = l.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      return cls ? '<span class="' + cls + '">' + safe + '</span>' : safe;
-    }
-    function fetchLogs() {
-      fetch('/api/logs?n=' + _fetchCount)
-        .then(function(r) { return r.json(); })
-        .then(function(lines) {
-          if (!Array.isArray(lines)) return;
-          var newest = lines.length ? lines[lines.length - 1] : '';
-          var atLive = _reversed
-            ? logsBody.scrollTop <= 20
-            : logsBody.scrollTop + logsBody.clientHeight >= logsBody.scrollHeight - 20;
-          if (newest !== _lastNewest) {
-            _lastNewest = newest;
-            var ordered = _reversed ? lines.slice().reverse() : lines;
-            logsBody.innerHTML = ordered.map(formatLine).join('\n');
-            logsStatus.textContent = lines.length + ' lines - last updated ' + new Date().toLocaleTimeString();
-            if (_autoScroll || atLive) logsBody.scrollTop = _reversed ? 0 : logsBody.scrollHeight;
-          }
-        })
-        .catch(function() { logsStatus.textContent = 'Could not reach server.'; });
-    }
-    fetchLogs();
-    setInterval(function() { if (!_paused) fetchLogs(); }, 2000);
 
     function browseFolder(inputId) {
       fetch('/api/browse-folder', { method: 'POST' })
@@ -823,6 +666,9 @@
       { title: 'MediaMTX Streaming', fields: [
         { path: 'mediamtx.enabled', label: 'Enabled', type: 'boolean',
           desc: 'Enable MediaMTX for RTSP / HLS / WebRTC restreaming.' },
+        { path: 'mediamtx.log_level', label: 'Log Level', type: 'select',
+          options: ['error','warn','info','debug'],
+          desc: 'MediaMTX log verbosity. debug is very verbose; info is recommended for normal use.' },
         { path: 'mediamtx.rtsp_port', label: 'RTSP Port', type: 'number',
           min: 1, max: 65535,
           desc: 'Port for RTSP streams. Default: 8554.' },

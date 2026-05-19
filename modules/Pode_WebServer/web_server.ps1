@@ -1394,18 +1394,8 @@ try {
                         $result.error = 'No USB device found.'
                     } else {
                         $usbDev    = [PSCustomObject]@{ DeviceId = $usbDeviceId; ConnectionType = 'USB'; IP = $null; Port = $null }
-                        $connectOut = Invoke-AdbCmd -Device $usbDev -Command "shell cmd wifi connect-network `"$wifiSsid`" wpa2 `"$wifiPwd`"" -adb $adbPath
-                        if ($connectOut -ne $false -and ($connectOut -match 'successfully|connected|Network connection initiated')) {
-                            $result.ok = $true
-                        } else {
-                            # Try alternate: still mark ok if no error returned
-                            if ($connectOut -ne $false -and $connectOut -notmatch 'error|failed|unknown') {
-                                $result.ok = $true
-                            } else {
-                                $result.error = ($connectOut -join ' ').Trim()
-                                if (-not $result.error) { $result.error = 'Connection command failed.' }
-                            }
-                        }
+                        $result.ok = Connect-HeadsetToWifi -Device $usbDev -Ssid $wifiSsid -Password $wifiPwd
+                        if (-not $result.ok) { $result.error = 'WiFi connection failed.' }
                     }
                     }
                 }
@@ -1577,6 +1567,10 @@ try {
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/usbdeviceinfo') {
             try {
                 $result = @{ found = $false; ip = ''; model = ''; serialNumber = ''; ssid = ''; wifiAdbOpen = $false; apkInstalled = $false; alreadyRegistered = $false }
+                $knownNetworks   = Get-WifiNetworks
+                $preferredWifi   = $knownNetworks | Where-Object { $_.Preferred } | Select-Object -First 1
+                if (-not $preferredWifi) { $preferredWifi = $knownNetworks | Select-Object -First 1 }
+                $expectedSsidVal = if ($preferredWifi) { $preferredWifi.SSID } else { '' }
                 if ($adbPath -and (Test-Path -LiteralPath $adbPath)) {
                     $details = Get-AdbUsbDeviceDetails -adb $adbPath -AdbPort $adbPort -PackageName $apkPackage
                     if ($details) {
@@ -1591,7 +1585,7 @@ try {
                             model             = $details.Model
                             serialNumber      = $details.SerialNumber
                             ssid              = $details.WiFiSSID
-                            expectedSsid      = $wifiSsid
+                            expectedSsid      = $expectedSsidVal
                             wifiAdbOpen       = $details.WifiAdbOpen
                             apkInstalled      = $details.ApkInstalled
                             alreadyRegistered = $alreadyReg
@@ -1838,14 +1832,25 @@ try {
                 $qn      = [System.Web.HttpUtility]::ParseQueryString($request.Url.Query)['n']
                 $maxLines = if ($qn -and $qn -match '^\d+$') { [int]$qn } else { 200 }
                 if ($maxLines -gt 2000) { $maxLines = 2000 }
-                $lines = @()
+                $lines   = @()
+                $logPath = $null
                 if ($global:logFile -and (Test-Path -LiteralPath $global:logFile)) {
-                    $lines = (Get-Content -LiteralPath $global:logFile -Tail $maxLines -ErrorAction SilentlyContinue) -replace '"', '\"'
+                    $logPath = $global:logFile
                 } elseif ($global:logFolder -and (Test-Path -LiteralPath $global:logFolder)) {
-                    $latest = Get-ChildItem -LiteralPath $global:logFolder -Filter "log_*.txt" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-                    if ($latest) {
-                        $lines = (Get-Content -LiteralPath $latest.FullName -Tail $maxLines -ErrorAction SilentlyContinue) -replace '"', '\"'
-                    }
+                    $latest  = Get-ChildItem -LiteralPath $global:logFolder -Filter 'log_*.txt' |
+                               Sort-Object LastWriteTime -Descending | Select-Object -First 1
+                    if ($latest) { $logPath = $latest.FullName }
+                }
+                if ($logPath) {
+                    $fs = [System.IO.File]::Open($logPath, [System.IO.FileMode]::Open,
+                          [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+                    $sr = [System.IO.StreamReader]::new($fs, [System.Text.Encoding]::Default)
+                    try {
+                        $all = [System.Collections.Generic.List[string]]::new()
+                        while (-not $sr.EndOfStream) { $all.Add($sr.ReadLine()) }
+                        $slice = if ($all.Count -le $maxLines) { $all.ToArray() } else { $all.GetRange($all.Count - $maxLines, $maxLines).ToArray() }
+                        $lines = $slice -replace '\\', '\\\\' -replace '"', '\"'
+                    } finally { $sr.Close(); $fs.Close() }
                 }
                 $jsonLines = '[' + (($lines | ForEach-Object { '"' + $_ + '"' }) -join ',') + ']'
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonLines)
@@ -1915,29 +1920,6 @@ try {
             } catch {
                 try {
                     $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{}')
-                    $response.StatusCode      = 500
-                    $response.ContentType     = 'application/json; charset=utf-8'
-                    $response.ContentLength64 = $errBytes.Length
-                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
-                } catch {}
-            } finally { $response.Close() }
-            continue
-        }
-
-        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/restartmediamtx') {
-            try {
-                Stop-MediaMtx
-                Start-Sleep -Milliseconds 800
-                Start-MediaMtx
-                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
-                $response.StatusCode      = 200
-                $response.ContentType     = 'application/json; charset=utf-8'
-                $response.Headers.Add('Access-Control-Allow-Origin', '*')
-                $response.ContentLength64 = $respBytes.Length
-                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
-            } catch {
-                try {
-                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
                     $response.StatusCode      = 500
                     $response.ContentType     = 'application/json; charset=utf-8'
                     $response.ContentLength64 = $errBytes.Length
@@ -2086,14 +2068,25 @@ try {
                 $qn      = [System.Web.HttpUtility]::ParseQueryString($request.Url.Query)['n']
                 $maxLines = if ($qn -and $qn -match '^\d+$') { [int]$qn } else { 200 }
                 if ($maxLines -gt 2000) { $maxLines = 2000 }
-                $lines = @()
+                $lines   = @()
+                $logPath = $null
                 if ($global:logFile -and (Test-Path -LiteralPath $global:logFile)) {
-                    $lines = (Get-Content -LiteralPath $global:logFile -Tail $maxLines -ErrorAction SilentlyContinue) -replace '"', '\"'
+                    $logPath = $global:logFile
                 } elseif ($global:logFolder -and (Test-Path -LiteralPath $global:logFolder)) {
-                    $latest = Get-ChildItem -LiteralPath $global:logFolder -Filter "log_*.txt" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-                    if ($latest) {
-                        $lines = (Get-Content -LiteralPath $latest.FullName -Tail $maxLines -ErrorAction SilentlyContinue) -replace '"', '\"'
-                    }
+                    $latest  = Get-ChildItem -LiteralPath $global:logFolder -Filter 'log_*.txt' |
+                               Sort-Object LastWriteTime -Descending | Select-Object -First 1
+                    if ($latest) { $logPath = $latest.FullName }
+                }
+                if ($logPath) {
+                    $fs = [System.IO.File]::Open($logPath, [System.IO.FileMode]::Open,
+                          [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+                    $sr = [System.IO.StreamReader]::new($fs, [System.Text.Encoding]::Default)
+                    try {
+                        $all = [System.Collections.Generic.List[string]]::new()
+                        while (-not $sr.EndOfStream) { $all.Add($sr.ReadLine()) }
+                        $slice = if ($all.Count -le $maxLines) { $all.ToArray() } else { $all.GetRange($all.Count - $maxLines, $maxLines).ToArray() }
+                        $lines = $slice -replace '\\', '\\\\' -replace '"', '\"'
+                    } finally { $sr.Close(); $fs.Close() }
                 }
                 $jsonLines = '[' + (($lines | ForEach-Object { '"' + $_ + '"' }) -join ',') + ']'
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonLines)

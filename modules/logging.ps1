@@ -42,28 +42,24 @@ function Write-Log {
 
     # Check whether the log level allows writing to file
     if ($logLevels.IndexOf($Level) -ge $logLevels.IndexOf($global:debugLevelToFile) -or $global:debugLevelToFile -eq "DEBUG") {
-        $attempt = 0
-        $maxAttempts = 5
-        $written = $false
-
-        
-        while ($attempt -lt $maxAttempts) {
+        try {
+            $mtx = [System.Threading.Mutex]::new($false, 'Global\VRHMLog')
+            $acq = $false
             try {
-                Add-Content -Path $global:logFile -Value $logEntry -erroraction 'silentlycontinue'
-                $written = $true
-                break
-            } catch {
-                if ($_.Exception.HResult -eq -2147024864 -or $_.Exception.GetType().Name -eq "IOException") { # ERROR_SHARING_VIOLATION if the file is already opened by another process
-                    Start-Sleep -Milliseconds 200 
-                    $attempt++
-                }
-                else {
-                    throw
-                }
+                $acq = $mtx.WaitOne(1000)
+                $bytes = [System.Text.Encoding]::Default.GetBytes($logEntry + "`r`n")
+                $fs = [System.IO.File]::Open(
+                    $global:logFile,
+                    [System.IO.FileMode]::Append,
+                    [System.IO.FileAccess]::Write,
+                    [System.IO.FileShare]::ReadWrite)
+                try { $fs.Write($bytes, 0, $bytes.Length) } finally { $fs.Close() }
+            } finally {
+                if ($acq) { $mtx.ReleaseMutex() }
+                $mtx.Dispose()
             }
-        }
-        if (-not $written) {
-            Write-Warning "Failed to write to the log file after $maxAttempts attempts: $logEntry"
+        } catch {
+            Write-Warning "Failed to write to the log file: $logEntry"
         }
     }
 

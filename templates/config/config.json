@@ -88,6 +88,7 @@
   "mediamtx": {
     "enabled": true,
     "folder": "mediamtx_v1.17.1_windows_amd64",
+    "log_level": "info",
     "rtsp_port": 8554,
     "hls_port": 8888,
     "webrtc_port": 8889,
