@@ -184,7 +184,7 @@ function Start-VRMonitor {
 
             }
 
-            Write-Log ($msg.JobInfoCollected -f $knownHeadsetsInfo.Count) -Level INFO
+            Write-Log ($msg.JobInfoCollected -f $knownHeadsetsInfo.Count) -Level DEBUG
             # Export vers CSV (exclude internal fields prefixed with _)
             $knownHeadsetsInfo |
                 Export-Csv -Path $global:knownHeadsetsInfosFilePath -Delimiter ";" -Encoding UTF8 -NoTypeInformation
@@ -198,7 +198,7 @@ function Start-VRMonitor {
             # Sync mediamtx restream paths with current headsets
             Sync-RestreamPaths
 
-            Write-Log ($msg.JobRestartsIn -f $jobName, $VRMonitor_refresh_timer) -Level INFO
+            Write-Log ($msg.JobRestartsIn -f $jobName, $VRMonitor_refresh_timer) -Level DEBUG
            
             Start-Sleep -Seconds $VRMonitor_refresh_timer
         }

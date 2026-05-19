@@ -18,6 +18,50 @@ function Get-DeviceId {
 }
 
 
+# Returns the stored password for a given SSID from the encrypted WiFi store, or $null if not found.
+function Get-WifiPassword {
+    param([Parameter(Mandatory)][string]$Ssid)
+    $match = Get-WifiNetworks | Where-Object { $_.SSID -eq $Ssid } | Select-Object -First 1
+    if ($match) { return $match.Password }
+    return $null
+}
+
+# Connects a headset to a WiFi network via ADB.
+# $UseRandomMac=$false (default) forces the real device MAC; $true allows Android MAC randomization.
+# Password is resolved from the encrypted store when omitted.
+# Returns $true on success, $false on failure.
+function Connect-HeadsetToWifi {
+    param(
+        [Parameter(Mandatory)][object]$Device,
+        [Parameter(Mandatory)][string]$Ssid,
+        [string]$Password,
+        [bool]$UseRandomMac = $false
+    )
+
+    if (-not $Password) {
+        $Password = Get-WifiPassword -Ssid $Ssid
+        if (-not $Password) {
+            Write-Log ($msg.WifiPasswordNotFound -f $Ssid) -Level ERROR
+            return $false
+        }
+    }
+
+    $macFlag = if ($UseRandomMac) { 'persistent' } else { 'none' }
+
+    Invoke-AdbCmd -Device $Device -Command "shell svc wifi enable" | Out-Null
+
+    $out = Invoke-AdbCmd -Device $Device -Command "shell cmd -w wifi connect-network `"$Ssid`" wpa2 `"$Password`" -r $macFlag"
+
+    if ($out -ne $false -and ($out -join '') -notmatch 'error|failed|unknown') {
+        Write-Log ($msg.WifiConnectSuccess -f $Ssid, $Device.DeviceId) -Level SUCCESS
+        return $true
+    } else {
+        Write-Log ($msg.WifiConnectFailed -f $Ssid, $Device.DeviceId, ($out -join ' ').Trim()) -Level ERROR
+        return $false
+    }
+}
+
+
 # Wrapper around `& $adb ...` that captures stdout, stderr, and exit code.
 # Returns @{ ExitCode; StdOut; StdErr; Ok }.
 # - StdOut / StdErr are arrays of lines (may be empty).
@@ -481,16 +525,10 @@ function Enable-WiFiADB {
 
             $switchChoice = (Read-Host ($msg.SwitchToSsidPrompt -f $wifi_ssid)).ToUpper()
             if ($switchChoice -eq 'Y') {
-                try {
-                    Invoke-AdbCmd -Device $usbDevice -Command "shell svc wifi enable" -adb $adb | Out-Null
-                    Invoke-AdbCmd -Device $usbDevice -Command "shell cmd -w wifi connect-network $wifi_ssid wpa2 $wifi_pwd -r none" -adb $adb | Out-Null
-
-                    Write-Log ($msg.ActivatingWifiNetwork -f $wifi_ssid, $headsetModel, $deviceId) -Level INFO
-                    Start-Sleep -Seconds 5
-                } catch {
-                    Write-Log ($msg.WifiConfigFailed -f $_) -Level ERROR
+                if (-not (Connect-HeadsetToWifi -Device $usbDevice -Ssid $wifi_ssid -Password $wifi_pwd)) {
                     return $false
                 }
+                Start-Sleep -Seconds 5
             } else {
                 Write-Log ($msg.KeepingCurrentWifi) -Level INFO
             }

@@ -43,7 +43,7 @@ function Write-MediaMtxYml {
 # VR_HEADSET_MANAGER - mediamtx configuration
 # Auto-generated: $timestamp - do not edit manually
 
-logLevel: info
+logLevel: $($global:mediamtxLogLevel)
 logDestinations: [stdout, file]
 logFile: $mediamtxLogFile
 

@@ -263,16 +263,16 @@ function start-screenCopy {
         }
         $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
         $recordFile = Join-Path -Path $recordFolder -ChildPath "${displayName}_$timestamp.mp4"
-        $recordOption = "--record=$recordFile"
+        $recordOption = "--record=`"$recordFile`""
         Write-Log -Message ($msg.ScrcpyRecording -f $recordFile) -Level "INFO"
     } else {
         $recordOption = ""
     }
-    $arguments = "-s $adb_device $options --window-title=$displayName $recordOption"
+    $arguments = "-s $adb_device $options --window-title=$displayName --render-driver=software $recordOption"
     #.\scrcpy.exe --crop 1664:1304:2260:450 --angle=-21 --max-fps 45 -b 16M --no-audio --video-buffer=100 --video-codec=h264 --video-encoder=OMX.qcom.video.encoder.avc -s $adb_device
     #.\sources\scrcpy-win64-v3.3\scrcpy.exe -s 192.168.1.243:5555 -b20m --crop=1664:1304:2260:450 --angle=-21 --max-size=800 --max-fps=30 --video-codec=h265 --no-audio --window-title=Q3_BLUE
     
-	Write-Log -Message ($msg.ScrcpyLaunching -f $arguments) -Level "INFO"
+	Write-Log -Message ($msg.ScrcpyLaunching -f $arguments) -Level "SUCCESS"
     try {
         #$process = 
         Start-Process $scrcpy -ArgumentList $arguments -PassThru -NoNewWindow `
