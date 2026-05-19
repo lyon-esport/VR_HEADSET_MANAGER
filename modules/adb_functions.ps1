@@ -421,12 +421,8 @@ function Enable-WiFiADB {
     #>
 
     param(
-        [Parameter(Mandatory=$true)]
-        [string]$wifi_ssid,
-        [string]$wifi_pwd,
         [int]$AdbPort = $global:adbPort_default,
         [string]$adb = $global:adbPath
-        
     )
 
     # 1. Initial verification
@@ -435,9 +431,20 @@ function Enable-WiFiADB {
         return $false
     }
 
+    # Resolve WiFi credentials from secure store
+    $knownNetworks = Get-WifiNetworks
+    $preferredNet  = $knownNetworks | Where-Object { $_.Preferred } | Select-Object -First 1
+    if (-not $preferredNet) { $preferredNet = $knownNetworks | Select-Object -First 1 }
+    if (-not $preferredNet) {
+        Write-Log $msg.WifiNoNetworkConfigured -Level ERROR
+        return $false
+    }
+    $wifi_ssid = $preferredNet.SSID
+    $wifi_pwd  = $preferredNet.Password
+
     Write-Log ($msg.SearchingUsbHeadset) -Level INFO
     try {
-        
+
         # 2. USB Device Detection
         $usbDevice = Get-AdbUsbDevice -adb $adb
         if (-not $usbDevice) {
@@ -466,7 +473,10 @@ function Enable-WiFiADB {
         }
 
         # Step 4: Verify the connected SSID
-        if ($currentSSID -notmatch [regex]::Escape($wifi_ssid)) {
+        $onKnownNetwork = $knownNetworks | Where-Object { $currentSSID -match [regex]::Escape($_.SSID) }
+        if ($onKnownNetwork) {
+            Write-Log ($msg.WifiHeadsetOnKnownNetwork -f $currentSSID) -Level INFO
+        } elseif ($currentSSID -notmatch [regex]::Escape($wifi_ssid)) {
             Write-Log ($msg.HeadsetNotConnectedToSsid -f $wifi_ssid) -Level WARNING
 
             $switchChoice = (Read-Host ($msg.SwitchToSsidPrompt -f $wifi_ssid)).ToUpper()

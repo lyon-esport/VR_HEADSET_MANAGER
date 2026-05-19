@@ -102,6 +102,8 @@
     .logs-body .log-ok   { color: #34d399; }
     .logs-body .log-info { color: #60a5fa; }
     .logs-body .log-dbg  { color: #64748b; }
+    .logs-footer { padding: 6px 16px; display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+    .logs-footer span { font-size: 11px; color: var(--muted); }
     .logs-status { font-size: 11px; padding: 4px 16px 8px; color: var(--muted); flex-shrink: 0; }
 
     /* Toast */
@@ -230,6 +232,24 @@
       font-size: 11px; color: var(--muted); padding: 10px 22px 0;
       border-top: 1px solid var(--card-border); margin-top: 4px;
     }
+
+    /* ── WiFi networks table ────────────────────────────────────────────────── */
+    .wifi-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .wifi-table th { text-align: left; padding: 6px 8px; color: var(--muted); font-size: 11px; font-weight: 600; border-bottom: 1px solid var(--card-border); }
+    .wifi-table td { padding: 8px 8px; border-bottom: 1px solid var(--card-border); color: var(--text); vertical-align: middle; }
+    .wifi-table tr:last-child td { border-bottom: none; }
+    .wifi-table tr:hover > td { background: rgba(255,255,255,.025); }
+    [data-theme=light] .wifi-table tr:hover > td { background: rgba(0,0,0,.02); }
+    .wifi-icon-btn { padding: 3px 8px; border-radius: 4px; background: none; border: 1px solid #333; color: var(--muted); font-size: 12px; cursor: pointer; transition: background .12s, color .12s; }
+    [data-theme=light] .wifi-icon-btn { border-color: #e5e7eb; }
+    .wifi-icon-btn + .wifi-icon-btn { margin-left: 4px; }
+    .wifi-icon-btn:hover { background: #222; color: var(--text); }
+    [data-theme=light] .wifi-icon-btn:hover { background: #f3f4f6; }
+    .wifi-icon-del:hover { border-color: #ef4444; color: #ef4444; background: rgba(239,68,68,.1); }
+    .wifi-icon-edit:hover { border-color: var(--accent); color: var(--accent); background: rgba(59,130,246,.08); }
+    .wifi-star-btn { background: none; border: none; cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 4px; color: var(--muted); transition: color .15s; }
+    .wifi-star-btn.preferred { color: #f59e0b; }
+    .wifi-star-btn:not(.preferred):hover { color: #fbbf24; }
 
     /* ── Scrcpy section ─────────────────────────────────────────────────────── */
     .scrcpy-folder-row { display: flex; align-items: flex-start; gap: 20px; }
@@ -423,21 +443,49 @@
       </div>
     </section>
 
+    <!-- Known WiFi Networks -->
+    <section class="section">
+      <div class="section-title">Known WiFi Networks</div>
+      <div class="card">
+        <table class="wifi-table" id="wifi-table">
+          <thead>
+            <tr>
+              <th style="width:32px"></th>
+              <th>SSID</th>
+              <th>Password</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="wifi-tbody">
+            <tr id="wifi-empty-row"><td colspan="4" style="color:var(--muted);font-size:12px;padding:10px 0">No WiFi networks saved.</td></tr>
+          </tbody>
+        </table>
+        <div id="wifi-form" style="display:none;margin-top:14px;display:none">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <input type="text" id="wifi-ssid-inp" class="cfg-input" placeholder="SSID" style="width:200px">
+            <div style="position:relative;width:200px">
+              <input type="password" id="wifi-pwd-inp" class="cfg-input" placeholder="Password" style="padding-right:36px;width:100%">
+              <button type="button" id="wifi-pwd-toggle" title="Show/hide password" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--muted);padding:2px;line-height:0">
+                <svg id="wifi-eye-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              </button>
+            </div>
+            <button class="cfg-save-btn" id="wifi-form-save">Save</button>
+            <button class="cfg-cancel-btn" id="wifi-form-cancel">Cancel</button>
+          </div>
+        </div>
+        <div style="margin-top:14px">
+          <button class="action-btn" id="wifi-add-btn" style="display:inline-flex;width:auto">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            <span>Add Network</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
     <!-- Scrcpy -->
     <section class="section">
       <div class="section-title">Scrcpy</div>
       <div class="card">
-        <div class="scrcpy-folder-row">
-          <div class="scrcpy-folder-label">
-            <div class="scrcpy-lbl">Binaries Folder</div>
-            <div class="scrcpy-sub">Subfolder (relative to the app root) containing scrcpy.exe and adb.exe. Applies to both scrcpy and ADB settings.</div>
-          </div>
-          <div class="scrcpy-folder-ctrl">
-            <input type="text" id="scrcpy-folder-input" class="cfg-input" placeholder="e.g. scrcpy-win64-v3.3.4">
-            <button id="scrcpy-folder-save" class="cfg-save-btn">Save</button>
-          </div>
-        </div>
-        <hr class="scrcpy-divider">
         <button class="action-btn" id="btn-profiles">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
@@ -448,32 +496,38 @@
             <div class="btn-desc">Add, edit and delete scrcpy profiles per headset model</div>
           </div>
         </button>
-      </div>
-    </section>
-
-    <!-- Folders -->
-    <section class="section">
-      <div class="section-title">Folders</div>
-      <div class="card">
-        <div class="btn-grid">
-          <button class="action-btn" id="btn-open-logs">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-            </svg>
-            <div>
-              <div>Open Logs Folder</div>
-              <div class="btn-desc">Opens in Explorer</div>
+        <hr class="scrcpy-divider">
+        <div class="scrcpy-folder-row">
+          <div class="scrcpy-folder-label">
+            <div class="scrcpy-lbl">Record Folder</div>
+            <div class="scrcpy-sub">Folder where scrcpy recordings are saved. Use forward slashes, e.g. D:/DATA/Records.</div>
+          </div>
+          <div class="scrcpy-folder-ctrl" style="flex-direction:column;align-items:flex-start">
+            <div style="display:flex;gap:8px;align-items:center;width:100%">
+              <input type="text" id="scrcpy-record-input" class="cfg-input" placeholder="e.g. D:/DATA/Records">
+              <button id="scrcpy-record-save" class="cfg-save-btn">Save</button>
             </div>
-          </button>
-          <button class="action-btn" id="btn-open-records">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
-            </svg>
-            <div>
-              <div>Open Records Folder</div>
-              <div class="btn-desc">Opens in Explorer</div>
-            </div>
-          </button>
+            <button class="action-btn" id="btn-open-records" style="margin-top:8px">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+              </svg>
+              <div>
+                <div>Open Records Folder</div>
+                <div class="btn-desc">Opens in Explorer</div>
+              </div>
+            </button>
+          </div>
+        </div>
+        <hr class="scrcpy-divider">
+        <div class="scrcpy-folder-row">
+          <div class="scrcpy-folder-label">
+            <div class="scrcpy-lbl">Binaries Folder</div>
+            <div class="scrcpy-sub">Source subfolder (relative to the app root/sources) containing scrcpy.exe and adb.exe. Applies to both scrcpy and ADB settings.</div>
+          </div>
+          <div class="scrcpy-folder-ctrl">
+            <input type="text" id="scrcpy-folder-input" class="cfg-input" placeholder="e.g. scrcpy-win64-v3.3.4">
+            <button id="scrcpy-folder-save" class="cfg-save-btn">Save</button>
+          </div>
         </div>
       </div>
     </section>
@@ -481,6 +535,15 @@
     <!-- Live logs -->
     <section class="section logs-section">
       <div class="section-title">Live Logs</div>
+      <button class="action-btn" id="btn-open-logs" style="margin-bottom:8px">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+        </svg>
+        <div>
+          <div>Open Logs Folder</div>
+          <div class="btn-desc">Opens in Explorer</div>
+        </div>
+      </button>
       <div class="logs-card">
         <div class="logs-header">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -491,9 +554,14 @@
             <button class="logs-ctrl-btn" id="logs-pause-btn">Pause</button>
             <button class="logs-ctrl-btn" id="logs-clear-btn">Clear</button>
             <button class="logs-ctrl-btn" id="logs-scroll-btn" title="Toggle auto-scroll">Scroll</button>
+            <button class="logs-ctrl-btn" id="logs-reverse-btn" title="Toggle order">Newest first</button>
           </div>
         </div>
         <div class="logs-body" id="logs-body"></div>
+        <div class="logs-footer">
+          <button class="logs-ctrl-btn" id="logs-more-btn">Load 400 more</button>
+          <span id="logs-more-status"></span>
+        </div>
         <div class="logs-status" id="logs-status">Loading...</div>
       </div>
     </section>
@@ -511,10 +579,6 @@
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
           </svg>
           Edit Configuration
-        </div>
-        <div style="display:flex;gap:8px">
-          <button class="cfg-save-btn" id="cfg-save-top">Save</button>
-          <button class="cfg-cancel-btn" id="cfg-close-top">Cancel</button>
         </div>
       </div>
       <div class="cfg-panel-body" id="cfg-panel-body">
@@ -619,7 +683,9 @@
     // Live logs
     var _paused     = false;
     var _autoScroll = true;
-    var _lastLen    = 0;
+    var _lastNewest = '';
+    var _reversed   = true;
+    var _fetchCount = 400;
     var logsBody    = document.getElementById('logs-body');
     var logsStatus  = document.getElementById('logs-status');
     var pauseBtn    = document.getElementById('logs-pause-btn');
@@ -640,8 +706,28 @@
     });
     scrollBtn.classList.add('active');
     logsBody.addEventListener('scroll', function() {
-      var atBottom = logsBody.scrollTop + logsBody.clientHeight >= logsBody.scrollHeight - 20;
-      if (!atBottom && _autoScroll) { _autoScroll = false; scrollBtn.classList.remove('active'); }
+      var atLive = _reversed
+        ? logsBody.scrollTop <= 20
+        : logsBody.scrollTop + logsBody.clientHeight >= logsBody.scrollHeight - 20;
+      if (!atLive && _autoScroll) { _autoScroll = false; scrollBtn.classList.remove('active'); }
+    });
+
+    var reverseBtn = document.getElementById('logs-reverse-btn');
+    reverseBtn.classList.add('active');
+    reverseBtn.addEventListener('click', function() {
+      _reversed = !_reversed;
+      reverseBtn.textContent = _reversed ? 'Newest first' : 'Oldest first';
+      reverseBtn.classList.toggle('active', _reversed);
+      _lastNewest = '';
+      fetchLogs();
+    });
+
+    var moreBtn = document.getElementById('logs-more-btn');
+    moreBtn.addEventListener('click', function() {
+      _fetchCount += 400;
+      _lastNewest = '';
+      fetchLogs();
+      document.getElementById('logs-more-status').textContent = 'Showing up to ' + _fetchCount + ' lines';
     });
 
     function formatLine(l) {
@@ -655,22 +741,35 @@
       return cls ? '<span class="' + cls + '">' + safe + '</span>' : safe;
     }
     function fetchLogs() {
-      fetch('/api/logs?n=400')
+      fetch('/api/logs?n=' + _fetchCount)
         .then(function(r) { return r.json(); })
         .then(function(lines) {
           if (!Array.isArray(lines)) return;
-          var atBottom = logsBody.scrollTop + logsBody.clientHeight >= logsBody.scrollHeight - 20;
-          if (lines.length !== _lastLen) {
-            _lastLen = lines.length;
-            logsBody.innerHTML = lines.map(formatLine).join('\n');
+          var newest = lines.length ? lines[lines.length - 1] : '';
+          var atLive = _reversed
+            ? logsBody.scrollTop <= 20
+            : logsBody.scrollTop + logsBody.clientHeight >= logsBody.scrollHeight - 20;
+          if (newest !== _lastNewest) {
+            _lastNewest = newest;
+            var ordered = _reversed ? lines.slice().reverse() : lines;
+            logsBody.innerHTML = ordered.map(formatLine).join('\n');
             logsStatus.textContent = lines.length + ' lines - last updated ' + new Date().toLocaleTimeString();
-            if (_autoScroll || atBottom) logsBody.scrollTop = logsBody.scrollHeight;
+            if (_autoScroll || atLive) logsBody.scrollTop = _reversed ? 0 : logsBody.scrollHeight;
           }
         })
         .catch(function() { logsStatus.textContent = 'Could not reach server.'; });
     }
     fetchLogs();
     setInterval(function() { if (!_paused) fetchLogs(); }, 2000);
+
+    function browseFolder(inputId) {
+      fetch('/api/browse-folder', { method: 'POST' })
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          if (j.ok && j.path) document.getElementById(inputId).value = j.path;
+        })
+        .catch(function() { showToast('Server unreachable', 2500); });
+    }
 
     // ── Config editor ────────────────────────────────────────────────────────
     var _cfgData = null;
@@ -680,12 +779,6 @@
         { path: 'language', label: 'Language', type: 'select',
           options: ['en-US', 'fr-FR'],
           desc: 'Interface language for the application.' }
-      ]},
-      { title: 'WiFi', fields: [
-        { path: 'WIFI.wifi_ssid', label: 'WiFi SSID', type: 'text',
-          desc: 'SSID of the network the headsets are connected to.' },
-        { path: 'WIFI.wifi_pwd', label: 'WiFi Password', type: 'text',
-          desc: 'Password used for automatic WiFi ADB connection.' }
       ]},
       { title: 'Logging', fields: [
         { path: 'Logging.debugLevelToFile', label: 'File Log Level', type: 'select',
@@ -705,10 +798,6 @@
           min: 1, max: 65535,
           desc: 'Default TCP port for WiFi ADB connections. Usually 5555.' }
       ]},
-      { title: 'Scrcpy', fields: [
-        { path: 'scrcpy.recordFolder', label: 'Record Folder', type: 'text',
-          desc: 'Folder where scrcpy recordings are saved. Use forward slashes, e.g. D:/DATA/Records.' }
-      ]},
       { title: 'Battery Thresholds', fields: [
         { path: 'Monitoring.thresholds.headset_battery_warningLevel', label: 'Headset Warning', type: 'number',
           min: 0, max: 100, unit: '%',
@@ -725,6 +814,11 @@
         { path: 'Monitoring.thresholds.temperature_highLevel', label: 'High Temperature', type: 'number',
           min: 30, max: 80, unit: '°C',
           desc: 'Headset temperature at which a heat warning is shown on the overlay.' }
+      ]},
+      { title: 'Battery Charging', fields: [
+        { path: 'Battery.headset_charging_power_W', label: 'Charging Power', type: 'number',
+          min: 1, max: 200, unit: 'W',
+          desc: 'Expected charging wattage used for battery time-remaining estimates.' }
       ]},
       { title: 'MediaMTX Streaming', fields: [
         { path: 'mediamtx.enabled', label: 'Enabled', type: 'boolean',
@@ -754,11 +848,6 @@
           min: 1, max: 65535,
           desc: 'HTTP port for the web UI. Default: 8080. Full restart required to take effect.' }
       ]},
-      { title: 'Battery Charging', fields: [
-        { path: 'Battery.headset_charging_power_W', label: 'Charging Power', type: 'number',
-          min: 1, max: 200, unit: 'W',
-          desc: 'Expected charging wattage used for battery time-remaining estimates.' }
-      ]}
     ];
 
     function cfgGet(obj, path) {
@@ -805,6 +894,11 @@
             html += '<input type="number" id="' + id + '" class="cfg-input cfg-input-sm" data-path="' + f.path + '" value="' + cfgEsc(String(val)) + '"'
               + (f.min != null ? ' min="' + f.min + '"' : '')
               + (f.max != null ? ' max="' + f.max + '"' : '') + '>';
+          } else if (f.type === 'folder') {
+            html += '<div style="display:flex;gap:8px;width:100%">'
+              + '<input type="text" id="' + id + '" class="cfg-input" data-path="' + f.path + '" value="' + cfgEsc(String(val)) + '">'
+              + '<button class="cfg-cancel-btn" style="white-space:nowrap" onclick="browseFolder(\'' + id + '\')">Browse...</button>'
+              + '</div>';
           } else {
             html += '<input type="text" id="' + id + '" class="cfg-input" data-path="' + f.path + '" value="' + cfgEsc(String(val)) + '">';
           }
@@ -873,9 +967,7 @@
         });
     });
 
-    document.getElementById('cfg-save-top').addEventListener('click', saveCfg);
     document.getElementById('cfg-save-bot').addEventListener('click', saveCfg);
-    document.getElementById('cfg-close-top').addEventListener('click', closeCfgModal);
     document.getElementById('cfg-close-bot').addEventListener('click', closeCfgModal);
     document.getElementById('cfg-modal').addEventListener('click', function(e) {
       if (e.target === this) closeCfgModal();
@@ -905,14 +997,36 @@
       if (e.target === this) document.getElementById('reset-modal').style.display = 'none';
     });
 
-    // ── Scrcpy folder ────────────────────────────────────────────────────────
+    // ── Scrcpy folder + record folder ────────────────────────────────────────
     fetch('/api/config')
       .then(function(r) { return r.json(); })
       .then(function(cfg) {
         var f = (cfg.scrcpy && cfg.scrcpy.folder) ? cfg.scrcpy.folder : '';
         document.getElementById('scrcpy-folder-input').value = f;
+        var r = (cfg.scrcpy && cfg.scrcpy.recordFolder) ? cfg.scrcpy.recordFolder : '';
+        document.getElementById('scrcpy-record-input').value = r;
       })
       .catch(function() {});
+
+    document.getElementById('scrcpy-record-save').addEventListener('click', function() {
+      var val = document.getElementById('scrcpy-record-input').value.trim();
+      if (!val) { showToast('Record folder cannot be empty', 2500); return; }
+      fetch('/api/config')
+        .then(function(r) { return r.json(); })
+        .then(function(cfg) {
+          if (!cfg.scrcpy) cfg.scrcpy = {};
+          cfg.scrcpy.recordFolder = val;
+          return fetch('/api/config/save', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(cfg, null, 2)
+          });
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          showToast(j.ok ? 'Record folder saved. Restart required.' : 'Save failed: ' + (j.error || 'error'), 3000);
+        })
+        .catch(function() { showToast('Server unreachable', 2500); });
+    });
 
     document.getElementById('scrcpy-folder-save').addEventListener('click', function() {
       var val = document.getElementById('scrcpy-folder-input').value.trim();
@@ -1265,6 +1379,131 @@
     document.getElementById('pro-save-bot').addEventListener('click', saveProfiles);
     document.getElementById('pro-close-top').addEventListener('click', closeProModal);
     document.getElementById('pro-close-bot').addEventListener('click', closeProModal);
+
+    // ── WiFi Networks ────────────────────────────────────────────────────────
+    var _wifiEditSsid = null;
+
+    function loadWifiNetworks() {
+      fetch('/api/wifi-networks')
+        .then(function(r) { return r.json(); })
+        .then(function(list) { renderWifiTable(list); })
+        .catch(function() {});
+    }
+
+    function renderWifiTable(list) {
+      var tbody = document.getElementById('wifi-tbody');
+      var emptyRow = document.getElementById('wifi-empty-row');
+      // Remove all non-empty rows
+      var rows = tbody.querySelectorAll('tr:not(#wifi-empty-row)');
+      rows.forEach(function(r) { r.remove(); });
+      if (!list || list.length === 0) {
+        emptyRow.style.display = '';
+        return;
+      }
+      emptyRow.style.display = 'none';
+      list.forEach(function(n) {
+        var tr = document.createElement('tr');
+        var starClass = n.preferred ? 'wifi-star-btn preferred' : 'wifi-star-btn';
+        var starTitle = n.preferred ? 'Preferred network' : 'Set as preferred';
+        tr.innerHTML = '<td style="text-align:center">'
+          + '<button class="' + starClass + '" data-action="set-preferred" data-ssid="' + escHtml(n.ssid) + '" title="' + starTitle + '">'
+          + (n.preferred ? '&#9733;' : '&#9734;') + '</button></td>'
+          + '<td>' + escHtml(n.ssid) + '</td>'
+          + '<td style="font-family:monospace;letter-spacing:.1em">&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;</td>'
+          + '<td style="text-align:right;white-space:nowrap">'
+          + '<button class="wifi-icon-btn wifi-icon-edit" data-action="edit" data-ssid="' + escHtml(n.ssid) + '" title="Edit">&#9998;</button>'
+          + '<button class="wifi-icon-btn wifi-icon-del" data-action="delete" data-ssid="' + escHtml(n.ssid) + '" title="Delete">&#10005;</button>'
+          + '</td>';
+        tbody.appendChild(tr);
+      });
+    }
+
+    function escHtml(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function showWifiForm(ssid) {
+      _wifiEditSsid = ssid || null;
+      document.getElementById('wifi-ssid-inp').value = ssid || '';
+      document.getElementById('wifi-pwd-inp').value  = '';
+      document.getElementById('wifi-ssid-inp').readOnly = !!ssid;
+      document.getElementById('wifi-form').style.display = 'flex';
+      document.getElementById('wifi-add-btn').style.display = 'none';
+      (ssid ? document.getElementById('wifi-pwd-inp') : document.getElementById('wifi-ssid-inp')).focus();
+    }
+
+    var EYE_ICON     = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+    var EYE_OFF_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+
+    document.getElementById('wifi-pwd-toggle').addEventListener('click', function() {
+      var inp = document.getElementById('wifi-pwd-inp');
+      var showing = inp.type === 'text';
+      inp.type = showing ? 'password' : 'text';
+      this.innerHTML = showing ? EYE_ICON : EYE_OFF_ICON;
+    });
+
+    function hideWifiForm() {
+      document.getElementById('wifi-form').style.display = 'none';
+      document.getElementById('wifi-add-btn').style.display = 'inline-flex';
+      document.getElementById('wifi-pwd-inp').type = 'password';
+      document.getElementById('wifi-pwd-toggle').innerHTML = EYE_ICON;
+      _wifiEditSsid = null;
+    }
+
+    document.getElementById('wifi-add-btn').addEventListener('click', function() { showWifiForm(null); });
+    document.getElementById('wifi-form-cancel').addEventListener('click', hideWifiForm);
+
+    document.getElementById('wifi-form-save').addEventListener('click', function() {
+      var ssid = document.getElementById('wifi-ssid-inp').value.trim();
+      var pass = document.getElementById('wifi-pwd-inp').value.trim();
+      if (!ssid) { showToast('SSID is required', 2000); return; }
+      fetch('/api/wifi-networks/upsert', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ssid: ssid, password: pass })
+      })
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          if (j.ok) { hideWifiForm(); loadWifiNetworks(); showToast('Network saved', 2000); }
+          else { showToast('Error: ' + (j.error || 'unknown'), 3000); }
+        })
+        .catch(function() { showToast('Server unreachable', 2500); });
+    });
+
+    document.getElementById('wifi-tbody').addEventListener('click', function(e) {
+      var btn = e.target.closest('[data-action]');
+      if (!btn) return;
+      var ssid   = btn.dataset.ssid;
+      var action = btn.dataset.action;
+      if (action === 'edit') {
+        showWifiForm(ssid);
+      } else if (action === 'delete') {
+        if (!confirm('Delete network "' + ssid + '"?')) return;
+        fetch('/api/wifi-networks/delete', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ssid: ssid })
+        })
+          .then(function(r) { return r.json(); })
+          .then(function(j) {
+            if (j.ok) { loadWifiNetworks(); showToast('Network removed', 2000); }
+            else { showToast('Error: ' + (j.error || 'unknown'), 3000); }
+          })
+          .catch(function() { showToast('Server unreachable', 2500); });
+      } else if (action === 'set-preferred') {
+        if (btn.classList.contains('preferred')) return;
+        fetch('/api/wifi-networks/set-preferred', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ssid: ssid })
+        })
+          .then(function(r) { return r.json(); })
+          .then(function(j) {
+            if (j.ok) { loadWifiNetworks(); showToast('"' + ssid + '" set as preferred', 2000); }
+            else { showToast('Error: ' + (j.error || 'unknown'), 3000); }
+          })
+          .catch(function() { showToast('Server unreachable', 2500); });
+      }
+    });
+
+    loadWifiNetworks();
   </script>
 </body>
 </html>

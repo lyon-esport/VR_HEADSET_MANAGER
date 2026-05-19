@@ -51,8 +51,6 @@ $adbPath    = $null
 $adbPort    = 5555
 $apkPath    = $null
 $apkPackage = 'tdg.oculuswirelessadb'
-$wifiSsid   = ''
-$wifiPwd    = ''
 try {
     $cfg = Get-Content $ConfigFilePath -Raw -ErrorAction Stop | ConvertFrom-Json
     if ($null -ne $cfg.WebServer.port)        { $port    = [int]$cfg.WebServer.port }
@@ -66,8 +64,6 @@ try {
                    Join-Path -ChildPath $cfg.apk.adbWirelessActivatorApk
     }
     if ($cfg.apk.adbWirelessActivatorPackageName) { $apkPackage = $cfg.apk.adbWirelessActivatorPackageName }
-    if ($cfg.WIFI.wifi_ssid) { $wifiSsid = $cfg.WIFI.wifi_ssid }
-    if ($cfg.WIFI.wifi_pwd)  { $wifiPwd  = $cfg.WIFI.wifi_pwd  }
 } catch {
     Write-Log ($msg.WebServerConfigReadFailed -f $port) -Level WARNING
 }
@@ -1381,9 +1377,15 @@ try {
                 $result = @{ ok = $false; error = '' }
                 if (-not ($adbPath -and (Test-Path -LiteralPath $adbPath))) {
                     $result.error = 'ADB not found.'
-                } elseif (-not $wifiSsid) {
-                    $result.error = 'No WiFi SSID configured.'
                 } else {
+                    $knownNetworks = Get-WifiNetworks
+                    $preferredNet  = $knownNetworks | Where-Object { $_.Preferred } | Select-Object -First 1
+                    if (-not $preferredNet) { $preferredNet = $knownNetworks | Select-Object -First 1 }
+                    if (-not $preferredNet) {
+                        $result.error = 'No WiFi network configured. Add one in app_config.'
+                    } else {
+                    $wifiSsid = $preferredNet.SSID
+                    $wifiPwd  = $preferredNet.Password
                     # Find USB device
                     $usbDeviceId = (& $adbPath devices 2>&1 |
                         Where-Object { $_ -match '^\S+\s+device$' -and $_ -notmatch '^\*' -and $_ -notmatch '^\d+\.\d+' } |
@@ -1405,6 +1407,7 @@ try {
                             }
                         }
                     }
+                    }
                 }
                 $jsonOut   = ConvertTo-Json $result -Compress
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonOut)
@@ -1417,6 +1420,148 @@ try {
                 try {
                     $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"Internal error"}')
                     $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: GET /api/wifi-networks  - returns known WiFi networks (SSIDs only, passwords masked)
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/wifi-networks') {
+            try {
+                $networks  = @(Get-WifiNetworks)
+                $result    = @($networks | ForEach-Object { @{ ssid = $_.SSID; passwordHint = '****'; preferred = $_.Preferred } })
+                $jsonOut   = ConvertTo-Json $result -Compress
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonOut)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"Internal error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/wifi-networks/upsert  - add or update a WiFi network {ssid, password}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/wifi-networks/upsert') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body   = $reader.ReadToEnd(); $reader.Close()
+                $json   = $body | ConvertFrom-Json
+                $ssid        = ([string]$json.ssid).Trim()
+                $wifiPassword = ([string]$json.password).Trim()
+                if (-not $ssid) { throw "SSID is required" }
+                $networks  = @(Get-WifiNetworks)
+                $existing  = $networks | Where-Object { $_.SSID -eq $ssid }
+                if ($existing) {
+                    $existing.Password = $wifiPassword
+                    $message = "updated"
+                } else {
+                    $isFirst = ($networks.Count -eq 0)
+                    $networks += [PSCustomObject]@{ SSID = $ssid; Password = $wifiPassword; Preferred = $isFirst }
+                    $message = "added"
+                }
+                Save-WifiNetworks -Networks $networks
+                $jsonOut   = ConvertTo-Json @{ ok = $true; message = $message } -Compress
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonOut)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errMsg    = $_.Exception.Message
+                    $errBytes  = [System.Text.Encoding]::UTF8.GetBytes(("{`"ok`":false,`"error`":`"$errMsg`"}"))
+                    $response.StatusCode      = 400
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/wifi-networks/delete  - remove a WiFi network {ssid}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/wifi-networks/delete') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body   = $reader.ReadToEnd(); $reader.Close()
+                $json   = $body | ConvertFrom-Json
+                $ssid   = ([string]$json.ssid).Trim()
+                if (-not $ssid) { throw "SSID is required" }
+                $all      = @(Get-WifiNetworks)
+                $wasPreferred = [bool]($all | Where-Object { $_.SSID -eq $ssid -and $_.Preferred })
+                $networks = @($all | Where-Object { $_.SSID -ne $ssid })
+                if ($wasPreferred -and $networks.Count -gt 0) { $networks[0].Preferred = $true }
+                Save-WifiNetworks -Networks $networks
+                $jsonOut   = ConvertTo-Json @{ ok = $true } -Compress
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonOut)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errMsg    = $_.Exception.Message
+                    $errBytes  = [System.Text.Encoding]::UTF8.GetBytes(("{`"ok`":false,`"error`":`"$errMsg`"}"))
+                    $response.StatusCode      = 400
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/wifi-networks/set-preferred  - marks one SSID as preferred {ssid}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/wifi-networks/set-preferred') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body   = $reader.ReadToEnd(); $reader.Close()
+                $json   = $body | ConvertFrom-Json
+                $ssid   = ([string]$json.ssid).Trim()
+                if (-not $ssid) { throw "SSID is required" }
+                $networks = @(Get-WifiNetworks)
+                $found = $false
+                foreach ($n in $networks) { $n.Preferred = ($n.SSID -eq $ssid); if ($n.SSID -eq $ssid) { $found = $true } }
+                if (-not $found) { throw "SSID not found" }
+                Save-WifiNetworks -Networks $networks
+                $jsonOut   = ConvertTo-Json @{ ok = $true } -Compress
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonOut)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errMsg    = $_.Exception.Message
+                    $errBytes  = [System.Text.Encoding]::UTF8.GetBytes(("{`"ok`":false,`"error`":`"$errMsg`"}"))
+                    $response.StatusCode      = 400
                     $response.ContentType     = 'application/json; charset=utf-8'
                     $response.Headers.Add('Access-Control-Allow-Origin', '*')
                     $response.ContentLength64 = $errBytes.Length
@@ -1616,18 +1761,59 @@ try {
         # API: GET /api/openfolder?target=logs|config|records  - opens folder in Explorer
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/openfolder') {
             try {
-                $target = (New-Object System.Web.HttpUtility).ParseQueryString($request.Url.Query)['target']
+                $target = [System.Web.HttpUtility]::ParseQueryString($request.Url.Query)['target']
+                $recordsFolder = try {
+                    $c = Get-Content -LiteralPath $global:ConfigFilePath -Raw -ErrorAction Stop | ConvertFrom-Json
+                    if ($c.scrcpy -and $c.scrcpy.recordFolder) { [string]$c.scrcpy.recordFolder } else { $null }
+                } catch { $null }
                 $folderMap = @{
-                    'logs'    = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "logs"))
-                    'config'  = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "config"))
-                    'records' = $global:recordsPath
+                    'logs'    = (Join-Path $global:ScriptPath "logs")
+                    'config'  = (Join-Path $global:ScriptPath "config")
+                    'records' = $recordsFolder
                 }
                 $folder = $folderMap[$target]
-                if ($folder -and (Test-Path -LiteralPath $folder)) {
+                if ($folder -and [System.IO.Directory]::Exists($folder)) {
                     Start-Process explorer.exe -ArgumentList "`"$folder`""
                     $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
                 } else {
                     $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"folder not found"}')
+                }
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $dbgMsg = $_.Exception.Message -replace '"',"'" -replace '[^\x20-\x7E]','?'
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes("{`"ok`":false,`"error`":`"$dbgMsg`"}")
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/browse-folder  - opens native Windows folder picker, returns selected path
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/browse-folder') {
+            try {
+                $tmp = [System.IO.Path]::GetTempFileName()
+                $ps  = "Add-Type -AssemblyName System.Windows.Forms;" +
+                       "`$d = New-Object System.Windows.Forms.FolderBrowserDialog;" +
+                       "`$d.Description = 'Select recording folder';" +
+                       "`$d.ShowNewFolderButton = `$true;" +
+                       "if (`$d.ShowDialog() -eq 'OK') { [System.IO.File]::WriteAllText('$tmp', `$d.SelectedPath, [System.Text.Encoding]::UTF8) } " +
+                       "else { [System.IO.File]::WriteAllText('$tmp', '', [System.Text.Encoding]::UTF8) }"
+                Start-Process powershell.exe -ArgumentList @('-NoProfile', '-Command', $ps) -WindowStyle Hidden -Wait
+                $chosen = [System.IO.File]::ReadAllText($tmp, [System.Text.Encoding]::UTF8).Trim()
+                Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue
+                if ($chosen) {
+                    $escaped = $chosen.Replace('\','\\').Replace('"','\"')
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes("{`"ok`":true,`"path`":`"$escaped`"}")
+                } else {
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true,"cancelled":true,"path":""}')
                 }
                 $response.StatusCode      = 200
                 $response.ContentType     = 'application/json; charset=utf-8'
@@ -1649,14 +1835,14 @@ try {
         # API: GET /api/logs?n=200  - returns last N lines of today's log file as JSON array
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/logs') {
             try {
-                $qn      = (New-Object System.Web.HttpUtility).ParseQueryString($request.Url.Query)['n']
+                $qn      = [System.Web.HttpUtility]::ParseQueryString($request.Url.Query)['n']
                 $maxLines = if ($qn -and $qn -match '^\d+$') { [int]$qn } else { 200 }
                 if ($maxLines -gt 2000) { $maxLines = 2000 }
                 $lines = @()
-                if ($LogFile -and (Test-Path -LiteralPath $LogFile)) {
-                    $lines = (Get-Content -LiteralPath $LogFile -Tail $maxLines -ErrorAction SilentlyContinue) -replace '"', '\"'
-                } elseif ($LogFolder -and (Test-Path -LiteralPath $LogFolder)) {
-                    $latest = Get-ChildItem -LiteralPath $LogFolder -Filter "log_*.txt" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+                if ($global:logFile -and (Test-Path -LiteralPath $global:logFile)) {
+                    $lines = (Get-Content -LiteralPath $global:logFile -Tail $maxLines -ErrorAction SilentlyContinue) -replace '"', '\"'
+                } elseif ($global:logFolder -and (Test-Path -LiteralPath $global:logFolder)) {
+                    $latest = Get-ChildItem -LiteralPath $global:logFolder -Filter "log_*.txt" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
                     if ($latest) {
                         $lines = (Get-Content -LiteralPath $latest.FullName -Tail $maxLines -ErrorAction SilentlyContinue) -replace '"', '\"'
                     }
@@ -1823,18 +2009,59 @@ try {
         # API: GET /api/openfolder?target=logs|config|records  - opens folder in Explorer
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/openfolder') {
             try {
-                $target = (New-Object System.Web.HttpUtility).ParseQueryString($request.Url.Query)['target']
+                $target = [System.Web.HttpUtility]::ParseQueryString($request.Url.Query)['target']
+                $recordsFolder = try {
+                    $c = Get-Content -LiteralPath $global:ConfigFilePath -Raw -ErrorAction Stop | ConvertFrom-Json
+                    if ($c.scrcpy -and $c.scrcpy.recordFolder) { [string]$c.scrcpy.recordFolder } else { $null }
+                } catch { $null }
                 $folderMap = @{
-                    'logs'    = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "logs"))
-                    'config'  = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "config"))
-                    'records' = $global:recordsPath
+                    'logs'    = (Join-Path $global:ScriptPath "logs")
+                    'config'  = (Join-Path $global:ScriptPath "config")
+                    'records' = $recordsFolder
                 }
                 $folder = $folderMap[$target]
-                if ($folder -and (Test-Path -LiteralPath $folder)) {
+                if ($folder -and [System.IO.Directory]::Exists($folder)) {
                     Start-Process explorer.exe -ArgumentList "`"$folder`""
                     $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
                 } else {
                     $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"folder not found"}')
+                }
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $dbgMsg = $_.Exception.Message -replace '"',"'" -replace '[^\x20-\x7E]','?'
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes("{`"ok`":false,`"error`":`"$dbgMsg`"}")
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/browse-folder  - opens native Windows folder picker, returns selected path
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/browse-folder') {
+            try {
+                $tmp = [System.IO.Path]::GetTempFileName()
+                $ps  = "Add-Type -AssemblyName System.Windows.Forms;" +
+                       "`$d = New-Object System.Windows.Forms.FolderBrowserDialog;" +
+                       "`$d.Description = 'Select recording folder';" +
+                       "`$d.ShowNewFolderButton = `$true;" +
+                       "if (`$d.ShowDialog() -eq 'OK') { [System.IO.File]::WriteAllText('$tmp', `$d.SelectedPath, [System.Text.Encoding]::UTF8) } " +
+                       "else { [System.IO.File]::WriteAllText('$tmp', '', [System.Text.Encoding]::UTF8) }"
+                Start-Process powershell.exe -ArgumentList @('-NoProfile', '-Command', $ps) -WindowStyle Hidden -Wait
+                $chosen = [System.IO.File]::ReadAllText($tmp, [System.Text.Encoding]::UTF8).Trim()
+                Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue
+                if ($chosen) {
+                    $escaped = $chosen.Replace('\','\\').Replace('"','\"')
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes("{`"ok`":true,`"path`":`"$escaped`"}")
+                } else {
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true,"cancelled":true,"path":""}')
                 }
                 $response.StatusCode      = 200
                 $response.ContentType     = 'application/json; charset=utf-8'
@@ -1856,14 +2083,14 @@ try {
         # API: GET /api/logs?n=200  - returns last N lines of today's log file as JSON array
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/logs') {
             try {
-                $qn      = (New-Object System.Web.HttpUtility).ParseQueryString($request.Url.Query)['n']
+                $qn      = [System.Web.HttpUtility]::ParseQueryString($request.Url.Query)['n']
                 $maxLines = if ($qn -and $qn -match '^\d+$') { [int]$qn } else { 200 }
                 if ($maxLines -gt 2000) { $maxLines = 2000 }
                 $lines = @()
-                if ($LogFile -and (Test-Path -LiteralPath $LogFile)) {
-                    $lines = (Get-Content -LiteralPath $LogFile -Tail $maxLines -ErrorAction SilentlyContinue) -replace '"', '\"'
-                } elseif ($LogFolder -and (Test-Path -LiteralPath $LogFolder)) {
-                    $latest = Get-ChildItem -LiteralPath $LogFolder -Filter "log_*.txt" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+                if ($global:logFile -and (Test-Path -LiteralPath $global:logFile)) {
+                    $lines = (Get-Content -LiteralPath $global:logFile -Tail $maxLines -ErrorAction SilentlyContinue) -replace '"', '\"'
+                } elseif ($global:logFolder -and (Test-Path -LiteralPath $global:logFolder)) {
+                    $latest = Get-ChildItem -LiteralPath $global:logFolder -Filter "log_*.txt" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
                     if ($latest) {
                         $lines = (Get-Content -LiteralPath $latest.FullName -Tail $maxLines -ErrorAction SilentlyContinue) -replace '"', '\"'
                     }

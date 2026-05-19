@@ -112,3 +112,61 @@ function Test-RequestPath {
     }
     return $null
 }
+
+
+# Returns the path to the encrypted WiFi networks store (data/wifi_networks.dat).
+function Get-WifiNetworksPath {
+    return (Join-Path -Path $global:ScriptPath -ChildPath 'data\wifi_networks.dat')
+}
+
+
+# Reads the encrypted WiFi networks file and returns an array of PSCustomObjects
+# with SSID and Password properties. Returns @() if the file does not exist.
+# If the file exists but cannot be decrypted or parsed, it is deleted and @() is returned.
+function Get-WifiNetworks {
+    $path = Get-WifiNetworksPath
+    if (-not (Test-Path -LiteralPath $path)) { return @() }
+    try {
+        $encrypted = Get-Content -LiteralPath $path -Raw -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($encrypted)) { throw "empty" }
+        $ss   = ConvertTo-SecureString $encrypted.Trim() -ErrorAction Stop
+        $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($ss)
+        try {
+            $plain = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+        } finally {
+            [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+        }
+        $list = @(($plain | ConvertFrom-Json) | ForEach-Object {
+            [PSCustomObject]@{ SSID = [string]$_.SSID; Password = [string]$_.Password; Preferred = [bool]$_.Preferred }
+        })
+        # Migration: if no entry is preferred, mark the first one and re-save
+        if ($list.Count -gt 0 -and -not ($list | Where-Object { $_.Preferred })) {
+            $list[0].Preferred = $true
+            Save-WifiNetworks -Networks $list
+        }
+        return $list
+    } catch {
+        Write-Log ($msg.WifiNetworksFileCorrupt) -Level WARNING
+        try { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue } catch {}
+        return @()
+    }
+}
+
+
+# Encrypts $Networks (array of objects with SSID + Password) and writes to
+# data/wifi_networks.dat using Windows DPAPI (machine/user-bound, no passphrase).
+# Overwrites any existing file.
+function Save-WifiNetworks {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [array]$Networks
+    )
+    $path  = Get-WifiNetworksPath
+    $plain = ($Networks | ForEach-Object { @{ SSID = $_.SSID; Password = $_.Password; Preferred = [bool]$_.Preferred } }) |
+             ConvertTo-Json -Compress
+    $ss        = ConvertTo-SecureString $plain -AsPlainText -Force
+    $encrypted = ConvertFrom-SecureString $ss
+    Write-FileWithoutBom -Path $path -Content $encrypted
+    Write-Log ($msg.WifiNetworksSaved -f $Networks.Count) -Level DEBUG
+}
