@@ -1,9 +1,5 @@
 {
   "language": "en-US",
-  "WIFI":{
-    "wifi_ssid": "YourWifiSSIDHere",
-    "wifi_pwd": "YourWifiPassword"
-  },
   "Paths":{
     "knownHeadsetsFile": "known_headsets.csv",
     "AppCacheFileName": "app_names.csv"

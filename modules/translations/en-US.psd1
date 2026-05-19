@@ -440,4 +440,23 @@
     TimerExpired          = "Timer expired for headset {0}"
     TimerFilesInitialized = "Timer files initialized ({0} headsets)"
     TimerFolderCreated    = "Timer folder created: {0}"
+
+    # WiFi networks store
+    WifiNetworksFileCorrupt   = "WiFi networks file is corrupt or unreadable. Deleting and starting fresh."
+    WifiNetworksSaved         = "WiFi networks saved ({0} entries)."
+    WifiNetworkAdded          = "WiFi network '{0}' added."
+    WifiNetworkUpdated        = "WiFi network '{0}' updated."
+    WifiNetworkRemoved        = "WiFi network '{0}' removed."
+    WifiNetworkNotFound       = "WiFi network '{0}' not found."
+    WifiNetworksTitle         = "== KNOWN WIFI NETWORKS =="
+    WifiNetworksEmpty         = "No known WiFi networks saved."
+    WifiNetworkSsidPrompt     = "Enter SSID (network name): "
+    WifiNetworkPasswordPrompt = "Enter password: "
+    WifiNetworksManage        = " W. Manage known WiFi networks"
+
+    WifiNetworkPreferred   = "WiFi network '{0}' set as preferred."
+    WifiNetworkAlreadyPref = "WiFi network '{0}' is already the preferred network."
+    WifiNetworkSetPref     = "Set as preferred"
+    WifiNoNetworkConfigured   = "No WiFi network configured. Add one via the WiFi Networks menu (W)."
+    WifiHeadsetOnKnownNetwork = "Headset is already connected to known network '{0}'."
 }

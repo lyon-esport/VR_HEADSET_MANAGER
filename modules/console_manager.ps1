@@ -208,7 +208,7 @@ function Show-MainMenu {
                     pause
                 }
                 '+' { Write-Host $msg.WifiADBActivation
-                        Enable-WiFiADB -wifi_ssid $global:WIFI_SSID -wifi_pwd $global:WIFI_PWD
+                        Enable-WiFiADB
                     }
                 '0' {
                     Write-Host $msg.Goodbye -ForegroundColor Yellow
@@ -925,6 +925,7 @@ function Show-SubMenu-Services {
         Write-Host ($msg.ServicesMediaMtxStatus -f $mtxStatus) -ForegroundColor $(if ($mtxProc) { 'Green' } else { 'Red' })
 
         Write-Host ""
+        Write-Host $msg.WifiNetworksManage      -ForegroundColor Cyan
         Write-Host $msg.ServicesChoiceWebServer -BackgroundColor DarkBlue -ForegroundColor White
         Write-Host $msg.ServicesChoiceStopWS    -BackgroundColor DarkBlue -ForegroundColor White
         Write-Host $msg.ServicesChoiceMediaMtx  -BackgroundColor DarkMagenta -ForegroundColor White
@@ -933,7 +934,8 @@ function Show-SubMenu-Services {
 
         $choice = Read-Host $msg.EnterChoice
 
-        switch ($choice) {
+        switch ($choice.ToUpper()) {
+            'W' { Show-SubMenu-WifiNetworks }
             '1' {
                 Start-WebServer -Restart
                 Write-Log $msg.ServicesWebServerRestarted -Level SUCCESS
@@ -955,6 +957,89 @@ function Show-SubMenu-Services {
                 Stop-MediaMtx
                 Write-Log $msg.ServicesMediaMtxStopped -Level INFO
                 Start-Sleep -Seconds 1
+            }
+        }
+    } while ($choice -ne '0')
+}
+
+
+function Show-SubMenu-WifiNetworks {
+    do {
+        Clear-Host
+        Write-Host $msg.WifiNetworksTitle -ForegroundColor Cyan
+        Write-Host ""
+        $networks = @(Get-WifiNetworks)
+        if ($networks.Count -eq 0) {
+            Write-Host $msg.WifiNetworksEmpty -ForegroundColor Yellow
+        } else {
+            $i = 1
+            foreach ($n in $networks) {
+                $flag = if ($n.Preferred) { '[*]' } else { '[ ]' }
+                $color = if ($n.Preferred) { 'Yellow' } else { 'Gray' }
+                Write-Host ("  {0} {1}. {2}" -f $flag, $i, $n.SSID) -ForegroundColor $color
+                $i++
+            }
+        }
+        Write-Host ""
+        Write-Host "  A. Add a network"
+        if ($networks.Count -gt 0) {
+            Write-Host "  [1-$($networks.Count)]. Edit / Delete a network"
+        }
+        Write-Host "  0. Back"
+        Write-Host ""
+
+        $choice = (Read-Host $msg.EnterChoice).Trim()
+
+        if ($choice.ToUpper() -eq 'A') {
+            $ssid = (Read-Host $msg.WifiNetworkSsidPrompt).Trim()
+            if (-not $ssid) { continue }
+            $pwd  = (Read-Host $msg.WifiNetworkPasswordPrompt).Trim()
+            $existing = $networks | Where-Object { $_.SSID -eq $ssid }
+            if ($existing) {
+                $existing.Password = $pwd
+                Write-Log ($msg.WifiNetworkUpdated -f $ssid) -Level SUCCESS
+            } else {
+                $isFirst = ($networks.Count -eq 0)
+                $networks += [PSCustomObject]@{ SSID = $ssid; Password = $pwd; Preferred = $isFirst }
+                Write-Log ($msg.WifiNetworkAdded -f $ssid) -Level SUCCESS
+            }
+            Save-WifiNetworks -Networks $networks
+            Start-Sleep -Seconds 1
+            continue
+        }
+
+        if ($choice -match '^\d+$') {
+            $idx = [int]$choice - 1
+            if ($idx -ge 0 -and $idx -lt $networks.Count) {
+                $target = $networks[$idx]
+                Write-Host ""
+                $prefLabel = if ($target.Preferred) { '[already preferred]' } else { $msg.WifiNetworkSetPref }
+                Write-Host ("  Selected: {0}" -f $target.SSID)
+                Write-Host ("  E. Edit password    P. {0}    D. Delete    0. Cancel" -f $prefLabel)
+                $action = (Read-Host $msg.EnterChoice).Trim().ToUpper()
+                if ($action -eq 'E') {
+                    $wifiPwdInput = (Read-Host $msg.WifiNetworkPasswordPrompt).Trim()
+                    $target.Password = $wifiPwdInput
+                    Save-WifiNetworks -Networks $networks
+                    Write-Log ($msg.WifiNetworkUpdated -f $target.SSID) -Level SUCCESS
+                    Start-Sleep -Seconds 1
+                } elseif ($action -eq 'P') {
+                    if ($target.Preferred) {
+                        Write-Log ($msg.WifiNetworkAlreadyPref -f $target.SSID) -Level INFO
+                    } else {
+                        foreach ($n in $networks) { $n.Preferred = ($n.SSID -eq $target.SSID) }
+                        Save-WifiNetworks -Networks $networks
+                        Write-Log ($msg.WifiNetworkPreferred -f $target.SSID) -Level SUCCESS
+                    }
+                    Start-Sleep -Seconds 1
+                } elseif ($action -eq 'D') {
+                    $wasPreferred = $target.Preferred
+                    $networks = @($networks | Where-Object { $_.SSID -ne $target.SSID })
+                    if ($wasPreferred -and $networks.Count -gt 0) { $networks[0].Preferred = $true }
+                    Save-WifiNetworks -Networks $networks
+                    Write-Log ($msg.WifiNetworkRemoved -f $target.SSID) -Level SUCCESS
+                    Start-Sleep -Seconds 1
+                }
             }
         }
     } while ($choice -ne '0')

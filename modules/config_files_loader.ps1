@@ -119,9 +119,6 @@ function Get-Config {
     $global:ADBWirelessActivatorAPK = Join-Path -Path $(Join-Path -Path $sourcesPath -ChildPath $configContent.apk.adbWirelessActivatorFolder) -ChildPath $configContent.apk.adbWirelessActivatorApk
     $global:ADBWirelessActivatorPackageName = $configContent.apk.adbWirelessActivatorPackageName
 
-    $global:WIFI_SSID = $configContent.WIFI.wifi_ssid
-    $global:WIFI_PWD = $configContent.WIFI.wifi_pwd
-
     $global:VRMonitor_refresh_timer = $configContent.VRMonitor.refresh_timer
 
     $global:adbFolder = Join-Path -Path $sourcesPath -ChildPath $configContent.ADB.folder

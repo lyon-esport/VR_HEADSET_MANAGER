@@ -432,4 +432,23 @@
     TimerExpired          = "Minuterie expiree pour le casque {0}"
     TimerFilesInitialized = "Fichiers minuterie initialises ({0} casques)"
     TimerFolderCreated    = "Dossier minuterie cree : {0}"
+
+    # WiFi networks store
+    WifiNetworksFileCorrupt   = "Fichier de reseaux WiFi corrompu ou illisible. Suppression et reinitialisation."
+    WifiNetworksSaved         = "Reseaux WiFi sauvegardes ({0} entrees)."
+    WifiNetworkAdded          = "Reseau WiFi '{0}' ajoute."
+    WifiNetworkUpdated        = "Reseau WiFi '{0}' mis a jour."
+    WifiNetworkRemoved        = "Reseau WiFi '{0}' supprime."
+    WifiNetworkNotFound       = "Reseau WiFi '{0}' introuvable."
+    WifiNetworksTitle         = "== RESEAUX WIFI CONNUS =="
+    WifiNetworksEmpty         = "Aucun reseau WiFi enregistre."
+    WifiNetworkSsidPrompt     = "Entrez le SSID (nom du reseau) : "
+    WifiNetworkPasswordPrompt = "Entrez le mot de passe : "
+    WifiNetworksManage        = " W. Gerer les reseaux WiFi connus"
+
+    WifiNetworkPreferred   = "Reseau WiFi '{0}' defini comme prefere."
+    WifiNetworkAlreadyPref = "Le reseau WiFi '{0}' est deja le reseau prefere."
+    WifiNetworkSetPref     = "Definir comme prefere"
+    WifiNoNetworkConfigured   = "Aucun reseau WiFi configure. Ajoutez-en un via le menu Reseaux WiFi (W)."
+    WifiHeadsetOnKnownNetwork = "Le casque est deja connecte au reseau connu '{0}'."
 }
