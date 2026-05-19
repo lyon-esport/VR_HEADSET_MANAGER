@@ -136,6 +136,20 @@ The web server is enabled by default to port 8080. This port can be modified in 
 - [ ] Review all powershell code with PSScriptAnalyzer and claude code...
 
 ---
+## License
+
+This project is licensed under the PolyForm Noncommercial License 1.0.0.
+
+✅ Allowed:
+- Personal use
+- Internal business use (non-commercial)
+
+❌ Not allowed:
+- Selling this software
+- Commercial usage
+
+See the [LICENSE file](/LICENSE.md) for details.
+---
 
 ## Sources
 
