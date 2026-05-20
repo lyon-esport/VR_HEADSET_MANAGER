@@ -454,4 +454,10 @@
     WifiNetworkSetPref     = "Definir comme prefere"
     WifiNoNetworkConfigured   = "Aucun reseau WiFi configure. Ajoutez-en un via le menu Reseaux WiFi (W)."
     WifiHeadsetOnKnownNetwork = "Le casque est deja connecte au reseau connu '{0}'."
+
+    # adb_functions.ps1 - parametres du casque
+    SettingBrightness       = "Reglage de la luminosite a {0}% sur {1}"
+    SettingGuardianMode    = "Mode guardian defini a {0} sur {1}"
+    HeadsetSettingApplied  = "Parametre applique avec succes sur {0}"
+    HeadsetSettingFailed   = "Echec de l'application du parametre sur {0}"
 }

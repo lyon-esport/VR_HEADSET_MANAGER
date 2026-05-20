@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash('l:/Drive partagés/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/scrcpy-win64-v4.0/adb.exe' -s 192.168.1.244:5555 shell settings put system screen_off_timeout 300000)",
+      "Bash('l:/Drive partagés/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/scrcpy-win64-v4.0/adb.exe' -s 192.168.1.244:5555 shell settings get system screen_off_timeout)",
+      "Bash('l:/Drive partagés/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/scrcpy-win64-v4.0/adb.exe' -s 192.168.1.244:5555 shell settings get system oculus_sleep_timeout_millis)",
+      "Bash('l:/Drive partagés/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/scrcpy-win64-v4.0/adb.exe' -s 192.168.1.244:5555 shell settings get system proximity_sensor_enabled)",
+      "Bash('l:/Drive partagés/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/scrcpy-win64-v4.0/adb.exe' -s 192.168.1.244:5555 shell settings get secure guardian_enabled)",
+      "Bash('l:/Drive partagés/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/scrcpy-win64-v4.0/adb.exe' -s 192.168.1.244:5555 shell settings put secure sleep_timeout 60000)",
+      "Bash('l:/Drive partagés/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/scrcpy-win64-v4.0/adb.exe' -s 192.168.1.244:5555 shell settings get secure sleep_timeout)",
+      "Bash('l:/Drive partagés/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/scrcpy-win64-v4.0/adb.exe' -s 192.168.1.244:5555 shell settings put secure sleep_timeout -1)",
+      "Bash('l:/Drive partagés/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/scrcpy-win64-v4.0/adb.exe' -s 192.168.1.244:5555 shell dumpsys -l)",
+      "Bash('l:/Drive partagés/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/scrcpy-win64-v4.0/adb.exe' -s 192.168.1.244:5555 shell dumpsys guardian)",
+      "Bash('l:/Drive partagés/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/scrcpy-win64-v4.0/adb.exe' -s 192.168.1.244:5555 shell settings put secure sleep_timeout 300000)",
+      "Bash('l:/Drive partagés/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/scrcpy-win64-v4.0/adb.exe' -s 192.168.1.244:5555 shell settings put secure controller_emulation_mode 1)",
+      "Bash('l:/Drive partagés/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/scrcpy-win64-v4.0/adb.exe' -s 192.168.1.244:5555 shell settings get secure controller_emulation_mode)",
+      "Bash('l:/Drive partagés/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/scrcpy-win64-v4.0/adb.exe' -s 192.168.1.244:5555 shell settings put secure controller_emulation_mode 0)",
+      "Bash('l:/Drive partagés/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/scrcpy-win64-v4.0/adb.exe' -s 192.168.1.244:5555 shell am broadcast -a com.oculus.vrshell.intent.action.UPDATE_FULL_PASSTHROUGH -n com.oculus.vrshell/.ShellControlBroadcastReceiver --ez passthrough true)"
+    ]
+  }
+}

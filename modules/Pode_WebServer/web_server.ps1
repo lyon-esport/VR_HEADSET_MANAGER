@@ -587,6 +587,67 @@ try {
             continue
         }
 
+        # API: GET /api/headset-settings?name=Q3_BLUE  - reads current headset parameters via ADB
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/headset-settings') {
+            try {
+                $safeName = [regex]::Match($request.QueryString['name'], '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+                $rows    = Get-KnownHeadsets
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                if (-not $headset) { throw "Headset not found" }
+                $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort -adb $adbPath
+                if (-not $device) { throw "Could not connect to headset via ADB" }
+
+                $screenTimeout    = Get-HeadsetScreenTimeout    -Device $device -adb $adbPath
+                $sleepTimeout     = Get-HeadsetSleepTimeout     -Device $device -adb $adbPath
+                $brightness       = Get-HeadsetBrightness       -Device $device -adb $adbPath
+
+                Send-JsonResponse -Response $response -Body @{
+                    ok               = $true
+                    screenTimeout    = $screenTimeout
+                    sleepTimeout     = $sleepTimeout
+                    brightness       = $brightness
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/headset-settings/apply  body: {"name":"Q3_BLUE","settings":{...}}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/headset-settings/apply') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body   = $reader.ReadToEnd()
+                $reader.Close()
+                $json     = $body | ConvertFrom-Json
+                $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+                $rows    = Get-KnownHeadsets
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                if (-not $headset) { throw "Headset not found" }
+                $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort -adb $adbPath
+                if (-not $device) { throw "Could not connect to headset via ADB" }
+
+                $s = $json.settings
+                if ($null -ne $s.guardianMode) {
+                    Set-HeadsetGuardian -Device $device -adb $adbPath | Out-Null
+                }
+
+                if ($null -ne $s.brightness) {
+                    Set-HeadsetBrightness -Device $device -Percent ([int]$s.brightness) -adb $adbPath | Out-Null
+                }
+                Send-JsonResponse -Response $response -Body @{ ok = $true }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
         # API: POST /api/updateprofile  body: {"name":"Q3_BLUE","profile":"portrait-R-N-45-20"}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/updateprofile') {
             try {

@@ -1,36 +1,23 @@
 
 ## video_monitor.html ##
 
-Create a new functionaility (and a new ps1 module for all future related functions) named timer.
-For each headset, let's generate a timer based on a text file. The timer file name is based on the headset id, and is stored in /website/timer
-in headset_settings.html let's add a new section in each headset, between recording and power sections
-This timer section should :
-- Define the timer value in min:sec
-- Have a switch button if it's a incremental of decremental timer (pressing displays inc (0 to end of timer) or dec (timer value to 0)), and a button to press for starting the update.
-- Have a button to start the timer
-
-Everytime the button is pressed, the text in the file should update with the remaining time like 06:30, 06:29 etc, and must be updated every seconds until 0. At 0 (or timer value reached if inc mode) it should display "Time's up !" 
-
-Add the visibility of the timer in [video].html genreated captures, and in the main video_monitor.html generated file.
-The visibility should read the text file and update dynamically the value on screen while the timer file content changes.
-The timer will be only white text, centered, on the botom of the video capture.
-Timer visibility should be enabled or disabled with a new button (with a clock icon) like monitoring information.
-
 
 ## APPLICATION MANAGEMENT ##
 
 Add icons of the running application before the name
 
 ##########
-
-
-Setup few parametes to manage on the headset :
-- Time before shutting down the screen
-- proximity sensor activation/desactivation
-- Guardian : Change detection of the limit - stationary, Guardian, enable/disable travel mode
-- Switch to Passthrough / VR mode
-- Switch hand tracking/controllers
-
+DONE
+	Generate ADB functions to manage following parameters, one function per paramtets family.
+	Setup few parametes to manage on the headset :
+	- Time before shutting down the screen
+	- proximity sensor activation/desactivation
+	- Guardian : Change detection of the limit - stationary, Guardian, enable/disable travel mode
+	- Switch to Passthrough / VR mode
+	- Switch hand tracking/controllers
+	You can do live tests with adb wifi enabled meta quest 3 headset connected to 192.168.1.244.
+	adb.exe file for tests is placed in L:\Drive partagés\04 Equipe Technique\20 VR\VR_HEADSET_MANAGER\DEV_VERSION\VR_HEADSET_MANAGER\sources\scrcpy-win64-v4.0
+/DONE
 
 When scrcpy is already running, if I switch to anoter desktop on Windows 11, it automatically start new scrcpy windows. It shouldn't.
 >> Tried but it failed
@@ -73,8 +60,6 @@ Let's check with stream deck activity
 
 DEBUG
 
-	Console : "Web Monitor available at :"
-		list @IP + interface : LAN/WAN (+ speed)
 	
 	Meta quest New UI :
 		Check apps names and update names in known apps.
@@ -86,6 +71,6 @@ DEBUG
 	
 	
 	To burn tokens...
-		Find a way to start adbwifi on headset startup...
+		Find a way to start adbwifi on headset startup... Lets dev an app ?
 	
 	

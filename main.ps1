@@ -120,27 +120,16 @@ if ($custom_config) {
     $global:configFilePath = Join-Path -Path $global:ScriptPath -ChildPath "config\config.json"
 }
 
-if (-not (Test-Path -Path $global:configFilePath)) {
-    $templateConfigPath = Join-Path -Path $global:ScriptPath -ChildPath "template\config\config.json"
-    if (Test-Path -Path $templateConfigPath) {
-        Copy-Item -Path $templateConfigPath -Destination $global:configFilePath
-        Write-Host "Config file created from template at: $global:configFilePath" -ForegroundColor Green
-        
-        Write-Host "Do you want to edit the config file now with your default file editor? (Y/N)" -ForegroundColor Yellow
-        $REPLY = Read-Host
-        
-        if ($REPLY -match '^[Yy]$') {
-            # Open the config file in the default text editor
-            Start-Process -FilePath $global:configFilePath
-        } else {
-            Write-Host "You can edit the config file later at: $global:configFilePath" -ForegroundColor Green
-        }
-
-    } else {
+if (-not (Test-Path -LiteralPath $global:configFilePath)) {
+    $templateConfigPath = Join-Path -Path $global:ScriptPath -ChildPath "templates\config\config.json"
+    if (-not (Test-Path -LiteralPath $templateConfigPath)) {
         Write-Host "Error: Template config file is missing!" -ForegroundColor Red
-        Read-Host "Press enter for exit"
+        Read-Host "Press enter to exit"
         exit 1
     }
+    $welcomeModule = Join-Path $global:ScriptPath "modules\welcome.ps1"
+    . $welcomeModule
+    Invoke-WelcomeSetup -ConfigTemplatePath $templateConfigPath -ConfigOutputPath $global:configFilePath
 } else {
     Write-Host "Config file found at: $global:configFilePath" -ForegroundColor Green
 }

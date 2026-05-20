@@ -265,6 +265,60 @@
     }
     .pm-btn.primary:hover { background: rgba(34,197,94,0.25); }
 
+    /* Advanced headset settings section */
+    .card-advsettings-section {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 14px;
+      border-top: 1px solid var(--card-border);
+    }
+    .hs-adv-btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: .78rem; padding: 5px 13px; border-radius: 6px;
+      border: 1px solid var(--card-border); background: transparent;
+      color: inherit; cursor: pointer; opacity: .75; font-family: inherit;
+      transition: opacity .12s, border-color .12s;
+    }
+    .hs-adv-btn:hover { opacity: 1; border-color: var(--accent, #22c55e); }
+
+    /* Advanced settings modal */
+    .advsettings-modal {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.72);
+      display: flex; align-items: center; justify-content: center; z-index: 200;
+    }
+    .advsettings-modal-box {
+      background: var(--card-bg); border-radius: 12px; padding: 28px 32px;
+      min-width: 340px; max-width: 460px; width: 100%;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.45);
+    }
+    .advsettings-modal-title { font-size: 1.05rem; font-weight: 700; margin-bottom: 20px; }
+    .adv-headset { color: var(--accent, #22c55e); margin-right: 5px; }
+    .adv-subtitle { opacity: .55; font-size: .82rem; font-weight: 400; }
+    .advsettings-modal-body { display: flex; flex-direction: column; gap: 13px; }
+    .adv-field { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+    .adv-field label { font-size: .85rem; opacity: .8; flex-shrink: 0; min-width: 140px; }
+    .adv-field select {
+      flex: 1; min-width: 0; padding: 5px 8px; border-radius: 6px;
+      border: 1px solid var(--card-border); background: var(--card-bg);
+      color: inherit; font-size: .85rem; font-family: inherit;
+    }
+    .adv-note { font-size: .72rem; opacity: .5; margin-left: 4px; font-weight: 400; }
+    .adv-field select:disabled { opacity: .55; cursor: default; }
+    .adv-info-val { font-size: .85rem; opacity: .8; text-align: right; flex-shrink: 0; }
+    /* Segmented 2-button */
+    .adv-seg { display: flex; border-radius: 7px; overflow: hidden; border: 1px solid var(--card-border); flex-shrink: 0; }
+    .adv-seg-btn { flex: 1; padding: 5px 12px; font-size: .82rem; font-family: inherit; background: transparent; color: inherit; border: none; cursor: pointer; transition: background .15s, color .15s; white-space: nowrap; }
+    .adv-seg-btn + .adv-seg-btn { border-left: 1px solid var(--card-border); }
+    .adv-seg-btn.active { background: var(--accent, #22c55e); color: #fff; }
+    .adv-seg-btn:not(.active):hover { background: rgba(255,255,255,.07); }
+    .adv-slider-wrap { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+    .adv-slider-wrap input[type=range] { flex: 1; min-width: 0; accent-color: var(--accent); }
+    .adv-slider-val { font-size: .82rem; opacity: .75; white-space: nowrap; min-width: 34px; text-align: right; }
+    .advsettings-modal-footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
+    .adv-loading { text-align: center; padding: 24px 0; opacity: .5; font-size: .85rem; }
+    .adv-error { color: #ef4444; font-size: .8rem; margin-top: 6px; text-align: right; }
+    .adv-field-col { flex-direction: column; align-items: flex-start; gap: 6px; }
+    .adv-btn-group { display: flex; gap: 6px; flex-wrap: wrap; }
+
     /* Power management row */
     .card-power-row {
       display: flex;
@@ -754,6 +808,49 @@
     </div>
   </div>
 
+  <!-- Advanced headset settings modal -->
+  <div class="advsettings-modal" id="advsettings-modal" style="display:none">
+    <div class="advsettings-modal-box">
+      <div class="advsettings-modal-title">
+        <span class="adv-headset" id="adv-headset"></span>
+        <span class="adv-subtitle">Advanced Settings</span>
+      </div>
+      <div class="advsettings-modal-body" id="adv-body">
+        <div class="adv-loading" id="adv-loading">Loading current settings...</div>
+        <div id="adv-fields" style="display:none; flex-direction:column; gap:13px;">
+          <div class="adv-field">
+            <label for="adv-brightness">Brightness</label>
+            <div class="adv-slider-wrap">
+              <input type="range" id="adv-brightness" min="0" max="100" step="1" value="50">
+              <span class="adv-slider-val" id="adv-brightness-val">50%</span>
+            </div>
+          </div>
+          <div class="adv-field">
+            <label>Guardian Mode</label>
+            <button class="hs-adv-btn" id="adv-guardian-init" style="font-size:.8rem">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+              </svg>
+              Guardian initialization
+            </button>
+          </div>
+
+          <div class="adv-field">
+            <label>Screen Timeout <span class="adv-note">(info only)</span></label>
+            <span class="adv-info-val" id="adv-screen-timeout">--</span>
+          </div>
+          <div class="adv-field">
+            <label>Sleep Timeout <span class="adv-note">(info only)</span></label>
+            <span class="adv-info-val" id="adv-sleep-timeout">--</span>
+          </div>
+        </div>
+      </div>
+      <div class="advsettings-modal-footer">
+        <button class="pm-btn" id="adv-cancel">Close</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Remove headset confirmation modal -->
   <div class="remove-modal" id="remove-modal" style="display:none">
     <div class="remove-modal-box">
@@ -1016,6 +1113,16 @@
               '<button class="timer-start-btn" data-timer-id="' + cfg.ID + '" data-dn="' + dn + '" title="Long press to reset">Start</button>' +
             '</div>' +
           '</div>' +
+          '<div class="card-advsettings-section">' +
+            '<span class="toggle-label">' +
+              '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+                '<circle cx="12" cy="12" r="3"/>' +
+                '<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>' +
+              '</svg>' +
+              'Advanced Settings' +
+            '</span>' +
+            '<button class="hs-adv-btn" data-adv-settings="' + dn + '">Configure</button>' +
+          '</div>' +
           '<div class="card-power-row">' +
             '<span class="power-label">' +
               '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
@@ -1140,6 +1247,12 @@
         var editProfileBtn = e.target.closest('[data-edit-profile]');
         if (editProfileBtn) {
           openProfileModal(editProfileBtn.dataset.editProfile);
+          return;
+        }
+        // Advanced settings button
+        var advBtn = e.target.closest('[data-adv-settings]');
+        if (advBtn) {
+          openAdvSettingsModal(advBtn.dataset.advSettings);
           return;
         }
         // Name edit button
@@ -1684,7 +1797,96 @@
       .finally(function() { saveBtn.disabled = false; });
     });
 
-    // â"€â"€ Remove modal â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+    // -- Advanced settings modal --------------------------------------------------
+    var _advDn = null;
+
+    function openAdvSettingsModal(dn) {
+      _advDn = dn;
+      document.getElementById('adv-headset').textContent = dn.replace(/_/g, ' ');
+      document.getElementById('adv-loading').style.display = '';
+      document.getElementById('adv-fields').style.display = 'none';
+      document.getElementById('advsettings-modal').style.display = 'flex';
+
+      fetch('/api/headset-settings?name=' + encodeURIComponent(dn))
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          if (!j.ok) { throw new Error(j.error || 'Failed'); }
+          var setSeg = function(segId, val) {
+            document.querySelectorAll('#' + segId + ' .adv-seg-btn').forEach(function(b) {
+              b.classList.toggle('active', b.dataset.value === val);
+            });
+          };
+          var msToLabel = function(ms) {
+            if (!ms || ms === '-1' || ms === -1) return 'Never';
+            var s = parseInt(ms, 10) / 1000;
+            if (s < 60) return s + ' sec';
+            if (s < 3600) { var m = Math.round(s / 60); return m + ' min'; }
+            var h = Math.round(s / 3600); return h + (h === 1 ? ' hour' : ' hours');
+          };
+          var el = document.getElementById('adv-screen-timeout');
+          if (el) el.textContent = msToLabel(j.screenTimeout);
+          el = document.getElementById('adv-sleep-timeout');
+          if (el) el.textContent = msToLabel(j.sleepTimeout);
+
+          var bv = (j.brightness !== undefined && j.brightness !== null) ? parseInt(j.brightness, 10) : 50;
+          document.getElementById('adv-brightness').value = bv;
+          document.getElementById('adv-brightness-val').textContent = bv + '%';
+          document.getElementById('adv-loading').style.display = 'none';
+          document.getElementById('adv-fields').style.display = 'flex';
+        })
+        .catch(function(err) {
+          document.getElementById('adv-loading').textContent = 'Could not read current settings. You can still apply changes.';
+          document.getElementById('adv-fields').style.display = 'flex';
+        });
+    }
+
+    function closeAdvSettingsModal() {
+      document.getElementById('advsettings-modal').style.display = 'none';
+      _advDn = null;
+    }
+
+    document.getElementById('adv-cancel').addEventListener('click', closeAdvSettingsModal);
+    document.getElementById('advsettings-modal').addEventListener('click', function(e) {
+      if (e.target === this) closeAdvSettingsModal();
+    });
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape' && _advDn) closeAdvSettingsModal();
+    });
+
+    function advQuickAction(settings) {
+      var dn = _advDn;
+      if (!dn) return;
+      fetch('/api/headset-settings/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: dn, settings: settings })
+      }).catch(function() {});
+    }
+    function advBtnAction(id, settings) {
+      document.getElementById(id).addEventListener('click', function() {
+        var btn = this;
+        btn.disabled = true;
+        var dn = _advDn;
+        if (!dn) { btn.disabled = false; return; }
+        fetch('/api/headset-settings/apply', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: dn, settings: settings })
+        }).catch(function() {}).finally(function() { btn.disabled = false; });
+      });
+    }
+    advBtnAction('adv-guardian-init', { guardianMode: 'Init' });
+
+    document.getElementById('adv-brightness').addEventListener('input', function() {
+      document.getElementById('adv-brightness-val').textContent = this.value + '%';
+    });
+
+    document.getElementById('adv-brightness').addEventListener('change', function() {
+      advQuickAction({ brightness: this.value });
+    });
+
+
+    // -- Remove modal -------------------------------------------------------------
     var _removeDn   = null;
     var _removeName = null;
 

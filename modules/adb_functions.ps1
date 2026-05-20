@@ -2109,3 +2109,105 @@ function Install-HeadsetApp {
         return [PSCustomObject]@{ Ok = $false; Error = $_.ToString() }
     }
 }
+
+
+
+function Set-HeadsetGuardian {
+    # Guardian mode cannot be changed via ADB broadcasts or settings on Quest 3 user builds.
+    # The IGuardianManagerService binder is inaccessible without a system session.
+    # Opens the guardian setup UI so the user can run the initialization on the headset.
+    param (
+        [Parameter(Mandatory=$true)]
+        [PSCustomObject]$Device,
+        [string]$adb = $global:adbPath
+    )
+    if (-not $Device) { Write-Log ($msg.ErrorOccurred -f 'No device') -Level ERROR; return $false }
+    $DeviceId = $Device.DeviceId
+    try {
+        Write-Log ($msg.SettingGuardianMode -f 'init', $DeviceId) -Level INFO
+        Invoke-AdbCmd -Device $Device -Command "shell am start -n com.oculus.guardiansetup/.MainActivity" -adb $adb | Out-Null
+        Write-Log ($msg.HeadsetSettingApplied -f $DeviceId) -Level SUCCESS
+        return $true
+    }
+    catch {
+        Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
+        return $false
+    }
+}
+
+function Get-HeadsetScreenTimeout {
+    param (
+        [Parameter(Mandatory=$true)]
+        [PSCustomObject]$Device,
+        [string]$adb = $global:adbPath
+    )
+    if (-not $Device) { return '-1' }
+    try {
+        $raw = ((Invoke-AdbCmd -Device $Device -Command "shell getprop persist.ovr.prefs_overrides.idle_time_threshold" -adb $adb) -join '').Trim()
+        if ($raw -and $raw -match '^\d+$') {
+            $ms = [int]$raw * 1000
+            if ($ms -eq 0) { return '-1' }
+            return [string]$ms
+        }
+        return '-1'
+    }
+    catch { Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR; return '-1' }
+}
+
+function Get-HeadsetSleepTimeout {
+    param (
+        [Parameter(Mandatory=$true)]
+        [PSCustomObject]$Device,
+        [string]$adb = $global:adbPath
+    )
+    if (-not $Device) { return '-1' }
+    try {
+        $raw = ((Invoke-AdbCmd -Device $Device -Command "shell getprop persist.ovr.prefs_overrides.autosleep_time" -adb $adb) -join '').Trim()
+        if ($raw -and $raw -match '^\d+$') {
+            $ms = [int]$raw * 1000
+            if ($ms -eq 0) { return '-1' }
+            return [string]$ms
+        }
+        return '-1'
+    }
+    catch { Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR; return '-1' }
+}
+
+
+function Get-HeadsetBrightness {
+    param (
+        [Parameter(Mandatory=$true)]
+        [PSCustomObject]$Device,
+        [string]$adb = $global:adbPath
+    )
+    if (-not $Device) { return '50' }
+    try {
+        $raw = ((Invoke-AdbCmd -Device $Device -Command "shell settings get system screen_brightness" -adb $adb) -join '').Trim()
+        if ($raw -and $raw -ne 'null' -and $raw -match '^\d+$') {
+            return [string][int]([Math]::Round([int]$raw / 255.0 * 100))
+        }
+        return '50'
+    }
+    catch { Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR; return '50' }
+}
+
+function Set-HeadsetBrightness {
+    param (
+        [Parameter(Mandatory=$true)]
+        [PSCustomObject]$Device,
+        [ValidateRange(0,100)]
+        [int]$Percent = 50,
+        [string]$adb = $global:adbPath
+    )
+    if (-not $Device) { Write-Log ($msg.ErrorOccurred -f 'No device') -Level ERROR; return $false }
+    $DeviceId = $Device.DeviceId
+    $raw = [int]([Math]::Round($Percent / 100.0 * 255))
+    try {
+        Write-Log ($msg.SettingBrightness -f $Percent, $DeviceId) -Level INFO
+        Invoke-AdbCmd -Device $Device -Command "shell settings put system screen_brightness $raw" -adb $adb | Out-Null
+        Write-Log ($msg.HeadsetSettingApplied -f $DeviceId) -Level SUCCESS
+        return $true
+    }
+    catch { Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR; return $false }
+}
+
