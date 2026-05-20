@@ -462,4 +462,10 @@
     WifiNetworkSetPref     = "Set as preferred"
     WifiNoNetworkConfigured   = "No WiFi network configured. Add one via the WiFi Networks menu (W)."
     WifiHeadsetOnKnownNetwork = "Headset is already connected to known network '{0}'."
+
+    # adb_functions.ps1 - headset settings
+    SettingBrightness       = "Setting brightness to {0}% on {1}"
+    SettingGuardianMode    = "Setting guardian mode to {0} on {1}"
+    HeadsetSettingApplied  = "Setting applied successfully on {0}"
+    HeadsetSettingFailed   = "Failed to apply setting on {0}"
 }
