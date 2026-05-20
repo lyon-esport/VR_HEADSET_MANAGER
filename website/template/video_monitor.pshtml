@@ -916,22 +916,41 @@
       var _lpTimer = null;
       var _longPressed = false;
       var _lpBtn = null;
+      var _lastTouchEnd = 0;
+      var _lastToggleTime = {};
 
+      function doResetBtn(btn) {
+        var tid = btn.dataset.timerCell;
+        _lastToggleTime[tid] = 0;
+        fetch('/api/timer?id=' + tid + '&action=reset')
+          .then(function(r) { return r.json(); })
+          .then(function(j) {
+            if (j.ok) { btn.classList.remove('running', 'paused'); }
+          }).catch(function() {});
+      }
+
+      // pause/resume: if the previous toggle on this button was within 800ms, treat as double-tap -> reset
       function doTimerAction(btn) {
         var tid = btn.dataset.timerCell;
+        var now = Date.now();
         if (btn.classList.contains('running')) {
+          if (now - (_lastToggleTime[tid] || 0) < 800) { doResetBtn(btn); return; }
+          _lastToggleTime[tid] = now;
           fetch('/api/timer?id=' + tid + '&action=pause')
             .then(function(r) { return r.json(); })
             .then(function(j) {
               if (j.ok) { btn.classList.remove('running'); btn.classList.add('paused'); }
             }).catch(function() {});
         } else if (btn.classList.contains('paused')) {
+          if (now - (_lastToggleTime[tid] || 0) < 800) { doResetBtn(btn); return; }
+          _lastToggleTime[tid] = now;
           fetch('/api/timer?id=' + tid + '&action=resume')
             .then(function(r) { return r.json(); })
             .then(function(j) {
               if (j.ok) { btn.classList.remove('paused'); btn.classList.add('running'); }
             }).catch(function() {});
         } else {
+          _lastToggleTime[tid] = 0;
           fetch('/api/timer?id=' + tid + '&action=start')
             .then(function(r) { return r.json(); })
             .then(function(j) {
@@ -940,25 +959,23 @@
         }
       }
 
+      function handleTap(btn) { doTimerAction(btn); }
+
       function startLongPress(btn) {
         _lpBtn = btn;
         _longPressed = false;
         _lpTimer = setTimeout(function() {
           _lpTimer = null;
           _longPressed = true;
-          var tid = btn.dataset.timerCell;
-          fetch('/api/timer?id=' + tid + '&action=reset')
-            .then(function(r) { return r.json(); })
-            .then(function(j) {
-              if (j.ok) { btn.classList.remove('running', 'paused'); }
-            }).catch(function() {});
+          _lastTapTime = 0; _lastTapBtn = null;
+          doResetBtn(btn);
         }, 800);
       }
       function cancelLongPress() {
         if (_lpTimer) { clearTimeout(_lpTimer); _lpTimer = null; }
       }
 
-      // Mouse: long press + click
+      // Mouse: long press + single/double-click
       document.getElementById('grid').addEventListener('mousedown', function(e) {
         var btn = e.target.closest('.cell-timer-btn[data-timer-cell]');
         if (btn) startLongPress(btn);
@@ -966,13 +983,14 @@
       document.getElementById('grid').addEventListener('mouseup',    cancelLongPress);
       document.getElementById('grid').addEventListener('mouseleave', cancelLongPress);
       document.getElementById('grid').addEventListener('click', function(e) {
+        if (Date.now() - _lastTouchEnd < 500) return; // suppress synthetic click from touch
         var btn = e.target.closest('.cell-timer-btn[data-timer-cell]');
         if (!btn) return;
         if (_longPressed) { _longPressed = false; return; }
-        doTimerAction(btn);
+        handleTap(btn);
       });
 
-      // Touch: long press via touchstart; tap via touchend (avoids 300ms delay)
+      // Touch: long press via touchstart; single/double-tap via touchend
       document.getElementById('grid').addEventListener('touchstart', function(e) {
         var btn = e.target.closest('.cell-timer-btn[data-timer-cell]');
         if (btn) { e.stopPropagation(); startLongPress(btn); }
@@ -981,12 +999,17 @@
         var btn = e.target.closest('.cell-timer-btn[data-timer-cell]');
         if (!btn) return;
         e.preventDefault();
-        if (_lpTimer) {
-          cancelLongPress();
-          doTimerAction(btn);
+        _lastTouchEnd = Date.now();
+        cancelLongPress();
+        if (!_longPressed) {
+          handleTap(btn);
         }
+        _longPressed = false;
       }, { passive: false });
       document.getElementById('grid').addEventListener('touchcancel', cancelLongPress);
+      document.getElementById('grid').addEventListener('contextmenu', function(e) {
+        if (e.target.closest('.cell-timer-btn[data-timer-cell]')) e.preventDefault();
+      });
     })();
 
     // Run scale then layout then scale again so no-stream heights are known before streaming layout

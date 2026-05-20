@@ -458,21 +458,39 @@
         var ctrlBtn = document.getElementById('timer-ctrl-btn');
         var _lpTimer = null;
         var _longPressed = false;
+        var _lastTouchEnd = 0;
+        var _lastToggleTime = 0;
 
+        function doReset() {
+          _lastToggleTime = 0;
+          fetch('/api/timer?id=' + TIMER_ID + '&action=reset')
+            .then(function(r) { return r.json(); })
+            .then(function(j) {
+              if (j.ok) { ctrlBtn.classList.remove('running', 'paused'); }
+            }).catch(function() {});
+        }
+
+        // pause/resume: if the previous toggle was within 800ms, treat as double-tap -> reset
         function doTimerAction() {
+          var now = Date.now();
           if (ctrlBtn.classList.contains('running')) {
+            if (now - _lastToggleTime < 800) { doReset(); return; }
+            _lastToggleTime = now;
             fetch('/api/timer?id=' + TIMER_ID + '&action=pause')
               .then(function(r) { return r.json(); })
               .then(function(j) {
                 if (j.ok) { ctrlBtn.classList.remove('running'); ctrlBtn.classList.add('paused'); }
               }).catch(function() {});
           } else if (ctrlBtn.classList.contains('paused')) {
+            if (now - _lastToggleTime < 800) { doReset(); return; }
+            _lastToggleTime = now;
             fetch('/api/timer?id=' + TIMER_ID + '&action=resume')
               .then(function(r) { return r.json(); })
               .then(function(j) {
                 if (j.ok) { ctrlBtn.classList.remove('paused'); ctrlBtn.classList.add('running'); }
               }).catch(function() {});
           } else {
+            _lastToggleTime = 0;
             fetch('/api/timer?id=' + TIMER_ID + '&action=start')
               .then(function(r) { return r.json(); })
               .then(function(j) {
@@ -481,19 +499,14 @@
           }
         }
 
-        function doReset() {
-          fetch('/api/timer?id=' + TIMER_ID + '&action=reset')
-            .then(function(r) { return r.json(); })
-            .then(function(j) {
-              if (j.ok) { ctrlBtn.classList.remove('running', 'paused'); }
-            }).catch(function() {});
-        }
+        function handleTap() { doTimerAction(); }
 
         function startLongPress() {
           _longPressed = false;
           _lpTimer = setTimeout(function() {
             _lpTimer = null;
             _longPressed = true;
+            _lastTapTime = 0;
             doReset();
           }, 800);
         }
@@ -501,28 +514,30 @@
           if (_lpTimer) { clearTimeout(_lpTimer); _lpTimer = null; }
         }
 
-        // Mouse: long press via mousedown/mouseup, click via native click event
+        // Mouse: long press via mousedown/mouseup, single/double-click via native click
         ctrlBtn.addEventListener('mousedown',  startLongPress);
         ctrlBtn.addEventListener('mouseup',    cancelLongPress);
         ctrlBtn.addEventListener('mouseleave', cancelLongPress);
         ctrlBtn.addEventListener('click', function() {
+          if (Date.now() - _lastTouchEnd < 500) return; // suppress synthetic click from touch
           if (_longPressed) { _longPressed = false; return; }
-          doTimerAction();
+          handleTap();
         });
 
-        // Touch: long press via touchstart/touchend; tap via touchend (avoids 300ms delay and preventDefault issues)
+        // Touch: long press via touchstart; single/double-tap via touchend
         ctrlBtn.addEventListener('touchstart', function(e) {
           e.stopPropagation();
           startLongPress();
         }, { passive: true });
         ctrlBtn.addEventListener('touchend', function(e) {
           e.preventDefault();
-          if (_lpTimer) {
-            cancelLongPress();
-            doTimerAction();
-          }
+          _lastTouchEnd = Date.now();
+          cancelLongPress();
+          if (!_longPressed) { handleTap(); }
+          _longPressed = false;
         }, { passive: false });
         ctrlBtn.addEventListener('touchcancel', cancelLongPress);
+        ctrlBtn.addEventListener('contextmenu', function(e) { e.preventDefault(); });
       })();
 
     </script>
