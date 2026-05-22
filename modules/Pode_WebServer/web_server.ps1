@@ -616,6 +616,32 @@ try {
             continue
         }
 
+        # API: GET /api/headset-firmware?name=Q3_BLUE  - returns firmware version, build, and pending OTA
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/headset-firmware') {
+            try {
+                $safeName = [regex]::Match($request.QueryString['name'], '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+                $rows    = Get-KnownHeadsets
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                if (-not $headset) { throw "Headset not found" }
+                $device  = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort -adb $adbPath
+                if (-not $device) { throw "Could not connect to headset via ADB" }
+
+                $fw = Get-HeadsetFirmwareInfo -Device $device -adb $adbPath
+                Send-JsonResponse -Response $response -Body @{
+                    ok            = $true
+                    version       = $fw.Version
+                    build         = $fw.Build
+                    updateVersion = $fw.UpdateVersion
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
         # API: POST /api/headset-settings/apply  body: {"name":"Q3_BLUE","settings":{...}}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/headset-settings/apply') {
             try {
