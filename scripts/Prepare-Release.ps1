@@ -28,21 +28,28 @@
 .PARAMETER FullReset
     Also removes data\known_headsets.csv (full factory reset).
 
+.PARAMETER Version
+    Release version string (e.g. "1.2.3"). If omitted the script prompts interactively.
+    Ignored in WhatIf mode (no version.txt is written).
+
 .EXAMPLE
     .\Prepare-Release.ps1 -WhatIf
     .\Prepare-Release.ps1
+    .\Prepare-Release.ps1 -Version "1.2.3"
     .\Prepare-Release.ps1 -FullReset
 #>
 param(
     [switch]$WhatIf,
-    [switch]$FullReset
+    [switch]$FullReset,
+    [string]$Version = ""
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 # Resolve project root (one level up from scripts\)
-$projectRoot = Split-Path -LiteralPath $PSScriptRoot -Parent
+# Note: -LiteralPath cannot be combined with -Parent in PS 5.1; $PSScriptRoot has no special chars
+$projectRoot = Split-Path $PSScriptRoot -Parent
 
 function Remove-ItemSafe {
     param([string]$Path, [string]$Label)
@@ -52,6 +59,7 @@ function Remove-ItemSafe {
         } else {
             Remove-Item -LiteralPath $Path -Recurse -Force
             Write-Host "  Deleted: $Label" -ForegroundColor Yellow
+            $script:deletedItems.Add($Label)
         }
         return $true
     }
@@ -68,6 +76,35 @@ function Remove-GlobSafe {
         } else {
             Remove-Item -LiteralPath $item.FullName -Force
             Write-Host "  Deleted: $Label\$($item.Name)" -ForegroundColor Yellow
+            $script:deletedItems.Add("$Label\$($item.Name)")
+        }
+    }
+}
+
+function Remove-EmptyDirectories {
+    param([string]$Root)
+    $excludedRoots = @(
+        (Join-Path $Root "scripts"),
+        (Join-Path $Root ".git"),
+        (Join-Path $Root ".claude")
+    )
+    # Bottom-up: sort deepest paths first so children are removed before parents are checked
+    $dirs = Get-ChildItem -LiteralPath $Root -Recurse -Directory -ErrorAction SilentlyContinue |
+            Sort-Object -Property FullName -Descending
+    foreach ($dir in $dirs) {
+        $skip = $false
+        foreach ($ex in $excludedRoots) {
+            if ($dir.FullName -eq $ex -or $dir.FullName.StartsWith($ex + '\')) { $skip = $true; break }
+        }
+        if ($skip) { continue }
+        if (@(Get-ChildItem -LiteralPath $dir.FullName -ErrorAction SilentlyContinue).Count -eq 0) {
+            if ($WhatIf) {
+                Write-Host "  [WhatIf] Would delete empty dir: $($dir.FullName.Substring($Root.Length + 1))" -ForegroundColor Cyan
+            } else {
+                Remove-Item -LiteralPath $dir.FullName -Force
+                Write-Host "  Deleted empty dir: $($dir.FullName.Substring($Root.Length + 1))" -ForegroundColor Yellow
+                $script:deletedItems.Add("(empty dir) $($dir.FullName.Substring($Root.Length + 1))")
+            }
         }
     }
 }
@@ -84,6 +121,7 @@ function Remove-FolderContents {
             Remove-Item -LiteralPath $_.FullName -Recurse -Force
         }
         Write-Host "  Deleted contents of: $Label ($($items.Count) item(s))" -ForegroundColor Yellow
+        $script:deletedItems.Add("$Label ($($items.Count) item(s))")
     }
 }
 
@@ -95,6 +133,36 @@ if ($FullReset) {
 }
 Write-Host ""
 
+# --- VERSION ---
+if (-not $WhatIf) {
+    while ($Version -notmatch '^\d+\.\d+(\.\d+)*$') {
+        $Version = (Read-Host "  Enter release version (e.g. 1.2.3)").Trim()
+        if ($Version -notmatch '^\d+\.\d+(\.\d+)*$') {
+            Write-Host "  Invalid format. Use digits separated by dots (e.g. 1.2.3)." -ForegroundColor Red
+        }
+    }
+    Write-Host "  Version set to: $Version" -ForegroundColor White
+    Write-Host ""
+}
+
+# Read config.json NOW before the config section deletes it, to know which sources folders to keep
+$sourcesKeep = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+$sourcesKeep.Add("ADB Wireless activator") | Out-Null
+$sourcesKeep.Add("powershell_Modules")      | Out-Null
+$sourcesKeep.Add("ffmpeg")                  | Out-Null
+$configJsonPath = Join-Path $projectRoot "config\config.json"
+if (Test-Path -LiteralPath $configJsonPath) {
+    $cfg = Get-Content -LiteralPath $configJsonPath -Raw | ConvertFrom-Json
+    if ($cfg.scrcpy.folder)                      { $sourcesKeep.Add(($cfg.scrcpy.folder   -split '[/\\]')[0]) | Out-Null }
+    if ($cfg.ADB.folder)                         { $sourcesKeep.Add(($cfg.ADB.folder      -split '[/\\]')[0]) | Out-Null }
+    if ($cfg.mediamtx -and $cfg.mediamtx.folder) { $sourcesKeep.Add(($cfg.mediamtx.folder -split '[/\\]')[0]) | Out-Null }
+} else {
+    Write-Host "  [Warning] config.json not found - sources cleanup will keep only the static list." -ForegroundColor Yellow
+}
+
+$script:deletedItems = [System.Collections.Generic.List[string]]::new()
+$keptSources         = [System.Collections.Generic.List[string]]::new()
+
 # --- LOGS ---
 Write-Host "[ Logs ]" -ForegroundColor Gray
 $logsDir = Join-Path $projectRoot "logs"
@@ -105,8 +173,8 @@ Write-Host "[ Generated HTML ]" -ForegroundColor Gray
 $websiteDir = Join-Path $projectRoot "website"
 Remove-GlobSafe -Directory $websiteDir -Pattern "*[monitoring].html" -Label "website\"
 Remove-GlobSafe -Directory $websiteDir -Pattern "*[video].html"      -Label "website\"
-Remove-ItemSafe -Path (Join-Path $websiteDir "monitor.html")       -Label "website\monitor.html"
-Remove-ItemSafe -Path (Join-Path $websiteDir "video_monitor.html") -Label "website\video_monitor.html"
+$null = Remove-ItemSafe -Path (Join-Path $websiteDir "monitor.html")       -Label "website\monitor.html"
+$null = Remove-ItemSafe -Path (Join-Path $websiteDir "video_monitor.html") -Label "website\video_monitor.html"
 
 # --- TIMER FILES ---
 Write-Host "[ Timer files ]" -ForegroundColor Gray
@@ -123,10 +191,10 @@ Write-Host "[ Data caches ]" -ForegroundColor Gray
 $dataDir = Join-Path $projectRoot "data"
 Remove-GlobSafe -Directory $dataDir -Pattern "*_installed_apps.csv" -Label "data\"
 Remove-GlobSafe -Directory $dataDir -Pattern "*_favorite_apps.csv"  -Label "data\"
-Remove-ItemSafe -Path (Join-Path $dataDir "app_names.csv")          -Label "data\app_names.csv"
-Remove-ItemSafe -Path (Join-Path $dataDir "known_headsets_infos.csv") -Label "data\known_headsets_infos.csv"
-Remove-ItemSafe -Path (Join-Path $dataDir "timer.csv")               -Label "data\timer.csv"
-Remove-ItemSafe -Path (Join-Path $dataDir "webserver.pid")          -Label "data\webserver.pid"
+$null = Remove-ItemSafe -Path (Join-Path $dataDir "app_names.csv")            -Label "data\app_names.csv"
+$null = Remove-ItemSafe -Path (Join-Path $dataDir "known_headsets_infos.csv") -Label "data\known_headsets_infos.csv"
+$null = Remove-ItemSafe -Path (Join-Path $dataDir "timer.csv")                -Label "data\timer.csv"
+$null = Remove-ItemSafe -Path (Join-Path $dataDir "webserver.pid")            -Label "data\webserver.pid"
 
 # Data backup CSVs (versioned copies created by the user)
 Remove-GlobSafe -Directory $dataDir -Pattern "known_headsets_v*.csv"      -Label "data\ [backup]"
@@ -136,8 +204,8 @@ Remove-GlobSafe -Directory $dataDir -Pattern "known_headsets_SCRCPY.csv"  -Label
 # --- CONFIG ---
 Write-Host "[ Config ]" -ForegroundColor Gray
 $configDir = Join-Path $projectRoot "config"
-Remove-ItemSafe -Path (Join-Path $configDir "mediamtx_headsets.yml") -Label "config\mediamtx_headsets.yml"
-Remove-ItemSafe -Path (Join-Path $configDir "config.json")           -Label "config\config.json"
+$null = Remove-ItemSafe -Path (Join-Path $configDir "mediamtx_headsets.yml") -Label "config\mediamtx_headsets.yml"
+$null = Remove-ItemSafe -Path (Join-Path $configDir "config.json")           -Label "config\config.json"
 # Config backup copies (e.g. "config - Copie.json")
 Remove-GlobSafe -Directory $configDir -Pattern "* - Copie*.json" -Label "config\ [backup]"
 Remove-GlobSafe -Directory $configDir -Pattern "*_backup*.json"  -Label "config\ [backup]"
@@ -145,23 +213,75 @@ Remove-GlobSafe -Directory $configDir -Pattern "*_backup*.json"  -Label "config\
 # --- DOCS TEST FILES ---
 Write-Host "[ Docs test files ]" -ForegroundColor Gray
 $docsDir = Join-Path $projectRoot "docs"
-Remove-ItemSafe -Path (Join-Path $docsDir "test.ps1")             -Label "docs\test.ps1"
-Remove-ItemSafe -Path (Join-Path $docsDir "test_invoke_usb.ps1")  -Label "docs\test_invoke_usb.ps1"
-Remove-ItemSafe -Path (Join-Path $docsDir "TODO_AI.txt")          -Label "docs\TODO_AI.txt"
+$null = Remove-ItemSafe -Path (Join-Path $docsDir "test.ps1")             -Label "docs\test.ps1"
+$null = Remove-ItemSafe -Path (Join-Path $docsDir "test_invoke_usb.ps1")  -Label "docs\test_invoke_usb.ps1"
+$null = Remove-ItemSafe -Path (Join-Path $docsDir "TODO_AI.txt")          -Label "docs\TODO_AI.txt"
 $docsFrDir = Join-Path $docsDir "fr-FR"
-Remove-ItemSafe -Path (Join-Path $docsFrDir "test.psd1")          -Label "docs\fr-FR\test.psd1"
+$null = Remove-ItemSafe -Path (Join-Path $docsFrDir "test.psd1")          -Label "docs\fr-FR\test.psd1"
 
 # --- FULL RESET (optional) ---
 if ($FullReset) {
     Write-Host "[ Full Reset ]" -ForegroundColor Magenta
-    Remove-ItemSafe -Path (Join-Path $dataDir "known_headsets.csv") -Label "data\known_headsets.csv"
+    $null = Remove-ItemSafe -Path (Join-Path $dataDir "known_headsets.csv") -Label "data\known_headsets.csv"
+}
+
+# --- SOURCES CLEANUP ---
+Write-Host "[ Sources cleanup ]" -ForegroundColor Gray
+$sourcesDir = Join-Path $projectRoot "sources"
+if (Test-Path -LiteralPath $sourcesDir) {
+    foreach ($item in (Get-ChildItem -LiteralPath $sourcesDir -ErrorAction SilentlyContinue)) {
+        if ($sourcesKeep.Contains($item.Name)) {
+            Write-Host "  Keeping: sources\$($item.Name)" -ForegroundColor DarkGray
+            $keptSources.Add($item.Name)
+        } else {
+            $null = Remove-ItemSafe -Path $item.FullName -Label "sources\$($item.Name)"
+        }
+    }
+}
+
+# --- EMPTY DIRECTORIES ---
+Write-Host "[ Empty directories ]" -ForegroundColor Gray
+Remove-EmptyDirectories -Root $projectRoot
+
+# --- VERSION FILE ---
+Write-Host "[ Version file ]" -ForegroundColor Gray
+$versionFilePath = Join-Path $projectRoot "version.txt"
+if ($WhatIf) {
+    Write-Host "  [WhatIf] Would write: version.txt (v$Version)" -ForegroundColor Cyan
+} else {
+    [System.IO.File]::WriteAllText($versionFilePath, $Version, [System.Text.Encoding]::UTF8)
+    Write-Host "  Written: version.txt -> $Version" -ForegroundColor Green
+}
+
+# --- RELEASE REPORT ---
+Write-Host "[ Release report ]" -ForegroundColor Gray
+$reportName = "VR_HEADSET_MANAGER_release_v${Version}_$(Get-Date -Format 'yyyy-MM-dd').txt"
+$reportPath = Join-Path (Split-Path $projectRoot -Parent) $reportName
+if ($WhatIf) {
+    Write-Host "  [WhatIf] Would write report: $reportPath" -ForegroundColor Cyan
+} else {
+    $reportLines = [System.Collections.Generic.List[string]]::new()
+    $reportLines.Add("VR HEADSET MANAGER - Release report")
+    $reportLines.Add("Version    : $Version")
+    $reportLines.Add("Date       : $(Get-Date -Format 'yyyy-MM-dd HH:mm')")
+    $reportLines.Add("Prepared by: $env:COMPUTERNAME")
+    $reportLines.Add("")
+    $reportLines.Add("Files / folders deleted ($($script:deletedItems.Count)):")
+    foreach ($entry in $script:deletedItems) { $reportLines.Add("  $entry") }
+    $reportLines.Add("")
+    $reportLines.Add("Folders kept in sources\:")
+    foreach ($entry in $keptSources) { $reportLines.Add("  $entry") }
+    [System.IO.File]::WriteAllText($reportPath, ($reportLines -join "`r`n"), [System.Text.Encoding]::UTF8)
+    Write-Host "  Written: $reportPath" -ForegroundColor Green
 }
 
 Write-Host ""
 if ($WhatIf) {
     Write-Host "=== WhatIf complete. No files were deleted. Re-run without -WhatIf to apply. ===" -ForegroundColor Cyan
 } else {
-    Write-Host "=== Release preparation complete. ===" -ForegroundColor Green
+    Write-Host "=== Release preparation complete (v$Version). ===" -ForegroundColor Green
     Write-Host "    config\config.json will be recreated from templates\config\config.json on first run." -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "  >> Last step: zip the project folder and distribute the archive. <<" -ForegroundColor Cyan
 }
 Write-Host ""

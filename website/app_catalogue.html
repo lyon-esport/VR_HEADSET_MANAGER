@@ -347,6 +347,11 @@
     .confirm-box .cb-btns .cb-confirm:hover { opacity: 0.85; }
     .confirm-box .cb-btns .cb-cancel:hover  { background: var(--bg4); }
 
+    /* -- Firmware badge ---------------------------------------------------- */
+    .fw-badge     { font-size: 11px; white-space: nowrap; }
+    .fw-badge-ok  { color: var(--text2); }
+    .fw-badge-upd { color: var(--warn); font-weight: 600; }
+
     /* -- Empty / hidden state --------------------------------------------- */
     .hidden { display: none !important; }
     .empty-msg { text-align: center; padding: 40px 12px; color: var(--text2); font-size: 12px; }
@@ -376,6 +381,7 @@
         <option value="">-- Select a headset --</option>
       </select>
       <span id="headset-status" style="font-size:11px;color:var(--text2);"></span>
+      <span id="fw-badge" class="fw-badge" style="display:none"></span>
       <span class="adb-conn-bar" id="adb-conn-bar">
         <span class="adb-conn-label">ADB connectivity</span>
         <span class="adb-badge unavailable" id="adb-usb-badge">USB</span>
@@ -639,13 +645,37 @@
       $id('install-section').classList.add('hidden');
       $id('apps-section').classList.add('hidden');
       stopAdbPolling();
+      $id('fw-badge').style.display = 'none';
       return;
     }
     $id('install-section').classList.remove('hidden');
     $id('apps-section').classList.remove('hidden');
     startAdbPolling();
     loadApps(false);
+    fetchFirmware();
   });
+
+  // -- Firmware badge --------------------------------------------------------
+  function fetchFirmware() {
+    var badge = $id('fw-badge');
+    badge.style.display = 'none';
+    if (!selectedHeadset) return;
+    fetch('/api/headset-firmware?name=' + encodeURIComponent(selectedHeadset))
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { badge.style.display = 'none'; return; }
+        var txt = 'V' + d.version + (d.build ? ' (build ' + d.build + ')' : '');
+        if (d.updateVersion) {
+          txt += '  →  Update available: V' + d.updateVersion;
+          badge.className = 'fw-badge fw-badge-upd';
+        } else {
+          badge.className = 'fw-badge fw-badge-ok';
+        }
+        badge.textContent = txt;
+        badge.style.display = 'inline';
+      })
+      .catch(function () { badge.style.display = 'none'; });
+  }
 
   // -- Load apps -------------------------------------------------------------
   function loadApps(refresh) {

@@ -353,6 +353,11 @@
       background: rgba(239,68,68,0.20); color: var(--ping-ko);
       border-color: rgba(239,68,68,0.6);
     }
+    .btn-adb-disabled {
+      opacity: 0.35 !important;
+      cursor: not-allowed !important;
+      pointer-events: none !important;
+    }
 
     /* Timer section */
     .card-timer-section {
@@ -1674,6 +1679,14 @@
             }
           }
         }
+
+        var adbOk = !!s.adb;
+        [
+          document.querySelector('[data-launch-app="' + dn + '"]'),
+          document.querySelector('[data-adv-settings="' + dn + '"]'),
+          document.querySelector('[data-power="reboot"][data-power-headset="' + dn + '"]'),
+          document.querySelector('[data-power="shutdown"][data-power-headset="' + dn + '"]')
+        ].forEach(function(b) { if (b) b.classList.toggle('btn-adb-disabled', !adbOk); });
       });
     }
 

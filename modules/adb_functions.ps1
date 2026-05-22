@@ -2211,3 +2211,56 @@ function Set-HeadsetBrightness {
     catch { Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR; return $false }
 }
 
+
+function Get-HeadsetFirmwareInfo {
+    <#
+    .SYNOPSIS
+    Returns firmware version, build number, and pending OTA update version for a headset via ADB.
+    .EXAMPLE
+    $d = Get-AdbWifiDevice -headsetIP "192.168.1.244"
+    Get-HeadsetFirmwareInfo -Device $d
+    #>
+    param (
+        [Parameter(Mandatory=$true)]
+        [PSCustomObject]$Device,
+        [string]$adb = $global:adbPath
+    )
+    if (-not $Device) { return $null }
+    try {
+        # ro.hzos.build.display_name gives the Meta Quest OS version (e.g. "2.3")
+        # ro.vros.build.version gives the numeric release (e.g. "203") used as fallback
+        # All ro.*version.release props return Android version "14", not the Meta OS version
+        $version = ((Invoke-AdbCmd -Device $Device -Command "shell getprop ro.hzos.build.display_name" -adb $adb) -join '').Trim()
+        if (-not $version) {
+            $version = ((Invoke-AdbCmd -Device $Device -Command "shell getprop ro.vros.build.version" -adb $adb) -join '').Trim()
+        }
+
+        # Build number: ro.build.version.incremental encodes Meta build as
+        # "AAAAAAA00BBBB0CCC" (7+2+4+1+3 digits) -> "AAAAAAA.BBBB.CCC"
+        # e.g. "52083180032000520" -> "5208318.3200.520"
+        $rawBuild = ((Invoke-AdbCmd -Device $Device -Command "shell getprop ro.build.version.incremental" -adb $adb) -join '').Trim()
+        if ($rawBuild -match '^(\d{7})00(\d{4})0(\d{3})$') {
+            $build = "$($Matches[1]).$($Matches[2]).$($Matches[3])"
+        } else {
+            $build = $rawBuild
+        }
+
+        # Pending OTA staged by the system
+        $updateVersion = $null
+        $otaVer = ((Invoke-AdbCmd -Device $Device -Command "shell getprop ro.update.version" -adb $adb) -join '').Trim()
+        if ($otaVer -and $otaVer -ne $version -and $otaVer -notmatch '^\s*$') {
+            $updateVersion = $otaVer
+        }
+
+        return [PSCustomObject]@{
+            Version       = $version
+            Build         = $build
+            UpdateVersion = $updateVersion
+        }
+    }
+    catch {
+        Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
+        return $null
+    }
+}
+
