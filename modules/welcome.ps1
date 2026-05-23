@@ -100,7 +100,7 @@ function Invoke-FfmpegDownload {
             if (-not (Test-Path -LiteralPath $destFolder)) {
                 New-Item -ItemType Directory -Path $destFolder | Out-Null
             }
-            Copy-Item -Path (Join-Path $binFolder.FullName "*") -Destination $destFolder -Recurse -Force
+            Copy-Item -LiteralPath (Join-Path $binFolder.FullName "ffmpeg.exe") -Destination $destFolder -Force
             Write-Host "  ffmpeg installed to: sources\ffmpeg" -ForegroundColor Green
             Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
             Remove-Item $extractPath -Recurse -Force -ErrorAction SilentlyContinue
@@ -115,10 +115,14 @@ function Invoke-FfmpegDownload {
         Write-Host "  Enter the full path to ffmpeg.exe:" -ForegroundColor White
         Write-Host "  > " -ForegroundColor Yellow -NoNewline
         $ffmpegExe = Read-Host
+        # Accept either a direct path to ffmpeg.exe or a folder containing it
         if ((Test-Path -LiteralPath $ffmpegExe) -and $ffmpegExe -like "*.exe") {
             $folder = Split-Path $ffmpegExe -Parent
             Write-Host "  ffmpeg folder set to: $folder" -ForegroundColor Green
             return $folder
+        } elseif ((Test-Path -LiteralPath $ffmpegExe -PathType Container) -and (Test-Path -LiteralPath (Join-Path $ffmpegExe "ffmpeg.exe"))) {
+            Write-Host "  ffmpeg folder set to: $ffmpegExe" -ForegroundColor Green
+            return $ffmpegExe
         } else {
             Write-Host "  Invalid path. Skipping." -ForegroundColor Red
             return "ffmpeg"

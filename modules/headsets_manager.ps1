@@ -431,7 +431,7 @@ function Rename-Headset {
         Write-Log ("scrcpy closed for '$oldDisplayName'.") -Level INFO
     }
 
-    # 2. Rename in the headsets list and save (triggers Write-htmlMonitor + Write-VideoMonitor)
+    # 2. Rename in the headsets list and save (triggers Write-htmlMonitor)
     $headset.Name = $NewName
     Save-Headsets -headsets $headsets
     Write-Log ("Headset renamed: '$OldName' -> '$NewName'") -Level INFO
@@ -490,7 +490,7 @@ function Remove-Headset {
 
     if ($headsetToRemove) {
         # Remove the headset from the list
-        $headsets = $headsets | Where-Object { $_.ID -ne $ID }
+        $headsets = @($headsets | Where-Object { $_.ID -ne $ID })
         Write-Log ($msg.HeadsetRemoved -f $ID, $headsetToRemove.Name) -Level INFO
         # Delete the installed apps cache file for this headset
         $cachePath = Join-Path $global:ScriptPath "data\$(Convert-Displayname $headsetToRemove.Name)_installed_apps.csv"
@@ -506,11 +506,25 @@ function Remove-Headset {
         }
         # Stop timer job and delete timer files (.txt and .run)
         Stop-HeadsetTimer -headsetId ([int]$headsetToRemove.ID)
+        $timerTxt = Get-TimerFilePath    -headsetId ([int]$headsetToRemove.ID)
+        $timerRun = Get-TimerRunFilePath -headsetId ([int]$headsetToRemove.ID)
+        foreach ($f in @($timerTxt, $timerRun)) {
+            if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
+        }
+        # Delete generated monitoring and video HTML overlays
+        foreach ($kind in @('monitoring', 'video')) {
+            $htmlPath = Get-HeadsetSitePath -Name $headsetToRemove.Name -Kind $kind
+            if (Test-Path -LiteralPath $htmlPath) { Remove-Item -LiteralPath $htmlPath -Force -ErrorAction SilentlyContinue }
+        }
         # Remove headset row from timer.csv
         $timerCsv = Join-Path $global:ScriptPath "data\timer.csv"
         if (Test-Path -LiteralPath $timerCsv) {
-            $rows = @(Import-Csv -LiteralPath $timerCsv) | Where-Object { [int]$_.HeadsetID -ne [int]$headsetToRemove.ID }
-            $rows | Export-Csv -LiteralPath $timerCsv -NoTypeInformation -Encoding UTF8 -Force
+            $rows = @(@(Import-Csv -LiteralPath $timerCsv) | Where-Object { [int]$_.HeadsetID -ne [int]$headsetToRemove.ID })
+            if ($rows.Count -gt 0) {
+                $rows | Export-Csv -LiteralPath $timerCsv -NoTypeInformation -Encoding UTF8 -Force
+            } else {
+                Set-Content -LiteralPath $timerCsv -Value '"HeadsetID","Minutes","Seconds","Mode"' -Encoding UTF8
+            }
         }
     } else {
         Write-Log ($msg.HeadsetIdNotFound -f $ID) -Level ERROR
@@ -522,12 +536,12 @@ function Remove-Headset {
 
 function Save-Headsets {
     param (
-        [Parameter(Mandatory = $true)][array]$headsets,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][array]$headsets,
         [string]$FilePath = $global:knownHeadsetsFilePath 
     )
 
     # Reassign IDs starting from 1
-    $newHeadsets = $headsets | Sort-Object ID
+    $newHeadsets = @($headsets | Sort-Object ID)
     $newID = 1
     foreach ($headset in $newHeadsets) {
         $headset.ID = $newID
@@ -535,10 +549,13 @@ function Save-Headsets {
     }
 
     # Save to the CSV file
-    $newHeadsets | Export-Csv -Path $FilePath -NoTypeInformation -Encoding UTF8
+    if ($newHeadsets.Count -eq 0) {
+        Set-Content -LiteralPath $FilePath -Value '"ID","Name","IPAddress","scrcpy_AutoRestart","Record","ScrcpyProfile","Model","SerialNumber"' -Encoding UTF8
+    } else {
+        $newHeadsets | Export-Csv -LiteralPath $FilePath -NoTypeInformation -Encoding UTF8
+    }
     Write-Log ($msg.HeadsetsSaved -f $FilePath) -Level INFO
     Write-htmlMonitor $newHeadsets
-    Write-VideoMonitor $newHeadsets
     # Create timer files for any newly added headsets (non-destructive: skips existing files)
     Initialize-TimerFiles
 } #OK

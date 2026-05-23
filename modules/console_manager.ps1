@@ -102,7 +102,6 @@ function Show-MainMenu {
 
         # Start html monitor update
         Write-htmlMonitor $global:knownHeadsets
-        Write-VideoMonitor $global:knownHeadsets
 
 
         Clear-Host

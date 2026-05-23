@@ -429,6 +429,7 @@
     MediaMtxFfmpegNotFound = "ffmpeg.exe not found at {0} - restream capture unavailable"
     MediaMtxFirewallRuleCreating = "Creating firewall rules for mediamtx restream ports (RTSP:{0}, HLS:{1})"
     MediaMtxFirewallRuleExists = "MediaMtx firewall rules already exist and are correctly configured"
+    MediaMtxFirewallRuleUpdating = "MediaMtx ports changed in config - removing stale firewall rules and recreating"
     MediaMtxFirewallRuleFailed = "Failed to manage mediamtx firewall rules: {0}"
     WebServerFirewallRuleCreating = "Creating firewall rule for web server port {0}"
     WebServerFirewallRuleExists = "Web server firewall rule already exists and is correctly configured"

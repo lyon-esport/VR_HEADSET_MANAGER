@@ -91,6 +91,7 @@ function Start-MediaMtx {
     }
     Write-Log $msg.MediaMtxStarting -Level INFO
     try {
+        Unblock-File -LiteralPath $global:mediamtxFilePath -ErrorAction SilentlyContinue
         Write-MediaMtxYml
         $proc = Start-Process -FilePath $global:mediamtxFilePath `
                               -ArgumentList "`"$($global:mediamtxYmlPath)`"" `
