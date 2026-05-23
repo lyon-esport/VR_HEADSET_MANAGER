@@ -190,7 +190,7 @@
       '</a>',
 
     manageDevicesBtnHTML:
-      '<a class="topbar-btn" href="/headset_settings.html" id="headset-settings-btn" title="Headset Settings">' +
+      '<a class="topbar-btn" href="/headsets_settings.html" id="headset-settings-btn" title="Headset Settings">' +
         '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
           '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/>' +
           '<line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/>' +
@@ -201,7 +201,7 @@
       '</a>',
 
     // Wire the Headset Settings button.
-    // If onOpen is provided it is called on click; otherwise navigates to /headset_settings.html.
+    // If onOpen is provided it is called on click; otherwise navigates to /headsets_settings.html.
     initManageDevicesBtn: function (onOpen) {
       document.addEventListener('DOMContentLoaded', function () {
         var btn = document.getElementById('headset-settings-btn');
@@ -210,7 +210,7 @@
           if (typeof onOpen === 'function') {
             onOpen();
           } else {
-            window.location.href = '/headset_settings.html';
+            window.location.href = '/headsets_settings.html';
           }
         });
       });
@@ -241,7 +241,7 @@
               '</svg>' +
               'Headsets Monitoring' +
             '</a>' +
-            '<a class="drop-item" href="/headset_settings.html">' +
+            '<a class="drop-item" href="/headsets_settings.html">' +
               '<svg class="drop-item-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
                 '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/>' +
                 '<line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/>' +
@@ -271,7 +271,7 @@
           '</div>' +
 
           '<div class="drop-section">' +
-            '<a class="drop-item" href="/headset_settings.html#manage">' +
+            '<a class="drop-item" href="/headsets_settings.html#manage">' +
               '<svg class="drop-item-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
                 '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>' +
               '</svg>' +

@@ -421,6 +421,7 @@
     MediaMtxFfmpegNotFound = "ffmpeg.exe introuvable a {0} - capture de restream indisponible"
     MediaMtxFirewallRuleCreating = "Creation des regles pare-feu pour mediamtx (RTSP:{0}, HLS:{1})"
     MediaMtxFirewallRuleExists = "Les regles pare-feu mediamtx existent deja et sont correctement configurees"
+    MediaMtxFirewallRuleUpdating = "Les ports mediamtx ont change dans la config - suppression des anciennes regles et recreation"
     MediaMtxFirewallRuleFailed = "Impossible de gerer les regles pare-feu mediamtx : {0}"
     WebServerFirewallRuleCreating = "Creation de la regle pare-feu pour le serveur web sur le port {0}"
     WebServerFirewallRuleExists = "La regle pare-feu du serveur web existe deja et est correctement configuree"

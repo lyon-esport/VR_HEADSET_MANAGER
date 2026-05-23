@@ -67,6 +67,7 @@ function Update-HeadsetMonitoringFile {
 function Write-htmlMonitor {
     param(
         [Parameter(Mandatory=$true)]
+        [AllowEmptyCollection()]
         [System.Collections.ArrayList]$knownHeadsets,
         [string]$templatePath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\template\monitor.pshtml"),
 
@@ -133,32 +134,3 @@ function Update-HeadsetVideoFile {
     }
 }
 
-# Generates website/video_monitor.html from the video_monitor.pshtml template.
-# Lists every headset in $knownHeadsets; the page JS polls the CSV at runtime
-# to filter cells by All / Reachable (ping) / Streaming (scrcpy).
-function Write-VideoMonitor {
-    param(
-        [Parameter(Mandatory=$true)]
-        [System.Collections.ArrayList]$knownHeadsets,
-        [string]$templatePath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\template\video_monitor.pshtml"),
-        [string]$outputPath   = (Join-Path -Path $global:ScriptPath -ChildPath "\website\video_monitor.html")
-    )
-
-    if (-not (Test-Path -Path $templatePath)) {
-        Write-Log ("Video monitor template not found: $templatePath") -Level WARNING
-        return
-    }
-
-    $headsetData = [System.Collections.ArrayList]@()
-    foreach ($h in $knownHeadsets) {
-        $null = $headsetData.Add(@{
-            name        = $h.Name
-            displayName = Convert-Displayname $h.Name
-            id          = [int]$h.ID
-        })
-    }
-
-    $templateVars = @{ headsets = $headsetData }
-    $html = Invoke-EpsTemplate -Path $templatePath -Safe -binding $templateVars
-    $html | Out-File -LiteralPath $outputPath -Encoding UTF8
-}

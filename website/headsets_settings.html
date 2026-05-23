@@ -473,6 +473,28 @@
       color: var(--muted);
       font-size: 13px;
     }
+    #empty-msg .empty-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 12px;
+    }
+    #empty-msg .empty-add-btn {
+      display: inline-flex; align-items: center; gap: 7px;
+      margin-top: 14px;
+      padding: 8px 18px;
+      background: rgba(59,130,246,0.12);
+      border: 1px solid rgba(59,130,246,0.35);
+      border-radius: 6px;
+      color: #3b82f6;
+      font-size: 13px; font-weight: 600;
+      cursor: pointer; text-decoration: none;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    #empty-msg .empty-add-btn:hover {
+      background: rgba(59,130,246,0.22);
+      border-color: rgba(59,130,246,0.6);
+    }
 
     /* Drag-and-drop reordering */
     .drag-handle {
@@ -971,7 +993,13 @@
       var grid = document.getElementById('cards-grid');
       grid.innerHTML = '';
       if (!configs.length) {
-        grid.innerHTML = '<div id="empty-msg">No headsets found.</div>';
+        grid.innerHTML = '<div id="empty-msg">' +
+          '<div class="empty-title">No headsets found in the known headsets list.</div>' +
+          '<div><a class="empty-add-btn" href="headsets_settings.html#manage">' +
+            '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>' +
+            'Click here to add your first headset' +
+          '</a></div>' +
+        '</div>';
         return;
       }
       var displayNames = configs.map(function(c) { return toDisplayName(c.Name); });
@@ -1696,7 +1724,7 @@
         .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
         .then(function(rows) {
           if (_editingField) return; // don't touch DOM while user is editing
-          if (!cardsBuilt && rows.length) {
+          if (!cardsBuilt) {
             buildCards(rows);
             initTimerStates(rows);
             // If opened with ?headset=X, show only that headset

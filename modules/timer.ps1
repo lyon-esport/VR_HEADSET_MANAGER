@@ -32,7 +32,7 @@ function Get-TimerCsvPath {
 function Initialize-TimerFiles {
     $timerFolder = Join-Path $global:ScriptPath "website\timer"
     if (-not (Test-Path -LiteralPath $timerFolder)) {
-        $null = New-Item -ItemType Directory -LiteralPath $timerFolder -Force
+        $null = New-Item -ItemType Directory -Path $timerFolder -Force
         Write-Log ($msg.TimerFolderCreated -f $timerFolder) -Level INFO
     }
 

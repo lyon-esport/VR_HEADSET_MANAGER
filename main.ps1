@@ -107,7 +107,15 @@ foreach ($folder in $requiredFolders) {
     }
 }
 
-$custom_config = $args[0] 
+# Pre-boot: ensure known_headsets.csv exists before modules load (Write-MediaMtxYml reads it)
+$_csvPath = Join-Path $global:ScriptPath "data\known_headsets.csv"
+if (-not (Test-Path -LiteralPath $_csvPath)) {
+    Write-Host "Initializing known_headsets.csv..." -ForegroundColor Yellow
+    "ID,Name,IPAddress,scrcpy_AutoRestart,Record,SerialNumber" | Out-File -LiteralPath $_csvPath -Encoding UTF8
+}
+Remove-Variable _csvPath
+
+$custom_config = $args[0]
 if ($custom_config) {
     Write-Host "Custom config file passed as argument: $custom_config" -ForegroundColor Green
 } else {

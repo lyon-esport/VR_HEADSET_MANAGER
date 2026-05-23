@@ -197,11 +197,7 @@ function Invoke-AppShutdown {
     try { Reset-AwakeMode }           catch { }
     try { Disconnect-ADBConnections }  catch { }
 
-    try { Stop-WebServer } catch { }
-
-    try { Stop-MediaMtx } catch { }
-
-    # Kill the headsets dashboard window (child process of this PID)
+    # Kill the dashboard FIRST so it cannot restart mediamtx after we stop it
     try {
         $dashProcs = Get-WmiObject -Class Win32_Process -Filter "ParentProcessId = $PID" |
             Where-Object { $_.CommandLine -match "headsets_dashboard\.ps1" }
@@ -209,6 +205,10 @@ function Invoke-AppShutdown {
             Stop-Process -Id $dp.ProcessId -Force -ErrorAction SilentlyContinue
         }
     } catch { }
+
+    try { Stop-WebServer } catch { }
+    try { Stop-MediaMtx  } catch { }
+
     Remove-Variable moduleSnapshots -Scope Global -ErrorAction SilentlyContinue
     exit 0
 }
@@ -218,7 +218,7 @@ function Invoke-AppShutdown {
 
 
 # Run all computer-level setup tasks (firewall rules, service auto-starts, etc.)
-if (-not $global:IsWebServerProcess) {
+if (-not $global:IsWebServerProcess -and -not $global:IsDashboardProcess) {
     Initialize-ComputerSetup
 }
 
@@ -235,10 +235,7 @@ function Start-WebServer {
     if ($Restart) {
         Stop-WebServer
 
-        # Regenerate video monitor page from template before restart
-        if ($global:knownHeadsets) {
-            Write-VideoMonitor $global:knownHeadsets
-        }
+
     }
 
     # -- Start phase ----------------------------------------------------------
@@ -303,13 +300,13 @@ function Start-WebServer {
     }
 }
 
-# Only run at startup (main process or web server), never inside VRMonitor job loop
-if (-not $global:IsVRMonitorJob) {
+# Only run at startup (main process or web server), never inside VRMonitor job loop or dashboard
+if (-not $global:IsVRMonitorJob -and -not $global:IsDashboardProcess) {
     Initialize-TimerFiles
 }
 
 # Start the Pode web server in a separate PowerShell window (guarded: skip if already running)
-if (-not $global:IsWebServerProcess) {
+if (-not $global:IsWebServerProcess -and -not $global:IsDashboardProcess) {
     Start-WebServer
 }
 
