@@ -279,7 +279,6 @@
       transition: opacity .12s, border-color .12s;
     }
     .hs-adv-btn:hover { opacity: 1; border-color: var(--accent, #22c55e); }
-
     /* Advanced settings modal */
     .advsettings-modal {
       position: fixed; inset: 0; background: rgba(0,0,0,0.72);
@@ -287,7 +286,7 @@
     }
     .advsettings-modal-box {
       background: var(--card-bg); border-radius: 12px; padding: 28px 32px;
-      min-width: 340px; max-width: 460px; width: 100%;
+      min-width: 340px; max-width: 540px; width: 100%;
       box-shadow: 0 8px 40px rgba(0,0,0,0.45);
     }
     .advsettings-modal-title { font-size: 1.05rem; font-weight: 700; margin-bottom: 20px; }
@@ -854,11 +853,30 @@
           </div>
           <div class="adv-field">
             <label>Guardian Mode</label>
-            <button class="hs-adv-btn" id="adv-guardian-init" style="font-size:.8rem">
+            <div style="display:flex;gap:6px;flex-wrap:nowrap;">
+              <button class="hs-adv-btn" id="adv-guardian-init" style="font-size:.8rem">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+                </svg>
+                Initialization
+              </button>
+              <button class="hs-adv-btn" id="adv-guardian-pause" style="font-size:.8rem" title="Session only - resets on reboot">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
+                </svg>
+                <span id="adv-guardian-pause-label">Disable (session)</span>
+              </button>
+            </div>
+          </div>
+
+
+          <div class="adv-field">
+            <label>Proximity Sensor <span class="adv-note">(session only)</span></label>
+            <button class="hs-adv-btn" id="adv-prox-disable" style="font-size:.8rem;">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+                <circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
               </svg>
-              Guardian initialization
+              Keep awake (this session)
             </button>
           </div>
 
@@ -1917,6 +1935,9 @@
       document.getElementById('adv-loading').style.display = '';
       document.getElementById('adv-fields').style.display = 'none';
       document.getElementById('advsettings-modal').style.display = 'flex';
+      var proxBtn = document.getElementById('adv-prox-disable');
+      proxBtn.classList.remove('toggle-btn', 'on');
+      proxBtn.disabled = false;
 
       fetch('/api/headset-settings?name=' + encodeURIComponent(dn))
         .then(function(r) { return r.json(); })
@@ -1987,6 +2008,43 @@
       });
     }
     advBtnAction('adv-guardian-init', { guardianMode: 'Init' });
+
+    (function() {
+      var paused = false;
+      document.getElementById('adv-guardian-pause').addEventListener('click', function() {
+        var btn = this;
+        var dn = _advDn;
+        if (!dn) return;
+        btn.disabled = true;
+        paused = !paused;
+        fetch('/api/headset-settings/apply', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: dn, settings: { guardianPause: paused } })
+        }).catch(function() { paused = !paused; }).finally(function() {
+          document.getElementById('adv-guardian-pause-label').textContent = paused ? 'Enable (session)' : 'Disable (session)';
+          btn.classList.toggle('on', paused);
+          btn.disabled = false;
+        });
+      });
+    })();
+
+    document.getElementById('adv-prox-disable').addEventListener('click', function() {
+      var btn = this;
+      btn.disabled = true;
+      var dn = _advDn;
+      if (!dn) { btn.disabled = false; return; }
+      fetch('/api/headset-settings/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: dn, settings: { proxOverride: true } })
+      }).then(function(r) { return r.json(); })
+        .then(function(j) {
+          if (j.ok) { btn.classList.add('toggle-btn', 'on'); }
+          else { btn.disabled = false; }
+        })
+        .catch(function() { btn.disabled = false; });
+    });
 
     document.getElementById('adv-brightness').addEventListener('input', function() {
       document.getElementById('adv-brightness-val').textContent = this.value + '%';

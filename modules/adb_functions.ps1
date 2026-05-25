@@ -2112,6 +2112,30 @@ function Install-HeadsetApp {
 
 
 
+function Set-HeadsetGuardianPause {
+    # Pauses (disables) or resumes the Guardian boundary display via debug.oculus.guardian_pause.
+    # Session-only - resets on reboot.
+    param (
+        [Parameter(Mandatory=$true)]
+        [PSCustomObject]$Device,
+        [bool]$Pause = $true,
+        [string]$adb = $global:adbPath
+    )
+    if (-not $Device) { Write-Log ($msg.ErrorOccurred -f 'No device') -Level ERROR; return $false }
+    $DeviceId = $Device.DeviceId
+    $val = if ($Pause) { '1' } else { '0' }
+    try {
+        Write-Log ($msg.SettingGuardianMode -f "pause=$val", $DeviceId) -Level INFO
+        Invoke-AdbCmd -Device $Device -Command "shell setprop debug.oculus.guardian_pause $val" -adb $adb | Out-Null
+        Write-Log ($msg.HeadsetSettingApplied -f $DeviceId) -Level SUCCESS
+        return $true
+    }
+    catch {
+        Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
+        return $false
+    }
+}
+
 function Set-HeadsetGuardian {
     # Guardian mode cannot be changed via ADB broadcasts or settings on Quest 3 user builds.
     # The IGuardianManagerService binder is inaccessible without a system session.
@@ -2206,6 +2230,22 @@ function Set-HeadsetBrightness {
         Write-Log ($msg.SettingBrightness -f $Percent, $DeviceId) -Level INFO
         Invoke-AdbCmd -Device $Device -Command "shell settings put system screen_brightness $raw" -adb $adb | Out-Null
         Write-Log ($msg.HeadsetSettingApplied -f $DeviceId) -Level SUCCESS
+        return $true
+    }
+    catch { Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR; return $false }
+}
+
+
+function Set-HeadsetProximitySensorOverride {
+    param (
+        [Parameter(Mandatory=$true)][PSCustomObject]$Device,
+        [string]$adb = $global:adbPath
+    )
+    if (-not $Device) { Write-Log ($msg.ErrorOccurred -f 'No device') -Level ERROR; return $false }
+    try {
+        Write-Log "Overriding proximity sensor (prox_close) on $($Device.DeviceId)" -Level INFO
+        Invoke-AdbCmd -Device $Device -Command "shell am broadcast -a com.oculus.vrpowermanager.prox_close" -adb $adb | Out-Null
+        Write-Log ($msg.HeadsetSettingApplied -f $Device.DeviceId) -Level SUCCESS
         return $true
     }
     catch { Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR; return $false }

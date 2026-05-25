@@ -15,7 +15,10 @@
       "Bash('l:/Drive partagés/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/scrcpy-win64-v4.0/adb.exe' -s 192.168.1.244:5555 shell settings put secure controller_emulation_mode 1)",
       "Bash('l:/Drive partagés/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/scrcpy-win64-v4.0/adb.exe' -s 192.168.1.244:5555 shell settings get secure controller_emulation_mode)",
       "Bash('l:/Drive partagés/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/scrcpy-win64-v4.0/adb.exe' -s 192.168.1.244:5555 shell settings put secure controller_emulation_mode 0)",
-      "Bash('l:/Drive partagés/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/scrcpy-win64-v4.0/adb.exe' -s 192.168.1.244:5555 shell am broadcast -a com.oculus.vrshell.intent.action.UPDATE_FULL_PASSTHROUGH -n com.oculus.vrshell/.ShellControlBroadcastReceiver --ez passthrough true)"
+      "Bash('l:/Drive partagés/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/scrcpy-win64-v4.0/adb.exe' -s 192.168.1.244:5555 shell am broadcast -a com.oculus.vrshell.intent.action.UPDATE_FULL_PASSTHROUGH -n com.oculus.vrshell/.ShellControlBroadcastReceiver --ez passthrough true)",
+      "Bash(gh repo *)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ]
   }
 }

@@ -662,9 +662,18 @@ try {
                     Set-HeadsetGuardian -Device $device -adb $adbPath | Out-Null
                 }
 
+                if ($null -ne $s.guardianPause) {
+                    Set-HeadsetGuardianPause -Device $device -Pause ([bool]$s.guardianPause) -adb $adbPath | Out-Null
+                }
+
                 if ($null -ne $s.brightness) {
                     Set-HeadsetBrightness -Device $device -Percent ([int]$s.brightness) -adb $adbPath | Out-Null
                 }
+
+                if ($null -ne $s.proxOverride) {
+                    Set-HeadsetProximitySensorOverride -Device $device -adb $adbPath | Out-Null
+                }
+
                 Send-JsonResponse -Response $response -Body @{ ok = $true }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
