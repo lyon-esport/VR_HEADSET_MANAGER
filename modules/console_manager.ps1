@@ -1199,17 +1199,8 @@ function Add-Headset-Manually {
     }
 
     # Optional fields
-    $adbPortInput = Read-Host "ADB port (optional, default: 5555)"
-
-    # Handle default values
-    if ([string]::IsNullOrWhiteSpace($adbPortInput)) {
-        $adbPort = 5555
-    } else {
-        $adbPort = [int]$adbPortInput
-    }
-
     # Call the main function
-    Add-Headset -IPAddress $ip -Name $name -adbPort $adbPort
+    Add-Headset -IPAddress $ip -Name $name
 
     Write-Host "Headset added successfully!" -ForegroundColor Cyan
 } #OK
