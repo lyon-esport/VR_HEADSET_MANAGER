@@ -845,6 +845,13 @@
         <div class="adv-loading" id="adv-loading">Loading current settings...</div>
         <div id="adv-fields" style="display:none; flex-direction:column; gap:13px;">
           <div class="adv-field">
+            <label for="adv-sound-level">Sound Level</label>
+            <div class="adv-slider-wrap">
+              <input type="range" id="adv-sound-level" min="0" max="100" step="1" value="50">
+              <span class="adv-slider-val" id="adv-sound-level-val">50%</span>
+            </div>
+          </div>
+          <div class="adv-field">
             <label for="adv-brightness">Brightness</label>
             <div class="adv-slider-wrap">
               <input type="range" id="adv-brightness" min="0" max="100" step="1" value="50">
@@ -956,6 +963,7 @@
     var headsetVisible = {};
     var cardsBuilt    = false;
     var _editingField = false;
+    var newDevicePromptDismissed = false;
     var appNameCache = {}; // package -> displayName, populated from /api/favoriteapps and /api/installedapps
     var appIconCache = {}; // package -> localIconPath
 
@@ -1799,6 +1807,20 @@
         .catch(function() {});
     }
 
+    async function pollForNewUsbHeadset() {
+      if (newDevicePromptDismissed) return;
+      var modal = document.getElementById('wifi-adb-modal');
+      if (modal && modal.style.display !== 'none') return;
+      try {
+        var res = await fetch('/api/usbdeviceinfo?_=' + Date.now());
+        if (!res.ok) return;
+        var data = await res.json();
+        if (data.found && !data.alreadyRegistered) {
+          openNewDevicesModal();
+        }
+      } catch (e) {}
+    }
+
     // â"€â"€ Power modal â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     var _powerAction = null;
     var _powerDn     = null;
@@ -1960,6 +1982,9 @@
           el = document.getElementById('adv-sleep-timeout');
           if (el) el.textContent = msToLabel(j.sleepTimeout);
 
+          var sv = (j.soundLevel !== undefined && j.soundLevel !== null) ? parseInt(j.soundLevel, 10) : 50;
+          document.getElementById('adv-sound-level').value = sv;
+          document.getElementById('adv-sound-level-val').textContent = sv + '%';
           var bv = (j.brightness !== undefined && j.brightness !== null) ? parseInt(j.brightness, 10) : 50;
           document.getElementById('adv-brightness').value = bv;
           document.getElementById('adv-brightness-val').textContent = bv + '%';
@@ -2046,6 +2071,14 @@
         .catch(function() { btn.disabled = false; });
     });
 
+    document.getElementById('adv-sound-level').addEventListener('input', function() {
+      document.getElementById('adv-sound-level-val').textContent = this.value + '%';
+    });
+
+    document.getElementById('adv-sound-level').addEventListener('change', function() {
+      advQuickAction({ soundLevel: this.value });
+    });
+
     document.getElementById('adv-brightness').addEventListener('input', function() {
       document.getElementById('adv-brightness-val').textContent = this.value + '%';
     });
@@ -2123,8 +2156,10 @@
 
     pollHeadsetsCsv();
     pollInfosCsv();
+    pollForNewUsbHeadset();
     setInterval(pollHeadsetsCsv, 10000);
     setInterval(pollInfosCsv, REFRESH_MS);
+    setInterval(pollForNewUsbHeadset, REFRESH_MS);
 
     // Timer helpers
 
@@ -2224,6 +2259,7 @@
     }
 
     function closeNewDevicesModal() {
+      newDevicePromptDismissed = true;
       document.getElementById('wifi-adb-modal').style.display = 'none';
     }
 
@@ -2543,11 +2579,13 @@
     }
 
     function submitNdmAddHeadset(ip, name) {
+      var model  = (_ndmData && _ndmData.model)        ? _ndmData.model        : '';
+      var serial = (_ndmData && _ndmData.serialNumber) ? _ndmData.serialNumber : '';
       renderNdmStep('add-saving');
       fetch('/api/addheadset', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name, ip: ip })
+        body: JSON.stringify({ name: name, ip: ip, model: model, serialNumber: serial })
       })
       .then(function(r) { return r.json(); })
       .then(function(j) {

@@ -1606,7 +1606,7 @@ function Get-HeadsetInstalledApps {
         }
 
         # Resolve missing packages online if requested
-        
+
         if ($ResolveMissing) {
             $missing = @($packages | Where-Object { -not $cache.ContainsKey($_) })
             if ($missing.Count -gt 0) {
@@ -1618,6 +1618,22 @@ function Get-HeadsetInstalledApps {
                 }
             }
             Update-AppCacheFromMetaMetadata -CacheFilePath $AppCacheFilePath
+        }
+
+        # Always persist newly discovered packages to app_names.csv (even without online lookup)
+        $newPkgs = @($packages | Where-Object { -not $cache.ContainsKey($_) })
+        if ($newPkgs.Count -gt 0) {
+            foreach ($pkg in $newPkgs) {
+                $shortName = if ($pkg.StartsWith('com.')) { $pkg.Substring(4) } else { $pkg }
+                $cache[$pkg] = [PSCustomObject]@{
+                    PackageName   = $pkg
+                    DisplayName   = $shortName
+                    IconUrl       = ''
+                    LocalIconPath = ''
+                }
+            }
+            $cache.Values | Sort-Object DisplayName | Export-Csv -LiteralPath $AppCacheFilePath -NoTypeInformation -Encoding UTF8
+            Write-Log ($msg.AppDisplayNameNotFound -f "$($newPkgs.Count) new packages added to app_names.csv") -Level DEBUG
         }
         
         # When returning all packages, determine which are third-party with a second ADB call
@@ -2229,6 +2245,55 @@ function Set-HeadsetBrightness {
     try {
         Write-Log ($msg.SettingBrightness -f $Percent, $DeviceId) -Level INFO
         Invoke-AdbCmd -Device $Device -Command "shell settings put system screen_brightness $raw" -adb $adb | Out-Null
+        Write-Log ($msg.HeadsetSettingApplied -f $DeviceId) -Level SUCCESS
+        return $true
+    }
+    catch { Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR; return $false }
+}
+
+
+function Get-HeadsetSoundLevel {
+    param (
+        [Parameter(Mandatory=$true)]
+        [PSCustomObject]$Device,
+        [string]$adb = $global:adbPath
+    )
+    if (-not $Device) { return '50' }
+    try {
+        $raw = (Invoke-AdbCmd -Device $Device -Command "shell cmd media_session volume --stream 3 --get" -adb $adb) -join ' '
+        if ($raw -match 'volume is (\d+) in range \[0\.\.(\d+)\]') {
+            $current = [int]$Matches[1]
+            $max     = [int]$Matches[2]
+            if ($max -gt 0) {
+                return [string][int]([Math]::Round($current / $max * 100))
+            }
+        }
+        return '50'
+    }
+    catch { Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR; return '50' }
+}
+
+
+function Set-HeadsetSoundLevel {
+    param (
+        [Parameter(Mandatory=$true)]
+        [PSCustomObject]$Device,
+        [ValidateRange(0,100)]
+        [int]$Percent = 50,
+        [string]$adb = $global:adbPath
+    )
+    if (-not $Device) { Write-Log ($msg.ErrorOccurred -f 'No device') -Level ERROR; return $false }
+    $DeviceId = $Device.DeviceId
+    try {
+        # Read current range to compute the raw target value
+        $getOut = (Invoke-AdbCmd -Device $Device -Command "shell cmd media_session volume --stream 3 --get" -adb $adb) -join ' '
+        $max = 15
+        if ($getOut -match 'in range \[0\.\.(\d+)\]') { $max = [int]$Matches[1] }
+        $value = [int]([Math]::Round($Percent / 100.0 * $max))
+        Write-Log ($msg.SettingSoundLevel -f $Percent, $DeviceId) -Level INFO
+        # Use AudioService binder directly - method 12 = setStreamVolume(streamType, index, flags)
+        # on Meta Quest (Android 14 / SDK 34). stream=3 (MUSIC), flags=0.
+        Invoke-AdbCmd -Device $Device -Command "shell service call audio 12 i32 3 i32 $value i32 0" -adb $adb | Out-Null
         Write-Log ($msg.HeadsetSettingApplied -f $DeviceId) -Level SUCCESS
         return $true
     }

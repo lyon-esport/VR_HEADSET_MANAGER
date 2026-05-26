@@ -1103,6 +1103,7 @@
         _proModel = newName;
         _proDirty = true;
         renderProTabs(); renderProBody();
+        doSaveToDisk(false);
         return;
       }
       if (action === 'cancel-rename') {
@@ -1154,6 +1155,7 @@
         m2.views[newVn] = { left_eye: { crop: leCrop, angle: leAngle }, right_eye: { crop: reCrop, angle: reAngle } };
         _proDirty = true; _proEditView = null;
         renderProBody();
+        doSaveToDisk(false);
         return;
       }
       if (action === 'cancel-edit-view') { _proEditView = null; renderProBody(); return; }
@@ -1200,25 +1202,33 @@
       if (_proDirty && !confirm('You have unsaved changes. Close without saving?')) return;
       document.getElementById('pro-modal').style.display = 'none';
     }
-    function saveProfiles() {
-      collectProGeneralSettings();
-      _proCfg.scrcpy.parameters = _proData;
+    function doSaveToDisk(closeOnSuccess) {
+      var payload;
+      try {
+        collectProGeneralSettings();
+        _proCfg.scrcpy.parameters = _proData;
+        payload = JSON.stringify(_proCfg, null, 2);
+      } catch (e) {
+        showToast('Save error (prepare): ' + e.message, 4000);
+        return;
+      }
       fetch('/api/config/save', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(_proCfg, null, 2)
+        body: payload
       })
         .then(function(r) { return r.json(); })
         .then(function(j) {
           if (j.ok) {
             _proDirty = false;
-            document.getElementById('pro-modal').style.display = 'none';
+            if (closeOnSuccess) document.getElementById('pro-modal').style.display = 'none';
             showToast('Profiles saved. Restart the app to apply changes.', 3500);
           } else {
             showToast('Save failed: ' + (j.error || 'error'), 3500);
           }
         })
-        .catch(function() { showToast('Server unreachable', 2500); });
+        .catch(function(e) { showToast('Server unreachable: ' + e.message, 2500); });
     }
+    function saveProfiles() { doSaveToDisk(true); }
 
     document.getElementById('btn-profiles').addEventListener('click', openProModal);
     document.getElementById('pro-save-top').addEventListener('click', saveProfiles);
