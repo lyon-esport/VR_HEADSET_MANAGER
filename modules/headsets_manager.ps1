@@ -344,7 +344,9 @@ function Add-Headset {
     param (
         [array]$headsets = (Get-KnownHeadsets),  # Default value: CSV file
         [Parameter(Mandatory = $true)][string]$IPAddress,
-        [string]$Name = "New headset"#,
+        [string]$Name         = "New headset",
+        [string]$Model        = "",
+        [string]$SerialNumber = ""
         #[int]$AdbPort = 5555
     )
 
@@ -359,11 +361,11 @@ function Add-Headset {
         ID          = ($headsets | Measure-Object).Count + 1
         Name         = $Name
         IPAddress    = $IPAddress
-        scrcpy_AutoRestart = "False"
+        scrcpy_AutoRestart = "True"
         Record       = "False"
         ScrcpyProfile = "square-R-N-45-20"
-        Model        = ""
-        SerialNumber = ""
+        Model        = $Model
+        SerialNumber = $SerialNumber
         #AdbPort      = $AdbPort
     }
 

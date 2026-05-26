@@ -600,12 +600,14 @@ try {
 
                 $screenTimeout    = Get-HeadsetScreenTimeout    -Device $device -adb $adbPath
                 $sleepTimeout     = Get-HeadsetSleepTimeout     -Device $device -adb $adbPath
+                $soundLevel       = Get-HeadsetSoundLevel       -Device $device -adb $adbPath
                 $brightness       = Get-HeadsetBrightness       -Device $device -adb $adbPath
 
                 Send-JsonResponse -Response $response -Body @{
                     ok               = $true
                     screenTimeout    = $screenTimeout
                     sleepTimeout     = $sleepTimeout
+                    soundLevel       = $soundLevel
                     brightness       = $brightness
                 }
             } catch {
@@ -664,6 +666,10 @@ try {
 
                 if ($null -ne $s.guardianPause) {
                     Set-HeadsetGuardianPause -Device $device -Pause ([bool]$s.guardianPause) -adb $adbPath | Out-Null
+                }
+
+                if ($null -ne $s.soundLevel) {
+                    Set-HeadsetSoundLevel -Device $device -Percent ([int]$s.soundLevel) -adb $adbPath | Out-Null
                 }
 
                 if ($null -ne $s.brightness) {
@@ -738,9 +744,12 @@ try {
             try {
                 $modelParam = $request.QueryString['model']
                 $views = @('portrait','square','wide')
-                if ($modelParam -and $global:scrcpyParameters.$modelParam -and $global:scrcpyParameters.$modelParam.views) {
-                    $views = @($global:scrcpyParameters.$modelParam.views | Get-Member -MemberType NoteProperty | Select-Object -ExpandProperty Name)
-                }
+                try {
+                    $liveConfig = Get-Content -LiteralPath $global:configFilePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                    if ($modelParam -and $liveConfig.scrcpy.parameters.$modelParam -and $liveConfig.scrcpy.parameters.$modelParam.views) {
+                        $views = @($liveConfig.scrcpy.parameters.$modelParam.views | Get-Member -MemberType NoteProperty | Select-Object -ExpandProperty Name)
+                    }
+                } catch {}
                 $json = $views | ConvertTo-Json -Compress
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes($json)
                 $response.StatusCode      = 200
@@ -1671,9 +1680,12 @@ try {
                     $details = Get-AdbUsbDeviceDetails -adb $adbPath -AdbPort $adbPort -PackageName $apkPackage
                     if ($details) {
                         $alreadyReg = $false
+                        $rows = Get-KnownHeadsets
                         if ($details.SerialNumber) {
-                            $rows = Get-KnownHeadsets
                             $alreadyReg = [bool]($rows | Where-Object { $_.SerialNumber -eq $details.SerialNumber })
+                        }
+                        if (-not $alreadyReg -and $details.IP) {
+                            $alreadyReg = [bool]($rows | Where-Object { $_.IPAddress -eq $details.IP })
                         }
                         $result = @{
                             found             = $true
@@ -1710,7 +1722,7 @@ try {
             continue
         }
 
-        # API: POST /api/addheadset  body: {"name":"Q3 Blue","ip":"192.168.1.243"}
+        # API: POST /api/addheadset  body: {"name":"Q3 Blue","ip":"192.168.1.243","model":"Quest 3","serialNumber":"ABC123"}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/addheadset') {
             try {
                 $reader  = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
@@ -1735,7 +1747,9 @@ try {
                 if ($rows | Where-Object { $_.IPAddress -eq $safeIp })   { throw "IP_DUPLICATE" }
                 if ($rows | Where-Object { $_.Name      -eq $safeName }) { throw "NAME_DUPLICATE" }
 
-                Add-Headset -headsets $rows -IPAddress $safeIp -Name $safeName
+                $safeModel  = if ($json.model)        { ([string]$json.model).Trim().Substring(0, [Math]::Min(([string]$json.model).Trim().Length, 60)) } else { '' }
+                $safeSerial = if ($json.serialNumber) { ([string]$json.serialNumber).Trim().Substring(0, [Math]::Min(([string]$json.serialNumber).Trim().Length, 40)) } else { '' }
+                Add-Headset -headsets $rows -IPAddress $safeIp -Name $safeName -Model $safeModel -SerialNumber $safeSerial
 
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
                 $response.StatusCode      = 200
@@ -2005,6 +2019,8 @@ try {
                     mediamtxRtspPort   = if ($global:mediamtxRtspPort)   { $global:mediamtxRtspPort }   else { 8554 }
                     mediamtxWebrtcPort = if ($global:mediamtxWebrtcPort) { $global:mediamtxWebrtcPort } else { 8889 }
                     mediamtxApiPort    = if ($global:mediamtxApiPort)    { $global:mediamtxApiPort }    else { 9997 }
+                    webServerPid       = $PID
+                    mediamtxPid        = (Get-Process -Name "mediamtx" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Id)
                 }
                 $jsonOut   = ConvertTo-Json $info -Compress
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonOut)
@@ -2241,6 +2257,8 @@ try {
                     mediamtxRtspPort   = if ($global:mediamtxRtspPort)   { $global:mediamtxRtspPort }   else { 8554 }
                     mediamtxWebrtcPort = if ($global:mediamtxWebrtcPort) { $global:mediamtxWebrtcPort } else { 8889 }
                     mediamtxApiPort    = if ($global:mediamtxApiPort)    { $global:mediamtxApiPort }    else { 9997 }
+                    webServerPid       = $PID
+                    mediamtxPid        = (Get-Process -Name "mediamtx" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Id)
                 }
                 $jsonOut   = ConvertTo-Json $info -Compress
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonOut)

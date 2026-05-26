@@ -457,6 +457,7 @@
     WifiHeadsetOnKnownNetwork = "Le casque est deja connecte au reseau connu '{0}'."
 
     # adb_functions.ps1 - parametres du casque
+    SettingSoundLevel       = "Reglage du volume sonore a {0}% sur {1}"
     SettingBrightness       = "Reglage de la luminosite a {0}% sur {1}"
     SettingGuardianMode    = "Mode guardian defini a {0} sur {1}"
     HeadsetSettingApplied  = "Parametre applique avec succes sur {0}"

@@ -465,6 +465,7 @@
     WifiHeadsetOnKnownNetwork = "Headset is already connected to known network '{0}'."
 
     # adb_functions.ps1 - headset settings
+    SettingSoundLevel       = "Setting sound level to {0}% on {1}"
     SettingBrightness       = "Setting brightness to {0}% on {1}"
     SettingGuardianMode    = "Setting guardian mode to {0} on {1}"
     HeadsetSettingApplied  = "Setting applied successfully on {0}"

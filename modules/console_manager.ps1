@@ -137,7 +137,7 @@ function Show-MainMenu {
                     $_.IPAddress -match '^192\.168\.'
                 } | ForEach-Object {
                     $adapter = Get-NetAdapter -InterfaceIndex $_.InterfaceIndex -ErrorAction SilentlyContinue
-                    if ($adapter -and $adapter.InterfaceDescription -notmatch 'Hyper-V|Virtual') {
+                    if ($adapter -and $_.InterfaceAlias -notmatch '^vEthernet') {
                         $label = if ($adapter.PhysicalMediaType -eq 'Native 802.11') { '[WiFi]' } else { '[LAN]' }
                         [PSCustomObject]@{ IPAddress = $_.IPAddress; Label = $label }
                     }

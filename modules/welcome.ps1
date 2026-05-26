@@ -63,59 +63,18 @@ function Invoke-FfmpegDownload {
     Write-Host "  [2] Set path to an existing ffmpeg.exe" -ForegroundColor White
     Write-Host "  [3] Skip - configure later" -ForegroundColor White
     Write-Host ""
-    Write-Host "  Choice [3]: " -ForegroundColor Yellow -NoNewline
+    Write-Host "  Choice [1]: " -ForegroundColor Yellow -NoNewline
     $key = Read-WizardKey
     Write-Host $key
 
-    if ($key -eq '1') {
-        Write-Host ""
-        Write-Host "  Fetching latest ffmpeg release info..." -ForegroundColor Yellow
-        try {
-            $apiUrl = "https://api.github.com/repos/GyanD/codexffmpeg/releases/latest"
-            $headers = @{ 'User-Agent' = 'VR-Headset-Manager-Setup' }
-            $release = Invoke-RestMethod -Uri $apiUrl -Headers $headers -TimeoutSec 15
-            $asset = $release.assets | Where-Object { $_.name -like "*essentials_build-www.zip" } | Select-Object -First 1
-            if (-not $asset) {
-                $asset = $release.assets | Where-Object { $_.name -like "*.zip" } | Select-Object -First 1
-            }
-            if (-not $asset) {
-                Write-Host "  No suitable zip found in release. Skipping." -ForegroundColor Red
-                return "ffmpeg"
-            }
-            $zipPath = Join-Path $env:TEMP "vrm_ffmpeg_download.zip"
-            $extractPath = Join-Path $env:TEMP "vrm_ffmpeg_extract"
-            $destFolder = Join-Path $SourcesFolder "ffmpeg"
-            Write-Host "  Downloading $($asset.name) ..." -ForegroundColor Yellow
-            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath -Headers $headers -TimeoutSec 300
-            Write-Host "  Extracting..." -ForegroundColor Yellow
-            if (Test-Path -LiteralPath $extractPath) { Remove-Item $extractPath -Recurse -Force }
-            Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
-            $binFolder = Get-ChildItem $extractPath -Recurse -Directory |
-                         Where-Object { $_.Name -eq "bin" } |
-                         Select-Object -First 1
-            if (-not $binFolder) {
-                Write-Host "  Could not find bin\ folder in archive. Skipping." -ForegroundColor Red
-                return "ffmpeg"
-            }
-            if (-not (Test-Path -LiteralPath $destFolder)) {
-                New-Item -ItemType Directory -Path $destFolder | Out-Null
-            }
-            Copy-Item -LiteralPath (Join-Path $binFolder.FullName "ffmpeg.exe") -Destination $destFolder -Force
-            Write-Host "  ffmpeg installed to: sources\ffmpeg" -ForegroundColor Green
-            Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
-            Remove-Item $extractPath -Recurse -Force -ErrorAction SilentlyContinue
-            return "ffmpeg"
-        } catch {
-            Write-Host "  Download failed: $($_.Exception.Message)" -ForegroundColor Red
-            Write-Host "  Skipping. You can install ffmpeg manually later." -ForegroundColor Yellow
-            return "ffmpeg"
-        }
+    if ($key -eq '3') {
+        Write-Host "  Skipped. Edit ffmpeg.folder in config\config.json to set it later." -ForegroundColor Yellow
+        return "ffmpeg"
     } elseif ($key -eq '2') {
         Write-Host ""
         Write-Host "  Enter the full path to ffmpeg.exe:" -ForegroundColor White
         Write-Host "  > " -ForegroundColor Yellow -NoNewline
         $ffmpegExe = Read-Host
-        # Accept either a direct path to ffmpeg.exe or a folder containing it
         if ((Test-Path -LiteralPath $ffmpegExe) -and $ffmpegExe -like "*.exe") {
             $folder = Split-Path $ffmpegExe -Parent
             Write-Host "  ffmpeg folder set to: $folder" -ForegroundColor Green
@@ -127,8 +86,60 @@ function Invoke-FfmpegDownload {
             Write-Host "  Invalid path. Skipping." -ForegroundColor Red
             return "ffmpeg"
         }
-    } else {
-        Write-Host "  Skipped. Edit ffmpeg.folder in config\config.json to set it later." -ForegroundColor Yellow
+    }
+
+    Write-Host ""
+    Write-Host "  Fetching latest ffmpeg release info..." -ForegroundColor Yellow
+    try {
+        $apiUrl = "https://api.github.com/repos/GyanD/codexffmpeg/releases/latest"
+        $headers = @{ 'User-Agent' = 'VR-Headset-Manager-Setup' }
+        $release = Invoke-RestMethod -Uri $apiUrl -Headers $headers -TimeoutSec 15
+        $asset = $release.assets | Where-Object { $_.name -like "*essentials_build-www.zip" } | Select-Object -First 1
+        if (-not $asset) {
+            $asset = $release.assets | Where-Object { $_.name -like "*.zip" } | Select-Object -First 1
+        }
+        if (-not $asset) {
+            Write-Host "  No suitable zip found in release. Skipping." -ForegroundColor Red
+            return "ffmpeg"
+        }
+        $zipPath = Join-Path $env:TEMP "vrm_ffmpeg_download.zip"
+        $destFolder = Join-Path $SourcesFolder "ffmpeg"
+        Write-Host "  Downloading $($asset.name) ..." -ForegroundColor Yellow
+        $bitsOk = $false
+        try {
+            $bits = Get-Service -Name BITS -ErrorAction Stop
+            if ($bits.Status -eq 'Running' -or $bits.StartType -ne 'Disabled') {
+                Start-BitsTransfer -Source $asset.browser_download_url -Destination $zipPath -Description "Downloading ffmpeg..." -ErrorAction Stop
+                $bitsOk = $true
+            }
+        } catch { }
+        if (-not $bitsOk) {
+            $wc = [System.Net.WebClient]::new()
+            $wc.Headers.Add('User-Agent', 'VR-Headset-Manager-Setup')
+            $wc.DownloadFile($asset.browser_download_url, $zipPath)
+            $wc.Dispose()
+        }
+        Write-Host "  Extracting ffmpeg.exe..." -ForegroundColor Yellow
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+        $entry = $zip.Entries | Where-Object { $_.FullName -like "*/bin/ffmpeg.exe" } | Select-Object -First 1
+        if (-not $entry) {
+            $zip.Dispose()
+            Write-Host "  Could not find bin\ffmpeg.exe in archive. Skipping." -ForegroundColor Red
+            return "ffmpeg"
+        }
+        if (-not (Test-Path -LiteralPath $destFolder)) {
+            New-Item -ItemType Directory -Path $destFolder | Out-Null
+        }
+        $destExe = Join-Path $destFolder "ffmpeg.exe"
+        [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $destExe, $true)
+        $zip.Dispose()
+        Write-Host "  ffmpeg installed to: sources\ffmpeg" -ForegroundColor Green
+        Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+        return "ffmpeg"
+    } catch {
+        Write-Host "  Download failed: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "  Skipping. You can install ffmpeg manually later." -ForegroundColor Yellow
         return "ffmpeg"
     }
 }

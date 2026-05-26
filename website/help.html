@@ -218,6 +218,20 @@
     .logs-footer span { font-size: 11px; color: var(--muted); }
     .logs-status { font-size: 11px; padding: 4px 16px 8px; color: var(--muted); flex-shrink: 0; }
 
+    /* PID tag */
+    .pid-tag {
+      display: inline-flex; align-items: center; gap: 5px;
+      font-family: 'Cascadia Code','Consolas',monospace; font-size: 11px;
+      color: var(--muted); border: 1px solid var(--card-border);
+      border-radius: 4px; padding: 2px 8px; white-space: nowrap;
+      align-self: center; flex-shrink: 0;
+    }
+    .pid-tag .pid-dot {
+      width: 6px; height: 6px; border-radius: 50%; background: #34d399; flex-shrink: 0;
+    }
+    .pid-tag.offline .pid-dot { background: #555; }
+    [data-theme=light] .pid-tag { border-color: #d1d5db; }
+
     /* Toast */
     #toast {
       position: fixed; bottom: 28px; left: 50%;
@@ -254,8 +268,8 @@
     <section class="section">
       <div class="section-title">Web Server</div>
       <div class="card card-pad">
-        <div class="btn-grid">
-          <button class="action-btn" id="btn-restart-webserver">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <button class="action-btn" id="btn-restart-webserver" style="flex:0 0 auto">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.55"/>
             </svg>
@@ -264,6 +278,7 @@
               <div class="btn-desc">Reloads the HTTP server process</div>
             </div>
           </button>
+          <span class="pid-tag" id="ws-pid-tag"><span class="pid-dot"></span>PID &mdash;</span>
         </div>
         <div class="status-banner info" id="restart-ws-info" style="display:none">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -278,8 +293,8 @@
     <section class="section">
       <div class="section-title">MediaMTX Streaming Server</div>
       <div class="card card-pad" style="margin-bottom:10px">
-        <div class="btn-grid">
-          <button class="action-btn" id="btn-restart-mediamtx">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <button class="action-btn" id="btn-restart-mediamtx" style="flex:0 0 auto">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.55"/>
             </svg>
@@ -288,6 +303,7 @@
               <div class="btn-desc">Restarts the streaming relay service</div>
             </div>
           </button>
+          <span class="pid-tag offline" id="mtx-pid-tag"><span class="pid-dot"></span>not running</span>
         </div>
         <div class="status-banner info" id="restart-mtx-info" style="display:none">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -459,13 +475,40 @@
     var _knownHeadsetIds = '';
     var _pollTimer = null;
 
+    function updatePidTags(info) {
+      var wsTag  = document.getElementById('ws-pid-tag');
+      var mtxTag = document.getElementById('mtx-pid-tag');
+      if (wsTag) {
+        wsTag.innerHTML = '<span class="pid-dot"></span>PID ' + (info.webServerPid || '&mdash;');
+        wsTag.classList.remove('offline');
+      }
+      if (mtxTag) {
+        if (info.mediamtxPid) {
+          mtxTag.innerHTML = '<span class="pid-dot"></span>PID ' + info.mediamtxPid;
+          mtxTag.classList.remove('offline');
+        } else {
+          mtxTag.innerHTML = '<span class="pid-dot"></span>not running';
+          mtxTag.classList.add('offline');
+        }
+      }
+    }
+
+    function refreshAppInfo() {
+      fetch('/api/appinfo')
+        .then(function(r) { return r.json(); })
+        .then(function(info) { _appInfo = info; updatePidTags(info); })
+        .catch(function() {});
+    }
+
     fetch('/api/appinfo')
       .then(function(r) { return r.json(); })
       .then(function(info) {
         _appInfo = info;
+        updatePidTags(info);
         buildLinks(info.mediamtxApiPort || 9997);
         loadStreamLinks();
         _pollTimer = setInterval(loadStreamLinks, 5000);
+        setInterval(refreshAppInfo, 5000);
       })
       .catch(function() { buildLinks(9997); loadStreamLinks(); _pollTimer = setInterval(loadStreamLinks, 5000); });
 
