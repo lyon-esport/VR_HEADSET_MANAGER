@@ -25,6 +25,17 @@ function ConvertTo-BoolField {
 }
 
 
+# Reads the ThirdParty boolean from a known_apps.csv row.
+# Supports new ThirdParty column ("True"/"False") and old Type column ("third-party"/"built-in")
+# so existing CSV files migrate transparently on first read.
+function ConvertTo-ThirdPartyBool {
+    param([Parameter(Mandatory=$true)] $Row)
+    if ($null -ne $Row.ThirdParty -and "$($Row.ThirdParty)" -ne '') { return ConvertTo-BoolField $Row.ThirdParty }
+    if ($null -ne $Row.Type      -and "$($Row.Type)"      -ne '') { return $Row.Type -eq 'third-party' }
+    return $true
+}
+
+
 # Build the path of a per-headset data CSV (data/<safe>_<suffix>.csv).
 # Suffix examples: 'favorite_apps', 'installed_apps'.
 function Get-HeadsetDataPath {
