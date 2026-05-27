@@ -24,6 +24,7 @@
     '.lm-app-row:hover{background:#202020;}',
     '.lm-app-name{flex:1;font-size:13px;color:#ccc;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
     '.lm-app-row.is-meta .lm-app-name{color:#67e8f9;font-weight:600;}',
+    '.lm-app-row.is-system .lm-app-name{color:#666;font-style:italic;}',
     '.lm-star-btn{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;flex-shrink:0;background:transparent;border:none;border-radius:4px;cursor:pointer;color:#3a3a3a;transition:color 0.12s;}',
     '.lm-star-btn.active{color:#facc15;}',
     '.lm-star-btn:hover{color:#facc15;}',
@@ -34,6 +35,9 @@
     '.lm-footer{border-top:1px solid #252525;padding:10px 18px;flex-shrink:0;display:flex;flex-direction:column;gap:8px;}',
     '.lm-show-all-btn{display:flex;align-items:center;justify-content:center;gap:6px;padding:7px;border-radius:6px;border:1px solid #333;background:#161616;color:#666;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;width:100%;transition:color 0.12s,border-color 0.12s;}',
     '.lm-show-all-btn:hover{color:#aaa;border-color:#444;}',
+    '.lm-system-toggle{display:flex;align-items:center;justify-content:center;gap:6px;padding:5px 10px;border-radius:6px;border:1px solid #333;background:#161616;color:#666;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;transition:color 0.12s,border-color 0.12s,background 0.12s;}',
+    '.lm-system-toggle:hover{color:#aaa;border-color:#444;}',
+    '.lm-system-toggle.active{background:rgba(59,130,246,0.18);border-color:#3b82f6;color:#60a5fa;}',
     '.lm-status{font-size:11px;color:#555;text-align:center;min-height:16px;}',
     '.lm-status.ok{color:#22c55e;}',
     '.lm-status.err{color:#ef4444;}',
@@ -53,6 +57,7 @@
     '[data-theme="light"] .lm-app-row:hover{background:#f5f5f5;}',
     '[data-theme="light"] .lm-app-name{color:#333;}',
     '[data-theme="light"] .lm-app-row.is-meta .lm-app-name{color:#0e7490;}',
+    '[data-theme="light"] .lm-app-row.is-system .lm-app-name{color:#aaa;font-style:italic;}',
     '[data-theme="light"] .lm-app-version{color:#bbb;}',
     '[data-theme="light"] .lm-star-btn{color:#ccc;}',
     '[data-theme="light"] .lm-star-btn.active{color:#facc15;}',
@@ -62,6 +67,9 @@
     '[data-theme="light"] .lm-launch-btn:hover{background:rgba(59,130,246,0.12);border-color:#3b82f6;color:#2563eb;}',
     '[data-theme="light"] .lm-show-all-btn{background:#f5f5f5;border-color:#ddd;color:#666;}',
     '[data-theme="light"] .lm-show-all-btn:hover{color:#222;border-color:#bbb;}',
+    '[data-theme="light"] .lm-system-toggle{background:#f5f5f5;border-color:#ddd;color:#666;}',
+    '[data-theme="light"] .lm-system-toggle:hover{color:#222;border-color:#bbb;}',
+    '[data-theme="light"] .lm-system-toggle.active{background:rgba(59,130,246,0.12);border-color:#3b82f6;color:#2563eb;}',
     '[data-theme="light"] .lm-status{color:#aaa;}',
     '[data-theme="light"] .lm-search{background:#f5f5f5;border-color:#ccc;color:#222;}',
     '[data-theme="light"] .lm-search:focus{border-color:#999;}'
@@ -89,6 +97,12 @@
         '</div>' +
         '<div class="lm-list" id="lm-list"></div>' +
         '<div class="lm-footer">' +
+          '<button class="lm-system-toggle" id="lm-system-toggle" style="display:none" title="Show or hide built-in system applications">' +
+            '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+              '<circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/>' +
+            '</svg>' +
+            ' Show built-in apps' +
+          '</button>' +
           '<button class="lm-show-all-btn" id="lm-show-all-btn">' +
             '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
               '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>' +
@@ -116,6 +130,8 @@
   var _favoritePackages = {};
   var _appNameCache     = {};
   var _statusResolver   = null;   // optional fn(dn) -> bool for ADB status
+  var _showSystem       = false;
+  var _resolvePoller    = null;   // setInterval handle for background resolve polling
 
   function _isAdbUp() {
     return _statusResolver ? !!_statusResolver(_launchDn) : false;
@@ -126,6 +142,7 @@
     _launchDn      = dn;
     _allAppsLoaded = false;
     _allApps       = [];
+    _showSystem    = false;
     document.getElementById('lm-headset-label').textContent = dn.replace(/_/g, ' ');
     document.getElementById('lm-status').textContent = '';
     document.getElementById('lm-status').className   = 'lm-status';
@@ -137,6 +154,8 @@
       '<line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>' +
       '</svg> Show all installed apps';
     document.getElementById('lm-refresh-btn').style.display = 'none';
+    document.getElementById('lm-system-toggle').style.display = 'none';
+    document.getElementById('lm-system-toggle').classList.remove('active');
     document.getElementById('lm-search-wrap').style.display = 'none';
     document.getElementById('lm-search').value = '';
     document.getElementById('app-launcher').style.display = 'flex';
@@ -160,6 +179,7 @@
   function closeLaunchModal() {
     document.getElementById('app-launcher').style.display = 'none';
     _launchDn = null;
+    if (_resolvePoller) { clearInterval(_resolvePoller); _resolvePoller = null; }
   }
 
   function renderLaunchList(apps, isFavView) {
@@ -186,7 +206,8 @@
     var isMeta = app.package === metaHomePkg;
     var isFav  = isMeta || !!_favoritePackages[app.package];
     var row = document.createElement('div');
-    row.className = 'lm-app-row' + (isMeta ? ' is-meta' : '');
+    var extraClass = isMeta ? ' is-meta' : (app.thirdParty === false ? ' is-system' : '');
+    row.className = 'lm-app-row' + extraClass;
 
     var starBtn = document.createElement('button');
     starBtn.className = 'lm-star-btn' + (isFav ? ' active' : '');
@@ -237,12 +258,13 @@
       if (a.displayName) _appNameCache[a.package] = a.displayName;
       if (a.favorite) _favoritePackages[a.package] = true;
     });
+    var visible = _showSystem ? apps : apps.filter(function (a) { return a.thirdParty !== false; });
     var list = document.getElementById('lm-list');
     list.innerHTML = '';
     var metaHomePkg = 'com.oculus.vrshell';
-    var metaApp   = apps.find(function (a) { return a.package === metaHomePkg; }) || { package: metaHomePkg, displayName: 'Meta Home', favorite: true };
-    var favApps   = apps.filter(function (a) { return a.package !== metaHomePkg && _favoritePackages[a.package]; });
-    var otherApps = apps.filter(function (a) { return a.package !== metaHomePkg && !_favoritePackages[a.package]; });
+    var metaApp   = visible.find(function (a) { return a.package === metaHomePkg; }) || { package: metaHomePkg, displayName: 'Meta Home', favorite: true };
+    var favApps   = visible.filter(function (a) { return a.package !== metaHomePkg && _favoritePackages[a.package]; });
+    var otherApps = visible.filter(function (a) { return a.package !== metaHomePkg && !_favoritePackages[a.package]; });
     function addSection(label) { var s = document.createElement('div'); s.className = 'lm-section-label'; s.textContent = label; list.appendChild(s); }
     addSection('Meta Home');
     renderAppRow(metaApp, list);
@@ -303,6 +325,14 @@
     document.getElementById('app-launcher').addEventListener('click', function (e) { if (e.target === this) closeLaunchModal(); });
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && _launchDn) closeLaunchModal(); });
 
+    document.getElementById('lm-system-toggle').addEventListener('click', function () {
+      if (!_allAppsLoaded) return;
+      _showSystem = !_showSystem;
+      this.classList.toggle('active', _showSystem);
+      var q = document.getElementById('lm-search').value.trim();
+      if (q) { _applySearch(q); } else { _renderAllApps(_allApps); }
+    });
+
     document.getElementById('lm-show-all-btn').addEventListener('click', function () {
       if (_allAppsLoaded || !_launchDn) return;
       var btn = this;
@@ -317,7 +347,7 @@
         statusEl.textContent = 'ADB offline - loading cached list...';
       }
       statusEl.className = 'lm-status';
-      var url = '/api/installedapps?name=' + encodeURIComponent(_launchDn) + (adbUp ? '&refresh=1' : '');
+      var url = '/api/installedapps?name=' + encodeURIComponent(_launchDn) + '&includeSystem=1' + (adbUp ? '&refresh=1' : '');
       fetch(url)
         .then(function (r) { return r.json(); })
         .then(function (apps) {
@@ -334,6 +364,7 @@
           statusEl.className   = 'lm-status';
           btn.style.display = 'none';
           document.getElementById('lm-refresh-btn').style.display = '';
+          document.getElementById('lm-system-toggle').style.display = '';
           document.getElementById('lm-search-wrap').style.display = '';
           document.getElementById('lm-search').value = '';
           _renderAllApps(apps);
@@ -350,35 +381,79 @@
         });
     });
 
+    var _refreshIconSvg =
+      '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+      '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>' +
+      '<path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>';
+
+    function _startResolvePolling(statusEl) {
+      if (_resolvePoller) { clearInterval(_resolvePoller); _resolvePoller = null; }
+      _resolvePoller = setInterval(function () {
+        fetch('/api/resolve-progress')
+          .then(function (r) { return r.json(); })
+          .then(function (p) {
+            if (p.status === 'done') {
+              clearInterval(_resolvePoller); _resolvePoller = null;
+              statusEl.textContent = 'App names updated.';
+              statusEl.className   = 'lm-status ok';
+              setTimeout(function () {
+                if (statusEl.textContent === 'App names updated.') {
+                  statusEl.textContent = ''; statusEl.className = 'lm-status';
+                }
+              }, 3000);
+              // Re-fetch list to show updated names (no ADB refresh needed)
+              fetch('/api/installedapps?name=' + encodeURIComponent(_launchDn) + '&includeSystem=1')
+                .then(function (r) { return r.json(); })
+                .then(function (apps) { _allApps = apps; _renderAllApps(apps); })
+                .catch(function () {});
+            } else if (p.status === 'error') {
+              clearInterval(_resolvePoller); _resolvePoller = null;
+              statusEl.textContent = 'Name resolution failed.';
+              statusEl.className   = 'lm-status err';
+            }
+          })
+          .catch(function () {});
+      }, 3000);
+    }
+
     document.getElementById('lm-refresh-btn').addEventListener('click', function () {
       if (!_launchDn) return;
       var btn = this;
+      var statusEl = document.getElementById('lm-status');
       btn.disabled = true;
       btn.textContent = 'Refreshing...';
-      var statusEl = document.getElementById('lm-status');
-      statusEl.textContent = 'Fetching app list and resolving names...';
+      statusEl.textContent = 'Fetching app list from headset...';
       statusEl.className   = 'lm-status';
-      fetch('/api/installedapps?name=' + encodeURIComponent(_launchDn) + '&refresh=1&resolveMissing=1')
+
+      // Phase 1: fast ADB-only cache refresh (no resolveMissing - no blocking network calls)
+      fetch('/api/installedapps?name=' + encodeURIComponent(_launchDn) + '&refresh=1&includeSystem=1')
         .then(function (r) { return r.json(); })
         .then(function (apps) {
           _allApps = apps;
           btn.disabled = false;
-          btn.innerHTML =
-            '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
-            '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>' +
-            '<path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>' +
-            '</svg> Refresh application list';
-          statusEl.textContent = '';
-          statusEl.className   = 'lm-status';
+          btn.innerHTML = _refreshIconSvg + ' Refresh application list';
           _renderAllApps(apps);
+
+          // Phase 2: trigger background online name resolution (non-blocking)
+          fetch('/api/resolve-app-names', { method: 'POST' })
+            .then(function (r) { return r.json(); })
+            .then(function (j) {
+              if (j.status === 'no_internet') {
+                statusEl.textContent = 'No internet - app names not resolved.';
+                statusEl.className   = 'lm-status';
+              } else if (j.status === 'started' || j.status === 'already_running') {
+                statusEl.textContent = 'Resolving app names in background...';
+                statusEl.className   = 'lm-status';
+                _startResolvePolling(statusEl);
+              } else {
+                statusEl.textContent = ''; statusEl.className = 'lm-status';
+              }
+            })
+            .catch(function () { statusEl.textContent = ''; statusEl.className = 'lm-status'; });
         })
         .catch(function () {
           btn.disabled = false;
-          btn.innerHTML =
-            '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
-            '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>' +
-            '<path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>' +
-            '</svg> Refresh application list';
+          btn.innerHTML = _refreshIconSvg + ' Refresh application list';
           statusEl.textContent = 'Refresh failed.';
           statusEl.className   = 'lm-status err';
         });

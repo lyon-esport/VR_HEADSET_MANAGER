@@ -289,6 +289,33 @@ $installJobBlock = {
     }
 }
 
+# Background job for async online app name resolution (Update-AppCacheOnline).
+# Runs in a NEW PowerShell process; dot-sources scripts_init to access module functions.
+$resolveJobBlock = {
+    param([string]$ScriptPath, [string]$ProgressFile, [string]$ConfigFilePath)
+    function Set-ResolveProg {
+        param([string]$status)
+        $safe = $status -replace '"', "'"
+        try { [System.IO.File]::WriteAllText($ProgressFile, "{`"status`":`"$safe`"}") } catch {}
+    }
+    Set-ResolveProg 'running'
+    try {
+        $global:ScriptPath         = $ScriptPath
+        $global:ConfigFilePath     = $ConfigFilePath
+        $global:IsWebServerProcess = $true
+        . (Join-Path $ScriptPath 'modules\scripts_init.ps1')
+        Update-AppCacheOnline -AppCacheFilePath (Join-Path $ScriptPath 'data\known_apps.csv') -ProgressFile $ProgressFile
+        Set-ResolveProg 'done'
+    } catch {
+        $err = ($_.ToString() -replace '"', "'") -replace '[^\x20-\x7E]', ''
+        try { [System.IO.File]::WriteAllText($ProgressFile, "{`"status`":`"error`",`"error`":`"$err`"}") } catch {}
+    }
+}
+
+# Active resolve job guard (only one at a time)
+$script:resolveJob      = $null
+$script:resolveProgFile = [System.IO.Path]::Combine($env:TEMP, 'vrm_resolve.json')
+
 try {
     while ($listener.IsListening) {
         # GetContext() blocks until a request arrives
@@ -865,7 +892,7 @@ try {
                         $favList += @{ package = $r.PackageName; displayName = $r.DisplayName }
                     }
                 }
-                $appNamesPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\app_names.csv"))
+                $appNamesPath = if ($global:AppCacheFilePath) { $global:AppCacheFilePath } else { [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_apps.csv")) }
                 if (Test-Path -LiteralPath $appNamesPath) {
                     $appNames = @{}
                     Import-Csv -LiteralPath $appNamesPath -Delimiter "," | ForEach-Object { $appNames[$_.PackageName] = $_ }
@@ -910,14 +937,14 @@ try {
                 $safeName  = [regex]::Match(($nameParam -replace ' ','_'), '^[\w\-]+$').Value
                 if (-not $safeName) { throw "Invalid headset name" }
 
-                $appNamesPath = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\app_names.csv"))
+                $appNamesPath = if ($global:AppCacheFilePath) { $global:AppCacheFilePath } else { [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_apps.csv")) }
                 $cachePath    = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\${safeName}_installed_apps.csv"))
                 $metaHomePkg  = 'com.oculus.vrshell'
 
                 # Load favorites
                 $favPkgs = @(Get-FavoriteApps -headsetName $safeName | Select-Object -ExpandProperty PackageName)
 
-                # Load app_names.csv as the live source of truth for display names and icons
+                # Load known_apps.csv as the live source of truth for display names and icons
                 $appNamesLookup = @{}
                 if (Test-Path -LiteralPath $appNamesPath) {
                     @(Import-Csv -LiteralPath $appNamesPath -Delimiter ",") | ForEach-Object {
@@ -925,78 +952,42 @@ try {
                     }
                 }
 
-                if ($includeSystem) {
-                    # All apps (third-party + built-in) -- always a live call, no cache
+                # Refresh cache from headset when requested (covers both includeSystem and default)
+                if ($refresh) {
                     $rows    = Get-KnownHeadsets
                     $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
                     if (-not $headset) { throw "Headset not found" }
                     $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort
                     if (-not $device) { throw "Could not connect to headset via ADB" }
-                    $installedApps = Get-HeadsetInstalledApps -Device $device -ThirdPartyOnly:$false
+                    Update-InstalledAppsCache -Device $device -headsetName $headset.Name
+                }
 
-                    # Build version lookup from the per-headset cache (has ADB-reported versions)
-                    $versionLookup = @{}
-                    if (Test-Path -LiteralPath $cachePath) {
-                        @(Import-Csv -LiteralPath $cachePath -Delimiter ",") | ForEach-Object {
-                            if ($_.PackageName -and $_.Version) { $versionLookup[$_.PackageName] = $_.Version }
-                        }
-                    }
-
-                    $appList = @($installedApps | ForEach-Object {
-                        $pkg    = $_.PackageName
-                        $entry  = if ($appNamesLookup.ContainsKey($pkg)) { $appNamesLookup[$pkg] } else { $null }
-                        $dn     = if ($entry -and $entry.DisplayName -and $entry.DisplayName -ne $pkg) { $entry.DisplayName } elseif ($_.DisplayName -and $_.DisplayName -ne $pkg) { $_.DisplayName } else { $pkg }
-                        $icon   = if ($entry -and $entry.LocalIconPath) { $entry.LocalIconPath } elseif ($_.LocalIconPath) { $_.LocalIconPath } else { '' }
-                        $ver    = if ($versionLookup.ContainsKey($pkg)) { $versionLookup[$pkg] } elseif ($_.Version) { $_.Version } else { '' }
-                        @{ package = $pkg; displayName = $dn; localIconPath = $icon; version = $ver; favorite = ($favPkgs -contains $pkg -or $pkg -eq $metaHomePkg); thirdParty = [bool]$_.ThirdParty }
-                    } | Sort-Object { $_.displayName })
+                if (Test-Path -LiteralPath $cachePath) {
+                    # Read lean cache (PackageName, Version) and enrich from known_apps.csv
+                    $cachedRows = @(Import-Csv -LiteralPath $cachePath -Delimiter ",")
+                    $appList = @($cachedRows | ForEach-Object {
+                        $pkg   = $_.PackageName
+                        $entry = if ($appNamesLookup.ContainsKey($pkg)) { $appNamesLookup[$pkg] } else { $null }
+                        $dn    = if ($entry -and $entry.DisplayName -and $entry.DisplayName -ne $pkg) { $entry.DisplayName } else { $pkg }
+                        $icon  = if ($entry -and $entry.LocalIconPath) { $entry.LocalIconPath } else { '' }
+                        $tp    = if ($entry) { ConvertTo-ThirdPartyBool $entry } else { $true }
+                        @{ package = $pkg; displayName = $dn; localIconPath = $icon; version = $_.Version; favorite = ($favPkgs -contains $pkg -or $pkg -eq $metaHomePkg); thirdParty = $tp }
+                    } | Where-Object { $includeSystem -or $_.thirdParty } | Sort-Object { $_.displayName })
                 } else {
-                    # Third-party apps only
-
-                    # If refresh requested, update cache from headset
-                    if ($refresh) {
-                        $rows    = Get-KnownHeadsets
-                        $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
-                        if (-not $headset) { throw "Headset not found" }
-                        $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort
-                        if (-not $device) { throw "Could not connect to headset via ADB" }
-                        if ($resolveMissing) {
-                            Update-InstalledAppsCache -Device $device -headsetName $headset.Name -ResolveMissing
-                        } else {
-                            Update-InstalledAppsCache -Device $device -headsetName $headset.Name
-                        }
-                    }
-
-                    # Use cache if available
-                    if (Test-Path -LiteralPath $cachePath) {
-                        $cachedRows = @(Import-Csv -LiteralPath $cachePath -Delimiter ",")
-                        $appList = @($cachedRows | ForEach-Object {
-                            $pkg   = $_.PackageName
-                            # Prefer live app_names.csv for display name and icon (stays current without a cache refresh)
-                            $entry = if ($appNamesLookup.ContainsKey($pkg)) { $appNamesLookup[$pkg] } else { $null }
-                            $dn    = if ($entry -and $entry.DisplayName -and $entry.DisplayName -ne $pkg) { $entry.DisplayName } elseif ($_.DisplayName -and $_.DisplayName -ne $pkg) { $_.DisplayName } else { $pkg }
-                            $icon  = if ($entry -and $entry.LocalIconPath) { $entry.LocalIconPath } elseif ($_.LocalIconPath) { $_.LocalIconPath } else { '' }
-                            $ver   = if ($_.Version) { $_.Version } else { '' }
-                            @{ package = $pkg; displayName = $dn; localIconPath = $icon; version = $ver; favorite = ($favPkgs -contains $pkg -or $pkg -eq $metaHomePkg); thirdParty = $true }
-                        } | Sort-Object { $_.displayName })
-                    } else {
-                        # Fallback: live ADB call
-                        $rows    = Get-KnownHeadsets
-                        $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
-                        if (-not $headset) { throw "Headset not found" }
-
-                        $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort -adb $adbPath
-                        if (-not $device) { throw "Could not connect to headset via ADB" }
-
-                        $installedApps = Get-HeadsetInstalledApps -Device $device -ThirdPartyOnly -adb $adbPath
-                        $appList = @($installedApps | ForEach-Object {
-                            $pkg   = $_.PackageName
-                            $entry = if ($appNamesLookup.ContainsKey($pkg)) { $appNamesLookup[$pkg] } else { $null }
-                            $dn    = if ($entry -and $entry.DisplayName -and $entry.DisplayName -ne $pkg) { $entry.DisplayName } elseif ($_.DisplayName -and $_.DisplayName -ne $pkg) { $_.DisplayName } else { $pkg }
-                            $icon  = if ($entry -and $entry.LocalIconPath) { $entry.LocalIconPath } elseif ($_.LocalIconPath) { $_.LocalIconPath } else { '' }
-                            @{ package = $pkg; displayName = $dn; localIconPath = $icon; version = $_.Version; favorite = ($favPkgs -contains $pkg -or $pkg -eq $metaHomePkg); thirdParty = $true }
-                        } | Sort-Object { $_.displayName })
-                    }
+                    # Fallback: live ADB call (no cache yet)
+                    $rows    = Get-KnownHeadsets
+                    $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                    if (-not $headset) { throw "Headset not found" }
+                    $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort -adb $adbPath
+                    if (-not $device) { throw "Could not connect to headset via ADB" }
+                    $installedApps = Get-HeadsetInstalledApps -Device $device -ThirdPartyOnly:(-not $includeSystem) -adb $adbPath
+                    $appList = @($installedApps | ForEach-Object {
+                        $pkg   = $_.PackageName
+                        $entry = if ($appNamesLookup.ContainsKey($pkg)) { $appNamesLookup[$pkg] } else { $null }
+                        $dn    = if ($entry -and $entry.DisplayName -and $entry.DisplayName -ne $pkg) { $entry.DisplayName } elseif ($_.DisplayName -and $_.DisplayName -ne $pkg) { $_.DisplayName } else { $pkg }
+                        $icon  = if ($entry -and $entry.LocalIconPath) { $entry.LocalIconPath } elseif ($_.LocalIconPath) { $_.LocalIconPath } else { '' }
+                        @{ package = $pkg; displayName = $dn; localIconPath = $icon; version = $_.Version; favorite = ($favPkgs -contains $pkg -or $pkg -eq $metaHomePkg); thirdParty = [bool]$_.ThirdParty }
+                    } | Sort-Object { $_.displayName })
                 }
 
                 $json = ConvertTo-Json @($appList) -Compress
@@ -1147,6 +1138,60 @@ try {
                 Send-JsonResponse -Response $response -Body @{ ok = $true }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ error = $_.Exception.Message }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/resolve-app-names
+        # Starts a background job that fetches app metadata from MetaMetadata (GitHub).
+        # Guard: returns {status:"already_running"} if a job is active.
+        # Returns {status:"no_internet"} when github.com is unreachable.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/resolve-app-names') {
+            try {
+                # Guard: one job at a time
+                if ($script:resolveJob -and $script:resolveJob.State -in @('Running', 'NotStarted')) {
+                    Send-JsonResponse -Response $response -Body @{ status = 'already_running' }
+                    continue
+                }
+                # Clean up finished job
+                if ($script:resolveJob) {
+                    try { Remove-Job -Job $script:resolveJob -Force -ErrorAction SilentlyContinue } catch {}
+                    $script:resolveJob = $null
+                }
+                # Internet check
+                $ping  = [System.Net.NetworkInformation.Ping]::new()
+                $reply = try { $ping.Send('github.com', 3000) } catch { $null }
+                if (-not $reply -or $reply.Status -ne 'Success') {
+                    Send-JsonResponse -Response $response -Body @{ status = 'no_internet' }
+                    continue
+                }
+                # Start background job
+                [System.IO.File]::WriteAllText($script:resolveProgFile, '{"status":"queued"}')
+                $script:resolveJob = Start-Job -ScriptBlock $resolveJobBlock -ArgumentList $ScriptPath, $script:resolveProgFile, $ConfigFilePath
+                Send-JsonResponse -Response $response -Body @{ status = 'started' }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ status = 'error'; error = $_.Exception.Message }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: GET /api/resolve-progress
+        # Returns the current status of the background app name resolution job.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/resolve-progress') {
+            try {
+                if (-not $script:resolveJob -and -not (Test-Path -LiteralPath $script:resolveProgFile)) {
+                    Send-JsonResponse -Response $response -Body @{ status = 'idle' }
+                } else {
+                    $raw = try { [System.IO.File]::ReadAllText($script:resolveProgFile) } catch { '{"status":"idle"}' }
+                    $bytes = [System.Text.Encoding]::UTF8.GetBytes($raw)
+                    $response.StatusCode      = 200
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                    $response.ContentLength64 = $bytes.Length
+                    $response.OutputStream.Write($bytes, 0, $bytes.Length)
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ status = 'error' }
             } finally { $response.Close() }
             continue
         }
@@ -2285,7 +2330,7 @@ try {
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/appnames') {
             try {
                 $appCsvPath = if ($global:AppCacheFilePath) { $global:AppCacheFilePath } else {
-                    [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\app_names.csv"))
+                    [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_apps.csv"))
                 }
                 $appObjects = @()
                 if (Test-Path -LiteralPath $appCsvPath) {
@@ -2296,6 +2341,7 @@ try {
                                 DisplayName   = [string]$_.DisplayName
                                 IconUrl       = [string]$_.IconUrl
                                 LocalIconPath = [string]$_.LocalIconPath
+                                ThirdParty    = ConvertTo-ThirdPartyBool $_
                             }
                         })
                 }
@@ -2330,7 +2376,7 @@ try {
                 if (-not $pkg) { throw "Invalid PackageName" }
 
                 $appCsvPath = if ($global:AppCacheFilePath) { $global:AppCacheFilePath } else {
-                    [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\app_names.csv"))
+                    [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_apps.csv"))
                 }
 
                 $rows  = @()
@@ -2345,6 +2391,7 @@ try {
                     DisplayName   = [string]$json.DisplayName
                     IconUrl       = [string]$json.IconUrl
                     LocalIconPath = [string]$json.LocalIconPath
+                    ThirdParty    = [bool]$json.ThirdParty
                 }
                 $cache.Values | Sort-Object DisplayName |
                     Export-Csv -LiteralPath $appCsvPath -NoTypeInformation -Encoding UTF8 -Force
@@ -2376,7 +2423,7 @@ try {
                 if (-not $pkg) { throw "Invalid PackageName" }
 
                 $appCsvPath = if ($global:AppCacheFilePath) { $global:AppCacheFilePath } else {
-                    [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\app_names.csv"))
+                    [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_apps.csv"))
                 }
 
                 if (Test-Path -LiteralPath $appCsvPath) {
@@ -2385,7 +2432,7 @@ try {
                     if ($rows.Count -gt 0) {
                         $rows | Export-Csv -LiteralPath $appCsvPath -NoTypeInformation -Encoding UTF8 -Force
                     } else {
-                        '"PackageName","DisplayName","IconUrl","LocalIconPath"' |
+                        '"PackageName","DisplayName","IconUrl","LocalIconPath","Type"' |
                             Set-Content -LiteralPath $appCsvPath -Encoding UTF8 -Force
                     }
                 }
@@ -2410,7 +2457,7 @@ try {
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/appnames/clear') {
             try {
                 $appCsvPath = if ($global:AppCacheFilePath) { $global:AppCacheFilePath } else {
-                    [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\app_names.csv"))
+                    [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_apps.csv"))
                 }
 
                 if (Test-Path -LiteralPath $appCsvPath) {
@@ -2422,7 +2469,7 @@ try {
                     Rename-Item -LiteralPath $appCsvPath -NewName $archive -Force -ErrorAction Stop
                 }
 
-                '"PackageName","DisplayName","IconUrl","LocalIconPath"' |
+                '"PackageName","DisplayName","IconUrl","LocalIconPath","Type"' |
                     Set-Content -LiteralPath $appCsvPath -Encoding UTF8 -Force
 
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
@@ -2434,43 +2481,6 @@ try {
             } catch {
                 try {
                     $eb = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"' + ($_ -replace '"',"'") + '"}')
-                    $response.StatusCode = 500; $response.ContentType = 'application/json; charset=utf-8'
-                    $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
-                } catch {}
-            } finally { $response.Close() }
-            continue
-        }
-
-        # API: POST /api/appnames/refresh - call Get-AppInfo for apps missing display name or icon
-        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/appnames/refresh') {
-            try {
-                $appCsvPath = if ($global:AppCacheFilePath) { $global:AppCacheFilePath } else {
-                    [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\app_names.csv"))
-                }
-                $updated = 0
-                if (Test-Path -LiteralPath $appCsvPath) {
-                    $rows = @(Import-Csv -LiteralPath $appCsvPath -Delimiter ",")
-                    foreach ($row in $rows) {
-                        $needsUpdate = ([string]::IsNullOrWhiteSpace($row.DisplayName) -or
-                                        $row.DisplayName -eq ($row.PackageName -replace '^com\.','') -or
-                                        [string]::IsNullOrWhiteSpace($row.IconUrl))
-                        if ($needsUpdate) {
-                            try {
-                                $info = Get-AppInfo -PackageName $row.PackageName -AppCacheFilePath $appCsvPath -searchOnline $true
-                                if ($info) { $updated++ }
-                            } catch {}
-                        }
-                    }
-                }
-                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true,"updated":' + $updated + '}')
-                $response.StatusCode      = 200
-                $response.ContentType     = 'application/json; charset=utf-8'
-                $response.Headers.Add('Access-Control-Allow-Origin', '*')
-                $response.ContentLength64 = $respBytes.Length
-                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
-            } catch {
-                try {
-                    $eb = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
                     $response.StatusCode = 500; $response.ContentType = 'application/json; charset=utf-8'
                     $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
                 } catch {}

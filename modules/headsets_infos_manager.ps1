@@ -293,7 +293,7 @@ function Get-KnownHeadsetInfos {
         # Get running app
         $pkg = Get-HeadsetForegroundApp -Device $device -adb $adb
         if ($pkg) {
-            $appInfo = Get-AppInfo -PackageName $pkg -searchOnline $true
+            $appInfo = Get-AppInfo -PackageName $pkg -searchOnline $false
             $result.RunningApp   = if ($appInfo.DisplayName) { $appInfo.DisplayName } else { $pkg }
             $result.RunningAppIcon = $appInfo.IconUrl
         }

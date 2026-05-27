@@ -65,6 +65,7 @@
     .col-dn  { width: 24%; }
     .col-iu  { width: 24%; }
     .col-li  { width: 14%; }
+    .col-ty  { width: 80px; }
     .col-er  { width: 34px; }
 
     thead { position: sticky; top: 0; z-index: 4; }
@@ -149,6 +150,24 @@
     .btn-cancel  { padding: 6px 14px; border-radius: 5px; border: 1px solid var(--border); background: var(--bg3); color: var(--text); cursor: pointer; font-size: 12px; }
     .btn-del-confirm { padding: 6px 14px; border-radius: 5px; border: 1px solid var(--danger); background: var(--danger); color: #fff; cursor: pointer; font-size: 12px; }
 
+    .type-badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; }
+    .type-badge.third-party { background: rgba(59,130,246,0.15); color: #93c5fd; }
+    .type-badge.built-in    { background: rgba(156,163,175,0.15); color: #9ca3af; }
+    [data-theme="light"] .type-badge.third-party { background: rgba(37,99,235,0.1); color: #1d4ed8; }
+    [data-theme="light"] .type-badge.built-in    { background: rgba(107,114,128,0.1); color: #6b7280; }
+    .type-switch { display: inline-flex; border-radius: 5px; overflow: hidden; border: 1px solid #333; }
+    .type-switch button { padding: 3px 8px; font-size: 10px; font-weight: 600; font-family: inherit; cursor: pointer; border: none; background: transparent; color: #555; transition: background 0.1s, color 0.1s; white-space: nowrap; }
+    .type-switch button:not(:last-child) { border-right: 1px solid #333; }
+    .type-switch button.active { background: #2a2a2a; color: #ccc; }
+    .type-switch button[data-val="true"].active  { background: rgba(59,130,246,0.2); color: #93c5fd; border-color: #3b82f6; }
+    .type-switch button[data-val="false"].active { background: rgba(156,163,175,0.15); color: #9ca3af; }
+    [data-theme="light"] .type-switch { border-color: #ddd; }
+    [data-theme="light"] .type-switch button { color: #aaa; }
+    [data-theme="light"] .type-switch button:not(:last-child) { border-color: #ddd; }
+    [data-theme="light"] .type-switch button.active { background: #f0f0f0; color: #333; }
+    [data-theme="light"] .type-switch button[data-val="true"].active  { background: rgba(37,99,235,0.1); color: #1d4ed8; }
+    [data-theme="light"] .type-switch button[data-val="false"].active { background: rgba(107,114,128,0.1); color: #6b7280; }
+
     @keyframes spin { to { transform: rotate(360deg); } }
     .spin { display: inline-block; animation: spin 0.75s linear infinite; }
   </style>
@@ -193,6 +212,7 @@
             <col class="col-dn">
             <col class="col-iu">
             <col class="col-li">
+            <col class="col-ty">
             <col class="col-er">
           </colgroup>
           <thead>
@@ -203,6 +223,7 @@
               <th class="col-dn">Display Name</th>
               <th class="col-iu">Icon URL</th>
               <th class="col-li">Local Icon</th>
+              <th class="col-ty">Type</th>
               <th class="col-er"></th>
             </tr>
             <!-- Search / edit row (dual-purpose) -->
@@ -216,6 +237,13 @@
               <td><input type="text" id="in-display"  placeholder="Search display name..."  autocomplete="off"></td>
               <td><input type="text" id="in-icon-url" placeholder="Search icon URL..."      autocomplete="off" spellcheck="false"></td>
               <td><input type="text" id="in-local"    placeholder="Search local icon..."    autocomplete="off" spellcheck="false"></td>
+              <td style="text-align:center">
+                <div class="type-switch" id="type-switch">
+                  <button data-val="" class="active" title="Show all types">All</button>
+                  <button data-val="true"  title="Show third-party apps only">3rd Party</button>
+                  <button data-val="false" title="Show built-in apps only">Built-in</button>
+                </div>
+              </td>
               <td></td>
             </tr>
           </thead>
@@ -257,6 +285,16 @@
   var inDN    = document.getElementById('in-display');
   var inIU    = document.getElementById('in-icon-url');
   var inLI    = document.getElementById('in-local');
+  var _typeFilter = '';   // '', 'true' (third-party), or 'false' (built-in)
+
+  // Wire up type-switch buttons
+  document.getElementById('type-switch').addEventListener('click', function(e) {
+    var btn = e.target.closest('button[data-val]');
+    if (!btn || _editPkg !== null) return;
+    _typeFilter = btn.dataset.val;
+    this.querySelectorAll('button').forEach(function(b) { b.classList.toggle('active', b === btn); });
+    renderTable();
+  });
 
   var SVG_SEARCH = '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>';
   var SVG_CHECK  = '<polyline points="20 6 9 17 4 12"/>';
@@ -327,11 +365,18 @@
         if (fDN  && !(app.DisplayName   || '').toLowerCase().includes(fDN))  return;
         if (fIU  && !(app.IconUrl       || '').toLowerCase().includes(fIU))  return;
         if (fLI  && !(app.LocalIconPath || '').toLowerCase().includes(fLI))  return;
+        if (_typeFilter !== '' && String(app.ThirdParty) !== _typeFilter)   return;
       }
 
       var tr = document.createElement('tr');
       tr.dataset.pkg = app.PackageName;
       if (_editPkg === app.PackageName) tr.classList.add('editing');
+
+      var typeBadge = app.ThirdParty === true
+                    ? '<span class="type-badge third-party">3rd Party</span>'
+                    : app.ThirdParty === false
+                        ? '<span class="type-badge built-in">Built-in</span>'
+                        : '<span style="color:var(--text2);font-size:11px">-</span>';
 
       var iconHtml = app.LocalIconPath
         ? '<img src="' + esc(app.LocalIconPath) + '" class="app-icon" onerror="this.style.display=\'none\'">'
@@ -357,6 +402,7 @@
             '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>' +
           '</button>' +
         '</td>' +
+        '<td class="col-ty">' + typeBadge + '</td>' +
         '<td class="col-er" style="text-align:center">' +
           '<button class="row-btn del" data-del="' + esc(app.PackageName) + '" title="Delete">' +
             '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
@@ -403,7 +449,8 @@
       PackageName:   pkg,
       DisplayName:   inDN.value.trim(),
       IconUrl:       inIU.value.trim(),
-      LocalIconPath: inLI.value.trim()
+      LocalIconPath: inLI.value.trim(),
+      ThirdParty:    (_apps.find(function(a) { return a.PackageName === pkg; }) || {}).ThirdParty ?? null
     };
     setStatus('Saving...', 'busy');
     fetch('/api/appnames/save', {
@@ -498,30 +545,62 @@
       .catch(function(e) { setStatus('Clear error: ' + e.message, 'err'); });
   });
 
+  var _resolvePoller = null;
+  var _resolveOrigHTML = null;
+  var _resolveBtn = null;
+
+  function _resolveResetBtn() {
+    if (_resolveBtn) { _resolveBtn.disabled = false; _resolveBtn.innerHTML = _resolveOrigHTML; }
+  }
+
+  function _resolveStartPolling() {
+    if (_resolvePoller) return;
+    _resolvePoller = setInterval(function() {
+      fetch('/api/resolve-progress')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          if (d.status === 'done') {
+            clearInterval(_resolvePoller); _resolvePoller = null;
+            setStatus('Online search complete', 'ok');
+            _resolveResetBtn(); loadApps();
+          } else if (d.status === 'error') {
+            clearInterval(_resolvePoller); _resolvePoller = null;
+            setStatus('Search failed: ' + (d.error || 'unknown error'), 'err');
+            _resolveResetBtn();
+          }
+        })
+        .catch(function() {});
+    }, 3000);
+  }
+
   document.getElementById('btn-refresh-web').addEventListener('click', function() {
-    var btn = this;
-    var origHTML = btn.innerHTML;
-    btn.disabled = true;
-    btn.innerHTML =
+    _resolveBtn = this;
+    _resolveOrigHTML = this.innerHTML;
+    this.disabled = true;
+    this.innerHTML =
       '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.55"/></svg>' +
       ' Searching online...';
     setStatus('Querying MetaMetadata for missing app info - this may take a few minutes...', 'busy');
-    fetch('/api/appnames/refresh', { method: 'POST' })
+    fetch('/api/resolve-app-names', { method: 'POST' })
       .then(function(r) { return r.json(); })
       .then(function(d) {
-        btn.disabled = false;
-        btn.innerHTML = origHTML;
-        if (d.ok) {
-          setStatus('Updated ' + (d.updated || 0) + ' app(s) from web', 'ok');
-          loadApps();
+        if (d.status === 'no_internet') {
+          setStatus('No internet connection - search skipped', 'err');
+          _resolveResetBtn();
+        } else if (d.status === 'already_running') {
+          setStatus('Search already in progress...', 'busy');
+          _resolveStartPolling();
+        } else if (d.status === 'started') {
+          setStatus('Searching online... (this may take a few minutes)', 'busy');
+          _resolveStartPolling();
         } else {
-          setStatus('Refresh failed: ' + (d.error || ''), 'err');
+          setStatus('Unexpected response: ' + d.status, 'err');
+          _resolveResetBtn();
         }
       })
       .catch(function(e) {
-        btn.disabled = false;
-        btn.innerHTML = origHTML;
         setStatus('Refresh error: ' + e.message, 'err');
+        _resolveResetBtn();
       });
   });
 

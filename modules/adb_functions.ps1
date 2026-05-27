@@ -1485,7 +1485,7 @@ function Invoke-HeadsetApp {
         }
 
         # Search cache
-        $cacheFile = Join-Path $global:ScriptPath "data\app_names.csv"
+        $cacheFile = if ($global:AppCacheFilePath) { $global:AppCacheFilePath } else { Join-Path $global:ScriptPath "data\known_apps.csv" }
         $match = $null
         if (Test-Path $cacheFile) {
             $match = @(Import-Csv -Path $cacheFile -Delimiter ",") |
@@ -1617,25 +1617,8 @@ function Get-HeadsetInstalledApps {
                     $cache[$pkg] = $entry
                 }
             }
-            Update-AppCacheFromMetaMetadata -CacheFilePath $AppCacheFilePath
         }
 
-        # Always persist newly discovered packages to app_names.csv (even without online lookup)
-        $newPkgs = @($packages | Where-Object { -not $cache.ContainsKey($_) })
-        if ($newPkgs.Count -gt 0) {
-            foreach ($pkg in $newPkgs) {
-                $shortName = if ($pkg.StartsWith('com.')) { $pkg.Substring(4) } else { $pkg }
-                $cache[$pkg] = [PSCustomObject]@{
-                    PackageName   = $pkg
-                    DisplayName   = $shortName
-                    IconUrl       = ''
-                    LocalIconPath = ''
-                }
-            }
-            $cache.Values | Sort-Object DisplayName | Export-Csv -LiteralPath $AppCacheFilePath -NoTypeInformation -Encoding UTF8
-            Write-Log ($msg.AppDisplayNameNotFound -f "$($newPkgs.Count) new packages added to app_names.csv") -Level DEBUG
-        }
-        
         # When returning all packages, determine which are third-party with a second ADB call
         $thirdPartySet = @{}
         if (-not $ThirdPartyOnly) {
@@ -1643,6 +1626,24 @@ function Get-HeadsetInstalledApps {
             foreach ($line in $tp) {
                 if ($line -match '^package:(.+)$') { $thirdPartySet[$Matches[1].Trim()] = $true }
             }
+        }
+
+        # Persist new packages and backfill ThirdParty for existing entries that lack it
+        $needsWrite = $false
+        foreach ($pkg in $packages) {
+            $pkgIsThirdParty = if ($ThirdPartyOnly) { $true } elseif ($thirdPartySet.ContainsKey($pkg)) { $true } else { $false }
+            if (-not $cache.ContainsKey($pkg)) {
+                $shortName = if ($pkg.StartsWith('com.')) { $pkg.Substring(4) } else { $pkg }
+                $cache[$pkg] = [PSCustomObject]@{ PackageName=$pkg; DisplayName=$shortName; IconUrl=''; LocalIconPath=''; ThirdParty=$pkgIsThirdParty }
+                $needsWrite = $true
+            } elseif ($null -eq $cache[$pkg].ThirdParty -or "$($cache[$pkg].ThirdParty)" -eq '') {
+                $cache[$pkg] | Add-Member -MemberType NoteProperty -Name ThirdParty -Value $pkgIsThirdParty -Force
+                $needsWrite = $true
+            }
+        }
+        if ($needsWrite) {
+            $cache.Values | Sort-Object DisplayName | Export-Csv -LiteralPath $AppCacheFilePath -NoTypeInformation -Encoding UTF8
+            Write-Log ($msg.AppDisplayNameNotFound -f "known_apps.csv updated with ThirdParty/new packages") -Level DEBUG
         }
 
         $apps = foreach ($pkg in $packages) {
@@ -1726,7 +1727,7 @@ function Get-AppInfo {
         }
     }
     # If the cache contains the package with all info let's return it !
-    if ($cache.ContainsKey($PackageName) -and $PackageName_short -notin $cache[$PackageName].DisplayName -and $cache[$PackageName].IconUrl) {
+    if ($cache.ContainsKey($PackageName) -and $cache[$PackageName].DisplayName -and ($cache[$PackageName].DisplayName -ne $PackageName_short)) {
         return $cache[$PackageName]
     }
     # fill the display name with cached value if already known, it may be added before of set manually by the user.
@@ -1807,89 +1808,69 @@ function Get-AppInfo {
     return $appInfos
 }
 
-# Generate a function that will rebuild in background the app_names.csv cache file from the online MetaMetadata repository, iterating through all packages and fetching their metadata. This can be used to pre-populate the cache with known apps without needing to trigger lookups one by one.
-function Update-AppCacheFromMetaMetadata { #DOES NOT WORKS, UNDER INVESTIGATION
-    <#
-    .SYNOPSIS
-    Rebuilds the local app_names.csv cache file by fetching metadata for all packages listed in the MetaMetadata GitHub repository.
-    .DESCRIPTION
-    Iterates through all JSON files in the MetaMetadata data folders (common, oculus, oculus_public, oculusdb, sidequest) and extracts package names, display names and icon URLs. Updates the local app_names.csv cache file with this information, which can then be used for instant resolution of app display names and icons without needing to hit the network for each lookup.
-    .EXAMPLE
-    Update-AppCacheFromMetaMetadata
-       #>
-    param (
+function Update-AppCacheOnline {
+    param(
         [string]$AppCacheFilePath = $global:AppCacheFilePath,
-        [string]$IconCacheDir = $(Join-Path $global:ScriptPath "website\assets\app_icons")
+        [string]$ProgressFile = ''
     )
+    if (-not $AppCacheFilePath) { $AppCacheFilePath = Join-Path $global:ScriptPath "data\known_apps.csv" }
+    if (-not (Test-Path -LiteralPath $AppCacheFilePath)) { return }
 
-    $baseUrl = "https://raw.githubusercontent.com/threethan/MetaMetadata/main/data"
-    $folders = @('common', 'oculus', 'oculus_public', 'oculusdb', 'sidequest')
-    $cache = @{}
+    $rows    = @(Import-Csv -LiteralPath $AppCacheFilePath -Delimiter ",")
+    $total   = $rows.Count
+    $updated = 0
+    $i       = 0
 
-    foreach ($folder in $folders) {
-        $indexUrl = "$baseUrl/$folder/index.json"
-        try {
-            $index = Invoke-RestMethod -Uri $indexUrl -TimeoutSec 10 -ErrorAction Stop
-            foreach ($entry in $index) {
-                if ($entry.package) {
-                    $packageName = $entry.package
-                    if (-not $cache.ContainsKey($packageName)) {
-                        $displayName = if ($entry.name) { $entry.name } else { $packageName }
-                        $iconUrl = ""
-                        if ($entry.square) { $iconUrl = $entry.square }
-                        elseif ($entry.icon) { $iconUrl = $entry.icon }
-                        elseif ($entry.landscape) { $iconUrl = $entry.landscape }
-                        elseif ($entry.portrait) { $iconUrl = $entry.portrait }
-                        elseif ($entry.hero) { $iconUrl = $entry.hero }
-                        elseif ($entry.logo) { $iconUrl = $entry.logo }
-
-                        # Download icon locally
-                        $localIconPath = ""
-                        if ($iconUrl) {
-                            if (-not (Test-Path $IconCacheDir)) {
-                                New-Item -ItemType Directory -Path $IconCacheDir -Force | Out-Null
-                            }
-                            $ext = '.png'
-                            if ($iconUrl -match '\.([a-zA-Z]{2,4})(?:[?#]|$)') {
-                                $ext = '.' + $Matches[1].ToLower()
-                            }
-                            $iconFileName = "$packageName$ext"
-                            $iconFile = Join-Path $IconCacheDir $iconFileName
-                            if (-not (Test-Path $iconFile)) {
-                                try {
-                                    Invoke-WebRequest -Uri $iconUrl -OutFile $iconFile -TimeoutSec 10 -ErrorAction Stop
-                                    Write-Log ($msg.AppDisplayNameResolved -f "Icon saved", $iconFileName) -Level DEBUG
-                                } catch {
-                                    Write-Log ($msg.AppDisplayNameNotFound -f "Icon download failed: $packageName") -Level DEBUG
-                                    $iconFileName = ""
-                                }
-                            }
-                            if ($iconFileName -ne "") {
-                                $localIconPath = "/assets/app_icons/$iconFileName"
-                            }
-                        }
-                        $cache[$packageName] = [PSCustomObject]@{
-                            PackageName = $packageName
-                            DisplayName = $displayName
-                            IconUrl     = $iconUrl
-                            LocalIconPath = $localIconPath
-                        }
-                    }
-                }
-            }
-        } catch {
-            Write-Log ($msg.ErrorOccurred -f "Failed to fetch index from $indexUrl : $_") -Level ERROR
+    foreach ($row in $rows) {
+        $i++
+        $needsResolve = [string]::IsNullOrWhiteSpace($row.DisplayName) -or
+                        $row.DisplayName -eq ($row.PackageName -replace '^com\.','') -or
+                        [string]::IsNullOrWhiteSpace($row.IconUrl)
+        if ($needsResolve) {
+            try {
+                Get-AppInfo -PackageName $row.PackageName -AppCacheFilePath $AppCacheFilePath -searchOnline $true | Out-Null
+                $updated++
+            } catch {}
+        }
+        if ($ProgressFile -and ($i % 10 -eq 0)) {
+            try { [System.IO.File]::WriteAllText($ProgressFile, "{`"status`":`"running`",`"done`":$i,`"total`":$total}") } catch {}
         }
     }
-    # Save cache to CSV
-    $cache.Values | Sort-Object DisplayName | Export-Csv -Path $AppCacheFilePath -NoTypeInformation -Encoding UTF8
-    Write-Log ($msg.AppDisplayNameResolved -f "Cache update complete", $cache.Count) -Level INFO
+    Write-Log "Update-AppCacheOnline: updated $updated / $total packages" -Level INFO
 }
 
 
 function Get-InstalledAppsCachePath {
     param ([string]$headsetName)
     return Join-Path $global:ScriptPath "data\$(Convert-Displayname $headsetName)_installed_apps.csv"
+}
+
+function Get-AppInfoFromKnownApps {
+    <#
+    .SYNOPSIS
+    Enriches a list of package names with metadata from known_apps.csv.
+    Returns PackageName, DisplayName, IconUrl, LocalIconPath, ThirdParty for each package.
+    Missing packages get safe defaults (DisplayName=PackageName, empty icons, ThirdParty=$true).
+    #>
+    param([string[]]$PackageNames)
+    $appNamesPath = if ($global:AppCacheFilePath) { $global:AppCacheFilePath } else { Join-Path $global:ScriptPath "data\known_apps.csv" }
+    $cache = @{}
+    if (Test-Path -LiteralPath $appNamesPath) {
+        Import-Csv -LiteralPath $appNamesPath -Delimiter "," | ForEach-Object {
+            if ($_.PackageName) { $cache[$_.PackageName] = $_ }
+        }
+    }
+    return @($PackageNames | ForEach-Object {
+        $pkg   = $_
+        $entry = $cache[$pkg]
+        [PSCustomObject]@{
+            PackageName   = $pkg
+            DisplayName   = if ($entry -and $entry.DisplayName -and $entry.DisplayName -ne $pkg) { $entry.DisplayName } else { $pkg }
+            IconUrl       = if ($entry) { $entry.IconUrl }       else { '' }
+            LocalIconPath = if ($entry) { $entry.LocalIconPath } else { '' }
+            ThirdParty    = if ($entry) { ConvertTo-ThirdPartyBool $entry } else { $true }
+        }
+    })
 }
 
 function Update-InstalledAppsCache {
@@ -1903,22 +1884,57 @@ function Update-InstalledAppsCache {
 
     try {
         $cachePath    = Get-InstalledAppsCachePath -headsetName $headsetName
-        $appNamesPath = Join-Path $global:ScriptPath "data\app_names.csv"
+        $appNamesPath = if ($global:AppCacheFilePath) { $global:AppCacheFilePath } else { Join-Path $global:ScriptPath "data\known_apps.csv" }
 
         # Fetch third-party packages from headset
         $rawOutput = Invoke-AdbCmd -Device $Device -Command "shell pm list packages -3" -adb $adb
         $packages  = @($rawOutput | ForEach-Object { ($_ -replace '^package:', '').Trim() } | Where-Object { $_ -ne '' } | Sort-Object)
 
-        if ($packages.Count -eq 0) { return }
+        # Fetch all packages to discover built-in apps
+        $allRaw      = Invoke-AdbCmd -Device $Device -Command "shell pm list packages" -adb $adb
+        $allPkgs     = @($allRaw | ForEach-Object { ($_ -replace '^package:', '').Trim() } | Where-Object { $_ -ne '' })
+
+        if ($allPkgs.Count -eq 0) { return }
+        $thirdSet    = @{}; foreach ($p in $packages) { $thirdSet[$p] = $true }
+        $builtInPkgs = @($allPkgs | Where-Object { -not $thirdSet.ContainsKey($_) })
+
+        # Load current known_apps.csv
+        $appNames = @{}
+        if (Test-Path -LiteralPath $appNamesPath) {
+            Import-Csv -LiteralPath $appNamesPath -Delimiter "," | ForEach-Object {
+                if ($_.PackageName) { $appNames[$_.PackageName] = $_ }
+            }
+        }
+
+        # Persist new/updated entries for both third-party and built-in packages
+        $needsWrite = $false
+        foreach ($pkg in $packages) {
+            if (-not $appNames.ContainsKey($pkg)) {
+                $shortName = if ($pkg.StartsWith('com.')) { $pkg.Substring(4) } else { $pkg }
+                $appNames[$pkg] = [PSCustomObject]@{ PackageName=$pkg; DisplayName=$shortName; IconUrl=''; LocalIconPath=''; ThirdParty=$true }
+                $needsWrite = $true
+            } elseif ($null -eq $appNames[$pkg].ThirdParty -or "$($appNames[$pkg].ThirdParty)" -eq '') {
+                $appNames[$pkg] | Add-Member -MemberType NoteProperty -Name ThirdParty -Value $true -Force
+                $needsWrite = $true
+            }
+        }
+        foreach ($pkg in $builtInPkgs) {
+            if (-not $appNames.ContainsKey($pkg)) {
+                $shortName = if ($pkg.StartsWith('com.')) { $pkg.Substring(4) } else { $pkg }
+                $appNames[$pkg] = [PSCustomObject]@{ PackageName=$pkg; DisplayName=$shortName; IconUrl=''; LocalIconPath=''; ThirdParty=$false }
+                $needsWrite = $true
+            } elseif ($null -eq $appNames[$pkg].ThirdParty -or "$($appNames[$pkg].ThirdParty)" -eq '') {
+                $appNames[$pkg] | Add-Member -MemberType NoteProperty -Name ThirdParty -Value $false -Force
+                $needsWrite = $true
+            }
+        }
+        if ($needsWrite) {
+            $appNames.Values | Sort-Object DisplayName | Export-Csv -LiteralPath $appNamesPath -NoTypeInformation -Encoding UTF8
+            Write-Log "known_apps.csv: updated with new/typed packages" -Level DEBUG
+        }
 
         # When -ResolveMissing: fetch online metadata for packages not yet fully resolved
         if ($ResolveMissing) {
-            $appNames = @{}
-            if (Test-Path $appNamesPath) {
-                Import-Csv -Path $appNamesPath -Delimiter "," | ForEach-Object {
-                    if ($_.PackageName) { $appNames[$_.PackageName] = $_ }
-                }
-            }
             foreach ($pkg in $packages) {
                 $cached = $appNames[$pkg]
                 $needsResolve = (-not $cached) -or (-not $cached.DisplayName) -or ($cached.DisplayName -eq $pkg) -or (-not $cached.IconUrl)
@@ -1928,11 +1944,13 @@ function Update-InstalledAppsCache {
             }
         }
 
-        # Load app_names lookup (possibly updated above)
-        $appNames = @{}
-        if (Test-Path $appNamesPath) {
-            Import-Csv -Path $appNamesPath -Delimiter "," | ForEach-Object {
-                if ($_.PackageName) { $appNames[$_.PackageName] = $_ }
+        # Reload known_apps lookup (may have been updated by ResolveMissing / Get-AppInfo above)
+        if ($ResolveMissing) {
+            $appNames = @{}
+            if (Test-Path -LiteralPath $appNamesPath) {
+                Import-Csv -LiteralPath $appNamesPath -Delimiter "," | ForEach-Object {
+                    if ($_.PackageName) { $appNames[$_.PackageName] = $_ }
+                }
             }
         }
 
@@ -1949,29 +1967,26 @@ function Update-InstalledAppsCache {
             }
         }
 
-        # Build new rows
-        $newRows = $packages | ForEach-Object {
-            $pkg     = $_
-            $entry   = $appNames[$pkg]
-            $dn      = if ($entry -and $entry.DisplayName -and $entry.DisplayName -ne $pkg) { $entry.DisplayName } else { $pkg }
-            $ico     = if ($entry) { $entry.IconUrl }     else { '' }
-            $icoPath = if ($entry) { $entry.LocalIconPath } else { '' }
-            $ver     = if ($versions.ContainsKey($pkg)) { $versions[$pkg] } else { '' }
-            [PSCustomObject]@{ PackageName = $pkg; DisplayName = $dn; IconUrl = $ico; LocalIconPath = $icoPath; Version = $ver }
+        # Build new rows (all packages - third-party and built-in; lean schema)
+        $allPkgsSorted = @($allPkgs | Sort-Object)
+        $newRows = $allPkgsSorted | ForEach-Object {
+            $pkg = $_
+            $ver = if ($versions.ContainsKey($pkg)) { $versions[$pkg] } else { '' }
+            [PSCustomObject]@{ PackageName = $pkg; Version = $ver }
         }
 
         # Compare with existing cache (by sorted package list only); always write when -ResolveMissing
         $changed = $ResolveMissing.IsPresent
-        if (-not $changed -and (Test-Path $cachePath)) {
-            $existing = @(Import-Csv -Path $cachePath -Delimiter "," | Select-Object -ExpandProperty PackageName | Sort-Object)
-            $changed  = ($existing -join ',') -ne ($packages -join ',')
-        } elseif (-not (Test-Path $cachePath)) {
+        if (-not $changed -and (Test-Path -LiteralPath $cachePath)) {
+            $existing = @(Import-Csv -LiteralPath $cachePath -Delimiter "," | Select-Object -ExpandProperty PackageName | Sort-Object)
+            $changed  = ($existing -join ',') -ne ($allPkgsSorted -join ',')
+        } elseif (-not (Test-Path -LiteralPath $cachePath)) {
             $changed = $true
         }
 
         if ($changed) {
-            $newRows | Export-Csv -Path $cachePath -NoTypeInformation -Delimiter "," -Encoding UTF8 -Force
-            Write-Log ($msg.InstalledAppsCacheUpdated -f $headsetName, $packages.Count) -Level DEBUG
+            $newRows | Export-Csv -LiteralPath $cachePath -NoTypeInformation -Delimiter "," -Encoding UTF8 -Force
+            Write-Log ($msg.InstalledAppsCacheUpdated -f $headsetName, $allPkgsSorted.Count) -Level DEBUG
         }
     }
     catch {

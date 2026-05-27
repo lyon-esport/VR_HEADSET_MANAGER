@@ -2,7 +2,7 @@
   "language": "en-US",
   "Paths":{
     "knownHeadsetsFile": "known_headsets.csv",
-    "AppCacheFileName": "app_names.csv"
+    "AppCacheFileName": "known_apps.csv"
   },
   "apk":{
 	"adbWirelessActivatorFolder": "ADB Wireless activator",

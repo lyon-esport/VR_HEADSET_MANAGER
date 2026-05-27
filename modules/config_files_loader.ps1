@@ -104,6 +104,19 @@ function Get-Config {
     $global:AppCacheFileName = $configContent.Paths.AppCacheFileName
     $global:AppCacheFilePath = Join-Path -Path $(Join-Path -Path $global:ScriptPath -ChildPath "data") -ChildPath $global:AppCacheFileName
 
+    # Migrate app_names.csv -> known_apps.csv automatically
+    if ($global:AppCacheFilePath -like "*app_names.csv") {
+        $newPath = $global:AppCacheFilePath -replace 'app_names\.csv$', 'known_apps.csv'
+        if ((Test-Path -LiteralPath $global:AppCacheFilePath) -and -not (Test-Path -LiteralPath $newPath)) {
+            Rename-Item -LiteralPath $global:AppCacheFilePath -NewName (Split-Path $newPath -Leaf) -ErrorAction SilentlyContinue
+        }
+        $configContent.Paths.AppCacheFileName = 'known_apps.csv'
+        try { $configContent | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $ConfigFilePath -Encoding UTF8 } catch {}
+        $global:AppCacheFileName = 'known_apps.csv'
+        $global:AppCacheFilePath = $newPath
+        Write-Host "Config: migrated app_names.csv to known_apps.csv"
+    }
+
 
     $global:knownHeadsetsSCRCPYFilePath = Join-Path -Path $(Join-Path -Path $global:ScriptPath -ChildPath "data") -ChildPath $($global:knownHeadsetsFile).Replace(".csv","_SCRCPY.csv")
     $global:scrcpyFolder = Join-Path -Path $sourcesPath -ChildPath $configContent.scrcpy.folder
