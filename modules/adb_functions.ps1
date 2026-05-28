@@ -1818,32 +1818,131 @@ function Get-AppInfo {
 function Update-AppCacheOnline {
     param(
         [string]$AppCacheFilePath = $global:AppCacheFilePath,
-        [string]$ProgressFile = ''
+        [string]$ProgressFile = '',
+        [int]$MaxThreads = 12
     )
     if (-not $AppCacheFilePath) { $AppCacheFilePath = Join-Path $global:ScriptPath "data\known_apps.csv" }
     if (-not (Test-Path -LiteralPath $AppCacheFilePath)) { return }
 
-    $rows    = @(Import-Csv -LiteralPath $AppCacheFilePath -Delimiter ",")
-    $total   = $rows.Count
-    $updated = 0
-    $i       = 0
+    $rows = @(Import-Csv -LiteralPath $AppCacheFilePath -Delimiter ",")
+    $toResolve = @($rows | Where-Object {
+        [string]::IsNullOrWhiteSpace($_.DisplayName) -or
+        $_.DisplayName -eq ($_.PackageName -replace '^com\.','') -or
+        [string]::IsNullOrWhiteSpace($_.IconUrl)
+    })
+    $total = $toResolve.Count
 
-    foreach ($row in $rows) {
-        $i++
-        $needsResolve = [string]::IsNullOrWhiteSpace($row.DisplayName) -or
-                        $row.DisplayName -eq ($row.PackageName -replace '^com\.','') -or
-                        [string]::IsNullOrWhiteSpace($row.IconUrl)
-        if ($needsResolve) {
+    if ($total -eq 0) {
+        Write-Log "Update-AppCacheOnline: nothing to resolve" -Level INFO
+        if ($ProgressFile) { [System.IO.File]::WriteAllText($ProgressFile, '{"status":"done","done":0,"total":0}') }
+        return
+    }
+
+    # Phase 1: parallel HTTP lookups via RunspacePool
+    $metaScriptBlock = {
+        param([string]$PackageName)
+        $folders = @('common', 'oculus', 'oculus_public', 'oculusdb', 'sidequest')
+        $base    = 'https://raw.githubusercontent.com/threethan/MetaMetadata/main/data'
+        $result  = [PSCustomObject]@{ PackageName = $PackageName; DisplayName = ''; IconUrl = '' }
+        foreach ($f in $folders) {
             try {
-                Get-AppInfo -PackageName $row.PackageName -AppCacheFilePath $AppCacheFilePath -searchOnline $true | Out-Null
-                $updated++
+                $r    = Invoke-RestMethod -Uri "$base/$f/$PackageName.json" -TimeoutSec 8 -ErrorAction Stop
+                $icon = if     ($r.square)    { $r.square }
+                        elseif ($r.icon)      { $r.icon }
+                        elseif ($r.landscape) { $r.landscape }
+                        elseif ($r.portrait)  { $r.portrait }
+                        elseif ($r.hero)      { $r.hero }
+                        elseif ($r.logo)      { $r.logo }
+                        else                  { '' }
+                if ($r.name) { $result.DisplayName = $r.name }
+                if ($icon)   { $result.IconUrl = $icon; break }
+                if ($r.name) { break }
             } catch {}
         }
-        if ($ProgressFile -and ($i % 10 -eq 0)) {
-            try { [System.IO.File]::WriteAllText($ProgressFile, "{`"status`":`"running`",`"done`":$i,`"total`":$total}") } catch {}
-        }
+        return $result
     }
-    Write-Log "Update-AppCacheOnline: updated $updated / $total packages" -Level INFO
+
+    $pool = [runspacefactory]::CreateRunspacePool(1, $MaxThreads)
+    $pool.Open()
+
+    $runspaces = foreach ($row in $toResolve) {
+        $ps = [powershell]::Create().AddScript($metaScriptBlock).AddArgument($row.PackageName)
+        $ps.RunspacePool = $pool
+        [PSCustomObject]@{ PS = $ps; AR = $ps.BeginInvoke(); Pkg = $row.PackageName; Collected = $false }
+    }
+
+    $httpResults = @{}
+    $done = 0
+    do {
+        foreach ($rs in ($runspaces | Where-Object { $_.AR.IsCompleted -and -not $_.Collected })) {
+            try {
+                $res = $rs.PS.EndInvoke($rs.AR)
+                if ($res) { $httpResults[$res.PackageName] = $res }
+            } catch {}
+            $rs.PS.Dispose()
+            $rs.Collected = $true
+            $done++
+            if ($ProgressFile -and ($done % 5 -eq 0 -or $done -eq $total)) {
+                try { [System.IO.File]::WriteAllText($ProgressFile,
+                    "{`"status`":`"running`",`"done`":$done,`"total`":$total}") } catch {}
+            }
+        }
+        if (($runspaces | Where-Object { -not $_.Collected }).Count -gt 0) {
+            Start-Sleep -Milliseconds 300
+        }
+    } while (($runspaces | Where-Object { -not $_.Collected }).Count -gt 0)
+
+    $pool.Close()
+    $pool.Dispose()
+
+    # Phase 2: serial icon downloads then single CSV write
+    $cache = @{}
+    foreach ($row in @(Import-Csv -LiteralPath $AppCacheFilePath -Delimiter ",")) {
+        $cache[$row.PackageName] = $row
+    }
+    $IconCacheDir = Join-Path $global:ScriptPath "website\assets\app_icons"
+    if (-not (Test-Path -LiteralPath $IconCacheDir)) {
+        New-Item -ItemType Directory -Path $IconCacheDir -Force | Out-Null
+    }
+
+    $changed = $false
+    foreach ($pkg in $httpResults.Keys) {
+        $r = $httpResults[$pkg]
+        if (-not $r.DisplayName -and -not $r.IconUrl) { continue }
+        $entry = if ($cache.ContainsKey($pkg)) { $cache[$pkg] } else { $null }
+        if (-not $entry) { continue }
+
+        $localPath = ''
+        if ($r.IconUrl) {
+            $ext = '.png'
+            if ($r.IconUrl -match '\.([a-zA-Z]{2,4})(?:[?#]|$)') { $ext = '.' + $Matches[1].ToLower() }
+            $iconFile = Join-Path $IconCacheDir "$pkg$ext"
+            if (-not (Test-Path -LiteralPath $iconFile)) {
+                try {
+                    Invoke-WebRequest -Uri $r.IconUrl -OutFile $iconFile -TimeoutSec 10 -ErrorAction Stop
+                } catch { $iconFile = '' }
+            }
+            if ($iconFile -and (Test-Path -LiteralPath $iconFile)) {
+                $localPath = "/assets/app_icons/$pkg$ext"
+            }
+        }
+
+        if ($r.DisplayName) { $entry.DisplayName   = $r.DisplayName }
+        if ($r.IconUrl)     { $entry.IconUrl        = $r.IconUrl }
+        if ($localPath)     { $entry.LocalIconPath  = $localPath }
+        $changed = $true
+    }
+
+    if ($changed) {
+        $cache.Values | Sort-Object DisplayName |
+            Export-Csv -LiteralPath $AppCacheFilePath -NoTypeInformation -Encoding UTF8
+    }
+
+    Write-Log "Update-AppCacheOnline: resolved $done / $total packages" -Level INFO
+    if ($ProgressFile) {
+        [System.IO.File]::WriteAllText($ProgressFile,
+            "{`"status`":`"done`",`"done`":$done,`"total`":$total}")
+    }
 }
 
 

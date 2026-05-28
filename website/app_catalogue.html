@@ -841,13 +841,16 @@
         .then(function(d) {
           if (d.status === 'done') {
             clearInterval(_resolvePoller); _resolvePoller = null;
-            setStatus('Online search complete', 'ok');
+            var summary = (d.total > 0) ? ' (' + d.done + ' / ' + d.total + ' packages)' : '';
+            setStatus('Online search complete' + summary, 'ok');
             _resolveResetBtn();
             if (selectedHeadset) loadApps(false);
           } else if (d.status === 'error') {
             clearInterval(_resolvePoller); _resolvePoller = null;
             setStatus('Search failed: ' + (d.error || 'unknown error'), 'err');
             _resolveResetBtn();
+          } else if (d.done !== undefined && d.total > 0) {
+            setStatus('Searching online... ' + d.done + ' / ' + d.total + ' packages', 'busy');
           }
         })
         .catch(function() {});
