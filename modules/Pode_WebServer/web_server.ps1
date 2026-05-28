@@ -1850,6 +1850,8 @@ try {
 
         # API: POST /api/restartwebserver
         # Sends a success response then spawns a delayed process that kills and restarts this server.
+        # Uses a temp script file in $env:TEMP (ASCII path) to avoid encoding issues with accented
+        # characters in the project path when passing args through powershell -Command.
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/restartwebserver') {
             try {
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
@@ -1859,20 +1861,25 @@ try {
                 $response.ContentLength64 = $respBytes.Length
                 $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
                 $response.Close()
-                $thisScript = $PSCommandPath
-                $spScriptPath = $ScriptPath
-                $spConfig     = $ConfigFilePath
-                $spPidFile    = $PidFile
-                $spLogFolder  = $LogFolder
-                $spLogFile    = $LogFile
-                $selfPid      = $PID
-                $cmd = "Start-Sleep -Seconds 2;" +
-                       "Stop-Process -Id $selfPid -Force -ErrorAction SilentlyContinue;" +
-                       "Start-Sleep -Milliseconds 500;" +
-                       "Start-Process powershell.exe -ArgumentList @('-NoExit','-File','`"$thisScript`"'," +
-                       "'-ScriptPath','`"$spScriptPath`"','-ConfigFilePath','`"$spConfig`"'," +
-                       "'-PidFile','`"$spPidFile`"','-LogFolder','`"$spLogFolder`"','-LogFile','`"$spLogFile`"') -WindowStyle Hidden"
-                Start-Process powershell.exe -ArgumentList @('-NoProfile', '-Command', $cmd) -WindowStyle Hidden
+
+                $helperScript = Join-Path $env:TEMP "vrm_restart_ws_$PID.ps1"
+                [System.IO.File]::WriteAllText($helperScript, @'
+param([int]$SelfPid,[string]$Script,[string]$ScriptPath,[string]$Config,[string]$PidFile,[string]$LogFolder,[string]$LogFile)
+Start-Sleep -Seconds 2
+Stop-Process -Id $SelfPid -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 500
+Start-Process powershell.exe -ArgumentList @('-File',$Script,'-ScriptPath',$ScriptPath,'-ConfigFilePath',$Config,'-PidFile',$PidFile,'-LogFolder',$LogFolder,'-LogFile',$LogFile) -WindowStyle Hidden
+'@)
+                Start-Process powershell.exe -ArgumentList @(
+                    '-NoProfile', '-File', $helperScript,
+                    '-SelfPid',   $PID,
+                    '-Script',    $PSCommandPath,
+                    '-ScriptPath',  $ScriptPath,
+                    '-Config',      $ConfigFilePath,
+                    '-PidFile',     $PidFile,
+                    '-LogFolder',   $LogFolder,
+                    '-LogFile',     $LogFile
+                ) -WindowStyle Hidden
                 continue
             } catch {
                 try { $response.Close() } catch {}
@@ -2083,38 +2090,6 @@ try {
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
             } finally { $response.Close() }
-            continue
-        }
-
-        # API: POST /api/restartwebserver
-        # Sends a success response then spawns a delayed process that kills and restarts this server.
-        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/restartwebserver') {
-            try {
-                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
-                $response.StatusCode      = 200
-                $response.ContentType     = 'application/json; charset=utf-8'
-                $response.Headers.Add('Access-Control-Allow-Origin', '*')
-                $response.ContentLength64 = $respBytes.Length
-                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
-                $response.Close()
-                $thisScript = $PSCommandPath
-                $spScriptPath = $ScriptPath
-                $spConfig     = $ConfigFilePath
-                $spPidFile    = $PidFile
-                $spLogFolder  = $LogFolder
-                $spLogFile    = $LogFile
-                $selfPid      = $PID
-                $cmd = "Start-Sleep -Seconds 2;" +
-                       "Stop-Process -Id $selfPid -Force -ErrorAction SilentlyContinue;" +
-                       "Start-Sleep -Milliseconds 500;" +
-                       "Start-Process powershell.exe -ArgumentList @('-NoExit','-File','`"$thisScript`"'," +
-                       "'-ScriptPath','`"$spScriptPath`"','-ConfigFilePath','`"$spConfig`"'," +
-                       "'-PidFile','`"$spPidFile`"','-LogFolder','`"$spLogFolder`"','-LogFile','`"$spLogFile`"') -WindowStyle Hidden"
-                Start-Process powershell.exe -ArgumentList @('-NoProfile', '-Command', $cmd) -WindowStyle Hidden
-                continue
-            } catch {
-                try { $response.Close() } catch {}
-            }
             continue
         }
 
