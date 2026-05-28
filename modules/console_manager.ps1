@@ -137,8 +137,10 @@ function Show-MainMenu {
                     $_.IPAddress -match '^192\.168\.'
                 } | ForEach-Object {
                     $adapter = Get-NetAdapter -InterfaceIndex $_.InterfaceIndex -ErrorAction SilentlyContinue
-                    if ($adapter -and $_.InterfaceAlias -notmatch '^vEthernet') {
-                        $label = if ($adapter.PhysicalMediaType -eq 'Native 802.11') { '[WiFi]' } else { '[LAN]' }
+                    $isInternalVEthernet = $_.InterfaceAlias -match '^vEthernet\s*\((Default Switch|WSL|NAT)\)'
+                    if ($adapter -and -not $isInternalVEthernet) {
+                        $isWifi = $adapter.PhysicalMediaType -eq 'Native 802.11' -or $_.InterfaceAlias -match 'Wi-?Fi'
+                        $label = if ($isWifi) { '[WiFi]' } else { '[LAN]' }
                         [PSCustomObject]@{ IPAddress = $_.IPAddress; Label = $label }
                     }
                 } | Where-Object { $_ }
