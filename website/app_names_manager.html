@@ -606,6 +606,31 @@
 
   syncBtn();
   loadApps();
+
+  // Always-on 15s poll: lock/unlock the web-search button across all browsers
+  function _syncResolveState() {
+    fetch('/api/resolve-progress')
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        var running = d.status === 'queued' || d.status === 'running';
+        if (running && _resolveBtn && !_resolveBtn.disabled) {
+          _resolveOrigHTML = _resolveBtn.innerHTML;
+          _resolveBtn.disabled = true;
+          _resolveBtn.innerHTML =
+            '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.55"/></svg>' +
+            ' Searching online...';
+          setStatus('Online search already in progress...', 'busy');
+          _resolveStartPolling();
+        } else if (!running && _resolveBtn && _resolveBtn.disabled && !_resolvePoller) {
+          _resolveResetBtn();
+        }
+      })
+      .catch(function() {});
+  }
+  _resolveBtn = document.getElementById('btn-refresh-web');
+  _resolveOrigHTML = _resolveBtn ? _resolveBtn.innerHTML : null;
+  _syncResolveState();
+  setInterval(_syncResolveState, 15000);
 })();
 </script>
 </body>

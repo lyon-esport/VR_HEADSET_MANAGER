@@ -159,6 +159,19 @@
     document.getElementById('lm-search-wrap').style.display = 'none';
     document.getElementById('lm-search').value = '';
     document.getElementById('app-launcher').style.display = 'flex';
+    // Immediate check: lock refresh btn if a background resolve job is already running
+    fetch('/api/resolve-progress')
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.status === 'queued' || d.status === 'running') {
+          var rbtn = document.getElementById('lm-refresh-btn');
+          var sel  = document.getElementById('lm-status');
+          if (rbtn) rbtn.disabled = true;
+          if (sel)  { sel.textContent = 'Online search in progress...'; sel.className = 'lm-status'; }
+          _startResolvePolling(sel);
+        }
+      })
+      .catch(function() {});
     renderLaunchList([]);
     fetch('/api/favoriteapps?name=' + encodeURIComponent(_launchDn))
       .then(function (r) { return r.json(); })
@@ -465,6 +478,27 @@
   } else {
     init();
   }
+
+  // Always-on 15s poll: syncs resolve button lock state across all browsers
+  setInterval(function() {
+    var btn = document.getElementById('lm-refresh-btn');
+    if (!btn || btn.style.display === 'none') return;
+    var statusEl = document.getElementById('lm-status');
+    fetch('/api/resolve-progress')
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        var running = d.status === 'queued' || d.status === 'running';
+        if (running && !btn.disabled) {
+          btn.disabled = true;
+          if (statusEl) { statusEl.textContent = 'Online search in progress...'; statusEl.className = 'lm-status'; }
+          _startResolvePolling(statusEl);
+        } else if (!running && btn.disabled && !_resolvePoller) {
+          btn.disabled = false;
+          if (statusEl) { statusEl.textContent = ''; statusEl.className = 'lm-status'; }
+        }
+      })
+      .catch(function() {});
+  }, 15000);
 
   window.openLaunchModal = openLaunchModal;
   window.appLauncher = {

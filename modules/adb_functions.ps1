@@ -1721,8 +1721,8 @@ function Get-AppInfo {
 
     # 1. Check local cache first
     $cache = @{}
-    if (Test-Path $AppCacheFilePath) {
-        foreach ($row in @(Import-Csv -Path $AppCacheFilePath -Delimiter ",")) {
+    if (Test-Path -LiteralPath $AppCacheFilePath) {
+        foreach ($row in @(Import-Csv -LiteralPath $AppCacheFilePath -Delimiter ",")) {
             $cache[$row.PackageName] = $row
         }
     }
@@ -1767,7 +1767,7 @@ function Get-AppInfo {
     
         # Download icon locally so the web UI can display it without hitting remote URLs
         if ($appInfos.IconUrl) {
-            if (-not (Test-Path $IconCacheDir)) {
+            if (-not (Test-Path -LiteralPath $IconCacheDir)) {
                 New-Item -ItemType Directory -Path $IconCacheDir -Force | Out-Null
             }
 
@@ -1779,7 +1779,7 @@ function Get-AppInfo {
             $iconFileName = "$PackageName$ext"
             $iconFile     = Join-Path $IconCacheDir $iconFileName
 
-            if (-not (Test-Path $iconFile)) {
+            if (-not (Test-Path -LiteralPath $iconFile)) {
                 try {
                     Invoke-WebRequest -Uri $appInfos.IconUrl -OutFile $iconFile -TimeoutSec 10 -ErrorAction Stop
                     Write-Log ($msg.AppDisplayNameResolved -f "Icon saved", $iconFileName) -Level DEBUG
@@ -1800,10 +1800,17 @@ function Get-AppInfo {
         $appInfos.DisplayName = $cache[$PackageName].DisplayName
     }
 
-      # Update cache file if we got new info
-    if ($appInfos -notlike $cache[$PackageName]) {
+    # Update cache file if we got new info
+    $changed = (-not $cache.ContainsKey($PackageName)) -or
+               ($appInfos.DisplayName -ne $cache[$PackageName].DisplayName) -or
+               ($appInfos.IconUrl -ne $cache[$PackageName].IconUrl) -or
+               ($appInfos.LocalIconPath -ne $cache[$PackageName].LocalIconPath)
+    if ($changed) {
+        # Preserve ThirdParty from existing row so the column is not lost on write
+        $existingTp = if ($cache.ContainsKey($PackageName)) { $cache[$PackageName].ThirdParty } else { $null }
+        $appInfos | Add-Member -MemberType NoteProperty -Name ThirdParty -Value $existingTp -Force
         $cache[$PackageName] = $appInfos
-        $cache.Values | Sort-Object DisplayName | Export-Csv -Path $AppCacheFilePath -NoTypeInformation -Encoding UTF8
+        $cache.Values | Sort-Object DisplayName | Export-Csv -LiteralPath $AppCacheFilePath -NoTypeInformation -Encoding UTF8
     }
     return $appInfos
 }
