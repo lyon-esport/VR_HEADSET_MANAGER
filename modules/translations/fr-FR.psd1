@@ -462,4 +462,8 @@
     SettingGuardianMode    = "Mode guardian defini a {0} sur {1}"
     HeadsetSettingApplied  = "Parametre applique avec succes sur {0}"
     HeadsetSettingFailed   = "Echec de l'application du parametre sur {0}"
+    BlockingUpdates        = "Blocage des mises a jour sur {0}"
+    UnblockingUpdates      = "Deblocage des mises a jour sur {0}"
+    UpdateBlockApplied     = "Parametre de blocage applique sur {0}"
+    UpdateBlockFailed      = "Echec du parametre de blocage sur {0}"
 }

@@ -629,6 +629,7 @@ try {
                 $sleepTimeout     = Get-HeadsetSleepTimeout     -Device $device -adb $adbPath
                 $soundLevel       = Get-HeadsetSoundLevel       -Device $device -adb $adbPath
                 $brightness       = Get-HeadsetBrightness       -Device $device -adb $adbPath
+                $blockUpdates     = Get-HeadsetUpdateBlockStatus -Device $device -adb $adbPath
 
                 Send-JsonResponse -Response $response -Body @{
                     ok               = $true
@@ -636,6 +637,7 @@ try {
                     sleepTimeout     = $sleepTimeout
                     soundLevel       = $soundLevel
                     brightness       = $brightness
+                    blockUpdates     = $blockUpdates
                 }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
@@ -705,6 +707,10 @@ try {
 
                 if ($null -ne $s.proxOverride) {
                     Set-HeadsetProximitySensorOverride -Device $device -adb $adbPath | Out-Null
+                }
+
+                if ($null -ne $s.blockUpdates) {
+                    Set-HeadsetUpdateBlocked -Device $device -Block ([bool]$s.blockUpdates) -adb $adbPath | Out-Null
                 }
 
                 Send-JsonResponse -Response $response -Body @{ ok = $true }

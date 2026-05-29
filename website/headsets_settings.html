@@ -888,6 +888,13 @@
           </div>
 
           <div class="adv-field">
+            <label>Block Updates</label>
+            <button class="toggle-btn" id="adv-updates-toggle" style="font-size:.8rem;">
+              <span id="adv-updates-toggle-label">--</span>
+            </button>
+          </div>
+
+          <div class="adv-field">
             <label>Screen Timeout <span class="adv-note">(info only)</span></label>
             <span class="adv-info-val" id="adv-screen-timeout">--</span>
           </div>
@@ -1982,6 +1989,23 @@
           var bv = (j.brightness !== undefined && j.brightness !== null) ? parseInt(j.brightness, 10) : 50;
           document.getElementById('adv-brightness').value = bv;
           document.getElementById('adv-brightness-val').textContent = bv + '%';
+          var updBtn = document.getElementById('adv-updates-toggle');
+          var updLabel = document.getElementById('adv-updates-toggle-label');
+          if (updBtn && updLabel) {
+            if (j.blockUpdates === true) {
+              updLabel.textContent = 'Blocked';
+              updBtn.classList.remove('on');
+              updBtn.dataset.blocked = 'true';
+            } else if (j.blockUpdates === false) {
+              updLabel.textContent = 'Allowed';
+              updBtn.classList.add('on');
+              updBtn.dataset.blocked = 'false';
+            } else {
+              updLabel.textContent = '--';
+              updBtn.dataset.blocked = '';
+            }
+            updBtn.disabled = false;
+          }
           document.getElementById('adv-loading').style.display = 'none';
           document.getElementById('adv-fields').style.display = 'flex';
         })
@@ -2001,6 +2025,10 @@
       var proxBtn = document.getElementById('adv-prox-disable');
       proxBtn.classList.remove('toggle-btn', 'on');
       proxBtn.disabled = false;
+      var updBtn = document.getElementById('adv-updates-toggle');
+      if (updBtn) { updBtn.dataset.blocked = ''; updBtn.classList.remove('on'); updBtn.disabled = true; }
+      var updLabel = document.getElementById('adv-updates-toggle-label');
+      if (updLabel) updLabel.textContent = '...';
       refreshAdvSettings();
     }
 
@@ -2077,6 +2105,31 @@
           else { btn.disabled = false; }
         })
         .catch(function() { btn.disabled = false; });
+    });
+
+    document.getElementById('adv-updates-toggle').addEventListener('click', function() {
+      var btn = this;
+      var dn = _advDn;
+      if (!dn) return;
+      var currentBlocked = btn.dataset.blocked === 'true';
+      if (btn.dataset.blocked === '') return;
+      var newState = !currentBlocked;
+      btn.disabled = true;
+      fetch('/api/headset-settings/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: dn, settings: { blockUpdates: newState } })
+      }).then(function(r) { return r.json(); })
+        .then(function(j) {
+          if (j.ok) {
+            btn.dataset.blocked = String(newState);
+            var lbl = document.getElementById('adv-updates-toggle-label');
+            if (lbl) lbl.textContent = newState ? 'Blocked' : 'Allowed';
+            btn.classList.toggle('on', !newState);
+          }
+        })
+        .catch(function() {})
+        .finally(function() { btn.disabled = false; });
     });
 
     document.getElementById('adv-sound-level').addEventListener('input', function() {
