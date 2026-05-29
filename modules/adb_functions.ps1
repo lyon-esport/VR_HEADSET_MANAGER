@@ -2494,3 +2494,53 @@ function Get-HeadsetFirmwareInfo {
     }
 }
 
+function Get-HeadsetUpdateBlockStatus {
+    param (
+        $Device,
+        [string]$adb = $global:adbPath
+    )
+    if (-not (Test-Path -LiteralPath $adb)) { return $null }
+    try {
+        $output = Invoke-AdbCmd -Device $Device -Command "shell appops get com.oculus.updater" -adb $adb
+        if ($null -eq $output) { return $null }
+        $blocked = ($output -join "`n") -match 'RUN_IN_BACKGROUND:\s*deny'
+        return [bool]$blocked
+    }
+    catch {
+        Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
+        return $null
+    }
+}
+
+function Set-HeadsetUpdateBlocked {
+    param (
+        $Device,
+        [bool]$Block,
+        [string]$adb = $global:adbPath
+    )
+    if (-not (Test-Path -LiteralPath $adb)) { return $false }
+    try {
+        $displayName = if ($Device -is [string]) { $Device } else { $Device.DisplayName }
+        if ($Block) {
+            Write-Log ($msg.BlockingUpdates -f $displayName) -Level INFO
+            Invoke-AdbCmd -Device $Device -Command "shell appops set com.oculus.updater RUN_IN_BACKGROUND deny" -adb $adb | Out-Null
+            $result = Invoke-AdbCmd -Device $Device -Command "shell appops set com.oculus.updater RUN_ANY_IN_BACKGROUND deny" -adb $adb
+        }
+        else {
+            Write-Log ($msg.UnblockingUpdates -f $displayName) -Level INFO
+            Invoke-AdbCmd -Device $Device -Command "shell appops set com.oculus.updater RUN_IN_BACKGROUND allow" -adb $adb | Out-Null
+            $result = Invoke-AdbCmd -Device $Device -Command "shell appops set com.oculus.updater RUN_ANY_IN_BACKGROUND allow" -adb $adb
+        }
+        if ($result -ne $false) {
+            Write-Log ($msg.UpdateBlockApplied -f $displayName) -Level SUCCESS
+            return $true
+        }
+        Write-Log ($msg.UpdateBlockFailed -f $displayName) -Level WARNING
+        return $false
+    }
+    catch {
+        Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
+        return $false
+    }
+}
+

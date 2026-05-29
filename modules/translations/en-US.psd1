@@ -470,4 +470,8 @@
     SettingGuardianMode    = "Setting guardian mode to {0} on {1}"
     HeadsetSettingApplied  = "Setting applied successfully on {0}"
     HeadsetSettingFailed   = "Failed to apply setting on {0}"
+    BlockingUpdates        = "Blocking firmware updates on {0}"
+    UnblockingUpdates      = "Unblocking firmware updates on {0}"
+    UpdateBlockApplied     = "Update block setting applied on {0}"
+    UpdateBlockFailed      = "Failed to apply update block setting on {0}"
 }
