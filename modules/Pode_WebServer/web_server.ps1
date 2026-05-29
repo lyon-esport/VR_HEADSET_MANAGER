@@ -316,12 +316,49 @@ $resolveJobBlock = {
 $script:resolveJob      = $null
 $script:resolveProgFile = [System.IO.Path]::Combine($env:TEMP, 'vrm_resolve.json')
 
+# Active update-versions job guard (only one at a time)
+$script:updateVersionsJob          = $null
+$script:updateVersionsProgFile     = [System.IO.Path]::Combine($env:TEMP, 'vrm_update_versions.json')
+$script:updateVersionsHeadsetName  = $null
+
+# Background USB detection cache - avoids blocking the main loop on slow ADB probes
+$script:usbInfoJob     = $null
+$script:usbInfoDetails = $null   # last raw result from Get-AdbUsbDeviceDetails ($null = no device)
+
+# Proactive: start first USB probe immediately so first page-load already has data
+if ($adbPath -and (Test-Path -LiteralPath $adbPath)) {
+    $uvSp = $ScriptPath; $uvCp = $ConfigFilePath; $uvExe = $adbPath; $uvPort = $adbPort; $uvPkg = $apkPackage
+    $script:usbInfoJob = Start-Job -ScriptBlock {
+        param($sp,$cp,$exe,$port,$pkg)
+        $global:ScriptPath = $sp; $global:ConfigFilePath = $cp; $global:IsWebServerProcess = $true
+        . (Join-Path $sp 'modules\scripts_init.ps1')
+        Get-AdbUsbDeviceDetails -adb $exe -AdbPort $port -PackageName $pkg
+    } -ArgumentList $uvSp,$uvCp,$uvExe,$uvPort,$uvPkg
+}
+
 try {
     while ($listener.IsListening) {
         # GetContext() blocks until a request arrives
         $context  = $listener.GetContext()
         $request  = $context.Request
         $response = $context.Response
+
+        # USB probe maintenance: collect completed job and immediately restart.
+        # Runs on every request so detection is continuous, not gated on the usbdeviceinfo endpoint.
+        if ($script:usbInfoJob -and $script:usbInfoJob.State -notin @('Running','NotStarted')) {
+            $script:usbInfoDetails = Receive-Job -Job $script:usbInfoJob -ErrorAction SilentlyContinue
+            Remove-Job -Job $script:usbInfoJob -Force -ErrorAction SilentlyContinue
+            $script:usbInfoJob = $null
+        }
+        if (-not $script:usbInfoJob -and $adbPath -and (Test-Path -LiteralPath $adbPath)) {
+            $uvSp = $ScriptPath; $uvCp = $ConfigFilePath; $uvExe = $adbPath; $uvPort = $adbPort; $uvPkg = $apkPackage
+            $script:usbInfoJob = Start-Job -ScriptBlock {
+                param($sp,$cp,$exe,$port,$pkg)
+                $global:ScriptPath = $sp; $global:ConfigFilePath = $cp; $global:IsWebServerProcess = $true
+                . (Join-Path $sp 'modules\scripts_init.ps1')
+                Get-AdbUsbDeviceDetails -adb $exe -AdbPort $port -PackageName $pkg
+            } -ArgumentList $uvSp,$uvCp,$uvExe,$uvPort,$uvPkg
+        }
 
         # CORS preflight
         if ($request.HttpMethod -eq 'OPTIONS') {
@@ -673,6 +710,35 @@ try {
             continue
         }
 
+        # API: GET /api/headset-storage?name=Q3_BLUE  - returns storage info via df /sdcard
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/headset-storage') {
+            try {
+                $safeName = [regex]::Match($request.QueryString['name'], '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+                $rows    = Get-KnownHeadsets
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                if (-not $headset) { throw "Headset not found" }
+                $device  = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort -adb $adbPath
+                if (-not $device) { throw "Could not connect to headset via ADB" }
+
+                $s = Get-HeadsetStorageInfo -Device $device -adb $adbPath
+                if (-not $s) { throw "Could not read storage info" }
+                Send-JsonResponse -Response $response -Body @{
+                    ok          = $true
+                    totalGB     = $s.TotalGB
+                    usedGB      = $s.UsedGB
+                    freeGB      = $s.FreeGB
+                    usedPercent = $s.UsedPercent
+                    freePercent = $s.FreePercent
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
         # API: POST /api/headset-settings/apply  body: {"name":"Q3_BLUE","settings":{...}}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/headset-settings/apply') {
             try {
@@ -844,6 +910,32 @@ try {
             continue
         }
 
+        # API: POST /api/stop-scrcpy  body: {"name":"Q3_BLUE"}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/stop-scrcpy') {
+            try {
+                $reader   = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body     = $reader.ReadToEnd()
+                $reader.Close()
+                $json     = $body | ConvertFrom-Json
+                $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+                $rows    = Get-KnownHeadsets
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                if ($headset) {
+                    $ok        = Stop-Scrcpy -HeadsetName $headset.Name -HeadsetIP $headset.IPAddress
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":' + ($ok.ToString().ToLower()) + '}')
+                } else {
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"not found"}')
+                }
+                Send-JsonResponse -Response $response -Body $respBytes -StatusCode 200
+            } catch {
+                try { Send-JsonResponse -Response $response -Body ([System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')) -StatusCode 500 } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
         # API: GET /api/headsets  - returns all known headsets as JSON (from Get-KnownHeadsets)
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/headsets') {
             try {
@@ -977,7 +1069,7 @@ try {
                         $dn    = if ($entry -and $entry.DisplayName -and $entry.DisplayName -ne $pkg) { $entry.DisplayName } else { $pkg }
                         $icon  = if ($entry -and $entry.LocalIconPath) { $entry.LocalIconPath } else { '' }
                         $tp    = if ($entry) { ConvertTo-ThirdPartyBool $entry } else { $true }
-                        @{ package = $pkg; displayName = $dn; localIconPath = $icon; version = $_.Version; favorite = ($favPkgs -contains $pkg -or $pkg -eq $metaHomePkg); thirdParty = $tp }
+                        @{ package = $pkg; displayName = $dn; localIconPath = $icon; version = $_.Version; pendingVersion = if ($_.PSObject.Properties['PendingVersion']) { $_.PendingVersion } else { '' }; storeVersion = if ($_.PSObject.Properties['StoreVersion']) { $_.StoreVersion } else { '' }; favorite = ($favPkgs -contains $pkg -or $pkg -eq $metaHomePkg); thirdParty = $tp }
                     } | Where-Object { $includeSystem -or $_.thirdParty } | Sort-Object { $_.displayName })
                 } else {
                     # Fallback: live ADB call (no cache yet)
@@ -992,7 +1084,7 @@ try {
                         $entry = if ($appNamesLookup.ContainsKey($pkg)) { $appNamesLookup[$pkg] } else { $null }
                         $dn    = if ($entry -and $entry.DisplayName -and $entry.DisplayName -ne $pkg) { $entry.DisplayName } elseif ($_.DisplayName -and $_.DisplayName -ne $pkg) { $_.DisplayName } else { $pkg }
                         $icon  = if ($entry -and $entry.LocalIconPath) { $entry.LocalIconPath } elseif ($_.LocalIconPath) { $_.LocalIconPath } else { '' }
-                        @{ package = $pkg; displayName = $dn; localIconPath = $icon; version = $_.Version; favorite = ($favPkgs -contains $pkg -or $pkg -eq $metaHomePkg); thirdParty = [bool]$_.ThirdParty }
+                        @{ package = $pkg; displayName = $dn; localIconPath = $icon; version = $_.Version; pendingVersion = ''; storeVersion = ''; favorite = ($favPkgs -contains $pkg -or $pkg -eq $metaHomePkg); thirdParty = [bool]$_.ThirdParty }
                     } | Sort-Object { $_.displayName })
                 }
 
@@ -1049,6 +1141,32 @@ try {
                     $response.ContentLength64 = $errBytes.Length
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/update-app  body: {"name":"Q3_RED","package":"com.beatgames.beatsaber"}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/update-app') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body    = $reader.ReadToEnd()
+                $reader.Close()
+                $parsed   = $body | ConvertFrom-Json
+                $safeName = [regex]::Match(($parsed.name -replace ' ','_'), '^[\w\-]+$').Value
+                $safePkg  = [regex]::Match($parsed.package, '^[\w\.\-]+$').Value
+                if (-not $safeName -or -not $safePkg) { throw "Invalid parameters" }
+
+                $rows    = Get-KnownHeadsets
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                if (-not $headset) { throw "Headset not found" }
+                $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort
+                if (-not $device) { throw "Could not connect to headset via ADB" }
+                $ok = Start-HeadsetAppUpdate -Device $device -PackageName $safePkg -headsetName $headset.Name
+                Send-JsonResponse -Response $response -Body @{ ok = $ok }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
                 $response.Close()
             }
@@ -1165,9 +1283,7 @@ try {
                     $script:resolveJob = $null
                 }
                 # Internet check
-                $ping  = [System.Net.NetworkInformation.Ping]::new()
-                $reply = try { $ping.Send('github.com', 3000) } catch { $null }
-                if (-not $reply -or $reply.Status -ne 'Success') {
+                if (-not (Test-InternetConnectivity)) {
                     Send-JsonResponse -Response $response -Body @{ status = 'no_internet' }
                     continue
                 }
@@ -1198,6 +1314,102 @@ try {
                 }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ status = 'error' }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/update-app-versions
+        # Starts a background job that fetches LatestVersion from MetaMetadata for all packages in known_apps.csv.
+        # Returns {status:"started"|"already_running"|"no_internet"|"error"}.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/update-app-versions') {
+            try {
+                if ($script:updateVersionsJob -and $script:updateVersionsJob.State -in @('Running', 'NotStarted')) {
+                    Send-JsonResponse -Response $response -Body @{ status = 'already_running' }
+                    continue
+                }
+                if ($script:updateVersionsJob) {
+                    try { Remove-Job -Job $script:updateVersionsJob -Force -ErrorAction SilentlyContinue } catch {}
+                    $script:updateVersionsJob = $null
+                }
+                if (-not (Test-InternetConnectivity)) {
+                    Send-JsonResponse -Response $response -Body @{ status = 'no_internet' }
+                    continue
+                }
+                $bodyRaw = New-Object System.IO.StreamReader($request.InputStream, $request.ContentEncoding)
+                $bodyJson = $bodyRaw.ReadToEnd()
+                try { $bodyObj = $bodyJson | ConvertFrom-Json } catch { $bodyObj = $null }
+                $script:updateVersionsHeadsetName = if ($bodyObj -and $bodyObj.headsetName) { $bodyObj.headsetName } else { $null }
+                [System.IO.File]::WriteAllText($script:updateVersionsProgFile, '{"status":"queued"}')
+                $uvProgFile  = $script:updateVersionsProgFile
+                $uvScriptPath = $ScriptPath
+                $uvConfigPath = $ConfigFilePath
+                $script:updateVersionsJob = Start-Job -ScriptBlock {
+                    param($sp, $pf, $cf)
+                    . (Join-Path $sp 'modules\scripts_init.ps1')
+                    Update-AppCacheOnline -ProgressFile $pf
+                } -ArgumentList $uvScriptPath, $uvProgFile, $uvConfigPath
+                Send-JsonResponse -Response $response -Body @{ status = 'started' }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ status = 'error'; error = $_.Exception.Message }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: GET /api/update-app-versions-progress
+        # Returns current status of the background update-versions job from progress file.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/update-app-versions-progress') {
+            try {
+                if (-not $script:updateVersionsJob -and -not (Test-Path -LiteralPath $script:updateVersionsProgFile)) {
+                    Send-JsonResponse -Response $response -Body @{ status = 'idle' }
+                } else {
+                    # Clean up finished job
+                    if ($script:updateVersionsJob -and $script:updateVersionsJob.State -notin @('Running', 'NotStarted')) {
+                        try { Remove-Job -Job $script:updateVersionsJob -Force -ErrorAction SilentlyContinue } catch {}
+                        $script:updateVersionsJob = $null
+                    }
+                    $raw = try { [System.IO.File]::ReadAllText($script:updateVersionsProgFile) } catch { '{"status":"idle"}' }
+                    $bytes = [System.Text.Encoding]::UTF8.GetBytes($raw)
+                    $response.StatusCode      = 200
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                    $response.ContentLength64 = $bytes.Length
+                    $response.OutputStream.Write($bytes, 0, $bytes.Length)
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ status = 'error' }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/refresh-headset-apps-cache
+        # Calls Update-InstalledAppsCache for a given headset. Used after update-app-versions completes.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/refresh-headset-apps-cache') {
+            try {
+                $bodyRaw  = New-Object System.IO.StreamReader($request.InputStream, $request.ContentEncoding)
+                $bodyJson = $bodyRaw.ReadToEnd()
+                $bodyObj  = try { $bodyJson | ConvertFrom-Json } catch { $null }
+                $hn = if ($bodyObj -and $bodyObj.headsetName) { [string]$bodyObj.headsetName } else { $null }
+                if (-not $hn) {
+                    Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = 'headsetName required' }
+                    continue
+                }
+                $headset = Get-KnownHeadsets | Where-Object { $_.Name -eq $hn } | Select-Object -First 1
+                if (-not $headset) {
+                    Send-JsonResponse -Response $response -StatusCode 404 -Body @{ ok = $false; error = 'headset not found' }
+                    continue
+                }
+                $device = try { Get-BestAdbDevice -headset $headset } catch { $null }
+                if (-not $device) {
+                    $device = try { Get-AdbWifiDevice -headsetIP $headset.IP } catch { $null }
+                }
+                if (-not $device) {
+                    Send-JsonResponse -Response $response -StatusCode 503 -Body @{ ok = $false; error = 'device not reachable' }
+                    continue
+                }
+                Update-InstalledAppsCache -Device $device -headsetName $hn
+                Send-JsonResponse -Response $response -Body @{ ok = $true }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally { $response.Close() }
             continue
         }
@@ -1722,33 +1934,23 @@ try {
         # API: GET /api/usbdeviceinfo  - returns full details of USB-connected ADB device
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/usbdeviceinfo') {
             try {
-                $result = @{ found = $false; ip = ''; model = ''; serialNumber = ''; ssid = ''; wifiAdbOpen = $false; apkInstalled = $false; alreadyRegistered = $false }
-                $knownNetworks   = Get-WifiNetworks
-                $preferredWifi   = $knownNetworks | Where-Object { $_.Preferred } | Select-Object -First 1
-                if (-not $preferredWifi) { $preferredWifi = $knownNetworks | Select-Object -First 1 }
-                $expectedSsidVal = if ($preferredWifi) { $preferredWifi.SSID } else { '' }
-                if ($adbPath -and (Test-Path -LiteralPath $adbPath)) {
-                    $details = Get-AdbUsbDeviceDetails -adb $adbPath -AdbPort $adbPort -PackageName $apkPackage
-                    if ($details) {
-                        $alreadyReg = $false
-                        $rows = Get-KnownHeadsets
-                        if ($details.SerialNumber) {
-                            $alreadyReg = [bool]($rows | Where-Object { $_.SerialNumber -eq $details.SerialNumber })
-                        }
-                        if (-not $alreadyReg -and $details.IP) {
-                            $alreadyReg = [bool]($rows | Where-Object { $_.IPAddress -eq $details.IP })
-                        }
-                        $result = @{
-                            found             = $true
-                            ip                = $details.IP
-                            model             = $details.Model
-                            serialNumber      = $details.SerialNumber
-                            ssid              = $details.WiFiSSID
-                            expectedSsid      = $expectedSsidVal
-                            wifiAdbOpen       = $details.WifiAdbOpen
-                            apkInstalled      = $details.ApkInstalled
-                            alreadyRegistered = $alreadyReg
-                        }
+                # Build response from last cached details (updated by the top-of-loop probe)
+                $details = $script:usbInfoDetails
+                $result  = @{ found = $false; ip = ''; model = ''; serialNumber = ''; ssid = ''; expectedSsid = ''; wifiAdbOpen = $false; apkInstalled = $false; alreadyRegistered = $false }
+                if ($details) {
+                    $knownNetworks   = Get-WifiNetworks
+                    $preferredWifi   = $knownNetworks | Where-Object { $_.Preferred } | Select-Object -First 1
+                    if (-not $preferredWifi) { $preferredWifi = $knownNetworks | Select-Object -First 1 }
+                    $expectedSsidVal = if ($preferredWifi) { $preferredWifi.SSID } else { '' }
+                    $rows       = Get-KnownHeadsets
+                    $alreadyReg = $false
+                    if ($details.SerialNumber) { $alreadyReg = [bool]($rows | Where-Object { $_.SerialNumber -eq $details.SerialNumber }) }
+                    if (-not $alreadyReg -and $details.IP) { $alreadyReg = [bool]($rows | Where-Object { $_.IPAddress -eq $details.IP }) }
+                    $result = @{
+                        found = $true; ip = $details.IP; model = $details.Model
+                        serialNumber = $details.SerialNumber; ssid = $details.WiFiSSID
+                        expectedSsid = $expectedSsidVal; wifiAdbOpen = $details.WifiAdbOpen
+                        apkInstalled = $details.ApkInstalled; alreadyRegistered = $alreadyReg
                     }
                 }
                 $jsonOut   = ConvertTo-Json $result -Compress

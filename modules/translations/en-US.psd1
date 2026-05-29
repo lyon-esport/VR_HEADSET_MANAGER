@@ -98,6 +98,13 @@
     ObbFolderFound      = "OBB data folder found for '{0}', uploading to headset..."
     ObbPushSuccess      = "OBB data for '{0}' pushed successfully to {1}"
     ObbPushFailed       = "Failed to push OBB data for '{0}' to {1}: {2}"
+    AppUpdateChecking    = "Checking pending app updates on {0}..."
+    AppUpdateFound       = "Found {0} pending app update(s) on {1}"
+    AppUpdateNoPending   = "No pending app updates on {0}"
+    AppUpdateStarting    = "Starting update for '{0}' on {1}..."
+    AppUpdateSuccess     = "Update started successfully for '{0}' on {1}"
+    AppUpdateFailed      = "Failed to start update for '{0}' on {1}"
+    AppUpdateNotFound    = "No staged update found for '{0}' on {1}"
 
     # ==========================================
     # console_manager.ps1
@@ -146,7 +153,7 @@
     VideoRecastCopied = "  Copied to clipboard: {0}"
     VideoRecastInvalidChoice = "  Invalid choice. Press any key to return."
     FilesFoldersTitle = "== FILES AND FOLDERS MANAGEMENT =="
-    InternetOK = "Network internet connection operational - Ping google.com : {0} ms"
+    InternetOK = "Network internet connection operational"
     InternetProblem = " Internet connection problem "
     WifiADBActivation = "== WIFI ADB ACTIVATION FROM USB =="
     Goodbye = "Goodbye !"
@@ -380,6 +387,7 @@
     ScrcpyOptionsChanged = "Scrcpy parameters changed for {0} ({1}), restarting..."
     ScrcpyRestarting = "Restarting scrcpy for headset {0}"
     ScrcpyStopTimeout = "scrcpy did not exit cleanly for {0} - force killing (recording may be incomplete)"
+    ScrcpyStopForHeadset = "Scrcpy stopped for headset: {0}"
     ScrcpyServerFileCopied = "Scrcpy server file copied."
     ScrcpyIconFileCopied = "Scrcpy icon file copied."
 
@@ -474,4 +482,7 @@
     UnblockingUpdates      = "Unblocking firmware updates on {0}"
     UpdateBlockApplied     = "Update block setting applied on {0}"
     UpdateBlockFailed      = "Failed to apply update block setting on {0}"
+    StorageInfoQuery       = "Querying storage info on {0}"
+    StorageInfoResult      = "Storage on {0}: {1} GB total, {2} GB used, {3} GB free ({4}% used)"
+    StorageInfoError       = "Failed to parse storage info for {0}"
 }
