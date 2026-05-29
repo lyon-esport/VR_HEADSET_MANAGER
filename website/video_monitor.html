@@ -22,9 +22,14 @@
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
       background: var(--bg);
-      min-height: 100vh;
+      height: 100%;
       font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
       overflow: hidden;
+    }
+    body {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
     }
 
     .dot {
@@ -63,6 +68,9 @@
       padding: var(--grid-gap);
       align-content: flex-start;
       align-items: flex-start;
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
     }
 
     /* Cell - streaming (default) - width set dynamically by applyLayout() */
@@ -394,6 +402,7 @@
     var naturalHeights = {};    // detected per-headset content height in px
     // ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
+    var MIN_STREAM_CELL_W = 200; // px — below this, scroll rather than shrink further
     var HEADSETS_CSV_PATH = '../data/known_headsets.csv';
     var headsetStatus = {};
     var autoRestartState = {};
@@ -812,7 +821,7 @@
         }
       }
 
-      var w = Math.floor(bestCellW);
+      var w = Math.max(Math.floor(bestCellW), MIN_STREAM_CELL_W);
       streamCells.forEach(function(cell) { cell.style.width = w + 'px'; });
     }
 

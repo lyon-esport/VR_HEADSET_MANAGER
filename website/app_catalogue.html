@@ -261,6 +261,7 @@
     .table-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; }
     table { width: 100%; border-collapse: collapse; table-layout: fixed; }
 
+    .col-launch  { width: 34px; }
     .col-icon    { width: 40px; }
     .col-name    { width: auto; min-width: 130px; }
     .col-version { width: 100px; }
@@ -308,13 +309,15 @@
     [data-theme="light"] .badge.third-party { background: rgba(37,99,235,0.1); color: #1d4ed8; }
     [data-theme="light"] .badge.built-in    { background: rgba(107,114,128,0.1); color: #6b7280; }
 
-    .del-btn {
+    .del-btn, .launch-row-btn {
       display: inline-flex; align-items: center; justify-content: center;
       width: 24px; height: 24px; border-radius: 4px; border: 1px solid transparent;
       background: transparent; color: var(--text2); cursor: pointer; padding: 0; font-size: 14px;
       transition: background 0.12s, color 0.12s, border-color 0.12s;
     }
     .del-btn:hover { background: rgba(239,68,68,0.14); color: var(--danger); border-color: var(--danger); }
+    .launch-row-btn:hover { background: rgba(59,130,246,0.14); color: var(--accent); border-color: var(--accent); }
+    .launch-row-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
     /* -- Status bar ------------------------------------------------------- */
     .status-bar {
@@ -478,6 +481,7 @@
         <div class="table-scroll">
           <table id="apps-table">
             <colgroup>
+              <col class="col-launch">
               <col class="col-icon">
               <col class="col-name">
               <col class="col-version">
@@ -486,6 +490,7 @@
             </colgroup>
             <thead>
               <tr class="hdr-row">
+                <th class="col-launch"></th>
                 <th class="col-icon"></th>
                 <th class="col-name sortable" data-col="name" data-dir="none">
                   App Name <span class="sort-icon">&#8597;</span>
@@ -500,6 +505,7 @@
               </tr>
               <tr class="filter-row">
                 <td></td>
+                <td></td>
                 <td><input type="text" id="filter-name" placeholder="Filter name..."></td>
                 <td><input type="text" id="filter-version" placeholder="Filter version..."></td>
                 <td><input type="text" id="filter-type" placeholder="3rd / built-in..."></td>
@@ -507,7 +513,7 @@
               </tr>
             </thead>
             <tbody id="apps-body">
-              <tr><td colspan="5" class="empty-msg">Select a headset to view installed apps.</td></tr>
+              <tr><td colspan="6" class="empty-msg">Select a headset to view installed apps.</td></tr>
             </tbody>
           </table>
         </div>
@@ -742,7 +748,7 @@
     });
 
     if (rows.length === 0) {
-      $id('apps-body').innerHTML = '<tr><td colspan="5" class="empty-msg">No apps match your filters.</td></tr>';
+      $id('apps-body').innerHTML = '<tr><td colspan="6" class="empty-msg">No apps match your filters.</td></tr>';
       return;
     }
 
@@ -757,6 +763,11 @@
         ? '<span class="badge third-party">3rd Party</span>'
         : '<span class="badge built-in">Built-in</span>';
 
+      var launchBtn =
+        '<button class="launch-row-btn" data-pkg="' + escHtml(app.package) + '" data-dn="' + escHtml(app.displayName || app.package) + '" title="Launch on headset">' +
+        '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>' +
+        '</button>';
+
       var delBtn = app.thirdParty
         ? '<button class="del-btn" data-pkg="' + escHtml(app.package) + '" data-dn="' + escHtml(app.displayName || app.package) + '" title="Uninstall">' +
           '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
@@ -765,6 +776,7 @@
 
       html +=
         '<tr>' +
+        '<td class="col-launch" style="text-align:center">' + launchBtn + '</td>' +
         '<td class="col-icon">' + icon + '</td>' +
         '<td class="col-name" title="' + escHtml(app.package) + '">' + escHtml(app.displayName || app.package) + '<br><span style="font-size:10px;color:var(--text2);font-family:monospace">' + escHtml(app.package) + '</span></td>' +
         '<td class="col-version" style="color:var(--text2)">' + escHtml(app.version || '') + '</td>' +
@@ -773,6 +785,30 @@
         '</tr>';
     });
     $id('apps-body').innerHTML = html;
+
+    // Wire launch buttons
+    $id('apps-body').querySelectorAll('.launch-row-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var pkg = this.dataset.pkg;
+        var dn  = this.dataset.dn;
+        if (!pkg || !selectedHeadset) return;
+        var self = this;
+        self.disabled = true;
+        setStatus('Launching ' + dn + '...', 'busy');
+        fetch('/api/launchapp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: selectedHeadset, package: pkg })
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          self.disabled = false;
+          if (j.ok) { setStatus(dn + ' launched.', 'ok'); }
+          else       { setStatus('Launch failed: ' + (j.error || 'unknown'), 'err'); }
+        })
+        .catch(function () { self.disabled = false; setStatus('Server unreachable.', 'err'); });
+      });
+    });
 
     // Wire uninstall buttons
     $id('apps-body').querySelectorAll('.del-btn').forEach(function (btn) {

@@ -4,7 +4,8 @@
 # Called once at startup from scripts_init.ps1 via Initialize-ComputerSetup.
 #
 # Responsibilities:
-#   - Invoke-AsAdmin         : run a script block elevated (UAC prompt if needed)
+#   - Invoke-AsAdmin              : run a script block elevated (UAC prompt if needed)
+#   - Invoke-BatchAsAdmin         : run multiple tasks in a single elevated console
 #   - Unblock-ADBFirewallRule      : ensure adb.exe is allowed through Windows Firewall
 #   - Unblock-MediaMtxFirewallRule : ensure mediamtx RTSP/HLS/WebRTC ports are open
 #   - Initialize-ComputerSetup     : orchestrate all setup tasks; called at startup
@@ -63,6 +64,38 @@ function Invoke-AsAdmin {
 }
 
 
+function Invoke-BatchAsAdmin {
+    <#
+    .SYNOPSIS
+    Runs multiple firewall/setup tasks in a single elevated console.
+    Each task is shown individually so the user can confirm or skip it.
+    Tasks are passed as @{Title; Details; ActionLabel; Script} hashtables.
+    #>
+    param([array]$Tasks)
+    if (-not $Tasks -or $Tasks.Count -eq 0) { return }
+
+    $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
+    # Serialize tasks to a temp JSON file to avoid Base64/quoting limits
+    $tasksFile = Join-Path $env:TEMP ("vrm_fw_tasks_" + [System.Guid]::NewGuid().ToString("N") + ".json")
+    $json = $Tasks | ConvertTo-Json -Depth 3
+    [System.IO.File]::WriteAllText($tasksFile, $json, [System.Text.UTF8Encoding]::new($false))
+
+    if ($isAdmin) {
+        & $script:fwBatchBlock -TasksFile $tasksFile
+    } else {
+        $scriptBlockString = $script:fwBatchBlock.ToString()
+        $tasksFileEsc = $tasksFile -replace "'", "''"
+        $command = "& { $scriptBlockString } -TasksFile '$tasksFileEsc'"
+        $encodedCommand = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($command))
+        Start-Process -FilePath "powershell.exe" `
+                      -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $encodedCommand `
+                      -Verb RunAs `
+                      -Wait
+    }
+}
+
+
 # ---------------------------------------------------------------------------
 # Shared elevated helper: Show-SetupBox
 # Defined as a string so it can be prepended to any elevated scriptblock.
@@ -85,6 +118,24 @@ function Show-SetupBox {
     return ($k.KeyChar -eq "y" -or $k.KeyChar -eq "Y" -or $k.Key -eq [ConsoleKey]::Enter)
 }
 '@
+
+# Elevated scriptblock used by Invoke-BatchAsAdmin.
+# Reads a JSON task file, prompts for each task, runs approved ones in sequence.
+$script:fwBatchBlock = [scriptblock]::Create(@'
+param($TasksFile)
+'@ + $script:SetupPromptFn + @'
+$utf8 = [System.Text.UTF8Encoding]::new($false)
+$json = [System.IO.File]::ReadAllText($TasksFile, $utf8)
+$tasks = $json | ConvertFrom-Json
+foreach ($task in $tasks) {
+    if (Show-SetupBox -Title $task.Title -Details $task.Details -ActionLabel $task.ActionLabel) {
+        Invoke-Expression $task.Script
+        Write-Host "  Rules created successfully." -ForegroundColor Green
+        Start-Sleep -Seconds 1
+    }
+}
+Remove-Item -LiteralPath $TasksFile -Force -ErrorAction SilentlyContinue
+'@)
 
 # Generic elevated scriptblock: creates inbound firewall port rules.
 # Params: RuleName (display name base), Title (box header), Details (description lines),
@@ -173,7 +224,10 @@ Start-Sleep -Seconds 1
 function Unblock-ADBFirewallRule {
     param(
         [Parameter(Mandatory=$true)]
-        [string]$AdbPath
+        [string]$AdbPath,
+        # When set, returns a task hashtable instead of opening an admin console directly.
+        # Used by Initialize-ComputerSetup to batch all tasks into one elevation.
+        [switch]$ReturnTask
     )
     $ruleName = "_[VR_HEADSET_MANAGER]ADB_Allowed"
     if (-not (Test-Path -Path $AdbPath)) {
@@ -194,8 +248,22 @@ function Unblock-ADBFirewallRule {
             Write-Log $msg.FirewallRuleCreating -Level INFO
             $title   = "FIREWALL RULE REQUIRED - ADB"
             $details = "Allowing ADB traffic (inbound + outbound)`nProgram : $AdbPath`nProfile : All (Domain, Private, Public)"
-            Invoke-AsAdmin -ScriptBlock $script:fwProgramRuleBlock -RuleName $ruleName -Program $AdbPath -Title $title -Details $details
-            return $true
+            if ($ReturnTask) {
+                $adbEsc = $AdbPath -replace "'", "''"
+                return @{
+                    Title       = $title
+                    Details     = $details
+                    ActionLabel = "Create rules"
+                    Script      = @"
+Get-NetFirewallRule | Where-Object DisplayName -ilike '*VR_HEADSET_MANAGER*' | Remove-NetFirewallRule -ErrorAction Continue
+New-NetFirewallRule -DisplayName '_[VR_HEADSET_MANAGER]ADB_Allowed [OUT]' -Direction Outbound -Program '$adbEsc' -Action Allow -Profile Any -Description 'Allow VR Headset Manager ADB connections' -ErrorAction Continue | Out-Null
+New-NetFirewallRule -DisplayName '_[VR_HEADSET_MANAGER]ADB_Allowed [IN]'  -Direction Inbound  -Program '$adbEsc' -Action Allow -Description 'Allow VR Headset Manager ADB connections' -ErrorAction Continue | Out-Null
+"@
+                }
+            } else {
+                Invoke-AsAdmin -ScriptBlock $script:fwProgramRuleBlock -RuleName $ruleName -Program $AdbPath -Title $title -Details $details
+                return $true
+            }
         } else {
             Write-Log $msg.FirewallRuleExists -Level DEBUG
             return $true
@@ -240,13 +308,44 @@ function Test-MediaMtxFirewallCurrent {
 }
 
 function Unblock-MediaMtxFirewallRule {
-    param([switch]$Force)
+    param(
+        [switch]$Force,
+        # When set, returns a task hashtable instead of opening an admin console directly.
+        # Used by Initialize-ComputerSetup to batch all tasks into one elevation.
+        [switch]$ReturnTask
+    )
     if (-not $global:mediamtxEnabled) { Write-Log $msg.MediaMtxNotEnabled -Level DEBUG; return }
     $ruleName   = "_[VR_HEADSET_MANAGER]MediaMtx_Allowed"
     $rtspPort   = if ($global:mediamtxRtspPort)   { $global:mediamtxRtspPort   } else { 8554 }
     $hlsPort    = if ($global:mediamtxHlsPort)    { $global:mediamtxHlsPort    } else { 8888 }
     $webrtcPort = if ($global:mediamtxWebrtcPort) { $global:mediamtxWebrtcPort } else { 8889 }
+    $progPath   = $global:mediamtxFilePath
     try {
+        if ($ReturnTask) {
+            # Caller already determined rules need updating; return task for batch elevation.
+            # Script includes removal of stale rules so the elevated process handles everything.
+            Write-Log ($msg.MediaMtxFirewallRuleCreating -f $rtspPort, $hlsPort) -Level INFO
+            $title   = "FIREWALL RULE REQUIRED - MediaMTX"
+            $details = "Allowing inbound streaming ports:`nRTSP   : port $rtspPort  (TCP + UDP)`nHLS    : port $hlsPort  (TCP)`nWebRTC : port $webrtcPort (TCP + UDP)`nProgram: $progPath`nProfile: All (Domain, Private, Public)"
+            $progEsc = $progPath -replace "'", "''"
+            return @{
+                Title       = $title
+                Details     = $details
+                ActionLabel = "Create rules"
+                Script      = @"
+Get-NetFirewallRule | Where-Object { `$_.DisplayName -ilike '*VR_HEADSET_MANAGER*MediaMtx*' } | Remove-NetFirewallRule -ErrorAction Continue
+`$rn = '_[VR_HEADSET_MANAGER]MediaMtx_Allowed'
+foreach (`$spec in @('RTSP-TCP [IN]|TCP|$rtspPort','RTSP-UDP [IN]|UDP|$rtspPort','HLS-TCP [IN]|TCP|$hlsPort','WebRTC-TCP [IN]|TCP|$webrtcPort','WebRTC-UDP [IN]|UDP|$webrtcPort')) {
+    `$parts = `$spec -split '\|'
+    New-NetFirewallRule -DisplayName (`$rn + ' ' + `$parts[0]) -Direction Inbound -Protocol `$parts[1] -LocalPort ([int]`$parts[2]) -Action Allow -Profile Any -ErrorAction Continue | Out-Null
+}
+New-NetFirewallRule -DisplayName (`$rn + ' [PROG-OUT]') -Direction Outbound -Program '$progEsc' -Action Allow -Profile Any -Description 'Allow MediaMTX outbound' -ErrorAction Continue | Out-Null
+New-NetFirewallRule -DisplayName (`$rn + ' [PROG-IN]')  -Direction Inbound  -Program '$progEsc' -Action Allow -Profile Any -Description 'Allow MediaMTX inbound'  -ErrorAction Continue | Out-Null
+"@
+            }
+        }
+
+        # Standalone path (called directly from menus, not via batch)
         $existing = Get-NetFirewallRule -ErrorAction SilentlyContinue |
                     Where-Object { $_.DisplayName -ilike "*VR_HEADSET_MANAGER*MediaMtx*" }
         if ($existing -and $Force) {
@@ -257,9 +356,9 @@ function Unblock-MediaMtxFirewallRule {
         if (-not $existing) {
             Write-Log ($msg.MediaMtxFirewallRuleCreating -f $rtspPort, $hlsPort) -Level INFO
             $title   = "FIREWALL RULE REQUIRED - MediaMTX"
-            $details = "Allowing inbound streaming ports:`nRTSP   : port $rtspPort  (TCP + UDP)`nHLS    : port $hlsPort  (TCP)`nWebRTC : port $webrtcPort (TCP + UDP)`nProgram: $global:mediamtxFilePath`nProfile: All (Domain, Private, Public)"
+            $details = "Allowing inbound streaming ports:`nRTSP   : port $rtspPort  (TCP + UDP)`nHLS    : port $hlsPort  (TCP)`nWebRTC : port $webrtcPort (TCP + UDP)`nProgram: $progPath`nProfile: All (Domain, Private, Public)"
             $specs   = "RTSP-TCP [IN]|TCP|$rtspPort`nRTSP-UDP [IN]|UDP|$rtspPort`nHLS-TCP [IN]|TCP|$hlsPort`nWebRTC-TCP [IN]|TCP|$webrtcPort`nWebRTC-UDP [IN]|UDP|$webrtcPort"
-            Invoke-AsAdmin -ScriptBlock $script:fwMediaMtxBlock -RuleName $ruleName -Program $global:mediamtxFilePath -Title $title -Details $details -RuleSpec $specs
+            Invoke-AsAdmin -ScriptBlock $script:fwMediaMtxBlock -RuleName $ruleName -Program $progPath -Title $title -Details $details -RuleSpec $specs
         } else {
             Write-Log $msg.MediaMtxFirewallRuleExists -Level DEBUG
         }
@@ -270,6 +369,11 @@ function Unblock-MediaMtxFirewallRule {
 
 
 function Unblock-WebServerFirewallRule {
+    param(
+        # When set, returns a task hashtable instead of opening an admin console directly.
+        # Used by Initialize-ComputerSetup to batch all tasks into one elevation.
+        [switch]$ReturnTask
+    )
     if (-not $global:WebServer_enabled) { return }
     $port     = if ($global:WebServer_port) { $global:WebServer_port } else { 8080 }
     $ruleName = "_[VR_HEADSET_MANAGER]WebServer_Allowed"
@@ -280,8 +384,17 @@ function Unblock-WebServerFirewallRule {
             Write-Log ($msg.WebServerFirewallRuleCreating -f $port) -Level INFO
             $title   = "FIREWALL RULE REQUIRED - Web Server"
             $details = "Allowing inbound web server connections:`nTCP port : $port (inbound)`nProfile  : All (Domain, Private, Public)"
-            $specs   = "TCP [IN]|TCP|$port"
-            Invoke-AsAdmin -ScriptBlock $script:fwPortRuleBlock -RuleName $ruleName -Title $title -Details $details -RuleSpec $specs
+            if ($ReturnTask) {
+                return @{
+                    Title       = $title
+                    Details     = $details
+                    ActionLabel = "Create rules"
+                    Script      = "New-NetFirewallRule -DisplayName '_[VR_HEADSET_MANAGER]WebServer_Allowed TCP [IN]' -Direction Inbound -Protocol TCP -LocalPort $port -Action Allow -Profile Any -ErrorAction Continue | Out-Null"
+                }
+            } else {
+                $specs = "TCP [IN]|TCP|$port"
+                Invoke-AsAdmin -ScriptBlock $script:fwPortRuleBlock -RuleName $ruleName -Title $title -Details $details -RuleSpec $specs
+            }
         } else {
             Write-Log $msg.WebServerFirewallRuleExists -Level DEBUG
         }
@@ -292,6 +405,11 @@ function Unblock-WebServerFirewallRule {
 
 
 function Register-WebServerUrlAcl {
+    param(
+        # When set, returns a task hashtable instead of opening an admin console directly.
+        # Used by Initialize-ComputerSetup to batch all tasks into one elevation.
+        [switch]$ReturnTask
+    )
     if (-not $global:WebServer_enabled) { return }
     $port = if ($global:WebServer_port) { $global:WebServer_port } else { 8080 }
     $url  = "http://+:$port/"
@@ -301,7 +419,16 @@ function Register-WebServerUrlAcl {
             Write-Log ($msg.WebServerUrlAclExists -f $port) -Level DEBUG
         } else {
             Write-Log ($msg.WebServerUrlAclRegistering -f $port) -Level INFO
-            Invoke-AsAdmin -ScriptBlock $script:urlAclBlock -Url $url
+            if ($ReturnTask) {
+                return @{
+                    Title       = "HTTP URL RESERVATION REQUIRED"
+                    Details     = "Allows the web server to run without admin rights.`nURL  : $url`nUser : Everyone (locale-independent SID S-1-1-0)"
+                    ActionLabel = "Register"
+                    Script      = "netsh http add urlacl url=$url sddl=`"D:(A;;GX;;;S-1-1-0)`" | Out-Null"
+                }
+            } else {
+                Invoke-AsAdmin -ScriptBlock $script:urlAclBlock -Url $url
+            }
         }
     } catch {
         Write-Log ($msg.WebServerUrlAclFailed -f $_) -Level ERROR
@@ -361,24 +488,33 @@ function Initialize-ComputerSetup {
         Remove-Item -LiteralPath $flagPath -Force -ErrorAction SilentlyContinue
     }
 
-    # Firewall - ADB
-    if (-not (Unblock-ADBFirewallRule -AdbPath $global:adbPath)) {
+    # Collect all pending firewall/ACL tasks, then open a single admin console for all of them.
+    $pendingTasks = @()
+
+    $adbTask = Unblock-ADBFirewallRule -AdbPath $global:adbPath -ReturnTask
+    if ($adbTask -is [hashtable]) {
+        $pendingTasks += $adbTask
+    } elseif ($adbTask -eq $false) {
         Write-Log $msg.FirewallConfigSkipped -Level WARNING
     }
 
-    # Firewall - mediamtx: recreate rules if ports changed since last setup
-    $mediamtxRulesOk = Test-MediaMtxFirewallCurrent
-    if ($mediamtxRulesOk) {
+    if (Test-MediaMtxFirewallCurrent) {
         Write-Log $msg.MediaMtxFirewallRuleExists -Level DEBUG
     } else {
-        Unblock-MediaMtxFirewallRule -Force
+        $mtxTask = Unblock-MediaMtxFirewallRule -ReturnTask
+        if ($mtxTask -is [hashtable]) { $pendingTasks += $mtxTask }
     }
 
-    # Firewall - web server port
-    Unblock-WebServerFirewallRule
+    $wsTask = Unblock-WebServerFirewallRule -ReturnTask
+    if ($wsTask -is [hashtable]) { $pendingTasks += $wsTask }
 
-    # HTTP URL ACL - allows Pode to bind on all interfaces without running as admin
-    Register-WebServerUrlAcl
+    $aclTask = Register-WebServerUrlAcl -ReturnTask
+    if ($aclTask -is [hashtable]) { $pendingTasks += $aclTask }
+
+    # Open one admin console for all pending tasks (zero UAC prompts if nothing to do)
+    if ($pendingTasks.Count -gt 0) {
+        Invoke-BatchAsAdmin -Tasks $pendingTasks
+    }
 
     # Write the ready flag so headsets_dashboard.ps1 knows firewall setup is done.
     # Content is the port fingerprint - dashboard deletes the file after reading it.

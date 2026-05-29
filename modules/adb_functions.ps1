@@ -2335,6 +2335,9 @@ function Get-HeadsetSleepTimeout {
 }
 
 
+$script:BrightnessMinRaw = 38   # Quest hardware minimum (~15% on 0-255 scale)
+$script:BrightnessMaxRaw = 255
+
 function Get-HeadsetBrightness {
     param (
         [Parameter(Mandatory=$true)]
@@ -2345,7 +2348,8 @@ function Get-HeadsetBrightness {
     try {
         $raw = ((Invoke-AdbCmd -Device $Device -Command "shell settings get system screen_brightness" -adb $adb) -join '').Trim()
         if ($raw -and $raw -ne 'null' -and $raw -match '^\d+$') {
-            return [string][int]([Math]::Round([int]$raw / 255.0 * 100))
+            $pct = [int]([Math]::Round(([int]$raw - $script:BrightnessMinRaw) / ($script:BrightnessMaxRaw - $script:BrightnessMinRaw) * 100))
+            return [string][Math]::Max(0, [Math]::Min(100, $pct))
         }
         return '50'
     }
@@ -2362,7 +2366,7 @@ function Set-HeadsetBrightness {
     )
     if (-not $Device) { Write-Log ($msg.ErrorOccurred -f 'No device') -Level ERROR; return $false }
     $DeviceId = $Device.DeviceId
-    $raw = [int]([Math]::Round($Percent / 100.0 * 255))
+    $raw = [int]([Math]::Round($Percent / 100.0 * ($script:BrightnessMaxRaw - $script:BrightnessMinRaw) + $script:BrightnessMinRaw))
     try {
         Write-Log ($msg.SettingBrightness -f $Percent, $DeviceId) -Level INFO
         Invoke-AdbCmd -Device $Device -Command "shell settings put system screen_brightness $raw" -adb $adb | Out-Null
