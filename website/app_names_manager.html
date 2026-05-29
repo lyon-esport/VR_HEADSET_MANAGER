@@ -476,13 +476,35 @@
     inp.addEventListener('input', function() {
       if (_editPkg === null) renderTable();
     });
+    inp.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' && _editPkg !== null) { e.preventDefault(); doSave(); }
+    });
   });
+
+  function copyToClipboard(text) {
+    if (!text) return;
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).catch(function() { copyFallback(text); });
+    } else {
+      copyFallback(text);
+    }
+  }
+
+  function copyFallback(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    try { document.execCommand('copy'); } catch(e) {}
+    document.body.removeChild(ta);
+  }
 
   tbody.addEventListener('click', function(e) {
     var copyBtn = e.target.closest('[data-copy]');
     if (copyBtn) {
-      var text = copyBtn.dataset.copy;
-      if (text) navigator.clipboard.writeText(text);
+      copyToClipboard(copyBtn.dataset.copy);
       return;
     }
     var editBtn = e.target.closest('[data-edit]');

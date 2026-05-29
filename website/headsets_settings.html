@@ -898,6 +898,7 @@
         </div>
       </div>
       <div class="advsettings-modal-footer">
+        <button class="pm-btn" id="adv-refresh">Refresh</button>
         <button class="pm-btn" id="adv-cancel">Close</button>
       </div>
     </div>
@@ -1951,25 +1952,18 @@
     // -- Advanced settings modal --------------------------------------------------
     var _advDn = null;
 
-    function openAdvSettingsModal(dn) {
-      _advDn = dn;
-      document.getElementById('adv-headset').textContent = dn.replace(/_/g, ' ');
+    function refreshAdvSettings() {
+      var dn = _advDn;
+      if (!dn) return;
+      var refreshBtn = document.getElementById('adv-refresh');
       document.getElementById('adv-loading').style.display = '';
       document.getElementById('adv-fields').style.display = 'none';
-      document.getElementById('advsettings-modal').style.display = 'flex';
-      var proxBtn = document.getElementById('adv-prox-disable');
-      proxBtn.classList.remove('toggle-btn', 'on');
-      proxBtn.disabled = false;
+      if (refreshBtn) refreshBtn.disabled = true;
 
       fetch('/api/headset-settings?name=' + encodeURIComponent(dn))
         .then(function(r) { return r.json(); })
         .then(function(j) {
           if (!j.ok) { throw new Error(j.error || 'Failed'); }
-          var setSeg = function(segId, val) {
-            document.querySelectorAll('#' + segId + ' .adv-seg-btn').forEach(function(b) {
-              b.classList.toggle('active', b.dataset.value === val);
-            });
-          };
           var msToLabel = function(ms) {
             if (!ms || ms === '-1' || ms === -1) return 'Never';
             var s = parseInt(ms, 10) / 1000;
@@ -1991,10 +1985,23 @@
           document.getElementById('adv-loading').style.display = 'none';
           document.getElementById('adv-fields').style.display = 'flex';
         })
-        .catch(function(err) {
+        .catch(function() {
           document.getElementById('adv-loading').textContent = 'Could not read current settings. You can still apply changes.';
           document.getElementById('adv-fields').style.display = 'flex';
+        })
+        .finally(function() {
+          if (refreshBtn) refreshBtn.disabled = false;
         });
+    }
+
+    function openAdvSettingsModal(dn) {
+      _advDn = dn;
+      document.getElementById('adv-headset').textContent = dn.replace(/_/g, ' ');
+      document.getElementById('advsettings-modal').style.display = 'flex';
+      var proxBtn = document.getElementById('adv-prox-disable');
+      proxBtn.classList.remove('toggle-btn', 'on');
+      proxBtn.disabled = false;
+      refreshAdvSettings();
     }
 
     function closeAdvSettingsModal() {
@@ -2003,6 +2010,7 @@
     }
 
     document.getElementById('adv-cancel').addEventListener('click', closeAdvSettingsModal);
+    document.getElementById('adv-refresh').addEventListener('click', refreshAdvSettings);
     document.getElementById('advsettings-modal').addEventListener('click', function(e) {
       if (e.target === this) closeAdvSettingsModal();
     });
