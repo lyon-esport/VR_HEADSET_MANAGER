@@ -170,6 +170,11 @@
     }
     .toggle-btn.on:hover { background: rgba(34,197,94,0.25); }
 
+    .scrcpy-kill-btn { background: none; border: none; cursor: pointer; color: #ef4444; padding: 2px 4px; border-radius: 4px; display: flex; align-items: center; flex-shrink: 0; }
+    .scrcpy-kill-btn:hover { background: rgba(239,68,68,0.12); }
+    .scrcpy-kill-btn:disabled { opacity: 0.5; cursor: default; }
+    .scrcpy-kill-btn.hidden { display: none !important; }
+
     /* Inline IP editor */
     .card-row-edit-btn {
       display: inline-flex; align-items: center; justify-content: center;
@@ -317,6 +322,10 @@
     .adv-error { color: #ef4444; font-size: .8rem; margin-top: 6px; text-align: right; }
     .adv-field-col { flex-direction: column; align-items: flex-start; gap: 6px; }
     .adv-btn-group { display: flex; gap: 6px; flex-wrap: wrap; }
+    .adv-storage-wrap { display: flex; flex-direction: column; gap: 3px; width: 100%; }
+    .adv-storage-track { height: 8px; border-radius: 4px; background: rgba(255,255,255,0.1); overflow: hidden; display: flex; }
+    .adv-storage-fill  { height: 100%; background: var(--accent, #22c55e); transition: width 0.4s ease; }
+    .adv-storage-labels { display: flex; justify-content: space-between; font-size: .75rem; color: var(--text2, #999); white-space: nowrap; gap: 6px; }
 
     /* Power management row */
     .card-power-row {
@@ -902,6 +911,19 @@
             <label>Sleep Timeout <span class="adv-note">(info only)</span></label>
             <span class="adv-info-val" id="adv-sleep-timeout">--</span>
           </div>
+          <div class="adv-field adv-field-col" id="adv-storage-row" style="display:none;width:100%">
+            <label>Storage</label>
+            <div class="adv-storage-wrap">
+              <div class="adv-storage-track">
+                <div class="adv-storage-fill" id="adv-storage-used-fill" style="width:0%"></div>
+              </div>
+              <div class="adv-storage-labels">
+                <span id="adv-storage-used-lbl">--</span>
+                <span id="adv-storage-free-lbl">--</span>
+                <span id="adv-storage-total-lbl">--</span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
       <div class="advsettings-modal-footer">
@@ -1147,6 +1169,12 @@
               '</svg>' +
               'Auto-restart scrcpy' +
             '</span>' +
+            '<button class="scrcpy-kill-btn hidden" data-kill-headset="' + dn + '" title="Stop scrcpy">' +
+              '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+                '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 0 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>' +
+                '<line x1="1" y1="1" x2="23" y2="23"/>' +
+              '</svg>' +
+            '</button>' +
             '<button class="toggle-btn' + (arOn ? ' on' : '') + '" data-ar-headset="' + dn + '">' +
               (arOn ? 'ON' : 'OFF') +
             '</button>' +
@@ -1458,6 +1486,21 @@
           .finally(function() { saveBtn.disabled = false; });
           return;
         }
+        // Kill scrcpy button
+        var killBtn = e.target.closest('[data-kill-headset]');
+        if (killBtn) {
+          var dn = killBtn.dataset.killHeadset;
+          killBtn.disabled = true;
+          fetch('/api/stop-scrcpy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: dn })
+          })
+          .then(function(r) { return r.json(); })
+          .catch(function() { return {}; })
+          .finally(function() { killBtn.disabled = false; });
+          return;
+        }
         // Auto-restart toggle
         var btn = e.target.closest('[data-ar-headset]');
         if (btn) {
@@ -1717,6 +1760,9 @@
 
         var scrcpyDot = document.querySelector('[data-dot-scrcpy="' + dn + '"] .dot');
         if (scrcpyDot) { scrcpyDot.className = 'dot ' + (s.scrcpy ? 'dot-blue' : 'dot-grey'); }
+
+        var killBtn = document.querySelector('[data-kill-headset="' + dn + '"]');
+        if (killBtn) { killBtn.classList.toggle('hidden', !s.scrcpy); }
 
         var modelEl = document.querySelector('[data-val-model="' + dn + '"]');
         if (modelEl && s.model && s.model !== '-') {
@@ -2016,6 +2062,21 @@
         .finally(function() {
           if (refreshBtn) refreshBtn.disabled = false;
         });
+
+      // Fetch storage info in parallel
+      document.getElementById('adv-storage-row').style.display = 'none';
+      fetch('/api/headset-storage?name=' + encodeURIComponent(dn))
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          if (!d.ok) return;
+          var row = document.getElementById('adv-storage-row');
+          row.style.display = 'flex';
+          document.getElementById('adv-storage-used-fill').style.width = d.usedPercent + '%';
+          document.getElementById('adv-storage-used-lbl').textContent = d.usedPercent + '% used (' + d.usedGB + ' GB)';
+          document.getElementById('adv-storage-free-lbl').textContent = d.freePercent + '% free (' + d.freeGB + ' GB)';
+          document.getElementById('adv-storage-total-lbl').textContent = 'Total: ' + d.totalGB + ' GB';
+        })
+        .catch(function() {});
     }
 
     function openAdvSettingsModal(dn) {

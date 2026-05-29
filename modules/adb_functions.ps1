@@ -143,7 +143,8 @@ function Invoke-AdbCmd {
         [Parameter(Mandatory=$true)]
         [string]$Command,
         [int]$TimeoutSeconds = 7,
-        [string]$adb = $global:adbPath
+        [string]$adb = $global:adbPath,
+        [switch]$SilentOnFail
     )
 
     if (-not $Device) { throw ($msg.AdbCmdDeviceNull) }
@@ -211,8 +212,10 @@ function Invoke-AdbCmd {
                          -TimeoutSeconds $TimeoutSeconds -Adb $adb
 
     if (-not $result.Ok) {
-        $errDetail = ($result.StdErr + $result.StdOut) -join ' '
-        Write-Log ($msg.AdbCmdFailed -f $Device.DeviceId, $Command, $result.ExitCode, $errDetail) -Level WARNING
+        if (-not $SilentOnFail) {
+            $errDetail = ($result.StdErr + $result.StdOut) -join ' '
+            Write-Log ($msg.AdbCmdFailed -f $Device.DeviceId, $Command, $result.ExitCode, $errDetail) -Level WARNING
+        }
         return $false
     }
     return $result.StdOut
@@ -877,10 +880,31 @@ function Get-AdbUsbDeviceDetails {
         $model        = ((Invoke-AdbCmd -Device $usbDevice -Command "shell getprop ro.product.model" -adb $adb) -join '').Trim()
         $serialNumber = ((Invoke-AdbCmd -Device $usbDevice -Command "shell getprop ro.serialno" -adb $adb) -join '').Trim()
 
-        # Current WiFi SSID
+        # Current WiFi SSID - robust fallback chain for Quest 3 / Android 12+ firmware changes
         $ssid = ''
-        $wifiInfo = (Invoke-AdbCmd -Device $usbDevice -Command "shell dumpsys wifi" -adb $adb) | Select-String 'mWifiInfo'
-        if ($wifiInfo -match 'SSID: "([^"]+)"') { $ssid = $Matches[1] }
+        # Primary: cmd wifi status (Android 11+) - clean output, no mWifiInfo dependency
+        $cmdStatus = Invoke-AdbCmd -Device $usbDevice -Command "shell cmd wifi status" -adb $adb
+        if ($cmdStatus -ne $false) {
+            foreach ($line in @($cmdStatus)) {
+                if ($line -match '\bssid="([^"]+)"') { $ssid = $Matches[1]; break }
+                if ($line -match '\bSSID:\s+([^,\s]+)') {
+                    $candidate = $Matches[1].Trim().Trim('"')
+                    if ($candidate -and $candidate -ne '<unknssid>') { $ssid = $candidate; break }
+                }
+            }
+        }
+        # Fallback: dumpsys wifi (older firmware)
+        if (-not $ssid) {
+            $wifiLines = @(Invoke-AdbCmd -Device $usbDevice -Command "shell dumpsys wifi" -adb $adb)
+            foreach ($line in $wifiLines) {
+                if ($line -match '\bSSID:\s+"([^"]+)"') {
+                    $candidate = $Matches[1]
+                    # Guard against stale $Matches leaking an IP from the earlier wlan0 extraction
+                    if ($candidate -notmatch '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') { $ssid = $candidate; break }
+                }
+                if ($line -match '\bssid="([^"]+)"') { $ssid = $Matches[1]; break }
+            }
+        }
 
         # WiFi ADB already open on IP:Port?
         $wifiAdbOpen = $false
@@ -1828,7 +1852,8 @@ function Update-AppCacheOnline {
     $toResolve = @($rows | Where-Object {
         [string]::IsNullOrWhiteSpace($_.DisplayName) -or
         $_.DisplayName -eq ($_.PackageName -replace '^com\.','') -or
-        [string]::IsNullOrWhiteSpace($_.IconUrl)
+        [string]::IsNullOrWhiteSpace($_.IconUrl) -or
+        (-not $_.PSObject.Properties['LatestVersion']) -or [string]::IsNullOrWhiteSpace($_.LatestVersion)
     })
     $total = $toResolve.Count
 
@@ -1843,7 +1868,7 @@ function Update-AppCacheOnline {
         param([string]$PackageName)
         $folders = @('common', 'oculus', 'oculus_public', 'oculusdb', 'sidequest')
         $base    = 'https://raw.githubusercontent.com/threethan/MetaMetadata/main/data'
-        $result  = [PSCustomObject]@{ PackageName = $PackageName; DisplayName = ''; IconUrl = '' }
+        $result  = [PSCustomObject]@{ PackageName = $PackageName; DisplayName = ''; IconUrl = ''; LatestVersion = '' }
         foreach ($f in $folders) {
             try {
                 $r    = Invoke-RestMethod -Uri "$base/$f/$PackageName.json" -TimeoutSec 8 -ErrorAction Stop
@@ -1855,8 +1880,22 @@ function Update-AppCacheOnline {
                         elseif ($r.logo)      { $r.logo }
                         else                  { '' }
                 if ($r.name) { $result.DisplayName = $r.name }
+                if ($f -eq 'oculus') {
+                    try {
+                        $lv = $r.data.node.liveChannel.nodes[0].latest_supported_binary.version
+                        if ($lv) { $result.LatestVersion = $lv }
+                    } catch {}
+                }
                 if ($icon)   { $result.IconUrl = $icon; break }
                 if ($r.name) { break }
+            } catch {}
+        }
+        # oculus folder is the only source for liveChannel version; always fetch it when not yet obtained
+        if (-not $result.LatestVersion) {
+            try {
+                $ro = Invoke-RestMethod -Uri "$base/oculus/$PackageName.json" -TimeoutSec 8 -ErrorAction Stop
+                $lv = $ro.data.node.liveChannel.nodes[0].latest_supported_binary.version
+                if ($lv) { $result.LatestVersion = $lv }
             } catch {}
         }
         return $result
@@ -1898,6 +1937,9 @@ function Update-AppCacheOnline {
     # Phase 2: serial icon downloads then single CSV write
     $cache = @{}
     foreach ($row in @(Import-Csv -LiteralPath $AppCacheFilePath -Delimiter ",")) {
+        if (-not $row.PSObject.Properties['LatestVersion']) {
+            $row | Add-Member -MemberType NoteProperty -Name LatestVersion -Value '' -Force
+        }
         $cache[$row.PackageName] = $row
     }
     $IconCacheDir = Join-Path $global:ScriptPath "website\assets\app_icons"
@@ -1908,7 +1950,7 @@ function Update-AppCacheOnline {
     $changed = $false
     foreach ($pkg in $httpResults.Keys) {
         $r = $httpResults[$pkg]
-        if (-not $r.DisplayName -and -not $r.IconUrl) { continue }
+        if (-not $r.DisplayName -and -not $r.IconUrl -and -not $r.LatestVersion) { continue }
         $entry = if ($cache.ContainsKey($pkg)) { $cache[$pkg] } else { $null }
         if (-not $entry) { continue }
 
@@ -1927,9 +1969,13 @@ function Update-AppCacheOnline {
             }
         }
 
-        if ($r.DisplayName) { $entry.DisplayName   = $r.DisplayName }
-        if ($r.IconUrl)     { $entry.IconUrl        = $r.IconUrl }
-        if ($localPath)     { $entry.LocalIconPath  = $localPath }
+        if ($r.DisplayName)    { $entry.DisplayName  = $r.DisplayName }
+        if ($r.IconUrl)        { $entry.IconUrl       = $r.IconUrl }
+        if ($localPath)        { $entry.LocalIconPath = $localPath }
+        if ($r.LatestVersion) {
+            if ($entry.PSObject.Properties['LatestVersion']) { $entry.LatestVersion = $r.LatestVersion }
+            else { $entry | Add-Member -MemberType NoteProperty -Name LatestVersion -Value $r.LatestVersion -Force }
+        }
         $changed = $true
     }
 
@@ -2073,19 +2119,69 @@ function Update-InstalledAppsCache {
             }
         }
 
+        # Fetch staged update versions (extra ADB call only when staged sessions exist)
+        $pendingVersions = @{}
+        $stagingLines = Invoke-AdbCmd -Device $Device -Command "shell cmd package list staged-sessions" -adb $adb -SilentOnFail
+        if ($stagingLines -ne $false -and @($stagingLines).Count -gt 0) {
+            $stgPkgMap = @{}
+            foreach ($sLine in $stagingLines) {
+                if ($sLine -match 'session (\d+):(\S+)') { $stgPkgMap[$Matches[1]] = $Matches[2] }
+                elseif ($sLine -match 'Session\[(\d+)\].*packageName=([^,\s}]+)') { $stgPkgMap[$Matches[1]] = $Matches[2] }
+            }
+            if ($stgPkgMap.Count -gt 0) {
+                $stgDump = Invoke-AdbCmd -Device $Device -Command "shell dumpsys package stagingsessions" -TimeoutSeconds 30 -adb $adb
+                if ($stgDump -ne $false) {
+                    $curId = $null; $curVer = $null
+                    foreach ($sdLine in $stgDump) {
+                        if ($sdLine -match '^\s*Session ID:\s*(\d+)') {
+                            if ($curId -and $curVer -and $stgPkgMap.ContainsKey($curId)) { $pendingVersions[$stgPkgMap[$curId]] = $curVer }
+                            $curId = $Matches[1]; $curVer = $null
+                        } elseif ($curId -and $sdLine -match '^\s*versionName\s*=\s*(\S+)') { $curVer = $Matches[1] }
+                    }
+                    if ($curId -and $curVer -and $stgPkgMap.ContainsKey($curId)) { $pendingVersions[$stgPkgMap[$curId]] = $curVer }
+                }
+            }
+        }
+
+        # Load latest store versions from known_apps.csv for cross-reference
+        $storeVersionMap = @{}
+        $appNamesPathForStore = if ($global:AppCacheFilePath) { $global:AppCacheFilePath } else { Join-Path $global:ScriptPath "data\known_apps.csv" }
+        if (Test-Path -LiteralPath $appNamesPathForStore) {
+            Import-Csv -LiteralPath $appNamesPathForStore -Delimiter "," | ForEach-Object {
+                if ($_.PackageName -and $_.PSObject.Properties['LatestVersion'] -and $_.LatestVersion) {
+                    $storeVersionMap[$_.PackageName] = $_.LatestVersion
+                }
+            }
+        }
+
         # Build new rows (all packages - third-party and built-in; lean schema)
         $allPkgsSorted = @($allPkgs | Sort-Object)
         $newRows = $allPkgsSorted | ForEach-Object {
-            $pkg = $_
-            $ver = if ($versions.ContainsKey($pkg)) { $versions[$pkg] } else { '' }
-            [PSCustomObject]@{ PackageName = $pkg; Version = $ver }
+            $pkg  = $_
+            $ver  = if ($versions.ContainsKey($pkg))        { $versions[$pkg] }        else { '' }
+            $pver = if ($pendingVersions.ContainsKey($pkg)) { $pendingVersions[$pkg] } else { '' }
+            $sver = if ($storeVersionMap.ContainsKey($pkg) -and $storeVersionMap[$pkg] -and $storeVersionMap[$pkg] -ne $ver) { $storeVersionMap[$pkg] } else { '' }
+            [PSCustomObject]@{ PackageName = $pkg; Version = $ver; PendingVersion = $pver; StoreVersion = $sver }
         }
 
-        # Compare with existing cache (by sorted package list only); always write when -ResolveMissing
+        # Compare with existing cache; always write when -ResolveMissing or schema is outdated
         $changed = $ResolveMissing.IsPresent
         if (-not $changed -and (Test-Path -LiteralPath $cachePath)) {
-            $existing = @(Import-Csv -LiteralPath $cachePath -Delimiter "," | Select-Object -ExpandProperty PackageName | Sort-Object)
+            $existingRows = @(Import-Csv -LiteralPath $cachePath -Delimiter ",")
+            $existing = @($existingRows | Select-Object -ExpandProperty PackageName | Sort-Object)
             $changed  = ($existing -join ',') -ne ($allPkgsSorted -join ',')
+            # Force rewrite when PendingVersion or StoreVersion column is absent (schema migration)
+            if (-not $changed -and $existingRows.Count -gt 0 -and (
+                $null -eq $existingRows[0].PSObject.Properties['PendingVersion'] -or
+                $null -eq $existingRows[0].PSObject.Properties['StoreVersion'])) {
+                $changed = $true
+            }
+            # Rewrite when StoreVersion values have changed (e.g. after Update-AppCacheOnline fetched new versions)
+            if (-not $changed -and $existingRows.Count -gt 0) {
+                $existingStoreMap = @{}
+                $existingRows | ForEach-Object { if ($_.PackageName -and $_.PSObject.Properties['StoreVersion']) { $existingStoreMap[$_.PackageName] = $_.StoreVersion } }
+                $changed = [bool]($newRows | Where-Object { ($existingStoreMap[$_.PackageName] -or '') -ne $_.StoreVersion } | Select-Object -First 1)
+            }
         } elseif (-not (Test-Path -LiteralPath $cachePath)) {
             $changed = $true
         }
@@ -2099,6 +2195,136 @@ function Update-InstalledAppsCache {
         Write-Log ($msg.InstalledAppsCacheFailed -f $headsetName, $_) -Level DEBUG
     }
 }
+
+function Get-HeadsetPendingAppUpdates {
+    # Returns staged update sessions as @{PackageName;CurrentVersion;PendingVersion;SessionId}.
+    # Returns empty array when none found - never throws or returns $false for the no-updates case.
+    param (
+        [Parameter(Mandatory=$true)] $Device,
+        [string]$headsetName,
+        [string]$adb = $global:adbPath
+    )
+
+    Write-Log ($msg.AppUpdateChecking -f $Device.DeviceId) -Level DEBUG
+
+    # Session ID -> package name
+    $sessionLines = Invoke-AdbCmd -Device $Device -Command "shell cmd package list staged-sessions" -adb $adb -SilentOnFail
+    if ($sessionLines -eq $false -or @($sessionLines).Count -eq 0) {
+        Write-Log ($msg.AppUpdateNoPending -f $Device.DeviceId) -Level DEBUG
+        return ,@()
+    }
+    $sessionPkgMap = @{}
+    foreach ($line in $sessionLines) {
+        if ($line -match 'session (\d+):(\S+)') {
+            $sessionPkgMap[$Matches[1]] = $Matches[2]
+        } elseif ($line -match 'Session\[(\d+)\].*packageName=([^,\s}]+)') {
+            $sessionPkgMap[$Matches[1]] = $Matches[2]
+        }
+    }
+    if ($sessionPkgMap.Count -eq 0) {
+        Write-Log ($msg.AppUpdateNoPending -f $Device.DeviceId) -Level DEBUG
+        return ,@()
+    }
+
+    # Session ID -> pending versionName from staged sessions dump
+    $sessionVersionMap = @{}
+    $dumpLines = Invoke-AdbCmd -Device $Device -Command "shell dumpsys package stagingsessions" -TimeoutSeconds 30 -adb $adb
+    if ($dumpLines -ne $false) {
+        $curId = $null; $curVer = $null
+        foreach ($dLine in $dumpLines) {
+            if ($dLine -match '^\s*Session ID:\s*(\d+)') {
+                if ($curId -and $curVer) { $sessionVersionMap[$curId] = $curVer }
+                $curId = $Matches[1]; $curVer = $null
+            } elseif ($curId -and $dLine -match '^\s*versionName\s*=\s*(\S+)') {
+                $curVer = $Matches[1]
+            }
+        }
+        if ($curId -and $curVer) { $sessionVersionMap[$curId] = $curVer }
+    }
+
+    # Current versions from CSV cache (avoids extra ADB round-trip)
+    $csvVersionMap = @{}
+    if ($headsetName) {
+        $cachePath = Get-InstalledAppsCachePath -headsetName $headsetName
+        if (Test-Path -LiteralPath $cachePath) {
+            Import-Csv -LiteralPath $cachePath -Delimiter "," | ForEach-Object {
+                if ($_.PackageName) { $csvVersionMap[$_.PackageName] = $_.Version }
+            }
+        }
+    }
+
+    # Build results
+    $results = @()
+    foreach ($sessionId in $sessionPkgMap.Keys) {
+        $pkg            = $sessionPkgMap[$sessionId]
+        $pendingVersion = if ($sessionVersionMap.ContainsKey($sessionId)) { $sessionVersionMap[$sessionId] } else { '' }
+        if (-not $pendingVersion) { continue }
+
+        $currentVersion = ''
+        if ($csvVersionMap.ContainsKey($pkg)) {
+            $currentVersion = $csvVersionMap[$pkg]
+        } else {
+            $fb = Invoke-AdbCmd -Device $Device -Command "shell dumpsys package $pkg" -adb $adb
+            if ($fb -ne $false) {
+                $vLine = @($fb) | Where-Object { $_ -match '^\s+versionName=(\S+)' } | Select-Object -First 1
+                if ($vLine -match '^\s+versionName=(\S+)') { $currentVersion = $Matches[1] }
+            }
+        }
+        $results += [PSCustomObject]@{
+            PackageName    = $pkg
+            CurrentVersion = $currentVersion
+            PendingVersion = $pendingVersion
+            SessionId      = $sessionId
+        }
+    }
+
+    $count = $results.Count
+    if ($count -gt 0) {
+        Write-Log ($msg.AppUpdateFound -f $count, $Device.DeviceId) -Level INFO
+    } else {
+        Write-Log ($msg.AppUpdateNoPending -f $Device.DeviceId) -Level DEBUG
+    }
+    return ,$results
+}
+
+
+function Start-HeadsetAppUpdate {
+    # Commits a staged package update via: cmd package commit-staged-session <sessionId>.
+    # Pass -SessionId from Get-HeadsetPendingAppUpdates to skip session discovery.
+    # Returns $true on success, $false on failure or no staged session found.
+    param (
+        [Parameter(Mandatory=$true)] $Device,
+        [Parameter(Mandatory=$true)] [string]$PackageName,
+        [string]$headsetName,
+        [string]$SessionId,
+        [string]$adb = $global:adbPath
+    )
+
+    if (-not $SessionId) {
+        $pending = Get-HeadsetPendingAppUpdates -Device $Device -headsetName $headsetName -adb $adb
+        $match   = @($pending) | Where-Object { $_.PackageName -eq $PackageName } | Select-Object -First 1
+        if (-not $match) {
+            Write-Log ($msg.AppUpdateNotFound -f $PackageName, $Device.DeviceId) -Level WARNING
+            return $false
+        }
+        $SessionId = $match.SessionId
+    }
+
+    Write-Log ($msg.AppUpdateStarting -f $PackageName, $Device.DeviceId) -Level INFO
+    $out = Invoke-AdbCmd -Device $Device -Command "shell cmd package commit-staged-session $SessionId" -adb $adb
+    if ($out -eq $false) {
+        Write-Log ($msg.AppUpdateFailed -f $PackageName, $Device.DeviceId) -Level ERROR
+        return $false
+    }
+    $outStr = ($out -join ' ').Trim().ToLower()
+    if ($outStr -match 'error|failed|exception' -and $outStr -notmatch 'success') {
+        Write-Log ($msg.AppUpdateFailed -f $PackageName, $Device.DeviceId) -Level ERROR
+        return $false
+    }
+    Write-Log ($msg.AppUpdateSuccess -f $PackageName, $Device.DeviceId) -Level SUCCESS
+    return $true
+}
+
 
 function Uninstall-HeadsetApp {
     <#
@@ -2445,7 +2671,8 @@ function Set-HeadsetProximitySensorOverride {
 function Get-HeadsetFirmwareInfo {
     <#
     .SYNOPSIS
-    Returns firmware version, build number, and pending OTA update version for a headset via ADB.
+    Returns firmware version and build number for a headset via ADB.
+    UpdateVersion is a best-effort field (always null on current Meta Quest firmware - see comment in body).
     .EXAMPLE
     $d = Get-AdbWifiDevice -headsetIP "192.168.1.244"
     Get-HeadsetFirmwareInfo -Device $d
@@ -2475,7 +2702,11 @@ function Get-HeadsetFirmwareInfo {
             $build = $rawBuild
         }
 
-        # Pending OTA staged by the system
+        # Pending OTA version - NOTE: on Meta Quest the update version is stored in
+        # com.oculus.updater's private data (/metadata/ota/prefs/, /data/misc/update_engine/)
+        # which is SELinux-protected and inaccessible to ADB without root.
+        # ro.update.version is kept as a best-effort fallback for firmware variants that
+        # may expose it, but returns empty on current Quest firmware.
         $updateVersion = $null
         $otaVer = ((Invoke-AdbCmd -Device $Device -Command "shell getprop ro.update.version" -adb $adb) -join '').Trim()
         if ($otaVer -and $otaVer -ne $version -and $otaVer -notmatch '^\s*$') {
@@ -2541,6 +2772,84 @@ function Set-HeadsetUpdateBlocked {
     catch {
         Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
         return $false
+    }
+}
+
+
+function Get-HeadsetStorageInfo {
+    <#
+    .SYNOPSIS
+    Returns storage capacity, usage and free space for a headset via ADB (df /sdcard).
+    .EXAMPLE
+    $d = Get-AdbWifiDevice -headsetIP "192.168.1.244"
+    Get-HeadsetStorageInfo -Device $d
+    #>
+    param (
+        [Parameter(Mandatory=$true)]
+        [PSCustomObject]$Device,
+        [string]$adb = $global:adbPath
+    )
+    if (-not $Device) { return $null }
+    $DeviceId = $Device.DeviceId
+
+    try {
+        Write-Log ($msg.StorageInfoQuery -f $DeviceId) -Level DEBUG
+
+        $dfOutput = Invoke-AdbCmd -Device $Device -Command "shell df /sdcard" -adb $adb
+
+        if (-not $dfOutput) {
+            Write-Log ($msg.StorageInfoError -f $DeviceId) -Level WARNING
+            return $null
+        }
+
+        # df output: header line + data line(s). Find the line with /sdcard or /dev/fuse
+        $dataLine = $dfOutput | Where-Object { $_ -match '/sdcard|/dev/fuse' } | Select-Object -First 1
+        if (-not $dataLine) {
+            # fallback: second non-empty line if no match by mount point
+            $dataLine = ($dfOutput | Where-Object { $_.Trim() -ne '' })[1]
+        }
+        if (-not $dataLine) {
+            Write-Log ($msg.StorageInfoError -f $DeviceId) -Level WARNING
+            return $null
+        }
+
+        # Columns: Filesystem  1K-blocks  Used  Available  Use%  Mounted
+        $cols = $dataLine -split '\s+' | Where-Object { $_ -ne '' }
+        if ($cols.Count -lt 5) {
+            Write-Log ($msg.StorageInfoError -f $DeviceId) -Level WARNING
+            return $null
+        }
+
+        $totalKB = [long]$cols[1]
+        $usedKB  = [long]$cols[2]
+        $freeKB  = [long]$cols[3]
+
+        $toGB = { param($kb) [math]::Round($kb / 1048576.0, 2) }
+
+        $totalGB = & $toGB $totalKB
+        $usedGB  = & $toGB $usedKB
+        $freeGB  = & $toGB $freeKB
+
+        $usedPct = if ($totalKB -gt 0) { [int][math]::Round($usedKB / $totalKB * 100) } else { 0 }
+        $freePct = 100 - $usedPct
+
+        $result = [PSCustomObject]@{
+            TotalGB     = $totalGB
+            UsedGB      = $usedGB
+            FreeGB      = $freeGB
+            UsedPercent = $usedPct
+            FreePercent = $freePct
+            TotalKB     = $totalKB
+            UsedKB      = $usedKB
+            FreeKB      = $freeKB
+        }
+
+        Write-Log ($msg.StorageInfoResult -f $DeviceId, $totalGB, $usedGB, $freeGB, $usedPct) -Level DEBUG
+        return $result
+    }
+    catch {
+        Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
+        return $null
     }
 }
 

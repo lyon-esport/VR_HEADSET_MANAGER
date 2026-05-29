@@ -200,9 +200,8 @@ function Show-MainMenu {
                     }
                 'W' { Show-SubMenu-Services }
                 'I' {
-                    $ping = Test-Connection -ComputerName google.com -Count 2
-                    if ($ping) {
-                        Write-Host ($msg.InternetOK -f (($ping | Measure-Object -Property ResponseTime -Average).Average)) -ForegroundColor Green
+                    if (Test-InternetConnectivity) {
+                        Write-Host $msg.InternetOK -ForegroundColor Green
                     } else {
                         Write-Host $msg.InternetProblem -ForegroundColor White -BackgroundColor Red
                     }

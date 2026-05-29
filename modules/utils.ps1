@@ -181,3 +181,19 @@ function Save-WifiNetworks {
     Write-FileWithoutBom -Path $path -Content $encrypted
     Write-Log ($msg.WifiNetworksSaved -f $Networks.Count) -Level DEBUG
 }
+
+
+# Returns $true if the internet is reachable, $false only if BOTH probes fail.
+# Probe 1: ICMP ping to 8.8.8.8 (Google public DNS - no DNS lookup needed).
+# Probe 2: DNS resolution of 'dns.google' (proves DNS is working end-to-end).
+# Internet is considered UP if at least one probe succeeds.
+function Test-InternetConnectivity {
+    param(
+        [int]$TimeoutMs = 3000
+    )
+    $ping   = [System.Net.NetworkInformation.Ping]::new()
+    $reply  = try { $ping.Send('8.8.8.8', $TimeoutMs) } catch { $null }
+    $pingOk = ($reply -and $reply.Status -eq 'Success')
+    $dnsOk  = try { $null = [System.Net.Dns]::GetHostAddresses('dns.google'); $true } catch { $false }
+    return ($pingOk -or $dnsOk)
+}

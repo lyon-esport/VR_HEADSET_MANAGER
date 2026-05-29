@@ -118,8 +118,8 @@ function Start-VRMonitor {
             
             
             # Check Headstets
-            if (Test-Path -Path $global:knownHeadsetsFilePath){
-                $knownHeadsets = @(Import-Csv -Path $global:knownHeadsetsFilePath)
+            if (Test-Path -LiteralPath $global:knownHeadsetsFilePath){
+                $knownHeadsets = @(Import-Csv -LiteralPath $global:knownHeadsetsFilePath)
             }
 
             $knownHeadsetsInfo = [System.Collections.ArrayList]@()

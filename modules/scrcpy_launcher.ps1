@@ -152,29 +152,29 @@ function ConvertTo-ScrcpyArguments {
 
 # Returns the running scrcpy process whose window title matches $displayName,
 # or $null if none found. $displayName must be in window-title form (spaces -> underscores).
+# Only considers processes launched from this app's scrcpy folder to avoid killing foreign scrcpy instances.
 function Get-ScrcpyProcess {
     param(
         [Parameter(Mandatory=$true)]
         [string]$displayName,
         [string]$headsetIP = ''
     )
+    $ownedProcs = Get-Process -Name "scrcpy" -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -like "$($global:scrcpyFolder)\scrcpy.exe" }
+
     # Primary: match by window title (works when window is on the active virtual desktop)
-    $byTitle = Get-Process -Name "scrcpy" -ErrorAction SilentlyContinue |
-        Where-Object { $_.MainWindowTitle -eq $displayName } |
-        Select-Object -First 1
+    $byTitle = $ownedProcs | Where-Object { $_.MainWindowTitle -eq $displayName } | Select-Object -First 1
     if ($byTitle) { return $byTitle }
 
     # Fallback: match by command line - handles windows on inactive virtual desktops
     # where MainWindowTitle is empty. Requires either displayName or headsetIP in the cmdline.
-    return Get-Process -Name "scrcpy" -ErrorAction SilentlyContinue |
-        Where-Object {
-            $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($_.Id)" -ErrorAction SilentlyContinue).CommandLine
-            if (-not $cmdLine) { return $false }
-            if ($headsetIP -and $cmdLine -match [regex]::Escape($headsetIP)) { return $true }
-            if ($cmdLine -match [regex]::Escape($displayName)) { return $true }
-            return $false
-        } |
-        Select-Object -First 1
+    return $ownedProcs | Where-Object {
+        $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($_.Id)" -ErrorAction SilentlyContinue).CommandLine
+        if (-not $cmdLine) { return $false }
+        if ($headsetIP -and $cmdLine -match [regex]::Escape($headsetIP)) { return $true }
+        if ($cmdLine -match [regex]::Escape($displayName)) { return $true }
+        return $false
+    } | Select-Object -First 1
 }
 
 function start-screenCopy {
@@ -359,20 +359,44 @@ function Watch-ScrcpyProcesses {
 }
 
 
-# Gracefully stops all running scrcpy processes launched from this app's scrcpy folder.
-# Sends WM_CLOSE first so active recordings are finalised, then force-kills after timeout.
-function Stop-AllScrcpy {
-    $procs = Get-Process -Name "scrcpy" -ErrorAction SilentlyContinue |
-             Where-Object { $_.Path -like "$($global:scrcpyFolder)\scrcpy.exe" }
-    if (-not $procs) { return }
+# Gracefully stops scrcpy processes launched from this app's scrcpy folder.
+# No argument: stops all owned scrcpy processes (shutdown path).
+# -HeadsetName: stops only the process for that specific headset.
+function Stop-Scrcpy {
+    param(
+        [string]$HeadsetName = '',
+        [string]$HeadsetIP   = ''
+    )
+
+    if ($HeadsetName) {
+        $displayName = Convert-Displayname $HeadsetName
+        $procs = @(Get-ScrcpyProcess -displayName $displayName -headsetIP $HeadsetIP)
+        if (-not $procs) {
+            Write-Log ($msg.ScrcpyNotRunning -f $displayName) -Level WARNING
+            return $false
+        }
+    } else {
+        $procs = @(Get-Process -Name "scrcpy" -ErrorAction SilentlyContinue |
+                   Where-Object { $_.Path -like "$($global:scrcpyFolder)\scrcpy.exe" })
+        if (-not $procs) { return $true }
+    }
+
     foreach ($proc in $procs) {
         $closed = $proc.CloseMainWindow()
-        if ($closed) { $proc.WaitForExit(5000) | Out-Null }
+        if ($closed) { $proc.WaitForExit(10000) | Out-Null }
         if (-not $proc.HasExited) {
+            Write-Log ($msg.ScrcpyStopTimeout -f $proc.MainWindowTitle) -Level WARNING
             Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 1
         }
     }
-    Write-Log "All scrcpy processes stopped." -Level INFO
+
+    if ($HeadsetName) {
+        Write-Log ($msg.ScrcpyStopForHeadset -f (Convert-Displayname $HeadsetName)) -Level INFO
+    } else {
+        Write-Log "All scrcpy processes stopped." -Level INFO
+    }
+    return $true
 }
 
 

@@ -98,6 +98,13 @@
     ObbFolderFound      = "Dossier OBB trouve pour '{0}', envoi vers le casque..."
     ObbPushSuccess      = "Donnees OBB pour '{0}' envoyees avec succes vers {1}"
     ObbPushFailed       = "Echec de l'envoi des donnees OBB pour '{0}' vers {1} : {2}"
+    AppUpdateChecking    = "Verification des mises a jour en attente sur {0}..."
+    AppUpdateFound       = "{0} mise(s) a jour en attente trouvee(s) sur {1}"
+    AppUpdateNoPending   = "Aucune mise a jour en attente sur {0}"
+    AppUpdateStarting    = "Demarrage de la mise a jour de '{0}' sur {1}..."
+    AppUpdateSuccess     = "Mise a jour lancee avec succes pour '{0}' sur {1}"
+    AppUpdateFailed      = "Echec du lancement de la mise a jour de '{0}' sur {1}"
+    AppUpdateNotFound    = "Aucune session de mise a jour trouvee pour '{0}' sur {1}"
 
     # ==========================================
     # console_manager.ps1
@@ -156,7 +163,7 @@
     ScrcpyOptionsInvalidNumber = "Valeur invalide. Entrez un entier positif."
     RecordingTitle = "== GESTION DU RECORDING DES CASQUES =="
     FilesFoldersTitle = "== GESTION DES FICHIERS ET DOSSIERS =="
-    InternetOK = "Connexion reseau internet operationnelle - Ping google.com : {0} ms"
+    InternetOK = "Connexion reseau internet operationnelle"
     InternetProblem = " Probleme de connexion a internet "
     WifiADBActivation = "== ACTIVATION WIFI ADB DEPUIS L'USB =="
     Goodbye = "Au revoir !"
@@ -372,6 +379,7 @@
     ScrcpyOptionsChanged = "Parametres scrcpy modifies pour {0} ({1}), redemarrage..."
     ScrcpyRestarting = "Redemarrage de scrcpy pour le casque {0}"
     ScrcpyStopTimeout = "scrcpy ne s'est pas arrete proprement pour {0} - arret force (enregistrement potentiellement incomplet)"
+    ScrcpyStopForHeadset = "Scrcpy arrete pour le casque : {0}"
     ScrcpyServerFileCopied = "Fichier serveur scrcpy copie."
     ScrcpyIconFileCopied = "Fichier icone scrcpy copie."
 
@@ -466,4 +474,7 @@
     UnblockingUpdates      = "Deblocage des mises a jour sur {0}"
     UpdateBlockApplied     = "Parametre de blocage applique sur {0}"
     UpdateBlockFailed      = "Echec du parametre de blocage sur {0}"
+    StorageInfoQuery       = "Recuperation des infos de stockage sur {0}"
+    StorageInfoResult      = "Stockage sur {0} : {1} Go total, {2} Go utilises, {3} Go libres ({4}% utilise)"
+    StorageInfoError       = "Impossible de lire les infos de stockage pour {0}"
 }

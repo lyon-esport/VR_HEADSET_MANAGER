@@ -266,7 +266,34 @@
     .col-name    { width: auto; min-width: 130px; }
     .col-version { width: 100px; }
     .col-type    { width: 90px; }
+    .col-update  { width: 120px; }
     .col-action  { width: 38px; }
+
+    .update-btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+      padding: 3px 8px; border-radius: 4px; border: 1px solid transparent;
+      font-size: 10px; font-weight: 600; cursor: pointer; white-space: nowrap;
+      transition: background 0.12s, color 0.12s, border-color 0.12s;
+    }
+    .update-btn.no-update {
+      background: transparent; color: var(--text2); border-color: transparent; cursor: default; opacity: 0.5;
+    }
+    .update-btn.has-update {
+      background: rgba(245,158,11,0.15); color: var(--warn); border-color: var(--warn);
+    }
+    .update-btn.has-update:hover:not(:disabled) {
+      background: var(--warn); color: #000; border-color: var(--warn);
+    }
+    .update-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .update-badge {
+      display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+      padding: 3px 8px; border-radius: 4px;
+      font-size: 10px; font-weight: 600; white-space: nowrap; cursor: default;
+    }
+    .update-badge.store-update {
+      background: rgba(59,130,246,0.12); color: var(--accent); border: 1px solid var(--accent); opacity: 0.85;
+    }
 
     thead { position: sticky; top: 0; z-index: 4; }
 
@@ -308,6 +335,19 @@
     .badge.built-in    { background: rgba(156,163,175,0.15); color: var(--text2); }
     [data-theme="light"] .badge.third-party { background: rgba(37,99,235,0.1); color: #1d4ed8; }
     [data-theme="light"] .badge.built-in    { background: rgba(107,114,128,0.1); color: #6b7280; }
+
+    .type-switch { display: inline-flex; border-radius: 5px; overflow: hidden; border: 1px solid #333; }
+    .type-switch button { padding: 3px 8px; font-size: 10px; font-weight: 600; font-family: inherit; cursor: pointer; border: none; background: transparent; color: #555; transition: background 0.1s, color 0.1s; white-space: nowrap; }
+    .type-switch button:not(:last-child) { border-right: 1px solid #333; }
+    .type-switch button.active { background: #2a2a2a; color: #ccc; }
+    .type-switch button[data-val="true"].active  { background: rgba(59,130,246,0.2); color: #93c5fd; border-color: #3b82f6; }
+    .type-switch button[data-val="false"].active { background: rgba(156,163,175,0.15); color: #9ca3af; }
+    [data-theme="light"] .type-switch { border-color: #ddd; }
+    [data-theme="light"] .type-switch button { color: #aaa; }
+    [data-theme="light"] .type-switch button:not(:last-child) { border-color: #ddd; }
+    [data-theme="light"] .type-switch button.active { background: #f0f0f0; color: #333; }
+    [data-theme="light"] .type-switch button[data-val="true"].active  { background: rgba(37,99,235,0.1); color: #1d4ed8; }
+    [data-theme="light"] .type-switch button[data-val="false"].active { background: rgba(107,114,128,0.1); color: #6b7280; }
 
     .del-btn, .launch-row-btn {
       display: inline-flex; align-items: center; justify-content: center;
@@ -355,6 +395,13 @@
     .fw-badge-ok  { color: var(--text2); }
     .fw-badge-upd { color: var(--warn); font-weight: 600; }
 
+    /* -- Storage bar -------------------------------------------------------- */
+    .storage-bar-wrap { display: none; flex-direction: column; gap: 3px; min-width: 180px; max-width: 260px; }
+    .storage-bar-track { height: 8px; border-radius: 4px; background: rgba(255,255,255,0.1); overflow: hidden; display: flex; }
+    .storage-bar-used { height: 100%; background: var(--accent); transition: width 0.4s ease; }
+    .storage-bar-labels { display: flex; justify-content: space-between; font-size: 10px; color: var(--text2); white-space: nowrap; gap: 6px; }
+    [data-theme="light"] .storage-bar-track { background: rgba(0,0,0,0.1); }
+
     /* -- Empty / hidden state --------------------------------------------- */
     .hidden { display: none !important; }
     .empty-msg { text-align: center; padding: 40px 12px; color: var(--text2); font-size: 12px; }
@@ -388,6 +435,16 @@
       </select>
       <span id="headset-status" style="font-size:11px;color:var(--text2);"></span>
       <span id="fw-badge" class="fw-badge" style="display:none"></span>
+      <div class="storage-bar-wrap" id="storage-bar-wrap">
+        <div class="storage-bar-track">
+          <div class="storage-bar-used" id="storage-bar-used" style="width:0%"></div>
+        </div>
+        <div class="storage-bar-labels">
+          <span id="storage-lbl-used">--</span>
+          <span id="storage-lbl-free">--</span>
+          <span id="storage-lbl-total">--</span>
+        </div>
+      </div>
       <span class="adb-conn-bar" id="adb-conn-bar">
         <span class="adb-conn-label">ADB connectivity</span>
         <span class="adb-badge unavailable" id="adb-usb-badge">USB</span>
@@ -467,6 +524,10 @@
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.55"/></svg>
           Search and update applications information from the web
         </button>
+        <button class="action-btn" id="update-versions-btn" title="Search app updates from Meta Store">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="8 17 12 21 16 17"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+          Search app updates
+        </button>
         <button class="action-btn" id="toggle-system-btn" data-active="false">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
           Show Built-in Apps
@@ -485,6 +546,7 @@
               <col class="col-icon">
               <col class="col-name">
               <col class="col-version">
+              <col class="col-update">
               <col class="col-type">
               <col class="col-action">
             </colgroup>
@@ -498,6 +560,9 @@
                 <th class="col-version sortable" data-col="version" data-dir="none">
                   Version <span class="sort-icon">&#8597;</span>
                 </th>
+                <th class="col-update sortable" data-col="update" data-dir="none">
+                  Update <span class="sort-icon">&#8597;</span>
+                </th>
                 <th class="col-type sortable" data-col="type" data-dir="none">
                   Type <span class="sort-icon">&#8597;</span>
                 </th>
@@ -508,12 +573,19 @@
                 <td></td>
                 <td><input type="text" id="filter-name" placeholder="Filter name..."></td>
                 <td><input type="text" id="filter-version" placeholder="Filter version..."></td>
-                <td><input type="text" id="filter-type" placeholder="3rd / built-in..."></td>
+                <td><input type="text" id="filter-update" placeholder="Filter update..."></td>
+                <td style="text-align:center">
+                  <div class="type-switch" id="type-filter-switch">
+                    <button data-val="" class="active" title="Show all types">All</button>
+                    <button data-val="true"  title="Show third-party apps only">3rd Party</button>
+                    <button data-val="false" title="Show built-in apps only">Built-in</button>
+                  </div>
+                </td>
                 <td></td>
               </tr>
             </thead>
             <tbody id="apps-body">
-              <tr><td colspan="6" class="empty-msg">Select a headset to view installed apps.</td></tr>
+              <tr><td colspan="7" class="empty-msg">Select a headset to view installed apps.</td></tr>
             </tbody>
           </table>
         </div>
@@ -575,9 +647,11 @@
 
   var selectedHeadset = '';
   var allApps = [];
+  var adbAvailable = false;
   var sortCol = 'name';
   var sortDir = 'asc';
   var showSystem = false;
+  var typeFilterVal = '';  // '', 'true' (3rd party), or 'false' (built-in)
   var pendingOverwrite = null; // {type:'apk'|'folder', tempId, path, file}
   var chosenTransport = 'auto';  // 'usb', 'wifi', or 'auto'
   var activeJobId = null;
@@ -620,10 +694,18 @@
   var adbConnTimer = null;
 
   function updateAdbBadges(usb, wifi, usbSpeed) {
+    adbAvailable = !!(usb || wifi);
     var usbBadge = $id('adb-usb-badge');
     usbBadge.className  = 'adb-badge ' + (usb  ? 'available' : 'unavailable');
     usbBadge.textContent = usb && usbSpeed ? usbSpeed : 'USB';
     $id('adb-wifi-badge').className = 'adb-badge ' + (wifi ? 'available' : 'unavailable');
+    refreshUpdateButtons();
+  }
+
+  function refreshUpdateButtons() {
+    $id('apps-body').querySelectorAll('.update-btn.has-update').forEach(function (btn) {
+      btn.disabled = !adbAvailable;
+    });
   }
 
   function pollAdbConnectivity() {
@@ -659,6 +741,7 @@
       $id('apps-section').classList.add('hidden');
       stopAdbPolling();
       $id('fw-badge').style.display = 'none';
+      $id('storage-bar-wrap').style.display = 'none';
       return;
     }
     $id('install-section').classList.remove('hidden');
@@ -666,6 +749,7 @@
     startAdbPolling();
     loadApps(false);
     fetchFirmware();
+    fetchStorage();
   });
 
   // -- Firmware badge --------------------------------------------------------
@@ -690,11 +774,29 @@
       .catch(function () { badge.style.display = 'none'; });
   }
 
+  // -- Storage bar -----------------------------------------------------------
+  function fetchStorage() {
+    var wrap = $id('storage-bar-wrap');
+    wrap.style.display = 'none';
+    if (!selectedHeadset) return;
+    fetch('/api/headset-storage?name=' + encodeURIComponent(selectedHeadset))
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) return;
+        wrap.style.display = 'flex';
+        $id('storage-bar-used').style.width = d.usedPercent + '%';
+        $id('storage-lbl-used').textContent = d.usedPercent + '% used (' + d.usedGB + ' GB)';
+        $id('storage-lbl-free').textContent = d.freePercent + '% free (' + d.freeGB + ' GB)';
+        $id('storage-lbl-total').textContent = 'Total: ' + d.totalGB + ' GB';
+      })
+      .catch(function () {});
+  }
+
   // -- Load apps -------------------------------------------------------------
   function loadApps(refresh) {
     if (!selectedHeadset) return;
     setStatus('Loading...', 'busy');
-    $id('apps-body').innerHTML = '<tr><td colspan="5" class="empty-msg">Loading...</td></tr>';
+    $id('apps-body').innerHTML = '<tr><td colspan="7" class="empty-msg">Loading...</td></tr>';
     var url = '/api/installedapps?name=' + encodeURIComponent(selectedHeadset);
     if (showSystem)  url += '&includeSystem=1';
     if (refresh)     url += '&refresh=1';
@@ -707,7 +809,7 @@
       })
       .catch(function (e) {
         setStatus('Failed to load apps.', 'err');
-        $id('apps-body').innerHTML = '<tr><td colspan="5" class="empty-msg">Could not load apps. Is the headset reachable?</td></tr>';
+        $id('apps-body').innerHTML = '<tr><td colspan="7" class="empty-msg">Could not load apps. Is the headset reachable?</td></tr>';
       });
   }
 
@@ -715,18 +817,20 @@
   function renderTable() {
     var nameFilter    = ($id('filter-name').value    || '').toLowerCase();
     var versionFilter = ($id('filter-version').value || '').toLowerCase();
-    var typeFilter    = ($id('filter-type').value    || '').toLowerCase();
+    var updateFilter  = ($id('filter-update').value  || '').toLowerCase();
     var globalFilter  = ($id('global-search-input').value || '').toLowerCase();
 
     var rows = allApps.filter(function (app) {
-      var dn  = (app.displayName || '').toLowerCase();
-      var pkg = (app.package     || '').toLowerCase();
-      var ver = (app.version     || '').toLowerCase();
-      var typ = app.thirdParty ? '3rd party' : 'built-in';
+      var dn  = (app.displayName    || '').toLowerCase();
+      var pkg = (app.package        || '').toLowerCase();
+      var ver = (app.version        || '').toLowerCase();
+      var upd = (app.pendingVersion || '').toLowerCase();
       if (globalFilter  && dn.indexOf(globalFilter)  === -1 && pkg.indexOf(globalFilter)  === -1) return false;
       if (nameFilter    && dn.indexOf(nameFilter)    === -1 && pkg.indexOf(nameFilter)    === -1) return false;
       if (versionFilter && ver.indexOf(versionFilter) === -1) return false;
-      if (typeFilter    && typ.indexOf(typeFilter)    === -1) return false;
+      var sver = (app.storeVersion || '').toLowerCase();
+      if (updateFilter  && upd.indexOf(updateFilter) === -1 && sver.indexOf(updateFilter) === -1) return false;
+      if (typeFilterVal !== '' && String(app.thirdParty) !== typeFilterVal) return false;
       return true;
     });
 
@@ -738,6 +842,9 @@
       } else if (sortCol === 'version') {
         va = (a.version || '').toLowerCase();
         vb = (b.version || '').toLowerCase();
+      } else if (sortCol === 'update') {
+        va = (a.pendingVersion || a.storeVersion || '').toLowerCase();
+        vb = (b.pendingVersion || b.storeVersion || '').toLowerCase();
       } else {
         va = a.thirdParty ? '0' : '1';
         vb = b.thirdParty ? '0' : '1';
@@ -748,7 +855,7 @@
     });
 
     if (rows.length === 0) {
-      $id('apps-body').innerHTML = '<tr><td colspan="6" class="empty-msg">No apps match your filters.</td></tr>';
+      $id('apps-body').innerHTML = '<tr><td colspan="7" class="empty-msg">No apps match your filters.</td></tr>';
       return;
     }
 
@@ -774,12 +881,29 @@
           '</button>'
         : '';
 
+      var hasPending = app.pendingVersion && app.pendingVersion.length > 0;
+      var hasStore   = !hasPending && app.storeVersion && app.storeVersion.length > 0;
+      var updateCell;
+      if (hasPending) {
+        var dis = adbAvailable ? '' : ' disabled';
+        updateCell = '<button class="update-btn has-update" data-pkg="' + escHtml(app.package) + '" data-ver="' + escHtml(app.pendingVersion) + '"' + dis + '>' +
+          '<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.55"/></svg>' +
+          escHtml(app.pendingVersion) + '</button>';
+      } else if (hasStore) {
+        updateCell = '<span class="update-badge store-update" title="Update available in Meta Store">' +
+          '<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>' +
+          escHtml(app.storeVersion) + '</span>';
+      } else {
+        updateCell = '<button class="update-btn no-update" disabled>no update</button>';
+      }
+
       html +=
         '<tr>' +
         '<td class="col-launch" style="text-align:center">' + launchBtn + '</td>' +
         '<td class="col-icon">' + icon + '</td>' +
         '<td class="col-name" title="' + escHtml(app.package) + '">' + escHtml(app.displayName || app.package) + '<br><span style="font-size:10px;color:var(--text2);font-family:monospace">' + escHtml(app.package) + '</span></td>' +
         '<td class="col-version" style="color:var(--text2)">' + escHtml(app.version || '') + '</td>' +
+        '<td class="col-update" style="text-align:center">' + updateCell + '</td>' +
         '<td class="col-type">' + badge + '</td>' +
         '<td class="col-action" style="text-align:center">' + delBtn + '</td>' +
         '</tr>';
@@ -813,6 +937,29 @@
     // Wire uninstall buttons
     $id('apps-body').querySelectorAll('.del-btn').forEach(function (btn) {
       btn.addEventListener('click', function () { openUninstallConfirm(this.dataset.pkg, this.dataset.dn); });
+    });
+
+    // Wire update buttons
+    $id('apps-body').querySelectorAll('.update-btn.has-update:not(:disabled)').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var pkg = this.dataset.pkg;
+        var ver = this.dataset.ver;
+        if (!pkg || !selectedHeadset || !adbAvailable) return;
+        var self = this;
+        self.disabled = true;
+        setStatus('Starting update for ' + pkg + ' -> ' + ver + '...', 'busy');
+        fetch('/api/update-app', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: selectedHeadset, package: pkg })
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          if (j.ok) { setStatus('Update started for ' + pkg + '.', 'ok'); }
+          else       { self.disabled = false; setStatus('Update failed: ' + (j.error || 'unknown'), 'err'); }
+        })
+        .catch(function () { self.disabled = false; setStatus('Server unreachable.', 'err'); });
+      });
     });
   }
 
@@ -848,8 +995,16 @@
   }());
 
   // -- Filters ---------------------------------------------------------------
-  ['filter-name', 'filter-version', 'filter-type', 'global-search-input'].forEach(function (id) {
+  ['filter-name', 'filter-version', 'filter-update', 'global-search-input'].forEach(function (id) {
     $id(id).addEventListener('input', renderTable);
+  });
+
+  document.getElementById('type-filter-switch').addEventListener('click', function (e) {
+    var btn = e.target.closest('button[data-val]');
+    if (!btn) return;
+    typeFilterVal = btn.dataset.val;
+    this.querySelectorAll('button').forEach(function (b) { b.classList.toggle('active', b === btn); });
+    renderTable();
   });
 
   // -- Refresh ---------------------------------------------------------------
@@ -942,6 +1097,131 @@
   }
   _syncResolveState();
   setInterval(_syncResolveState, 15000);
+
+  // -- Search app updates (MetaMetadata LatestVersion) -----------------------
+  var _updateVersionsPoller   = null;
+  var _updateVersionsBtn      = $id('update-versions-btn');
+  var _updateVersionsOrigHTML = _updateVersionsBtn ? _updateVersionsBtn.innerHTML : null;
+
+  var _updateVersionsSpinnerHTML =
+    '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin"><polyline points="8 17 12 21 16 17"/><line x1="12" y1="3" x2="12" y2="21"/></svg>' +
+    ' Searching updates...';
+
+  function _updateVersionsResetBtn() {
+    if (_updateVersionsBtn) {
+      _updateVersionsBtn.innerHTML = _updateVersionsOrigHTML;
+      updateVersionsBtnState();
+    }
+  }
+
+  function updateVersionsBtnState() {
+    if (!_updateVersionsBtn) return;
+    var online = navigator.onLine;
+    _updateVersionsBtn.disabled = !online || !!_updateVersionsPoller;
+    _updateVersionsBtn.style.opacity = online ? '' : '0.4';
+  }
+
+  window.addEventListener('online',  updateVersionsBtnState);
+  window.addEventListener('offline', updateVersionsBtnState);
+  updateVersionsBtnState();
+
+  function _updateVersionsStartPolling() {
+    if (_updateVersionsPoller) return;
+    _updateVersionsPoller = setInterval(function() {
+      fetch('/api/update-app-versions-progress')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          if (d.status === 'done' || d.status === 'complete') {
+            clearInterval(_updateVersionsPoller); _updateVersionsPoller = null;
+            var summary = (d.total > 0) ? ' (' + d.done + ' / ' + d.total + ' packages)' : '';
+            setStatus('Update search complete' + summary + '. Refreshing headset cache...', 'busy');
+            _updateVersionsResetBtn();
+            var hn = selectedHeadset;
+            if (hn) {
+              fetch('/api/refresh-headset-apps-cache', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ headsetName: hn })
+              })
+              .then(function() {
+                setStatus('Update search complete. App list refreshed.', 'ok');
+                loadApps(false);
+              })
+              .catch(function() {
+                setStatus('Update search complete. Could not refresh headset cache.', 'err');
+              });
+            } else {
+              setStatus('Update search complete' + summary, 'ok');
+            }
+          } else if (d.status === 'error') {
+            clearInterval(_updateVersionsPoller); _updateVersionsPoller = null;
+            setStatus('Update search failed: ' + (d.error || 'unknown error'), 'err');
+            _updateVersionsResetBtn();
+          } else if (d.done !== undefined && d.total > 0) {
+            setStatus('Searching updates... ' + d.done + ' / ' + d.total + ' packages', 'busy');
+          }
+        })
+        .catch(function() {});
+    }, 3000);
+  }
+
+  if (_updateVersionsBtn) {
+    _updateVersionsBtn.addEventListener('click', function() {
+      if (!navigator.onLine) return;
+      _updateVersionsBtn = this;
+      _updateVersionsOrigHTML = this.innerHTML;
+      this.disabled = true;
+      this.innerHTML = _updateVersionsSpinnerHTML;
+      setStatus('Querying MetaMetadata for app updates - this may take a few minutes...', 'busy');
+      var hn = selectedHeadset;
+      fetch('/api/update-app-versions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(hn ? { headsetName: hn } : {})
+      })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          if (d.status === 'no_internet') {
+            setStatus('No internet connection - update search skipped', 'err');
+            _updateVersionsResetBtn();
+          } else if (d.status === 'already_running') {
+            setStatus('Update search already in progress...', 'busy');
+            _updateVersionsStartPolling();
+          } else if (d.status === 'started') {
+            setStatus('Searching updates... (this may take a few minutes)', 'busy');
+            _updateVersionsStartPolling();
+          } else {
+            setStatus('Unexpected response: ' + d.status, 'err');
+            _updateVersionsResetBtn();
+          }
+        })
+        .catch(function(e) {
+          setStatus('Request error: ' + e.message, 'err');
+          _updateVersionsResetBtn();
+        });
+    });
+  }
+
+  // Always-on 15s poll: sync update-versions button state across all browsers
+  function _syncUpdateVersionsState() {
+    fetch('/api/update-app-versions-progress')
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        var running = d.status === 'queued' || d.status === 'running';
+        if (running && _updateVersionsBtn && !_updateVersionsPoller) {
+          _updateVersionsOrigHTML = _updateVersionsBtn.innerHTML;
+          _updateVersionsBtn.disabled = true;
+          _updateVersionsBtn.innerHTML = _updateVersionsSpinnerHTML;
+          setStatus('Update search already in progress...', 'busy');
+          _updateVersionsStartPolling();
+        } else if (!running && !_updateVersionsPoller) {
+          updateVersionsBtnState();
+        }
+      })
+      .catch(function() {});
+  }
+  _syncUpdateVersionsState();
+  setInterval(_syncUpdateVersionsState, 15000);
 
   // -- Toggle system apps ----------------------------------------------------
 

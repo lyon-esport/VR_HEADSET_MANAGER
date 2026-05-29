@@ -193,7 +193,7 @@ function Invoke-AppShutdown {
     not prevent the remaining steps from running.
     #>
     try { Stop-VRMonitor }             catch { }
-    try { Stop-AllScrcpy }            catch { }
+    try { Stop-Scrcpy }               catch { }
     try { Reset-AwakeMode }           catch { }
     try { Disconnect-ADBConnections }  catch { }
 

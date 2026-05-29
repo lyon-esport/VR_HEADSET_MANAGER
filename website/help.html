@@ -29,7 +29,7 @@
     }
     [data-theme=light] body { background: var(--bg); color: var(--text); }
 
-    .page { padding: 28px 32px; max-width: 860px; }
+    .page { padding: 28px 32px; width: 100%; min-width: 320px; box-sizing: border-box; }
     .page-title {
       font-size: 20px; font-weight: 700; color: #e5e7eb;
       margin-bottom: 6px; display: flex; align-items: center; gap: 10px;
@@ -232,6 +232,23 @@
     .pid-tag.offline .pid-dot { background: #555; }
     [data-theme=light] .pid-tag { border-color: #d1d5db; }
 
+    /* Responsive table wrapper */
+    .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+    @media (max-width: 700px) {
+      .page { padding: 16px 14px; }
+      .page-title { font-size: 17px; }
+      .logs-card { min-height: 220px; }
+      .btn-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 480px) {
+      .page { padding: 12px 10px; }
+      .stream-header { flex-direction: column; align-items: flex-start; gap: 8px; }
+      .logs-header { flex-wrap: wrap; gap: 6px; }
+      .logs-header div[style] { flex-wrap: wrap; }
+    }
+
     /* Toast */
     #toast {
       position: fixed; bottom: 28px; left: 50%;
@@ -328,7 +345,7 @@
       </div>
 
       <!-- MediaMTX API debug links -->
-      <div class="card">
+      <div class="card table-scroll">
         <table class="link-table">
           <thead>
             <tr>
@@ -404,9 +421,8 @@
           </svg>
           <span>Live</span>
           <div style="display:flex;gap:6px">
-            <button class="logs-ctrl-btn" id="logs-pause-btn">Pause</button>
             <button class="logs-ctrl-btn" id="logs-clear-btn">Clear</button>
-            <button class="logs-ctrl-btn" id="logs-scroll-btn" title="Toggle auto-scroll">Scroll</button>
+            <button class="logs-ctrl-btn" id="logs-scroll-btn" title="Enable live scroll (updates every 10s)">Live scroll</button>
             <button class="logs-ctrl-btn" id="logs-reverse-btn" title="Toggle order">Newest first</button>
           </div>
         </div>
@@ -654,37 +670,30 @@
     // Live logs
     var LOG_LEVELS = ['DEBUG','INFO','SUCCESS','WARNING','ERROR'];
     var LEVEL_COLORS = { DEBUG:'#64748b', INFO:'#60a5fa', SUCCESS:'#34d399', WARNING:'#fbbf24', ERROR:'#f87171' };
-    var _paused          = false;
-    var _autoScroll      = true;
+    var _autoScroll      = false;
     var _lastNewest      = '';
     var _reversed        = true;
     var _fetchCount      = 400;
     var _availableLevels = [];
     var _activeFilters   = {};
+    var _liveInterval    = null;
+    var _forceRedraw     = false;
     var logsBody    = document.getElementById('logs-body');
     var logsStatus  = document.getElementById('logs-status');
-    var pauseBtn    = document.getElementById('logs-pause-btn');
     var clearBtn    = document.getElementById('logs-clear-btn');
     var scrollBtn   = document.getElementById('logs-scroll-btn');
 
-    pauseBtn.addEventListener('click', function() {
-      _paused = !_paused;
-      pauseBtn.textContent = _paused ? 'Resume' : 'Pause';
-      pauseBtn.classList.toggle('active', _paused);
-      if (!_paused) fetchLogs();
-    });
     clearBtn.addEventListener('click', function() { logsBody.innerHTML = ''; _lastNewest = ''; });
     scrollBtn.addEventListener('click', function() {
       _autoScroll = !_autoScroll;
       scrollBtn.classList.toggle('active', _autoScroll);
-      if (_autoScroll) logsBody.scrollTop = logsBody.scrollHeight;
-    });
-    scrollBtn.classList.add('active');
-    logsBody.addEventListener('scroll', function() {
-      var atLive = _reversed
-        ? logsBody.scrollTop <= 20
-        : logsBody.scrollTop + logsBody.clientHeight >= logsBody.scrollHeight - 20;
-      if (!atLive && _autoScroll) { _autoScroll = false; scrollBtn.classList.remove('active'); }
+      if (_autoScroll) {
+        fetchLogs();
+        if (!_liveInterval) _liveInterval = setInterval(fetchLogs, 10000);
+        logsBody.scrollTop = _reversed ? 0 : logsBody.scrollHeight;
+      } else {
+        if (_liveInterval) { clearInterval(_liveInterval); _liveInterval = null; }
+      }
     });
 
     var reverseBtn = document.getElementById('logs-reverse-btn');
@@ -693,14 +702,14 @@
       _reversed = !_reversed;
       reverseBtn.textContent = _reversed ? 'Newest first' : 'Oldest first';
       reverseBtn.classList.toggle('active', _reversed);
-      _lastNewest = '';
+      _forceRedraw = true;
       fetchLogs();
     });
 
     var moreBtn = document.getElementById('logs-more-btn');
     moreBtn.addEventListener('click', function() {
       _fetchCount += 400;
-      _lastNewest = '';
+      _forceRedraw = true;
       fetchLogs();
       document.getElementById('logs-more-status').textContent = 'Showing up to ' + _fetchCount + ' lines';
     });
@@ -720,7 +729,7 @@
         btn.addEventListener('click', function() {
           _activeFilters[lv] = !_activeFilters[lv];
           btn.classList.toggle('active', _activeFilters[lv]);
-          _lastNewest = '';
+          _forceRedraw = true;
           fetchLogs();
         });
         container.appendChild(btn);
@@ -759,11 +768,9 @@
         .then(function(lines) {
           if (!Array.isArray(lines)) return;
           var newest = lines.length ? lines[lines.length - 1] : '';
-          var atLive = _reversed
-            ? logsBody.scrollTop <= 20
-            : logsBody.scrollTop + logsBody.clientHeight >= logsBody.scrollHeight - 20;
-          if (newest !== _lastNewest) {
+          if (newest !== _lastNewest || _forceRedraw) {
             _lastNewest = newest;
+            _forceRedraw = false;
             var ordered = _reversed ? lines.slice().reverse() : lines;
             if (_availableLevels.length > 0) {
               ordered = ordered.filter(function(l) {
@@ -771,15 +778,19 @@
                 return lv ? !!_activeFilters[lv] : true;
               });
             }
+            var prevScroll = logsBody.scrollTop;
             logsBody.innerHTML = ordered.map(formatLine).join('\n');
             logsStatus.textContent = lines.length + ' lines - last updated ' + new Date().toLocaleTimeString();
-            if (_autoScroll) logsBody.scrollTop = _reversed ? 0 : logsBody.scrollHeight;
+            if (_autoScroll) {
+              logsBody.scrollTop = _reversed ? 0 : logsBody.scrollHeight;
+            } else {
+              logsBody.scrollTop = prevScroll;
+            }
           }
         })
         .catch(function() { logsStatus.textContent = 'Could not reach server.'; });
     }
     fetchLogs();
-    setInterval(function() { if (!_paused) fetchLogs(); }, 2000);
   </script>
 </body>
 </html>
