@@ -295,7 +295,7 @@ function Get-KnownHeadsetInfos {
         if ($pkg) {
             $appInfo = Get-AppInfo -PackageName $pkg -searchOnline $false
             $result.RunningApp   = if ($appInfo.DisplayName) { $appInfo.DisplayName } else { $pkg }
-            $result.RunningAppIcon = $appInfo.IconUrl
+            $result.RunningAppIcon = if ($appInfo.LocalIconPath) { $appInfo.LocalIconPath } elseif ($appInfo.IconUrl) { $appInfo.IconUrl } else { "" }
         }
 
         # Check if scrcpy is running

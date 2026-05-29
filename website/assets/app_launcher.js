@@ -26,6 +26,7 @@
     '.lm-app-row.is-meta .lm-app-name{color:#67e8f9;font-weight:600;}',
     '.lm-app-row.is-system .lm-app-name{color:#666;font-style:italic;}',
     '.lm-star-btn{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;flex-shrink:0;background:transparent;border:none;border-radius:4px;cursor:pointer;color:#3a3a3a;transition:color 0.12s;}',
+    '.lm-app-icon{width:20px;height:20px;border-radius:4px;object-fit:contain;flex-shrink:0;}',
     '.lm-star-btn.active{color:#facc15;}',
     '.lm-star-btn:hover{color:#facc15;}',
     '.lm-app-row.is-meta .lm-star-btn{visibility:hidden;}',
@@ -260,6 +261,14 @@
     })(app, launchBtn);
 
     row.appendChild(starBtn);
+    if (app.localIconPath) {
+      var iconEl = document.createElement('img');
+      iconEl.className = 'lm-app-icon';
+      iconEl.src = app.localIconPath;
+      iconEl.alt = '';
+      iconEl.addEventListener('error', function () { this.style.display = 'none'; });
+      row.appendChild(iconEl);
+    }
     row.appendChild(nameEl);
     row.appendChild(verEl);
     row.appendChild(launchBtn);
