@@ -2,7 +2,7 @@
 
 ## Overview
 
-**VR HEADSET MANAGER** is a PowerShell-based automation tool designed to manage, monitor, and capture screens of **Meta Quest VR headsets** on flat screen using **ADB** over wifi and [**scrcpy**](https://github.com/Genymobile/scrcpy).
+**[VR HEADSET MANAGER](https://github.com/lyon-esport/VR_HEADSET_MANAGER/releases)** is a PowerShell-based automation tool designed to manage, monitor, and capture screens of **Meta Quest VR headsets** on flat screen using **ADB** over wifi and [**scrcpy**](https://github.com/Genymobile/scrcpy).
 
 It has been developped exclusively to manage Meta Quests headsets (Quest 2 and Quest 3), but should work for many more headsets based on Android (as it's using ADB Wifi).
 
@@ -24,7 +24,7 @@ I personally use it during showrooms and gaming exhibitions to capture the live 
 ## Installation
 
 1. **Place the project folder on your machine**  
-   > Download the [last realease of `VR_HEADSET_MANAGER`](https://github.com/lyon-esport/VR_HEADSET_MANAGER/releases) and unzip on your computer.
+   > Download the [last realease of **VR_HEADSET_MANAGER**](https://github.com/lyon-esport/VR_HEADSET_MANAGER/releases) and unzip on your computer.
 
 2. **Run the launcher**  
    - **START_VR_HEADSET_MANAGER.cmd**
