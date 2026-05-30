@@ -6,7 +6,7 @@
 
 It has been developped exclusively to manage Meta Quests headsets (Quest 2 and Quest 3), but should work for many more headsets based on Android (as it's using ADB Wifi).
 
-Please contact me if you need to add support of a new headset model/brands. If you wana offer me a different headset, i'll be pleased to support it in a next realase :laughing:.
+Please contact me by opening an issue if you need to add support of a new headset model/brands. If you wana offer me a different headset, i'll be pleased to support it in a next realase :laughing:.
 
 It provides:
 - Headsets screen capture (thanks scrcpy) with auto-restart and streaming over a web page, WHEP, RTSP or HLS
@@ -24,12 +24,12 @@ I personally use it during showrooms and gaming exhibitions to capture the live 
 ## Installation
 
 1. **Place the project folder on your machine**  
-   > Copy or clone the `VR_HEADSET_MANAGER` folder to your local computer.
+   > Download the [last realease of `VR_HEADSET_MANAGER`](https://github.com/lyon-esport/VR_HEADSET_MANAGER/releases) and unzip on your computer.
 
 2. **Run the launcher**  
-   - :warning: Run as admin on the first time :warning: **START_VR_HEADSET_MANAGER.cmd** 
+   - **START_VR_HEADSET_MANAGER.cmd**
    > - This will start PowerShell with the correct execution policy and launch the manager.
-   > - On first start it will automatically :  
+   > - ⚠️ On first start it will automatically start multiple commands as admin ⚠️
    >   - add Windows Firewall exceptions to allow adb.exe to talk with headsets over the network.
    >   - add Windows Firewall exceptions to allow mediamtx to restream over the network.
    >   - add Windows Firewall exceptions to allow the programm to scan mdns headsets over the network.
@@ -47,17 +47,16 @@ I personally use it during showrooms and gaming exhibitions to capture the live 
    > - Follow the instructions to add your headset (IP address, Firendly name...)
    > - Installation of [oculus-wireless-adb](https://github.com/thedroidgeek/oculus-wireless-adb) is proposed to start ADB Wifi from the headset without USB connection required.
    
-5. **in CLI, press the key corresponding to the ID if the headset to start screen miroring (scrcpy) manually**
 5. **in Web server, enable Auto-restart scrcpy to start screen capture automatically when the headset is available**
+5Bis. **in CLI, press the key corresponding to the ID if the headset to start screen miroring (scrcpy) manually**
    
 6. **Modify headset parameters**
    - Use different options to manage you headsets. You can enable recording, enable the auto-restart of the screen miroring, etc...
 
 7. **Modify VR HEADSET MANAGER parameters**
    - Use the web server to adapt parameters as you want.
-   - You can adapt configuration in the ./config/config.json file following [this guide](/docs/docs_config.md)
-   - Optionnally you can start the script with another custom config file by passing it as a parameter
-   - Control per-headset timers from any external tool (Stream Deck, OBS, curl...) using the [Timer API](/docs/docs_timer_api.md)
+   - You can adapt configuration in the ./config/config.json file following [this guide](/docs/docs_config.md) or from the web interface menu under Config > App Configuration
+   - Control per-headset timers from the web interface or from any external tool (Stream Deck, OBS, curl...) using the [Timer API](/docs/docs_timer_api.md)
 
 ---
 
@@ -66,23 +65,58 @@ I personally use it during showrooms and gaming exhibitions to capture the live 
 Before using the tool, make sure the following requirements are met:
 - ✅ This program folder must include **VR_HEADSET_MANAGER** in the name
 - ✅ The Meta Quest headset must be in **Developer Mode**
+- ✅ **ADB over WiFi must be enabled** and will be automatically once you have connected the headset by USB and added the headset in the list of known headsets. >> [You can also follow this process to enable it using a dedicated app !](/docs/docs_HowToEnableADBWifi.md)
 - ✅ The Meta Quest headset must be connected over WIFI, and reachable from the computer where you execute the script
-  *Note : To limit lacencies I recommand a dedicated WIFI SSID and channels for headsets only, and an ethernet connexion for the computer which is executing VR HEADSET MANAGER.*
-- ✅ **ADB over WiFi must be enabled** on the headset >> [You can follow this process to enable it !](/docs/docs_HowToEnableADBWifi.md)
+> [!NOTE]
+>  To limit lacencies I recommand a dedicated WIFI SSID and channels for headsets only, and an ethernet connexion for the computer which is executing VR HEADSET MANAGER.*
+
 
 > [!IMPORTANT]
-> Without these prerequisites, the headset will not be reachable over the network and scrcpy streaming will not work.
+> Without these prerequisites, the headset will not be reachable over the Wifi network and scrcpy streaming will not work.
 
 ---
 ## WEBSITE & API
-A dedicated website is available to manage your heasets and handle many options in addition of the CLI.
+Thanks Claude Code, a dedicated (vibe coded) website is available to manage your heasets and handle many options in addition of the CLI.
 I recommand to use the web interface to interract with your headsets as I added many functionalities (like headsets applications management and launcher).
 
 The web server is enabled by default to port 8080. This port can be modified in the config.json file.
 
 ---
 ## HEADSETS VIDEO CAPURE AND RESTREAM
+The application automatically starts a capure of the video using ffmpeg.exe, and then uses MediaMTX software to recast the video.
+You can reach out the streamed content using the web interface from any computer on your local network.
+Direct links to headsets video captures are available in ""Config"" > ""Help & Diagnostics"" section of the web server.
 
+---
+## APPLICATIONS MANAGER
+
+On many pages, you can see a [>] button : It's for starting an installed app directly for the web interface. It don't require any action from the enduser which is already into the matrix... You play the operator role, so you can launch all applications (built-in or 3rd party apps).
+
+> [!NOTE]
+> **3rd party** applications are all applications installed from the store or sideloaded. This software allows you to add or delete 3rd party apps.
+> **Built-in** applications are provided by Meta and cannot be modified or deleted.
+
+
+This software allows you to manage (install and uninstall) 3rd party games and apps using ADB USB or ADB Wifi.
+- Go on **Config** > **Headsets Apps**
+- Select your headset in the list
+- Use the web interface to select folder or apk files to sideload data directly to your headset
+
+> [!NOTE]
+> I identified the traffic is faster using Wifi connectivity instead of USB3 connectivity. It's not copying data using MTP but through ADB, I suspect that's why the transfer is slower...
+
+This software can automatically grab from the - [MetaMetadata database](https://github.com/threethan/MetaMetadata) applications names and logos. It have to be triggered manually and requires internet connectivity.
+Check under **Config** > **Known Apps** section.
+
+---
+## OTHER FUNCTIONALITIES
+
+- Keep the computer awake while the script is running to prevent screen lockout or hibernation.
+- It the headset is already knowned by the software, wile you connect it to the computer the ADB Wifi automatically starts
+- Wifi SSID and Passwords are stored using [Marshal](https://www.secureideas.com/blog/secure-password-management-in-powershell-best-practices) (ConvertTo-SecureString / ConvertFrom-SecureString)
+- You can control few headset parameters like sound and backlight power, disable guardian or start guardiant initialization...
+- Any Scrcpy stream catched from the headset can be recrorded
+- You can create custom crop profiles as you need...
 
 ---
 ## Roadmap 🎯
@@ -92,35 +126,23 @@ The web server is enabled by default to port 8080. This port can be modified in 
 
 ### Improvements
 #### 🏃Startup checks
-- [ ] ⚠️ [🔄 TO TEST : KO] Keep the computer awake while the script is running to prevent screen lockout or hibernation.
-- [x] [🔄 To validate] Firewall authorization for adb.exe on soft startup
-- [ ] Setup powershell execution >> To test on fresh installed pc
-- [ ] If no headset in the known headset file, propose to add it or search over the network (mdns scan ? usb ?)
-- [ ] Check available json config files in /config folder, and propose to select the right one if any
 
 #### 🛠️ Backend
-- [x] [🔄 IN TEST] include a json validator or tester (and warn config json is broken, and open a web page with json validator...) then propose to try reload or create a new file based on the template (overwrite existing file)
-- [ ] :key: Save by a secured manner the Wifi Password with [Marshal](https://www.secureideas.com/blog/secure-password-management-in-powershell-best-practices) (ConvertTo-SecureString / ConvertFrom-SecureString)
 - [ ] REST API to provide a web page to manage it from a phone, or by Stream Deck (already done for timers)
 
 
 #### ⚙️ Headsets management (Headset Management Console)
-- [ ] Review of Meta Quest configuration and ADB activation (by connecting with USB) for headsets that are not already known and configured in VR Heaset Manager
-	> - Install config : Do you want to modify headset parameters ? Y/N and test it on a brand new headset
- 		> - Test pushing parameters using ADB Wifi
- 		> - Provide parameters customization for each headset using the HMC
 - [ ] Scan network process to review
   > mdns to test for a headset in developper mode enabled
   > check all devices availabiel with 5555 opened
 
 #### 📺 VR Headset Screen capture
 
-
 #### 🎨 UI and Visual customization
 
 #### Headset info scrapping and interaction
-- [ ] Force the screen to get out of the game and switch to passthrough mode
-- [ ] Force recenter
+- [ ] Force the screen to get out of the game and switch to passthrough mode >> Tried but Meta seems to lock access to these functionalities from ADB connection...
+- [ ] Force recenter >> Tried but Meta seems to lock access to these functionalities from ADB connection...
 
 #### 🧪 New functionalities
 
@@ -129,14 +151,13 @@ The web server is enabled by default to port 8080. This port can be modified in 
   > - [Named Pipe ?](https://rkeithhill.wordpress.com/2014/11/01/windows-powershell-and-named-pipes/)
 
 #### 📚 Translations
-- [x] [DONE] Translate all text (IHM + comments) in [EN] instead of [FR] - To do by IA... [like this](/docs/translation_fr.xml)
 - [ ] Translation of the website
 
 ### Code improvement
 - [ ] Review all powershell code with PSScriptAnalyzer and claude code...
 
 ---
-## License
+## LICENCE
 
 This project is licensed under the PolyForm Noncommercial License 1.0.0.
 
