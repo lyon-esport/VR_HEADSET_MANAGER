@@ -189,15 +189,16 @@ Start-VRMonitor -VRMonitor_refresh_timer $global:VRMonitor_refresh_timer
 # Open the VR Monitor in a new PowerShell window
 $headsets_dashboard_script = Join-Path -Path $scriptPath -ChildPath "modules\headsets_dashboard.ps1"
 
+$dashboardWindowStyle = if ($global:Dashboard_showConsole) { "Normal" } else { "Hidden" }
 Start-Process powershell.exe -ArgumentList @(
     "-NoExit",
     "-File",
     "`"$headsets_dashboard_script`"",
     "-ScriptPath",
     "`"$scriptPath`"",
-    "-ConfigFilePath", 
+    "-ConfigFilePath",
     "`"$configFilePath`""
-)
+) -WindowStyle $dashboardWindowStyle
 
 Write-Host "Waiting 5 seconds before showing the main menu... " -ForegroundColor Yellow -NoNewline
     for ($i = 4; $i -ge 1; $i--) {

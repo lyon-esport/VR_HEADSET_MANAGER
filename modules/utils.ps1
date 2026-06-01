@@ -187,6 +187,31 @@ function Save-WifiNetworks {
 # Probe 1: ICMP ping to 8.8.8.8 (Google public DNS - no DNS lookup needed).
 # Probe 2: DNS resolution of 'dns.google' (proves DNS is working end-to-end).
 # Internet is considered UP if at least one probe succeeds.
+function Get-ComputerWifiSSID {
+    $adapter = Get-NetAdapter | Where-Object {
+        ($_.PhysicalMediaType -eq 'Native 802.11' -or $_.PhysicalMediaType -eq 'Wireless LAN') -and
+        $_.Status -eq 'Up'
+    } | Select-Object -First 1
+    if (-not $adapter) { return $null }
+    $netProfile = Get-NetConnectionProfile -InterfaceAlias $adapter.InterfaceAlias -ErrorAction SilentlyContinue
+    if ($netProfile) { return $netProfile.Name }
+    return $null
+}
+
+function Get-ComputerWifiPassword {
+    param([string]$SSID)
+    if ([string]::IsNullOrWhiteSpace($SSID)) { return $null }
+    try {
+        $tmpDir = $env:TEMP
+        & netsh wlan export profile name=$SSID folder=$tmpDir key=clear 2>$null | Out-Null
+        $xmlFile = Get-ChildItem -LiteralPath $tmpDir -Filter "Wi-Fi-$SSID.xml" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $xmlFile) { return $null }
+        [xml]$xml = Get-Content -LiteralPath $xmlFile.FullName -Encoding UTF8
+        Remove-Item -LiteralPath $xmlFile.FullName -Force -ErrorAction SilentlyContinue
+        return $xml.WLANProfile.MSM.security.sharedKey.keyMaterial
+    } catch { return $null }
+}
+
 function Test-InternetConnectivity {
     param(
         [int]$TimeoutMs = 3000

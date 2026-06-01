@@ -1790,6 +1790,19 @@ try {
         }
 
         # API: GET /api/wifi-networks  - returns known WiFi networks (SSIDs only, passwords masked)
+        # API: GET /api/wifi-detect  - returns the PC's currently connected WiFi SSID and password
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/wifi-detect') {
+            try {
+                $detectedSsid = Get-ComputerWifiSSID
+                $detectedPwd  = if ($detectedSsid) { Get-ComputerWifiPassword -SSID $detectedSsid } else { $null }
+                $payload = @{ ok = $true; ssid = $detectedSsid; password = $detectedPwd }
+                Send-JsonResponse -Response $response -Body $payload
+            } catch {
+                Send-JsonResponse -Response $response -Body @{ ok = $false; error = $_.Exception.Message } -StatusCode 500
+            }
+            continue
+        }
+
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/wifi-networks') {
             try {
                 $networks  = @(Get-WifiNetworks)

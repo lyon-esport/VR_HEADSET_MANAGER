@@ -86,15 +86,16 @@ function Show-MainMenu {
             Write-Host $msg.VRMonitorNotRunning -ForegroundColor Yellow
             $headsets_dashboard_script = Join-Path -Path $scriptPath -ChildPath "modules\headsets_dashboard.ps1"
 
+            $dashboardWindowStyle = if ($global:Dashboard_showConsole) { "Normal" } else { "Hidden" }
             Start-Process powershell.exe -ArgumentList @(
                 "-NoExit",
                 "-File",
                 "`"$headsets_dashboard_script`"",
                 "-ScriptPath",
                 "`"$scriptPath`"",
-                "-ConfigFilePath", 
+                "-ConfigFilePath",
                 "`"$configFilePath`""
-            )
+            ) -WindowStyle $dashboardWindowStyle
             
             #Prevent the computer from sleeping while the dashboard is running
             Set-AwakeMode
@@ -117,6 +118,7 @@ function Show-MainMenu {
         Write-Host $msg.VideoRecast -BackgroundColor DarkMagenta -ForegroundColor White
         Write-Host $msg.FilesFolders -BackgroundColor DarkCyan -ForegroundColor Black 
         Write-Host $msg.ServicesManagement -BackgroundColor DarkGray -ForegroundColor White
+        Write-Host "  [C] Configuration" -BackgroundColor DarkBlue -ForegroundColor Cyan
         Write-Host $msg.Quit
         Write-Host $msg.AnyOtherKey
         Write-Host
@@ -199,6 +201,7 @@ function Show-MainMenu {
                         Show-SubMenu-FilesAndFolders
                     }
                 'W' { Show-SubMenu-Services }
+                'C' { Show-SubMenu-Config }
                 'I' {
                     if (Test-InternetConnectivity) {
                         Write-Host $msg.InternetOK -ForegroundColor Green
@@ -960,6 +963,47 @@ function Show-SubMenu-Services {
             }
         }
     } while ($choice -ne '0')
+}
+
+
+function Show-SubMenu-Config {
+    do {
+        Clear-Host
+        Write-Host ""
+        Write-Host "  === Configuration ===" -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host "  [W] WiFi Networks  - List, add, edit, delete, set preferred"
+        $dashboardStatus = if ($global:Dashboard_showConsole) { "Shown" } else { "Hidden" }
+        Write-Host "  [D] VR Headset Monitoring Console  - Currently: $dashboardStatus"
+        Write-Host ""
+        Write-Host "  [0] Back"
+        Write-Host ""
+        $choice = (Read-Host $msg.EnterChoice).Trim().ToUpper()
+        switch ($choice) {
+            'W' { Show-SubMenu-WifiNetworks }
+            'D' {
+                $cfgPath = if ($global:configFilePath) { $global:configFilePath } else { Join-Path $global:ScriptPath "config\config.json" }
+                $cfg = Read-ConfigJson -ConfigFilePath $cfgPath
+                if ($cfg) {
+                    if ($null -eq $cfg.VRMonitor) {
+                        $cfg | Add-Member -NotePropertyName VRMonitor -NotePropertyValue ([PSCustomObject]@{ showConsole = $false })
+                    }
+                    $newVal = -not [bool]$cfg.VRMonitor.showConsole
+                    $cfg.VRMonitor.showConsole = $newVal
+                    $global:Dashboard_showConsole = $newVal
+                    $json = $cfg | ConvertTo-Json -Depth 10
+                    Write-FileWithoutBom -Path $cfgPath -Content $json
+                    $statusLabel = if ($newVal) { "Shown" } else { "Hidden" }
+                    Write-Host ""
+                    Write-Host "  VR Headset Monitoring Console set to: $statusLabel" -ForegroundColor Green
+                    Write-Host "  Please restart the application for the change to take effect." -ForegroundColor Yellow
+                    Write-Host ""
+                    Read-Host $msg.PressEnterToContinue | Out-Null
+                }
+            }
+            '0' { return }
+        }
+    } while ($true)
 }
 
 

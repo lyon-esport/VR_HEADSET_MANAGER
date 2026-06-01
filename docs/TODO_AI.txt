@@ -1,23 +1,6 @@
 ALL CHANGES AND UPDATES TO MANAGE WITH AI TOOLS
 
-- Ajouter un fichier .releaseinclude.md pour lister les fichiers et dossiers à conserver.
-	Prévoir le cas d'exclusion de fichiers dans un dossier autorisé, commev dans .gitignore
----
-Please create a new .releaseinclude to place in /scripts folder.
-It should use the same working process as a .gitignore but at the oposite : all listed files or folders must be included.
-Examples :
-/docs/ or /docs/* => Will include the docs folder and all included items
-! before the path or file name will exclude the file or folder (highest priority)
-!/docs/test.ps1 => will exclude the test.ps1 file despite docs folder added
-!/website/*[monitoring].html will exclude all files ending by [monitoring].html into website folder
 
-Then, reveiw the script @Create-ZipRelease.ps1 to use the new .releaseinclude file as reference of all files and folders to include.
-.releaseinclude file must contain all folders and unique files that are currently listed in Create-ZipRelease.ps1.
-In the future, I will only have to add files or folder into the .releaseinclude file, and the new release will have to contain it.
----
-
-
-- Ajouter le SSID et clé du wifi actuellement connecté au PC "relou de devoir taper login et pwd"
 
 
 - On startup, it requests to install NuGet. See if we can drop this by getting all imported modules in local without NuGet usage
@@ -32,9 +15,6 @@ Après téléchargement de ffmpeg.exe, : Prompt pour fournisseur NuGet
 	- Web server working
 	- New web page
 	- Test erros 
-
-- Hide/display console interface headsets monitoring (running background)
-	Au redémarrage du soft, vérifier qu'il ne tourne pas déjà une fenêtre quelque part en background !
 
 
 PB 

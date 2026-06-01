@@ -42,18 +42,6 @@ function Read-ValidPort {
     }
 }
 
-function Save-WifiNetworkWizard {
-    param([string]$DataFolder, [string]$Ssid, [string]$Password)
-    $wifiPath = Join-Path $DataFolder "wifi_networks.dat"
-    $networks = @([PSCustomObject]@{ SSID = $Ssid; Password = $Password })
-    $json = $networks | ConvertTo-Json -Compress
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
-    $encrypted = [System.Security.Cryptography.ProtectedData]::Protect(
-        $bytes, $null,
-        [System.Security.Cryptography.DataProtectionScope]::CurrentUser
-    )
-    [System.IO.File]::WriteAllBytes($wifiPath, $encrypted)
-}
 
 function Invoke-FfmpegDownload {
     param([string]$SourcesFolder)
@@ -150,7 +138,7 @@ function Invoke-WelcomeSetup {
         [string]$ConfigOutputPath
     )
 
-    $totalSteps = 6
+    $totalSteps = 5
 
     Show-WelcomeBanner
 
@@ -209,38 +197,9 @@ function Invoke-WelcomeSetup {
     $config.scrcpy.recordFolder = $recordFolder
 
     # ------------------------------------------------------------------
-    # Step 3 - WiFi
+    # Step 3 - Web server port
     # ------------------------------------------------------------------
-    Show-WizardStep -Step 3 -Total $totalSteps -Title "WiFi Network"
-    Write-Host "  Enter the WiFi SSID and password your headsets connect to." -ForegroundColor White
-    Write-Host "  This is saved encrypted. Press Enter to skip." -ForegroundColor DarkGray
-    Write-Host ""
-    Write-Host "  SSID: " -ForegroundColor Yellow -NoNewline
-    $ssid = Read-Host
-    if (-not [string]::IsNullOrWhiteSpace($ssid)) {
-        Write-Host "  Password: " -ForegroundColor Yellow -NoNewline
-        $securePass = Read-Host -AsSecureString
-        $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePass)
-        $plainPass = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
-        [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
-        $dataFolder = Join-Path $global:ScriptPath "data"
-        if (-not (Test-Path -LiteralPath $dataFolder)) {
-            New-Item -ItemType Directory -Path $dataFolder | Out-Null
-        }
-        try {
-            Save-WifiNetworkWizard -DataFolder $dataFolder -Ssid $ssid -Password $plainPass
-            Write-Host "  WiFi network saved (encrypted with Windows DPAPI)." -ForegroundColor Green
-        } catch {
-            Write-Host "  Could not save WiFi credentials: $($_.Exception.Message)" -ForegroundColor Red
-        }
-    } else {
-        Write-Host "  Skipped. Add WiFi networks later via the main menu." -ForegroundColor Yellow
-    }
-
-    # ------------------------------------------------------------------
-    # Step 4 - Web server port
-    # ------------------------------------------------------------------
-    Show-WizardStep -Step 4 -Total $totalSteps -Title "Web Server Port"
+    Show-WizardStep -Step 3 -Total $totalSteps -Title "Web Server Port"
     Write-Host "  The built-in web server shows headset status in your browser." -ForegroundColor White
     $wsPort = Read-ValidPort -Label "Web server port" -Default 8080
     $config.WebServer.port = $wsPort
@@ -249,7 +208,7 @@ function Invoke-WelcomeSetup {
     # ------------------------------------------------------------------
     # Step 5 - MediaMTX ports
     # ------------------------------------------------------------------
-    Show-WizardStep -Step 5 -Total $totalSteps -Title "MediaMTX Streaming Ports"
+    Show-WizardStep -Step 4 -Total $totalSteps -Title "MediaMTX Streaming Ports"
     Write-Host "  MediaMTX streams headset video to OBS and the web dashboard." -ForegroundColor White
     Write-Host "  Default ports: RTSP 8554 | HLS 8888 | WebRTC 8889 | API 9997" -ForegroundColor DarkGray
     Write-Host ""
@@ -269,7 +228,7 @@ function Invoke-WelcomeSetup {
     # ------------------------------------------------------------------
     # Step 6 - FFmpeg
     # ------------------------------------------------------------------
-    Show-WizardStep -Step 6 -Total $totalSteps -Title "FFmpeg"
+    Show-WizardStep -Step 5 -Total $totalSteps -Title "FFmpeg"
     Write-Host "  FFmpeg is used by MediaMTX to capture and re-encode streams." -ForegroundColor White
     $sourcesFolder = Join-Path $global:ScriptPath "sources"
     $ffmpegFolder = Invoke-FfmpegDownload -SourcesFolder $sourcesFolder

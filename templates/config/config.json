@@ -15,8 +15,9 @@
     "debugLevelToConsole": "SUCCESS",
 	"logFile": "logfile.txt"
   },
-  "VRMonitor":{
-	"refresh_timer":5
+  "VRMonitor": {
+    "refresh_timer": 5,
+    "showConsole": false
   },
   "ADB":{
 	"folder":"scrcpy-win64-v4.0",

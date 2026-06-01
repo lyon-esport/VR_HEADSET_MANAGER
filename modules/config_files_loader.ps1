@@ -172,6 +172,9 @@ function Get-Config {
     $global:WebServer_enabled = if ($null -ne $configContent.WebServer.enabled) { [bool]$configContent.WebServer.enabled } else { $false }
     $global:WebServer_port    = if ($configContent.WebServer.port)               { [int]$configContent.WebServer.port }    else { 8080 }
 
+    # VR Monitor console visibility
+    $global:Dashboard_showConsole = if ($null -ne $configContent.VRMonitor.showConsole) { [bool]$configContent.VRMonitor.showConsole } else { $false }
+
    
     # Charge of logging configuration variables with validation and default values
     #get computer name

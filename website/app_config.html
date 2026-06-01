@@ -434,6 +434,7 @@
                 <svg id="wifi-eye-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
               </button>
             </div>
+            <button class="cfg-cancel-btn" type="button" id="wifi-copy-pc-btn" title="Copy the SSID and password from the PC's current WiFi connection">Copy from PC WiFi</button>
             <button class="cfg-save-btn" id="wifi-form-save">Save</button>
             <button class="cfg-cancel-btn" id="wifi-form-cancel">Cancel</button>
           </div>
@@ -634,7 +635,9 @@
       { title: 'VR Monitor', fields: [
         { path: 'VRMonitor.refresh_timer', label: 'Refresh Timer', type: 'number',
           min: 1, max: 120, unit: 'seconds',
-          desc: 'How often the dashboard polls headset status.' }
+          desc: 'How often the dashboard polls headset status.' },
+        { path: 'VRMonitor.showConsole', label: 'Show Monitoring Console', type: 'boolean',
+          desc: 'Display the VR Headset Monitoring console window on startup. Runs silently in background when disabled. Requires application restart.' }
       ]},
       { title: 'ADB', fields: [
         { path: 'ADB.adbPort_default', label: 'ADB Port', type: 'number',
@@ -1305,6 +1308,21 @@
       document.getElementById('wifi-pwd-toggle').innerHTML = EYE_ICON;
       _wifiEditSsid = null;
     }
+
+    document.getElementById('wifi-copy-pc-btn').addEventListener('click', function() {
+      fetch('/api/wifi-detect')
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          if (j.ok && j.ssid) {
+            document.getElementById('wifi-ssid-inp').value = j.ssid;
+            if (j.password) document.getElementById('wifi-pwd-inp').value = j.password;
+            showToast('Copied from PC WiFi', 2000);
+          } else {
+            showToast('No active WiFi detected on this PC', 2500);
+          }
+        })
+        .catch(function() { showToast('Server unreachable', 2500); });
+    });
 
     document.getElementById('wifi-add-btn').addEventListener('click', function() { showWifiForm(null); });
     document.getElementById('wifi-form-cancel').addEventListener('click', hideWifiForm);
