@@ -1,0 +1,43 @@
+# -------------------------------------------------------
+# VR HEADSET MANAGER - Release Include Rules
+#
+# Lines without ! = INCLUDE
+# Lines with !     = EXCLUDE (highest priority, overrides any include)
+# Paths are relative to the project root.
+# Both / and \ are accepted as separators.
+# Wildcards: * matches any characters except \ (no path crossing).
+# Folder patterns: /folder/ or /folder/* includes all files recursively.
+# -------------------------------------------------------
+
+# --- Root files ---
+/main.ps1
+/START_VR_HEADSET_MANAGER.cmd
+/README.md
+/LICENSE.md
+
+# --- Core modules ---
+/modules/
+
+# --- Config template (not the runtime config) ---
+/templates/
+
+# --- Website static pages and templates ---
+/website/
+!/website/timer/
+!/website/assets/app_icons/
+!/website/monitor.html
+!/website/*[monitoring].html
+!/website/*[video].html
+
+# --- Documentation (exclude scratch/test files) ---
+/docs/
+!/docs/test.ps1
+!/docs/test_invoke_usb.ps1
+!/docs/TODO_AI.txt
+!/docs/fr-FR/test.psd1
+
+# --- Sources: explicitly included subfolders ---
+/sources/ADB Wireless activator/
+/sources/mediamtx_v1.17.1_windows_amd64/
+/sources/powershell_Modules/
+/sources/scrcpy-win64-v4.0/

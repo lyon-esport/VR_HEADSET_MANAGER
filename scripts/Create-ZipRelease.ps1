@@ -9,14 +9,12 @@
     (alongside the project folder). Makes zero changes to the project folder.
 
 .DESCRIPTION
-    Scans the project folder and adds all files to a zip, excluding:
-      - logs\, data\, scripts\
-      - website\timer\, website\assets\app_icons\
-      - Generated HTML overlays and monitor pages
-      - config\config.json, config\mediamtx_headsets.yml, config backups
-      - docs\ scratch/test files
-      - CLAUDE.md, ToDo.txt, root *.json files, all dot-files/dot-folders
-      - Unused sources subfolders (resolved from config.json)
+    Reads scripts\.releaseinclude to determine which files to bundle.
+    The include file uses an inverted .gitignore syntax:
+      - Lines without ! = include pattern
+      - Lines with !    = exclude pattern (highest priority)
+      - /folder/ or /folder/* = include all files under that folder recursively
+      - * wildcard matches any characters except \ (no path separator crossing)
     A synthetic version.txt is added to the zip root entry.
 
 .PARAMETER Version
@@ -66,74 +64,67 @@ if (Test-Path -LiteralPath $zipPath) {
     Remove-Item -LiteralPath $zipPath -Force
 }
 
-# --- BUILD EXCLUSION RULES ---
-# Read config.json to determine which sources subfolders to keep
-$sourcesKeep = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-@("ADB Wireless activator", "powershell_Modules") | ForEach-Object { $sourcesKeep.Add($_) | Out-Null }
-$configJsonPath = Join-Path $projectRoot "config\config.json"
-if (Test-Path -LiteralPath $configJsonPath) {
-    $cfg = Get-Content -LiteralPath $configJsonPath -Raw | ConvertFrom-Json
-    if ($cfg.scrcpy.folder)                      { $sourcesKeep.Add(($cfg.scrcpy.folder   -split '[/\\]')[0]) | Out-Null }
-    if ($cfg.ADB.folder)                         { $sourcesKeep.Add(($cfg.ADB.folder      -split '[/\\]')[0]) | Out-Null }
-    if ($cfg.mediamtx -and $cfg.mediamtx.folder) { $sourcesKeep.Add(($cfg.mediamtx.folder -split '[/\\]')[0]) | Out-Null }
-} else {
-    Write-Host "  [Warning] config.json not found - using static sources keep-list only." -ForegroundColor Yellow
+# --- PARSE .releaseinclude ---
+$releaseIncludePath = Join-Path $PSScriptRoot ".releaseinclude"
+if (-not (Test-Path -LiteralPath $releaseIncludePath)) {
+    Write-Host "  ERROR: .releaseinclude not found at: $releaseIncludePath" -ForegroundColor Red
+    exit 1
 }
 
-# Excluded directory absolute paths - any file under these is skipped
-$excludedDirPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-@("logs", "data", "scripts", "website\timer", "website\assets\app_icons",
-  ".git", ".github", ".claude", ".vscode") | ForEach-Object {
-    $excludedDirPaths.Add((Join-Path $projectRoot $_)) | Out-Null
+function ConvertTo-PatternRegex {
+    param([string]$Pattern)
+    # Normalize separators to \
+    $p = $Pattern.Replace('/', '\')
+    # Strip leading \
+    if ($p.StartsWith('\')) { $p = $p.Substring(1) }
+    # Folder pattern: ends with \ or \* => match anything under that prefix
+    if ($p.EndsWith('\') -or $p.EndsWith('\*')) {
+        $prefix = $p.TrimEnd('*').TrimEnd('\')
+        return '^' + [regex]::Escape($prefix) + '(\\.+|$)'
+    }
+    # File pattern: replace * wildcard (no path crossing)
+    $escaped = [regex]::Escape($p)
+    $regexStr = $escaped.Replace('\*', '[^\\]*').Replace('\?', '[^\\]')
+    return '^' + $regexStr + '$'
 }
-# Excluded sources subfolders (dynamic, resolved from config)
-$sourcesDir = Join-Path $projectRoot "sources"
-if (Test-Path -LiteralPath $sourcesDir) {
-    foreach ($item in @(Get-ChildItem -LiteralPath $sourcesDir -Directory -ErrorAction SilentlyContinue)) {
-        if (-not $sourcesKeep.Contains($item.Name)) {
-            $excludedDirPaths.Add($item.FullName) | Out-Null
-        }
+
+$includeRegexes = [System.Collections.Generic.List[string]]::new()
+$excludeRegexes = [System.Collections.Generic.List[string]]::new()
+
+foreach ($rawLine in (Get-Content -LiteralPath $releaseIncludePath)) {
+    $line = $rawLine.Trim()
+    if ($line -eq '' -or $line.StartsWith('#')) { continue }
+    if ($line.StartsWith('!')) {
+        $excludeRegexes.Add((ConvertTo-PatternRegex -Pattern $line.Substring(1))) | Out-Null
+    } else {
+        $includeRegexes.Add((ConvertTo-PatternRegex -Pattern $line)) | Out-Null
     }
 }
 
-function Test-FileExcluded {
+function Test-FileIncluded {
     param([System.IO.FileInfo]$File)
-    $full = $File.FullName
-    $rel  = $full.Substring($projectRoot.Length + 1)  # relative to project root, e.g. "website\monitor.html"
-    $dir  = Split-Path $rel -Parent                    # parent segment, e.g. "website"
-    $name = $File.Name
+    $rel = $File.FullName.Substring($projectRoot.Length + 1)  # relative path from project root
 
-    # Excluded directory prefixes
-    foreach ($excl in $excludedDirPaths) {
-        if ($full.StartsWith($excl + '\') -or $full -eq $excl) { return $true }
+    # Always exclude: scripts\ folder (the release tooling itself)
+    if ($rel.StartsWith('scripts\') -or $rel -eq 'scripts') { return $false }
+
+    # Always exclude: dot-files and dot-folders at root level
+    $topSegment = ($rel -split '\\')[0]
+    if ($topSegment.StartsWith('.')) { return $false }
+
+    # Check include patterns
+    $included = $false
+    foreach ($rx in $includeRegexes) {
+        if ($rel -match $rx) { $included = $true; break }
+    }
+    if (-not $included) { return $false }
+
+    # Check exclude patterns (highest priority)
+    foreach ($rx in $excludeRegexes) {
+        if ($rel -match $rx) { return $false }
     }
 
-    # Root-level: dot-files (.gitignore etc.)
-    if ($dir -eq '' -and $name -like '.*') { return $true }
-    # Root-level: *.json scratch files
-    if ($dir -eq '' -and $name -like '*.json') { return $true }
-    # Root-level: named dev/AI files
-    if ($rel -in @('CLAUDE.md', 'ToDo.txt')) { return $true }
-
-    # sources\ root: only subfolders are kept; loose files at sources root are excluded
-    if ($dir -eq 'sources') { return $true }
-
-    # website\ generated files
-    if ($dir -eq 'website') {
-        if ($name.EndsWith('[monitoring].html') -or $name.EndsWith('[video].html')) { return $true }
-        if ($name -eq 'monitor.html') { return $true }
-    }
-
-    # config\ generated/backup files
-    if ($dir -eq 'config') {
-        if ($name -in @('mediamtx_headsets.yml', 'config.json')) { return $true }
-        if ($name -like '* - Copie*.json' -or $name -like '*_backup*.json') { return $true }
-    }
-
-    # docs\ scratch/test files
-    if ($rel -in @('docs\test.ps1', 'docs\test_invoke_usb.ps1', 'docs\TODO_AI.txt', 'docs\fr-FR\test.psd1')) { return $true }
-
-    return $false
+    return $true
 }
 
 # --- SCAN FILES ---
@@ -142,7 +133,7 @@ $allFiles = @(Get-ChildItem -LiteralPath $projectRoot -Recurse -File -Force -Err
 $included = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
 $skipped  = 0
 foreach ($f in $allFiles) {
-    if (Test-FileExcluded -File $f) { $skipped++ } else { $included.Add($f) }
+    if (Test-FileIncluded -File $f) { $included.Add($f) } else { $skipped++ }
 }
 Write-Host "  Including : $($included.Count) files" -ForegroundColor White
 Write-Host "  Excluding : $skipped files" -ForegroundColor DarkGray
