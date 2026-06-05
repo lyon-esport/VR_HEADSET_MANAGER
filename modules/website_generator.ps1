@@ -1,5 +1,9 @@
 
 #Update-HeadsetMonitoringFile -knownHeadsetsInfo $knownHeadsetsInfo -templatePath (Join-Path -Path $global:ScriptPath -ChildPath "\website\template\headset_status_v2.pshtml") # $global:Monitoring_headsetTemplate -outputPath $global:outputPath
+
+# Per-file hash cache - avoids rewriting HTML when data has not changed since last render
+$script:_monitoringHashes = @{}
+
 function Update-HeadsetMonitoringFile {
     param(
         [Parameter(Mandatory=$true)]
@@ -11,7 +15,7 @@ function Update-HeadsetMonitoringFile {
         [string]$outputPath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\")
     )
 
-    if (-not (Test-Path -Path $templatePath)) {
+    if (-not (Test-Path -LiteralPath $templatePath)) {
         Write-Host "Error: The headset monitoring template file does not exist at path $templatePath" -ForegroundColor Red
         return
     }
@@ -37,29 +41,18 @@ function Update-HeadsetMonitoringFile {
             running_app_icon = if ($headset.RunningAppIcon) { $headset.RunningAppIcon } else { "" }
             power_state     = if ($headset.PowerState -and $headset.PowerState -ne "-") { $headset.PowerState } else { "" }
             time_remaining_min = if ($headset.TimeRemainingMin -and $headset.TimeRemainingMin -ne "-") { $headset.TimeRemainingMin } else { "" }
-            #battery_emoji   = if ($([convert]::ToInt32($($headset.Battery -replace ' %','') , 10)) -lt 30) { [System.Char]::ConvertFromUtf32(0x1FAAB)  } else { [System.Char]::ConvertFromUtf32(0x1F50B) }
-            #charging_emoji  = if ($headset.Charging -ne $true) { [System.Char]::ConvertFromUtf32(0x274C) } else { [System.Char]::ConvertFromUtf32(0x26A1) }
-            #temp_emoji      = if ($headset.Temp -eq "-") { [System.Char]::ConvertFromUtf32(0x2753) } elseif ($headset.Temp -lt 50) { [System.Char]::ConvertFromUtf32(0x1F9CA) } else { [System.Char]::ConvertFromUtf32(0x1F525) }
         }
-        $headsetsHtml = Invoke-EpsTemplate -Path $templatePath -Safe -binding $deviceInfo #$headset
-        <#
-        [System.Char]::ConvertFromUtf32(0x1F50B) # battery emoji
-        [System.Char]::ConvertFromUtf32(0x1FAAB) # low battery emoji
-        [System.Char]::ConvertFromUtf32(0x1F4A1) # light bulb emoji
-        [System.Char]::ConvertFromUtf32(0x1F525) # fire emoji
-        [System.Char]::ConvertFromUtf32(0x1F4A6) # sweat emoji
-        [System.Char]::ConvertFromUtf32(0x1F4A4)    # sleep emoji
-        [System.Char]::ConvertFromUtf32(0x1F480) # skull emoji
-        [System.Char]::ConvertFromUtf32(0x2705) # check mark emoji
-        [System.Char]::ConvertFromUtf32(0x26A1) # high voltage emoji
-        [System.Char]::ConvertFromUtf32(0x26A0) # warning emoji
-        [System.Char]::ConvertFromUtf32(0x1F6AB) # no entry emoji
-#>
-        # write html to $output/$name[monitoring].html
-        # $value =  @{ Name = "Quest3 BLEU" }
-        $outputFile = Join-Path -Path $outputPath -ChildPath ((Convert-Displayname($headset.Name)) + "[monitoring].html")
-        $headsetsHtml | Out-File -LiteralPath $outputFile -Encoding UTF8
+        $headsetsHtml = Invoke-EpsTemplate -Path $templatePath -Safe -binding $deviceInfo
 
+        $outputFile = Join-Path -Path $outputPath -ChildPath ((Convert-Displayname($headset.Name)) + "[monitoring].html")
+
+        # Skip write if content has not changed
+        $hashBytes = [System.Security.Cryptography.MD5]::Create().ComputeHash([System.Text.Encoding]::UTF8.GetBytes($headsetsHtml))
+        $hashStr = ($hashBytes | ForEach-Object { $_.ToString('x2') }) -join ''
+        if ($script:_monitoringHashes[$outputFile] -ne $hashStr) {
+            Write-FileWithoutBom -Path $outputFile -Content $headsetsHtml
+            $script:_monitoringHashes[$outputFile] = $hashStr
+        }
     }
 }
 
@@ -74,18 +67,16 @@ function Write-htmlMonitor {
         [string]$outputPath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\monitor.html")
     )
 
-    if (-not (Test-Path -Path $templatePath)) {
+    if (-not (Test-Path -LiteralPath $templatePath)) {
         Write-Host "Error: The monitor template file does not exist at path $templatePath" -ForegroundColor Red
         return
     }
-
-
 
     $TemplateVariables = @{
         headsets = $knownHeadsets | ForEach-Object { Convert-Displayname $_.Name }
     }
     $headsetsHtml = Invoke-EpsTemplate -Path $templatePath -Safe -binding $TemplateVariables
-    $headsetsHtml | Out-File -FilePath $outputPath -Encoding UTF8
+    Write-FileWithoutBom -Path $outputPath -Content $headsetsHtml
 }
 
 # Generates one [video].html per headset using the scrcpy WHEP video template.
@@ -102,7 +93,7 @@ function Update-HeadsetVideoFile {
         [string]$outputPath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\")
     )
 
-    if (-not (Test-Path -Path $templatePath)) {
+    if (-not (Test-Path -LiteralPath $templatePath)) {
         Write-Log ("Video template not found: $templatePath") -Level WARNING
         return
     }
@@ -127,10 +118,15 @@ function Update-HeadsetVideoFile {
 
         $videoHtml = Invoke-EpsTemplate -Path $templatePath -Safe -binding $videoInfo
 
-        # Write to <DisplayName>[video].html  e.g. Q3_BLUE[video].html
-        # Use -LiteralPath because brackets in filenames are misread as wildcards by -FilePath.
         $outputFile = Join-Path -Path $outputPath -ChildPath ((Convert-Displayname $headset.Name) + "[video].html")
-        $videoHtml | Out-File -LiteralPath $outputFile -Encoding UTF8
+
+        # Skip write if content has not changed
+        $hash = ($videoHtml | Get-FileHash -Algorithm MD5 -ErrorAction SilentlyContinue)
+        $hashStr = if ($hash) { $hash.Hash } else { [guid]::NewGuid().ToString() }
+        if ($script:_monitoringHashes[$outputFile] -ne $hashStr) {
+            Write-FileWithoutBom -Path $outputFile -Content $videoHtml
+            $script:_monitoringHashes[$outputFile] = $hashStr
+        }
     }
 }
 

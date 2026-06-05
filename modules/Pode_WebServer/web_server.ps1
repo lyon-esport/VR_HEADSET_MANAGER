@@ -321,19 +321,28 @@ $script:updateVersionsJob          = $null
 $script:updateVersionsProgFile     = [System.IO.Path]::Combine($env:TEMP, 'vrm_update_versions.json')
 $script:updateVersionsHeadsetName  = $null
 
-# Background USB detection cache - avoids blocking the main loop on slow ADB probes
-$script:usbInfoJob     = $null
-$script:usbInfoDetails = $null   # last raw result from Get-AdbUsbDeviceDetails ($null = no device)
+# Background USB detection - single persistent job, loads modules once, polls every 3 seconds
+$script:usbInfoResultFile = [System.IO.Path]::Combine($env:TEMP, 'vrm_usb_info.json')
+$script:usbInfoJob = $null
 
-# Proactive: start first USB probe immediately so first page-load already has data
 if ($adbPath -and (Test-Path -LiteralPath $adbPath)) {
     $uvSp = $ScriptPath; $uvCp = $ConfigFilePath; $uvExe = $adbPath; $uvPort = $adbPort; $uvPkg = $apkPackage
+    $uvOut = $script:usbInfoResultFile
     $script:usbInfoJob = Start-Job -ScriptBlock {
-        param($sp,$cp,$exe,$port,$pkg)
+        param($sp, $cp, $exe, $port, $pkg, $outFile)
         $global:ScriptPath = $sp; $global:ConfigFilePath = $cp; $global:IsWebServerProcess = $true
         . (Join-Path $sp 'modules\scripts_init.ps1')
-        Get-AdbUsbDeviceDetails -adb $exe -AdbPort $port -PackageName $pkg
-    } -ArgumentList $uvSp,$uvCp,$uvExe,$uvPort,$uvPkg
+        while ($true) {
+            try {
+                $result = Get-AdbUsbDeviceDetails -adb $exe -AdbPort $port -PackageName $pkg
+                $json = if ($result) { $result | ConvertTo-Json -Compress } else { 'null' }
+            } catch {
+                $json = 'null'
+            }
+            try { [System.IO.File]::WriteAllText($outFile, $json) } catch {}
+            Start-Sleep -Seconds 3
+        }
+    } -ArgumentList $uvSp, $uvCp, $uvExe, $uvPort, $uvPkg, $uvOut
 }
 
 try {
@@ -343,22 +352,7 @@ try {
         $request  = $context.Request
         $response = $context.Response
 
-        # USB probe maintenance: collect completed job and immediately restart.
-        # Runs on every request so detection is continuous, not gated on the usbdeviceinfo endpoint.
-        if ($script:usbInfoJob -and $script:usbInfoJob.State -notin @('Running','NotStarted')) {
-            $script:usbInfoDetails = Receive-Job -Job $script:usbInfoJob -ErrorAction SilentlyContinue
-            Remove-Job -Job $script:usbInfoJob -Force -ErrorAction SilentlyContinue
-            $script:usbInfoJob = $null
-        }
-        if (-not $script:usbInfoJob -and $adbPath -and (Test-Path -LiteralPath $adbPath)) {
-            $uvSp = $ScriptPath; $uvCp = $ConfigFilePath; $uvExe = $adbPath; $uvPort = $adbPort; $uvPkg = $apkPackage
-            $script:usbInfoJob = Start-Job -ScriptBlock {
-                param($sp,$cp,$exe,$port,$pkg)
-                $global:ScriptPath = $sp; $global:ConfigFilePath = $cp; $global:IsWebServerProcess = $true
-                . (Join-Path $sp 'modules\scripts_init.ps1')
-                Get-AdbUsbDeviceDetails -adb $exe -AdbPort $port -PackageName $pkg
-            } -ArgumentList $uvSp,$uvCp,$uvExe,$uvPort,$uvPkg
-        }
+        # USB probe runs in a persistent background job - result read from temp file on demand
 
         # CORS preflight
         if ($request.HttpMethod -eq 'OPTIONS') {
@@ -681,6 +675,57 @@ try {
                     $response.ContentLength64 = $errBytes.Length
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: GET /api/headset-status?name=<DisplayName>
+        # Lightweight status endpoint: reads known_headsets_infos.csv (written by VRMonitor) and
+        # returns the live data for one headset as JSON. No ADB call. Used by the monitoring overlay
+        # JS to update the DOM every second without re-downloading the full HTML page.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/headset-status') {
+            try {
+                $rawName = $request.QueryString['name']
+                if (-not $rawName) { throw "Missing name parameter" }
+
+                $infosPath = $global:knownHeadsetsInfosFilePath
+                if (-not (Test-Path -LiteralPath $infosPath)) {
+                    Send-JsonResponse -Response $response -StatusCode 404 -Body @{ error = 'No monitoring data yet' }
+                    continue
+                }
+
+                $rows = Import-Csv -LiteralPath $infosPath -Delimiter ";"
+                $row  = $rows | Where-Object { $_.Name -eq $rawName } | Select-Object -First 1
+
+                if (-not $row) {
+                    Send-JsonResponse -Response $response -StatusCode 404 -Body @{ error = 'Headset not found' }
+                    continue
+                }
+
+                # Parse raw CSV strings into typed values for the JS consumer
+                $battery    = if ($row.Battery -and $row.Battery -ne '-') { [int]($row.Battery -replace '\s*%','') } else { $null }
+                $battLeft   = if ($row.BatteryControllerLeft  -and $row.BatteryControllerLeft  -ne '-') { [int]($row.BatteryControllerLeft  -replace '\s*%','') } else { $null }
+                $battRight  = if ($row.BatteryControllerRight -and $row.BatteryControllerRight -ne '-') { [int]($row.BatteryControllerRight -replace '\s*%','') } else { $null }
+                $temp       = if ($row.Temp -and $row.Temp -ne '-') { [int]($row.Temp -replace ',','.') } else { $null }
+                $timeMin    = if ($row.TimeRemainingMin -and $row.TimeRemainingMin -ne '-' -and $row.TimeRemainingMin -ne '') { [int]$row.TimeRemainingMin } else { $null }
+
+                $result = @{
+                    ping                 = [bool]($row.Ping -eq 'True')
+                    battery              = $battery
+                    battery_ctrl_left    = $battLeft
+                    battery_ctrl_right   = $battRight
+                    charging             = [bool]($row.Charging -eq 'True')
+                    temp                 = $temp
+                    power_state          = if ($row.PowerState -and $row.PowerState -ne '-') { $row.PowerState } else { '' }
+                    time_remaining_min   = $timeMin
+                    running_app          = if ($row.RunningApp)     { $row.RunningApp }     else { '' }
+                    running_app_icon     = if ($row.RunningAppIcon) { $row.RunningAppIcon } else { '' }
+                }
+                Send-JsonResponse -Response $response -Body $result
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ error = $_.Exception.Message }
             } finally {
                 $response.Close()
             }
@@ -1983,8 +2028,11 @@ try {
         # API: GET /api/usbdeviceinfo  - returns full details of USB-connected ADB device
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/usbdeviceinfo') {
             try {
-                # Build response from last cached details (updated by the top-of-loop probe)
-                $details = $script:usbInfoDetails
+                # Build response from last result written by the persistent USB probe job
+                $details = try {
+                    $raw = [System.IO.File]::ReadAllText($script:usbInfoResultFile)
+                    if ($raw -and $raw -ne 'null') { $raw | ConvertFrom-Json } else { $null }
+                } catch { $null }
                 $result  = @{ found = $false; ip = ''; model = ''; serialNumber = ''; ssid = ''; expectedSsid = ''; wifiAdbOpen = $false; apkInstalled = $false; alreadyRegistered = $false }
                 if ($details) {
                     $knownNetworks   = Get-WifiNetworks
@@ -2961,6 +3009,10 @@ Start-Process powershell.exe -ArgumentList @('-File',$Script,'-ScriptPath',$Scri
 } finally {
     $listener.Stop()
     $listener.Close()
+    if ($script:usbInfoJob) {
+        Stop-Job  $script:usbInfoJob -ErrorAction SilentlyContinue
+        Remove-Job $script:usbInfoJob -Force -ErrorAction SilentlyContinue
+    }
     if ($PidFile -and (Test-Path -LiteralPath $PidFile)) {
         Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
     }

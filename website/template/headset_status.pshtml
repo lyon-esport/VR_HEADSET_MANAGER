@@ -92,7 +92,7 @@
         border-color: rgba(96,165,250,0.25);
 		color: white;
       }
-      /* Hot temperature > 50 °C: red background + text */
+      /* Hot temperature > 50 degC: red background + text */
       .temp--hot {
         background: rgba(239, 68, 68, 0.20);
         border-color: rgba(239, 68, 68, 0.45);
@@ -118,7 +118,7 @@
     <div class="wrap">
       <main class="card" role="main" aria-label="Status <%= $name %>">
         <h1 class="title"><%= $name %>
-           <span class="muted">
+           <span class="muted" id="status-emoji">
             <% if (-not $ping) { %>☠️<% } elseif ( ($temp -gt $temperature_highLevel) -or ($battery -lt $headset_battery_criticalLevel) -or (-not $charging) ) { %>⚠️<% } else { %>✅<% } %>
         </span>
         </h1>
@@ -172,109 +172,173 @@
 %>
 <% if ($assetModelPath) { %>
         <div class="device-icons" aria-label="Device hardware status">
-          <img src="assets/<%= $assetModelPath %>/Ctrl_Left_<%= $ctrlLeftColor %>.png"
+          <img id="icon-left"
+               src="assets/<%= $assetModelPath %>/Ctrl_Left_<%= $ctrlLeftColor %>.png"
                alt="Left Controller - <%= $ctrlLeftColor %>" class="device-icon" />
-          <img src="assets/<%= $assetModelPath %>/Headset_<%= $headsetIconColor %>.png"
+          <img id="icon-headset"
+               src="assets/<%= $assetModelPath %>/Headset_<%= $headsetIconColor %>.png"
                alt="Headset - <%= $headsetIconColor %>" class="device-icon" />
-          <img src="assets/<%= $assetModelPath %>/Ctrl_Right_<%= $ctrlRightColor %>.png"
+          <img id="icon-right"
+               src="assets/<%= $assetModelPath %>/Ctrl_Right_<%= $ctrlRightColor %>.png"
                alt="Right Controller - <%= $ctrlRightColor %>" class="device-icon" />
         </div>
 <% } %>
         <div class="values" aria-live="polite">
           <span class="batt" aria-label="Battery percentage">
-            <span class="emoji" aria-hidden="true">
+            <span class="emoji" aria-hidden="true" id="batt-emoji">
             <% if ($battery -lt $headset_battery_criticalLevel) { %>🪫<% } else { %>🔋<% } %>
             </span>
-            <strong><%= $battery %> %</strong>
-            <span class="muted">
+            <strong id="batt-value"><%= $battery %> %</strong>
+            <span class="muted" id="charge-emoji">
               <% if ($charging) { %>⚡<% } else { %>🚫<% } %>
             </span>
-            <% if ($timeDisplay) { %><% if ($power_state) { %><span style="font-size:0.85em;margin-left:4px;color:<% if ($power_state -eq 'charging') { %>limegreen<% } else { %>crimson<% } %>;font-weight:bold"><% if ($power_state -eq 'charging') { %>&#x2197;<% } else { %>&#x2198;<% } %></span><% } %><span class="muted" style="font-size:0.75em;margin-left:2px">~<%= $timeDisplay %></span><% } %>
+            <span id="time-remaining-wrap"<% if (-not $timeDisplay) { %> style="display:none"<% } %>>
+              <% if ($power_state) { %><span id="power-state-arrow" style="font-size:0.85em;margin-left:4px;color:<% if ($power_state -eq 'charging') { %>limegreen<% } else { %>crimson<% } %>;font-weight:bold"><% if ($power_state -eq 'charging') { %>&#x2197;<% } else { %>&#x2198;<% } %></span><% } else { %><span id="power-state-arrow" style="display:none"></span><% } %><span class="muted" id="time-val" style="font-size:0.75em;margin-left:2px">~<%= $timeDisplay %></span>
+            </span>
           </span>
           <span class="temp" aria-label="Temperature in Celsius">
-            <span class="emoji" aria-hidden="true">
+            <span class="emoji" aria-hidden="true" id="temp-emoji">
               <% if ($temp -gt $temperature_highLevel) { %>🔥<% } else { %>❄️<% } %>
             </span>
-            <strong><%= $temp %>&nbsp;°C</strong>
+            <strong id="temp-value"><%= $temp %>&nbsp;°C</strong>
           </span>
         </div>
       </main>
     </div>
 
     <script>
+      // Baked-in constants from template generation (static, never change at runtime)
+      var _NAME  = '<%= $name -replace "'","\\'" %>';
+      var _MODEL = '<%= $assetModelPath %>';
+      var _CRIT      = <%= $headset_battery_criticalLevel %>;
+      var _WARN      = <%= $headset_battery_warningLevel %>;
+      var _CTRL_CRIT = <%= $controllers_battery_criticalLevel %>;
+      var _CTRL_WARN = <%= $controllers_battery_warningLevel %>;
+      var _TEMP_HIGH = <%= $temperature_highLevel %>;
+
       function applyBatteryClass() {
-        const batt = document.querySelector('.batt');
+        var batt = document.querySelector('.batt');
         if (!batt) return;
-
-        const strong = batt.querySelector('strong');
+        var strong = batt.querySelector('strong');
         if (!strong) return;
-
-        const num = parseInt((strong.textContent || '').replace(/\D/g, ''), 10);
+        var num = parseInt((strong.textContent || '').replace(/\D/g, ''), 10);
         if (isNaN(num)) return;
-
         batt.classList.remove('batt--low', 'batt--mid', 'batt--ok');
-
-        if (num <= <%= $headset_battery_criticalLevel %>) {
-          batt.classList.add('batt--low');   // red
-        } else if (num < <%= $headset_battery_warningLevel %>) {
-          batt.classList.add('batt--mid');   // orange
+        if (num <= _CRIT) {
+          batt.classList.add('batt--low');
+        } else if (num < _WARN) {
+          batt.classList.add('batt--mid');
         } else {
-          batt.classList.add('batt--ok');    // blue
+          batt.classList.add('batt--ok');
         }
       }
 
       function applyTempClass() {
-        const temp = document.querySelector('.temp');
+        var temp = document.querySelector('.temp');
         if (!temp) return;
-
-        const strong = temp.querySelector('strong');
+        var strong = temp.querySelector('strong');
         if (!strong) return;
-
-        // Ex: "52 °C" -> 52
-        const t = parseInt((strong.textContent || '').replace(/\D/g, ''), 10);
+        var t = parseInt((strong.textContent || '').replace(/\D/g, ''), 10);
         if (isNaN(t)) return;
-
-        temp.classList.toggle('temp--hot', t > <%= $temperature_highLevel %> );
+        temp.classList.toggle('temp--hot', t > _TEMP_HIGH);
       }
 
-      // On load
-      document.addEventListener('DOMContentLoaded', () => {
+      function _iconColor(batt, crit, warn) {
+        if (batt === null) return 'GREY';
+        if (batt < crit) return 'RED';
+        if (batt < warn) return 'ORANGE';
+        return 'GREEN';
+      }
+
+      function _headsetColor(ping, batt, crit, warn) {
+        if (!ping) return 'UNAVAILABLE';
+        if (batt === null) return 'WHITE';
+        if (batt < crit) return 'RED';
+        if (batt < warn) return 'ORANGE';
+        return 'GREEN';
+      }
+
+      function _timeStr(min) {
+        if (!min) return '';
+        var h = Math.floor(min / 60), m = min % 60;
+        return h > 0 ? h + 'h ' + m + 'm' : m + 'm';
+      }
+
+      function _setText(id, text) {
+        var el = document.getElementById(id);
+        if (el) el.textContent = text;
+      }
+
+      function _updateFromJson(d) {
+        // Status emoji
+        var se = document.getElementById('status-emoji');
+        if (se) {
+          if (!d.ping) se.textContent = '☠️';
+          else if ((d.temp !== null && d.temp > _TEMP_HIGH) || (d.battery !== null && d.battery < _CRIT) || !d.charging) se.textContent = '⚠️';
+          else se.textContent = '✅';
+        }
+
+        // Battery
+        _setText('batt-value', d.battery !== null ? d.battery + ' %' : '-');
+        _setText('batt-emoji', d.battery !== null && d.battery < _CRIT ? '🪫' : '🔋');
+        _setText('charge-emoji', d.charging ? '⚡' : '🚫');
+
+        // Time remaining
+        var tw = document.getElementById('time-remaining-wrap');
+        var ts = _timeStr(d.time_remaining_min);
+        if (tw) tw.style.display = ts ? '' : 'none';
+        _setText('time-val', ts ? '~' + ts : '');
+
+        // Power state arrow
+        var pa = document.getElementById('power-state-arrow');
+        if (pa) {
+          if (ts && d.power_state) {
+            pa.style.display = '';
+            pa.style.color = d.power_state === 'charging' ? 'limegreen' : 'crimson';
+            pa.innerHTML = d.power_state === 'charging' ? '&#x2197;' : '&#x2198;';
+          } else {
+            pa.style.display = 'none';
+          }
+        }
+
+        // Temperature
+        _setText('temp-value', d.temp !== null ? d.temp + ' °C' : '-');
+        _setText('temp-emoji', d.temp !== null && d.temp > _TEMP_HIGH ? '🔥' : '❄️');
+
+        // Device icons (only when model is known)
+        if (_MODEL) {
+          var hc = _headsetColor(d.ping, d.battery, _CRIT, _WARN);
+          var lc = _iconColor(d.battery_ctrl_left, _CTRL_CRIT, _CTRL_WARN);
+          var rc = _iconColor(d.battery_ctrl_right, _CTRL_CRIT, _CTRL_WARN);
+          var iconL = document.getElementById('icon-left');
+          var iconH = document.getElementById('icon-headset');
+          var iconR = document.getElementById('icon-right');
+          if (iconL) iconL.src = 'assets/' + _MODEL + '/Ctrl_Left_'  + lc + '.png';
+          if (iconH) iconH.src = 'assets/' + _MODEL + '/Headset_'    + hc + '.png';
+          if (iconR) iconR.src = 'assets/' + _MODEL + '/Ctrl_Right_' + rc + '.png';
+        }
+
+        applyBatteryClass();
+        applyTempClass();
+      }
+
+      // On load: apply CSS classes to the EPS-rendered initial content
+      document.addEventListener('DOMContentLoaded', function() {
         applyBatteryClass();
         applyTempClass();
       });
 
-      // Watch for dynamic changes
-      const battTarget = document.querySelector('.batt strong');
-      if (battTarget) {
-        const moBatt = new MutationObserver(applyBatteryClass);
-        moBatt.observe(battTarget, { characterData: true, childList: true, subtree: true });
-      }
-
-      const tempTarget = document.querySelector('.temp strong');
-      if (tempTarget) {
-        const moTemp = new MutationObserver(applyTempClass);
-        moTemp.observe(tempTarget, { characterData: true, childList: true, subtree: true });
-      }
-
-  (function () {
-    var INTERVAL_MS = 1000;
-    function refresh() {
-      fetch(window.location.href, { cache: 'no-store' })
-        .then(function (r) { return r.text(); })
-        .then(function (html) {
-          var doc = new DOMParser().parseFromString(html, 'text/html');
-          var newCard = doc.querySelector('.card');
-          var curCard = document.querySelector('.card');
-          if (newCard && curCard) {
-            curCard.innerHTML = newCard.innerHTML;
-            applyBatteryClass();
-            applyTempClass();
-          }
-        })
-        .catch(function () {});
-    }
-    setInterval(refresh, INTERVAL_MS);
-  })();
+      // Polling: fetch only JSON data, update DOM in-place (no full-page reload)
+      (function () {
+        var INTERVAL_MS = 1000;
+        function refresh() {
+          fetch('/api/headset-status?name=' + encodeURIComponent(_NAME), { cache: 'no-store' })
+            .then(function (r) { return r.json(); })
+            .then(_updateFromJson)
+            .catch(function () {});
+        }
+        setInterval(refresh, INTERVAL_MS);
+      })();
     </script>
   </body>
 </html>
