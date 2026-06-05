@@ -262,7 +262,7 @@
             pc.onicegatheringstatechange = function() {
               if (pc.iceGatheringState === 'complete') resolve();
             };
-            setTimeout(resolve, 4000);
+            setTimeout(resolve, 500);
           });
 
           // POST the SDP offer to the mediamtx WHEP endpoint

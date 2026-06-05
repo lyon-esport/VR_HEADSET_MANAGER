@@ -178,7 +178,7 @@ function Add-RestreamPath {
         runOnDemand             = $cmd
         runOnDemandRestart      = $true
         runOnDemandStartTimeout = "15s"
-        runOnDemandCloseAfter   = "0s"
+        runOnDemandCloseAfter   = "30s"
     } | ConvertTo-Json -Compress
 
     $apiUrl = "http://localhost:$($global:mediamtxApiPort)/v3/config/paths/add/$pathName"
