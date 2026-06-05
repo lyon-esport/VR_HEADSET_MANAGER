@@ -198,6 +198,9 @@ function Start-VRMonitor {
             # Sync mediamtx restream paths with current headsets
             Sync-RestreamPaths
 
+            # Computer workload snapshot (throttled to once per minute via Update-ComputerMonitoring)
+            Update-ComputerMonitoring
+
             Write-Log ($msg.JobRestartsIn -f $jobName, $VRMonitor_refresh_timer) -Level DEBUG
            
             Start-Sleep -Seconds $VRMonitor_refresh_timer

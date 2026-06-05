@@ -330,7 +330,7 @@
     HeadsetsSaved = "Headsets have been reassigned IDs and saved to '{0}'."
 
     # ==========================================
-    # headsets_infos_manager.ps1
+    # headsets_monitoring.ps1
     # ==========================================
     JobNotFound = "Job {0} not found -- Don't need to kill it"
     JobCannotBeStopped = "Job {0} cannot be stopped"
@@ -485,4 +485,10 @@
     StorageInfoQuery       = "Querying storage info on {0}"
     StorageInfoResult      = "Storage on {0}: {1} GB total, {2} GB used, {3} GB free ({4}% used)"
     StorageInfoError       = "Failed to parse storage info for {0}"
+
+    # ==========================================
+    # utils.ps1 - computer monitoring
+    # ==========================================
+    ComputerMonitoringUpdated = "Computer monitoring snapshot updated."
+    ComputerMonitoringSkipped = "Computer monitoring skipped (not due yet)."
 }

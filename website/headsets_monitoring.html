@@ -165,6 +165,122 @@
     [data-theme="light"] tbody tr          { border-color: var(--border); }
     [data-theme="light"] .mon-launch-btn   { background: #e8e8e8; border-color: #c8c8c8; color: #555; }
     [data-theme="light"] .mon-launch-btn:hover { background: rgba(59,130,246,0.1); border-color: rgba(59,130,246,0.5); color: #3b82f6; }
+
+    /* ── Computer monitoring dropdown ── */
+    .comp-section {
+      margin-top: 16px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .comp-section summary {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      background: var(--th-bg);
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--muted);
+      user-select: none;
+      list-style: none;
+    }
+    .comp-section summary::-webkit-details-marker { display: none; }
+    .comp-section summary .chevron {
+      margin-left: auto;
+      transition: transform 0.2s;
+    }
+    .comp-section[open] summary .chevron { transform: rotate(90deg); }
+    .comp-body {
+      padding: 14px;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 12px;
+    }
+    .comp-card {
+      background: #161616;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 11px 13px;
+    }
+    [data-theme="light"] .comp-card { background: #e8e8e8; }
+    .comp-card-title {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+    .comp-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      padding: 2px 0;
+      gap: 8px;
+    }
+    .comp-row .lbl { color: #666; white-space: nowrap; }
+    .comp-row .val { color: var(--text); font-variant-numeric: tabular-nums; text-align: right; }
+    .comp-bar-wrap {
+      height: 4px;
+      background: #222;
+      border-radius: 2px;
+      margin-top: 6px;
+      overflow: hidden;
+    }
+    [data-theme="light"] .comp-bar-wrap { background: #ccc; }
+    .comp-bar {
+      height: 100%;
+      border-radius: 2px;
+      transition: width 0.4s;
+    }
+    .comp-ts {
+      grid-column: 1 / -1;
+      font-size: 11px;
+      color: #555;
+      text-align: right;
+      padding-top: 2px;
+    }
+    .comp-workload-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    .comp-workload-table th {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      text-align: right;
+      padding: 2px 4px 5px;
+    }
+    .comp-workload-table th:first-child { text-align: left; }
+    .comp-workload-table td {
+      padding: 3px 4px;
+      text-align: right;
+      white-space: nowrap;
+      color: var(--text);
+    }
+    .comp-workload-table td:first-child { text-align: left; color: #888; }
+    .comp-workload-card { grid-column: 1 / -1; }
+
+    .comp-refresh-btn {
+      margin-left: auto;
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 10px;
+      background: none; border: 1px solid #333; border-radius: 4px;
+      color: var(--muted); font-size: 10px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.06em;
+      cursor: pointer; transition: color 0.15s, border-color 0.15s, background 0.15s;
+    }
+    .comp-refresh-btn:hover { color: #3b82f6; border-color: rgba(59,130,246,0.5); background: rgba(59,130,246,0.08); }
+    .comp-refresh-btn.spinning svg { animation: comp-spin 0.7s linear infinite; }
+    @keyframes comp-spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
@@ -218,6 +334,21 @@
         </tbody>
       </table>
     </div>
+
+    <details class="comp-section" id="comp-section">
+      <summary>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        Computer Statistics
+        <button class="comp-refresh-btn" id="comp-refresh-btn" title="Force immediate refresh" onclick="event.preventDefault();forceCompRefresh()">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-.49-4.49"/></svg>
+          Refresh
+        </button>
+        <svg class="chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+      </summary>
+      <div class="comp-body" id="comp-body">
+        <div style="color:#555;font-size:12px;padding:8px 0">Loading computer stats...</div>
+      </div>
+    </details>
   </div>
 
   <script>
@@ -348,6 +479,142 @@
         })
         .catch(function() { ind.style.display = 'none'; });
     }
+
+    // ── Computer monitoring ──────────────────────────────────────────────────
+    var COMP_JSON_PATH  = '../data/computer_monitoring.json';
+    var COMP_REFRESH_MS = 30000;
+
+    function barColor(pct) {
+      if (pct >= 85) return '#ef4444';
+      if (pct >= 60) return '#f97316';
+      return '#3b82f6';
+    }
+
+    function compBar(pct) {
+      var p = Math.min(100, Math.max(0, pct || 0));
+      return '<div class="comp-bar-wrap"><div class="comp-bar" style="width:' + p + '%;background:' + barColor(p) + '"></div></div>';
+    }
+
+    function renderComp(d) {
+      var body = document.getElementById('comp-body');
+      if (!d) { body.innerHTML = '<div style="color:#555;font-size:12px;padding:4px 0">No data yet. Computer stats are collected once per minute.</div>'; return; }
+      var html = '';
+
+      // CPU card
+      if (d.CPU) {
+        var c = d.CPU;
+        html += '<div class="comp-card">' +
+          '<div class="comp-card-title">CPU</div>' +
+          (c.Model ? '<div class="comp-row"><span class="lbl">Model</span><span class="val" style="font-size:11px;max-width:130px;overflow:hidden;text-overflow:ellipsis" title="' + esc(c.Model) + '">' + esc(c.Model) + '</span></div>' : '') +
+          '<div class="comp-row"><span class="lbl">Cores</span><span class="val">' + esc(c.PhysicalCores) + 'P / ' + esc(c.LogicalCores) + 'L</span></div>' +
+          '<div class="comp-row"><span class="lbl">Load</span><span class="val">' + esc(c.LoadPercent) + ' %</span></div>' +
+          compBar(c.LoadPercent) +
+          '</div>';
+      }
+
+      // RAM card
+      if (d.RAM) {
+        var r = d.RAM;
+        html += '<div class="comp-card">' +
+          '<div class="comp-card-title">RAM</div>' +
+          '<div class="comp-row"><span class="lbl">Type</span><span class="val">' + esc(r.Generation || '-') + (r.SpeedMHz ? ' ' + esc(r.SpeedMHz) + ' MHz' : '') + '</span></div>' +
+          '<div class="comp-row"><span class="lbl">Total</span><span class="val">' + esc(r.TotalGB) + ' GB</span></div>' +
+          '<div class="comp-row"><span class="lbl">Used</span><span class="val">' + esc(r.UsedGB) + ' GB (' + esc(r.UsedPercent) + '%)</span></div>' +
+          '<div class="comp-row"><span class="lbl">Free</span><span class="val">' + esc(r.FreeGB) + ' GB</span></div>' +
+          compBar(r.UsedPercent) +
+          '</div>';
+      }
+
+      // GPU cards
+      if (d.GPU && d.GPU.length) {
+        d.GPU.forEach(function(g) {
+          var load3d = (g.Load3DPercent != null) ? g.Load3DPercent : null;
+          var vramUsed = (g.VramUsedPercent != null) ? g.VramUsedPercent : null;
+          html += '<div class="comp-card">' +
+            '<div class="comp-card-title">GPU ' + (d.GPU.length > 1 ? esc(g.Index) + ' ' : '') + '</div>' +
+            (g.Model ? '<div class="comp-row"><span class="lbl">Model</span><span class="val" style="font-size:11px;max-width:130px;overflow:hidden;text-overflow:ellipsis" title="' + esc(g.Model) + '">' + esc(g.Model) + '</span></div>' : '') +
+            '<div class="comp-row"><span class="lbl">VRAM</span><span class="val">' + esc(g.DedicatedVramGB) + ' GB</span></div>' +
+            (load3d != null ? '<div class="comp-row"><span class="lbl">3D Load</span><span class="val">' + esc(load3d) + ' %</span></div>' + compBar(load3d) : '') +
+            (vramUsed != null ? '<div class="comp-row" style="margin-top:4px"><span class="lbl">VRAM used</span><span class="val">' + esc(g.VramUsedGB) + ' GB (' + esc(vramUsed) + '%)</span></div>' + compBar(vramUsed) : '') +
+            '</div>';
+        });
+      }
+
+      // Process workload card (full-width)
+      if (d.AppWorkload && d.AppWorkload.length) {
+        var rows = d.AppWorkload.map(function(w) {
+          return '<tr>' +
+            '<td>' + esc(w.ProcessName) + '</td>' +
+            '<td>' + esc(w.Count) + '</td>' +
+            '<td>' + esc(w.TotalCpuPct) + ' %</td>' +
+            '<td>' + esc(w.TotalMemoryMB) + ' MB</td>' +
+            '</tr>';
+        }).join('');
+        html += '<div class="comp-card comp-workload-card">' +
+          '<div class="comp-card-title">Process workload' +
+            (d.ScrcpyCount ? ' &nbsp;<span style="color:#3b82f6;font-size:11px;font-weight:600">' + esc(d.ScrcpyCount) + ' scrcpy running</span>' : '') +
+          '</div>' +
+          '<table class="comp-workload-table">' +
+            '<thead><tr><th>Process</th><th>Count</th><th>CPU</th><th>RAM</th></tr></thead>' +
+            '<tbody>' + rows + '</tbody>' +
+          '</table>' +
+          '</div>';
+      }
+
+      // Timestamp
+      if (d.Timestamp) {
+        html += '<div class="comp-ts">Last update: ' + esc(d.Timestamp.replace('T', ' ')) + '</div>';
+      }
+
+      body.innerHTML = html || '<div style="color:#555;font-size:12px">No data available.</div>';
+    }
+
+    function pollComp() {
+      fetch(COMP_JSON_PATH + '?_=' + Date.now())
+        .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function(d) { renderComp(d); })
+        .catch(function() { renderComp(null); });
+    }
+
+    function forceCompRefresh() {
+      var btn = document.getElementById('comp-refresh-btn');
+      btn.classList.add('spinning');
+      btn.disabled = true;
+      fetch('/api/computer-monitoring/force-refresh', { method: 'POST' })
+        .then(function(r) { return r.json(); })
+        .then(function() {
+          // Poll for updated data — the VRMonitor loop runs every few seconds,
+          // so retry up to ~15 s until the timestamp in the file changes.
+          var before = null;
+          var bodyEl = document.getElementById('comp-body');
+          var tsEl = bodyEl ? bodyEl.querySelector('.comp-ts') : null;
+          if (tsEl) before = tsEl.textContent;
+          var attempts = 0;
+          var check = setInterval(function() {
+            attempts++;
+            fetch(COMP_JSON_PATH + '?_=' + Date.now())
+              .then(function(r) { return r.json(); })
+              .then(function(d) {
+                var newTs = d.Timestamp ? d.Timestamp.replace('T', ' ') : null;
+                var changed = newTs && (!before || before.indexOf(newTs) === -1);
+                if (changed || attempts >= 15) {
+                  clearInterval(check);
+                  btn.classList.remove('spinning');
+                  btn.disabled = false;
+                  renderComp(d);
+                }
+              })
+              .catch(function() {
+                if (attempts >= 15) { clearInterval(check); btn.classList.remove('spinning'); btn.disabled = false; }
+              });
+          }, 1000);
+        })
+        .catch(function() { btn.classList.remove('spinning'); btn.disabled = false; });
+    }
+
+    pollComp();
+    setInterval(pollComp, COMP_REFRESH_MS);
+    // ── /Computer monitoring ─────────────────────────────────────────────────
 
     pollCsv();
     setInterval(pollCsv, REFRESH_MS);

@@ -11,7 +11,9 @@ Après téléchargement de ffmpeg.exe, : Prompt pour fournisseur NuGet
 
 - Ajouter un auto refrersh dans la fenêtre d'ajout d'un casque (pour afficher le casque s'il a été connecté entre temps)
 
-- Generate unit test to test
+- Generate unit test scripts to test
+	- Syntax errors by passing the full file path as argument
+	- restart webserver while it's necessary
 	- Web server working
 	- New web page
 	- Test erros 
@@ -53,6 +55,20 @@ Let's check with stream deck activity
 	If there is no headset in the list, let's redirect the main webpage to the headset_settings web page
 	In the headset_settings web page, if there is no headset, let's add a button "add new headset"
 	
+
+	Please generate a function like computer monitoring, in utils.ps1 that will call all other functions for collecting computer workload.
+	This will place the results in a computer_monitoring.json file that will be stored in data.
+	It will keep only the last check results in the file. This file will be overwritten every time.
+	It should also contains count of currently running scrcpy jobs (this should be easy to get, if there isn't already a function for that in scrcpy_launcher.ps1, let's create it)
+
+	This funciton will be triggeered by the headsets monitoring loop (that runs every 5s) to check 1 time per min the computer workload.
+	This function will start if the json file has been generated for more than 1 min.
+	A flag must exist to force re-check of the computer workload before the 1min "waiting time" before refresh. This will be used later, for example from the web interface or from the console.
+	The timing of 1min of waiting time before doing a computer monitoring refresh, and the file name of the json, should be customizable and will be configured in the config file and loaded as a global variable, and will be updateble from the web interface in Edit config File menu.
+
+In headsets_monitoring.html add a drop-down section below headsets list.
+This drop-down list will display all computer statistics collected in the $global:computerMonitoringFilePath 
+
 
 
 #### RELEASE ####

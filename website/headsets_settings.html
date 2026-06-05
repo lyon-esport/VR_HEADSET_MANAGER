@@ -475,6 +475,78 @@
     }
     .power-modal-footer { display: flex; justify-content: flex-end; gap: 8px; }
 
+    /* Shutdown-all modal */
+    .shutdown-all-modal {
+      position: fixed; inset: 0; z-index: 1001;
+      background: rgba(0,0,0,0.72);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .shutdown-all-modal__box {
+      background: #1a1a1a; border: 1px solid #333; border-radius: 10px;
+      min-width: 300px; max-width: 380px; padding: 24px 26px;
+      display: flex; flex-direction: column; gap: 14px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+    }
+    .shutdown-all-modal__title {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 14px; font-weight: 700; color: #ef4444;
+    }
+    .shutdown-all-modal__sub {
+      font-size: 12px; color: var(--muted); line-height: 1.5;
+    }
+    .shutdown-all-modal__sub strong { color: #e0e0e0; }
+    .shutdown-all-modal__input {
+      background: #111; border: 1px solid #444; border-radius: 6px;
+      color: #e0e0e0; font-size: 13px; padding: 7px 10px;
+      width: 100%; box-sizing: border-box; letter-spacing: 2px;
+      text-transform: none; outline: none;
+    }
+    .shutdown-all-modal__input:focus { border-color: #ef4444; }
+    .shutdown-all-modal__actions { display: flex; justify-content: flex-end; gap: 8px; }
+    .shutdown-all-modal__list {
+      display: flex; flex-direction: column; gap: 5px;
+      max-height: 160px; overflow-y: auto;
+      padding: 8px 10px; border-radius: 6px;
+      background: rgba(239,68,68,0.07); border: 1px solid rgba(239,68,68,0.2);
+    }
+    .shutdown-all-modal__list-item {
+      display: flex; align-items: center; gap: 7px;
+      font-size: 12px; color: #e0e0e0;
+    }
+    .shutdown-all-modal__list-item svg { flex-shrink: 0; color: #ef4444; }
+    .shutdown-all-modal__empty {
+      font-size: 12px; color: var(--muted); text-align: center; padding: 4px 0;
+    }
+    .shutdown-all-modal__status {
+      font-size: 12px; color: var(--muted); text-align: center;
+    }
+    .pm-btn.danger {
+      background: rgba(239,68,68,0.15); color: #ef4444; border-color: rgba(239,68,68,0.4);
+    }
+    .pm-btn.danger:hover { background: rgba(239,68,68,0.25); }
+    .pm-btn.danger:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
+    /* Shutdown-all topbar button */
+    .shutdown-all-topbar-btn {
+      display: flex; align-items: center; gap: 5px;
+      padding: 4px 10px; border-radius: 6px;
+      border: 1px solid rgba(239,68,68,0.4);
+      background: rgba(239,68,68,0.1); color: #ef4444;
+      font-size: 12px; font-weight: 600; cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+      white-space: nowrap;
+    }
+    .shutdown-all-topbar-btn:hover { background: rgba(239,68,68,0.22); border-color: rgba(239,68,68,0.65); }
+    #shutdown-all-btn { margin-right: 8px; }
+    .shutdown-all-topbar-btn svg { flex-shrink: 0; }
+    [data-theme="light"] .shutdown-all-modal__box    { background: #fff; border-color: #e0e0e0; box-shadow: 0 8px 32px rgba(0,0,0,0.12); }
+    [data-theme="light"] .shutdown-all-modal__sub    { color: #999; }
+    [data-theme="light"] .shutdown-all-modal__sub strong { color: #111; }
+    [data-theme="light"] .shutdown-all-modal__input  { background: #f5f5f5; border-color: #ccc; color: #111; }
+    [data-theme="light"] .shutdown-all-modal__list   { background: rgba(239,68,68,0.05); }
+    [data-theme="light"] .shutdown-all-modal__list-item { color: #111; }
+    [data-theme="light"] .shutdown-all-topbar-btn    { background: rgba(239,68,68,0.07); }
+    @media (max-width: 950px) { .shutdown-all-label { display: none; } }
+
     #empty-msg {
       padding: 60px;
       text-align: center;
@@ -767,6 +839,12 @@
       <script>document.write(TopBar.filtersHTML)</script>
     </div>
     <div class="topbar-right">
+      <button id="shutdown-all-btn" class="shutdown-all-topbar-btn" title="Shutdown all ADB-connected headsets">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>
+        </svg>
+        <span class="shutdown-all-label">Shutdown All</span>
+      </button>
       <script>document.write(TopBar.monitoringBtnHTML)</script>
       <script>document.write(TopBar.manageDevicesBtnHTML)</script>
       <script>document.write(TopBar.configMenuHTML)</script>
@@ -795,6 +873,31 @@
         <button class="pm-btn" id="pwm-cancel">Cancel</button>
         <button class="pm-btn" id="pwm-confirm">Confirm</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Shutdown-all confirmation modal -->
+  <div class="shutdown-all-modal" id="shutdownAllModal" style="display:none">
+    <div class="shutdown-all-modal__box">
+      <div class="shutdown-all-modal__title">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>
+        </svg>
+        Shutdown ALL headsets?
+      </div>
+      <div class="shutdown-all-modal__sub">
+        This will power off every ADB-connected headset.
+      </div>
+      <div id="shutdownAllList"></div>
+      <div id="shutdownAllConfirmRow" style="display:none">
+        Type <strong>YES</strong> to confirm:<br>
+        <input id="shutdownAllInput" class="shutdown-all-modal__input" type="text" placeholder="YES" autocomplete="off" spellcheck="false" style="margin-top:8px">
+      </div>
+      <div class="shutdown-all-modal__actions">
+        <button id="shutdownAllCancelBtn" class="pm-btn">Cancel</button>
+        <button id="shutdownAllConfirmBtn" class="pm-btn danger" disabled>Shutdown All</button>
+      </div>
+      <div class="shutdown-all-modal__status" id="shutdownAllStatus" style="display:none"></div>
     </div>
   </div>
 
@@ -1922,7 +2025,78 @@
       }).catch(function() {});
     });
 
-    // â"€â"€ Profile modal â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+    // -- Shutdown-all modal -------------------------------------------------
+    document.getElementById('shutdown-all-btn').addEventListener('click', function() {
+      // Build list of ADB-connected headsets from live headsetStatus
+      var connected = Object.keys(headsetStatus).filter(function(dn) {
+        return headsetStatus[dn] && headsetStatus[dn].adb;
+      });
+
+      var listEl    = document.getElementById('shutdownAllList');
+      var confirmRow = document.getElementById('shutdownAllConfirmRow');
+      var confirmBtn = document.getElementById('shutdownAllConfirmBtn');
+
+      if (connected.length === 0) {
+        listEl.innerHTML = '<div class="shutdown-all-modal__empty">No connected headset to shutdown.</div>';
+        confirmRow.style.display = 'none';
+        confirmBtn.disabled = true;
+      } else {
+        var powerIcon = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>';
+        listEl.innerHTML = '<div class="shutdown-all-modal__list">' +
+          connected.map(function(dn) {
+            return '<div class="shutdown-all-modal__list-item">' + powerIcon + dn.replace(/_/g, ' ') + '</div>';
+          }).join('') +
+        '</div>';
+        confirmRow.style.display = 'block';
+        confirmBtn.disabled = true;
+      }
+
+      document.getElementById('shutdownAllInput').value = '';
+      document.getElementById('shutdownAllStatus').style.display = 'none';
+      document.getElementById('shutdownAllModal').style.display = 'flex';
+      if (connected.length > 0) {
+        setTimeout(function() { document.getElementById('shutdownAllInput').focus(); }, 50);
+      }
+    });
+
+    document.getElementById('shutdownAllCancelBtn').addEventListener('click', function() {
+      document.getElementById('shutdownAllModal').style.display = 'none';
+    });
+
+    document.getElementById('shutdownAllModal').addEventListener('click', function(e) {
+      if (e.target === this) document.getElementById('shutdownAllModal').style.display = 'none';
+    });
+
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape' && document.getElementById('shutdownAllModal').style.display !== 'none') {
+        document.getElementById('shutdownAllModal').style.display = 'none';
+      }
+    });
+
+    document.getElementById('shutdownAllInput').addEventListener('input', function() {
+      document.getElementById('shutdownAllConfirmBtn').disabled = (this.value !== 'YES');
+    });
+
+    document.getElementById('shutdownAllConfirmBtn').addEventListener('click', function() {
+      var statusEl = document.getElementById('shutdownAllStatus');
+      statusEl.textContent = 'Shutting down all headsets...';
+      statusEl.style.display = 'block';
+      document.getElementById('shutdownAllConfirmBtn').disabled = true;
+      document.getElementById('shutdownAllCancelBtn').disabled = true;
+      fetch('/api/shutdown-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      }).then(function(r) { return r.json(); }).then(function(data) {
+        statusEl.textContent = data.ok ? 'Done. All connected headsets shutting down.' : ('Error: ' + (data.error || 'unknown'));
+        document.getElementById('shutdownAllCancelBtn').disabled = false;
+        setTimeout(function() { document.getElementById('shutdownAllModal').style.display = 'none'; }, 2000);
+      }).catch(function() {
+        statusEl.textContent = 'Request failed.';
+        document.getElementById('shutdownAllCancelBtn').disabled = false;
+      });
+    });
+
+    // -- Profile modal â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     var _editingProfileDn = null;
 
     function openProfileModal(dn) {

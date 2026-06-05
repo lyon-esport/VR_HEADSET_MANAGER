@@ -639,6 +639,13 @@
         { path: 'VRMonitor.showConsole', label: 'Show Monitoring Console', type: 'boolean',
           desc: 'Display the VR Headset Monitoring console window on startup. Runs silently in background when disabled. Requires application restart.' }
       ]},
+      { title: 'Computer Monitoring', fields: [
+        { path: 'ComputerMonitoring.refresh_timer_sec', label: 'Refresh Interval', type: 'number',
+          min: 10, max: 3600, unit: 'seconds',
+          desc: 'How often the computer statistics snapshot (CPU, RAM, GPU, processes) is refreshed. Default: 60 s.' },
+        { path: 'ComputerMonitoring.file_name', label: 'Output File Name', type: 'text',
+          desc: 'Name of the JSON file written to the data folder. Default: computer_monitoring.json.' }
+      ]},
       { title: 'ADB', fields: [
         { path: 'ADB.adbPort_default', label: 'ADB Port', type: 'number',
           min: 1, max: 65535,

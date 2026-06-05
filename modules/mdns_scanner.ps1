@@ -10,7 +10,7 @@
 .NOTES
     To integrate with the VR_HEADSET_MANAGER project:
     - Replace Write-MdnsLog calls with Write-Log from logging.ps1
-    - Replace Register-DiscoveredHeadset with Add-Headset from headsets_infos_manager.ps1
+    - Replace Register-DiscoveredHeadset with Add-Headset from headsets_monitoring.ps1
 #>
 
 # ─── Constants ────────────────────────────────────────────────────────────────
@@ -393,7 +393,7 @@ function Show-DiscoveredHeadsets {
 
 <#
     Minimal standalone headset registration into a CSV file.
-    Replace with Add-Headset from headsets_infos_manager.ps1 when integrated
+    Replace with Add-Headset from headsets_monitoring.ps1 when integrated
     into the VR_HEADSET_MANAGER project.
 #>
 function Register-DiscoveredHeadset {

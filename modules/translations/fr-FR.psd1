@@ -322,7 +322,7 @@
     HeadsetsSaved = "Les casques ont ete reorganises et enregistres dans '{0}'."
 
     # ==========================================
-    # headsets_infos_manager.ps1
+    # headsets_monitoring.ps1
     # ==========================================
     JobNotFound = "Job {0} introuvable -- Pas besoin de l'arreter"
     JobCannotBeStopped = "Le job {0} ne peut pas etre arrete"
@@ -477,4 +477,10 @@
     StorageInfoQuery       = "Recuperation des infos de stockage sur {0}"
     StorageInfoResult      = "Stockage sur {0} : {1} Go total, {2} Go utilises, {3} Go libres ({4}% utilise)"
     StorageInfoError       = "Impossible de lire les infos de stockage pour {0}"
+
+    # ==========================================
+    # utils.ps1 - surveillance de l'ordinateur
+    # ==========================================
+    ComputerMonitoringUpdated = "Instantane de surveillance de l'ordinateur mis a jour."
+    ComputerMonitoringSkipped = "Surveillance ordinateur ignoree (pas encore due)."
 }

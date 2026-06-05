@@ -19,6 +19,10 @@
     "refresh_timer": 5,
     "showConsole": false
   },
+  "ComputerMonitoring": {
+    "refresh_timer_sec": 60,
+    "file_name": "computer_monitoring.json"
+  },
   "ADB":{
 	"folder":"scrcpy-win64-v4.0",
     "adbPort_default": 5555

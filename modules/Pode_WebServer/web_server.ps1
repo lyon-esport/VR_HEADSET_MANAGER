@@ -31,7 +31,7 @@ $global:ConfigFilePath  = $ConfigFilePath
 if ($LogFolder) { $global:logFolder = $LogFolder }
 if ($LogFile)   { $global:logFile   = $LogFile   }
 
-# Import all modules (same pattern as VRMonitor job in headsets_infos_manager.ps1)
+# Import all modules (same pattern as VRMonitor job in headsets_monitoring.ps1)
 # Flag prevents scripts_init from launching another web server or running computer setup
 $global:IsWebServerProcess = $true
 $scripts_init = Join-Path $ScriptPath "modules\scripts_init.ps1"
@@ -632,6 +632,42 @@ try {
                 if (-not $device) { throw "Could not connect to headset via ADB" }
                 Invoke-HeadsetShutdown -Device $device -adb $adbPath | Out-Null
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/shutdown-all  - shuts down all ADB-reachable headsets
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/shutdown-all') {
+            try {
+                $rows    = Get-KnownHeadsets
+                $results = @()
+                foreach ($h in $rows) {
+                    $device = Get-BestAdbDevice -Headset $h -AdbPort $adbPort -adb $adbPath
+                    if ($device) {
+                        $ok = Invoke-HeadsetShutdown -Device $device -adb $adbPath
+                        Write-Log "Shutdown-all: $($h.DisplayName) => ok=$ok" -Level INFO
+                        $results += @{ name = $h.DisplayName; ok = [bool]$ok }
+                    } else {
+                        $results += @{ name = $h.DisplayName; ok = $false }
+                    }
+                }
+                $respJson  = $results | ConvertTo-Json -Compress
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes("{`"ok`":true,`"results`":$respJson}")
                 $response.StatusCode      = 200
                 $response.ContentType     = 'application/json; charset=utf-8'
                 $response.Headers.Add('Access-Control-Allow-Origin', '*')
@@ -2108,6 +2144,19 @@ Start-Process powershell.exe -ArgumentList @('-File',$Script,'-ScriptPath',$Scri
             continue
         }
 
+        # API: POST /api/computer-monitoring/force-refresh
+        # Creates a flag file read by the VRMonitor loop (separate process) to trigger an immediate refresh.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/computer-monitoring/force-refresh') {
+            try {
+                $flagFile = Join-Path -Path $global:ScriptPath -ChildPath "data\computer_monitoring_forcerefresh.flag"
+                [System.IO.File]::WriteAllText($flagFile, '')
+                Send-JsonResponse -Response $response -Body @{ ok = $true }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { $response.Close() }
+            continue
+        }
+
         # API: GET /api/openconfig  - opens config.json in the default editor (Notepad)
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/openconfig') {
             try {
@@ -2868,7 +2917,7 @@ Start-Process powershell.exe -ArgumentList @('-File',$Script,'-ScriptPath',$Scri
                 $resolvedFile    = [System.IO.Path]::GetFullPath((Join-Path $dataPath $fileRelative))
                 $resolvedBase    = [System.IO.Path]::GetFullPath($dataPath)
                 $allowedExt      = [System.IO.Path]::GetExtension($resolvedFile).ToLower()
-                if (-not $resolvedFile.StartsWith($resolvedBase) -or $allowedExt -ne '.csv') {
+                if (-not $resolvedFile.StartsWith($resolvedBase) -or ($allowedExt -ne '.csv' -and $allowedExt -ne '.json')) {
                     $response.StatusCode = 403
                     $response.Close()
                     continue

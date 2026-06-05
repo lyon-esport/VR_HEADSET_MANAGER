@@ -134,6 +134,10 @@ function Get-Config {
 
     $global:VRMonitor_refresh_timer = $configContent.VRMonitor.refresh_timer
 
+    # ComputerMonitoring
+    $global:ComputerMonitoring_refresh_timer_sec = if ($null -ne $configContent.ComputerMonitoring.refresh_timer_sec) { [int]$configContent.ComputerMonitoring.refresh_timer_sec } else { 60 }
+    $computerMonitoringFileName = if ($configContent.ComputerMonitoring.file_name) { $configContent.ComputerMonitoring.file_name } else { "computer_monitoring.json" }
+    $global:computerMonitoringFilePath = Join-Path -Path $global:ScriptPath -ChildPath "data\$computerMonitoringFileName"
     $global:adbFolder = Join-Path -Path $sourcesPath -ChildPath $configContent.ADB.folder
     $global:adbPath = Join-Path -Path $global:adbFolder -ChildPath "adb.exe"
     $global:adbPort_default = $configContent.ADB.adbPort_default
