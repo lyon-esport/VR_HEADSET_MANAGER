@@ -2154,6 +2154,9 @@ function Update-InstalledAppsCache {
             }
         }
 
+        # Fetch per-package storage sizes (single ADB call)
+        $storageSizes = Get-HeadsetAppStorageSizes -Device $Device -adb $adb
+
         # Build new rows (all packages - third-party and built-in; lean schema)
         $allPkgsSorted = @($allPkgs | Sort-Object)
         $newRows = $allPkgsSorted | ForEach-Object {
@@ -2161,7 +2164,8 @@ function Update-InstalledAppsCache {
             $ver  = if ($versions.ContainsKey($pkg))        { $versions[$pkg] }        else { '' }
             $pver = if ($pendingVersions.ContainsKey($pkg)) { $pendingVersions[$pkg] } else { '' }
             $sver = if ($storeVersionMap.ContainsKey($pkg) -and $storeVersionMap[$pkg] -and $storeVersionMap[$pkg] -ne $ver) { $storeVersionMap[$pkg] } else { '' }
-            [PSCustomObject]@{ PackageName = $pkg; Version = $ver; PendingVersion = $pver; StoreVersion = $sver }
+            $sz   = if ($storageSizes.ContainsKey($pkg))    { $storageSizes[$pkg] }    else { 0 }
+            [PSCustomObject]@{ PackageName = $pkg; Version = $ver; PendingVersion = $pver; StoreVersion = $sver; SizeBytes = $sz }
         }
 
         # Compare with existing cache; always write when -ResolveMissing or schema is outdated
@@ -2170,10 +2174,11 @@ function Update-InstalledAppsCache {
             $existingRows = @(Import-Csv -LiteralPath $cachePath -Delimiter ",")
             $existing = @($existingRows | Select-Object -ExpandProperty PackageName | Sort-Object)
             $changed  = ($existing -join ',') -ne ($allPkgsSorted -join ',')
-            # Force rewrite when PendingVersion or StoreVersion column is absent (schema migration)
+            # Force rewrite when PendingVersion, StoreVersion, or SizeBytes column is absent (schema migration)
             if (-not $changed -and $existingRows.Count -gt 0 -and (
                 $null -eq $existingRows[0].PSObject.Properties['PendingVersion'] -or
-                $null -eq $existingRows[0].PSObject.Properties['StoreVersion'])) {
+                $null -eq $existingRows[0].PSObject.Properties['StoreVersion'] -or
+                $null -eq $existingRows[0].PSObject.Properties['SizeBytes'])) {
                 $changed = $true
             }
             # Rewrite when StoreVersion values have changed (e.g. after Update-AppCacheOnline fetched new versions)
@@ -2850,6 +2855,40 @@ function Get-HeadsetStorageInfo {
     catch {
         Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
         return $null
+    }
+}
+
+function Get-HeadsetAppStorageSizes {
+    # Returns hashtable {PackageName -> SizeBytes (long)} using a single dumpsys diskstats call.
+    # Sizes are APK+data bytes reported by Android; negative or zero values are excluded.
+    param (
+        [Parameter(Mandatory=$true)]
+        [PSCustomObject]$Device,
+        [string]$adb = $global:adbPath
+    )
+    if (-not $Device) { return @{} }
+    try {
+        $raw = Invoke-AdbCmd -Device $Device -Command "shell dumpsys diskstats" -TimeoutSeconds 30 -adb $adb
+        if (-not $raw) { return @{} }
+        $text = ($raw -join "`n")
+        $pkgMatch  = [regex]::Match($text, 'Package Names: \[(.+?)\]')
+        $sizeMatch = [regex]::Match($text, 'App Sizes: \[(.+?)\]')
+        if (-not $pkgMatch.Success -or -not $sizeMatch.Success) { return @{} }
+        $pkgs  = $pkgMatch.Groups[1].Value  -split ',' | ForEach-Object { $_.Trim().Trim('"') }
+        $sizes = $sizeMatch.Groups[1].Value -split ','
+        $result = @{}
+        for ($i = 0; $i -lt $pkgs.Count -and $i -lt $sizes.Count; $i++) {
+            $sz = [long]0
+            if ([long]::TryParse($sizes[$i].Trim(), [ref]$sz) -and $sz -gt 0) {
+                $result[$pkgs[$i]] = $sz
+            }
+        }
+        Write-Log "Get-HeadsetAppStorageSizes: $($result.Count) packages with size data" -Level DEBUG
+        return $result
+    }
+    catch {
+        Write-Log "Get-HeadsetAppStorageSizes failed: $_" -Level WARNING
+        return @{}
     }
 }
 

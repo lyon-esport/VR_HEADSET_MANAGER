@@ -264,6 +264,7 @@
     .col-launch  { width: 34px; }
     .col-icon    { width: 40px; }
     .col-name    { width: auto; min-width: 130px; }
+    .col-size    { width: 72px; }
     .col-version { width: 100px; }
     .col-type    { width: 90px; }
     .col-update  { width: 120px; }
@@ -545,6 +546,7 @@
               <col class="col-launch">
               <col class="col-icon">
               <col class="col-name">
+              <col class="col-size">
               <col class="col-version">
               <col class="col-update">
               <col class="col-type">
@@ -556,6 +558,9 @@
                 <th class="col-icon"></th>
                 <th class="col-name sortable" data-col="name" data-dir="none">
                   App Name <span class="sort-icon">&#8597;</span>
+                </th>
+                <th class="col-size sortable" data-col="size" data-dir="none" style="text-align:right">
+                  Size <span class="sort-icon">&#8597;</span>
                 </th>
                 <th class="col-version sortable" data-col="version" data-dir="none">
                   Version <span class="sort-icon">&#8597;</span>
@@ -572,6 +577,7 @@
                 <td></td>
                 <td></td>
                 <td><input type="text" id="filter-name" placeholder="Filter name..."></td>
+                <td><input type="text" id="filter-size" placeholder="Filter size..."></td>
                 <td><input type="text" id="filter-version" placeholder="Filter version..."></td>
                 <td><input type="text" id="filter-update" placeholder="Filter update..."></td>
                 <td style="text-align:center">
@@ -585,7 +591,7 @@
               </tr>
             </thead>
             <tbody id="apps-body">
-              <tr><td colspan="7" class="empty-msg">Select a headset to view installed apps.</td></tr>
+              <tr><td colspan="8" class="empty-msg">Select a headset to view installed apps.</td></tr>
             </tbody>
           </table>
         </div>
@@ -796,7 +802,7 @@
   function loadApps(refresh) {
     if (!selectedHeadset) return;
     setStatus('Loading...', 'busy');
-    $id('apps-body').innerHTML = '<tr><td colspan="7" class="empty-msg">Loading...</td></tr>';
+    $id('apps-body').innerHTML = '<tr><td colspan="8" class="empty-msg">Loading...</td></tr>';
     var url = '/api/installedapps?name=' + encodeURIComponent(selectedHeadset);
     if (showSystem)  url += '&includeSystem=1';
     if (refresh)     url += '&refresh=1';
@@ -809,13 +815,14 @@
       })
       .catch(function (e) {
         setStatus('Failed to load apps.', 'err');
-        $id('apps-body').innerHTML = '<tr><td colspan="7" class="empty-msg">Could not load apps. Is the headset reachable?</td></tr>';
+        $id('apps-body').innerHTML = '<tr><td colspan="8" class="empty-msg">Could not load apps. Is the headset reachable?</td></tr>';
       });
   }
 
   // -- Render table ----------------------------------------------------------
   function renderTable() {
     var nameFilter    = ($id('filter-name').value    || '').toLowerCase();
+    var sizeFilter    = ($id('filter-size').value    || '').toLowerCase();
     var versionFilter = ($id('filter-version').value || '').toLowerCase();
     var updateFilter  = ($id('filter-update').value  || '').toLowerCase();
     var globalFilter  = ($id('global-search-input').value || '').toLowerCase();
@@ -827,6 +834,7 @@
       var upd = (app.pendingVersion || '').toLowerCase();
       if (globalFilter  && dn.indexOf(globalFilter)  === -1 && pkg.indexOf(globalFilter)  === -1) return false;
       if (nameFilter    && dn.indexOf(nameFilter)    === -1 && pkg.indexOf(nameFilter)    === -1) return false;
+      if (sizeFilter    && fmtSize(app.sizeBytes).toLowerCase().indexOf(sizeFilter) === -1) return false;
       if (versionFilter && ver.indexOf(versionFilter) === -1) return false;
       var sver = (app.storeVersion || '').toLowerCase();
       if (updateFilter  && upd.indexOf(updateFilter) === -1 && sver.indexOf(updateFilter) === -1) return false;
@@ -835,6 +843,10 @@
     });
 
     rows.sort(function (a, b) {
+      if (sortCol === 'size') {
+        var sa = a.sizeBytes || 0, sb = b.sizeBytes || 0;
+        return sortDir === 'asc' ? sa - sb : sb - sa;
+      }
       var va, vb;
       if (sortCol === 'name') {
         va = (a.displayName || a.package || '').toLowerCase();
@@ -855,7 +867,7 @@
     });
 
     if (rows.length === 0) {
-      $id('apps-body').innerHTML = '<tr><td colspan="7" class="empty-msg">No apps match your filters.</td></tr>';
+      $id('apps-body').innerHTML = '<tr><td colspan="8" class="empty-msg">No apps match your filters.</td></tr>';
       return;
     }
 
@@ -902,6 +914,7 @@
         '<td class="col-launch" style="text-align:center">' + launchBtn + '</td>' +
         '<td class="col-icon">' + icon + '</td>' +
         '<td class="col-name" title="' + escHtml(app.package) + '">' + escHtml(app.displayName || app.package) + '<br><span style="font-size:10px;color:var(--text2);font-family:monospace">' + escHtml(app.package) + '</span></td>' +
+        '<td class="col-size" style="text-align:right;color:var(--text2);font-size:11px">' + fmtSize(app.sizeBytes) + '</td>' +
         '<td class="col-version" style="color:var(--text2)">' + escHtml(app.version || '') + '</td>' +
         '<td class="col-update" style="text-align:center">' + updateCell + '</td>' +
         '<td class="col-type">' + badge + '</td>' +
@@ -967,6 +980,14 @@
     return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
+  function fmtSize(bytes) {
+    if (!bytes || bytes <= 0) return '--';
+    if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(1) + ' GB';
+    if (bytes >= 1048576)    return Math.round(bytes / 1048576) + ' MB';
+    if (bytes >= 1024)       return Math.round(bytes / 1024) + ' KB';
+    return bytes + ' B';
+  }
+
   // -- Sort ------------------------------------------------------------------
   document.querySelectorAll('th.sortable').forEach(function (th) {
     th.addEventListener('click', function () {
@@ -995,7 +1016,7 @@
   }());
 
   // -- Filters ---------------------------------------------------------------
-  ['filter-name', 'filter-version', 'filter-update', 'global-search-input'].forEach(function (id) {
+  ['filter-name', 'filter-size', 'filter-version', 'filter-update', 'global-search-input'].forEach(function (id) {
     $id(id).addEventListener('input', renderTable);
   });
 

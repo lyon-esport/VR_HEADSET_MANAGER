@@ -1150,7 +1150,7 @@ try {
                         $dn    = if ($entry -and $entry.DisplayName -and $entry.DisplayName -ne $pkg) { $entry.DisplayName } else { $pkg }
                         $icon  = if ($entry -and $entry.LocalIconPath) { $entry.LocalIconPath } else { '' }
                         $tp    = if ($entry) { ConvertTo-ThirdPartyBool $entry } else { $true }
-                        @{ package = $pkg; displayName = $dn; localIconPath = $icon; version = $_.Version; pendingVersion = if ($_.PSObject.Properties['PendingVersion']) { $_.PendingVersion } else { '' }; storeVersion = if ($_.PSObject.Properties['StoreVersion']) { $_.StoreVersion } else { '' }; favorite = ($favPkgs -contains $pkg -or $pkg -eq $metaHomePkg); thirdParty = $tp }
+                        @{ package = $pkg; displayName = $dn; localIconPath = $icon; version = $_.Version; pendingVersion = if ($_.PSObject.Properties['PendingVersion']) { $_.PendingVersion } else { '' }; storeVersion = if ($_.PSObject.Properties['StoreVersion']) { $_.StoreVersion } else { '' }; sizeBytes = if ($_.PSObject.Properties['SizeBytes'] -and $_.SizeBytes -match '^\d+$') { [long]$_.SizeBytes } else { 0L }; favorite = ($favPkgs -contains $pkg -or $pkg -eq $metaHomePkg); thirdParty = $tp }
                     } | Where-Object { $includeSystem -or $_.thirdParty } | Sort-Object { $_.displayName })
                 } else {
                     # Fallback: live ADB call (no cache yet)
@@ -1165,7 +1165,7 @@ try {
                         $entry = if ($appNamesLookup.ContainsKey($pkg)) { $appNamesLookup[$pkg] } else { $null }
                         $dn    = if ($entry -and $entry.DisplayName -and $entry.DisplayName -ne $pkg) { $entry.DisplayName } elseif ($_.DisplayName -and $_.DisplayName -ne $pkg) { $_.DisplayName } else { $pkg }
                         $icon  = if ($entry -and $entry.LocalIconPath) { $entry.LocalIconPath } elseif ($_.LocalIconPath) { $_.LocalIconPath } else { '' }
-                        @{ package = $pkg; displayName = $dn; localIconPath = $icon; version = $_.Version; pendingVersion = ''; storeVersion = ''; favorite = ($favPkgs -contains $pkg -or $pkg -eq $metaHomePkg); thirdParty = [bool]$_.ThirdParty }
+                        @{ package = $pkg; displayName = $dn; localIconPath = $icon; version = $_.Version; pendingVersion = ''; storeVersion = ''; sizeBytes = 0L; favorite = ($favPkgs -contains $pkg -or $pkg -eq $metaHomePkg); thirdParty = [bool]$_.ThirdParty }
                     } | Sort-Object { $_.displayName })
                 }
 
