@@ -19,7 +19,7 @@
 
 # Round an integer down to the nearest multiple of $Step.
 # 47, 5 -> 45 ; 12, 5 -> 10 ; 6, 5 -> 5 ; <= 0 returns 0.
-function _RoundFpsDown {
+function Get-RoundedFpsDown {
     param([int]$Value, [int]$Step = 5)
     if ($Value -le 0 -or $Step -le 0) { return 0 }
     return [int]([Math]::Floor($Value / $Step) * $Step)
@@ -28,8 +28,14 @@ function _RoundFpsDown {
 
 # Clamp a value to [Min, Max]. Used to enforce min_fps / min_bitrate /
 # min_max_size floors and "never above original baseline" ceilings.
-function _Clamp {
+# If Min > Max (caller bug, e.g. baseline lower than current floor) we treat the
+# request as "pin to Min" rather than returning the unclamped Value silently.
+function Get-ClampedValue {
     param([int]$Value, [int]$Min, [int]$Max)
+    if ($Min -gt $Max) {
+        Write-Log "Get-ClampedValue: Min ($Min) > Max ($Max); pinning to Min." -Level WARNING
+        return $Min
+    }
     if ($Value -lt $Min) { return $Min }
     if ($Value -gt $Max) { return $Max }
     return $Value
@@ -37,31 +43,44 @@ function _Clamp {
 
 
 ###############################################################
-# INPUT GATHERING
+# CROSS-PROCESS LOCK
+# The web server process and the VRMonitor background job can both call
+# apply/restore concurrently (operator clicks Apply while VQO is firing).
+# Enter-VqaLock acquires an exclusive handle on data\vqa.lock so writes
+# to config.json / vqa_*.json are serialised. Always release in finally.
 ###############################################################
 
 
-# GET /v3/paths/list against the mediamtx HTTP API and sum readers across paths.
-# Returns the total active reader count, or 0 if mediamtx is disabled, the API
-# is unreachable, or the response cannot be parsed.
-function Get-MediaMtxClientCount {
-    if (-not $global:mediamtxEnabled) { return 0 }
-    $port = $global:mediamtxApiPort
-    if (-not $port) { return 0 }
-    $url = "http://localhost:$port/v3/paths/list"
-    try {
-        $resp = Invoke-RestMethod -Uri $url -Method GET -TimeoutSec 2 -ErrorAction Stop
-    } catch {
-        return 0
-    }
-    $count = 0
-    if ($resp -and $resp.items) {
-        foreach ($p in $resp.items) {
-            if ($p.readers) { $count += @($p.readers).Count }
+function Enter-VqaLock {
+    param([int]$TimeoutMs = 3000)
+    $lockPath = Join-Path $global:ScriptPath 'data\vqa.lock'
+    $deadline = (Get-Date).AddMilliseconds($TimeoutMs)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            return [System.IO.FileStream]::new(
+                $lockPath,
+                [System.IO.FileMode]::OpenOrCreate,
+                [System.IO.FileAccess]::Write,
+                [System.IO.FileShare]::None)
+        } catch [System.IO.IOException] {
+            Start-Sleep -Milliseconds 100
         }
     }
-    return [int]$count
+    return $null
 }
+
+
+function Exit-VqaLock {
+    param($Stream)
+    if ($Stream) {
+        try { $Stream.Dispose() } catch { }
+    }
+}
+
+
+###############################################################
+# INPUT GATHERING
+###############################################################
 
 
 # Bundle every input the VQR needs into a single PSCustomObject. Returns $null
@@ -85,13 +104,16 @@ function Get-VqaInputs {
 
     # Profile max-sizes from $global:scrcpyParameters (PSCustomObject keyed by model name)
     $profiles = @()
-    if ($global:scrcpyParameters) {
-        foreach ($modelProp in $global:scrcpyParameters[0].PSObject.Properties) {
+    $sp = @($global:scrcpyParameters)
+    if ($sp.Count -gt 0 -and $sp[0]) {
+        foreach ($modelProp in $sp[0].PSObject.Properties) {
             $profiles += [PSCustomObject]@{
                 Model   = $modelProp.Name
                 MaxSize = [int]$modelProp.Value.max_size
             }
         }
+    } else {
+        Write-Log "VQR: scrcpyParameters global is empty or null." -Level WARNING
     }
 
     # Running scrcpy sessions: cross-reference known_headsets.csv with live scrcpy procs
@@ -149,7 +171,7 @@ function Get-VqaInputs {
 #          threshold AND a baseline snapshot exists (we previously scaled
 #          down, so there is something to scale back up).
 #   none : steady state.
-function _GetVqaDirection {
+function Get-VqaDirection {
     param([int]$Cpu, [int]$Gpu)
     if ($Cpu -ge $global:VQA_CpuMitigationThreshold -or $Gpu -ge $global:VQA_GpuMitigationThreshold) {
         return 'down'
@@ -179,6 +201,152 @@ function _GetVqaDirection {
 #
 # Upscale uses the same step but never exceeds the values stored in
 # vqa_originals.json - the operator's chosen ceiling.
+# Pure: compute one row for the Profiles table from a single profile input.
+# Returns @{Model; Original; Current; Recommended}.
+function Get-VqaProfileRecommendation {
+    param(
+        [Parameter(Mandatory)] $Profile,        # @{Model; MaxSize}
+        [Parameter(Mandatory)] [string]$Direction,
+        [Parameter(Mandatory)] [double]$Step,
+        $Originals                              # parsed vqa_originals.json or $null
+    )
+    $current = [int]$Profile.MaxSize
+    # Treat 0 (uncapped) as VQA_DefaultUncappedMaxSize for math only - the raw
+    # operator value (often 0) is what we report in Original/Current so the UI
+    # can render "uncapped" honestly.
+    $effective = if ($current -eq 0) { [int]$global:VQA_DefaultUncappedMaxSize } else { $current }
+    $original  = $current
+    if ($Originals -and $Originals.Profiles) {
+        $origEntry = $Originals.Profiles | Where-Object { $_.Model -eq $Profile.Model } | Select-Object -First 1
+        if ($origEntry) { $original = [int]$origEntry.MaxSize }
+    }
+
+    $recommended = $current
+    switch ($Direction) {
+        'down' {
+            $recommended = [int][Math]::Round($effective * (1 - $Step))
+            $recommended = Get-ClampedValue -Value $recommended -Min $global:VQA_MinMaxSize -Max $effective
+        }
+        'up' {
+            $recommended = [int][Math]::Round($effective * (1 + $Step))
+            $ceiling = if ($original -gt 0) { $original } else { $effective }
+            $recommended = Get-ClampedValue -Value $recommended -Min $effective -Max $ceiling
+        }
+        # 'none' -> recommended stays $current
+    }
+    return [PSCustomObject]@{
+        Model       = $Profile.Model
+        Original    = $original
+        Current     = $current
+        Recommended = $recommended
+    }
+}
+
+
+# Pure: compute one row for the Headsets table from a single running session.
+# Returns $null when ParsedProfile is missing. Otherwise returns the row object
+# including the rebuilt RecommendedProfile string.
+# LowestFps / LowestBw are the per-cycle alignment targets (step 2 of the
+# 3-step mitigation pipeline).
+function Get-VqaHeadsetRecommendation {
+    param(
+        [Parameter(Mandatory)] $Headset,        # @{Name; Model; Profile; ParsedProfile; ...}
+        [Parameter(Mandatory)] [string]$Direction,
+        [Parameter(Mandatory)] [double]$Step,
+        [Parameter(Mandatory)] [int]$FpsStep,
+        [Parameter(Mandatory)] [int]$LowestFps,
+        [Parameter(Mandatory)] [int]$LowestBw,
+        $Originals
+    )
+    if (-not $Headset.ParsedProfile) { return $null }
+
+    $curFps = [int]$Headset.ParsedProfile.Fps
+    $curBw  = [int]$Headset.ParsedProfile.BitrateMbps
+    $origFps = $curFps; $origBw = $curBw
+    if ($Originals -and $Originals.Headsets) {
+        $origEntry = $Originals.Headsets | Where-Object { $_.Name -eq $Headset.Name } | Select-Object -First 1
+        if ($origEntry) { $origFps = [int]$origEntry.Fps; $origBw = [int]$origEntry.BitrateMbps }
+    }
+
+    $newFps = $curFps; $newBw = $curBw
+    switch ($Direction) {
+        'down' {
+            # Step 2 (align to lowest in the cohort) + Step 3 (downscale step%)
+            $alignedFps = if ($LowestFps -gt 0) { $LowestFps } else { $curFps }
+            $alignedBw  = if ($LowestBw  -gt 0) { $LowestBw }  else { $curBw }
+            $newFps = Get-RoundedFpsDown -Value ([int][Math]::Round($alignedFps * (1 - $Step))) -Step $FpsStep
+            $newBw  = [int][Math]::Round($alignedBw * (1 - $Step))
+            $newFps = Get-ClampedValue -Value $newFps -Min $global:VQA_MinFps         -Max $curFps
+            $newBw  = Get-ClampedValue -Value $newBw  -Min $global:VQA_MinBitrateMbps -Max $curBw
+        }
+        'up' {
+            $newFps = Get-RoundedFpsDown -Value ([int][Math]::Round($curFps * (1 + $Step))) -Step $FpsStep
+            $newBw  = [int][Math]::Round($curBw * (1 + $Step))
+            $newFps = Get-ClampedValue -Value $newFps -Min $curFps -Max $origFps
+            $newBw  = Get-ClampedValue -Value $newBw  -Min $curBw  -Max $origBw
+        }
+    }
+
+    return [PSCustomObject]@{
+        Name              = $Headset.Name
+        Model             = $Headset.Model
+        OriginalFps       = $origFps
+        OriginalBitrate   = $origBw
+        CurrentFps        = $curFps
+        CurrentBitrate    = $curBw
+        RecommendedFps    = $newFps
+        RecommendedBitrate= $newBw
+        CurrentProfile    = $Headset.Profile
+        RecommendedProfile= (ConvertTo-ScrcpyProfile -View $Headset.ParsedProfile.View -Eye $Headset.ParsedProfile.Eye -AudioDup $Headset.ParsedProfile.AudioDup -Fps $newFps -BitrateMbps $newBw)
+    }
+}
+
+
+# Pure: compute the MediaMTX row. Returns @{OriginalFramerate; OriginalBitrate;
+# CurrentFramerate; CurrentBitrate; RecommendedFramerate; RecommendedBitrate}.
+function Get-VqaMediaMtxRecommendation {
+    param(
+        [Parameter(Mandatory)] $Current,        # @{Framerate; BitrateMbps}
+        [Parameter(Mandatory)] [string]$Direction,
+        [Parameter(Mandatory)] [double]$Step,
+        [Parameter(Mandatory)] [int]$FpsStep,
+        $Originals
+    )
+    $mtxBw     = [int]$Current.BitrateMbps
+    $mtxFps    = [int]$Current.Framerate
+    $mtxOrigBw  = $mtxBw; $mtxOrigFps = $mtxFps
+    if ($Originals -and $Originals.MediaMtx) {
+        $mtxOrigBw  = [int]$Originals.MediaMtx.BitrateMbps
+        $mtxOrigFps = [int]$Originals.MediaMtx.Framerate
+    }
+    $mtxNewBw  = $mtxBw; $mtxNewFps = $mtxFps
+    switch ($Direction) {
+        'down' {
+            $mtxNewBw  = Get-ClampedValue -Value ([int][Math]::Round($mtxBw  * (1 - $Step))) -Min $global:VQA_MinBitrateMbps -Max $mtxBw
+            $mtxNewFps = Get-RoundedFpsDown -Value ([int][Math]::Round($mtxFps * (1 - $Step))) -Step $FpsStep
+            $mtxNewFps = Get-ClampedValue -Value $mtxNewFps -Min $global:VQA_MinFps -Max $mtxFps
+        }
+        'up' {
+            $mtxNewBw  = Get-ClampedValue -Value ([int][Math]::Round($mtxBw  * (1 + $Step))) -Min $mtxBw -Max $mtxOrigBw
+            $mtxNewFps = Get-RoundedFpsDown -Value ([int][Math]::Round($mtxFps * (1 + $Step))) -Step $FpsStep
+            $mtxNewFps = Get-ClampedValue -Value $mtxNewFps -Min $mtxFps -Max $mtxOrigFps
+        }
+    }
+    return [PSCustomObject]@{
+        OriginalFramerate   = $mtxOrigFps
+        OriginalBitrate     = $mtxOrigBw
+        CurrentFramerate    = $mtxFps
+        CurrentBitrate      = $mtxBw
+        RecommendedFramerate= $mtxNewFps
+        RecommendedBitrate  = $mtxNewBw
+    }
+}
+
+
+# Orchestrator. Reads inputs, picks direction, builds rows via the three pure
+# helpers above, writes the recommendation JSON + history row. When direction
+# is 'none' the helpers naturally return Recommended==Current rows (no math),
+# so the UI tables stay populated with current values.
 function Invoke-VideoQualityRecommendation {
     $inputs = Get-VqaInputs
     if (-not $inputs) {
@@ -189,7 +357,7 @@ function Invoke-VideoQualityRecommendation {
     # Decrement the post-change cooldown counter once per VQR cycle. The web UI
     # uses CooldownRemaining > 0 to suppress warnings, and VQO short-circuits
     # while the cooldown is active.
-    $cooldownRemaining = _DecrementVqaCooldown
+    $cooldownRemaining = Step-VqaCooldown
 
     # CPU = LoadPercent. GPU = max Load3DPercent across adapters (worst case).
     $cpu = if ($inputs.Snapshot.CPU -and $null -ne $inputs.Snapshot.CPU.LoadPercent) { [int]$inputs.Snapshot.CPU.LoadPercent } else { 0 }
@@ -200,7 +368,7 @@ function Invoke-VideoQualityRecommendation {
         }
     }
 
-    $direction = _GetVqaDirection -Cpu $cpu -Gpu $gpu
+    $direction = Get-VqaDirection -Cpu $cpu -Gpu $gpu
     $step      = [double]$global:VQA_DownscaleStepPercent / 100.0
     $fpsStep   = $global:VQA_FpsRoundStep
 
@@ -210,115 +378,30 @@ function Invoke-VideoQualityRecommendation {
         try { $originals = Get-Content -LiteralPath $global:VQA_OriginalsFilePath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $originals = $null }
     }
 
-    # ------- Profiles table (per scrcpy model) -------
+    # Profiles
     $profileRows = @()
     foreach ($p in $inputs.Profiles) {
-        $current = [int]$p.MaxSize
-        # Treat 0 (uncapped) as VQA_DefaultUncappedMaxSize for math only - the raw
-        # operator value (often 0) is what we report in Original / Current so the
-        # UI can render "uncapped" honestly.
-        $effective = if ($current -eq 0) { [int]$global:VQA_DefaultUncappedMaxSize } else { $current }
-        $original  = $current
-        if ($originals -and $originals.Profiles) {
-            $origEntry = $originals.Profiles | Where-Object { $_.Model -eq $p.Model } | Select-Object -First 1
-            if ($origEntry) { $original = [int]$origEntry.MaxSize }
-        }
-
-        $recommended = $current
-        switch ($direction) {
-            'down' {
-                $recommended = [int][Math]::Round($effective * (1 - $step))
-                $recommended = _Clamp -Value $recommended -Min $global:VQA_MinMaxSize -Max $effective
-            }
-            'up' {
-                $recommended = [int][Math]::Round($effective * (1 + $step))
-                $ceiling = if ($original -gt 0) { $original } else { $effective }
-                $recommended = _Clamp -Value $recommended -Min $effective -Max $ceiling
-            }
-        }
-        $profileRows += [PSCustomObject]@{
-            Model       = $p.Model
-            Original    = $original
-            Current     = $current
-            Recommended = $recommended
-        }
+        $profileRows += Get-VqaProfileRecommendation -Profile $p -Direction $direction -Step $step -Originals $originals
     }
 
-    # ------- Headsets table (per running scrcpy session) -------
-    # Step 2: find lowest currently-applied Fps and Bitrate across running headsets.
+    # Headsets - cohort alignment first (step 2 of mitigation pipeline)
     $lowestFps = 0; $lowestBw = 0
     foreach ($h in $inputs.Headsets) {
         if ($h.ParsedProfile) {
-            if ($lowestFps -eq 0 -or $h.ParsedProfile.Fps -lt $lowestFps)         { $lowestFps = [int]$h.ParsedProfile.Fps }
+            if ($lowestFps -eq 0 -or $h.ParsedProfile.Fps         -lt $lowestFps) { $lowestFps = [int]$h.ParsedProfile.Fps }
             if ($lowestBw  -eq 0 -or $h.ParsedProfile.BitrateMbps -lt $lowestBw)  { $lowestBw  = [int]$h.ParsedProfile.BitrateMbps }
         }
     }
-
     $headsetRows = @()
     foreach ($h in $inputs.Headsets) {
-        if (-not $h.ParsedProfile) { continue }
-        $curFps = [int]$h.ParsedProfile.Fps
-        $curBw  = [int]$h.ParsedProfile.BitrateMbps
-        $origFps = $curFps; $origBw = $curBw
-        if ($originals -and $originals.Headsets) {
-            $origEntry = $originals.Headsets | Where-Object { $_.Name -eq $h.Name } | Select-Object -First 1
-            if ($origEntry) { $origFps = [int]$origEntry.Fps; $origBw = [int]$origEntry.BitrateMbps }
-        }
-
-        $newFps = $curFps; $newBw = $curBw
-        switch ($direction) {
-            'down' {
-                # Step 2 (align) + Step 3 (downscale step%)
-                $alignedFps = if ($lowestFps -gt 0) { $lowestFps } else { $curFps }
-                $alignedBw  = if ($lowestBw  -gt 0) { $lowestBw }  else { $curBw }
-                $newFps = _RoundFpsDown -Value ([int][Math]::Round($alignedFps * (1 - $step))) -Step $fpsStep
-                $newBw  = [int][Math]::Round($alignedBw * (1 - $step))
-                $newFps = _Clamp -Value $newFps -Min $global:VQA_MinFps         -Max $curFps
-                $newBw  = _Clamp -Value $newBw  -Min $global:VQA_MinBitrateMbps -Max $curBw
-            }
-            'up' {
-                $newFps = _RoundFpsDown -Value ([int][Math]::Round($curFps * (1 + $step))) -Step $fpsStep
-                $newBw  = [int][Math]::Round($curBw * (1 + $step))
-                $newFps = _Clamp -Value $newFps -Min $curFps -Max $origFps
-                $newBw  = _Clamp -Value $newBw  -Min $curBw  -Max $origBw
-            }
-        }
-
-        $headsetRows += [PSCustomObject]@{
-            Name              = $h.Name
-            Model             = $h.Model
-            OriginalFps       = $origFps
-            OriginalBitrate   = $origBw
-            CurrentFps        = $curFps
-            CurrentBitrate    = $curBw
-            RecommendedFps    = $newFps
-            RecommendedBitrate= $newBw
-            CurrentProfile    = $h.Profile
-            RecommendedProfile= (ConvertTo-ScrcpyProfile -View $h.ParsedProfile.View -Eye $h.ParsedProfile.Eye -AudioDup $h.ParsedProfile.AudioDup -Fps $newFps -BitrateMbps $newBw)
-        }
+        $row = Get-VqaHeadsetRecommendation -Headset $h -Direction $direction -Step $step `
+            -FpsStep $fpsStep -LowestFps $lowestFps -LowestBw $lowestBw -Originals $originals
+        if ($row) { $headsetRows += $row }
     }
 
-    # ------- MediaMTX row -------
-    $mtxBw       = [int]$inputs.MediaMtx.BitrateMbps
-    $mtxFps      = [int]$inputs.MediaMtx.Framerate
-    $mtxOrigBw   = $mtxBw; $mtxOrigFps = $mtxFps
-    if ($originals -and $originals.MediaMtx) {
-        $mtxOrigBw  = [int]$originals.MediaMtx.BitrateMbps
-        $mtxOrigFps = [int]$originals.MediaMtx.Framerate
-    }
-    $mtxNewBw  = $mtxBw; $mtxNewFps = $mtxFps
-    switch ($direction) {
-        'down' {
-            $mtxNewBw  = _Clamp -Value ([int][Math]::Round($mtxBw  * (1 - $step))) -Min $global:VQA_MinBitrateMbps -Max $mtxBw
-            $mtxNewFps = _RoundFpsDown -Value ([int][Math]::Round($mtxFps * (1 - $step))) -Step $fpsStep
-            $mtxNewFps = _Clamp -Value $mtxNewFps -Min $global:VQA_MinFps -Max $mtxFps
-        }
-        'up' {
-            $mtxNewBw  = _Clamp -Value ([int][Math]::Round($mtxBw  * (1 + $step))) -Min $mtxBw -Max $mtxOrigBw
-            $mtxNewFps = _RoundFpsDown -Value ([int][Math]::Round($mtxFps * (1 + $step))) -Step $fpsStep
-            $mtxNewFps = _Clamp -Value $mtxNewFps -Min $mtxFps -Max $mtxOrigFps
-        }
-    }
+    # MediaMTX
+    $mtxRow = Get-VqaMediaMtxRecommendation -Current $inputs.MediaMtx -Direction $direction `
+        -Step $step -FpsStep $fpsStep -Originals $originals
 
     $reason = "CPU=${cpu}% GPU=${gpu}% (mitigation: cpu>=$($global:VQA_CpuMitigationThreshold) or gpu>=$($global:VQA_GpuMitigationThreshold))"
 
@@ -338,14 +421,7 @@ function Invoke-VideoQualityRecommendation {
         }
         Profiles     = $profileRows
         Headsets     = $headsetRows
-        MediaMtx     = [PSCustomObject]@{
-            OriginalFramerate  = $mtxOrigFps
-            OriginalBitrate    = $mtxOrigBw
-            CurrentFramerate   = $mtxFps
-            CurrentBitrate     = $mtxBw
-            RecommendedFramerate= $mtxNewFps
-            RecommendedBitrate  = $mtxNewBw
-        }
+        MediaMtx     = $mtxRow
         # Auto-apply state + cooldown - consumed by the web UI and topbar chip.
         AutoApplyProfiles  = [bool]$global:VQA_AutoApplyProfiles
         AutoApplyHeadsets  = [bool]$global:VQA_AutoApplyHeadsets
@@ -357,7 +433,7 @@ function Invoke-VideoQualityRecommendation {
 
     try {
         Write-FileWithoutBom -Path $global:VQA_RecommendationFilePath -Content ($rec | ConvertTo-Json -Depth 6)
-        _AppendVqaHistory -Rec $rec
+        Add-VqaHistoryRow -Rec $rec
     } catch {
         Write-Log ("VQR: failed to write recommendation: " + $_.Exception.Message) -Level WARNING
     }
@@ -370,16 +446,19 @@ function Invoke-VideoQualityRecommendation {
 # Append one row to vqa_history.csv. Header is created on first write; the file
 # is truncated to a header-only state by Initialize-VideoQualityAutomation at
 # startup, so history is per-session.
-function _AppendVqaHistory {
+function Add-VqaHistoryRow {
     param($Rec)
     $header = "Timestamp;CpuPct;GpuPct;ScrcpyCount;ClientCount;Direction;Reason;Json"
     if (-not (Test-Path -LiteralPath $global:VQA_HistoryFilePath)) {
         Write-FileWithoutBom -Path $global:VQA_HistoryFilePath -Content ($header + "`r`n")
     }
     $json = ($Rec | ConvertTo-Json -Depth 6 -Compress) -replace '"', '""'
-    $line = "{0};{1};{2};{3};{4};{5};{6};""{7}""" -f `
+    $line = "{0};{1};{2};{3};{4};{5};{6};""{7}""`r`n" -f `
         $Rec.Timestamp, $Rec.Cpu, $Rec.Gpu, $Rec.ScrcpyCount, $Rec.ClientCount, $Rec.Direction, ($Rec.Reason -replace ';', ','), $json
-    Add-Content -LiteralPath $global:VQA_HistoryFilePath -Value $line -Encoding UTF8
+    # PS5 Add-Content -Encoding UTF8 prepends a BOM to every appended write,
+    # which would scatter BOM bytes across the CSV. Append via .NET directly
+    # with explicit no-BOM encoding.
+    [System.IO.File]::AppendAllText($global:VQA_HistoryFilePath, $line, [System.Text.UTF8Encoding]::new($false))
 }
 
 
@@ -390,12 +469,19 @@ function _AppendVqaHistory {
 
 # Read the last $count rows from vqa_history.csv. Returns @() if fewer rows
 # than requested exist (so VQO waits until the buffer is full).
-function _GetLastVqaHistoryRows {
+function Get-LastVqaHistoryRows {
     param([int]$Count)
     if (-not (Test-Path -LiteralPath $global:VQA_HistoryFilePath)) { return @() }
-    $all = @(Get-Content -LiteralPath $global:VQA_HistoryFilePath -Encoding UTF8 | Select-Object -Skip 1)
-    if ($all.Count -lt $Count) { return @() }
-    return @($all | Select-Object -Last $Count)
+    $expectedHeader = "Timestamp;CpuPct;GpuPct;ScrcpyCount;ClientCount;Direction;Reason;Json"
+    $all = @(Get-Content -LiteralPath $global:VQA_HistoryFilePath -Encoding UTF8)
+    if ($all.Count -eq 0 -or $all[0] -ne $expectedHeader) {
+        Write-Log "VQR: history file header missing or malformed, resetting." -Level WARNING
+        Write-FileWithoutBom -Path $global:VQA_HistoryFilePath -Content ($expectedHeader + "`r`n")
+        return @()
+    }
+    $rows = @($all | Select-Object -Skip 1)
+    if ($rows.Count -lt $Count) { return @() }
+    return @($rows | Select-Object -Last $Count)
 }
 
 
@@ -431,17 +517,25 @@ function Get-VqaCooldownRemaining {
 # Called once at the top of every VQR cycle. Decrements the counter, deletes
 # the file when it reaches 0, returns the post-decrement value (so the
 # recommendation JSON can carry it).
-function _DecrementVqaCooldown {
-    $remaining = Get-VqaCooldownRemaining
-    if ($remaining -le 0) { return 0 }
-    $remaining = $remaining - 1
-    if ($remaining -le 0) {
-        Remove-Item -LiteralPath $global:VQA_CooldownFilePath -Force -ErrorAction SilentlyContinue
-        return 0
+function Step-VqaCooldown {
+    # Short timeout: if another process holds the lock, skip this decrement -
+    # the next VQR cycle will catch up. Contention is non-fatal here.
+    $lock = Enter-VqaLock -TimeoutMs 500
+    if (-not $lock) { return (Get-VqaCooldownRemaining) }
+    try {
+        $remaining = Get-VqaCooldownRemaining
+        if ($remaining -le 0) { return 0 }
+        $remaining = $remaining - 1
+        if ($remaining -le 0) {
+            Remove-Item -LiteralPath $global:VQA_CooldownFilePath -Force -ErrorAction SilentlyContinue
+            return 0
+        }
+        $obj = [PSCustomObject]@{ RemainingCycles = $remaining; StartedAt = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss") }
+        Write-FileWithoutBom -Path $global:VQA_CooldownFilePath -Content ($obj | ConvertTo-Json -Compress)
+        return $remaining
+    } finally {
+        Exit-VqaLock -Stream $lock
     }
-    $obj = [PSCustomObject]@{ RemainingCycles = $remaining; StartedAt = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss") }
-    Write-FileWithoutBom -Path $global:VQA_CooldownFilePath -Content ($obj | ConvertTo-Json -Compress)
-    return $remaining
 }
 
 
@@ -459,8 +553,11 @@ function Set-VqaAutoApply {
         [Parameter(Mandatory)] [bool]$Enabled
     )
     $cfgPath = Join-Path $global:ScriptPath 'config\config.json'
-    $cfg = Read-ConfigJson -ConfigFilePath $cfgPath
-    if (-not $cfg -or -not $cfg.VideoQualityAutomation) { return $false }
+    $cfg = Read-ConfigJson -ConfigFilePath $cfgPath -NonInteractive
+    if (-not $cfg -or -not $cfg.VideoQualityAutomation) {
+        Write-Log "VQA: cannot toggle auto-apply, config.json unreadable." -Level ERROR
+        return $false
+    }
     switch ($Section) {
         'profiles' {
             if ($cfg.VideoQualityAutomation.PSObject.Properties.Name -contains 'auto_apply_profiles') {
@@ -503,8 +600,16 @@ function Invoke-VideoQualityOptimizer {
     if ((Get-VqaCooldownRemaining) -gt 0) { return }
 
     $n = [int]$global:VQA_VqoConsecutiveCount
-    if ($n -lt 1) { $n = 5 }
-    $rows = _GetLastVqaHistoryRows -Count $n
+    if ($n -lt 1) {
+        # Misconfigured (missing or zero). Use a sane default and log ONCE per
+        # session so the operator notices but the log isn't spammed each cycle.
+        if (-not $script:VqaVqoCountFallbackWarned) {
+            Write-Log ("VQO: VQA_VqoConsecutiveCount is $n; using fallback of 5. Set vqo_consecutive_count in config.json.") -Level WARNING
+            $script:VqaVqoCountFallbackWarned = $true
+        }
+        $n = 5
+    }
+    $rows = Get-LastVqaHistoryRows -Count $n
     if ($rows.Count -lt $n) { return }
 
     # Column 6 (0-indexed 5) = Direction. Every row must be 'down'.
@@ -513,18 +618,18 @@ function Invoke-VideoQualityOptimizer {
     }
 
     Write-Log ("VQO: $n consecutive 'down' recommendations - auto-applying enabled sections.") -Level INFO
-    $applied = $false
     try {
-        if ($global:VQA_AutoApplyProfiles) { Invoke-VqaApply -Scope 'profile'  | Out-Null; $applied = $true }
-        if ($global:VQA_AutoApplyHeadsets) { Invoke-VqaApply -Scope 'headset'  | Out-Null; $applied = $true }
-        if ($global:VQA_AutoApplyMediaMtx) { Invoke-VqaApply -Scope 'mediamtx' | Out-Null; $applied = $true }
+        # Single coalesced call so config.json is written once and mediamtx
+        # restarts at most once per cycle. Invoke-VqaApply uses SectionFilter to
+        # skip sections whose per-section flag is off.
+        Invoke-VqaApply -Scope 'all' -SectionFilter @{
+            Profiles = $global:VQA_AutoApplyProfiles
+            Headsets = $global:VQA_AutoApplyHeadsets
+            MediaMtx = $global:VQA_AutoApplyMediaMtx
+        } | Out-Null
     } catch {
         Write-Log ("VQO: apply failed: " + $_.Exception.Message) -Level ERROR
     }
-    # Invoke-VqaApply already arms the cooldown at the end of each successful
-    # apply, so the file already exists by here; this call is a no-op redundancy
-    # only when every section flag was off (in which case $applied stays false).
-    if (-not $applied) { Write-Log "VQO: all per-section flags off after pre-check - nothing applied." -Level DEBUG }
 }
 
 
@@ -534,54 +639,97 @@ function Invoke-VideoQualityOptimizer {
 
 
 # Returns the latest recommendation object (parsed JSON) or $null.
-function _GetLatestVqaRecommendation {
+function Get-LatestVqaRecommendation {
     if (-not (Test-Path -LiteralPath $global:VQA_RecommendationFilePath)) { return $null }
     try { return Get-Content -LiteralPath $global:VQA_RecommendationFilePath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { return $null }
 }
 
 
-# Build the baseline snapshot from the CURRENT (pre-apply) state. Stored on
-# first apply only - never overwritten so subsequent applies still know the
-# operator's original ceilings for upscaling.
-function _SnapshotVqaOriginals {
-    $cfg = Read-ConfigJson -ConfigFilePath (Join-Path $global:ScriptPath 'config\config.json')
-    $profiles = @()
-    if ($cfg -and $cfg.scrcpy -and $cfg.scrcpy.parameters) {
-        foreach ($prop in $cfg.scrcpy.parameters.PSObject.Properties) {
-            $profiles += [PSCustomObject]@{ Model = $prop.Name; MaxSize = [int]$prop.Value.max_size }
-        }
+# Per-field baseline merge. Captures the CURRENT (pre-mutation) value of each
+# field listed in $Applied that does NOT already have a baseline entry; existing
+# entries are never overwritten so the snapshot always reflects the operator's
+# original ceiling, even across multiple apply cycles.
+#
+# This is the Phase 2 fix for the "restore pushes 480 instead of 0" bug: a
+# whole-config snapshot captured at first-apply was poisoned whenever config had
+# already been mutated by a crashed earlier session. With per-field lazy capture
+# triggered only when a field is about to change, each field's baseline equals
+# its true pre-mutation value (as long as the previous session restored cleanly
+# - which Phase 1's success tracking enforces).
+function Save-VqaBaseline {
+    param(
+        # Hashtable describing the imminent mutation. Same shape as the $applied
+        # hashtable built by Invoke-VqaApply.
+        [Parameter(Mandatory)] $Applied
+    )
+    # NOTE: Caller (Invoke-VqaApply) already holds Enter-VqaLock. Do NOT acquire
+    # it here - FileShare.None means re-entry would deadlock.
+    $cfg = Read-ConfigJson -ConfigFilePath (Join-Path $global:ScriptPath 'config\config.json') -NonInteractive
+    if (-not $cfg) {
+        Write-Log "VQA: cannot read config.json for baseline snapshot." -Level ERROR
+        return
     }
 
-    $heads = @()
-    foreach ($h in @(Get-KnownHeadsets)) {
-        $parsed = ConvertFrom-ScrcpyProfile -Profile $h.ScrcpyProfile
-        if ($parsed) {
-            $heads += [PSCustomObject]@{
-                Name        = $h.Name
-                Profile     = $h.ScrcpyProfile
-                Fps         = [int]$parsed.Fps
-                BitrateMbps = [int]$parsed.BitrateMbps
-            }
-        }
+    # Load existing baseline (if any) so we merge instead of overwriting captured fields.
+    $existing = $null
+    if (Test-Path -LiteralPath $global:VQA_OriginalsFilePath) {
+        try { $existing = Get-Content -LiteralPath $global:VQA_OriginalsFilePath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $existing = $null }
+    }
+    $mergedProfiles = @{}
+    $mergedHeadsets = @{}
+    $mergedMtx      = $null
+    if ($existing) {
+        if ($existing.Profiles) { foreach ($p in @($existing.Profiles)) { $mergedProfiles[$p.Model] = $p } }
+        if ($existing.Headsets) { foreach ($h in @($existing.Headsets)) { $mergedHeadsets[$h.Name] = $h } }
+        if ($existing.MediaMtx) { $mergedMtx = $existing.MediaMtx }
     }
 
-    $mtxBw = 0
-    if ($global:mediamtxBitrate) {
-        $bw = [string]$global:mediamtxBitrate -replace '[^\d]', ''
-        if ($bw) { $mtxBw = [int]$bw }
+    $captured = @()
+
+    foreach ($p in @($Applied.Profiles)) {
+        if ($mergedProfiles.ContainsKey($p.Model)) { continue }
+        if ($cfg.scrcpy.parameters.PSObject.Properties.Name -notcontains $p.Model) { continue }
+        $curMax = [int]$cfg.scrcpy.parameters.($p.Model).max_size
+        $mergedProfiles[$p.Model] = [PSCustomObject]@{ Model = $p.Model; MaxSize = $curMax }
+        $captured += "$($p.Model)=$curMax"
     }
+
+    foreach ($h in @($Applied.Headsets)) {
+        if ($mergedHeadsets.ContainsKey($h.Name)) { continue }
+        $row = Get-KnownHeadsets | Where-Object { $_.Name -eq $h.Name } | Select-Object -First 1
+        if (-not $row) { continue }
+        $parsed = ConvertFrom-ScrcpyProfile -Profile $row.ScrcpyProfile
+        if (-not $parsed) { continue }
+        $mergedHeadsets[$h.Name] = [PSCustomObject]@{
+            Name        = $h.Name
+            Profile     = $row.ScrcpyProfile
+            Fps         = [int]$parsed.Fps
+            BitrateMbps = [int]$parsed.BitrateMbps
+        }
+        $captured += "$($h.Name)=$($row.ScrcpyProfile)"
+    }
+
+    if ($Applied.MediaMtx -and -not $mergedMtx) {
+        $curFps = if ($cfg.mediamtx -and $cfg.mediamtx.stream_framerate) { [int]$cfg.mediamtx.stream_framerate } else { 0 }
+        $curBw  = 0
+        if ($cfg.mediamtx -and $cfg.mediamtx.stream_bitrate) {
+            $digits = ([string]$cfg.mediamtx.stream_bitrate) -replace '[^\d]', ''
+            if ($digits) { $curBw = [int]$digits }
+        }
+        $mergedMtx = [PSCustomObject]@{ Framerate = $curFps; BitrateMbps = $curBw }
+        $captured += "MediaMtx=${curFps}fps/${curBw}M"
+    }
+
+    if ($captured.Count -eq 0) { return }   # nothing new to capture
 
     $snap = [PSCustomObject]@{
         Timestamp = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss")
-        Profiles  = $profiles
-        Headsets  = $heads
-        MediaMtx  = [PSCustomObject]@{
-            Framerate    = [int]$global:mediamtxFramerate
-            BitrateMbps  = $mtxBw
-        }
+        Profiles  = @($mergedProfiles.Values)
+        Headsets  = @($mergedHeadsets.Values)
+        MediaMtx  = $mergedMtx
     }
     Write-FileWithoutBom -Path $global:VQA_OriginalsFilePath -Content ($snap | ConvertTo-Json -Depth 5)
-    Write-Log "VQA: baseline snapshot written." -Level INFO
+    Write-Log ("VQA: baseline merged. Captured: [" + ($captured -join ', ') + "].") -Level INFO
 }
 
 
@@ -596,114 +744,154 @@ function Invoke-VqaApply {
     param(
         [ValidateSet('all','profile','headset','mediamtx')]
         [string]$Scope = 'all',
-        [string]$Target = ''
+        [string]$Target = '',
+        # When VQO runs with mixed per-section flags, it passes which sections are
+        # actually enabled so we can do the work in one pass (single config write,
+        # single mediamtx restart). Manual web/console callers leave this $null.
+        [hashtable]$SectionFilter = $null
     )
 
-    $rec = _GetLatestVqaRecommendation
-    if (-not $rec) { Write-Log "VQA: no recommendation to apply." -Level WARNING; return $false }
-    if ($rec.Direction -eq 'none') { Write-Log "VQA: recommendation is 'none', nothing to apply." -Level INFO; return $false }
-
-    if (-not (Test-Path -LiteralPath $global:VQA_OriginalsFilePath)) { _SnapshotVqaOriginals }
-
-    $applied = @{
-        Timestamp = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss")
-        Profiles  = @()
-        Headsets  = @()
-        MediaMtx  = $null
+    $lock = Enter-VqaLock
+    if (-not $lock) {
+        Write-Log "VQA: another apply is in progress, skipping." -Level WARNING
+        return $false
     }
+    try {
+        $rec = Get-LatestVqaRecommendation
+        if (-not $rec) { Write-Log "VQA: no recommendation to apply." -Level WARNING; return $false }
+        if ($rec.Direction -eq 'none') { Write-Log "VQA: recommendation is 'none', nothing to apply." -Level INFO; return $false }
 
-    $configPath = Join-Path $global:ScriptPath 'config\config.json'
-    $cfg = Read-ConfigJson -ConfigFilePath $configPath
-    if (-not $cfg) { Write-Log "VQA: cannot read config.json for apply." -Level ERROR; return $false }
+        # Resolve which section is in scope. SectionFilter (when supplied) further
+        # narrows things so VQO can call once with -Scope all + filter rather than
+        # 3x with one scope each.
+        $doProfiles = ($Scope -eq 'all' -or $Scope -eq 'profile')  -and ($null -eq $SectionFilter -or [bool]$SectionFilter.Profiles)
+        $doHeadsets = ($Scope -eq 'all' -or $Scope -eq 'headset')  -and ($null -eq $SectionFilter -or [bool]$SectionFilter.Headsets)
+        $doMtx      = ($Scope -eq 'all' -or $Scope -eq 'mediamtx') -and ($null -eq $SectionFilter -or [bool]$SectionFilter.MediaMtx)
 
-    $configChanged = $false
-    $restartMtx    = $false
-    $restartProcs  = @()
+        $configPath = Join-Path $global:ScriptPath 'config\config.json'
+        $cfg = Read-ConfigJson -ConfigFilePath $configPath -NonInteractive
+        if (-not $cfg) { Write-Log "VQA: cannot read config.json for apply." -Level ERROR; return $false }
 
-    # -- Profiles (config.json scrcpy.parameters.<Model>.max_size)
-    if ($Scope -eq 'all' -or $Scope -eq 'profile') {
-        foreach ($p in $rec.Profiles) {
-            if ($Scope -eq 'profile' -and $Target -and $p.Model -ne $Target) { continue }
-            if ([int]$p.Recommended -eq [int]$p.Current) { continue }
-            if ($cfg.scrcpy.parameters.PSObject.Properties.Name -contains $p.Model) {
-                $cfg.scrcpy.parameters.($p.Model).max_size = [int]$p.Recommended
-                $configChanged = $true
-                $applied.Profiles += [PSCustomObject]@{ Model = $p.Model; MaxSize = [int]$p.Recommended }
-                # All running sessions of this model need a scrcpy restart for new max_size to take effect.
-                foreach ($h in $rec.Headsets) {
-                    if ($h.Model -eq $p.Model -and ($restartProcs -notcontains $h.Name)) { $restartProcs += $h.Name }
+        # ---- PASS 1: compute what would change. Pure - no side effects. ----
+        $applied = @{
+            Timestamp = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss")
+            Profiles  = @()
+            Headsets  = @()
+            MediaMtx  = $null
+        }
+        $restartProcs = @()
+
+        if ($doProfiles) {
+            foreach ($p in $rec.Profiles) {
+                if ($Scope -eq 'profile' -and $Target -and $p.Model -ne $Target) { continue }
+                if ([int]$p.Recommended -eq [int]$p.Current) { continue }
+                if ($cfg.scrcpy.parameters.PSObject.Properties.Name -contains $p.Model) {
+                    $applied.Profiles += [PSCustomObject]@{ Model = $p.Model; MaxSize = [int]$p.Recommended }
+                    foreach ($h in $rec.Headsets) {
+                        if ($h.Model -eq $p.Model -and ($restartProcs -notcontains $h.Name)) { $restartProcs += $h.Name }
+                    }
                 }
             }
         }
-    }
 
-    # -- MediaMTX (config.json mediamtx.stream_framerate / stream_bitrate)
-    if ($Scope -eq 'all' -or $Scope -eq 'mediamtx') {
-        $newFps = [int]$rec.MediaMtx.RecommendedFramerate
-        $newBw  = [int]$rec.MediaMtx.RecommendedBitrate
-        $curFps = [int]$rec.MediaMtx.CurrentFramerate
-        $curBw  = [int]$rec.MediaMtx.CurrentBitrate
-        if ($newFps -ne $curFps -or $newBw -ne $curBw) {
-            $cfg.mediamtx.stream_framerate = $newFps
-            $cfg.mediamtx.stream_bitrate   = "${newBw}M"
-            $configChanged = $true
-            $restartMtx    = $true
-            $applied.MediaMtx = [PSCustomObject]@{ Framerate = $newFps; BitrateMbps = $newBw }
+        if ($doMtx) {
+            $newFps = [int]$rec.MediaMtx.RecommendedFramerate
+            $newBw  = [int]$rec.MediaMtx.RecommendedBitrate
+            $curFps = [int]$rec.MediaMtx.CurrentFramerate
+            $curBw  = [int]$rec.MediaMtx.CurrentBitrate
+            if ($newFps -ne $curFps -or $newBw -ne $curBw) {
+                $applied.MediaMtx = [PSCustomObject]@{ Framerate = $newFps; BitrateMbps = $newBw }
+            }
         }
-    }
 
-    if ($configChanged) {
-        Write-FileWithoutBom -Path $configPath -Content (($cfg | ConvertTo-Json -Depth 12))
-        # Reload globals so subsequent reads see the new values immediately.
-        try { Get-Config -ConfigFilePath $configPath } catch { }
-    }
-
-    # -- Per-headset (known_headsets.csv ScrcpyProfile column)
-    # Update-HeadsetField looks up by ID, so map Name -> ID via Get-KnownHeadsets once.
-    if ($Scope -eq 'all' -or $Scope -eq 'headset') {
-        $allHeads = @(Get-KnownHeadsets)
-        foreach ($h in $rec.Headsets) {
-            if ($Scope -eq 'headset' -and $Target -and $h.Name -ne $Target) { continue }
-            if ($h.RecommendedProfile -eq $h.CurrentProfile) { continue }
-            $row = $allHeads | Where-Object { $_.Name -eq $h.Name } | Select-Object -First 1
-            if (-not $row) { continue }
-            try {
-                Update-HeadsetField -ID ([int]$row.ID) -Field 'ScrcpyProfile' -NewValue $h.RecommendedProfile | Out-Null
-                $applied.Headsets += [PSCustomObject]@{ Name = $h.Name; Profile = $h.RecommendedProfile }
+        if ($doHeadsets) {
+            $allHeads = @(Get-KnownHeadsets)
+            foreach ($h in $rec.Headsets) {
+                if ($Scope -eq 'headset' -and $Target -and $h.Name -ne $Target) { continue }
+                if ($h.RecommendedProfile -eq $h.CurrentProfile) { continue }
+                $row = $allHeads | Where-Object { $_.Name -eq $h.Name } | Select-Object -First 1
+                if (-not $row) { continue }
+                $applied.Headsets += [PSCustomObject]@{
+                    Name    = $h.Name
+                    Profile = $h.RecommendedProfile
+                    _Id     = [int]$row.ID    # carry through so PASS 2 doesn't need a second lookup
+                }
                 if ($restartProcs -notcontains $h.Name) { $restartProcs += $h.Name }
+            }
+        }
+
+        $mutated = ($applied.Profiles.Count -gt 0) -or ($applied.Headsets.Count -gt 0) -or ($null -ne $applied.MediaMtx)
+        if (-not $mutated) {
+            Write-Log "VQA: recommendation matches current state, nothing to apply." -Level INFO
+            return $false
+        }
+
+        # ---- Snapshot baseline (per-field, lazy) before any mutation ----
+        # Save-VqaBaseline captures only fields not already in baseline, using
+        # their CURRENT pre-mutation value. Safe to call every apply.
+        Save-VqaBaseline -Applied $applied
+
+        # ---- PASS 2: write mutations to disk ----
+        $restartMtx = $false
+        foreach ($p in $applied.Profiles) {
+            $cfg.scrcpy.parameters.($p.Model).max_size = [int]$p.MaxSize
+        }
+        if ($applied.MediaMtx) {
+            $cfg.mediamtx.stream_framerate = [int]$applied.MediaMtx.Framerate
+            $cfg.mediamtx.stream_bitrate   = ("{0}M" -f [int]$applied.MediaMtx.BitrateMbps)
+            $restartMtx = $true
+        }
+        if ($applied.Profiles.Count -gt 0 -or $applied.MediaMtx) {
+            Write-FileWithoutBom -Path $configPath -Content (($cfg | ConvertTo-Json -Depth 12))
+            try { Get-Config -ConfigFilePath $configPath } catch { }
+        }
+
+        foreach ($h in $applied.Headsets) {
+            try {
+                Update-HeadsetField -ID ([int]$h._Id) -Field 'ScrcpyProfile' -NewValue $h.Profile | Out-Null
             } catch {
                 Write-Log ("VQA: failed to update " + $h.Name + ": " + $_.Exception.Message) -Level WARNING
             }
         }
-    }
 
-    # Persist what we wrote (used by restore to detect operator manual edits)
-    Write-FileWithoutBom -Path $global:VQA_AppliedFilePath -Content ($applied | ConvertTo-Json -Depth 5)
-
-    # -- Restart affected scrcpy sessions
-    foreach ($name in $restartProcs) {
-        try {
-            $row = Get-KnownHeadsets | Where-Object { $_.Name -eq $name } | Select-Object -First 1
-            if ($row) {
-                Stop-Scrcpy -HeadsetName $name -HeadsetIP $row.IPAddress | Out-Null
-                Start-Sleep -Milliseconds 500
-                start-screenCopy -headsetIP $row.IPAddress -displayName $row.Name -scrcpyProfile $row.ScrcpyProfile
-            }
-        } catch {
-            Write-Log ("VQA: failed to restart scrcpy for $name " + $_.Exception.Message) -Level WARNING
+        # Strip the internal _Id field before persisting applied.json
+        $appliedToWrite = @{
+            Timestamp = $applied.Timestamp
+            Profiles  = $applied.Profiles
+            Headsets  = @($applied.Headsets | ForEach-Object { [PSCustomObject]@{ Name = $_.Name; Profile = $_.Profile } })
+            MediaMtx  = $applied.MediaMtx
         }
-    }
+        Write-FileWithoutBom -Path $global:VQA_AppliedFilePath -Content ($appliedToWrite | ConvertTo-Json -Depth 5)
 
-    # -- Restart mediamtx if its config changed
-    if ($restartMtx) {
-        try { Stop-MediaMtx; Start-Sleep -Seconds 1; Start-MediaMtx } catch { Write-Log "VQA: mediamtx restart failed." -Level WARNING }
-    }
+        # -- Restart affected scrcpy sessions
+        foreach ($name in $restartProcs) {
+            try {
+                $row = Get-KnownHeadsets | Where-Object { $_.Name -eq $name } | Select-Object -First 1
+                if ($row) {
+                    Stop-Scrcpy -HeadsetName $name -HeadsetIP $row.IPAddress | Out-Null
+                    Start-Sleep -Milliseconds 500
+                    start-screenCopy -headsetIP $row.IPAddress -displayName $row.Name -scrcpyProfile $row.ScrcpyProfile
+                }
+            } catch {
+                Write-Log ("VQA: failed to restart scrcpy for $name " + $_.Exception.Message) -Level WARNING
+            }
+        }
 
-    Write-Log ($msg.VqaRecommendationApplied -f $rec.Direction) -Level SUCCESS
-    # Arm the post-change cooldown so the workload can settle before VQR resumes
-    # warning the operator or VQO triggers another apply.
-    Start-VqaCooldown
-    return $true
+        if ($restartMtx) {
+            try { Stop-MediaMtx; Start-Sleep -Seconds 1; Start-MediaMtx } catch { Write-Log "VQA: mediamtx restart failed." -Level WARNING }
+        }
+
+        Write-Log ($msg.VqaRecommendationApplied -f $rec.Direction) -Level SUCCESS
+        Start-VqaCooldown
+        # Drop the cross-process flag read by the VRMonitor loop's
+        # Update-ComputerMonitoring so CPU/GPU stats refresh within seconds
+        # instead of waiting for the next throttled cycle - the UI uses those
+        # numbers to colour the VQA bars and headroom indicators.
+        try { [System.IO.File]::WriteAllText((Join-Path $global:ScriptPath 'data\computer_monitoring_forcerefresh.flag'), '') } catch { }
+        return $true
+    } finally {
+        Exit-VqaLock -Stream $lock
+    }
 }
 
 
@@ -714,6 +902,13 @@ function Invoke-VqaApply {
 function Restore-VqaOriginals {
     if (-not (Test-Path -LiteralPath $global:VQA_OriginalsFilePath)) { return $false }
 
+    $lock = Enter-VqaLock
+    if (-not $lock) {
+        Write-Log "VQA: restore skipped, another VQA operation is in progress." -Level WARNING
+        return $false
+    }
+    try {
+
     $orig = $null; $applied = $null
     try { $orig    = Get-Content -LiteralPath $global:VQA_OriginalsFilePath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { }
     if (Test-Path -LiteralPath $global:VQA_AppliedFilePath) {
@@ -722,11 +917,15 @@ function Restore-VqaOriginals {
     if (-not $orig) { return $false }
 
     $configPath = Join-Path $global:ScriptPath 'config\config.json'
-    $cfg = Read-ConfigJson -ConfigFilePath $configPath
+    $cfg = Read-ConfigJson -ConfigFilePath $configPath -NonInteractive
+    if (-not $cfg) { Write-Log "VQA: cannot read config.json for restore." -Level ERROR; return $false }
     $configChanged = $false
     $restartMtx    = $false
+    # M8: track failures. If anything throws, keep originals/applied files so the
+    # operator can diagnose and retry.
+    $errCount = 0
 
-    # -- Profiles
+    # -- Profiles (single int per model; full-field operator-edit check)
     if ($orig.Profiles -and $cfg.scrcpy -and $cfg.scrcpy.parameters) {
         foreach ($p in $orig.Profiles) {
             if (-not ($cfg.scrcpy.parameters.PSObject.Properties.Name -contains $p.Model)) { continue }
@@ -746,7 +945,7 @@ function Restore-VqaOriginals {
         }
     }
 
-    # -- MediaMTX
+    # -- MediaMTX (already per-field)
     if ($orig.MediaMtx) {
         $curFps = [int]$cfg.mediamtx.stream_framerate
         $curBwStr = [string]$cfg.mediamtx.stream_bitrate
@@ -766,27 +965,67 @@ function Restore-VqaOriginals {
     }
 
     if ($configChanged) {
-        Write-FileWithoutBom -Path $configPath -Content (($cfg | ConvertTo-Json -Depth 12))
-        try { Get-Config -ConfigFilePath $configPath } catch { }
+        try {
+            Write-FileWithoutBom -Path $configPath -Content (($cfg | ConvertTo-Json -Depth 12))
+            try { Get-Config -ConfigFilePath $configPath } catch { }
+        } catch {
+            Write-Log ("VQA restore: config.json write failed: " + $_.Exception.Message) -Level ERROR
+            $errCount++
+        }
     }
 
-    # -- Headsets
+    # -- Headsets (per-field operator-edit detection)
+    # ScrcpyProfile is "view-EYE-AUDIO-FPS-BW". A whole-string compare misses
+    # partial operator edits (e.g., FPS changed while other fields match VQA's
+    # last write). Parse all three (baseline / applied / current) and decide per
+    # field; rebuild the profile string from the merged result.
     $restartProcs = @()
     if ($orig.Headsets) {
         foreach ($h in $orig.Headsets) {
             $row = Get-KnownHeadsets | Where-Object { $_.Name -eq $h.Name } | Select-Object -First 1
             if (-not $row) { continue }
-            $appliedProfile = $null
+
+            $baseline = ConvertFrom-ScrcpyProfile -Profile $h.Profile
+            $current  = ConvertFrom-ScrcpyProfile -Profile $row.ScrcpyProfile
+            if (-not $baseline -or -not $current) { continue }
+
+            $appliedParsed = $null
             if ($applied -and $applied.Headsets) {
                 $a = $applied.Headsets | Where-Object { $_.Name -eq $h.Name } | Select-Object -First 1
-                if ($a) { $appliedProfile = [string]$a.Profile }
+                if ($a) { $appliedParsed = ConvertFrom-ScrcpyProfile -Profile $a.Profile }
             }
-            if ($null -ne $appliedProfile -and $row.ScrcpyProfile -ne $appliedProfile) { continue }
-            if ($row.ScrcpyProfile -ne $h.Profile) {
+
+            # Per-field decision: keep current value if operator edited it
+            # (current differs from what VQA last wrote); otherwise restore to
+            # baseline. When no applied entry exists for this headset, restore
+            # everything.
+            $fields = @{
+                View        = $current.View
+                Eye         = $current.Eye
+                AudioDup    = $current.AudioDup
+                Fps         = $current.Fps
+                BitrateMbps = $current.BitrateMbps
+            }
+            foreach ($f in @('View','Eye','AudioDup','Fps','BitrateMbps')) {
+                $touched = $false
+                if ($appliedParsed) {
+                    if ($current.$f -ne $appliedParsed.$f) { $touched = $true }
+                }
+                if (-not $touched) { $fields[$f] = $baseline.$f }
+            }
+
+            $newProfile = ConvertTo-ScrcpyProfile `
+                -View $fields.View -Eye $fields.Eye -AudioDup $fields.AudioDup `
+                -Fps $fields.Fps -BitrateMbps $fields.BitrateMbps
+
+            if ($newProfile -ne $row.ScrcpyProfile) {
                 try {
-                    Update-HeadsetField -ID ([int]$row.ID) -Field 'ScrcpyProfile' -NewValue $h.Profile | Out-Null
+                    Update-HeadsetField -ID ([int]$row.ID) -Field 'ScrcpyProfile' -NewValue $newProfile | Out-Null
                     $restartProcs += $h.Name
-                } catch { }
+                } catch {
+                    Write-Log ("VQA restore: failed to update " + $h.Name + ": " + $_.Exception.Message) -Level WARNING
+                    $errCount++
+                }
             }
         }
     }
@@ -799,10 +1038,20 @@ function Restore-VqaOriginals {
                 Start-Sleep -Milliseconds 500
                 start-screenCopy -headsetIP $row.IPAddress -displayName $row.Name -scrcpyProfile $row.ScrcpyProfile
             }
-        } catch { }
+        } catch {
+            Write-Log ("VQA restore: scrcpy restart failed for $name`: " + $_.Exception.Message) -Level WARNING
+            # scrcpy restart failure does not corrupt baseline; do not block file cleanup
+        }
     }
     if ($restartMtx) {
-        try { Stop-MediaMtx; Start-Sleep -Seconds 1; Start-MediaMtx } catch { }
+        try { Stop-MediaMtx; Start-Sleep -Seconds 1; Start-MediaMtx } catch {
+            Write-Log ("VQA restore: mediamtx restart failed: " + $_.Exception.Message) -Level WARNING
+        }
+    }
+
+    if ($errCount -gt 0) {
+        Write-Log ("VQA: restore PARTIAL ($errCount error(s)). Originals and applied files kept for retry.") -Level WARNING
+        return $false
     }
 
     Remove-Item -LiteralPath $global:VQA_OriginalsFilePath -Force -ErrorAction SilentlyContinue
@@ -811,7 +1060,15 @@ function Restore-VqaOriginals {
     # Restore is also a "system mutated" event - arm the cooldown so VQR/VQO
     # let the workload re-stabilise before reacting.
     Start-VqaCooldown
+    # Trigger immediate computer-monitoring refresh (cross-process flag read by
+    # the VRMonitor loop). Without this the UI keeps showing stale CPU/GPU
+    # numbers until the throttled cycle elapses.
+    try { [System.IO.File]::WriteAllText((Join-Path $global:ScriptPath 'data\computer_monitoring_forcerefresh.flag'), '') } catch { }
     return $true
+
+    } finally {
+        Exit-VqaLock -Stream $lock
+    }
 }
 
 
@@ -831,71 +1088,19 @@ function Reset-VqaToOriginals { return Restore-VqaOriginals }
 function Initialize-VideoQualityAutomation {
     if (Test-Path -LiteralPath $global:VQA_OriginalsFilePath) {
         Write-Log "VQA: orphan baseline detected from previous run, restoring." -Level WARNING
-        try { Restore-VqaOriginals | Out-Null } catch { }
+        $restoreOk = $false
+        try { $restoreOk = [bool](Restore-VqaOriginals) } catch {
+            Write-Log ("VQA: orphan restore threw: " + $_.Exception.Message) -Level ERROR
+        }
+        if (-not $restoreOk) {
+            Write-Log "VQA: orphan restore FAILED. Leaving originals/applied/history in place for diagnosis. Manual fix required." -Level ERROR
+            return
+        }
     }
-    # Per-session history: header only.
+    # Per-session history: header only - only when restore succeeded (or was unnecessary).
     $header = "Timestamp;CpuPct;GpuPct;ScrcpyCount;ClientCount;Direction;Reason;Json"
     Write-FileWithoutBom -Path $global:VQA_HistoryFilePath -Content ($header + "`r`n")
     Write-Log $msg.VqaHistoryReset -Level DEBUG
 }
 
 
-###############################################################
-# CONSOLE SUB-MENU
-###############################################################
-
-
-# [M] Monitoring sub-menu. Modelled on Show-SubMenu-Services. Lives in this
-# module so the whole menu disappears when VQA is disabled (the module is
-# not dot-sourced in that case).
-function Show-SubMenu-Monitoring {
-    do {
-        Clear-Host
-        Write-Host ""
-        Write-Host " ==========================================================" -ForegroundColor Cyan
-        Write-Host "   $($msg.MonitoringMenuTitle)" -ForegroundColor Cyan
-        Write-Host " ==========================================================" -ForegroundColor Cyan
-        Write-Host ""
-
-        $rec = _GetLatestVqaRecommendation
-        if ($rec) {
-            $color = if ($rec.Direction -eq 'down') { 'Yellow' } elseif ($rec.Direction -eq 'up') { 'Green' } else { 'Gray' }
-            Write-Host ("   CPU: {0}%   GPU: {1}%   scrcpy: {2}   clients: {3}" -f $rec.Cpu, $rec.Gpu, $rec.ScrcpyCount, $rec.ClientCount) -ForegroundColor White
-            Write-Host ("   Direction: {0}   Reason: {1}" -f $rec.Direction, $rec.Reason) -ForegroundColor $color
-        } else {
-            Write-Host "   No recommendation yet." -ForegroundColor DarkGray
-        }
-        $p = if ($global:VQA_AutoApplyProfiles) { 'ON' } else { 'OFF' }
-        $h = if ($global:VQA_AutoApplyHeadsets) { 'ON' } else { 'OFF' }
-        $m = if ($global:VQA_AutoApplyMediaMtx) { 'ON' } else { 'OFF' }
-        $cd = Get-VqaCooldownRemaining
-        Write-Host ("   Auto-apply:  Profiles [{0}]   Headsets [{1}]   MediaMTX [{2}]" -f $p, $h, $m) -ForegroundColor White
-        Write-Host ("   Cooldown:    {0} cycles remaining" -f $cd) -ForegroundColor White
-        Write-Host ""
-        Write-Host "   [1] Toggle Profiles auto-apply"
-        Write-Host "   [2] Toggle Headsets auto-apply"
-        Write-Host "   [3] Toggle MediaMTX auto-apply"
-        Write-Host "   [4] Apply current recommendation now"
-        Write-Host "   [5] Restore originals"
-        Write-Host "   [6] Show full recommendation JSON"
-        Write-Host "   [0] Back"
-        Write-Host ""
-        $choice = Read-Host "   Choice"
-
-        switch ($choice) {
-            '1' { Set-VqaAutoApply -Section 'profiles' -Enabled (-not $global:VQA_AutoApplyProfiles) | Out-Null; Start-Sleep -Milliseconds 500 }
-            '2' { Set-VqaAutoApply -Section 'headsets' -Enabled (-not $global:VQA_AutoApplyHeadsets) | Out-Null; Start-Sleep -Milliseconds 500 }
-            '3' { Set-VqaAutoApply -Section 'mediamtx' -Enabled (-not $global:VQA_AutoApplyMediaMtx) | Out-Null; Start-Sleep -Milliseconds 500 }
-            '4' { Invoke-VqaApply -Scope 'all' | Out-Null; Read-Host "Press Enter" }
-            '5' { Restore-VqaOriginals | Out-Null; Read-Host "Press Enter" }
-            '6' {
-                if (Test-Path -LiteralPath $global:VQA_RecommendationFilePath) {
-                    Get-Content -LiteralPath $global:VQA_RecommendationFilePath -Raw | Write-Host
-                } else {
-                    Write-Host "No recommendation file yet."
-                }
-                Read-Host "Press Enter"
-            }
-        }
-    } while ($choice -ne '0')
-}

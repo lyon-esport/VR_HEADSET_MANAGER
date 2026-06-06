@@ -1231,6 +1231,63 @@ function Open-File {
 }
 
 
+# [Q] Quality Monitoring sub-menu. Gated by $global:VQA_Enabled in Show-MainMenu;
+# the VQA-specific commands it calls (Set-VqaAutoApply, Invoke-VqaApply, etc.)
+# only exist when modules/video_quality_automation.ps1 is loaded, which itself
+# only happens when VQA is enabled.
+function Show-SubMenu-Monitoring {
+    do {
+        Clear-Host
+        Write-Host ""
+        Write-Host " ==========================================================" -ForegroundColor Cyan
+        Write-Host "   $($msg.MonitoringMenuTitle)" -ForegroundColor Cyan
+        Write-Host " ==========================================================" -ForegroundColor Cyan
+        Write-Host ""
+
+        $rec = Get-LatestVqaRecommendation
+        if ($rec) {
+            $color = if ($rec.Direction -eq 'down') { 'Yellow' } elseif ($rec.Direction -eq 'up') { 'Green' } else { 'Gray' }
+            Write-Host ("   CPU: {0}%   GPU: {1}%   scrcpy: {2}   clients: {3}" -f $rec.Cpu, $rec.Gpu, $rec.ScrcpyCount, $rec.ClientCount) -ForegroundColor White
+            Write-Host ("   Direction: {0}   Reason: {1}" -f $rec.Direction, $rec.Reason) -ForegroundColor $color
+        } else {
+            Write-Host "   No recommendation yet." -ForegroundColor DarkGray
+        }
+        $p = if ($global:VQA_AutoApplyProfiles) { 'ON' } else { 'OFF' }
+        $h = if ($global:VQA_AutoApplyHeadsets) { 'ON' } else { 'OFF' }
+        $m = if ($global:VQA_AutoApplyMediaMtx) { 'ON' } else { 'OFF' }
+        $cd = Get-VqaCooldownRemaining
+        Write-Host ("   Auto-apply:  Profiles [{0}]   Headsets [{1}]   MediaMTX [{2}]" -f $p, $h, $m) -ForegroundColor White
+        Write-Host ("   Cooldown:    {0} cycles remaining" -f $cd) -ForegroundColor White
+        Write-Host ""
+        Write-Host "   [1] Toggle Profiles auto-apply"
+        Write-Host "   [2] Toggle Headsets auto-apply"
+        Write-Host "   [3] Toggle MediaMTX auto-apply"
+        Write-Host "   [4] Apply current recommendation now"
+        Write-Host "   [5] Restore originals"
+        Write-Host "   [6] Show full recommendation JSON"
+        Write-Host "   [0] Back"
+        Write-Host ""
+        $choice = Read-Host "   Choice"
+
+        switch ($choice) {
+            '1' { Set-VqaAutoApply -Section 'profiles' -Enabled (-not $global:VQA_AutoApplyProfiles) | Out-Null; Start-Sleep -Milliseconds 500 }
+            '2' { Set-VqaAutoApply -Section 'headsets' -Enabled (-not $global:VQA_AutoApplyHeadsets) | Out-Null; Start-Sleep -Milliseconds 500 }
+            '3' { Set-VqaAutoApply -Section 'mediamtx' -Enabled (-not $global:VQA_AutoApplyMediaMtx) | Out-Null; Start-Sleep -Milliseconds 500 }
+            '4' { Invoke-VqaApply -Scope 'all' | Out-Null; Read-Host "Press Enter" }
+            '5' { Restore-VqaOriginals | Out-Null; Read-Host "Press Enter" }
+            '6' {
+                if (Test-Path -LiteralPath $global:VQA_RecommendationFilePath) {
+                    Get-Content -LiteralPath $global:VQA_RecommendationFilePath -Raw | Write-Host
+                } else {
+                    Write-Host "No recommendation file yet."
+                }
+                Read-Host "Press Enter"
+            }
+        }
+    } while ($choice -ne '0')
+}
+
+
 function Add-Headset-Manually {
     # Clear the screen
     Clear-Host

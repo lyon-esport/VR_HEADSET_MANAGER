@@ -24,10 +24,10 @@
 # --- Website static pages and templates ---
 /website/
 !/website/timer/
-!/website/assets/app_icons/
 !/website/monitor.html
 !/website/*[monitoring].html
 !/website/*[video].html
+!/website/assets/app_icons/
 
 # --- Documentation (exclude scratch/test files) ---
 /docs/
@@ -41,3 +41,4 @@
 /sources/mediamtx_v1.17.1_windows_amd64/
 /sources/powershell_Modules/
 /sources/scrcpy-win64-v4.0/
+/sources/vr_games_icons

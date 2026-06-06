@@ -278,6 +278,34 @@ function Sync-RestreamPaths {
 }
 
 
+function Get-MediaMtxClientCount {
+    <#
+    .SYNOPSIS
+    GET /v3/paths/list against the mediamtx HTTP API and sum readers across paths.
+
+    .DESCRIPTION
+    Returns the total active reader count, or 0 if mediamtx is disabled, the API
+    is unreachable, or the response cannot be parsed.
+    #>
+    if (-not $global:mediamtxEnabled) { return 0 }
+    $port = $global:mediamtxApiPort
+    if (-not $port) { return 0 }
+    $url = "http://localhost:$port/v3/paths/list"
+    try {
+        $resp = Invoke-RestMethod -Uri $url -Method GET -TimeoutSec 2 -ErrorAction Stop
+    } catch {
+        return 0
+    }
+    $count = 0
+    if ($resp -and $resp.items) {
+        foreach ($p in $resp.items) {
+            if ($p.readers) { $count += @($p.readers).Count }
+        }
+    }
+    return [int]$count
+}
+
+
 function Get-RestreamUrl {
     <#
     .SYNOPSIS

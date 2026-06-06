@@ -27,7 +27,7 @@
     [data-theme=light] { --bg:#f3f4f6; --text:#1f2937; --card-bg:#fff; --card-border:#e5e7eb; --muted:#9ca3af; }
     [data-theme=light] body { background: var(--bg); color: var(--text); }
 
-    .page { padding: 28px 32px; flex: 1; display: flex; flex-direction: column; max-width: 860px; width: 100%; }
+    .page { padding: 28px 32px; flex: 1; display: flex; flex-direction: column; width: 100%; }
     .page-title {
       font-size: 20px; font-weight: 700; color: #e5e7eb;
       margin-bottom: 6px; display: flex; align-items: center; gap: 10px;
@@ -118,18 +118,31 @@
       flex-shrink: 0;
     }
     .cfg-section-title {
+      font-size: 11px; font-weight: 600; letter-spacing: .06em;
+      text-transform: uppercase; color: var(--accent);
+      padding: 16px 22px 4px;
+      border-top: 1px solid var(--card-border);
+      box-shadow: 0 -4px 0 0 var(--card-border);
+      margin-top: 4px;
+    }
+    .cfg-subsection-title {
       font-size: 10px; font-weight: 700; letter-spacing: .1em;
       text-transform: uppercase; color: var(--muted);
-      padding: 16px 22px 4px;
+      padding: 12px 22px 2px 52px;
+      border-top: 1px solid var(--card-border);
+      margin-top: 4px;
+    }
+    .cfg-row-indented {
+      padding-left: 200px;
     }
     .cfg-row {
       display: flex; align-items: flex-start; gap: 20px;
-      padding: 10px 22px;
+      padding: 10px 52px 10px 52px;
       border-bottom: 1px solid var(--card-border);
     }
     .cfg-row:last-of-type { border-bottom: none; }
-    .cfg-label-col { flex: 0 0 clamp(180px, 22%, 280px); }
-    .cfg-input-col { flex: 1; display: flex; align-items: center; padding-top: 2px; }
+    .cfg-label-col { flex: 0 0 calc(60% - 10px); padding-left: 40px; }
+    .cfg-input-col { flex: 0 0 calc(40% - 10px); display: flex; align-items: center; padding-top: 2px; }
     .cfg-label { font-size: 13px; font-weight: 500; color: #e5e7eb; }
     [data-theme=light] .cfg-label { color: #111827; }
     .cfg-unit { font-size: 11px; color: var(--muted); font-weight: 400; }
@@ -367,7 +380,7 @@
         <circle cx="12" cy="12" r="3"/>
         <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
       </svg>
-      App Configuration
+      VR Headsets Manager Configuration
     </div>
     <p class="page-subtitle">Edit configuration and access application files.</p>
 
@@ -646,51 +659,56 @@
         { path: 'ComputerMonitoring.file_name', label: 'Output File Name', type: 'text',
           desc: 'Name of the JSON file written to the data folder. Default: computer_monitoring.json.' }
       ]},
-      { title: 'Video Quality Automation', fields: [
-        { path: 'VideoQualityAutomation.enabled', label: 'Enable VQR (Recommender)', type: 'boolean',
+      { title: 'Video Quality Automation (VQA)', fields: [
+        { path: 'VideoQualityAutomation.enabled', label: 'Enable Video Quality Automation', type: 'boolean',
           desc: 'Master switch. When disabled, the entire feature (recommender, optimizer, web section, console menu) is skipped. Requires application restart to take effect.' },
+        { type: 'subsection', label: 'Auto-apply Recommendations' },
         { path: 'VideoQualityAutomation.auto_apply_profiles', label: 'Auto-apply Profiles', type: 'boolean',
           desc: 'Auto-apply VQR recommendations for profile max_size after N consecutive down cycles. Toggling this also arms the post-change cooldown.' },
         { path: 'VideoQualityAutomation.auto_apply_headsets', label: 'Auto-apply Headsets', type: 'boolean',
           desc: 'Auto-apply per-headset fps/bitrate recommendations. Triggers a scrcpy restart (brief flicker) when fired.' },
         { path: 'VideoQualityAutomation.auto_apply_mediamtx', label: 'Auto-apply MediaMTX', type: 'boolean',
           desc: 'Auto-apply MediaMTX framerate / bitrate recommendations. Triggers a mediamtx restart when fired.' },
-        { path: 'VideoQualityAutomation.cooldown_cycles', label: 'Cooldown Cycles', type: 'number',
-          min: 0, max: 60,
-          desc: 'After any apply or auto-apply flag toggle, suppress warnings and auto-apply for N new VQR cycles so the workload can settle. Default: 5.' },
-        { path: 'VideoQualityAutomation.cpu_max_threshold_percent', label: 'CPU Max Threshold', type: 'number',
-          min: 10, max: 100, unit: '%',
-          desc: 'Operator-defined upper bound on CPU load. Recommendations never restore values that would push CPU above this. Default: 80 %.' },
-        { path: 'VideoQualityAutomation.gpu_max_threshold_percent', label: 'GPU Max Threshold', type: 'number',
-          min: 10, max: 100, unit: '%',
-          desc: 'Operator-defined upper bound on GPU 3D load. Default: 80 %.' },
+        { type: 'subsection', label: 'CPU Thresholds' },
         { path: 'VideoQualityAutomation.cpu_mitigation_threshold_percent', label: 'CPU Mitigation Threshold', type: 'number',
           min: 10, max: 100, unit: '%',
           desc: 'CPU load at or above which VQR starts proposing quality reductions. Default: 60 %.' },
+        { path: 'VideoQualityAutomation.cpu_max_threshold_percent', label: 'CPU Max Threshold', type: 'number',
+          min: 10, max: 100, unit: '%',
+          desc: 'Operator-defined upper bound on CPU load. Recommendations never restore values that would push CPU above this. Default: 80 %.' },
+        { type: 'subsection', label: 'GPU Thresholds' },
         { path: 'VideoQualityAutomation.gpu_mitigation_threshold_percent', label: 'GPU Mitigation Threshold', type: 'number',
           min: 10, max: 100, unit: '%',
           desc: 'GPU 3D load at or above which VQR starts proposing quality reductions. Default: 60 %.' },
+        { path: 'VideoQualityAutomation.gpu_max_threshold_percent', label: 'GPU Max Threshold', type: 'number',
+          min: 10, max: 100, unit: '%',
+          desc: 'Operator-defined upper bound on GPU 3D load. Default: 80 %.' },
+        { type: 'subsection', label: 'Global Recommendation Parameters' },
+        { path: 'VideoQualityAutomation.cooldown_cycles', label: 'Cooldown Cycles', type: 'number',
+          min: 0, max: 60,
+          desc: 'After any apply or auto-apply flag toggle, suppress warnings and auto-apply for N new VQR cycles so the workload can settle. Default: 5.' },
         { path: 'VideoQualityAutomation.downscale_step_percent', label: 'Downscale / Upscale Step', type: 'number',
           min: 1, max: 50, unit: '%',
           desc: 'Percentage reduction (and symmetric upscale step) applied to max_size, fps and bitrate per VQR cycle. Default: 20 %.' },
-        { path: 'VideoQualityAutomation.fps_round_step', label: 'FPS Rounding Step', type: 'number',
-          min: 1, max: 30, unit: 'fps',
-          desc: 'Recommended FPS values are rounded down to the nearest multiple of this. Default: 5.' },
+        { path: 'VideoQualityAutomation.vqo_consecutive_count', label: 'VQO Consecutive Cycles', type: 'number',
+          min: 1, max: 20,
+          desc: 'Number of consecutive VQR cycles that must agree on the same direction (down or up) before VQO auto-applies the recommendation. Default: 5.' },
+        { type: 'subsection', label: 'Streams Parameters' },
         { path: 'VideoQualityAutomation.min_max_size_px', label: 'Minimum max_size', type: 'number',
           min: 240, max: 4096, unit: 'px',
           desc: 'Floor for profile max_size recommendations. VQR will never recommend a value lower than this. Default: 480.' },
-        { path: 'VideoQualityAutomation.min_fps', label: 'Minimum FPS', type: 'number',
-          min: 1, max: 120, unit: 'fps',
-          desc: 'Floor for per-headset FPS recommendations. Default: 15.' },
-        { path: 'VideoQualityAutomation.min_bitrate_mbps', label: 'Minimum Bitrate', type: 'number',
-          min: 1, max: 100, unit: 'Mbps',
-          desc: 'Floor for per-headset and mediamtx bitrate recommendations. Default: 2.' },
         { path: 'VideoQualityAutomation.default_uncapped_max_size_px', label: 'Default Uncapped max_size', type: 'number',
           min: 480, max: 4096, unit: 'px',
           desc: 'When a profile has max_size = 0 (uncapped) and VQR needs to compute a downscale, this value is used as the starting point. Default: 1280.' },
-        { path: 'VideoQualityAutomation.vqo_consecutive_count', label: 'VQO Consecutive Cycles', type: 'number',
-          min: 1, max: 20,
-          desc: 'Number of consecutive VQR cycles that must agree on the same direction (down or up) before VQO auto-applies the recommendation. Default: 5.' }
+        { path: 'VideoQualityAutomation.min_fps', label: 'Minimum FPS', type: 'number',
+          min: 1, max: 120, unit: 'fps',
+          desc: 'Floor for per-headset FPS recommendations. Default: 15.' },
+        { path: 'VideoQualityAutomation.fps_round_step', label: 'FPS Rounding Step', type: 'number',
+          min: 1, max: 30, unit: 'fps',
+          desc: 'Recommended FPS values are rounded down to the nearest multiple of this. Default: 5.' },
+        { path: 'VideoQualityAutomation.min_bitrate_mbps', label: 'Minimum Bitrate', type: 'number',
+          min: 1, max: 100, unit: 'Mbps',
+          desc: 'Floor for per-headset and mediamtx bitrate recommendations. Default: 2.' }
       ]},
       { title: 'ADB', fields: [
         { path: 'ADB.adbPort_default', label: 'ADB Port', type: 'number',
@@ -772,11 +790,17 @@
       var html = '';
       CFG_SECTIONS.forEach(function(sec) {
         html += '<div class="cfg-section-title">' + sec.title + '</div>';
+        var inSubsection = false;
         sec.fields.forEach(function(f) {
+          if (f.type === 'subsection') {
+            inSubsection = true;
+            html += '<div class="cfg-subsection-title">' + f.label + '</div>';
+            return;
+          }
           var id  = 'cfg-' + f.path.replace(/\./g, '-');
           var val = cfgGet(config, f.path);
           if (val == null) val = '';
-          html += '<div class="cfg-row">';
+          html += '<div class="cfg-row' + (inSubsection ? ' cfg-row-indented' : '') + '">';
           html += '<div class="cfg-label-col"><div class="cfg-label">' + f.label;
           if (f.unit) html += ' <span class="cfg-unit">(' + cfgEsc(f.unit) + ')</span>';
           html += '</div><div class="cfg-desc">' + f.desc + '</div></div>';

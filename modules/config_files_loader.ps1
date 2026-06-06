@@ -10,9 +10,14 @@ function Read-ConfigJson {
     opens an online validator, and prompts the user to [R]eload, restore
     the [T]emplate, or [Q]uit. Loops until valid JSON is obtained.
     Returns the parsed object on success.
+
+    .PARAMETER NonInteractive
+    When set, returns $null on parse failure instead of prompting. Use for
+    callers that cannot block on console input (web request handlers, jobs).
     #>
     param (
-        [string]$ConfigFilePath
+        [string]$ConfigFilePath,
+        [switch]$NonInteractive
     )
 
     $configContent = $null
@@ -24,6 +29,10 @@ function Read-ConfigJson {
             $jsonValid = $true
         }
         catch {
+            if ($NonInteractive) {
+                try { Write-Log ("Read-ConfigJson: parse failed in non-interactive mode: " + $_.Exception.Message) -Level WARNING } catch { }
+                return $null
+            }
             Write-Host ""
             Write-Host "  *** INVALID JSON: The configuration file contains a syntax error! ***" -ForegroundColor Red -BackgroundColor Black
             Write-Host "  File  : $ConfigFilePath" -ForegroundColor Yellow
