@@ -330,7 +330,7 @@
 
       // Polling: fetch only JSON data, update DOM in-place (no full-page reload)
       (function () {
-        var INTERVAL_MS = 1000;
+        var INTERVAL_MS = 2000;
         function refresh() {
           fetch('/api/headset-status?name=' + encodeURIComponent(_NAME), { cache: 'no-store' })
             .then(function (r) { return r.json(); })

@@ -138,6 +138,51 @@ function Get-Config {
     $global:ComputerMonitoring_refresh_timer_sec = if ($null -ne $configContent.ComputerMonitoring.refresh_timer_sec) { [int]$configContent.ComputerMonitoring.refresh_timer_sec } else { 60 }
     $computerMonitoringFileName = if ($configContent.ComputerMonitoring.file_name) { $configContent.ComputerMonitoring.file_name } else { "computer_monitoring.json" }
     $global:computerMonitoringFilePath = Join-Path -Path $global:ScriptPath -ChildPath "data\$computerMonitoringFileName"
+
+    # VideoQualityAutomation (VQA) - master switch + VQO sub-flag + thresholds
+    if ($null -ne $configContent.VideoQualityAutomation) {
+        $vqa = $configContent.VideoQualityAutomation
+        $global:VQA_Enabled                = [bool]$vqa.enabled
+        # Per-section auto-apply flags (replace legacy enabled_VQO). When the legacy
+        # field is still present and a per-section flag is missing, the legacy value
+        # is mirrored - keeps behaviour identical on upgrade.
+        $legacyVqo = if ($null -ne $vqa.enabled_VQO) { [bool]$vqa.enabled_VQO } else { $null }
+        $global:VQA_AutoApplyProfiles = if ($null -ne $vqa.auto_apply_profiles) { [bool]$vqa.auto_apply_profiles } elseif ($null -ne $legacyVqo) { $legacyVqo } else { $false }
+        $global:VQA_AutoApplyHeadsets = if ($null -ne $vqa.auto_apply_headsets) { [bool]$vqa.auto_apply_headsets } elseif ($null -ne $legacyVqo) { $legacyVqo } else { $false }
+        $global:VQA_AutoApplyMediaMtx = if ($null -ne $vqa.auto_apply_mediamtx) { [bool]$vqa.auto_apply_mediamtx } elseif ($null -ne $legacyVqo) { $legacyVqo } else { $false }
+        $global:VQA_CooldownCycles    = if ($null -ne $vqa.cooldown_cycles) { [int]$vqa.cooldown_cycles } else { 5 }
+        $global:VQA_CooldownFilePath  = Join-Path -Path $global:ScriptPath -ChildPath "data\vqa_cooldown.json"
+        # Derived OR for any old call site still reading the legacy global.
+        $global:VQA_EnabledVQO        = ($global:VQA_AutoApplyProfiles -or $global:VQA_AutoApplyHeadsets -or $global:VQA_AutoApplyMediaMtx)
+        $global:VQA_CpuMaxThreshold        = if ($null -ne $vqa.cpu_max_threshold_percent) { [int]$vqa.cpu_max_threshold_percent } else { 80 }
+        $global:VQA_GpuMaxThreshold        = if ($null -ne $vqa.gpu_max_threshold_percent) { [int]$vqa.gpu_max_threshold_percent } else { 80 }
+        $global:VQA_CpuMitigationThreshold = if ($null -ne $vqa.cpu_mitigation_threshold_percent) { [int]$vqa.cpu_mitigation_threshold_percent } else { 60 }
+        $global:VQA_GpuMitigationThreshold = if ($null -ne $vqa.gpu_mitigation_threshold_percent) { [int]$vqa.gpu_mitigation_threshold_percent } else { 60 }
+        $global:VQA_DownscaleStepPercent   = if ($null -ne $vqa.downscale_step_percent) { [int]$vqa.downscale_step_percent } else { 20 }
+        $global:VQA_FpsRoundStep           = if ($null -ne $vqa.fps_round_step) { [int]$vqa.fps_round_step } else { 5 }
+        $global:VQA_MinMaxSize             = if ($null -ne $vqa.min_max_size_px) { [int]$vqa.min_max_size_px } else { 480 }
+        $global:VQA_MinFps                 = if ($null -ne $vqa.min_fps) { [int]$vqa.min_fps } else { 15 }
+        $global:VQA_MinBitrateMbps         = if ($null -ne $vqa.min_bitrate_mbps) { [int]$vqa.min_bitrate_mbps } else { 2 }
+        $global:VQA_DefaultUncappedMaxSize = if ($null -ne $vqa.default_uncapped_max_size_px) { [int]$vqa.default_uncapped_max_size_px } else { 1280 }
+        $global:VQA_VqoConsecutiveCount    = if ($null -ne $vqa.vqo_consecutive_count) { [int]$vqa.vqo_consecutive_count } else { 5 }
+        $historyName        = if ($vqa.history_file_name)        { $vqa.history_file_name }        else { "vqa_history.csv" }
+        $recommendationName = if ($vqa.recommendation_file_name) { $vqa.recommendation_file_name } else { "vqa_recommendation.json" }
+        $originalsName      = if ($vqa.originals_file_name)      { $vqa.originals_file_name }      else { "vqa_originals.json" }
+        $appliedName        = if ($vqa.applied_file_name)        { $vqa.applied_file_name }        else { "vqa_applied.json" }
+        $global:VQA_HistoryFilePath        = Join-Path -Path $global:ScriptPath -ChildPath "data\$historyName"
+        $global:VQA_RecommendationFilePath = Join-Path -Path $global:ScriptPath -ChildPath "data\$recommendationName"
+        $global:VQA_OriginalsFilePath      = Join-Path -Path $global:ScriptPath -ChildPath "data\$originalsName"
+        $global:VQA_AppliedFilePath        = Join-Path -Path $global:ScriptPath -ChildPath "data\$appliedName"
+    } else {
+        $global:VQA_Enabled           = $false
+        $global:VQA_EnabledVQO        = $false
+        $global:VQA_AutoApplyProfiles = $false
+        $global:VQA_AutoApplyHeadsets = $false
+        $global:VQA_AutoApplyMediaMtx = $false
+        $global:VQA_CooldownCycles    = 5
+        $global:VQA_CooldownFilePath  = Join-Path -Path $global:ScriptPath -ChildPath "data\vqa_cooldown.json"
+    }
+
     $global:adbFolder = Join-Path -Path $sourcesPath -ChildPath $configContent.ADB.folder
     $global:adbPath = Join-Path -Path $global:adbFolder -ChildPath "adb.exe"
     $global:adbPort_default = $configContent.ADB.adbPort_default

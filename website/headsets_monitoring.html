@@ -335,6 +335,74 @@
       </table>
     </div>
 
+    <!-- ===== Video Quality Automation section (rendered only when /api/vqa/status reports enabled) ===== -->
+    <details class="comp-section" id="vqa-section" style="display:none">
+      <summary id="vqa-summary">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9"/><polyline points="3 4 3 12 11 12"/></svg>
+        Video Quality Automation
+        <span class="pill pill-green" id="vqa-status-pill" style="margin-left:10px;color:#15803d">OK</span>
+        <!-- Header badge is display-only: ON if any of the 3 per-section auto-apply
+             flags is true, OFF otherwise. The actual toggles live in each card title. -->
+        <span class="comp-refresh-btn" id="vqa-vqo-btn" title="ON if any per-section auto-apply is enabled" style="margin-left:auto;gap:8px;cursor:default">
+          <span>VIDEO QUALITY AUTO-OPTIMIZER</span>
+          <span id="vqa-vqo-state" style="padding:2px 8px;border-radius:10px;font-size:10px;font-weight:800;background:#dc2626;color:#fff">OFF</span>
+        </span>
+        <svg class="chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+      </summary>
+      <div class="comp-body" id="vqa-body" style="grid-template-columns:1fr">
+        <div id="vqa-warning" style="display:none;padding:8px 11px;background:rgba(250,204,21,0.15);border:1px solid rgba(250,204,21,0.5);border-radius:4px;color:#a06030;font-size:12px;font-weight:600">
+          Computer load above mitigation threshold - quality reduction recommended.
+        </div>
+        <div id="vqa-vqo-warning" style="display:none;padding:8px 11px;background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.4);border-radius:4px;color:#3b82f6;font-size:11.5px">
+          VQO will auto-apply recommendations. Streams will restart (brief flicker) when CPU/GPU stays above mitigation for N cycles.
+        </div>
+        <div class="comp-card comp-workload-card">
+          <div class="comp-card-title" style="display:flex;align-items:center;gap:8px">
+            <span>Profile max sizes</span>
+            <button class="comp-refresh-btn" id="vqa-auto-profiles-btn" style="margin-left:auto;gap:6px" onclick="event.preventDefault();toggleVqoSection('profiles')">
+              <span>AUTO-APPLY RECOMMENDATIONS</span>
+              <span id="vqa-auto-profiles-state" style="padding:2px 8px;border-radius:10px;font-size:10px;font-weight:800;background:#dc2626;color:#fff">OFF</span>
+            </button>
+          </div>
+          <table class="comp-workload-table" id="vqa-profiles-table">
+            <thead><tr><th>Model</th><th>Original</th><th>Current</th><th>Recommended</th><th>Apply</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="comp-card comp-workload-card">
+          <div class="comp-card-title" style="display:flex;align-items:center;gap:8px">
+            <span>Running headsets (fps / bitrate Mbps)</span>
+            <button class="comp-refresh-btn" id="vqa-auto-headsets-btn" style="margin-left:auto;gap:6px" onclick="event.preventDefault();toggleVqoSection('headsets')">
+              <span>AUTO-APPLY RECOMMENDATIONS</span>
+              <span id="vqa-auto-headsets-state" style="padding:2px 8px;border-radius:10px;font-size:10px;font-weight:800;background:#dc2626;color:#fff">OFF</span>
+            </button>
+          </div>
+          <table class="comp-workload-table" id="vqa-headsets-table">
+            <thead><tr><th>Headset</th><th>Original</th><th>Current</th><th>Recommended</th><th>Apply</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="comp-card comp-workload-card">
+          <div class="comp-card-title" style="display:flex;align-items:center;gap:8px">
+            <span>MediaMTX restream</span>
+            <span id="vqa-mtx-clients" style="color:#3b82f6;font-size:11px;font-weight:600">0 clients connected</span>
+            <button class="comp-refresh-btn" id="vqa-auto-mediamtx-btn" style="margin-left:auto;gap:6px" onclick="event.preventDefault();toggleVqoSection('mediamtx')">
+              <span>AUTO-APPLY RECOMMENDATIONS</span>
+              <span id="vqa-auto-mediamtx-state" style="padding:2px 8px;border-radius:10px;font-size:10px;font-weight:800;background:#dc2626;color:#fff">OFF</span>
+            </button>
+          </div>
+          <table class="comp-workload-table" id="vqa-mtx-table">
+            <thead><tr><th>Setting</th><th>Original</th><th>Current</th><th>Recommended</th><th>Apply</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;padding:6px 0">
+          <button class="comp-refresh-btn" onclick="event.preventDefault();vqaApply('all','')">Apply all</button>
+          <button class="comp-refresh-btn" onclick="event.preventDefault();vqaRestore()" style="border-color:#a06030;color:#a06030">Restore originals</button>
+        </div>
+      </div>
+    </details>
+
     <details class="comp-section" id="comp-section">
       <summary>
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
@@ -354,7 +422,7 @@
   <script>
     var CSV_PATH      = '../data/known_headsets_infos.csv';
     var CSV_DELIMITER = ';';
-    var REFRESH_MS    = 2000;
+    var REFRESH_MS    = 4000;
     var activeFilter  = 'all';
     var lastRows      = [];
 
@@ -483,16 +551,28 @@
     // ── Computer monitoring ──────────────────────────────────────────────────
     var COMP_JSON_PATH  = '../data/computer_monitoring.json';
     var COMP_REFRESH_MS = 30000;
+    var vqaBarThresholds = null; // filled from vqa_recommendation.json when VQA is enabled
 
-    function barColor(pct) {
-      if (pct >= 85) return '#ef4444';
-      if (pct >= 60) return '#f97316';
+    function barColor(pct, maxT, mitT) {
+      if (pct >= (maxT != null ? maxT : 85)) return '#ef4444';
+      if (pct >= (mitT != null ? mitT : 60)) return '#f97316';
       return '#3b82f6';
     }
 
     function compBar(pct) {
       var p = Math.min(100, Math.max(0, pct || 0));
       return '<div class="comp-bar-wrap"><div class="comp-bar" style="width:' + p + '%;background:' + barColor(p) + '"></div></div>';
+    }
+
+    function compBarVqa(pct, kind) {
+      var t = vqaBarThresholds;
+      var maxT = null, mitT = null;
+      if (t) {
+        if (kind === 'cpu') { maxT = t.CpuMax; mitT = t.CpuMitigation; }
+        else if (kind === 'gpu') { maxT = t.GpuMax; mitT = t.GpuMitigation; }
+      }
+      var p = Math.min(100, Math.max(0, pct || 0));
+      return '<div class="comp-bar-wrap"><div class="comp-bar" style="width:' + p + '%;background:' + barColor(p, maxT, mitT) + '"></div></div>';
     }
 
     function renderComp(d) {
@@ -508,7 +588,7 @@
           (c.Model ? '<div class="comp-row"><span class="lbl">Model</span><span class="val" style="font-size:11px;max-width:130px;overflow:hidden;text-overflow:ellipsis" title="' + esc(c.Model) + '">' + esc(c.Model) + '</span></div>' : '') +
           '<div class="comp-row"><span class="lbl">Cores</span><span class="val">' + esc(c.PhysicalCores) + 'P / ' + esc(c.LogicalCores) + 'L</span></div>' +
           '<div class="comp-row"><span class="lbl">Load</span><span class="val">' + esc(c.LoadPercent) + ' %</span></div>' +
-          compBar(c.LoadPercent) +
+          compBarVqa(c.LoadPercent, 'cpu') +
           '</div>';
       }
 
@@ -534,7 +614,7 @@
             '<div class="comp-card-title">GPU ' + (d.GPU.length > 1 ? esc(g.Index) + ' ' : '') + '</div>' +
             (g.Model ? '<div class="comp-row"><span class="lbl">Model</span><span class="val" style="font-size:11px;max-width:130px;overflow:hidden;text-overflow:ellipsis" title="' + esc(g.Model) + '">' + esc(g.Model) + '</span></div>' : '') +
             '<div class="comp-row"><span class="lbl">VRAM</span><span class="val">' + esc(g.DedicatedVramGB) + ' GB</span></div>' +
-            (load3d != null ? '<div class="comp-row"><span class="lbl">3D Load</span><span class="val">' + esc(load3d) + ' %</span></div>' + compBar(load3d) : '') +
+            (load3d != null ? '<div class="comp-row"><span class="lbl">3D Load</span><span class="val">' + esc(load3d) + ' %</span></div>' + compBarVqa(load3d, 'gpu') : '') +
             (vramUsed != null ? '<div class="comp-row" style="margin-top:4px"><span class="lbl">VRAM used</span><span class="val">' + esc(g.VramUsedGB) + ' GB (' + esc(vramUsed) + '%)</span></div>' + compBar(vramUsed) : '') +
             '</div>';
         });
@@ -615,6 +695,281 @@
     pollComp();
     setInterval(pollComp, COMP_REFRESH_MS);
     // ── /Computer monitoring ─────────────────────────────────────────────────
+
+    // ── Video Quality Automation ────────────────────────────────────────────
+    var VQA_JSON_PATH = '../data/vqa_recommendation.json';
+    var VQA_REFRESH_MS = 30000;
+    var vqaEnabled = false;
+    var vqaVqoEnabled = false;
+    var vqaLastDirection = 'none';
+
+    // `changed` is decided by the caller on the raw numeric values so that
+    // "uncapped" (0) and "0" never look different, and a row with current == recommended
+    // is rendered as non-actionable and neutral-coloured regardless of direction.
+    function vqaRenderRow(label, original, current, recommended, scope, target, changed) {
+      var btnAttrs = !changed
+        ? 'style="pointer-events:none;opacity:0.35"'
+        : 'onclick="event.preventDefault();vqaApply(\'' + scope + '\',\'' + (target || '').replace(/'/g, "\\'") + '\')"';
+      // Use darker amber (#b45309) instead of #facc15 so the value is legible in light mode too.
+      var recColor = changed ? (vqaLastDirection === 'down' ? '#b45309' : '#15803d') : 'var(--text)';
+      return '<tr>' +
+        '<td>' + esc(label) + '</td>' +
+        '<td>' + esc(original) + '</td>' +
+        '<td>' + esc(current) + '</td>' +
+        '<td style="color:' + recColor + ';font-weight:600">' + esc(recommended) + '</td>' +
+        '<td><button class="comp-refresh-btn" ' + btnAttrs + '>Apply</button></td>' +
+        '</tr>';
+    }
+
+    // Display helper: 0 means "uncapped" for profile max_size; pass-through otherwise.
+    function vqaMaxSizeText(v) { return (v === 0 || v === '0') ? 'uncapped' : v; }
+
+    // Tracks the live state for the 3 per-section auto-apply flags + derived header badge.
+    var vqaState = { autoApply_profiles: false, autoApply_headsets: false, autoApply_mediamtx: false, derivedVqo: false };
+
+    function vqaRender(d) {
+      if (!d) return;
+      vqaLastDirection = d.Direction || 'none';
+      if (d.Thresholds) { vqaBarThresholds = d.Thresholds; }
+
+      // Only sync section flags from the recommendation JSON on first paint (before
+      // /api/vqa/status has responded). After that, vqaState is the authoritative source
+      // so that optimistic toggle updates are not overwritten by a stale JSON file.
+      if (!vqaState.initialized) {
+        vqaState.autoApply_profiles = !!d.AutoApplyProfiles;
+        vqaState.autoApply_headsets = !!d.AutoApplyHeadsets;
+        vqaState.autoApply_mediamtx = !!d.AutoApplyMediaMtx;
+        vqaState.derivedVqo         = !!d.VqoEnabled;
+        vqaVqoEnabled               = vqaState.derivedVqo;
+        vqaPaintAutoApplyState('profiles', vqaState.autoApply_profiles);
+        vqaPaintAutoApplyState('headsets', vqaState.autoApply_headsets);
+        vqaPaintAutoApplyState('mediamtx', vqaState.autoApply_mediamtx);
+        vqaPaintVqoState(vqaState.derivedVqo);
+      }
+
+      // MediaMTX active-client count badge (same look as "N scrcpy running" in Computer Statistics).
+      var clients = (d.ClientCount || 0);
+      var mtxClientsEl = document.getElementById('vqa-mtx-clients');
+      if (mtxClientsEl) {
+        mtxClientsEl.textContent = clients + ' client' + (clients === 1 ? '' : 's') + ' connected';
+      }
+
+      // Warning banner + summary bar color
+      var summary = document.getElementById('vqa-summary');
+      var pill = document.getElementById('vqa-status-pill');
+      var details = document.getElementById('vqa-section');
+      var maxHit = (d.Cpu >= d.Thresholds.CpuMax || d.Gpu >= d.Thresholds.GpuMax);
+      var thresholdsHit = (d.Cpu >= d.Thresholds.CpuMitigation || d.Gpu >= d.Thresholds.GpuMitigation);
+      var inCooldown = (d.CooldownRemaining || 0) > 0;
+
+      document.getElementById('vqa-warning').style.display = (thresholdsHit && !inCooldown) ? 'block' : 'none';
+      document.getElementById('vqa-vqo-warning').style.display = vqaVqoEnabled ? 'block' : 'none';
+
+      // Pill states (in priority order):
+      //   - SETTLING       : a post-change cooldown is active; warnings + auto-apply paused.
+      //   - REQUIRED       : CPU or GPU at/above the operator's max threshold.
+      //   - RECOMMENDED    : mitigation threshold hit but below max.
+      //   - Headroom / OK  : steady state or upscale possible.
+      if (inCooldown) {
+        pill.className = 'pill';
+        pill.textContent = 'SETTLING (' + d.CooldownRemaining + ' cycles left)';
+        pill.style.background = '#3f3f46';
+        pill.style.color = '#e5e7eb';
+        summary.style.background = '';
+      } else if (maxHit) {
+        pill.className = 'pill';
+        pill.textContent = 'MITIGATION REQUIRED';
+        pill.style.background = '#dc2626';
+        pill.style.color = '#ffffff';
+        summary.style.background = 'rgba(220,38,38,0.10)';
+        if (!details.open) { details.open = true; }
+      } else if (thresholdsHit) {
+        pill.className = 'pill pill-yellow';
+        pill.textContent = 'MITIGATION RECOMMENDED';
+        pill.style.background = '';
+        pill.style.color = '#b45309';
+        summary.style.background = 'rgba(250,204,21,0.12)';
+        if (!details.open) { details.open = true; }
+      } else if (vqaLastDirection === 'up') {
+        pill.className = 'pill pill-green';
+        pill.textContent = 'Headroom';
+        pill.style.background = '';
+        pill.style.color = '#15803d';
+        summary.style.background = '';
+      } else {
+        pill.className = 'pill pill-green';
+        pill.textContent = 'OK';
+        pill.style.background = '';
+        pill.style.color = '#15803d';
+        summary.style.background = '';
+      }
+
+      // Profiles table - compare raw numeric Current vs Recommended so 0 (uncapped)
+      // and the literal int 0 never disagree just because of display formatting.
+      var pBody = document.querySelector('#vqa-profiles-table tbody');
+      var pHtml = '';
+      (d.Profiles || []).forEach(function(p) {
+        var orig    = vqaMaxSizeText(p.Original);
+        var cur     = vqaMaxSizeText(p.Current);
+        var rec     = vqaMaxSizeText(p.Recommended);
+        var changed = ((p.Recommended | 0) !== (p.Current | 0));
+        pHtml += vqaRenderRow(p.Model, orig, cur, rec, 'profile', p.Model, changed);
+      });
+      pBody.innerHTML = pHtml || '<tr><td colspan="5" style="color:#555;text-align:center">No profiles configured.</td></tr>';
+
+      // Headsets table
+      var hBody = document.querySelector('#vqa-headsets-table tbody');
+      var hHtml = '';
+      (d.Headsets || []).forEach(function(h) {
+        var orig = h.OriginalFps + ' / ' + h.OriginalBitrate;
+        var cur  = h.CurrentFps  + ' / ' + h.CurrentBitrate;
+        var rec  = h.RecommendedFps + ' / ' + h.RecommendedBitrate;
+        var changed = (h.RecommendedFps !== h.CurrentFps || h.RecommendedBitrate !== h.CurrentBitrate);
+        hHtml += vqaRenderRow(h.Name, orig, cur, rec, 'headset', h.Name, changed);
+      });
+      hBody.innerHTML = hHtml || '<tr><td colspan="5" style="color:#555;text-align:center">No running scrcpy sessions.</td></tr>';
+
+      // MediaMTX row
+      var mBody = document.querySelector('#vqa-mtx-table tbody');
+      var m = d.MediaMtx || {};
+      var mOrig = (m.OriginalFramerate || '-') + ' fps / ' + (m.OriginalBitrate || '-') + ' Mbps';
+      var mCur  = (m.CurrentFramerate  || '-') + ' fps / ' + (m.CurrentBitrate  || '-') + ' Mbps';
+      var mRec  = (m.RecommendedFramerate || '-') + ' fps / ' + (m.RecommendedBitrate || '-') + ' Mbps';
+      var mChanged = (m.RecommendedFramerate !== m.CurrentFramerate || m.RecommendedBitrate !== m.CurrentBitrate);
+      mBody.innerHTML = vqaRenderRow('framerate / bitrate', mOrig, mCur, mRec, 'mediamtx', '', mChanged);
+    }
+
+    function pollVqa() {
+      if (!vqaEnabled) return;
+      fetch(VQA_JSON_PATH + '?_=' + Date.now())
+        .then(function(r) { if (!r.ok) throw 0; return r.json(); })
+        .then(vqaRender)
+        .catch(function() { /* no recommendation yet */ });
+    }
+
+    function vqaApply(scope, target) {
+      fetch('/api/vqa/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scope: scope, target: target })
+      }).then(function() { setTimeout(pollVqa, 500); });
+    }
+
+    function vqaRestore() {
+      if (!confirm('Restore all original parameters? This will revert profile max-sizes, headset fps/bitrate and mediamtx settings (skipping fields you edited manually).')) return;
+      fetch('/api/vqa/restore', { method: 'POST' })
+        .then(function() { setTimeout(pollVqa, 500); });
+    }
+
+    // Toggle one per-section auto-apply flag. The badge is painted optimistically
+    // BEFORE the fetch so the operator gets instant feedback; the server response
+    // is then reconciled in case the persisted value differs (or rolled back on error).
+    function toggleVqoSection(section) {
+      var key = 'autoApply_' + section;
+      var newVal = !vqaState[key];
+      if (newVal) {
+        var label = (section === 'profiles') ? 'profile max sizes'
+                  : (section === 'headsets') ? 'per-headset fps/bitrate'
+                  : 'MediaMTX framerate/bitrate';
+        if (!confirm('Enable auto-apply for ' + label + '? VQO will automatically reduce these settings when CPU/GPU stay above mitigation for several cycles. Streams may restart (brief flicker).')) return;
+      }
+
+      // Optimistic paint - flip the badge immediately so it does not look frozen
+      // while the API call + config.json write round-trips.
+      var previous = vqaState[key];
+      vqaState[key] = newVal;
+      vqaState.derivedVqo = vqaState.autoApply_profiles || vqaState.autoApply_headsets || vqaState.autoApply_mediamtx;
+      vqaVqoEnabled       = vqaState.derivedVqo;
+      vqaPaintAutoApplyState(section, newVal);
+      vqaPaintVqoState(vqaState.derivedVqo);
+
+      fetch('/api/vqa/toggle-auto-apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ section: section, enabled: newVal })
+      })
+        .then(function(r) {
+          if (!r.ok) throw new Error('toggle failed: ' + r.status);
+          return r.json();
+        })
+        .then(function(d) {
+          // Reconcile with the persisted truth (in case another tab/console changed something).
+          vqaState.autoApply_profiles = !!d.auto_apply_profiles;
+          vqaState.autoApply_headsets = !!d.auto_apply_headsets;
+          vqaState.autoApply_mediamtx = !!d.auto_apply_mediamtx;
+          vqaState.derivedVqo         = !!d.derived_vqo;
+          vqaVqoEnabled               = vqaState.derivedVqo;
+          vqaPaintAutoApplyState('profiles', vqaState.autoApply_profiles);
+          vqaPaintAutoApplyState('headsets', vqaState.autoApply_headsets);
+          vqaPaintAutoApplyState('mediamtx', vqaState.autoApply_mediamtx);
+          vqaPaintVqoState(vqaState.derivedVqo);
+          pollVqa();
+        })
+        .catch(function() {
+          // Roll back the optimistic flip on error so the UI matches reality.
+          vqaState[key] = previous;
+          vqaState.derivedVqo = vqaState.autoApply_profiles || vqaState.autoApply_headsets || vqaState.autoApply_mediamtx;
+          vqaVqoEnabled       = vqaState.derivedVqo;
+          vqaPaintAutoApplyState(section, previous);
+          vqaPaintVqoState(vqaState.derivedVqo);
+        });
+    }
+
+    // Repaint the ON/OFF badge inside one of the 3 per-section AUTO-APPLY buttons.
+    function vqaPaintAutoApplyState(section, enabled) {
+      var st = document.getElementById('vqa-auto-' + section + '-state');
+      if (!st) return;
+      st.textContent      = enabled ? 'ON' : 'OFF';
+      st.style.background = enabled ? '#16a34a' : '#dc2626';
+      st.style.color      = '#ffffff';
+    }
+
+    // Repaint the derived header VIDEO QUALITY AUTO-OPTIMIZER badge.
+    function vqaPaintVqoState(enabled) {
+      var st = document.getElementById('vqa-vqo-state');
+      if (!st) return;
+      st.textContent      = enabled ? 'ON' : 'OFF';
+      st.style.background = enabled ? '#16a34a' : '#dc2626';
+      st.style.color      = '#ffffff';
+    }
+
+    // Probe status once at page load; only mount the section + start polling when enabled.
+    fetch('/api/vqa/status')
+      .then(function(r) { return r.json(); })
+      .then(function(s) {
+        vqaEnabled = !!s.enabled;
+        if (!vqaEnabled) {
+          var el = document.getElementById('vqa-section');
+          if (el) el.parentNode.removeChild(el);
+          return;
+        }
+        vqaState.autoApply_profiles = !!s.auto_apply_profiles;
+        vqaState.autoApply_headsets = !!s.auto_apply_headsets;
+        vqaState.autoApply_mediamtx = !!s.auto_apply_mediamtx;
+        vqaState.derivedVqo         = !!s.enabled_vqo;
+        vqaState.initialized        = true;
+        if (s.cpu_max_threshold != null) {
+          vqaBarThresholds = {
+            CpuMax:        s.cpu_max_threshold,
+            GpuMax:        s.gpu_max_threshold,
+            CpuMitigation: s.cpu_mitigation,
+            GpuMitigation: s.gpu_mitigation
+          };
+        }
+        vqaVqoEnabled               = vqaState.derivedVqo;
+        document.getElementById('vqa-section').style.display = '';
+        vqaPaintAutoApplyState('profiles', vqaState.autoApply_profiles);
+        vqaPaintAutoApplyState('headsets', vqaState.autoApply_headsets);
+        vqaPaintAutoApplyState('mediamtx', vqaState.autoApply_mediamtx);
+        vqaPaintVqoState(vqaState.derivedVqo);
+        pollVqa();
+        setInterval(pollVqa, VQA_REFRESH_MS);
+      })
+      .catch(function() {
+        var el = document.getElementById('vqa-section');
+        if (el) el.parentNode.removeChild(el);
+      });
+    // ── /Video Quality Automation ───────────────────────────────────────────
 
     pollCsv();
     setInterval(pollCsv, REFRESH_MS);

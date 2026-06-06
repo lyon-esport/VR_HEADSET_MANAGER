@@ -13,6 +13,13 @@
   // Apply saved theme immediately to avoid flash of wrong theme
   try { if (localStorage.getItem('vrm-theme') === 'light') document.documentElement.setAttribute('data-theme', 'light'); } catch (e) {}
 
+  // Inject responsive rule: hide the MITIGATION label on narrow viewports, keep only the icon.
+  (function () {
+    var s = document.createElement('style');
+    s.textContent = '@media (max-width:700px){#topbar-vqa-warning-label{display:none!important}}';
+    document.head.appendChild(s);
+  }());
+
   var _filterCallback = null;
 
   var BRAND_SVG =
@@ -33,10 +40,26 @@
     '<polyline points="20 6 9 17 4 12"/></svg>';
 
   window.TopBar = {
+    // Brand + a hidden VQA warning icon to its right. The icon is shown by
+    // TopBar.initVqaWarning() when VQA detects a mitigation condition and VQO
+    // auto-apply is off. Click navigates to the Video Quality Automation page.
     brandHTML:
       '<a href="/" class="topbar-brand">' +
         BRAND_SVG +
         '<span class="topbar-btn-label">VR Headset Manager</span>' +
+      '</a>' +
+      '<a href="/headsets_monitoring.html#vqa-section" id="topbar-vqa-warning" ' +
+         'title="Video quality mitigation needed" ' +
+         'style="display:none;align-items:center;gap:6px;padding:4px 10px;margin-left:8px;' +
+         'border-radius:6px;text-decoration:none;font-size:11px;font-weight:700;letter-spacing:0.04em;' +
+         'background:rgba(250,204,21,0.18);color:#b45309;border:1px solid rgba(250,204,21,0.55);' +
+         'transition:background 0.15s,color 0.15s,border-color 0.15s">' +
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+             'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' +
+          '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>' +
+          '<line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>' +
+        '</svg>' +
+        '<span id="topbar-vqa-warning-label">MITIGATION RECOMMENDED</span>' +
       '</a>',
 
     vsepHTML: '<div class="v-sep"></div>',
@@ -310,8 +333,59 @@
           '</div>' +
 
         '</div>' +
-      '</div>'
+      '</div>',
+
+    // Show / hide / repaint the VQA warning chip in the brand area based on the
+    // current recommendation snapshot. Called once at page load by initVqaWarning,
+    // then on a 30 s poll.
+    _vqaWarningUpdate: function () {
+      var el = document.getElementById('topbar-vqa-warning');
+      if (!el) return;
+      fetch('/api/vqa/status').then(function (r) { return r.json(); }).then(function (s) {
+        // Hidden when VQA is disabled OR when the derived VQO badge is ON (operator
+        // chose auto-apply for at least one section, so a warning would just be noise).
+        if (!s.enabled || s.enabled_vqo) { el.style.display = 'none'; return; }
+        return fetch('/data/vqa_recommendation.json?_=' + Date.now())
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (d) {
+            if (!d || !d.Thresholds) { el.style.display = 'none'; return; }
+            // Cooldown takes precedence: while the system is settling after an apply
+            // or flag toggle, suppress the warning entirely.
+            if ((d.CooldownRemaining || 0) > 0) { el.style.display = 'none'; return; }
+            var max  = (d.Cpu >= d.Thresholds.CpuMax        || d.Gpu >= d.Thresholds.GpuMax);
+            var mit  = (d.Cpu >= d.Thresholds.CpuMitigation || d.Gpu >= d.Thresholds.GpuMitigation);
+            var lbl  = document.getElementById('topbar-vqa-warning-label');
+            if (max) {
+              el.style.display       = 'inline-flex';
+              el.style.background    = '#dc2626';
+              el.style.color         = '#ffffff';
+              el.style.borderColor   = '#dc2626';
+              if (lbl) lbl.textContent = 'MITIGATION REQUIRED';
+              el.title = 'CPU/GPU above maximum threshold - immediate quality reduction required';
+            } else if (mit) {
+              el.style.display       = 'inline-flex';
+              el.style.background    = 'rgba(250,204,21,0.18)';
+              el.style.color         = '#b45309';
+              el.style.borderColor   = 'rgba(250,204,21,0.55)';
+              if (lbl) lbl.textContent = 'MITIGATION RECOMMENDED';
+              el.title = 'CPU/GPU above mitigation threshold - quality reduction recommended';
+            } else {
+              el.style.display = 'none';
+            }
+          });
+      }).catch(function () { /* api or json unreachable - leave hidden */ });
+    },
+
+    // Public initializer. Self-invoked below so individual pages do not need to
+    // call it - the chip just maintains itself everywhere the topbar is used.
+    initVqaWarning: function () {
+      document.addEventListener('DOMContentLoaded', function () { TopBar._vqaWarningUpdate(); });
+      setInterval(function () { TopBar._vqaWarningUpdate(); }, 30000);
+    }
   };
+
+  // Auto-init the VQA warning chip for every page that loads topbar.js.
+  TopBar.initVqaWarning();
 
   // Wire up Config dropdown toggle (runs after DOM is ready)
   document.addEventListener('DOMContentLoaded', function () {

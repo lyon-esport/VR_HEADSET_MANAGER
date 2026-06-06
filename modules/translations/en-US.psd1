@@ -491,4 +491,17 @@
     # ==========================================
     ComputerMonitoringUpdated = "Computer monitoring snapshot updated."
     ComputerMonitoringSkipped = "Computer monitoring skipped (not due yet)."
+
+    # ==========================================
+    # video_quality_automation.ps1
+    # ==========================================
+    QualityMonitoring          = "  Q. Video Quality Automation (VQR / VQO) "
+    MonitoringMenuTitle        = "Video Quality Automation - Monitoring"
+    VqaEnabledVQO              = "VQO auto-apply enabled."
+    VqaDisabledVQO             = "VQO auto-apply disabled."
+    VqaRecommendationApplied   = "VQA recommendation applied (direction: {0})."
+    VqaRestored                = "VQA: original parameters restored."
+    VqaWarningThresholdExceeded= "CPU/GPU above mitigation threshold - quality reduction recommended."
+    VqaHistoryReset            = "VQA: per-session history reset."
+    VqaInvalidApiResponse      = "VQA: mediamtx API returned invalid response."
 }

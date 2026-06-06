@@ -66,9 +66,91 @@ Let's check with stream deck activity
 	A flag must exist to force re-check of the computer workload before the 1min "waiting time" before refresh. This will be used later, for example from the web interface or from the console.
 	The timing of 1min of waiting time before doing a computer monitoring refresh, and the file name of the json, should be customizable and will be configured in the config file and loaded as a global variable, and will be updateble from the web interface in Edit config File menu.
 
-In headsets_monitoring.html add a drop-down section below headsets list.
-This drop-down list will display all computer statistics collected in the $global:computerMonitoringFilePath 
+	In headsets_monitoring.html add a drop-down section below headsets list.
+	This drop-down list will display all computer statistics collected in the $global:computerMonitoringFilePath 
 
+## VIDEO QUALITY AUTOMATION ##
+
+In headsets_monitoring.html the collection of Process workload works well.
+I want to add a new functionality : Provide to the operator a proposal or automation for adjusting quality settings for the video capture, based on the CPU, and GPU workload.
+- config.json file should contain a section for Video Quality Automation, below Computer Monitoring
+	it will contain a flag for enabling / disabling the Video Quality Optimizer[VQO] (true/false)
+	It will contain CPU and also GPU max threshold to keep under (default 80% to set in template)
+	It will contain CPU and GPU threashold when VRQ will start proposing video quality mitigation (default 60% to set in template)
+
+Description of the VQR backend function :
+	In input, the process will get :
+	- Computer statistics collection (cpu/ram/gpu, workload from processes...)
+	- Number of connected clients to the mediamtx restream process
+	- Configured profiles parameters (specifically wih max size parameters)
+	- all scrcpy sessions currently running with profile parameter selected
+	Expected output :
+		List of recommandation with parameters that can reduce CPU and GPU workload to keep the application with acceptable performances.
+		It can play with global headsets profiles Max Size (px), each headset FPS and bandwith parameters, mediamtx restream parameters
+	VQR will have to generate a recommandation based on the cpu and gpu workloads, to propose some optimizations in view to stabilize computer performances
+	Every time the stats collection is done the VQR process should be started.
+	
+
+		CPU caluclation :
+			If CPU workload is lower than mitigation threashold, it will do nothing
+			If global CPU workload is upper than mitigation threashold it will automatically calculate a new value to adapt workload
+		
+		GPU caluclation :
+			If CPU workload is lower than mitigation threashold, it will do nothing
+			If GPU workload is upper than mitigation threashold it will automatically calculate a new value to adapt workload
+		
+		Check which processes are working on CPU and GPU to give a logic proposal to adapt logical parameters update proposals.
+		I think recommandations can be proposed based on a reduction of 20% downscale values, with a rounding of multiple of 5 for FPS. It should always be integer value.
+		If the GPU or CPU is getting better, it can propose to scale back up to adjust power to be kept lower than mitigation threasholds (only if there are enough margin).
+		In any case it can't be overwiten over that onriginal threasholds defined by the user.
+
+	
+Description of the VQO backend Process :
+	if VQO is enabled, is should then be started.
+	If video quality optimizer is enabled, video quality recommandation display is directly applied.
+	Video Quality Optimizer function will check last 5 collection parameters, and will apply VQR recommandations if it's the same "power saving" result.
+	The process should keep an history in a csv of the recomandation values of each run of the current session, while restarting the app it should overwrite the history.
+	
+
+Description of the Video Quality Automation VQR and VQO Frontend :
+	In headsets_monitoring.html, Below Computer Monitoring, a new drop down section should be added for Video Quality Automation
+	This section should conain (in the drop down section for example) a button to enable or disable Video Quality Optimizer" and warn user that quality recommandations will be applied automatically lower quality of the video capure and streams based on the computer perfomances. It will also generate flickering of the screens while applying new parameters as streams will have to be restarted.
+	It should display a list of profiles with configured max sized parameters in the config.json, and the recommanded max size.
+	It should display a list of scrcpy running headsets with current applied parameters, and new recommanded parameters (fps/bandwidth).
+	On the right of these 2 arrays, it should contains a row with a button to apply recommandation.
+	Example : [ Item | ORIGINALLY configured parameters | Currently configured parameters | Recommanded parameter | Apply recommandation ]
+	If CPU or GPU is upper than mitigation threasholds it should display the drop down section automatically and display a warning in the section bar (Section bar should become yellow).
+	If VQO is enabled, recommandation buttons should be greyed and non clickable.
+	In the botom of the section, a button should be displayed to restore original values set by the operator (or orinially setup in the config file).
+	The same options should be visible in console management, in a Monitoring section (to create if it does not exists).
+
+Recomandation application :
+	While recommandations are applied, it should push parameters on selected headsets or profiles, or mediamxt parameters. If mediamtx process need to be restarted, let's do it then.
+	At the software shudown (and also if it restarts after crashes), if parameters has been applied by the VQR or VRO process and have been modified (as it's updating config.json file or headsets, or mediamtx config files), it should restore all parameters as it was configured before applying recommandations.
+	However, if an operator modifies parameters manually in the config file, or using the web editor, it should be kept.
+
+The code should be human readable and easy to understand, and have correct documentation/comments
+Please ask me any question you can have if some points are not clear, and provide a plan. We can brainstorm to get the best way to keep this software performances acceptable for operators.
+
+---------- VQA Verification plan -----------
+End-to-end test on the "Q3 RED" headset (192.168.1.244):
+
+Config wiring — start the app, confirm Get-Config populates all $global:VQA_* variables (run Get-Variable VQA_* in the console).
+VQR pure path — manually edit data/computer_monitoring.json to fake CPU=85 GPU=85, wait one VRMonitor tick, confirm data/vqa_recommendation.json is written with Direction: down and a non-empty profiles/headsets list. Confirm a row is appended to vqa_history.csv.
+Mediamtx client count — start mediamtx + 1 WHEP viewer in browser, run Get-MediaMtxClientCount from console, expect 1.
+Web UI — open headsets_monitoring.html, confirm the new VQA section appears under Computer Statistics, polls vqa_recommendation.json, auto-opens + yellow bar when fake high-load is injected.
+Per-row apply — click Apply on one headset row. Confirm known_headsets.csv ScrcpyProfile updates, the running scrcpy is restarted with the new args, vqa_originals.json and vqa_applied.json are created.
+Restore button — click Restore. Confirm CSV and config.json revert to baseline; vqa_originals.json / vqa_applied.json are deleted.
+Operator-edit protection — apply VQR, then manually edit one CSV field, then trigger restore. Confirm that manually-edited field is not reverted, but other fields are.
+Crash-restart restore — apply VQR, kill the app process (no clean shutdown), restart. Confirm Initialize-VideoQualityAutomation detects orphan vqa_originals.json and restores.
+VQO debounce — set enabled_VQO=true, vqo_consecutive_count=3, inject 3 high-load snapshots in a row, confirm auto-apply fires exactly once. Inject one low-load snapshot, confirm counter resets.
+Console menu — main menu [M] opens Monitoring sub-menu; all 4 actions work.
+Syntax-only check on new module:
+$errors=$null;[System.Management.Automation.Language.Parser]::ParseFile('modules\video_quality_automation.ps1',[ref]$null,[ref]$errors);$errors
+Translation parity: pwsh scripts\Test-TranslationParity.ps1 must exit 0.
+Config schema parity: pwsh scripts\Test-ConfigSchema.ps1 must exit 0.
+
+------------------------------------------
 
 
 #### RELEASE ####

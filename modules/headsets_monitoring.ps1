@@ -201,6 +201,17 @@ function Start-VRMonitor {
             # Computer workload snapshot (throttled to once per minute via Update-ComputerMonitoring)
             Update-ComputerMonitoring
 
+            # Video Quality Automation: emit a recommendation every cycle, auto-apply if VQO enabled.
+            # The module is only loaded when $global:VQA_Enabled is true, so the function may not exist.
+            if ($global:VQA_Enabled -and (Get-Command Invoke-VideoQualityRecommendation -ErrorAction SilentlyContinue)) {
+                try {
+                    Invoke-VideoQualityRecommendation | Out-Null
+                    if ($global:VQA_EnabledVQO) { Invoke-VideoQualityOptimizer }
+                } catch {
+                    Write-Log ("VQA: cycle failed: " + $_.Exception.Message) -Level WARNING
+                }
+            }
+
             Write-Log ($msg.JobRestartsIn -f $jobName, $VRMonitor_refresh_timer) -Level DEBUG
            
             Start-Sleep -Seconds $VRMonitor_refresh_timer

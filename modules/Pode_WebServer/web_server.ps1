@@ -152,6 +152,11 @@ if ($PidFile) {
     $PID | Set-Content -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
 }
 
+# Boost this process priority above Normal so the single-threaded request loop
+# is not starved when scrcpy/ffmpeg/mediamtx saturate the host. AboveNormal (not
+# High) preserves scheduling fairness for the streaming workload.
+try { (Get-Process -Id $PID).PriorityClass = 'AboveNormal' } catch {}
+
 # Start HttpListener
 # Requires URL ACL pre-registered by computer_setup.ps1:
 #   netsh http add urlacl url=http://+:<port>/ user=Everyone
@@ -696,8 +701,19 @@ try {
                     continue
                 }
 
-                $rows = Import-Csv -LiteralPath $infosPath -Delimiter ";"
-                $row  = $rows | Where-Object { $_.Name -eq $rawName } | Select-Object -First 1
+                # Cache the parsed CSV per file-mtime so N concurrent pollers
+                # (each headset monitoring overlay polls 1Hz) share a single disk
+                # read. Otherwise the single-threaded request loop spends most of
+                # its time doing redundant Import-Csv calls on the same file.
+                $infosMtime = (Get-Item -LiteralPath $infosPath -ErrorAction SilentlyContinue).LastWriteTimeUtc
+                if (-not $script:headsetInfosCache -or
+                    $script:headsetInfosCacheMtime -ne $infosMtime) {
+                    $rows = Import-Csv -LiteralPath $infosPath -Delimiter ";"
+                    $script:headsetInfosCache       = @{}
+                    foreach ($r in $rows) { $script:headsetInfosCache[$r.Name] = $r }
+                    $script:headsetInfosCacheMtime  = $infosMtime
+                }
+                $row = $script:headsetInfosCache[$rawName]
 
                 if (-not $row) {
                     Send-JsonResponse -Response $response -StatusCode 404 -Body @{ error = 'Headset not found' }
@@ -2192,6 +2208,114 @@ Start-Process powershell.exe -ArgumentList @('-File',$Script,'-ScriptPath',$Scri
             continue
         }
 
+        # API: GET /api/vqa/status - returns whether Video Quality Automation is enabled and the 3 per-section
+        # auto-apply flags. The legacy enabled_vqo is included as a derived OR for any consumer that still reads it.
+        # Always available so the web UI can decide whether to render the VQA section, even when VQA is disabled.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/vqa/status') {
+            try {
+                $derivedVqo = ($global:VQA_AutoApplyProfiles -or $global:VQA_AutoApplyHeadsets -or $global:VQA_AutoApplyMediaMtx)
+                Send-JsonResponse -Response $response -Body @{
+                    enabled              = [bool]$global:VQA_Enabled
+                    auto_apply_profiles  = [bool]$global:VQA_AutoApplyProfiles
+                    auto_apply_headsets  = [bool]$global:VQA_AutoApplyHeadsets
+                    auto_apply_mediamtx  = [bool]$global:VQA_AutoApplyMediaMtx
+                    enabled_vqo          = [bool]$derivedVqo
+                    cpu_max_threshold    = if ($global:VQA_Enabled) { [int]$global:VQA_CpuMaxThreshold }        else { $null }
+                    gpu_max_threshold    = if ($global:VQA_Enabled) { [int]$global:VQA_GpuMaxThreshold }        else { $null }
+                    cpu_mitigation       = if ($global:VQA_Enabled) { [int]$global:VQA_CpuMitigationThreshold } else { $null }
+                    gpu_mitigation       = if ($global:VQA_Enabled) { [int]$global:VQA_GpuMitigationThreshold } else { $null }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/vqa/apply  - Applies the latest VQR recommendation. Body: { scope, target }.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/vqa/apply') {
+            try {
+                if (-not $global:VQA_Enabled) {
+                    Send-JsonResponse -Response $response -StatusCode 404 -Body @{ ok = $false; error = 'VQA disabled' }
+                } else {
+                    $bodyText = (New-Object System.IO.StreamReader($request.InputStream, $request.ContentEncoding)).ReadToEnd()
+                    $body  = if ($bodyText) { try { $bodyText | ConvertFrom-Json } catch { $null } } else { $null }
+                    $scope = if ($body -and $body.scope)  { [string]$body.scope }  else { 'all' }
+                    $target= if ($body -and $body.target) { [string]$body.target } else { '' }
+                    $ok = Invoke-VqaApply -Scope $scope -Target $target
+                    Send-JsonResponse -Response $response -Body @{ ok = [bool]$ok }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/vqa/restore  - Reverts to operator baseline, skipping fields edited manually since apply.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/vqa/restore') {
+            try {
+                if (-not $global:VQA_Enabled) {
+                    Send-JsonResponse -Response $response -StatusCode 404 -Body @{ ok = $false; error = 'VQA disabled' }
+                } else {
+                    $ok = Reset-VqaToOriginals
+                    Send-JsonResponse -Response $response -Body @{ ok = [bool]$ok }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/vqa/toggle-auto-apply
+        # Body: { section: "profiles" | "headsets" | "mediamtx", enabled: bool }
+        # Persists to config.json via Set-VqaAutoApply (which also arms the cooldown).
+        # Returns the full 3-section state + derived_vqo so the UI can paint all buttons at once.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/vqa/toggle-auto-apply') {
+            try {
+                if (-not $global:VQA_Enabled) {
+                    Send-JsonResponse -Response $response -StatusCode 404 -Body @{ ok = $false; error = 'VQA disabled' }
+                } else {
+                    $bodyText = (New-Object System.IO.StreamReader($request.InputStream, $request.ContentEncoding)).ReadToEnd()
+                    $body = if ($bodyText) { try { $bodyText | ConvertFrom-Json } catch { $null } } else { $null }
+                    $section = if ($body -and $body.section) { [string]$body.section } else { '' }
+                    if ($section -notin @('profiles','headsets','mediamtx')) {
+                        Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = "section must be 'profiles', 'headsets' or 'mediamtx'" }
+                    } else {
+                        $current = switch ($section) {
+                            'profiles' { $global:VQA_AutoApplyProfiles }
+                            'headsets' { $global:VQA_AutoApplyHeadsets }
+                            'mediamtx' { $global:VQA_AutoApplyMediaMtx }
+                        }
+                        $newVal = if ($body -and $null -ne $body.enabled) { [bool]$body.enabled } else { -not [bool]$current }
+                        Set-VqaAutoApply -Section $section -Enabled $newVal | Out-Null
+                        $derivedVqo = ($global:VQA_AutoApplyProfiles -or $global:VQA_AutoApplyHeadsets -or $global:VQA_AutoApplyMediaMtx)
+                        Send-JsonResponse -Response $response -Body @{
+                            ok                  = $true
+                            auto_apply_profiles = [bool]$global:VQA_AutoApplyProfiles
+                            auto_apply_headsets = [bool]$global:VQA_AutoApplyHeadsets
+                            auto_apply_mediamtx = [bool]$global:VQA_AutoApplyMediaMtx
+                            derived_vqo         = [bool]$derivedVqo
+                        }
+                    }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/vqa/toggle-vqo  - DEPRECATED. The single master VQO flag has been
+        # replaced by 3 per-section flags. The header badge is now derived from those.
+        # Returns 410 Gone with a hint so old clients fail loudly.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/vqa/toggle-vqo') {
+            try {
+                Send-JsonResponse -Response $response -StatusCode 410 -Body @{
+                    ok    = $false
+                    error = 'toggle-vqo is deprecated; use POST /api/vqa/toggle-auto-apply with { section, enabled }'
+                }
+            } catch { } finally { $response.Close() }
+            continue
+        }
+
         # API: POST /api/computer-monitoring/force-refresh
         # Creates a flag file read by the VRMonitor loop (separate process) to trigger an immediate refresh.
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/computer-monitoring/force-refresh') {
@@ -2358,9 +2482,18 @@ Start-Process powershell.exe -ArgumentList @('-File',$Script,'-ScriptPath',$Scri
                 $mtxQuery = $request.Url.Query
                 $mtxPort  = if ($global:mediamtxApiPort) { $global:mediamtxApiPort } else { 9997 }
                 $mtxUrl   = "http://127.0.0.1:$mtxPort$mtxPath$mtxQuery"
-                $wc = [System.Net.WebClient]::new()
-                $wc.Headers.Add('Accept', 'application/json')
-                $body = $wc.DownloadString($mtxUrl)
+                # HttpWebRequest with hard timeouts so a stalled mediamtx cannot
+                # freeze the single-threaded request loop for the OS default ~100s.
+                $req = [System.Net.HttpWebRequest]::Create($mtxUrl)
+                $req.Method            = 'GET'
+                $req.Accept            = 'application/json'
+                $req.Timeout           = 1500
+                $req.ReadWriteTimeout  = 1500
+                $resp   = $req.GetResponse()
+                $stream = $resp.GetResponseStream()
+                $reader = [System.IO.StreamReader]::new($stream)
+                $body   = $reader.ReadToEnd()
+                $reader.Close(); $stream.Close(); $resp.Close()
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
                 $response.StatusCode      = 200
                 $response.ContentType     = 'application/json; charset=utf-8'
@@ -2383,15 +2516,22 @@ Start-Process powershell.exe -ArgumentList @('-File',$Script,'-ScriptPath',$Scri
         # API: GET /api/appinfo  - returns port info and useful URLs for the topbar Help section
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/appinfo') {
             try {
-                $info = @{
-                    webServerPort      = $port
-                    mediamtxHlsPort    = if ($global:mediamtxHlsPort)    { $global:mediamtxHlsPort }    else { 8888 }
-                    mediamtxRtspPort   = if ($global:mediamtxRtspPort)   { $global:mediamtxRtspPort }   else { 8554 }
-                    mediamtxWebrtcPort = if ($global:mediamtxWebrtcPort) { $global:mediamtxWebrtcPort } else { 8889 }
-                    mediamtxApiPort    = if ($global:mediamtxApiPort)    { $global:mediamtxApiPort }    else { 9997 }
-                    webServerPid       = $PID
-                    mediamtxPid        = (Get-Process -Name "mediamtx" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Id)
+                # Cache for 10s - Get-Process is slow under high CPU load and this
+                # endpoint is polled by the topbar from every open page.
+                if (-not $script:appInfoCache -or
+                    ((Get-Date) - $script:appInfoCacheAt).TotalSeconds -gt 10) {
+                    $script:appInfoCache = @{
+                        webServerPort      = $port
+                        mediamtxHlsPort    = if ($global:mediamtxHlsPort)    { $global:mediamtxHlsPort }    else { 8888 }
+                        mediamtxRtspPort   = if ($global:mediamtxRtspPort)   { $global:mediamtxRtspPort }   else { 8554 }
+                        mediamtxWebrtcPort = if ($global:mediamtxWebrtcPort) { $global:mediamtxWebrtcPort } else { 8889 }
+                        mediamtxApiPort    = if ($global:mediamtxApiPort)    { $global:mediamtxApiPort }    else { 9997 }
+                        webServerPid       = $PID
+                        mediamtxPid        = (Get-Process -Name "mediamtx" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Id)
+                    }
+                    $script:appInfoCacheAt = Get-Date
                 }
+                $info      = $script:appInfoCache
                 $jsonOut   = ConvertTo-Json $info -Compress
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonOut)
                 $response.StatusCode      = 200
@@ -2564,9 +2704,18 @@ Start-Process powershell.exe -ArgumentList @('-File',$Script,'-ScriptPath',$Scri
                 $mtxQuery = $request.Url.Query
                 $mtxPort  = if ($global:mediamtxApiPort) { $global:mediamtxApiPort } else { 9997 }
                 $mtxUrl   = "http://127.0.0.1:$mtxPort$mtxPath$mtxQuery"
-                $wc = [System.Net.WebClient]::new()
-                $wc.Headers.Add('Accept', 'application/json')
-                $body = $wc.DownloadString($mtxUrl)
+                # HttpWebRequest with hard timeouts so a stalled mediamtx cannot
+                # freeze the single-threaded request loop for the OS default ~100s.
+                $req = [System.Net.HttpWebRequest]::Create($mtxUrl)
+                $req.Method            = 'GET'
+                $req.Accept            = 'application/json'
+                $req.Timeout           = 1500
+                $req.ReadWriteTimeout  = 1500
+                $resp   = $req.GetResponse()
+                $stream = $resp.GetResponseStream()
+                $reader = [System.IO.StreamReader]::new($stream)
+                $body   = $reader.ReadToEnd()
+                $reader.Close(); $stream.Close(); $resp.Close()
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
                 $response.StatusCode      = 200
                 $response.ContentType     = 'application/json; charset=utf-8'
@@ -2589,15 +2738,22 @@ Start-Process powershell.exe -ArgumentList @('-File',$Script,'-ScriptPath',$Scri
         # API: GET /api/appinfo  - returns port info and useful URLs for the topbar Help section
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/appinfo') {
             try {
-                $info = @{
-                    webServerPort      = $port
-                    mediamtxHlsPort    = if ($global:mediamtxHlsPort)    { $global:mediamtxHlsPort }    else { 8888 }
-                    mediamtxRtspPort   = if ($global:mediamtxRtspPort)   { $global:mediamtxRtspPort }   else { 8554 }
-                    mediamtxWebrtcPort = if ($global:mediamtxWebrtcPort) { $global:mediamtxWebrtcPort } else { 8889 }
-                    mediamtxApiPort    = if ($global:mediamtxApiPort)    { $global:mediamtxApiPort }    else { 9997 }
-                    webServerPid       = $PID
-                    mediamtxPid        = (Get-Process -Name "mediamtx" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Id)
+                # Cache for 10s - Get-Process is slow under high CPU load and this
+                # endpoint is polled by the topbar from every open page.
+                if (-not $script:appInfoCache -or
+                    ((Get-Date) - $script:appInfoCacheAt).TotalSeconds -gt 10) {
+                    $script:appInfoCache = @{
+                        webServerPort      = $port
+                        mediamtxHlsPort    = if ($global:mediamtxHlsPort)    { $global:mediamtxHlsPort }    else { 8888 }
+                        mediamtxRtspPort   = if ($global:mediamtxRtspPort)   { $global:mediamtxRtspPort }   else { 8554 }
+                        mediamtxWebrtcPort = if ($global:mediamtxWebrtcPort) { $global:mediamtxWebrtcPort } else { 8889 }
+                        mediamtxApiPort    = if ($global:mediamtxApiPort)    { $global:mediamtxApiPort }    else { 9997 }
+                        webServerPid       = $PID
+                        mediamtxPid        = (Get-Process -Name "mediamtx" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Id)
+                    }
+                    $script:appInfoCacheAt = Get-Date
                 }
+                $info      = $script:appInfoCache
                 $jsonOut   = ConvertTo-Json $info -Compress
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonOut)
                 $response.StatusCode      = 200

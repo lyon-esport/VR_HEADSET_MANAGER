@@ -483,4 +483,17 @@
     # ==========================================
     ComputerMonitoringUpdated = "Instantane de surveillance de l'ordinateur mis a jour."
     ComputerMonitoringSkipped = "Surveillance ordinateur ignoree (pas encore due)."
+
+    # ==========================================
+    # video_quality_automation.ps1
+    # ==========================================
+    QualityMonitoring          = "  Q. Automatisation Qualite Video (VQR / VQO) "
+    MonitoringMenuTitle        = "Automatisation Qualite Video - Surveillance"
+    VqaEnabledVQO              = "Application automatique VQO activee."
+    VqaDisabledVQO             = "Application automatique VQO desactivee."
+    VqaRecommendationApplied   = "Recommandation VQA appliquee (direction : {0})."
+    VqaRestored                = "VQA : parametres d'origine restaures."
+    VqaWarningThresholdExceeded= "CPU/GPU au-dessus du seuil de mitigation - reduction de qualite recommandee."
+    VqaHistoryReset            = "VQA : historique de session reinitialise."
+    VqaInvalidApiResponse      = "VQA : API mediamtx a retourne une reponse invalide."
 }

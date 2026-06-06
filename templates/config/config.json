@@ -23,6 +23,28 @@
     "refresh_timer_sec": 60,
     "file_name": "computer_monitoring.json"
   },
+  "VideoQualityAutomation": {
+    "enabled": true,
+    "auto_apply_profiles": false,
+    "auto_apply_headsets": false,
+    "auto_apply_mediamtx": false,
+    "cooldown_cycles": 5,
+    "cpu_max_threshold_percent": 80,
+    "gpu_max_threshold_percent": 80,
+    "cpu_mitigation_threshold_percent": 60,
+    "gpu_mitigation_threshold_percent": 60,
+    "downscale_step_percent": 20,
+    "fps_round_step": 5,
+    "min_max_size_px": 480,
+    "min_fps": 15,
+    "min_bitrate_mbps": 2,
+    "default_uncapped_max_size_px": 1280,
+    "vqo_consecutive_count": 5,
+    "history_file_name": "vqa_history.csv",
+    "recommendation_file_name": "vqa_recommendation.json",
+    "originals_file_name": "vqa_originals.json",
+    "applied_file_name": "vqa_applied.json"
+  },
   "ADB":{
 	"folder":"scrcpy-win64-v4.0",
     "adbPort_default": 5555

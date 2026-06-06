@@ -118,6 +118,9 @@ function Show-MainMenu {
         Write-Host $msg.VideoRecast -BackgroundColor DarkMagenta -ForegroundColor White
         Write-Host $msg.FilesFolders -BackgroundColor DarkCyan -ForegroundColor Black 
         Write-Host $msg.ServicesManagement -BackgroundColor DarkGray -ForegroundColor White
+        if ($global:VQA_Enabled) {
+            Write-Host $msg.QualityMonitoring -BackgroundColor DarkGreen -ForegroundColor White
+        }
         Write-Host "  [C] Configuration" -BackgroundColor DarkBlue -ForegroundColor Cyan
         Write-Host $msg.Quit
         Write-Host $msg.AnyOtherKey
@@ -201,6 +204,11 @@ function Show-MainMenu {
                         Show-SubMenu-FilesAndFolders
                     }
                 'W' { Show-SubMenu-Services }
+                'Q' {
+                        if ($global:VQA_Enabled -and (Get-Command Show-SubMenu-Monitoring -ErrorAction SilentlyContinue)) {
+                            Show-SubMenu-Monitoring
+                        }
+                    }
                 'C' { Show-SubMenu-Config }
                 'I' {
                     if (Test-InternetConnectivity) {

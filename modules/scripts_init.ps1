@@ -50,11 +50,25 @@ $ModulesPath = Join-Path -Path $global:ScriptPath -ChildPath "modules"
             return
     }
 
-$moduleFiles = Get-ChildItem -Path $ModulesPath -Filter "*.ps1" -File | Sort-Object Name | 
-    Where-Object { 
-        $_.Name -notlike "*_init.ps1" -and 
+# Pre-read config.json (cheap, no globals) to decide whether to load the VQA
+# module. When VideoQualityAutomation.enabled is false we skip
+# video_quality_automation.ps1 entirely so its functions, sub-menu and
+# background work cost zero.
+$vqaPreEnabled = $false
+$vqaPreConfigPath = if ($global:custom_config) { $global:custom_config } else { Join-Path $global:ScriptPath "config\config.json" }
+if (Test-Path -LiteralPath $vqaPreConfigPath) {
+    try {
+        $vqaPreCfg = Get-Content -LiteralPath $vqaPreConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($vqaPreCfg.VideoQualityAutomation -and $vqaPreCfg.VideoQualityAutomation.enabled) { $vqaPreEnabled = $true }
+    } catch { }
+}
+
+$moduleFiles = Get-ChildItem -Path $ModulesPath -Filter "*.ps1" -File | Sort-Object Name |
+    Where-Object {
+        $_.Name -notlike "*_init.ps1" -and
         $_.Name -notlike "headsets_dashboard.ps1" -and
-        $_.Name -notlike "*_test.ps1"
+        $_.Name -notlike "*_test.ps1" -and
+        ($vqaPreEnabled -or $_.Name -ne "video_quality_automation.ps1")
     }
 
     if (-not $global:moduleSnapshots) { $global:moduleSnapshots = @{} }
@@ -154,6 +168,15 @@ $moduleFiles = Get-ChildItem -Path $ModulesPath -Filter "*.ps1" -File | Sort-Obj
     }
     Write-Log ($msg.TranslationsLoaded -f $global:SelectedLanguage) -Level DEBUG
 
+# Video Quality Automation startup: crash-recovery + history truncation.
+# Skipped inside the VRMonitor job and the dashboard process (they only need
+# the runtime functions, not the per-session reset).
+if ($global:VQA_Enabled -and -not $global:IsVRMonitorJob -and -not $global:IsDashboardProcess -and -not $global:IsWebServerProcess) {
+    if (Get-Command Initialize-VideoQualityAutomation -ErrorAction SilentlyContinue) {
+        try { Initialize-VideoQualityAutomation } catch { Write-Log ("VQA init failed: " + $_.Exception.Message) -Level WARNING }
+    }
+}
+
 
 function Stop-WebServer {
     $webServerPidFile = Join-Path $global:ScriptPath "data\webserver.pid"
@@ -208,6 +231,11 @@ function Invoke-AppShutdown {
 
     try { Stop-WebServer } catch { }
     try { Stop-MediaMtx  } catch { }
+
+    # Restore any VQA-applied parameters back to operator originals before exit.
+    if ($global:VQA_Enabled -and (Get-Command Restore-VqaOriginals -ErrorAction SilentlyContinue)) {
+        try { Restore-VqaOriginals | Out-Null } catch { }
+    }
 
     Remove-Variable moduleSnapshots -Scope Global -ErrorAction SilentlyContinue
     exit 0
