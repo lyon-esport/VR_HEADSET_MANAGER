@@ -297,7 +297,7 @@ $installJobBlock = {
 # Background job for async online app name resolution (Update-AppCacheOnline).
 # Runs in a NEW PowerShell process; dot-sources scripts_init to access module functions.
 $resolveJobBlock = {
-    param([string]$ScriptPath, [string]$ProgressFile, [string]$ConfigFilePath)
+    param([string]$ScriptPath, [string]$ProgressFile, [string]$ConfigFilePath, [bool]$ForceOnline = $false)
     function Set-ResolveProg {
         param([string]$status)
         $safe = $status -replace '"', "'"
@@ -309,7 +309,7 @@ $resolveJobBlock = {
         $global:ConfigFilePath     = $ConfigFilePath
         $global:IsWebServerProcess = $true
         . (Join-Path $ScriptPath 'modules\scripts_init.ps1')
-        Update-AppCacheOnline -AppCacheFilePath (Join-Path $ScriptPath 'data\known_apps.csv') -ProgressFile $ProgressFile
+        Update-AppCacheOnline -AppCacheFilePath (Join-Path $ScriptPath 'data\known_apps.csv') -ProgressFile $ProgressFile -ForceOnline:$ForceOnline
         Set-ResolveProg 'done'
     } catch {
         $err = ($_.ToString() -replace '"', "'") -replace '[^\x20-\x7E]', ''
@@ -320,6 +320,15 @@ $resolveJobBlock = {
 # Active resolve job guard (only one at a time)
 $script:resolveJob      = $null
 $script:resolveProgFile = [System.IO.Path]::Combine($env:TEMP, 'vrm_resolve.json')
+# Reset stale progress file from a previous session (running/queued with no active job)
+if (Test-Path -LiteralPath $script:resolveProgFile) {
+    try {
+        $stale = [System.IO.File]::ReadAllText($script:resolveProgFile) | ConvertFrom-Json
+        if ($stale.status -in @('running', 'queued')) {
+            [System.IO.File]::WriteAllText($script:resolveProgFile, '{"status":"idle"}')
+        }
+    } catch { Remove-Item -LiteralPath $script:resolveProgFile -Force -ErrorAction SilentlyContinue }
+}
 
 # Active update-versions job guard (only one at a time)
 $script:updateVersionsJob          = $null
@@ -1386,7 +1395,10 @@ try {
                 }
                 # Start background job
                 [System.IO.File]::WriteAllText($script:resolveProgFile, '{"status":"queued"}')
-                $script:resolveJob = Start-Job -ScriptBlock $resolveJobBlock -ArgumentList $ScriptPath, $script:resolveProgFile, $ConfigFilePath
+                $bodyRaw    = (New-Object System.IO.StreamReader($request.InputStream)).ReadToEnd()
+                $bodyObj    = try { $bodyRaw | ConvertFrom-Json } catch { $null }
+                $forceOnline = [bool]($bodyObj.forceOnline)
+                $script:resolveJob = Start-Job -ScriptBlock $resolveJobBlock -ArgumentList $ScriptPath, $script:resolveProgFile, $ConfigFilePath, $forceOnline
                 Send-JsonResponse -Response $response -Body @{ status = 'started' }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ status = 'error'; error = $_.Exception.Message }
@@ -1402,6 +1414,11 @@ try {
                     Send-JsonResponse -Response $response -Body @{ status = 'idle' }
                 } else {
                     $raw = try { [System.IO.File]::ReadAllText($script:resolveProgFile) } catch { '{"status":"idle"}' }
+                    # No active job — only trust terminal statuses; stale running/queued → idle
+                    if (-not $script:resolveJob) {
+                        $parsed = try { $raw | ConvertFrom-Json } catch { $null }
+                        if (-not $parsed -or $parsed.status -in @('running', 'queued')) { $raw = '{"status":"idle"}' }
+                    }
                     $bytes = [System.Text.Encoding]::UTF8.GetBytes($raw)
                     $response.StatusCode      = 200
                     $response.ContentType     = 'application/json; charset=utf-8'
@@ -2905,23 +2922,8 @@ Start-Process powershell.exe -ArgumentList @('-File',$Script,'-ScriptPath',$Scri
         # API: POST /api/appnames/clear  - archive current file, create empty replacement
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/appnames/clear') {
             try {
-                $appCsvPath = if ($global:AppCacheFilePath) { $global:AppCacheFilePath } else {
-                    [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_apps.csv"))
-                }
-
-                if (Test-Path -LiteralPath $appCsvPath) {
-                    $stamp   = Get-Date -Format 'yyyy.MM.dd-HH.mm'
-                    $dir     = Split-Path $appCsvPath -Parent
-                    $base    = [System.IO.Path]::GetFileNameWithoutExtension($appCsvPath)
-                    $ext     = [System.IO.Path]::GetExtension($appCsvPath)
-                    $archive = Join-Path $dir ($base + '_old_' + $stamp + $ext)
-                    Rename-Item -LiteralPath $appCsvPath -NewName $archive -Force -ErrorAction Stop
-                }
-
-                '"PackageName","DisplayName","IconUrl","LocalIconPath","Type"' |
-                    Set-Content -LiteralPath $appCsvPath -Encoding UTF8 -Force
-
-                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                $ok = Clear-AppNamesCache
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($(if ($ok) { '{"ok":true}' } else { '{"ok":false,"error":"Clear failed - check server logs"}' }))
                 $response.StatusCode      = 200
                 $response.ContentType     = 'application/json; charset=utf-8'
                 $response.Headers.Add('Access-Control-Allow-Origin', '*')

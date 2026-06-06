@@ -838,6 +838,7 @@
       var updated = JSON.parse(JSON.stringify(_cfgData));
       CFG_SECTIONS.forEach(function(sec) {
         sec.fields.forEach(function(f) {
+          if (f.type === 'subsection') return;
           var el = document.getElementById('cfg-' + f.path.replace(/\./g, '-'));
           if (!el) return;
           var val;

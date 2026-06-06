@@ -168,6 +168,13 @@ $moduleFiles = Get-ChildItem -Path $ModulesPath -Filter "*.ps1" -File | Sort-Obj
     }
     Write-Log ($msg.TranslationsLoaded -f $global:SelectedLanguage) -Level DEBUG
 
+# Initialize known_apps.csv from template on first startup
+if ($global:AppCacheFilePath -and -not (Test-Path -LiteralPath $global:AppCacheFilePath)) {
+    if (Get-Command Initialize-AppNamesCache -ErrorAction SilentlyContinue) {
+        Initialize-AppNamesCache -AppCacheFilePath $global:AppCacheFilePath
+    }
+}
+
 # Video Quality Automation startup: crash-recovery + history truncation.
 # Skipped inside the VRMonitor job and the dashboard process (they only need
 # the runtime functions, not the per-session reset).

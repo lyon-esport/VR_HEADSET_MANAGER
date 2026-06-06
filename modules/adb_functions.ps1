@@ -1697,6 +1697,66 @@ function Get-HeadsetInstalledApps {
 }
 
 
+function Resolve-LocalAppIcon {
+    <#
+    .SYNOPSIS
+    Resolves an app icon from local storage, copying from sources if needed.
+    Returns the web-relative path (/assets/app_icons/<file>) or $null.
+    Priority: 1) already in app_icons, 2) in sources\vr_games_icons, 3) $null (go online).
+    #>
+    param(
+        [string]$PackageName,
+        [string]$IconCacheDir = $(Join-Path $global:ScriptPath "website\assets\app_icons"),
+        [switch]$SourcesOnly
+    )
+
+    # 1. sources\vr_games_icons has highest priority (operator choice overrides web cache).
+    #    Longest-prefix match: exact package name wins over shorter prefixes.
+    #    e.g. com.android.png matches com.android.* but com.android.server.telecom.png wins for that package.
+    #    The matched file is copied under its original stem name (shared, no per-package duplication).
+    $sourcesDir = Join-Path $global:ScriptPath "sources\vr_games_icons"
+    $sourceFile = $null
+    $destExt    = $null
+    if (Test-Path -LiteralPath $sourcesDir) {
+        $bestLen = -1
+        foreach ($ext in @('.webp', '.png', '.jpg')) {
+            Get-ChildItem -LiteralPath $sourcesDir -Filter "*$ext" | ForEach-Object {
+                $stem = $_.BaseName
+                if ($PackageName -eq $stem -or $PackageName -like "$stem.*") {
+                    if ($stem.Length -gt $bestLen) {
+                        $bestLen    = $stem.Length
+                        $sourceFile = $_.FullName
+                        $destExt    = $ext
+                    }
+                }
+            }
+        }
+    }
+    if ($sourceFile) {
+        if (-not (Test-Path -LiteralPath $IconCacheDir)) {
+            New-Item -ItemType Directory -Path $IconCacheDir -Force | Out-Null
+        }
+        $bestStem = [System.IO.Path]::GetFileNameWithoutExtension($sourceFile)
+        $destName = "$bestStem$destExt"
+        $destPath = Join-Path $IconCacheDir $destName
+        Copy-Item -LiteralPath $sourceFile -Destination $destPath -Force
+        return "/assets/app_icons/$destName"
+    }
+
+    # 2. Already cached in app_icons? Prefer .webp over .png. Skipped when SourcesOnly.
+    if (-not $SourcesOnly) {
+        foreach ($ext in @('.webp', '.png', '.jpg')) {
+            $candidate = Join-Path $IconCacheDir "$PackageName$ext"
+            if (Test-Path -LiteralPath $candidate) {
+                return "/assets/app_icons/$PackageName$ext"
+            }
+        }
+    }
+
+    return $null
+}
+
+
 function Get-AppInfo {
     <#
     .SYNOPSIS
@@ -1725,7 +1785,8 @@ function Get-AppInfo {
         [string]$PackageName,
         [string]$AppCacheFilePath = $global:AppCacheFilePath,
         [string]$IconCacheDir = $(Join-Path $global:ScriptPath "website\assets\app_icons"),
-        [bool]$searchOnline = $false
+        [bool]$searchOnline = $false,
+        [switch]$ForceOnline = $false
     )
 
     # genreate package name without com. on the beginning without using match
@@ -1751,12 +1812,26 @@ function Get-AppInfo {
         }
     }
     # If the cache contains the package with all info let's return it !
+    # But first, always check sources\vr_games_icons — operator-supplied icons take priority
+    # and must be copied to app_icons even on early-return paths.
     if ($cache.ContainsKey($PackageName) -and $cache[$PackageName].DisplayName -and ($cache[$PackageName].DisplayName -ne $PackageName_short)) {
+        $localResolved = Resolve-LocalAppIcon -PackageName $PackageName -IconCacheDir $IconCacheDir
+        if ($localResolved -and $cache[$PackageName].LocalIconPath -ne $localResolved) {
+            $cache[$PackageName].LocalIconPath = $localResolved
+            $cache.Values | Sort-Object DisplayName | Export-Csv -LiteralPath $AppCacheFilePath -NoTypeInformation -Encoding UTF8
+        }
         return $cache[$PackageName]
     }
     # fill the display name with cached value if already known, it may be added before of set manually by the user.
     if ($cache[$PackageName].DisplayName -and $PackageName_short -in $cache[$PackageName].DisplayName) {
         $appInfos.DisplayName = $cache[$PackageName].DisplayName
+    }
+
+    # Resolve from local storage before going online.
+    # SourcesOnly when ForceOnline: skip app_icons cache, but still honour sources\vr_games_icons.
+    $localResolved = Resolve-LocalAppIcon -PackageName $PackageName -IconCacheDir $IconCacheDir -SourcesOnly:$ForceOnline
+    if ($localResolved) {
+        $appInfos.LocalIconPath = $localResolved
     }
 
     # Let's search online !
@@ -1790,7 +1865,7 @@ function Get-AppInfo {
         }
     
         # Download icon locally so the web UI can display it without hitting remote URLs
-        if ($appInfos.IconUrl) {
+        if ($appInfos.IconUrl -and ($appInfos.LocalIconPath -eq '' -or $ForceOnline)) {
             if (-not (Test-Path -LiteralPath $IconCacheDir)) {
                 New-Item -ItemType Directory -Path $IconCacheDir -Force | Out-Null
             }
@@ -1803,7 +1878,7 @@ function Get-AppInfo {
             $iconFileName = "$PackageName$ext"
             $iconFile     = Join-Path $IconCacheDir $iconFileName
 
-            if (-not (Test-Path -LiteralPath $iconFile)) {
+            if (-not (Test-Path -LiteralPath $iconFile) -or $ForceOnline) {
                 try {
                     Invoke-WebRequest -Uri $appInfos.IconUrl -OutFile $iconFile -TimeoutSec 10 -ErrorAction Stop
                     Write-Log ($msg.AppDisplayNameResolved -f "Icon saved", $iconFileName) -Level DEBUG
@@ -1814,7 +1889,15 @@ function Get-AppInfo {
             }
 
             if ($iconFileName -ne "") {
-                $appInfos.LocalIconPath = "/assets/app_icons/$iconFileName"
+                # Prefer .webp: if we downloaded .png but .webp already exists, use webp and drop png
+                $webpFile = Join-Path $IconCacheDir "$PackageName.webp"
+                $pngFile  = Join-Path $IconCacheDir "$PackageName.png"
+                if ((Test-Path -LiteralPath $webpFile) -and (Test-Path -LiteralPath $pngFile)) {
+                    Remove-Item -LiteralPath $pngFile -Force -ErrorAction SilentlyContinue
+                    $appInfos.LocalIconPath = "/assets/app_icons/$PackageName.webp"
+                } else {
+                    $appInfos.LocalIconPath = "/assets/app_icons/$iconFileName"
+                }
             }
         }
     }
@@ -1843,18 +1926,21 @@ function Update-AppCacheOnline {
     param(
         [string]$AppCacheFilePath = $global:AppCacheFilePath,
         [string]$ProgressFile = '',
-        [int]$MaxThreads = 12
+        [int]$MaxThreads = 12,
+        [switch]$ForceOnline = $false
     )
     if (-not $AppCacheFilePath) { $AppCacheFilePath = Join-Path $global:ScriptPath "data\known_apps.csv" }
     if (-not (Test-Path -LiteralPath $AppCacheFilePath)) { return }
 
     $rows = @(Import-Csv -LiteralPath $AppCacheFilePath -Delimiter ",")
-    $toResolve = @($rows | Where-Object {
-        [string]::IsNullOrWhiteSpace($_.DisplayName) -or
-        $_.DisplayName -eq ($_.PackageName -replace '^com\.','') -or
-        [string]::IsNullOrWhiteSpace($_.IconUrl) -or
-        (-not $_.PSObject.Properties['LatestVersion']) -or [string]::IsNullOrWhiteSpace($_.LatestVersion)
-    })
+    $toResolve = if ($ForceOnline) { $rows } else {
+        @($rows | Where-Object {
+            [string]::IsNullOrWhiteSpace($_.DisplayName) -or
+            $_.DisplayName -eq ($_.PackageName -replace '^com\.','') -or
+            [string]::IsNullOrWhiteSpace($_.IconUrl) -or
+            (-not $_.PSObject.Properties['LatestVersion']) -or [string]::IsNullOrWhiteSpace($_.LatestVersion)
+        })
+    }
     $total = $toResolve.Count
 
     if ($total -eq 0) {
@@ -1955,17 +2041,27 @@ function Update-AppCacheOnline {
         if (-not $entry) { continue }
 
         $localPath = ''
-        if ($r.IconUrl) {
+        # SourcesOnly when ForceOnline: still honour sources\vr_games_icons but skip app_icons cache.
+        $localPath = Resolve-LocalAppIcon -PackageName $pkg -IconCacheDir $IconCacheDir -SourcesOnly:$ForceOnline
+        if (-not $localPath -and $r.IconUrl) {
             $ext = '.png'
             if ($r.IconUrl -match '\.([a-zA-Z]{2,4})(?:[?#]|$)') { $ext = '.' + $Matches[1].ToLower() }
             $iconFile = Join-Path $IconCacheDir "$pkg$ext"
-            if (-not (Test-Path -LiteralPath $iconFile)) {
+            if (-not (Test-Path -LiteralPath $iconFile) -or $ForceOnline) {
                 try {
                     Invoke-WebRequest -Uri $r.IconUrl -OutFile $iconFile -TimeoutSec 10 -ErrorAction Stop
                 } catch { $iconFile = '' }
             }
             if ($iconFile -and (Test-Path -LiteralPath $iconFile)) {
-                $localPath = "/assets/app_icons/$pkg$ext"
+                # Prefer .webp: if both exist after download, drop .png
+                $webpFile = Join-Path $IconCacheDir "$pkg.webp"
+                $pngFile  = Join-Path $IconCacheDir "$pkg.png"
+                if ((Test-Path -LiteralPath $webpFile) -and (Test-Path -LiteralPath $pngFile)) {
+                    Remove-Item -LiteralPath $pngFile -Force -ErrorAction SilentlyContinue
+                    $localPath = "/assets/app_icons/$pkg.webp"
+                } else {
+                    $localPath = "/assets/app_icons/$pkg$ext"
+                }
             }
         }
 
@@ -1977,6 +2073,19 @@ function Update-AppCacheOnline {
             else { $entry | Add-Member -MemberType NoteProperty -Name LatestVersion -Value $r.LatestVersion -Force }
         }
         $changed = $true
+    }
+
+    # Phase 3: sync operator icons from sources\vr_games_icons for ALL packages in cache.
+    # Runs regardless of $toResolve so fully-resolved packages are also covered.
+    $sourcesDir = Join-Path $global:ScriptPath "sources\vr_games_icons"
+    if (Test-Path -LiteralPath $sourcesDir) {
+        foreach ($pkg in $cache.Keys) {
+            $localPath = Resolve-LocalAppIcon -PackageName $pkg -IconCacheDir $IconCacheDir -SourcesOnly
+            if ($localPath -and $cache[$pkg].LocalIconPath -ne $localPath) {
+                $cache[$pkg].LocalIconPath = $localPath
+                $changed = $true
+            }
+        }
     }
 
     if ($changed) {
@@ -1996,6 +2105,97 @@ function Get-InstalledAppsCachePath {
     param ([string]$headsetName)
     return Join-Path $global:ScriptPath "data\$(Convert-Displayname $headsetName)_installed_apps.csv"
 }
+
+
+function Initialize-AppNamesCache {
+    <#
+    .SYNOPSIS
+    Creates known_apps.csv from the template at templates\data\known_apps.csv.
+    Falls back to writing an empty header if the template is missing.
+    Called on first startup and by Clear-AppNamesCache.
+
+    .EXAMPLE
+    Initialize-AppNamesCache
+    Initialize-AppNamesCache -AppCacheFilePath "C:\path\to\known_apps.csv"
+    #>
+    param(
+        [string]$AppCacheFilePath = $global:AppCacheFilePath
+    )
+    if (-not $AppCacheFilePath) {
+        $AppCacheFilePath = Join-Path $global:ScriptPath "data\known_apps.csv"
+    }
+    $templatePath = Join-Path $global:ScriptPath "templates\data\known_apps.csv"
+    if (Test-Path -LiteralPath $templatePath) {
+        $dir = Split-Path $AppCacheFilePath -Parent
+        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        Copy-Item -LiteralPath $templatePath -Destination $AppCacheFilePath -Force
+        Write-Log "App cache initialized from template" -Level INFO
+    } else {
+        '"PackageName","DisplayName","IconUrl","LocalIconPath","ThirdParty","LatestVersion"' |
+            Set-Content -LiteralPath $AppCacheFilePath -Encoding UTF8 -Force
+        Write-Log "App cache template not found, created empty cache" -Level WARNING
+    }
+}
+
+
+function Clear-AppNamesCache {
+    <#
+    .SYNOPSIS
+    Archives known_apps.csv and wipes the app_icons cache folder.
+
+    .DESCRIPTION
+    - Renames known_apps.csv to known_apps_old_<timestamp>.csv (preserves data).
+    - Creates a fresh empty known_apps.csv with the correct header.
+    - Deletes all files in website\assets\app_icons\ except those that originated
+      from sources\vr_games_icons (operator-supplied icons are never deleted).
+    Returns $true on success, $false on failure.
+
+    .EXAMPLE
+    Clear-AppNamesCache
+    #>
+    param(
+        [string]$AppCacheFilePath = $global:AppCacheFilePath
+    )
+    if (-not $AppCacheFilePath) {
+        $AppCacheFilePath = Join-Path $global:ScriptPath "data\known_apps.csv"
+    }
+
+    try {
+        # Archive existing CSV
+        if (Test-Path -LiteralPath $AppCacheFilePath) {
+            $stamp   = Get-Date -Format 'yyyy.MM.dd-HH.mm'
+            $dir     = Split-Path $AppCacheFilePath -Parent
+            $base    = [System.IO.Path]::GetFileNameWithoutExtension($AppCacheFilePath)
+            $ext     = [System.IO.Path]::GetExtension($AppCacheFilePath)
+            $archive = Join-Path $dir ($base + '_old_' + $stamp + $ext)
+            Rename-Item -LiteralPath $AppCacheFilePath -NewName $archive -Force -ErrorAction Stop
+            Write-Log "App cache archived to $archive" -Level INFO
+        }
+
+        # Re-initialize from template (pre-fills OS app names)
+        Initialize-AppNamesCache -AppCacheFilePath $AppCacheFilePath
+
+        # Wipe app_icons cache — preserve files that came from sources\vr_games_icons
+        $iconCacheDir = Join-Path $global:ScriptPath "website\assets\app_icons"
+        $sourcesDir   = Join-Path $global:ScriptPath "sources\vr_games_icons"
+        if (Test-Path -LiteralPath $iconCacheDir) {
+            $sourceNames = @{}
+            if (Test-Path -LiteralPath $sourcesDir) {
+                Get-ChildItem -LiteralPath $sourcesDir -File | ForEach-Object { $sourceNames[$_.Name] = $true }
+            }
+            Get-ChildItem -LiteralPath $iconCacheDir -File |
+                Where-Object { -not $sourceNames.ContainsKey($_.Name) } |
+                Remove-Item -Force -ErrorAction SilentlyContinue
+            Write-Log "App icons cache cleared (operator icons preserved)" -Level INFO
+        }
+
+        return $true
+    } catch {
+        Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
+        return $false
+    }
+}
+
 
 function Get-AppInfoFromKnownApps {
     <#
@@ -2040,11 +2240,13 @@ function Update-InstalledAppsCache {
 
         # Fetch third-party packages from headset
         $rawOutput = Invoke-AdbCmd -Device $Device -Command "shell pm list packages -3" -adb $adb
-        $packages  = @($rawOutput | ForEach-Object { ($_ -replace '^package:', '').Trim() } | Where-Object { $_ -ne '' } | Sort-Object)
+        if ($rawOutput -eq $false) { return }
+        $packages  = @($rawOutput | ForEach-Object { ($_ -replace '^package:', '').Trim() } | Where-Object { $_ -match '^[a-zA-Z]' } | Sort-Object)
 
         # Fetch all packages to discover built-in apps
         $allRaw      = Invoke-AdbCmd -Device $Device -Command "shell pm list packages" -adb $adb
-        $allPkgs     = @($allRaw | ForEach-Object { ($_ -replace '^package:', '').Trim() } | Where-Object { $_ -ne '' })
+        if ($allRaw -eq $false) { return }
+        $allPkgs     = @($allRaw | ForEach-Object { ($_ -replace '^package:', '').Trim() } | Where-Object { $_ -match '^[a-zA-Z]' })
 
         if ($allPkgs.Count -eq 0) { return }
         $thirdSet    = @{}; foreach ($p in $packages) { $thirdSet[$p] = $true }
