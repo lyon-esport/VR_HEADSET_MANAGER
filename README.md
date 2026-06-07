@@ -74,6 +74,13 @@ Before using the tool, make sure the following requirements are met:
 > [!IMPORTANT]
 > Without these prerequisites, the headset will not be reachable over the Wifi network and scrcpy streaming will not work.
 
+### Hardware requirements
+
+VR headsets streaming is power consumer...
+I recommand minimum 4 CPU, 16GB RAM and 2GB dedicated GPU VRAM for 4 headsets
+More headsets and mode viewer devices you will have to restream, and higher the consumption will be.
+I implemented a functionality named [Video Quality Automation](/docs/vqa.md) that recomand or apply automatically resolution and bandwidth reduction for keeping acceptable perfomances on your computer.
+
 ---
 ## WEBSITE & API
 Thanks Claude Code, a dedicated (vibe coded) website is available to manage your heasets and handle many options in addition of the CLI.
