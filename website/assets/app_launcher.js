@@ -29,7 +29,9 @@
     '.lm-app-icon{width:20px;height:20px;border-radius:4px;object-fit:contain;flex-shrink:0;}',
     '.lm-star-btn.active{color:#facc15;}',
     '.lm-star-btn:hover{color:#facc15;}',
-    '.lm-app-row.is-meta .lm-star-btn{visibility:hidden;}',
+    '.lm-app-row[draggable="true"]{cursor:grab;padding-left:10px;}',
+    '.lm-drag-handle{display:none;align-items:center;justify-content:center;width:14px;flex-shrink:0;color:#444;cursor:grab;}',
+    '.lm-app-row[draggable="true"] .lm-drag-handle{display:inline-flex;}',
     '.lm-app-version{font-size:11px;color:#444;flex-shrink:0;white-space:nowrap;}',
     '.lm-launch-btn{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:5px;border:1px solid #444;background:#2a2a2a;color:#888;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;flex-shrink:0;transition:background 0.12s,border-color 0.12s,color 0.12s;}',
     '.lm-launch-btn:hover{background:rgba(59,130,246,0.22);border-color:#3b82f6;color:#3b82f6;}',
@@ -42,6 +44,14 @@
     '.lm-status{font-size:11px;color:#555;text-align:center;min-height:16px;}',
     '.lm-status.ok{color:#22c55e;}',
     '.lm-status.err{color:#ef4444;}',
+    /* Currently running app */
+    '.lm-running-app{display:flex;align-items:center;gap:7px;flex:1;justify-content:center;padding:0 8px;overflow:hidden;min-width:0;}',
+    '.lm-running-icon{width:20px;height:20px;border-radius:4px;object-fit:contain;flex-shrink:0;}',
+    '.lm-running-text{display:flex;flex-direction:column;overflow:hidden;min-width:0;}',
+    '.lm-running-label{font-size:9px;font-weight:700;color:#444;text-transform:uppercase;letter-spacing:0.06em;line-height:1;}',
+    '.lm-running-name{font-size:12px;color:#888;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
+    '[data-theme="light"] .lm-running-label{color:#bbb;}',
+    '[data-theme="light"] .lm-running-name{color:#666;}',
     /* Search */
     '.lm-search-wrap{display:flex;align-items:center;gap:4px;flex:1;margin:0 12px;}',
     '.lm-search{flex:1;background:#111;border:1px solid #333;border-radius:5px;color:#ccc;font-family:inherit;font-size:12px;padding:4px 8px;outline:none;min-width:0;}',
@@ -86,6 +96,13 @@
           '<div class="lm-title-wrap">' +
             '<span class="lm-headset-label" id="lm-headset-label"></span>' +
             '<span class="lm-title">Launch App</span>' +
+          '</div>' +
+          '<div class="lm-running-app" id="lm-running-app" style="display:none">' +
+            '<img class="lm-running-icon" id="lm-running-icon" src="" alt="" onerror="this.style.display=\'none\'">' +
+            '<div class="lm-running-text">' +
+              '<span class="lm-running-label">Running</span>' +
+              '<span class="lm-running-name" id="lm-running-name"></span>' +
+            '</div>' +
           '</div>' +
           '<div class="lm-search-wrap" id="lm-search-wrap" style="display:none">' +
             '<input class="lm-search" id="lm-search" type="search" placeholder="Search apps..." autocomplete="off" spellcheck="false">' +
@@ -159,7 +176,27 @@
     document.getElementById('lm-system-toggle').classList.remove('active');
     document.getElementById('lm-search-wrap').style.display = 'none';
     document.getElementById('lm-search').value = '';
+    document.getElementById('lm-running-app').style.display = 'none';
     document.getElementById('app-launcher').style.display = 'flex';
+    // Fetch and display currently running app
+    fetch('/api/foregroundapp?name=' + encodeURIComponent(dn))
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.package) return;
+        var wrap = document.getElementById('lm-running-app');
+        var icon = document.getElementById('lm-running-icon');
+        var name = document.getElementById('lm-running-name');
+        name.textContent = d.displayName || d.package;
+        name.title = d.package;
+        if (d.localIconPath) {
+          icon.src = d.localIconPath;
+          icon.style.display = '';
+        } else {
+          icon.style.display = 'none';
+        }
+        wrap.style.display = 'flex';
+      })
+      .catch(function () {});
     // Immediate check: lock refresh btn if a background resolve job is already running
     fetch('/api/resolve-progress')
       .then(function(r) { return r.json(); })
@@ -199,12 +236,7 @@
   function renderLaunchList(apps, isFavView) {
     var list = document.getElementById('lm-list');
     list.innerHTML = '';
-    var metaHomePkg = 'com.oculus.vrshell';
-    var hasMetaHome = apps.some(function (a) { return a.package === metaHomePkg; });
     var displayApps = apps.slice();
-    if (!hasMetaHome && (isFavView || _allAppsLoaded)) {
-      displayApps.unshift({ package: metaHomePkg, displayName: 'Meta Home', favorite: true });
-    }
     if (displayApps.length === 0) {
       list.innerHTML = '<div class="lm-section-label" style="padding-top:14px;text-align:center">Loading...</div>';
       return;
@@ -213,15 +245,23 @@
       var s = document.createElement('div'); s.className = 'lm-section-label'; s.textContent = 'Favorites'; list.appendChild(s);
     }
     displayApps.forEach(function (app) { renderAppRow(app, list); });
+    if (isFavView && !_allAppsLoaded) {
+      list.querySelectorAll('.lm-app-row').forEach(function (r) {
+        r.draggable = true;
+        var handle = document.createElement('span');
+        handle.className = 'lm-drag-handle';
+        handle.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="5" r="1" fill="currentColor"/><circle cx="9" cy="12" r="1" fill="currentColor"/><circle cx="9" cy="19" r="1" fill="currentColor"/><circle cx="15" cy="5" r="1" fill="currentColor"/><circle cx="15" cy="12" r="1" fill="currentColor"/><circle cx="15" cy="19" r="1" fill="currentColor"/></svg>';
+        r.insertBefore(handle, r.firstChild);
+      });
+    }
   }
 
   function renderAppRow(app, list) {
-    var metaHomePkg = 'com.oculus.vrshell';
-    var isMeta = app.package === metaHomePkg;
-    var isFav  = isMeta || !!_favoritePackages[app.package];
+    var isFav  = !!_favoritePackages[app.package];
     var row = document.createElement('div');
-    var extraClass = isMeta ? ' is-meta' : (app.thirdParty === false ? ' is-system' : '');
+    var extraClass = app.thirdParty === false ? ' is-system' : '';
     row.className = 'lm-app-row' + extraClass;
+    row.dataset.pkg = app.package;
 
     var starBtn = document.createElement('button');
     starBtn.className = 'lm-star-btn' + (isFav ? ' active' : '');
@@ -230,7 +270,6 @@
     (function (a, sb) {
       sb.addEventListener('click', function (e) {
         e.stopPropagation();
-        if (isMeta) return;
         var newFav = !_favoritePackages[a.package];
         if (newFav) { _favoritePackages[a.package] = true; } else { delete _favoritePackages[a.package]; }
         sb.className = 'lm-star-btn' + (newFav ? ' active' : '');
@@ -283,13 +322,9 @@
     var visible = _showSystem ? apps : apps.filter(function (a) { return a.thirdParty !== false; });
     var list = document.getElementById('lm-list');
     list.innerHTML = '';
-    var metaHomePkg = 'com.oculus.vrshell';
-    var metaApp   = visible.find(function (a) { return a.package === metaHomePkg; }) || { package: metaHomePkg, displayName: 'Meta Home', favorite: true };
-    var favApps   = visible.filter(function (a) { return a.package !== metaHomePkg && _favoritePackages[a.package]; });
-    var otherApps = visible.filter(function (a) { return a.package !== metaHomePkg && !_favoritePackages[a.package]; });
+    var favApps   = visible.filter(function (a) { return !!_favoritePackages[a.package]; });
+    var otherApps = visible.filter(function (a) { return !_favoritePackages[a.package]; });
     function addSection(label) { var s = document.createElement('div'); s.className = 'lm-section-label'; s.textContent = label; list.appendChild(s); }
-    addSection('Meta Home');
-    renderAppRow(metaApp, list);
     if (favApps.length)   { addSection('Favorites'); favApps.forEach(function (a) { renderAppRow(a, list); }); }
     if (otherApps.length) { addSection('All Apps');  otherApps.forEach(function (a) { renderAppRow(a, list); }); }
   }
@@ -341,6 +376,50 @@
 
   // ---- Event wiring (deferred until DOM ready) ----
   function init() {
+    // Drag-and-drop for per-headset favorites reordering
+    var _lmDragSrc = null;
+    var lmList = document.getElementById('lm-list');
+    lmList.addEventListener('dragstart', function (e) {
+      var row = e.target.closest('.lm-app-row[draggable="true"]');
+      if (!row) return;
+      _lmDragSrc = row;
+      e.dataTransfer.effectAllowed = 'move';
+      setTimeout(function () { if (_lmDragSrc) _lmDragSrc.style.opacity = '0.4'; }, 0);
+    });
+    lmList.addEventListener('dragover', function (e) {
+      var row = e.target.closest('.lm-app-row[draggable="true"]');
+      if (!row || row === _lmDragSrc) return;
+      e.preventDefault();
+      row.style.outline = '2px solid #3b82f6';
+    });
+    lmList.addEventListener('dragleave', function (e) {
+      var row = e.target.closest('.lm-app-row[draggable="true"]');
+      if (row && !row.contains(e.relatedTarget)) row.style.outline = '';
+    });
+    lmList.addEventListener('drop', function (e) {
+      e.preventDefault();
+      var target = e.target.closest('.lm-app-row[draggable="true"]');
+      if (target && _lmDragSrc && _lmDragSrc !== target) {
+        lmList.insertBefore(_lmDragSrc, target);
+        _lmDragSrc.style.opacity = '';
+        target.style.outline = '';
+        var pkgs = [];
+        lmList.querySelectorAll('.lm-app-row[data-pkg]').forEach(function (r) { pkgs.push(r.dataset.pkg); });
+        if (_launchDn && pkgs.length) {
+          fetch('/api/favorites/reorder', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: _launchDn, packages: pkgs })
+          }).catch(function () {});
+        }
+      }
+      _lmDragSrc = null;
+    });
+    lmList.addEventListener('dragend', function () {
+      if (_lmDragSrc) { _lmDragSrc.style.opacity = ''; _lmDragSrc = null; }
+      lmList.querySelectorAll('.lm-app-row').forEach(function (r) { r.style.outline = ''; });
+    });
+
     document.getElementById('lm-close').addEventListener('click', closeLaunchModal);
     document.getElementById('lm-search').addEventListener('input', function () { _applySearch(this.value.trim()); });
     document.getElementById('lm-search').addEventListener('search', function () { _applySearch(this.value.trim()); });
@@ -388,6 +467,7 @@
           document.getElementById('lm-refresh-btn').style.display = '';
           document.getElementById('lm-system-toggle').style.display = '';
           document.getElementById('lm-search-wrap').style.display = '';
+          document.getElementById('lm-running-app').style.display = 'none';
           document.getElementById('lm-search').value = '';
           _renderAllApps(apps);
         })

@@ -1042,6 +1042,39 @@ try {
             continue
         }
 
+        # API: POST /api/start-scrcpy-all - enables autorestart for all headsets (VRMonitor starts scrcpy)
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/start-scrcpy-all') {
+            try {
+                $rows = Get-KnownHeadsets
+                foreach ($row in $rows) {
+                    Update-HeadsetField -Id $row.ID -Field 'scrcpy_AutoRestart' -NewValue 'True'
+                }
+                Send-JsonResponse -Response $response -Raw '{"ok":true}'
+            } catch {
+                try { Send-JsonResponse -Response $response -Raw '{"ok":false,"error":"server error"}' -StatusCode 500 } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/stop-scrcpy-all - disables autorestart for all headsets then kills all scrcpy
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/stop-scrcpy-all') {
+            try {
+                $rows = Get-KnownHeadsets
+                foreach ($row in $rows) {
+                    Update-HeadsetField -Id $row.ID -Field 'scrcpy_AutoRestart' -NewValue 'False'
+                }
+                Stop-Scrcpy
+                Send-JsonResponse -Response $response -Raw '{"ok":true}'
+            } catch {
+                try { Send-JsonResponse -Response $response -Raw '{"ok":false,"error":"server error"}' -StatusCode 500 } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
         # API: GET /api/headsets  - returns all known headsets as JSON (from Get-KnownHeadsets)
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/headsets') {
             try {
@@ -1087,12 +1120,10 @@ try {
                 $safeName  = [regex]::Match(($nameParam -replace ' ','_'), '^[\w\-]+$').Value
                 if (-not $safeName) { throw "Invalid headset name" }
 
-                $metaHomePkg = 'com.oculus.vrshell'
-                $metaHomeObj = @{ package = $metaHomePkg; displayName = 'Meta Home' }
-                $favList     = @($metaHomeObj)
-                $favRows     = Get-FavoriteApps -headsetName $safeName
+                $favList = @()
+                $favRows = Get-FavoriteApps -headsetName $safeName
                 foreach ($r in $favRows) {
-                    if ($r.PackageName -and $r.PackageName -ne $metaHomePkg) {
+                    if ($r.PackageName) {
                         $favList += @{ package = $r.PackageName; displayName = $r.DisplayName }
                     }
                 }
@@ -1665,6 +1696,51 @@ try {
             continue
         }
 
+        # API: GET /api/foregroundapp?name=Q3_BLUE  - returns the package + display name + icon of the running app
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/foregroundapp') {
+            try {
+                $rawQuery  = $request.Url.Query.TrimStart('?')
+                $nameParam = if ($rawQuery -match '(?:^|&)name=([^&]+)') { [Uri]::UnescapeDataString($Matches[1]) } else { '' }
+                $safeName  = [regex]::Match(($nameParam -replace ' ','_'), '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+
+                $rows    = Get-KnownHeadsets
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                if (-not $headset) { throw "Headset not found" }
+
+                $device  = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort -adb $adbPath
+                $pkg     = if ($device) { Get-HeadsetForegroundApp -Device $device -adb $adbPath } else { $null }
+
+                $result  = @{ package = ''; displayName = ''; localIconPath = '' }
+                if ($pkg) {
+                    $result.package = $pkg
+                    $appCsvPath = if ($global:AppCacheFilePath) { $global:AppCacheFilePath } else { [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_apps.csv")) }
+                    if (Test-Path -LiteralPath $appCsvPath) {
+                        $entry = Import-Csv -LiteralPath $appCsvPath -Delimiter "," | Where-Object { $_.PackageName -eq $pkg } | Select-Object -First 1
+                        if ($entry) {
+                            if ($entry.DisplayName) { $result.displayName   = $entry.DisplayName }
+                            if ($entry.LocalIconPath) { $result.localIconPath = $entry.LocalIconPath }
+                        }
+                    }
+                    if (-not $result.displayName) { $result.displayName = $pkg }
+                }
+                $json      = $result | ConvertTo-Json -Compress
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $eb = [System.Text.Encoding]::UTF8.GetBytes('{"package":"","displayName":"","localIconPath":""}')
+                    $response.StatusCode = 200; $response.ContentType = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
+                } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
         # API: POST /api/launchapp  body: {"name":"Q3_BLUE","package":"com.beatgames.beatsaber"}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/launchapp') {
             try {
@@ -1712,15 +1788,6 @@ try {
                 $safePkg  = [regex]::Match($json.package, '^[\w\.\-]+$').Value
                 $safeName = [regex]::Match(($json.name -replace ' ','_'), '^[\w\-]+$').Value
                 if (-not $safePkg -or -not $safeName) { throw "Invalid input" }
-                # Protect Meta Home from being unfavorited
-                if ($safePkg -eq 'com.oculus.vrshell') {
-                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
-                    $response.StatusCode      = 200
-                    $response.ContentType     = 'application/json; charset=utf-8'
-                    $response.ContentLength64 = $respBytes.Length
-                    $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
-                    continue
-                }
                 $favRows = @(Get-FavoriteApps -headsetName $safeName)
                 $addFav  = [string]$json.favorite -eq 'True' -or [string]$json.favorite -eq 'true'
                 if ($addFav) {
@@ -1864,7 +1931,7 @@ try {
                     $preferredNet  = $knownNetworks | Where-Object { $_.Preferred } | Select-Object -First 1
                     if (-not $preferredNet) { $preferredNet = $knownNetworks | Select-Object -First 1 }
                     if (-not $preferredNet) {
-                        $result.error = 'No WiFi network configured. Add one in app_config.'
+                        $result.error = 'No WiFi network configured. Add one in vrhm_config.'
                     } else {
                     $wifiSsid = $preferredNet.SSID
                     $wifiPwd  = $preferredNet.Password
@@ -2530,6 +2597,20 @@ Start-Process powershell.exe -ArgumentList @('-File',$Script,'-ScriptPath',$Scri
             continue
         }
 
+        # API: GET /api/version  - returns the application version string from version.txt
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/version') {
+            try {
+                $versionFile = Join-Path $global:ScriptPath 'version.txt'
+                $versionStr  = if (Test-Path -LiteralPath $versionFile) {
+                    (Get-Content -LiteralPath $versionFile -Raw).Trim()
+                } else { 'unknown' }
+                Send-JsonResponse -Response $response -Body @{ version = $versionStr }
+            } catch {
+                try { Send-JsonResponse -Response $response -Body @{ version = 'unknown' } } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
         # API: GET /api/appinfo  - returns port info and useful URLs for the topbar Help section
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/appinfo') {
             try {
@@ -2752,6 +2833,20 @@ Start-Process powershell.exe -ArgumentList @('-File',$Script,'-ScriptPath',$Scri
             continue
         }
 
+        # API: GET /api/version  - returns the application version string from version.txt
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/version') {
+            try {
+                $versionFile = Join-Path $global:ScriptPath 'version.txt'
+                $versionStr  = if (Test-Path -LiteralPath $versionFile) {
+                    (Get-Content -LiteralPath $versionFile -Raw).Trim()
+                } else { 'unknown' }
+                Send-JsonResponse -Response $response -Body @{ version = $versionStr }
+            } catch {
+                try { Send-JsonResponse -Response $response -Body @{ version = 'unknown' } } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
         # API: GET /api/appinfo  - returns port info and useful URLs for the topbar Help section
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/appinfo') {
             try {
@@ -2924,6 +3019,156 @@ Start-Process powershell.exe -ArgumentList @('-File',$Script,'-ScriptPath',$Scri
             try {
                 $ok = Clear-AppNamesCache
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes($(if ($ok) { '{"ok":true}' } else { '{"ok":false,"error":"Clear failed - check server logs"}' }))
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $eb = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"' + ($_ -replace '"',"'") + '"}')
+                    $response.StatusCode = 500; $response.ContentType = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
+                } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: GET /api/defaultfavorites  - returns ordered rows from the default favorites template
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/defaultfavorites') {
+            try {
+                $templatePath = Join-Path $ScriptPath "templates\data\default_favorite_apps.csv"
+                $appCsvPath   = if ($global:AppCacheFilePath) { $global:AppCacheFilePath } else { [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_apps.csv")) }
+                $appNames     = @{}
+                if (Test-Path -LiteralPath $appCsvPath) {
+                    Import-Csv -LiteralPath $appCsvPath -Delimiter "," | ForEach-Object { if ($_.PackageName) { $appNames[$_.PackageName] = $_ } }
+                }
+                $result = @()
+                if (Test-Path -LiteralPath $templatePath) {
+                    Import-Csv -LiteralPath $templatePath -Delimiter "," | ForEach-Object {
+                        if ($_.PackageName) {
+                            $entry  = $appNames[$_.PackageName]
+                            $result += @{
+                                package       = $_.PackageName
+                                displayName   = if ($entry -and $entry.DisplayName) { $entry.DisplayName } else { $_.DisplayName }
+                                localIconPath = if ($entry -and $entry.LocalIconPath) { $entry.LocalIconPath } else { '' }
+                            }
+                        }
+                    }
+                }
+                $json      = ConvertTo-Json @($result) -Compress
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $eb = [System.Text.Encoding]::UTF8.GetBytes('[]')
+                    $response.StatusCode = 500; $response.ContentType = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
+                } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/defaultfavorites/toggle  - add or remove a package from the default favorites template
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/defaultfavorites/toggle') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body    = $reader.ReadToEnd(); $reader.Close()
+                $json    = $body | ConvertFrom-Json
+                $safePkg = [regex]::Match($json.package, '^[\w\.\-]+$').Value
+                if (-not $safePkg) { throw "Invalid package" }
+                $templatePath = Join-Path $ScriptPath "templates\data\default_favorite_apps.csv"
+                $rows = @()
+                if (Test-Path -LiteralPath $templatePath) {
+                    $rows = @(Import-Csv -LiteralPath $templatePath -Delimiter ",")
+                }
+                $addFav = [string]$json.favorite -eq 'True' -or [string]$json.favorite -eq 'true'
+                if ($addFav) {
+                    if (-not ($rows | Where-Object { $_.PackageName -eq $safePkg })) {
+                        $rows += [PSCustomObject]@{ PackageName = $safePkg; DisplayName = [string]$json.displayName }
+                    }
+                } else {
+                    $rows = @($rows | Where-Object { $_.PackageName -ne $safePkg })
+                }
+                $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+                $sb = [System.Text.StringBuilder]::new()
+                $null = $sb.AppendLine('"PackageName","DisplayName"')
+                foreach ($r in $rows) { $null = $sb.AppendLine('"' + ($r.PackageName -replace '"','""') + '","' + ($r.DisplayName -replace '"','""') + '"') }
+                [System.IO.File]::WriteAllText($templatePath, $sb.ToString().TrimEnd(), $utf8NoBom)
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $eb = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"' + ($_ -replace '"',"'") + '"}')
+                    $response.StatusCode = 500; $response.ContentType = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
+                } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/defaultfavorites/reorder  - reorder rows in the default favorites template
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/defaultfavorites/reorder') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body    = $reader.ReadToEnd(); $reader.Close()
+                $json    = $body | ConvertFrom-Json
+                $templatePath = Join-Path $ScriptPath "templates\data\default_favorite_apps.csv"
+                $rowMap = @{}
+                if (Test-Path -LiteralPath $templatePath) {
+                    Import-Csv -LiteralPath $templatePath -Delimiter "," | ForEach-Object { if ($_.PackageName) { $rowMap[$_.PackageName] = $_ } }
+                }
+                $ordered = @()
+                foreach ($pkg in $json.packages) {
+                    $safePkg = [regex]::Match($pkg, '^[\w\.\-]+$').Value
+                    if ($safePkg -and $rowMap.ContainsKey($safePkg)) { $ordered += $rowMap[$safePkg] }
+                }
+                $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+                $sb = [System.Text.StringBuilder]::new()
+                $null = $sb.AppendLine('"PackageName","DisplayName"')
+                foreach ($r in $ordered) { $null = $sb.AppendLine('"' + ($r.PackageName -replace '"','""') + '","' + ($r.DisplayName -replace '"','""') + '"') }
+                [System.IO.File]::WriteAllText($templatePath, $sb.ToString().TrimEnd(), $utf8NoBom)
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $eb = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"' + ($_ -replace '"',"'") + '"}')
+                    $response.StatusCode = 500; $response.ContentType = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
+                } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/favorites/reorder  - reorder per-headset favorites
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/favorites/reorder') {
+            try {
+                $reader   = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body     = $reader.ReadToEnd(); $reader.Close()
+                $json     = $body | ConvertFrom-Json
+                $safeName = [regex]::Match(($json.name -replace ' ','_'), '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid name" }
+                $favMap = @{}
+                @(Get-FavoriteApps -headsetName $safeName) | ForEach-Object { if ($_.PackageName) { $favMap[$_.PackageName] = $_ } }
+                $ordered = @()
+                foreach ($pkg in $json.packages) {
+                    $safePkg = [regex]::Match($pkg, '^[\w\.\-]+$').Value
+                    if ($safePkg -and $favMap.ContainsKey($safePkg)) { $ordered += $favMap[$safePkg] }
+                }
+                Save-FavoriteApps -favorites $ordered -headsetName $safeName
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
                 $response.StatusCode      = 200
                 $response.ContentType     = 'application/json; charset=utf-8'
                 $response.Headers.Add('Access-Control-Allow-Origin', '*')
@@ -3136,6 +3381,14 @@ Start-Process powershell.exe -ArgumentList @('-File',$Script,'-ScriptPath',$Scri
                     $response.StatusCode = 403
                     $response.Close()
                     continue
+                }
+                # Transparent fallback: if not found at website root, try website/generated/
+                if (-not [System.IO.File]::Exists($resolvedFile)) {
+                    $generatedBase = [System.IO.Path]::GetFullPath((Join-Path $websitePath "generated"))
+                    $fallback      = [System.IO.Path]::GetFullPath((Join-Path $generatedBase $urlPath))
+                    if ($fallback.StartsWith($generatedBase) -and [System.IO.File]::Exists($fallback)) {
+                        $resolvedFile = $fallback
+                    }
                 }
             }
 

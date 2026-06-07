@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NIID VR2 VR Headset - Status</title>
+
+    <style>
+      :root {
+        --text: #e5e7eb;     /* light gray */
+        --accent: #60a5fa;   /* blue */
+        --muted: #94a3b8;    /* blue-gray */
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        height: 100%;
+        margin: 0;
+        background: transparent !important; /* key for OBS */
+        color: var(--text);
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+      }
+      .wrap {
+        min-height: 100%;
+        display: grid;
+        place-items: center;
+        padding: 31px 25px;
+      }
+      .card {
+        width: min(749px, 74vw);
+        background: transparent;  /* no background for overlay */
+        border: none;
+        border-radius: 16px;
+        padding: 36px 34px;
+        box-shadow: none;
+        backdrop-filter: none;
+        text-align: center;
+      }
+      .title {
+        margin: 0 0 21px 0;
+        font-size: clamp(36px, 6.5vw, 49px);
+        font-weight: 800;
+        letter-spacing: 0.6px;
+        color: var(--accent);
+        text-shadow: 0 2px 8px rgba(0,0,0,0.35);
+      }
+      .values {
+        font-size: clamp(31px, 5.85vw, 44px);
+        line-height: 1.3;
+        display: inline-flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 16px;
+        text-shadow: 0 2px 6px rgba(0,0,0,0.35);
+      }
+
+      /* Common styles */
+      .batt *, .temp * { white-space: nowrap; }
+      .batt, .temp {
+        display: inline-flex;
+        align-items: center;
+        gap: 13px;
+        padding: 13px 18px;
+        border-radius: 999px;
+        border: 1px solid transparent;
+        color: #fff; /* text always white by default */
+      }
+      .batt .emoji, .temp .emoji {
+        filter: drop-shadow(0 2px 4px rgba(0,0,0,0.25));
+      }
+      .muted { color: var(--muted); font-weight: 500; }
+
+      /* Battery states (background/border only, text stays white) */
+      .batt--low {                       /* <= 30%: red */
+        background: rgba(239, 68, 68, 0.18);
+        border-color: rgba(239, 68, 68, 0.35);
+		color: red;
+      }
+      .batt--mid {                       /* 31-59%: orange */
+        background: rgba(245, 158, 11, 0.18);
+        border-color: rgba(245, 158, 11, 0.35);
+		color: orange;
+      }
+      .batt--ok {                        /* >= 60%: blue (current style) */
+        background: rgba(96, 165, 250, 0.12);
+        border-color: rgba(96, 165, 250, 0.25);
+		color: white;
+      }
+
+      /* Normal temperature (blue) */
+      .temp {
+        background: rgba(96,165,250,0.12);
+        border-color: rgba(96,165,250,0.25);
+		color: white;
+      }
+      /* Hot temperature > 50 degC: red background + text */
+      .temp--hot {
+        background: rgba(239, 68, 68, 0.20);
+        border-color: rgba(239, 68, 68, 0.45);
+        color: red;
+      }
+
+      /* Device icon row: left controller, headset, right controller */
+      .device-icons {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 26px;
+        margin: 13px 0 18px;
+      }
+      .device-icon {
+        height: clamp(47px, 7.15vw, 68px);
+        width: auto;
+        filter: drop-shadow(0 2px 4px rgba(0,0,0,0.35));
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <main class="card" role="main" aria-label="Status NIID VR2">
+        <h1 class="title">NIID VR2
+           <span class="muted" id="status-emoji">
+            ☠️
+        </span>
+        </h1>
+
+
+        <div class="values" aria-live="polite">
+          <span class="batt" aria-label="Battery percentage">
+            <span class="emoji" aria-hidden="true" id="batt-emoji">
+            🪫
+            </span>
+            <strong id="batt-value">- %</strong>
+            <span class="muted" id="charge-emoji">
+              ⚡
+            </span>
+            <span id="time-remaining-wrap" style="display:none">
+              <span id="power-state-arrow" style="display:none"></span><span class="muted" id="time-val" style="font-size:0.75em;margin-left:2px">~</span>
+            </span>
+          </span>
+          <span class="temp" aria-label="Temperature in Celsius">
+            <span class="emoji" aria-hidden="true" id="temp-emoji">
+              ❄️
+            </span>
+            <strong id="temp-value">-&nbsp;°C</strong>
+          </span>
+        </div>
+      </main>
+    </div>
+
+    <script>
+      // Baked-in constants from template generation (static, never change at runtime)
+      var _NAME  = 'NIID VR2';
+      var _MODEL = '';
+      var _CRIT      = 30;
+      var _WARN      = 40;
+      var _CTRL_CRIT = 15;
+      var _CTRL_WARN = 25;
+      var _TEMP_HIGH = 50;
+
+      function applyBatteryClass() {
+        var batt = document.querySelector('.batt');
+        if (!batt) return;
+        var strong = batt.querySelector('strong');
+        if (!strong) return;
+        var num = parseInt((strong.textContent || '').replace(/\D/g, ''), 10);
+        if (isNaN(num)) return;
+        batt.classList.remove('batt--low', 'batt--mid', 'batt--ok');
+        if (num <= _CRIT) {
+          batt.classList.add('batt--low');
+        } else if (num < _WARN) {
+          batt.classList.add('batt--mid');
+        } else {
+          batt.classList.add('batt--ok');
+        }
+      }
+
+      function applyTempClass() {
+        var temp = document.querySelector('.temp');
+        if (!temp) return;
+        var strong = temp.querySelector('strong');
+        if (!strong) return;
+        var t = parseInt((strong.textContent || '').replace(/\D/g, ''), 10);
+        if (isNaN(t)) return;
+        temp.classList.toggle('temp--hot', t > _TEMP_HIGH);
+      }
+
+      function _iconColor(batt, crit, warn) {
+        if (batt === null) return 'GREY';
+        if (batt < crit) return 'RED';
+        if (batt < warn) return 'ORANGE';
+        return 'GREEN';
+      }
+
+      function _headsetColor(ping, batt, crit, warn) {
+        if (!ping) return 'UNAVAILABLE';
+        if (batt === null) return 'WHITE';
+        if (batt < crit) return 'RED';
+        if (batt < warn) return 'ORANGE';
+        return 'GREEN';
+      }
+
+      function _timeStr(min) {
+        if (!min) return '';
+        var h = Math.floor(min / 60), m = min % 60;
+        return h > 0 ? h + 'h ' + m + 'm' : m + 'm';
+      }
+
+      function _setText(id, text) {
+        var el = document.getElementById(id);
+        if (el) el.textContent = text;
+      }
+
+      function _updateFromJson(d) {
+        // Status emoji
+        var se = document.getElementById('status-emoji');
+        if (se) {
+          if (!d.ping) se.textContent = '☠️';
+          else if ((d.temp !== null && d.temp > _TEMP_HIGH) || (d.battery !== null && d.battery < _CRIT) || !d.charging) se.textContent = '⚠️';
+          else se.textContent = '✅';
+        }
+
+        // Battery
+        _setText('batt-value', d.battery !== null ? d.battery + ' %' : '-');
+        _setText('batt-emoji', d.battery !== null && d.battery < _CRIT ? '🪫' : '🔋');
+        _setText('charge-emoji', d.charging ? '⚡' : '🚫');
+
+        // Time remaining
+        var tw = document.getElementById('time-remaining-wrap');
+        var ts = _timeStr(d.time_remaining_min);
+        if (tw) tw.style.display = ts ? '' : 'none';
+        _setText('time-val', ts ? '~' + ts : '');
+
+        // Power state arrow
+        var pa = document.getElementById('power-state-arrow');
+        if (pa) {
+          if (ts && d.power_state) {
+            pa.style.display = '';
+            pa.style.color = d.power_state === 'charging' ? 'limegreen' : 'crimson';
+            pa.innerHTML = d.power_state === 'charging' ? '&#x2197;' : '&#x2198;';
+          } else {
+            pa.style.display = 'none';
+          }
+        }
+
+        // Temperature
+        _setText('temp-value', d.temp !== null ? d.temp + ' °C' : '-');
+        _setText('temp-emoji', d.temp !== null && d.temp > _TEMP_HIGH ? '🔥' : '❄️');
+
+        // Device icons (only when model is known)
+        if (_MODEL) {
+          var hc = _headsetColor(d.ping, d.battery, _CRIT, _WARN);
+          var lc = _iconColor(d.battery_ctrl_left, _CTRL_CRIT, _CTRL_WARN);
+          var rc = _iconColor(d.battery_ctrl_right, _CTRL_CRIT, _CTRL_WARN);
+          var iconL = document.getElementById('icon-left');
+          var iconH = document.getElementById('icon-headset');
+          var iconR = document.getElementById('icon-right');
+          if (iconL) iconL.src = 'assets/' + _MODEL + '/Ctrl_Left_'  + lc + '.png';
+          if (iconH) iconH.src = 'assets/' + _MODEL + '/Headset_'    + hc + '.png';
+          if (iconR) iconR.src = 'assets/' + _MODEL + '/Ctrl_Right_' + rc + '.png';
+        }
+
+        applyBatteryClass();
+        applyTempClass();
+      }
+
+      // On load: apply CSS classes to the EPS-rendered initial content
+      document.addEventListener('DOMContentLoaded', function() {
+        applyBatteryClass();
+        applyTempClass();
+      });
+
+      // Polling: fetch only JSON data, update DOM in-place (no full-page reload)
+      (function () {
+        var INTERVAL_MS = 2000;
+        function refresh() {
+          fetch('/api/headset-status?name=' + encodeURIComponent(_NAME), { cache: 'no-store' })
+            .then(function (r) { return r.json(); })
+            .then(_updateFromJson)
+            .catch(function () {});
+        }
+        setInterval(refresh, INTERVAL_MS);
+      })();
+    </script>
+  </body>
+</html>

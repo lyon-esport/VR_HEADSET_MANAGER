@@ -98,7 +98,7 @@ if ((Split-Path $global:ScriptPath -Leaf) -notmatch "VR_HEADSET_MANAGER") {
 
 
 # Check if folders exists in the same folder as the script, otherwise create them
-$requiredFolders = @("config","data","logs","website")
+$requiredFolders = @("config","data","logs","website","website\generated")
 foreach ($folder in $requiredFolders) {
     $folderPath = Join-Path -Path $global:ScriptPath -ChildPath $folder
     if (-not (Test-Path -Path $folderPath)) {
@@ -210,6 +210,9 @@ Write-Host "`n"
 
 # Starting the main menu function that will show the different options to the user
 # Loop re-enters Show-MainMenu whenever a module reload is triggered (any-key refresh).
+# Drain any keystrokes buffered during startup (welcome wizard, firewall window, countdown)
+# so the first Read-Host in Show-MainMenu does not auto-fire the reload default case.
+$Host.UI.RawUI.FlushInputBuffer()
 $global:MenuReload = $false
 do {
     $global:MenuReload = $false

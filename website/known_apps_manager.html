@@ -62,11 +62,16 @@
     /* Column widths */
     .col-el  { width: 34px; }
     .col-pkg { width: auto; min-width: 120px; }
-    .col-dn  { width: 24%; }
-    .col-iu  { width: 24%; }
-    .col-li  { width: 14%; }
+    .col-dn  { width: 22%; }
+    .col-fv  { width: 62px; }
+    .col-iu  { width: 22%; }
+    .col-li  { width: 13%; }
     .col-ty  { width: 80px; }
     .col-er  { width: 34px; }
+
+    .fav-star-btn { display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; border-radius:4px; border:1px solid transparent; background:transparent; color:#3a3a3a; cursor:pointer; padding:0; transition:color 0.12s, border-color 0.12s; }
+    .fav-star-btn:hover { color:#facc15; border-color:rgba(250,204,21,0.4); }
+    .fav-star-btn.active { color:#facc15; }
 
     thead { position: sticky; top: 0; z-index: 4; }
 
@@ -200,9 +205,13 @@
         <input type="checkbox" id="chk-force-icons" style="cursor:pointer;">
         Force icons re-download
       </label>
+      <button class="action-btn" id="btn-manage-defaults">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+        Manage default favorites for new headsets
+      </button>
       <button class="action-btn danger" id="btn-clear">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
-        Clear known applications table
+        Clear Known apps and icons
       </button>
     </div>
 
@@ -214,6 +223,7 @@
             <col class="col-el">
             <col class="col-pkg">
             <col class="col-dn">
+            <col class="col-fv">
             <col class="col-iu">
             <col class="col-li">
             <col class="col-ty">
@@ -225,6 +235,7 @@
               <th class="col-el"></th>
               <th class="col-pkg">Package Name</th>
               <th class="col-dn">Display Name</th>
+              <th class="col-fv" style="text-align:center;cursor:help" title="Apps starred here are automatically added to the favorites of any new headset created in the future. Existing headsets are not affected.">Favorite</th>
               <th class="col-iu">Icon URL</th>
               <th class="col-li">Local Icon</th>
               <th class="col-ty">Type</th>
@@ -239,6 +250,7 @@
               </td>
               <td><input type="text" id="in-pkg"      placeholder="Search package..."      autocomplete="off" spellcheck="false"></td>
               <td><input type="text" id="in-display"  placeholder="Search display name..."  autocomplete="off"></td>
+              <td></td>
               <td><input type="text" id="in-icon-url" placeholder="Search icon URL..."      autocomplete="off" spellcheck="false"></td>
               <td><input type="text" id="in-local"    placeholder="Search local icon..."    autocomplete="off" spellcheck="false"></td>
               <td style="text-align:center">
@@ -266,6 +278,21 @@
   </div><!-- .content -->
 </div><!-- .page-wrap -->
 
+<!-- Default favorites manager overlay -->
+<div class="overlay" id="deffav-overlay" style="display:none">
+  <div class="confirm-box" style="max-width:420px;width:92%">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <strong style="font-size:13px">Default favorites for new headsets</strong>
+      <button class="btn-cancel" id="deffav-close" style="padding:3px 10px">Close</button>
+    </div>
+    <p style="font-size:11px;color:var(--text2);margin:0 0 10px;line-height:1.5">
+      These apps are automatically added to the favorites of any new headset. Drag rows to reorder. Use the star column in the table to add or remove apps.
+    </p>
+    <ul id="deffav-list" style="list-style:none;padding:0;margin:0;min-height:32px;max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:6px"></ul>
+    <div id="deffav-status" style="font-size:11px;color:var(--text2);margin-top:8px;min-height:16px"></div>
+  </div>
+</div>
+
 <!-- Delete confirm overlay -->
 <div class="overlay" id="confirm-overlay" style="display:none">
   <div class="confirm-box">
@@ -282,6 +309,7 @@
   var _apps    = [];
   var _editPkg = null;   // null = search mode, string = package being edited
   var _delPkg  = null;
+  var _defaultFavPkgs = {};   // set of package names in the default favorites template
 
   var tbody   = document.getElementById('apps-body');
   var btnSave = document.getElementById('btn-save');
@@ -394,6 +422,11 @@
         '</td>' +
         '<td class="col-pkg pkg-cell" title="' + esc(app.PackageName) + '">' + esc(app.PackageName) + '</td>' +
         '<td class="col-dn  dn-cell"  title="' + esc(app.DisplayName)  + '">' + iconHtml + esc(app.DisplayName) + '</td>' +
+        '<td class="col-fv" style="text-align:center">' +
+          '<button class="fav-star-btn' + (_defaultFavPkgs[app.PackageName] ? ' active' : '') + '" data-fav-pkg="' + esc(app.PackageName) + '" data-fav-dn="' + esc(app.DisplayName) + '" title="' + (_defaultFavPkgs[app.PackageName] ? 'Remove from default favorites' : 'Add to default favorites for new headsets') + '">' +
+            '<svg width="13" height="13" viewBox="0 0 24 24" fill="' + (_defaultFavPkgs[app.PackageName] ? 'currentColor' : 'none') + '" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>' +
+          '</button>' +
+        '</td>' +
         '<td class="col-iu url-cell" title="' + esc(app.IconUrl) + '">' +
           esc(app.IconUrl) +
           '<button class="row-btn copy-btn" data-copy="' + esc(app.IconUrl) + '" title="Copy">' +
@@ -509,6 +542,20 @@
     var copyBtn = e.target.closest('[data-copy]');
     if (copyBtn) {
       copyToClipboard(copyBtn.dataset.copy);
+      return;
+    }
+    var favBtn = e.target.closest('[data-fav-pkg]');
+    if (favBtn) {
+      var pkg    = favBtn.dataset.favPkg;
+      var dn     = favBtn.dataset.favDn;
+      var newFav = !_defaultFavPkgs[pkg];
+      if (newFav) { _defaultFavPkgs[pkg] = true; } else { delete _defaultFavPkgs[pkg]; }
+      fetch('/api/defaultfavorites/toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ package: pkg, displayName: dn, favorite: newFav })
+      }).catch(function() {});
+      renderTable();
       return;
     }
     var editBtn = e.target.closest('[data-edit]');
@@ -634,8 +681,111 @@
       });
   });
 
+  // Load default favorites state from template
+  function loadDefaultFavs(callback) {
+    fetch('/api/defaultfavorites')
+      .then(function(r) { return r.json(); })
+      .then(function(items) {
+        _defaultFavPkgs = {};
+        items.forEach(function(a) { if (a.package) _defaultFavPkgs[a.package] = true; });
+        if (callback) callback(items);
+      })
+      .catch(function() {});
+  }
+
+  // Default favorites manager modal
+  var _deffavDragSrc = null;
+
+  function openDefFavModal() {
+    document.getElementById('deffav-overlay').style.display = 'flex';
+    _renderDefFavModal();
+  }
+
+  function _renderDefFavModal() {
+    var list   = document.getElementById('deffav-list');
+    var status = document.getElementById('deffav-status');
+    list.innerHTML = '<li style="padding:8px 10px;font-size:11px;color:var(--text2)">Loading...</li>';
+    status.textContent = '';
+    loadDefaultFavs(function(items) {
+      list.innerHTML = '';
+      renderTable();
+      if (!items.length) {
+        list.innerHTML = '<li style="padding:10px 12px;font-size:12px;color:var(--text2);text-align:center">No default favorites yet. Use the star column in the table to add apps.</li>';
+        return;
+      }
+      items.forEach(function(item) {
+        var li = document.createElement('li');
+        li.draggable = true;
+        li.dataset.pkg = item.package;
+        li.style.cssText = 'display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--border);cursor:grab;background:var(--bg2)';
+        var iconPart = item.localIconPath
+          ? '<img src="' + esc(item.localIconPath) + '" style="width:16px;height:16px;border-radius:3px;object-fit:contain;flex-shrink:0" onerror="this.style.display=\'none\'">'
+          : '';
+        li.innerHTML =
+          '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;color:var(--text2)"><line x1="3" y1="8" x2="21" y2="8"/><line x1="3" y1="16" x2="21" y2="16"/></svg>' +
+          iconPart +
+          '<span style="flex:1;font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(item.displayName || item.package) + '</span>' +
+          '<span style="font-size:10px;color:var(--text2);font-family:monospace;flex-shrink:0;max-width:160px;overflow:hidden;text-overflow:ellipsis">' + esc(item.package) + '</span>';
+
+        li.addEventListener('dragstart', function(e) {
+          _deffavDragSrc = this;
+          e.dataTransfer.effectAllowed = 'move';
+          setTimeout(function() { if (_deffavDragSrc) _deffavDragSrc.style.opacity = '0.4'; }, 0);
+        });
+        li.addEventListener('dragover', function(e) {
+          e.preventDefault();
+          if (this !== _deffavDragSrc) this.style.borderTop = '2px solid var(--accent)';
+        });
+        li.addEventListener('dragleave', function() { this.style.borderTop = ''; });
+        li.addEventListener('drop', function(e) {
+          e.preventDefault();
+          this.style.borderTop = '';
+          if (_deffavDragSrc && _deffavDragSrc !== this) {
+            list.insertBefore(_deffavDragSrc, this);
+            if (_deffavDragSrc) { _deffavDragSrc.style.opacity = ''; }
+            _saveDefFavOrder(status);
+          }
+          _deffavDragSrc = null;
+        });
+        li.addEventListener('dragend', function() {
+          if (_deffavDragSrc) { _deffavDragSrc.style.opacity = ''; _deffavDragSrc = null; }
+          list.querySelectorAll('li').forEach(function(l) { l.style.borderTop = ''; });
+        });
+        list.appendChild(li);
+      });
+    });
+  }
+
+  function _saveDefFavOrder(status) {
+    var pkgs = [];
+    document.getElementById('deffav-list').querySelectorAll('li[data-pkg]').forEach(function(li) { pkgs.push(li.dataset.pkg); });
+    if (status) { status.textContent = 'Saving...'; status.style.color = 'var(--text2)'; }
+    fetch('/api/defaultfavorites/reorder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ packages: pkgs })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (status) {
+        status.textContent = d.ok ? 'Order saved.' : 'Save failed.';
+        status.style.color = d.ok ? 'var(--success)' : 'var(--danger)';
+        setTimeout(function() { if (status) status.textContent = ''; }, 2000);
+      }
+    })
+    .catch(function() { if (status) { status.textContent = 'Error saving.'; status.style.color = 'var(--danger)'; } });
+  }
+
+  document.getElementById('btn-manage-defaults').addEventListener('click', function() { openDefFavModal(); });
+  document.getElementById('deffav-close').addEventListener('click', function() {
+    document.getElementById('deffav-overlay').style.display = 'none';
+  });
+  document.getElementById('deffav-overlay').addEventListener('click', function(e) {
+    if (e.target === this) document.getElementById('deffav-overlay').style.display = 'none';
+  });
+
   syncBtn();
-  loadApps();
+  loadDefaultFavs(function() { loadApps(); });
 
   // Always-on 15s poll: lock/unlock the web-search button across all browsers
   function _syncResolveState() {

@@ -1880,7 +1880,7 @@
           appEl.textContent = appNameCache[pkg] || pkg || '-';
           appEl.title = pkg;
           if (iconEl) {
-            var iconPath = pkg ? appIconCache[pkg] : '';
+            var iconPath = s.runningAppIcon || '';
             if (iconPath) {
               iconEl.src = iconPath;
               iconEl.style.display = '';
@@ -1952,11 +1952,12 @@
             var dn = toDisplayName(row.Name || '');
             if (!dn) return;
             headsetStatus[dn] = {
-              ping:   (row.Ping    || '').toLowerCase() === 'true',
-              adb:    (row.ADBWifi || '').toLowerCase() === 'true',
-              scrcpy: (row.SCRCPY  || '').toLowerCase() === 'ok',
-              model:  row.Model || '',
-              runningApp: row.RunningApp || ''
+              ping:           (row.Ping    || '').toLowerCase() === 'true',
+              adb:            (row.ADBWifi || '').toLowerCase() === 'true',
+              scrcpy:         (row.SCRCPY  || '').toLowerCase() === 'ok',
+              model:          row.Model || '',
+              runningApp:     row.RunningApp     || '',
+              runningAppIcon: row.RunningAppIcon || ''
             };
           });
           if (cardsBuilt) updateStatusDots();

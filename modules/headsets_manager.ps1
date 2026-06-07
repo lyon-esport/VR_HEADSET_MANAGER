@@ -376,6 +376,14 @@ function Add-Headset {
 
     # Save to the CSV file
     Save-Headsets -headsets $headsets
+
+    # Copy default favorites template to the new headset's favorites file
+    $safeName        = $Name -replace ' ','_'
+    $templateFavPath = Join-Path $global:ScriptPath "templates\data\default_favorite_apps.csv"
+    $newFavPath      = Join-Path $global:ScriptPath "data\${safeName}_favorite_apps.csv"
+    if ((Test-Path -LiteralPath $templateFavPath) -and -not (Test-Path -LiteralPath $newFavPath)) {
+        Copy-Item -LiteralPath $templateFavPath -Destination $newFavPath
+    }
 } # OK
 
 # Update-HeadsetField -ID ([int]"1") -Field "SerialNumber" -NewValue "ABC123"
@@ -439,7 +447,7 @@ function Rename-Headset {
     Write-Log ("Headset renamed: '$OldName' -> '$NewName'") -Level INFO
 
     # 3. Delete old per-headset HTML files (monitoring + video)
-    $websiteDir = Join-Path $global:ScriptPath "website"
+    $websiteDir = Join-Path $global:ScriptPath "website\generated"
     foreach ($suffix in @('[monitoring].html', '[video].html')) {
         $oldFile = Join-Path $websiteDir ($oldDisplayName + $suffix)
         if (Test-Path -LiteralPath $oldFile) {

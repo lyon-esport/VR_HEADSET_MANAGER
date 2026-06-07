@@ -1652,7 +1652,7 @@ function Get-HeadsetInstalledApps {
             }
         }
 
-        # Persist new packages and backfill ThirdParty for existing entries that lack it
+        # Persist new packages and always sync ThirdParty from live ADB result
         $needsWrite = $false
         foreach ($pkg in $packages) {
             $pkgIsThirdParty = if ($ThirdPartyOnly) { $true } elseif ($thirdPartySet.ContainsKey($pkg)) { $true } else { $false }
@@ -1660,9 +1660,12 @@ function Get-HeadsetInstalledApps {
                 $shortName = if ($pkg.StartsWith('com.')) { $pkg.Substring(4) } else { $pkg }
                 $cache[$pkg] = [PSCustomObject]@{ PackageName=$pkg; DisplayName=$shortName; IconUrl=''; LocalIconPath=''; ThirdParty=$pkgIsThirdParty }
                 $needsWrite = $true
-            } elseif ($null -eq $cache[$pkg].ThirdParty -or "$($cache[$pkg].ThirdParty)" -eq '') {
-                $cache[$pkg] | Add-Member -MemberType NoteProperty -Name ThirdParty -Value $pkgIsThirdParty -Force
-                $needsWrite = $true
+            } else {
+                $cached = [string]$cache[$pkg].ThirdParty
+                if ($cached -eq '' -or $null -eq $cache[$pkg].ThirdParty -or ($cached -ne "$pkgIsThirdParty")) {
+                    $cache[$pkg] | Add-Member -MemberType NoteProperty -Name ThirdParty -Value $pkgIsThirdParty -Force
+                    $needsWrite = $true
+                }
             }
         }
         if ($needsWrite) {

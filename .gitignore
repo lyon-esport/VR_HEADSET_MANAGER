@@ -43,4 +43,5 @@ OBS/timer/
 .gdoc
 /.github/
 *_test.ps1
+/version.txt
 

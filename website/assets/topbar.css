@@ -84,6 +84,12 @@
 }
 .topbar-btn:hover { background: #1e1e1e; color: #aaa; }
 
+/* Active page indicator */
+.topbar-btn.active                        { color: #60a5fa; border-bottom: 2px solid #60a5fa; border-radius: 0; }
+.drop-item.active                         { color: #60a5fa; border-left: 2px solid #60a5fa; padding-left: 10px; }
+[data-theme="light"] .topbar-btn.active   { color: #1d4ed8; border-bottom-color: #1d4ed8; }
+[data-theme="light"] .drop-item.active    { color: #1d4ed8; border-left-color: #1d4ed8; }
+
 /* ── Topbar filter buttons (center section) ── */
 .topbar-filters {
   display: flex;
@@ -214,6 +220,30 @@
 }
 .drop-item.disabled { opacity: 0.35; cursor: default; pointer-events: none; }
 
+/* ── Headset Settings split-button hover dropdown ── */
+.headset-menu { position: relative; display: inline-flex; }
+.headset-menu-btn { border-right: none; }
+.headset-menu-dropdown {
+  display: none;
+  position: absolute;
+  top: calc(var(--bar-h) + 1px);
+  right: 0;
+  min-width: 260px;
+  background: var(--drop-bg);
+  border: 1px solid var(--drop-border);
+  border-radius: 0 0 6px 6px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+  z-index: 300;
+}
+.headset-menu:hover .headset-menu-dropdown { display: block; }
+.headset-menu-btn .chevron { opacity: 0.3; margin-left: 2px; }
+.drop-item-danger { color: #ef4444 !important; }
+.drop-item-danger .drop-item-icon { opacity: 0.6 !important; }
+.drop-item-danger:hover { background: rgba(239,68,68,0.10) !important; color: #f87171 !important; }
+[data-theme="light"] .headset-menu-dropdown { box-shadow: 0 10px 30px rgba(0,0,0,0.12); }
+[data-theme="light"] .drop-item-danger { color: #dc2626 !important; }
+[data-theme="light"] .drop-item-danger:hover { background: rgba(220,38,38,0.08) !important; color: #b91c1c !important; }
+
 /* ── Compact dropdown (shown when topbar overflows on narrow viewports) ── */
 .headset-compact { display: none; position: relative; flex-shrink: 0; }
 .headset-compact-btn {
@@ -295,6 +325,7 @@
 
 @media (max-width: 700px) {
   .topbar-btn-label { display: none; }
+  .topbar-title     { display: none; }
   .topbar-btn       { padding: 0 10px; }
   .actions-btn      { padding: 0 10px; }
   .topbar-brand     { padding: 0 10px; }

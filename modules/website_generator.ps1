@@ -12,7 +12,7 @@ function Update-HeadsetMonitoringFile {
         #[string]$templatePath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\template\headset_status_v2.pshtml") ,
         [string]$templatePath = $global:Monitoring_headsetTemplate ,
 
-        [string]$outputPath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\")
+        [string]$outputPath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\generated\")
     )
 
     if (-not (Test-Path -LiteralPath $templatePath)) {
@@ -64,7 +64,7 @@ function Write-htmlMonitor {
         [System.Collections.ArrayList]$knownHeadsets,
         [string]$templatePath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\template\monitor.pshtml"),
 
-        [string]$outputPath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\monitor.html")
+        [string]$outputPath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\generated\monitor.html")
     )
 
     if (-not (Test-Path -LiteralPath $templatePath)) {
@@ -90,7 +90,7 @@ function Update-HeadsetVideoFile {
 
         [string]$templatePath = $global:Monitoring_videoTemplate,
 
-        [string]$outputPath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\")
+        [string]$outputPath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\generated\")
     )
 
     if (-not (Test-Path -LiteralPath $templatePath)) {

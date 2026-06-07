@@ -1,0 +1,547 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Q3 BLUE - Live Video</title>
+
+    <style>
+      /* Full-viewport transparent layout for OBS browser source */
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body {
+        width: 100%; height: 100%;
+        background: transparent !important;
+        overflow: hidden;
+      }
+
+      /* Video element fills the entire viewport */
+      #stream {
+        width: 100%; height: 100%;
+        object-fit: contain;
+        background: #000;
+        display: block;
+      }
+
+      /* Status message shown while connecting or on error - centered */
+      #status {
+        position: absolute;
+        top: 50%; left: 50%;
+        transform: translate(-50%, -50%);
+        color: rgba(255, 255, 255, 0.55);
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        font-size: 20px;
+        text-align: center;
+        text-shadow: 0 2px 6px rgba(0, 0, 0, 0.8);
+        pointer-events: none;
+        display: none;
+      }
+
+      /* Hover action buttons */
+      #actions-left {
+        position: absolute;
+        top: 10px; left: 10px;
+        z-index: 40;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        opacity: 0;
+        transition: opacity 0.15s;
+      }
+      #actions-right {
+        position: absolute;
+        top: 10px; right: 10px;
+        z-index: 40;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        opacity: 0;
+        transition: opacity 0.15s;
+      }
+      body:hover #actions-left,
+      body:hover #actions-right { opacity: 1; }
+      .action-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 34px; height: 34px;
+        border-radius: 7px;
+        background: rgba(0,0,0,0.60);
+        border: 1px solid rgba(255,255,255,0.15);
+        color: rgba(255,255,255,0.80);
+        cursor: pointer;
+        text-decoration: none;
+        font-family: inherit;
+        transition: background 0.15s, color 0.15s, border-color 0.15s;
+      }
+      .action-btn:hover { background: rgba(59,130,246,0.80); color: #fff; border-color: rgba(59,130,246,0.6); }
+      .action-btn.active { background: rgba(59,130,246,0.55); color: #fff; border-color: rgba(59,130,246,0.6); }
+      .btn-icon { width: 14px; height: 14px; display: block; }
+      /* Touch devices: larger tap targets, always-visible buttons */
+      @media (pointer: coarse) {
+        #actions-left  { opacity: 1; gap: 10px; top: 14px; left: 14px; }
+        #actions-right { opacity: 1; gap: 10px; top: 14px; right: 14px; }
+        .action-btn { width: 48px; height: 48px; border-radius: 10px; }
+        .btn-icon { width: 20px; height: 20px; }
+      }
+
+      /* Timer control button - bottom-left, hourglass icon, only when timer is visible */
+      #timer-ctrl-btn {
+        display: none;
+        position: absolute;
+        bottom: 14px;
+        left: 14px;
+        z-index: 40;
+        touch-action: manipulation;
+      }
+      #timer-ctrl-btn.running { background: rgba(239,68,68,0.45); border-color: rgba(239,68,68,0.6); color: #f87171; }
+      #timer-ctrl-btn.running:hover { background: rgba(239,68,68,0.65); border-color: rgba(239,68,68,0.8); }
+      #timer-ctrl-btn.paused  { background: rgba(234,179,8,0.40);  border-color: rgba(234,179,8,0.6);  color: #fbbf24; }
+      #timer-ctrl-btn.paused:hover  { background: rgba(234,179,8,0.60);  border-color: rgba(234,179,8,0.8); }
+
+      /* Timer overlay - white text centered at the bottom of the video rect */
+      #timer-overlay {
+        position: absolute;
+        bottom: 8%;
+        left: 50%;
+        transform: translateX(-50%);
+        color: #fff;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        font-size: 2.4em;
+        font-weight: 700;
+        text-shadow: 0 2px 8px rgba(0,0,0,0.9);
+        pointer-events: none;
+        display: none;
+        white-space: nowrap;
+        z-index: 35;
+        letter-spacing: 0.03em;
+      }
+      #timer-overlay.visible { display: block; }
+
+      /* Monitoring overlay - sized/positioned by JS over the actual video rect */
+      #monitoring-overlay {
+        display: none;
+        position: absolute;
+        z-index: 30;
+        overflow: hidden;
+        border-radius: 0 0 3px 0;
+      }
+      #monitoring-overlay.visible { display: block; }
+      #monitoring-overlay iframe {
+        position: absolute;
+        top: 0; left: 0;
+        border: none;
+        pointer-events: none;
+        transform-origin: top left;
+      }
+    </style>
+  </head>
+  <body>
+    <video id="stream" autoplay muted playsinline></video>
+    <div id="status"></div>
+
+    <div id="actions-left">
+      <!-- Monitoring overlay -->
+      <button class="action-btn" id="btn-monitoring" title="Show monitoring" aria-label="Show monitoring" onclick="toggleMonitoring()">
+        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
+        </svg>
+      </button>
+      <!-- Timer overlay -->
+      <button class="action-btn" id="btn-timer" title="Show timer" aria-label="Show timer" onclick="toggleTimer()">
+        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+        </svg>
+      </button>
+    </div>
+    <div id="actions-right">
+      <!-- Fullscreen -->
+      <button class="action-btn" id="btn-fullscreen" title="Fullscreen" aria-label="Fullscreen" onclick="toggleFullscreen()">
+        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
+          <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+        </svg>
+      </button>
+      <!-- Launch app -->
+      <button class="action-btn" id="btn-launch" title="Launch app" aria-label="Launch app" onclick="openLaunchModal('Q3_BLUE')">
+        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="5 3 19 12 5 21 5 3"/>
+        </svg>
+      </button>
+    </div>
+
+    <div id="timer-overlay"></div>
+
+    <button id="timer-ctrl-btn" class="action-btn" title="Start timer (long press: reset)" aria-label="Timer control">
+      <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M5 2h14M5 22h14M7 2v5l5 5-5 5v5M17 2v5l-5 5 5 5v5"/>
+      </svg>
+    </button>
+
+    <div id="monitoring-overlay">
+      <iframe src="Q3_BLUE[monitoring].html" scrolling="no" allow="autoplay"></iframe>
+    </div>
+
+    <script>
+      // -----------------------------------------------------------------------
+      // WHEP (WebRTC HTTP Egress Protocol) player for mediamtx
+      // Uses window.location.hostname so it works from any LAN client without
+      // hardcoding localhost. Falls back to localhost when opened as a local file.
+      // Stream URL: http://{host}:{webrtcPort}/{streamPath}/whep
+      // mediamtx starts ffmpeg on-demand when this page connects.
+      // -----------------------------------------------------------------------
+
+      // EPS-rendered constants (baked into HTML at generation time)
+      var WHEP_HOST = window.location.hostname || 'localhost';
+      var WHEP_URL = 'http://' + WHEP_HOST + ':8889/q3_blue/whep';
+      var RETRY_DELAY_MS = 5000;   // retry interval when stream is unavailable
+
+      var videoEl  = document.getElementById('stream');
+      var statusEl = document.getElementById('status');
+      var pc = null;
+      var retryTimer = null;
+
+      function showStatus(msg) {
+        if (msg) {
+          statusEl.textContent = msg;
+          statusEl.style.display = 'block';
+        } else {
+          statusEl.style.display = 'none';
+          statusEl.textContent = '';
+        }
+      }
+
+      function cleanup() {
+        if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+        if (pc) {
+          pc.oniceconnectionstatechange = null;
+          pc.ontrack = null;
+          try { pc.close(); } catch (_) {}
+          pc = null;
+        }
+      }
+
+      function scheduleRetry() {
+        cleanup();
+        showStatus('Stream unavailable - retrying...');
+        retryTimer = setTimeout(connect, RETRY_DELAY_MS);
+      }
+
+      async function connect() {
+        cleanup();
+        showStatus('Connecting...');
+        try {
+          pc = new RTCPeerConnection();
+
+          // Request video (and audio if available) from mediamtx
+          pc.addTransceiver('video', { direction: 'recvonly' });
+          try { pc.addTransceiver('audio', { direction: 'recvonly' }); } catch (_) {}
+
+          // Attach the incoming stream to the <video> element
+          pc.ontrack = function(evt) {
+            if (evt.streams && evt.streams[0]) {
+              videoEl.srcObject = evt.streams[0];
+              showStatus('');
+            }
+          };
+
+          // Reconnect automatically if the ICE connection drops
+          pc.oniceconnectionstatechange = function() {
+            var s = pc.iceConnectionState;
+            if (s === 'failed' || s === 'disconnected' || s === 'closed') {
+              scheduleRetry();
+            }
+          };
+
+          // Create SDP offer
+          var offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+
+          // Wait for ICE candidate gathering (with a safety timeout)
+          await new Promise(function(resolve) {
+            if (pc.iceGatheringState === 'complete') { resolve(); return; }
+            pc.onicegatheringstatechange = function() {
+              if (pc.iceGatheringState === 'complete') resolve();
+            };
+            setTimeout(resolve, 500);
+          });
+
+          // POST the SDP offer to the mediamtx WHEP endpoint
+          var res = await fetch(WHEP_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/sdp' },
+            body: pc.localDescription.sdp
+          });
+
+          if (!res.ok) {
+            throw new Error('WHEP response: ' + res.status);
+          }
+
+          var sdpAnswer = await res.text();
+          await pc.setRemoteDescription({ type: 'answer', sdp: sdpAnswer });
+
+        } catch (err) {
+          scheduleRetry();
+        }
+      }
+
+      // Start as soon as the DOM is ready
+      document.addEventListener('DOMContentLoaded', function() {
+        connect();
+        // Hide action buttons when embedded in an iframe (e.g. video_monitor.html)
+        if (window.self !== window.top) {
+          document.getElementById('actions-left').style.display  = 'none';
+          document.getElementById('actions-right').style.display = 'none';
+        } else {
+          // Default both overlays visible; only hide if user explicitly turned them off
+          try {
+            if (localStorage.getItem('mon-vis-'   + TIMER_ID) !== '0') { toggleMonitoring(); }
+            if (localStorage.getItem('timer-vis-' + TIMER_ID) !== '0') { toggleTimer(); }
+          } catch(_e) {
+            toggleMonitoring();
+            toggleTimer();
+          }
+        }
+      });
+
+      // ---- Action buttons ----
+      function toggleFullscreen() {
+        if (!document.fullscreenElement) {
+          document.documentElement.requestFullscreen().catch(function() {});
+          document.getElementById('btn-fullscreen').classList.add('active');
+        } else {
+          document.exitFullscreen();
+          document.getElementById('btn-fullscreen').classList.remove('active');
+        }
+      }
+      document.addEventListener('fullscreenchange', function() {
+        var btn = document.getElementById('btn-fullscreen');
+        if (btn) btn.classList.toggle('active', !!document.fullscreenElement);
+      });
+
+      var _monitoringVisible = false;
+
+      // Natural render dimensions of the monitoring iframe (must match headset_status template)
+      var NATURAL_W = 480;
+      var NATURAL_H = 480;
+      var _detectedH = NATURAL_H;   // updated on iframe load
+
+      // Compute the actual rendered video rect inside the viewport (object-fit: contain letterboxing)
+      function getVideoDisplayRect() {
+        var vw = videoEl.videoWidth;
+        var vh = videoEl.videoHeight;
+        var cw = window.innerWidth;
+        var ch = window.innerHeight;
+        if (!vw || !vh) return { left: 0, top: 0, width: cw, height: ch };
+        var scale = Math.min(cw / vw, ch / vh);
+        var w = vw * scale;
+        var h = vh * scale;
+        return { left: (cw - w) / 2, top: (ch - h) / 2, width: w, height: h };
+      }
+
+      // Position and scale the monitoring overlay over the top-left corner of the video
+      function positionMonitoringOverlay() {
+        var overlay = document.getElementById('monitoring-overlay');
+        if (!overlay) return;
+        var rect     = getVideoDisplayRect();
+        var wrapperW = rect.width / 3;
+        var wrapperH = wrapperW * (_detectedH / NATURAL_W);
+        overlay.style.left   = rect.left + 'px';
+        overlay.style.top    = rect.top  + 'px';
+        overlay.style.width  = wrapperW  + 'px';
+        overlay.style.height = wrapperH  + 'px';
+        var iframe = overlay.querySelector('iframe');
+        if (iframe) {
+          var s = wrapperW / NATURAL_W;
+          iframe.style.width           = NATURAL_W + 'px';
+          iframe.style.height          = _detectedH + 'px';
+          iframe.style.transform       = 'scale(' + s + ')';
+          iframe.style.transformOrigin = 'top left';
+        }
+      }
+
+      function toggleMonitoring() {
+        _monitoringVisible = !_monitoringVisible;
+        var overlay = document.getElementById('monitoring-overlay');
+        var btn     = document.getElementById('btn-monitoring');
+        overlay.classList.toggle('visible', _monitoringVisible);
+        btn.classList.toggle('active', _monitoringVisible);
+        if (_monitoringVisible) positionMonitoringOverlay();
+        try { localStorage.setItem('mon-vis-' + TIMER_ID, _monitoringVisible ? '1' : '0'); } catch(_e) {}
+      }
+
+      window.addEventListener('resize', function() {
+        if (_monitoringVisible) positionMonitoringOverlay();
+      });
+
+      // Re-position when video dimensions become known (stream connects)
+      videoEl.addEventListener('loadedmetadata', function() {
+        if (_monitoringVisible) positionMonitoringOverlay();
+      });
+
+      // Detect actual monitoring content height on iframe load; reposition overlay
+      function detectMonitoringHeight() {
+        var iframe = document.querySelector('#monitoring-overlay iframe');
+        if (!iframe) return;
+        try {
+          var doc = iframe.contentDocument || (iframe.contentWindow && iframe.contentWindow.document);
+          if (!doc || !doc.documentElement) return;
+          var h = doc.documentElement.scrollHeight;
+          if (h > 10) { _detectedH = h; if (_monitoringVisible) positionMonitoringOverlay(); }
+        } catch(e) {}
+      }
+      document.querySelector('#monitoring-overlay iframe').addEventListener('load', detectMonitoringHeight);
+
+      // ---- Timer overlay ----
+      var TIMER_ID = '2';
+      var _timerVisible = false;
+      var _timerInterval = null;
+
+      function toggleTimer() {
+        _timerVisible = !_timerVisible;
+        document.getElementById('timer-overlay').classList.toggle('visible', _timerVisible);
+        document.getElementById('btn-timer').classList.toggle('active', _timerVisible);
+        var ctrlBtn = document.getElementById('timer-ctrl-btn');
+        if (_timerVisible) {
+          ctrlBtn.style.display = 'flex';
+          startTimerPoll();
+          syncTimerCtrlBtn();
+        } else {
+          ctrlBtn.style.display = 'none';
+          stopTimerPoll();
+        }
+        try { localStorage.setItem('timer-vis-' + TIMER_ID, _timerVisible ? '1' : '0'); } catch(_e) {}
+      }
+
+      function syncTimerCtrlBtn() {
+        fetch('/api/timer?id=' + TIMER_ID + '&action=status')
+          .then(function(r) { return r.ok ? r.json() : null; })
+          .then(function(j) {
+            if (!j) return;
+            var btn = document.getElementById('timer-ctrl-btn');
+            btn.classList.remove('running', 'paused');
+            if (j.active) { btn.classList.add('running'); }
+            else if (j.paused) { btn.classList.add('paused'); }
+          }).catch(function() {});
+      }
+
+      function startTimerPoll() {
+        stopTimerPoll();
+        function poll() {
+          fetch('/api/timer?id=' + TIMER_ID + '&action=status&_=' + Date.now())
+            .then(function(r) { return r.ok ? r.json() : null; })
+            .then(function(j) {
+              if (!j) return;
+              var el = document.getElementById('timer-overlay');
+              var btn = document.getElementById('timer-ctrl-btn');
+              var v = (j.value || '').trim();
+              if (v) {
+                el.textContent = v;
+                el.classList.add('visible');
+              } else {
+                el.classList.remove('visible');
+              }
+              btn.classList.remove('running', 'paused');
+              if (j.active) { btn.classList.add('running'); }
+              else if (j.paused) { btn.classList.add('paused'); }
+            }).catch(function() {});
+        }
+        poll();
+        _timerInterval = setInterval(poll, 1000);
+      }
+
+      function stopTimerPoll() {
+        if (_timerInterval) { clearInterval(_timerInterval); _timerInterval = null; }
+      }
+
+      // ---- Timer control button (hourglass) ----
+      (function() {
+        var ctrlBtn = document.getElementById('timer-ctrl-btn');
+        var _lpTimer = null;
+        var _longPressed = false;
+        var _lastTouchEnd = 0;
+        var _lastToggleTime = 0;
+
+        function doReset() {
+          _lastToggleTime = 0;
+          fetch('/api/timer?id=' + TIMER_ID + '&action=reset')
+            .then(function(r) { return r.json(); })
+            .then(function(j) {
+              if (j.ok) { ctrlBtn.classList.remove('running', 'paused'); }
+            }).catch(function() {});
+        }
+
+        // pause/resume: if the previous toggle was within 800ms, treat as double-tap -> reset
+        function doTimerAction() {
+          var now = Date.now();
+          if (ctrlBtn.classList.contains('running')) {
+            if (now - _lastToggleTime < 800) { doReset(); return; }
+            _lastToggleTime = now;
+            fetch('/api/timer?id=' + TIMER_ID + '&action=pause')
+              .then(function(r) { return r.json(); })
+              .then(function(j) {
+                if (j.ok) { ctrlBtn.classList.remove('running'); ctrlBtn.classList.add('paused'); }
+              }).catch(function() {});
+          } else if (ctrlBtn.classList.contains('paused')) {
+            if (now - _lastToggleTime < 800) { doReset(); return; }
+            _lastToggleTime = now;
+            fetch('/api/timer?id=' + TIMER_ID + '&action=resume')
+              .then(function(r) { return r.json(); })
+              .then(function(j) {
+                if (j.ok) { ctrlBtn.classList.remove('paused'); ctrlBtn.classList.add('running'); }
+              }).catch(function() {});
+          } else {
+            _lastToggleTime = 0;
+            fetch('/api/timer?id=' + TIMER_ID + '&action=start')
+              .then(function(r) { return r.json(); })
+              .then(function(j) {
+                if (j.ok) { ctrlBtn.classList.add('running'); }
+              }).catch(function() {});
+          }
+        }
+
+        function handleTap() { doTimerAction(); }
+
+        function startLongPress() {
+          _longPressed = false;
+          _lpTimer = setTimeout(function() {
+            _lpTimer = null;
+            _longPressed = true;
+            _lastTapTime = 0;
+            doReset();
+          }, 800);
+        }
+        function cancelLongPress() {
+          if (_lpTimer) { clearTimeout(_lpTimer); _lpTimer = null; }
+        }
+
+        // Mouse: long press via mousedown/mouseup, single/double-click via native click
+        ctrlBtn.addEventListener('mousedown',  startLongPress);
+        ctrlBtn.addEventListener('mouseup',    cancelLongPress);
+        ctrlBtn.addEventListener('mouseleave', cancelLongPress);
+        ctrlBtn.addEventListener('click', function() {
+          if (Date.now() - _lastTouchEnd < 500) return; // suppress synthetic click from touch
+          if (_longPressed) { _longPressed = false; return; }
+          handleTap();
+        });
+
+        // Touch: long press via touchstart; single/double-tap via touchend
+        ctrlBtn.addEventListener('touchstart', function(e) {
+          e.stopPropagation();
+          startLongPress();
+        }, { passive: true });
+        ctrlBtn.addEventListener('touchend', function(e) {
+          e.preventDefault();
+          _lastTouchEnd = Date.now();
+          cancelLongPress();
+          if (!_longPressed) { handleTap(); }
+          _longPressed = false;
+        }, { passive: false });
+        ctrlBtn.addEventListener('touchcancel', cancelLongPress);
+        ctrlBtn.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+      })();
+
+    </script>
+    <script src="/assets/app_launcher.js"></script>
+    <script>appLauncher.setStatusResolver(function() { return true; });</script>
+  </body>
+</html>

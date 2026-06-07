@@ -213,29 +213,80 @@
       '</a>',
 
     manageDevicesBtnHTML:
-      '<a class="topbar-btn" href="/headsets_settings.html" id="headset-settings-btn" title="Headset Settings">' +
-        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
-          '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/>' +
-          '<line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/>' +
-          '<line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/>' +
-          '<line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>' +
-        '</svg>' +
-        '<span class="topbar-btn-label">Headset Settings</span>' +
-      '</a>',
+      '<div class="headset-menu" id="headset-menu">' +
+        '<a class="topbar-btn headset-menu-btn" href="/headsets_settings.html" id="headset-settings-btn" title="Headset Settings">' +
+          '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+            '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/>' +
+            '<line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/>' +
+            '<line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/>' +
+            '<line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>' +
+          '</svg>' +
+          '<span class="topbar-btn-label">Headset Settings</span>' +
+          CHEVRON_SVG +
+        '</a>' +
+        '<div class="headset-menu-dropdown" id="headset-menu-dropdown">' +
 
-    // Wire the Headset Settings button.
+          '<div class="drop-section">' +
+            '<a class="drop-item" href="/headsets_settings.html">' +
+              '<svg class="drop-item-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+                '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/>' +
+                '<line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/>' +
+                '<line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/>' +
+                '<line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>' +
+              '</svg>' +
+              'Headset Settings' +
+            '</a>' +
+            '<a class="drop-item" href="/headsets_settings.html#manage">' +
+              '<svg class="drop-item-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+                '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>' +
+              '</svg>' +
+              'Add New Headset' +
+            '</a>' +
+            '<a class="drop-item" href="/vrhm_config.html">' +
+              '<svg class="drop-item-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+                '<polygon points="12 2 2 7 12 12 22 7 12 2"/>' +
+                '<polyline points="2 17 12 22 22 17"/>' +
+                '<polyline points="2 12 12 17 22 12"/>' +
+              '</svg>' +
+              'Manage Scrcpy Capture Profiles' +
+            '</a>' +
+          '</div>' +
+
+          '<div class="drop-section">' +
+            '<div class="drop-section-label">Quick Actions</div>' +
+            '<button class="drop-item" id="hs-start-all-btn">' +
+              '<svg class="drop-item-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+                '<polygon points="5 3 19 12 5 21 5 3"/>' +
+              '</svg>' +
+              'Start Scrcpy for All Headsets' +
+            '</button>' +
+            '<button class="drop-item" id="hs-stop-all-btn">' +
+              '<svg class="drop-item-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+                '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>' +
+              '</svg>' +
+              'Stop Scrcpy for All Headsets' +
+            '</button>' +
+            '<button class="drop-item drop-item-danger" id="hs-shutdown-all-btn">' +
+              '<svg class="drop-item-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+                '<path d="M18.36 6.64a9 9 0 1 1-12.73 0"/>' +
+                '<line x1="12" y1="2" x2="12" y2="12"/>' +
+              '</svg>' +
+              'Shutdown All Headsets' +
+            '</button>' +
+          '</div>' +
+
+        '</div>' +
+      '</div>',
+
+    // Wire the Headset Settings button (kept for backward compatibility).
     // If onOpen is provided it is called on click; otherwise navigates to /headsets_settings.html.
     initManageDevicesBtn: function (onOpen) {
       document.addEventListener('DOMContentLoaded', function () {
         var btn = document.getElementById('headset-settings-btn');
         if (!btn) return;
-        btn.addEventListener('click', function () {
-          if (typeof onOpen === 'function') {
-            onOpen();
-          } else {
-            window.location.href = '/headsets_settings.html';
-          }
-        });
+        if (typeof onOpen === 'function') {
+          btn.addEventListener('click', function (e) { e.preventDefault(); onOpen(); });
+        }
       });
     },
 
@@ -277,14 +328,14 @@
 
           '<div class="drop-section">' +
             '<div class="drop-section-label">Applications Management</div>' +
-            '<a class="drop-item" href="/app_catalogue.html">' +
+            '<a class="drop-item" href="/headsets_apps_manager.html">' +
               '<svg class="drop-item-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
                 '<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>' +
                 '<path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>' +
               '</svg>' +
               'Headsets Apps' +
             '</a>' +
-            '<a class="drop-item" href="/app_names_manager.html">' +
+            '<a class="drop-item" href="/known_apps_manager.html">' +
               '<svg class="drop-item-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
                 '<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>' +
                 '<rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>' +
@@ -298,7 +349,7 @@
               '<svg class="drop-item-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
                 '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>' +
               '</svg>' +
-              'Manage New Devices' +
+              'Add New Headset' +
             '</a>' +
           '</div>' +
 
@@ -309,7 +360,7 @@
               '</svg>' +
               'Help &amp; Diagnostics' +
             '</a>' +
-            '<a class="drop-item" href="/app_config.html">' +
+            '<a class="drop-item" href="/vrhm_config.html">' +
               '<svg class="drop-item-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
                 '<circle cx="12" cy="12" r="3"/>' +
                 '<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>' +
@@ -387,6 +438,35 @@
   // Auto-init the VQA warning chip for every page that loads topbar.js.
   TopBar.initVqaWarning();
 
+  // Auto-highlight the topbar button/dropdown item matching the current page.
+  document.addEventListener('DOMContentLoaded', function () {
+    var path = window.location.pathname.replace(/\/$/, '') || '/';
+
+    // Pages that have a dedicated standalone topbar button
+    var BTN_MAP = {
+      '/headsets_monitoring.html': 'headsets-monitoring-btn',
+      '/headsets_settings.html':   'headset-settings-btn'
+    };
+
+    if (BTN_MAP[path]) {
+      var btn = document.getElementById(BTN_MAP[path]);
+      if (btn) btn.classList.add('active');
+    }
+
+    // Highlight any dropdown item whose href matches (strip hash anchors before comparing)
+    var anyDropActive = false;
+    document.querySelectorAll('.drop-item[href]').forEach(function (a) {
+      var href = a.getAttribute('href').split('#')[0];
+      if (href === path) { a.classList.add('active'); anyDropActive = true; }
+    });
+
+    // If the active page has no standalone button, highlight Config toggle as a hint
+    if (anyDropActive && !BTN_MAP[path]) {
+      var configBtn = document.getElementById('actions-toggle');
+      if (configBtn) configBtn.classList.add('active');
+    }
+  });
+
   // Wire up Config dropdown toggle (runs after DOM is ready)
   document.addEventListener('DOMContentLoaded', function () {
     var toggle   = document.getElementById('actions-toggle');
@@ -401,6 +481,34 @@
       dropdown.classList.remove('open');
       toggle.classList.remove('open');
     });
+
+    // Headset Settings dropdown quick-action buttons
+    function _refreshHeadsetPage() {
+      if (typeof pollHeadsetsCsv === 'function') pollHeadsetsCsv();
+      if (typeof pollInfosCsv    === 'function') pollInfosCsv();
+    }
+    var hsStartAll = document.getElementById('hs-start-all-btn');
+    if (hsStartAll) {
+      hsStartAll.addEventListener('click', function (e) {
+        e.stopPropagation();
+        TopBar.apiPost('/api/start-scrcpy-all', 'Start Scrcpy All', hsStartAll, _refreshHeadsetPage);
+      });
+    }
+    var hsStopAll = document.getElementById('hs-stop-all-btn');
+    if (hsStopAll) {
+      hsStopAll.addEventListener('click', function (e) {
+        e.stopPropagation();
+        TopBar.apiPost('/api/stop-scrcpy-all', 'Stop Scrcpy All', hsStopAll, _refreshHeadsetPage);
+      });
+    }
+    var hsShutdownAll = document.getElementById('hs-shutdown-all-btn');
+    if (hsShutdownAll) {
+      hsShutdownAll.addEventListener('click', function (e) {
+        e.stopPropagation();
+        if (!confirm('Shutdown ALL headsets? This will power them off.')) return;
+        TopBar.apiPost('/api/shutdown-all', 'Shutdown All', hsShutdownAll);
+      });
+    }
 
     // Theme toggle
     function _updateThemeBtn() {      var lbl = document.getElementById('theme-toggle-label');
@@ -446,8 +554,9 @@
     } catch(e) {}
   });
 
-  // Utility for pages: TopBar.apiPost(url, label, btn) - POST with visual feedback
-  window.TopBar.apiPost = function(url, label, btn) {
+  // Utility for pages: TopBar.apiPost(url, label, btn, onSuccess) - POST with visual feedback
+  // onSuccess is an optional callback called after a successful response.
+  window.TopBar.apiPost = function(url, label, btn, onSuccess) {
     if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; }
     var origHTML = btn ? btn.innerHTML : '';
     fetch(url, { method: 'POST' })
@@ -456,6 +565,7 @@
         if (j && j.ok) {
           if (btn) btn.innerHTML = btn.innerHTML.replace(/>[^<]*(<\/button>)?$/, function(m) { return '>Done' + (m.indexOf('</') !== -1 ? '</button>' : ''); });
           setTimeout(function() { if (btn) { btn.innerHTML = origHTML; btn.disabled = false; btn.style.opacity = ''; } }, 2000);
+          if (typeof onSuccess === 'function') onSuccess();
         } else {
           if (btn) { btn.disabled = false; btn.style.opacity = ''; }
           alert((label || 'Action') + ' failed: ' + (j && j.error ? j.error : 'unknown error'));
@@ -467,9 +577,9 @@
       });
   };
 
-  // Placeholder kept for compatibility (modal moved to app_config.html)
+  // Placeholder kept for compatibility (modal moved to vrhm_config.html)
   function _openLogsModal() {
-    // Moved to app_config.html
+    // Moved to vrhm_config.html
   }
 
 }());

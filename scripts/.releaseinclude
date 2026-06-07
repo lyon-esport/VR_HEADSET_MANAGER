@@ -24,9 +24,7 @@
 # --- Website static pages and templates ---
 /website/
 !/website/timer/
-!/website/monitor.html
-!/website/*[monitoring].html
-!/website/*[video].html
+!/website/generated/
 !/website/assets/app_icons/
 
 # --- Documentation (exclude scratch/test files) ---

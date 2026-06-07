@@ -1,6 +1,6 @@
 "PackageName","DisplayName","IconUrl","LocalIconPath","ThirdParty","LatestVersion"
 "com.oculus.vrshell","Meta Application Browser","","",false,""
-"com.oculus.panelapp.library","Meta Application Browser (new menu)","","",false,""
+"com.oculus.panelapp.library","Meta New Main Menu","","",false,""
 "com.oculus.systemux","Meta System UX","","",false,""
 "com.oculus.home","Meta Home","","",false,""
 "com.oculus.avatar2","Meta Avatar","","",false,""
@@ -21,5 +21,5 @@
 "com.android.providers.settings","Android Settings Provider","","",false,""
 "com.android.shell","Android Shell","","",false,""
 "com.android.systemui","Android System UI","","",false,""
-"com.anagan.qgo","Quest Game Optimizer","","",false,""
+"com.anagan.qgo","Quest Game Optimizer","","",true,""
 

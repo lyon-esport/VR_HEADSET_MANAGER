@@ -280,6 +280,7 @@
       Help &amp; Diagnostics
     </div>
     <p class="page-subtitle">Restart services and access troubleshooting resources.</p>
+    <p id="app-version" style="font-size:12px;color:var(--muted);margin-bottom:20px;margin-top:-18px"></p>
 
     <!-- Web Server -->
     <section class="section">
@@ -440,6 +441,14 @@
   <div id="toast"></div>
 
   <script>
+    fetch('/api/version')
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        var el = document.getElementById('app-version');
+        if (el && d.version) el.textContent = 'Version: ' + d.version;
+      })
+      .catch(function() {});
+
     var _mtxBase = '';
 
     // MediaMTX API endpoints table definition

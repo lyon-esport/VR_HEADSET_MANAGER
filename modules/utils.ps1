@@ -62,7 +62,7 @@ function Get-HeadsetSitePath {
     )
     $safe = $Name -replace ' ', '_'
     $file = "{0}[{1}].html" -f $safe, $Kind
-    return (Join-Path -Path $global:ScriptPath -ChildPath (Join-Path -Path 'website' -ChildPath $file))
+    return (Join-Path -Path $global:ScriptPath -ChildPath (Join-Path -Path 'website\generated' -ChildPath $file))
 }
 
 
