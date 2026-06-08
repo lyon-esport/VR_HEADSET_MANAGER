@@ -17,6 +17,7 @@ known_headsets*.csv
 website/monitor.html
 website/timer/*
 website/assets/app_icons/*
+website/generated/
 !/website/template/
 
 # ignore records
