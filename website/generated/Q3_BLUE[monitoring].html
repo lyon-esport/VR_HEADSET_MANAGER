@@ -119,17 +119,29 @@
       <main class="card" role="main" aria-label="Status Q3 BLUE">
         <h1 class="title">Q3 BLUE
            <span class="muted" id="status-emoji">
-            ☠️
+            ✅
         </span>
         </h1>
 
 
+        <div class="device-icons" aria-label="Device hardware status">
+          <img id="icon-left"
+               src="assets/Quest%203/Ctrl_Left_GREY.png"
+               alt="Left Controller - GREY" class="device-icon" />
+          <img id="icon-headset"
+               src="assets/Quest%203/Headset_GREEN.png"
+               alt="Headset - GREEN" class="device-icon" />
+          <img id="icon-right"
+               src="assets/Quest%203/Ctrl_Right_GREY.png"
+               alt="Right Controller - GREY" class="device-icon" />
+        </div>
+
         <div class="values" aria-live="polite">
           <span class="batt" aria-label="Battery percentage">
             <span class="emoji" aria-hidden="true" id="batt-emoji">
-            🪫
+            🔋
             </span>
-            <strong id="batt-value">- %</strong>
+            <strong id="batt-value">85 %</strong>
             <span class="muted" id="charge-emoji">
               ⚡
             </span>
@@ -141,7 +153,7 @@
             <span class="emoji" aria-hidden="true" id="temp-emoji">
               ❄️
             </span>
-            <strong id="temp-value">-&nbsp;°C</strong>
+            <strong id="temp-value">42&nbsp;°C</strong>
           </span>
         </div>
       </main>
@@ -150,7 +162,7 @@
     <script>
       // Baked-in constants from template generation (static, never change at runtime)
       var _NAME  = 'Q3 BLUE';
-      var _MODEL = '';
+      var _MODEL = 'Quest%203';
       var _CRIT      = 30;
       var _WARN      = 40;
       var _CTRL_CRIT = 15;

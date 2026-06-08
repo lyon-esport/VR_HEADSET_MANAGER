@@ -141,7 +141,7 @@ Write-Log ($msg.WebServerStartingOnPort -f $port) -Level INFO
 Write-Log ($msg.WebServerServingFrom -f $websitePath) -Level DEBUG
 if ($lanIPs) {
     foreach ($ip in $lanIPs) {
-        Write-Log ($msg.WebServerLinkLine -f $ip, $port) -Level INFO
+        Write-Log ($msg.WebServerLinkLine -f $ip, $port, "") -Level INFO
     }
 } else {
     Write-Log $msg.WebServerNoLanAddress -Level WARNING

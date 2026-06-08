@@ -279,6 +279,7 @@
     # scripts_init.ps1
     # ==========================================
     TranslationsLoaded = "Traductions chargees pour la langue : {0}"
+    LogRetentionPurged = "Suppression de {0} ancien(s) fichier(s) de log de plus de {1} jours."
     NetworkProfileCurrent = "Profil reseau actuel : {0}"
     NetworkProfileFailed = "Impossible de recuperer le profil reseau : {0}"
     FirewallRuleCreating = "Creation d'une regle de pare-feu pour ADB.exe"

@@ -1,5 +1,7 @@
 # VR Headsets Monitor - headsets_dashboard.ps1
-# This script opens a new PowerShell window to display the status of known VR headsets.
+# Display-only window: reads CSV data and renders the colored headsets table.
+# Service supervision (scrcpy / mediamtx / web server restarts) lives in
+# Start-VRMonitor; shutdown is handled by the main process and reaper.ps1.
 
 param(
     [string]$ScriptPath,
@@ -14,78 +16,49 @@ $currentProcess = Get-WmiObject -Class Win32_Process -Filter "ProcessId = $PID"
 $parentPID = $currentProcess.ParentProcessId
 Write-Host "ID du process parent: $parentPID"
 
-
-#get callerscript identifier
-$callerScript = (Get-Process -Id $parentPID)
-Write-Host "Caller script : $callerScript" -ForegroundColor Yellow
-
-Write-Host "Starting VR Headsets Monitor until Caller script is closed..." -ForegroundColor Green
-
-# Wait for the main process to finish firewall setup before starting MediaMTX.
-# Initialize-ComputerSetup writes data\fw_ready.flag once all rules are confirmed.
-# This prevents the Windows "allow network access?" dialog on first run or after port changes.
-$flagPath = Join-Path $ScriptPath "data\fw_ready.flag"
-Write-Host "Waiting for firewall setup to complete..." -ForegroundColor Yellow -NoNewline
-$timeout = 120
-$elapsed = 0
-while (-not (Test-Path -LiteralPath $flagPath) -and $elapsed -lt $timeout) {
-    Write-Host "." -ForegroundColor Cyan -NoNewline
-    Start-Sleep -Seconds 1
-    $elapsed++
+# One-time module + config load. The dashboard is display-only and uses
+# already-imported functions (e.g. Show-HeadsetsTableColored) that re-read
+# the CSVs from disk on each call, so there is no need to dot-source modules
+# every iteration.
+$global:ScriptPath = $ScriptPath
+$global:IsDashboardProcess = $true
+$scripts_init = Join-Path -Path $global:ScriptPath -ChildPath "\modules\scripts_init.ps1"
+if (-not (Test-Path -Path $scripts_init)) {
+    Write-Host "Error: The initialization script is missing!" -ForegroundColor Red
+    exit
 }
-if (Test-Path -LiteralPath $flagPath) {
-    Remove-Item -LiteralPath $flagPath -Force -ErrorAction SilentlyContinue
-    Write-Host " ready." -ForegroundColor Green
-} else {
-    Write-Host " timed out, continuing anyway." -ForegroundColor Yellow
-}
-Write-Host ""
+. $scripts_init
 
 while ($true) {
-    # Check if caller script is still running
+    # Self-terminate if the parent (main) process is gone.
     if (-not (Get-Process -Id $parentPID -ErrorAction SilentlyContinue)) {
         Write-Host "Caller script has ended. Exiting VR Headsets Monitor..." -ForegroundColor Red
         break
     }
 
-#IMPORT ALL FUNCITONS...
-    $global:ScriptPath = $ScriptPath
-    $global:IsDashboardProcess = $true
-    $scripts_init = Join-Path -Path $global:ScriptPath -ChildPath "\modules\scripts_init.ps1"
-    if (Test-Path -Path $scripts_init) {
-        . $scripts_init
-    } else {
-        Write-Host "Error: The initialization script is missing!" -ForegroundColor Red
-        exit
-    }
-
-# Display the headsets table
     Clear-Host
-    Write-Host "VR Headsets Monitor started..." -ForegroundColor Green
-
+    Write-Host "VR Headsets Monitor (display)" -ForegroundColor Green
     Write-Host "=== KNOWN HEADSETS MONITORING ==="
     Show-HeadsetsTableColored
-    
-    Watch-ScrcpyProcesses # Restart scrcpy window if it was closed
-    Start-MediaMtx        # Restart mediamtx if it has stopped
 
-    Write-host "Refesh in $global:VRMonitor_refresh_timer seconds... " -ForegroundColor Yellow -NoNewline
+    Write-host "Refresh in $global:VRMonitor_refresh_timer seconds... " -ForegroundColor Yellow -NoNewline
     Start-Sleep -Seconds 1
     for ($i = $global:VRMonitor_refresh_timer - 1; $i -ge 1; $i--) {
         Write-Host "$i " -ForegroundColor Cyan -NoNewline
         Start-Sleep -Seconds 1
     }
-    Write-Host "`n"  # Return to line
-  
+    Write-Host "`n"
 }
 
-# Parent process has exited - perform cleanup and close this window.
-# Note: $msg and other globals may not be available here (loop already exited),
-# so use Write-Host directly and call functions defensively.
-Write-Host "Stopping application services..." -ForegroundColor Yellow
-try { Stop-VRMonitor } catch { }
-try { Stop-MediaMtx  } catch { }
+# Best-effort cleanup of our PID file on self-exit; reaper will clean up
+# if we were killed without reaching this point.
+try {
+    $dashboardPidFile = Join-Path $global:ScriptPath "data\dashboard.pid"
+    if (Test-Path -LiteralPath $dashboardPidFile) {
+        Remove-Item -LiteralPath $dashboardPidFile -Force -ErrorAction SilentlyContinue
+    }
+} catch { }
 
 Write-Host "Closing dashboard window." -ForegroundColor Red
-Start-Sleep -Seconds 2
+Start-Sleep -Seconds 1
 Stop-Process -Id $PID -Force

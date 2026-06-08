@@ -279,6 +279,70 @@ function Get-FwReadyFlagPath {
     return Join-Path $global:ScriptPath "data\fw_ready.flag"
 }
 
+# ---------------------------------------------------------------------------
+# Persistent firewall state (data\fw_state.json)
+# Records the values we last successfully applied so a future run can detect
+# drift (e.g. user changed WebServer.port) and clean up the previous entries.
+# ---------------------------------------------------------------------------
+function Get-FwStatePath {
+    return Join-Path $global:ScriptPath "data\fw_state.json"
+}
+
+function Get-FwState {
+    $path = Get-FwStatePath
+    if (-not (Test-Path -LiteralPath $path)) { return $null }
+    try {
+        $raw = Get-Content -LiteralPath $path -Raw -ErrorAction Stop
+        return ($raw | ConvertFrom-Json -ErrorAction Stop)
+    } catch {
+        return $null
+    }
+}
+
+function Set-FwState {
+    param([Parameter(Mandatory=$true)] $State)
+    $path = Get-FwStatePath
+    $json = $State | ConvertTo-Json -Depth 4
+    try {
+        Write-FileWithoutBom -Path $path -Content $json
+    } catch {
+        try { Write-Log ("Set-FwState: failed to write fw_state.json: " + $_.Exception.Message) -Level WARNING } catch {}
+    }
+}
+
+# Returns $true if the WebServer firewall rule(s) exist AND every matching
+# rule's LocalPort matches the current $global:WebServer_port.
+# Mirror of Test-MediaMtxFirewallCurrent.
+function Test-WebServerFirewallCurrent {
+    $port = if ($global:WebServer_port) { [string]$global:WebServer_port } else { "8080" }
+    try {
+        $rules = Get-NetFirewallRule -ErrorAction SilentlyContinue |
+                 Where-Object { $_.DisplayName -ilike "*VR_HEADSET_MANAGER*WebServer*" }
+        if (-not $rules) { return $false }
+        $ports = $rules | Get-NetFirewallPortFilter -ErrorAction SilentlyContinue |
+                          Select-Object -ExpandProperty LocalPort
+        if (-not $ports) { return $false }
+        foreach ($p in @($ports)) {
+            if ([string]$p -ne $port) { return $false }
+        }
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+# Returns $true iff a URL ACL is registered for the current WebServer port.
+function Test-WebServerUrlAclCurrent {
+    $port = if ($global:WebServer_port) { $global:WebServer_port } else { 8080 }
+    $url  = "http://+:$port/"
+    try {
+        $existing = netsh http show urlacl url=$url 2>&1
+        return ($existing -match [regex]::Escape($url))
+    } catch {
+        return $false
+    }
+}
+
 # Returns $true if MediaMTX firewall rules exist AND their ports match current config.
 # Used to detect port changes in config.json that require rule recreation.
 function Test-MediaMtxFirewallCurrent {
@@ -378,25 +442,31 @@ function Unblock-WebServerFirewallRule {
     $port     = if ($global:WebServer_port) { $global:WebServer_port } else { 8080 }
     $ruleName = "_[VR_HEADSET_MANAGER]WebServer_Allowed"
     try {
-        $existing = Get-NetFirewallRule -ErrorAction SilentlyContinue |
-                    Where-Object { $_.DisplayName -ilike "*VR_HEADSET_MANAGER*WebServer*" }
-        if (-not $existing) {
-            Write-Log ($msg.WebServerFirewallRuleCreating -f $port) -Level INFO
-            $title   = "FIREWALL RULE REQUIRED - Web Server"
-            $details = "Allowing inbound web server connections:`nTCP port : $port (inbound)`nProfile  : All (Domain, Private, Public)"
-            if ($ReturnTask) {
-                return @{
-                    Title       = $title
-                    Details     = $details
-                    ActionLabel = "Create rules"
-                    Script      = "New-NetFirewallRule -DisplayName '_[VR_HEADSET_MANAGER]WebServer_Allowed TCP [IN]' -Direction Inbound -Protocol TCP -LocalPort $port -Action Allow -Profile Any -ErrorAction Continue | Out-Null"
-                }
-            } else {
-                $specs = "TCP [IN]|TCP|$port"
-                Invoke-AsAdmin -ScriptBlock $script:fwPortRuleBlock -RuleName $ruleName -Title $title -Details $details -RuleSpec $specs
+        if (Test-WebServerFirewallCurrent) {
+            Write-Log $msg.WebServerFirewallRuleExists -Level DEBUG
+            return
+        }
+        # Drift detected (no rule OR LocalPort != current $port) - rebuild.
+        Write-Log ($msg.WebServerFirewallRuleCreating -f $port) -Level INFO
+        $title   = "FIREWALL RULE REQUIRED - Web Server"
+        $details = "Allowing inbound web server connections:`nTCP port : $port (inbound)`nProfile  : All (Domain, Private, Public)`n(Any previous VR_HEADSET_MANAGER WebServer rule will be removed first.)"
+        if ($ReturnTask) {
+            return @{
+                Title       = $title
+                Details     = $details
+                ActionLabel = "Create rules"
+                Script      = @"
+Get-NetFirewallRule | Where-Object { `$_.DisplayName -ilike '*VR_HEADSET_MANAGER*WebServer*' } | Remove-NetFirewallRule -ErrorAction Continue
+New-NetFirewallRule -DisplayName '_[VR_HEADSET_MANAGER]WebServer_Allowed TCP [IN]' -Direction Inbound -Protocol TCP -LocalPort $port -Action Allow -Profile Any -ErrorAction Continue | Out-Null
+"@
             }
         } else {
-            Write-Log $msg.WebServerFirewallRuleExists -Level DEBUG
+            # Standalone (non-batch) path: drop stale rules first, then create the new one.
+            Get-NetFirewallRule -ErrorAction SilentlyContinue |
+                Where-Object { $_.DisplayName -ilike "*VR_HEADSET_MANAGER*WebServer*" } |
+                Remove-NetFirewallRule -ErrorAction SilentlyContinue
+            $specs = "TCP [IN]|TCP|$port"
+            Invoke-AsAdmin -ScriptBlock $script:fwPortRuleBlock -RuleName $ruleName -Title $title -Details $details -RuleSpec $specs
         }
     } catch {
         Write-Log ($msg.WebServerFirewallRuleFailed -f $_) -Level ERROR
@@ -408,27 +478,44 @@ function Register-WebServerUrlAcl {
     param(
         # When set, returns a task hashtable instead of opening an admin console directly.
         # Used by Initialize-ComputerSetup to batch all tasks into one elevation.
-        [switch]$ReturnTask
+        [switch]$ReturnTask,
+        # Optional persisted state from a previous run. Used to know which old
+        # port's URL ACL must be cleaned up when the port has changed.
+        $PriorState = $null
     )
     if (-not $global:WebServer_enabled) { return }
     $port = if ($global:WebServer_port) { $global:WebServer_port } else { 8080 }
     $url  = "http://+:$port/"
     try {
-        $existing = netsh http show urlacl url=$url 2>&1
-        if ($existing -match [regex]::Escape($url)) {
+        if (Test-WebServerUrlAclCurrent) {
             Write-Log ($msg.WebServerUrlAclExists -f $port) -Level DEBUG
-        } else {
-            Write-Log ($msg.WebServerUrlAclRegistering -f $port) -Level INFO
-            if ($ReturnTask) {
-                return @{
-                    Title       = "HTTP URL RESERVATION REQUIRED"
-                    Details     = "Allows the web server to run without admin rights.`nURL  : $url`nUser : Everyone (locale-independent SID S-1-1-0)"
-                    ActionLabel = "Register"
-                    Script      = "netsh http add urlacl url=$url sddl=`"D:(A;;GX;;;S-1-1-0)`" | Out-Null"
-                }
-            } else {
-                Invoke-AsAdmin -ScriptBlock $script:urlAclBlock -Url $url
+            return
+        }
+        Write-Log ($msg.WebServerUrlAclRegistering -f $port) -Level INFO
+
+        $priorPort = $null
+        if ($PriorState -and $PriorState.WebServerPort -and ([int]$PriorState.WebServerPort -ne [int]$port)) {
+            $priorPort = [int]$PriorState.WebServerPort
+        }
+
+        if ($ReturnTask) {
+            $cleanupLine = ""
+            $details     = "Allows the web server to run without admin rights.`nURL  : $url`nUser : Everyone (locale-independent SID S-1-1-0)"
+            if ($priorPort) {
+                $cleanupLine = "netsh http delete urlacl url=http://+:$priorPort/ | Out-Null`r`n"
+                $details    += "`n(The previous reservation on port $priorPort will be removed first.)"
             }
+            return @{
+                Title       = "HTTP URL RESERVATION REQUIRED"
+                Details     = $details
+                ActionLabel = "Register"
+                Script      = $cleanupLine + "netsh http add urlacl url=$url sddl=`"D:(A;;GX;;;S-1-1-0)`" | Out-Null"
+            }
+        } else {
+            if ($priorPort) {
+                try { netsh http delete urlacl url=("http://+:" + $priorPort + "/") 2>&1 | Out-Null } catch {}
+            }
+            Invoke-AsAdmin -ScriptBlock $script:urlAclBlock -Url $url
         }
     } catch {
         Write-Log ($msg.WebServerUrlAclFailed -f $_) -Level ERROR
@@ -488,6 +575,11 @@ function Initialize-ComputerSetup {
         Remove-Item -LiteralPath $flagPath -Force -ErrorAction SilentlyContinue
     }
 
+    # Load the persisted state from the previous successful run so per-rule
+    # drift detection (port changed, program path changed) can also clean up
+    # the previously-applied entries instead of leaking them.
+    $priorState = Get-FwState
+
     # Collect all pending firewall/ACL tasks, then open a single admin console for all of them.
     $pendingTasks = @()
 
@@ -508,12 +600,23 @@ function Initialize-ComputerSetup {
     $wsTask = Unblock-WebServerFirewallRule -ReturnTask
     if ($wsTask -is [hashtable]) { $pendingTasks += $wsTask }
 
-    $aclTask = Register-WebServerUrlAcl -ReturnTask
+    $aclTask = Register-WebServerUrlAcl -ReturnTask -PriorState $priorState
     if ($aclTask -is [hashtable]) { $pendingTasks += $aclTask }
 
     # Open one admin console for all pending tasks (zero UAC prompts if nothing to do)
     if ($pendingTasks.Count -gt 0) {
         Invoke-BatchAsAdmin -Tasks $pendingTasks
+    }
+
+    # Persist what we just (re)applied so the next run can detect drift.
+    # Written even when no tasks ran - the values still describe the live OS state.
+    Set-FwState -State @{
+        AdbPath         = $global:adbPath
+        WebServerPort   = $global:WebServer_port
+        MediaMtxRtsp    = $global:mediamtxRtspPort
+        MediaMtxHls     = $global:mediamtxHlsPort
+        MediaMtxWebrtc  = $global:mediamtxWebrtcPort
+        MediaMtxProgram = $global:mediamtxFilePath
     }
 
     # Write the ready flag so headsets_dashboard.ps1 knows firewall setup is done.

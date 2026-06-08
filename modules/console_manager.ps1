@@ -78,27 +78,33 @@ function Show-HeadsetPickerMenu {
 function Show-MainMenu {
     do {
 
-         #Check if headsets dashboard is running, if not restart it
-        $VRMonitorProcess = Get-WmiObject -Class Win32_Process -Filter "ParentProcessId = $PID" | Where-Object { $_.CommandLine -match "headsets_dashboard.ps1" }
-        Write-Log ($msg.VRMonitorProcessId -f $VRMonitorProcess.ProcessId) -Level DEBUG
-        
-        if (-not $VRMonitorProcess) {
-            Write-Host $msg.VRMonitorNotRunning -ForegroundColor Yellow
-            $headsets_dashboard_script = Join-Path -Path $scriptPath -ChildPath "modules\headsets_dashboard.ps1"
+        # Prevent the computer from sleeping while the app is running.
+        # Awake mode is independent of the dashboard window visibility.
+        Set-AwakeMode
 
-            $dashboardWindowStyle = if ($global:Dashboard_showConsole) { "Normal" } else { "Hidden" }
-            Start-Process powershell.exe -ArgumentList @(
-                "-NoExit",
-                "-File",
-                "`"$headsets_dashboard_script`"",
-                "-ScriptPath",
-                "`"$scriptPath`"",
-                "-ConfigFilePath",
-                "`"$configFilePath`""
-            ) -WindowStyle $dashboardWindowStyle
-            
-            #Prevent the computer from sleeping while the dashboard is running
-            Set-AwakeMode
+        # Only spawn / respawn the dashboard window when the operator wants it visible.
+        # Service supervision is owned by Start-VRMonitor, not the dashboard.
+        if ($global:Dashboard_showConsole) {
+            $VRMonitorProcess = Get-WmiObject -Class Win32_Process -Filter "ParentProcessId = $PID" | Where-Object { $_.CommandLine -match "headsets_dashboard.ps1" }
+            Write-Log ($msg.VRMonitorProcessId -f $VRMonitorProcess.ProcessId) -Level DEBUG
+
+            if (-not $VRMonitorProcess) {
+                Write-Host $msg.VRMonitorNotRunning -ForegroundColor Yellow
+                $headsets_dashboard_script = Join-Path -Path $scriptPath -ChildPath "modules\headsets_dashboard.ps1"
+                $dashProc = Start-Process powershell.exe -ArgumentList @(
+                    "-NoExit",
+                    "-File",
+                    "`"$headsets_dashboard_script`"",
+                    "-ScriptPath",
+                    "`"$scriptPath`"",
+                    "-ConfigFilePath",
+                    "`"$configFilePath`""
+                ) -WindowStyle Normal -PassThru
+                if ($dashProc) {
+                    $dashPidFile = Join-Path $global:ScriptPath "data\dashboard.pid"
+                    $dashProc.Id | Set-Content -LiteralPath $dashPidFile -Force -ErrorAction SilentlyContinue
+                }
+            }
         }
 
         # Start html monitor update
@@ -110,18 +116,13 @@ function Show-MainMenu {
         Write-Host $msg.MainMenuTitle -ForegroundColor Cyan
         Write-Host $msg.StreamHeadset -BackgroundColor Yellow -ForegroundColor Black
         #Write-Host " I. Check internet connection " -BackgroundColor White -ForegroundColor Black
-        Write-Host $msg.EnableWifiADB -BackgroundColor White -ForegroundColor Black
         Write-Host $msg.AddModifyHeadset -BackgroundColor Green -ForegroundColor DarkMagenta
         Write-Host $msg.ScrcpyTracking -BackgroundColor DarkRed -ForegroundColor White
         Write-Host $msg.ScrcpyOptions -BackgroundColor DarkCyan -ForegroundColor Yellow
         Write-Host $msg.RecordingManagement -BackgroundColor DarkBlue -ForegroundColor White
-        Write-Host $msg.VideoRecast -BackgroundColor DarkMagenta -ForegroundColor White
-        Write-Host $msg.FilesFolders -BackgroundColor DarkCyan -ForegroundColor Black 
+        Write-Host $msg.FilesFolders -BackgroundColor DarkCyan -ForegroundColor Black
         Write-Host $msg.ServicesManagement -BackgroundColor DarkGray -ForegroundColor White
-        if ($global:VQA_Enabled) {
-            Write-Host $msg.QualityMonitoring -BackgroundColor DarkGreen -ForegroundColor White
-        }
-        Write-Host "  [C] Configuration" -BackgroundColor DarkBlue -ForegroundColor Cyan
+        Write-Host "C. Configuration" -BackgroundColor DarkBlue -ForegroundColor Cyan
         Write-Host $msg.Quit
         Write-Host $msg.AnyOtherKey
         Write-Host
@@ -199,16 +200,10 @@ function Show-MainMenu {
                 'R' { Write-Host $msg.RecordingTitle
                         Show-SubMenu-Recording
                     }
-                'V' { Show-SubMenu-VideoRecast }
                 'F' { Write-Host $msg.FilesFoldersTitle
                         Show-SubMenu-FilesAndFolders
                     }
                 'W' { Show-SubMenu-Services }
-                'Q' {
-                        if ($global:VQA_Enabled -and (Get-Command Show-SubMenu-Monitoring -ErrorAction SilentlyContinue)) {
-                            Show-SubMenu-Monitoring
-                        }
-                    }
                 'C' { Show-SubMenu-Config }
                 'I' {
                     if (Test-InternetConnectivity) {
@@ -218,9 +213,6 @@ function Show-MainMenu {
                     }
                     pause
                 }
-                '+' { Write-Host $msg.WifiADBActivation
-                        Enable-WiFiADB
-                    }
                 '0' {
                     Write-Host $msg.Goodbye -ForegroundColor Yellow
                     Invoke-AppShutdown
@@ -300,6 +292,7 @@ function Show-SubMenu-AddHeadset { #CHOICE 2
     Write-Host $msg.ModifyManually
     Write-Host $msg.RemoveFromList
     Write-Host $msg.LaunchAppMenu
+    Write-Host "`t 6. Enable Wifi ADB on a connected headset"
     Write-Host $msg.ReturnPreviousMenu
 
     $userInput = Read-Host $msg.YourChoice
@@ -325,6 +318,10 @@ function Show-SubMenu-AddHeadset { #CHOICE 2
         }
         '5' {
             Show-SubMenu-LaunchApp
+        }
+        '6' {
+            Write-Host $msg.WifiADBActivation
+            Enable-WiFiADB
         }
         '0' {
             Write-Log -Message $msg.ReturnPrevious -Level "INFO"
@@ -408,11 +405,11 @@ function Show-SubMenu-EditHeadset { #CHOICE 3
         }
     } elseif ($field -eq "ScrcpyProfile") {
         Show-SubMenu-ScrcpyOptions -HeadsetID ([int]$idInput)
+        return
     } else {
         # Ask for the new value for the selected field
         $newValue = Read-Host ($msg.EnterNewValue -f $field)
     }
-    
 
     # Update the headset with the new parameters
     Update-HeadsetField -ID ([int]$idInput) -Field $field -NewValue $newValue
@@ -781,34 +778,53 @@ function Show-SubMenu-Recording { #CHOICE 6
 
 
 function Show-SubMenu-ScrcpyOptions {
+    param (
+        [int]$HeadsetID = 0
+    )
     $headsets = @(Get-KnownHeadsets)
     if ($headsets.Count -eq 0) {
         Write-Host $msg.NoHeadsetInFile -ForegroundColor Yellow
         return
     }
 
-    do {
-        Clear-Host
-        Start-Sleep -Milliseconds 100
-        Write-Host $msg.ScrcpyOptionsTitle -ForegroundColor Cyan
-        Write-Host $msg.ScrcpyOptionsSelectHeadset
-        Write-Host $msg.IDNameScrcpyProfile
-        Write-Host $msg.Separator
-        $headsets | ForEach-Object {
-            $profileText = if ($_.ScrcpyProfile) { $_.ScrcpyProfile } else { "R-N-45-20" }
-            Write-Host "$($_.ID)`t$($_.Name.PadRight(16))`t$profileText"
-        }
-        Write-Host $msg.Return
-        Write-Host ""
-
-        $idInput = Read-Host $msg.Choice
-        if ($idInput -eq '0') { return }
-
-        $headset = $headsets | Where-Object { $_.ID -eq $idInput }
+    # If a specific headset ID was passed, skip the picker and go straight to edit
+    if ($HeadsetID -gt 0) {
+        $headset = $headsets | Where-Object { $_.ID -eq $HeadsetID }
         if (-not $headset) {
-            Write-Log ($msg.InvalidID -f $idInput) -Level WARNING
-            Start-Sleep -Seconds 2
-            continue
+            Write-Log ($msg.InvalidID -f $HeadsetID) -Level WARNING
+            return
+        }
+        $idInput = "$HeadsetID"
+        # Jump directly into the inner edit loop below
+    } else {
+        $idInput = $null
+    }
+
+    do {
+        if (-not $idInput) {
+            Clear-Host
+            Start-Sleep -Milliseconds 100
+            Write-Host $msg.ScrcpyOptionsTitle -ForegroundColor Cyan
+            Write-Host $msg.ScrcpyOptionsSelectHeadset
+            Write-Host $msg.IDNameScrcpyProfile
+            Write-Host $msg.Separator
+            $headsets | ForEach-Object {
+                $profileText = if ($_.ScrcpyProfile) { $_.ScrcpyProfile } else { "R-N-45-20" }
+                Write-Host "$($_.ID)`t$($_.Name.PadRight(16))`t$profileText"
+            }
+            Write-Host $msg.Return
+            Write-Host ""
+
+            $idInput = Read-Host $msg.Choice
+            if ($idInput -eq '0') { return }
+
+            $headset = $headsets | Where-Object { $_.ID -eq $idInput }
+            if (-not $headset) {
+                Write-Log ($msg.InvalidID -f $idInput) -Level WARNING
+                Start-Sleep -Seconds 2
+                $idInput = $null
+                continue
+            }
         }
 
         # Inner loop: edit individual profile fields for the selected headset
@@ -851,12 +867,22 @@ function Show-SubMenu-ScrcpyOptions {
 
             switch ($opt) {
                 '1' {
-                    Write-Host "  Available views: $viewList"
-                    $val = (Read-Host "  View profile (current: $view)").ToLower()
-                    if ($val -in $availableViews) {
-                        $parts[0] = $val
+                    Write-Host "  Available views:"
+                    for ($vi = 0; $vi -lt $availableViews.Count; $vi++) {
+                        $marker = if ($availableViews[$vi] -eq $view) { '*' } else { ' ' }
+                        Write-Host ("    {0}. {1} {2}" -f ($vi + 1), $availableViews[$vi], $marker)
+                    }
+                    $numInput = Read-Host ("  Select view (1-{0}, current: {1})" -f $availableViews.Count, $view)
+                    if ($numInput -match '^\d+$') {
+                        $numIdx = [int]$numInput - 1
+                        if ($numIdx -ge 0 -and $numIdx -lt $availableViews.Count) {
+                            $parts[0] = $availableViews[$numIdx]
+                        } else {
+                            Write-Host ("  Invalid choice. Enter a number between 1 and {0}." -f $availableViews.Count) -ForegroundColor Red
+                            Start-Sleep -Seconds 2
+                        }
                     } else {
-                        Write-Host "  Invalid view. Choose from: $viewList" -ForegroundColor Red
+                        Write-Host "  Invalid input. Enter a number." -ForegroundColor Red
                         Start-Sleep -Seconds 2
                     }
                 }
@@ -911,6 +937,10 @@ function Show-SubMenu-ScrcpyOptions {
             }
         } while ($opt -ne '0')
 
+        # When called with a specific HeadsetID, return after editing that headset
+        if ($HeadsetID -gt 0) { return }
+        $idInput = $null
+
     } while ($true)
 }
 
@@ -936,17 +966,17 @@ function Show-SubMenu-Services {
         Write-Host ($msg.ServicesMediaMtxStatus -f $mtxStatus) -ForegroundColor $(if ($mtxProc) { 'Green' } else { 'Red' })
 
         Write-Host ""
-        Write-Host $msg.WifiNetworksManage      -ForegroundColor Cyan
-        Write-Host $msg.ServicesChoiceWebServer -BackgroundColor DarkBlue -ForegroundColor White
-        Write-Host $msg.ServicesChoiceStopWS    -BackgroundColor DarkBlue -ForegroundColor White
-        Write-Host $msg.ServicesChoiceMediaMtx  -BackgroundColor DarkMagenta -ForegroundColor White
-        Write-Host $msg.ServicesChoiceStopMtx   -BackgroundColor DarkMagenta -ForegroundColor White
+        Write-Host $msg.VideoRecast              -BackgroundColor DarkMagenta -ForegroundColor White
+        Write-Host $msg.ServicesChoiceWebServer  -BackgroundColor DarkBlue -ForegroundColor White
+        Write-Host $msg.ServicesChoiceStopWS     -BackgroundColor DarkBlue -ForegroundColor White
+        Write-Host $msg.ServicesChoiceMediaMtx   -BackgroundColor DarkMagenta -ForegroundColor White
+        Write-Host $msg.ServicesChoiceStopMtx    -BackgroundColor DarkMagenta -ForegroundColor White
         Write-Host $msg.ServicesChoiceBack
 
         $choice = Read-Host $msg.EnterChoice
 
         switch ($choice.ToUpper()) {
-            'W' { Show-SubMenu-WifiNetworks }
+            'V' { Show-SubMenu-VideoRecast }
             '1' {
                 Start-WebServer -Restart
                 Write-Log $msg.ServicesWebServerRestarted -Level SUCCESS
@@ -980,15 +1010,23 @@ function Show-SubMenu-Config {
         Write-Host ""
         Write-Host "  === Configuration ===" -ForegroundColor Cyan
         Write-Host ""
-        Write-Host "  [W] WiFi Networks  - List, add, edit, delete, set preferred"
+        Write-Host "  W. WiFi Networks  - List, add, edit, delete, set preferred"
         $dashboardStatus = if ($global:Dashboard_showConsole) { "Shown" } else { "Hidden" }
-        Write-Host "  [D] VR Headset Monitoring Console  - Currently: $dashboardStatus"
+        Write-Host "  D. VR Headset Monitoring Console  - Currently: $dashboardStatus"
+        if ($global:VQA_Enabled) {
+            Write-Host "  Q. Video Quality Automation (VQR / VQO)"
+        }
         Write-Host ""
-        Write-Host "  [0] Back"
+        Write-Host "  0. Back"
         Write-Host ""
         $choice = (Read-Host $msg.EnterChoice).Trim().ToUpper()
         switch ($choice) {
             'W' { Show-SubMenu-WifiNetworks }
+            'Q' {
+                if ($global:VQA_Enabled -and (Get-Command Show-SubMenu-Monitoring -ErrorAction SilentlyContinue)) {
+                    Show-SubMenu-Monitoring
+                }
+            }
             'D' {
                 $cfgPath = if ($global:configFilePath) { $global:configFilePath } else { Join-Path $global:ScriptPath "config\config.json" }
                 $cfg = Read-ConfigJson -ConfigFilePath $cfgPath
@@ -1001,10 +1039,20 @@ function Show-SubMenu-Config {
                     $global:Dashboard_showConsole = $newVal
                     $json = $cfg | ConvertTo-Json -Depth 10
                     Write-FileWithoutBom -Path $cfgPath -Content $json
+                    if (-not $newVal) {
+                        # Toggled OFF: kill any running dashboard now so it does
+                        # not linger. Show-MainMenu's gate prevents a respawn.
+                        try {
+                            Get-WmiObject -Class Win32_Process -Filter "ParentProcessId = $PID" |
+                                Where-Object { $_.CommandLine -match "headsets_dashboard\.ps1" } |
+                                ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+                        } catch { }
+                        $dashPidFile = Join-Path $global:ScriptPath "data\dashboard.pid"
+                        if (Test-Path -LiteralPath $dashPidFile) { Remove-Item -LiteralPath $dashPidFile -Force -ErrorAction SilentlyContinue }
+                    }
                     $statusLabel = if ($newVal) { "Shown" } else { "Hidden" }
                     Write-Host ""
                     Write-Host "  VR Headset Monitoring Console set to: $statusLabel" -ForegroundColor Green
-                    Write-Host "  Please restart the application for the change to take effect." -ForegroundColor Yellow
                     Write-Host ""
                     Read-Host $msg.PressEnterToContinue | Out-Null
                 }

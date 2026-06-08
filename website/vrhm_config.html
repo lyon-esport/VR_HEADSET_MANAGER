@@ -643,7 +643,10 @@
           desc: 'Minimum severity level written to the log file.' },
         { path: 'Logging.debugLevelToConsole', label: 'Console Log Level', type: 'select',
           options: ['DEBUG','INFO','SUCCESS','WARNING','ERROR','NONE'],
-          desc: 'Minimum severity level shown in the PowerShell console.' }
+          desc: 'Minimum severity level shown in the PowerShell console.' },
+        { path: 'Logging.logRetentionDays', label: 'Log Retention (days)', type: 'number',
+          min: 1, max: 3650, unit: 'days',
+          desc: 'Delete log files older than this many days at application startup. Default: 30.' }
       ]},
       { title: 'VR Monitor', fields: [
         { path: 'VRMonitor.refresh_timer', label: 'Refresh Timer', type: 'number',

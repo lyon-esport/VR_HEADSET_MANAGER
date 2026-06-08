@@ -287,6 +287,7 @@
     # scripts_init.ps1
     # ==========================================
     TranslationsLoaded = "Translations loaded for language: {0}"
+    LogRetentionPurged = "Deleted {0} old log file(s) older than {1} days."
     WebServerAlreadyRunning = "Web server already running on port {0}"
     WebServerLinksHeader = "Web monitor available at:"
     WebServerLinkLine    = "  http://{0}:{1}/ {2}"

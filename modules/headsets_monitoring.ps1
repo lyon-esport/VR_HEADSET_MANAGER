@@ -68,6 +68,7 @@ function Start-VRMonitor {
         $jobName = "VRMonitor"
     )
     Stop-VRMonitor $jobName
+    $parentPID = $PID
     Start-Job -Name $jobName -ScriptBlock {
         # INIT OF ALL VARIABLES GRAB FROM THE MAIN SCRIPT ($using)
         $global:ScriptPath              = $using:ScriptPath
@@ -75,6 +76,7 @@ function Start-VRMonitor {
         $global:logFolder               = $using:logFolder
         $global:logFile                 = $using:logFile
         $global:VRMonitor_refresh_timer = $using:VRMonitor_refresh_timer
+        $parentPID                      = $using:parentPID
 
         $i=1
         # Hashtable: IP -> serialized history string, persists across loop iterations
@@ -95,7 +97,24 @@ function Start-VRMonitor {
         Write-Host "Starting VRMonitor global:ConfigFilePath = $($global:ConfigFilePath)" -ForegroundColor Magenta
 
         $global:IsVRMonitorJob = $true
+        $shutdownFlagPath = Join-Path $global:ScriptPath "data\shutdown.flag"
         while($true) {
+
+            # Cooperative shutdown: main process writes shutdown.flag before tearing
+            # down services. Exit cleanly so no more watchdog restarts happen.
+            if (Test-Path -LiteralPath $shutdownFlagPath) {
+                Write-Host "VRMonitor: shutdown flag detected, exiting loop"
+                return
+            }
+
+            # If the parent process is gone, drop the shutdown flag so the reaper
+            # finishes cleanup, then exit.
+            if (-not (Get-Process -Id $parentPID -ErrorAction SilentlyContinue)) {
+                Write-Host "VRMonitor: parent process ($parentPID) has exited - signaling reaper"
+                try { New-Item -ItemType File -Path $shutdownFlagPath -Force | Out-Null } catch { }
+                return
+            }
+
             #IMPORT ALL FUNCITONS...
             $scripts_init = Join-Path -Path $global:ScriptPath -ChildPath "\modules\scripts_init.ps1"
             if (Test-Path -Path $scripts_init) {
@@ -105,13 +124,12 @@ function Start-VRMonitor {
                 Write-Host "Error: The module initialization script was not found!" -ForegroundColor Red
                 exit
             }
-
             
             Write-Log ($msg.JobStarting -f $jobName, $i) -Level DEBUG
             $i++
 
             Get-Config -ConfigFilePath $global:ConfigFilePath
-            
+
             Write-Log ($msg.DebugConfigFilePath -f $global:ConfigFilePath) -Level DEBUG
             Write-Log ($msg.DebugKnownHeadsetsPath -f $global:knownHeadsetsFilePath) -Level DEBUG
             Write-Log ($msg.DebugKnownHeadsetsInfosPath -f $global:knownHeadsetsInfosFilePath) -Level DEBUG
@@ -193,10 +211,17 @@ function Start-VRMonitor {
             Update-HeadsetMonitoringFile -knownHeadsetsInfo $knownHeadsetsInfo
 
             # Update headset video HTML files (WHEP player per headset, static - only changes when headset list changes)
-            Update-HeadsetVideoFile -knownHeadsetsInfo $knownHeadsetsInfo
+            Update-HeadsetVideoFile
 
             # Sync mediamtx restream paths with current headsets
             Sync-RestreamPaths
+
+            # Service watchdogs (moved from headsets_dashboard.ps1).
+            # Start-MediaMtx and Start-WebServer are idempotent (process / PID-file
+            # guards): cheap no-op when alive, respawn when dead.
+            try { Watch-ScrcpyProcesses } catch { Write-Log ("VRMonitor: scrcpy watchdog failed: " + $_.Exception.Message) -Level WARNING }
+            try { Start-MediaMtx }         catch { Write-Log ("VRMonitor: mediamtx watchdog failed: " + $_.Exception.Message) -Level WARNING }
+            try { Start-WebServer }        catch { Write-Log ("VRMonitor: web server watchdog failed: " + $_.Exception.Message) -Level WARNING }
 
             # Computer workload snapshot (throttled to once per minute via Update-ComputerMonitoring)
             Update-ComputerMonitoring
@@ -213,8 +238,14 @@ function Start-VRMonitor {
             }
 
             Write-Log ($msg.JobRestartsIn -f $jobName, $VRMonitor_refresh_timer) -Level DEBUG
-           
-            Start-Sleep -Seconds $VRMonitor_refresh_timer
+
+            $elapsed = 0
+            while ($elapsed -lt $VRMonitor_refresh_timer) {
+                Start-Sleep -Seconds 2
+                $elapsed += 2
+                if (-not (Get-Process -Id $parentPID -ErrorAction SilentlyContinue)) { break }
+                if (Test-Path -LiteralPath $shutdownFlagPath) { break }
+            }
         }
     }
 }

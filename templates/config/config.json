@@ -1,19 +1,20 @@
 {
   "language": "en-US",
-  "Paths":{
+  "Paths": {
     "knownHeadsetsFile": "known_headsets.csv",
     "AppCacheFileName": "known_apps.csv"
   },
   "apk":{
 	"adbWirelessActivatorFolder": "ADB Wireless activator",
 	"adbWirelessActivatorApk": "tdg.oculuswirelessadb-1.3.apk",
-	"adbWirelessActivatorPackageName":"tdg.oculuswirelessadb"
+	"adbWirelessActivatorPackageName": "tdg.oculuswirelessadb"
 	},
-  "Logging":{
+  "Logging": {
 	"Comment-possibleValues": "DEBUG,INFO,SUCCESS,WARNING,ERROR,NONE",
-    "debugLevelToFile": "INFO",
-    "debugLevelToConsole": "SUCCESS",
-	"logFile": "logfile.txt"
+    "debugLevelToFile": "SUCCESS",
+    "debugLevelToConsole": "ERROR",
+	"logFile": "logfile.txt",
+	"logRetentionDays": 30
   },
   "VRMonitor": {
     "refresh_timer": 5,
@@ -37,7 +38,7 @@
     "fps_round_step": 5,
     "min_max_size_px": 480,
     "min_fps": 15,
-    "min_bitrate_mbps": 2,
+    "min_bitrate_mbps": 3,
     "default_uncapped_max_size_px": 1280,
     "vqo_consecutive_count": 5,
     "history_file_name": "vqa_history.csv",
@@ -104,38 +105,38 @@
       },
       "Quest 2": {
         "views": {
-          "portrait": {
+          "square": {
             "left_eye": {
-              "crop": "1550:1320:130:275",
+              "crop": "1475:1475:172:190",
               "angle": 0
             },
             "right_eye": {
-              "crop": "1550:1320:2000:275",
+              "crop": "1475:1475:2028:190",
               "angle": 0
             }
           },
-          "square": {
+          "portrait": {
             "left_eye": {
-              "crop": "1320:1320:260:275",
+              "crop": "1200:1660:335:118",
               "angle": 0
             },
             "right_eye": {
-              "crop": "1320:1320:1870:275",
+              "crop": "1200:1660:2148:118",
               "angle": 0
             }
           },
           "wide": {
             "left_eye": {
-              "crop": "1840:1080:0:395",
+              "crop": "1630:1150:90:350",
               "angle": 0
             },
             "right_eye": {
-              "crop": "1840:1080:1760:395",
+              "crop": "1630:1150:1955:350",
               "angle": 0
             }
           }
         },
-        "max_size": 640,
+        "max_size": 0,
         "video_codec": "h264",
         "video_encoder": "",
         "video_buffer": 50,
@@ -143,21 +144,21 @@
       }
     }
   },
-  "Monitoring":{
-	 "HeadsetTemplate":"headset_status.pshtml",
-	 "VideoTemplate":"headset_scrcpy.pshtml",
-	 "thresholds":{
+  "Monitoring": {
+	 "HeadsetTemplate": "headset_status.pshtml",
+	 "VideoTemplate": "headset_scrcpy.pshtml",
+	 "thresholds": {
 		"headset_battery_warningLevel": 40,
 		"headset_battery_criticalLevel": 30,
 		"controllers_battery_warningLevel": 30,
-		"controllers_battery_criticalLevel": 20,
+		"controllers_battery_criticalLevel": 15,
 		"temperature_highLevel": 50
 	 }
   },
   "mediamtx": {
     "enabled": true,
-    "folder": "MediaMTX\\mediamtx_v1.18.2_windows_amd64",
-    "log_level": "info",
+    "folder": "MediaMTX\\mediamtx_v1.19.0_windows_amd64",
+    "log_level": "error",
     "rtsp_port": 8554,
     "hls_port": 8888,
     "webrtc_port": 8889,

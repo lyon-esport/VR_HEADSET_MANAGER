@@ -249,6 +249,20 @@ function Get-Config {
     $global:debugLevelToFile = $configContent.Logging.debugLevelToFile
     $global:debugLevelToConsole = $configContent.Logging.debugLevelToConsole
 
+    # Log files retention policy (days). Default 30; clamp invalid values.
+    $parsedRetention = $null
+    if ($null -ne $configContent.Logging.logRetentionDays) {
+        $parsedRetention = $configContent.Logging.logRetentionDays -as [int]
+    }
+    if ($null -eq $parsedRetention -or $parsedRetention -lt 1) {
+        if ($null -ne $configContent.Logging.logRetentionDays) {
+            Write-Host "Invalid Logging.logRetentionDays value: '$($configContent.Logging.logRetentionDays)'. Using default of 30 days." -ForegroundColor Yellow
+        }
+        $global:logRetentionDays = 30
+    } else {
+        $global:logRetentionDays = [int]$parsedRetention
+    }
+
 
 
     $validLogLevels = @("DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "NONE")

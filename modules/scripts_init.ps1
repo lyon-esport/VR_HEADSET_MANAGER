@@ -67,6 +67,7 @@ $moduleFiles = Get-ChildItem -Path $ModulesPath -Filter "*.ps1" -File | Sort-Obj
     Where-Object {
         $_.Name -notlike "*_init.ps1" -and
         $_.Name -notlike "headsets_dashboard.ps1" -and
+        $_.Name -notlike "reaper.ps1" -and
         $_.Name -notlike "*_test.ps1" -and
         ($vqaPreEnabled -or $_.Name -ne "video_quality_automation.ps1")
     }
@@ -142,6 +143,13 @@ $moduleFiles = Get-ChildItem -Path $ModulesPath -Filter "*.ps1" -File | Sort-Obj
         Write-Log "Configuration file $ConfigFilePath loaded successfully" -Level DEBUG
         Write-Host "DEBUG global:knownHeadsetsFile = $($global:knownHeadsetsFile)" -ForegroundColor Magenta
         Write-Host "DEBUG global:knownHeadsetsFilePath = $($global:knownHeadsetsFilePath)" -ForegroundColor Magenta
+
+        # Log files retention purge - main process only, once per startup.
+        if (-not $global:IsVRMonitorJob -and -not $global:IsDashboardProcess -and -not $global:IsWebServerProcess) {
+            if (Get-Command Remove-OldLogFiles -ErrorAction SilentlyContinue) {
+                try { Remove-OldLogFiles } catch { Write-Log ("Log retention purge failed: " + $_.Exception.Message) -Level WARNING }
+            }
+        }
     }
 
     # Load centralized translations based on selected language.
@@ -216,24 +224,51 @@ function Invoke-AppShutdown {
     Gracefully shuts down all app services.
 
     .DESCRIPTION
-    Stops scrcpy processes, resets awake mode, disconnects ADB, stops the web server,
-    cleans up the PID file, and stops mediamtx. Designed to be called both from the
-    main menu quit handler ('0') and from headsets_dashboard.ps1 when the parent process
-    exits. Each step is wrapped defensively so a missing $msg or failed function does
-    not prevent the remaining steps from running.
+    Race-free shutdown:
+      1. Writes data\shutdown.flag so Start-VRMonitor exits cooperatively at the
+         top of its next loop iteration (no more service restarts).
+      2. Waits up to ~VRMonitor refresh interval + 2s for the job to leave Running
+         state, then proceeds with ordered teardown.
+      3. Stops scrcpy, web server, mediamtx, dashboard.
+      4. Drops data\reaper_exit.flag so the standalone reaper exits without doing
+         anything (services are already cleanly stopped).
     #>
-    try { Stop-VRMonitor }             catch { }
+    $shutdownFlagPath   = Join-Path $global:ScriptPath "data\shutdown.flag"
+    $reaperExitFlagPath = Join-Path $global:ScriptPath "data\reaper_exit.flag"
+
+    # 1. Signal VRMonitor to exit its loop before we tear down services.
+    try { New-Item -ItemType File -Path $shutdownFlagPath -Force | Out-Null } catch { }
+
+    # 2. Wait for the job to leave Running. Refresh-timer + a small grace period.
+    try {
+        $job = Get-Job -Name "VRMonitor" -ErrorAction SilentlyContinue
+        if ($job) {
+            $waitSec  = [int]$global:VRMonitor_refresh_timer + 2
+            if ($waitSec -lt 4) { $waitSec = 4 }
+            $deadline = (Get-Date).AddSeconds($waitSec)
+            while ((Get-Date) -lt $deadline) {
+                $state = (Get-Job -Name "VRMonitor" -ErrorAction SilentlyContinue).State
+                if (-not $state -or $state -ne 'Running') { break }
+                Start-Sleep -Milliseconds 250
+            }
+        }
+    } catch { }
+
+    try { Stop-VRMonitor }            catch { }
     try { Stop-Scrcpy }               catch { }
     try { Reset-AwakeMode }           catch { }
-    try { Disconnect-ADBConnections }  catch { }
+    try { Disconnect-ADBConnections } catch { }
 
-    # Kill the dashboard FIRST so it cannot restart mediamtx after we stop it
+    # Kill the dashboard (if any) before stopping services so its self-exit
+    # parent-PID check does not race against us.
     try {
         $dashProcs = Get-WmiObject -Class Win32_Process -Filter "ParentProcessId = $PID" |
             Where-Object { $_.CommandLine -match "headsets_dashboard\.ps1" }
         foreach ($dp in $dashProcs) {
             Stop-Process -Id $dp.ProcessId -Force -ErrorAction SilentlyContinue
         }
+        $dashPidFile = Join-Path $global:ScriptPath "data\dashboard.pid"
+        if (Test-Path -LiteralPath $dashPidFile) { Remove-Item -LiteralPath $dashPidFile -Force -ErrorAction SilentlyContinue }
     } catch { }
 
     try { Stop-WebServer } catch { }
@@ -242,6 +277,14 @@ function Invoke-AppShutdown {
     # Restore any VQA-applied parameters back to operator originals before exit.
     if ($global:VQA_Enabled -and (Get-Command Restore-VqaOriginals -ErrorAction SilentlyContinue)) {
         try { Restore-VqaOriginals | Out-Null } catch { }
+    }
+
+    # 4. Tell the reaper graceful shutdown is done so it exits without acting.
+    try { New-Item -ItemType File -Path $reaperExitFlagPath -Force | Out-Null } catch { }
+
+    # Clean up our own signaling flag.
+    if (Test-Path -LiteralPath $shutdownFlagPath) {
+        Remove-Item -LiteralPath $shutdownFlagPath -Force -ErrorAction SilentlyContinue
     }
 
     Remove-Variable moduleSnapshots -Scope Global -ErrorAction SilentlyContinue

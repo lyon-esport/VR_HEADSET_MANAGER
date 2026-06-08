@@ -62,6 +62,7 @@
       align-items: center;
       min-width: 0;
       overflow: hidden;
+      flex: 1 1 auto;
     }
     .card-name-display .card-row-edit-btn { flex-shrink: 0; }
     .card-name {
@@ -97,6 +98,13 @@
     .dot-red    { background: var(--ping-ko); }
     .dot-blue   { background: var(--scrcpy-ok); }
     .dot-grey   { background: #333; }
+    .headset-card.dots-compact .status-dot-label { display: none; }
+    .headset-card.dots-compact .status-dot { gap: 0; }
+    .headset-card.dots-compact .card-dots {
+      flex-direction: column;
+      align-items: center;
+      gap: 3px;
+    }
 
     /* Card body */
     .card-body {
@@ -1147,7 +1155,29 @@
       displayNames.forEach(function(dn) { headsetVisible[dn] = true; });
     }
 
-    // â"€â"€ Card building â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+    function updateCardCompactness(card) {
+      if (!card) return;
+      requestAnimationFrame(function() {
+        var nameEl = card.querySelector('.card-name');
+        if (!nameEl) return;
+        card.classList.remove('dots-compact');
+        // Force a synchronous reflow before re-measuring after the class removal.
+        void nameEl.offsetWidth;
+        if (nameEl.scrollWidth > nameEl.clientWidth + 1) {
+          card.classList.add('dots-compact');
+        }
+      });
+    }
+
+    var _compactResizeTimer = null;
+    window.addEventListener('resize', function() {
+      if (_compactResizeTimer) clearTimeout(_compactResizeTimer);
+      _compactResizeTimer = setTimeout(function() {
+        document.querySelectorAll('#cards-grid .headset-card').forEach(updateCardCompactness);
+      }, 100);
+    });
+
+    // Card building
     function buildCards(configs) {
       var grid = document.getElementById('cards-grid');
       grid.innerHTML = '';
@@ -1201,14 +1231,14 @@
               '</button>' +
             '</span>' +
             '<div class="card-dots">' +
-              '<span class="status-dot" data-dot-ping="' + dn + '">' +
-                '<span class="dot dot-grey"></span>PING' +
+              '<span class="status-dot" data-dot-ping="' + dn + '" title="PING">' +
+                '<span class="dot dot-grey"></span><span class="status-dot-label">PING</span>' +
               '</span>' +
-              '<span class="status-dot" data-dot-adb="' + dn + '">' +
-                '<span class="dot dot-grey"></span>ADB' +
+              '<span class="status-dot" data-dot-adb="' + dn + '" title="ADB">' +
+                '<span class="dot dot-grey"></span><span class="status-dot-label">ADB</span>' +
               '</span>' +
-              '<span class="status-dot" data-dot-scrcpy="' + dn + '">' +
-                '<span class="dot dot-grey"></span>SCRCPY' +
+              '<span class="status-dot" data-dot-scrcpy="' + dn + '" title="SCRCPY">' +
+                '<span class="dot dot-grey"></span><span class="status-dot-label">SCRCPY</span>' +
               '</span>' +
             '</div>' +
             '<button class="card-remove-btn" data-remove-headset="' + dn + '" data-remove-name="' + esc(cfg.Name) + '" title="Remove headset">' +
@@ -1342,6 +1372,7 @@
 
         card.setAttribute('draggable', 'false');
         grid.appendChild(card);
+        updateCardCompactness(card);
       });
 
       // ── Drag-and-drop reordering ──────────────────────────────────────
@@ -1500,6 +1531,8 @@
               document.getElementById('name-display-' + dn).style.display = '';
               document.getElementById('name-edit-' + dn).style.display = 'none';
               _editingField = false;
+              var _card = document.getElementById('name-val-' + dn).closest('.headset-card');
+              if (_card) updateCardCompactness(_card);
             } else {
               input.style.borderBottomColor = 'var(--ping-ko)';
               setTimeout(function() { input.style.borderBottomColor = ''; }, 1200);

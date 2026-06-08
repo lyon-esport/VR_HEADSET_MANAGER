@@ -84,9 +84,12 @@ function Start-MediaMtx {
         Write-Log ($msg.MediaMtxNotFound -f $global:mediamtxFilePath) -Level ERROR
         return
     }
+    $mediamtxPidFile = Join-Path $global:ScriptPath "data\mediamtx.pid"
     $running = Get-Process -Name "mediamtx" -ErrorAction SilentlyContinue
     if ($running) {
         Write-Log ($msg.MediaMtxAlreadyRunning -f $running.Id) -Level DEBUG
+        # Refresh stale PID file (e.g. crash + restart by user)
+        $running.Id | Set-Content -LiteralPath $mediamtxPidFile -Force -ErrorAction SilentlyContinue
         return
     }
     Write-Log $msg.MediaMtxStarting -Level INFO
@@ -100,6 +103,7 @@ function Start-MediaMtx {
                               -PassThru `
                               -ErrorAction Stop
         Start-Sleep -Milliseconds 1500   # give mediamtx time to bind ports
+        $proc.Id | Set-Content -LiteralPath $mediamtxPidFile -Force -ErrorAction SilentlyContinue
         Write-Log ($msg.MediaMtxStarted -f $proc.Id) -Level SUCCESS
     }
     catch {
@@ -122,6 +126,12 @@ function Stop-MediaMtx {
     }
     catch {
         Write-Log ($msg.MediaMtxStopFailed -f $_) -Level ERROR
+    }
+    finally {
+        $mediamtxPidFile = Join-Path $global:ScriptPath "data\mediamtx.pid"
+        if (Test-Path -LiteralPath $mediamtxPidFile) {
+            Remove-Item -LiteralPath $mediamtxPidFile -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 

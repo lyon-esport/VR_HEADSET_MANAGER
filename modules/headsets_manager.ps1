@@ -174,7 +174,7 @@ function Show-HeadsetsTableColored {
     $knownHeadsetsInfo = @(Import-Csv -LiteralPath $knownHeadsetsInfosFilePath -Delimiter ";" )
     # Check whether data is present
     if (-not $knownHeadsetsInfo -or $knownHeadsetsInfo.Count -eq 0) {
-        Write-Log ($msg.NoHeadsetInInfosFile -f $knownHeadsetsInfosFilePath) -Level WARNING
+        Write-Log ($msg.NoHeadsetInInfosFile -f $knownHeadsetsInfosFilePath) -Level DEBUG
         return
     }
 
@@ -459,7 +459,7 @@ function Rename-Headset {
     # 4. Regenerate [video].html for the new name
     $renamedRow = $headsets | Where-Object { $_.Name -eq $NewName }
     if ($renamedRow) {
-        Update-HeadsetVideoFile -knownHeadsetsInfo ([System.Collections.ArrayList]@($renamedRow))
+        Update-HeadsetVideoFile
         Write-Log ("Regenerated [video].html for '$newDisplayName'.") -Level DEBUG
     }
 
@@ -566,6 +566,8 @@ function Save-Headsets {
     }
     Write-Log ($msg.HeadsetsSaved -f $FilePath) -Level INFO
     Write-htmlMonitor $newHeadsets
+    Update-HeadsetMonitoringFile
+    Update-HeadsetVideoFile
     # Create timer files for any newly added headsets (non-destructive: skips existing files)
     Initialize-TimerFiles
 } #OK

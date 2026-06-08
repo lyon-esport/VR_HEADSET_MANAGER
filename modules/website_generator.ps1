@@ -6,8 +6,7 @@ $script:_monitoringHashes = @{}
 
 function Update-HeadsetMonitoringFile {
     param(
-        [Parameter(Mandatory=$true)]
-        [System.Collections.ArrayList]$knownHeadsetsInfo,
+        [System.Collections.ArrayList]$knownHeadsetsInfo = $null,
 
         #[string]$templatePath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\template\headset_status_v2.pshtml") ,
         [string]$templatePath = $global:Monitoring_headsetTemplate ,
@@ -18,6 +17,14 @@ function Update-HeadsetMonitoringFile {
     if (-not (Test-Path -LiteralPath $templatePath)) {
         Write-Host "Error: The headset monitoring template file does not exist at path $templatePath" -ForegroundColor Red
         return
+    }
+
+    if ($null -eq $knownHeadsetsInfo) {
+        $raw = @()
+        if ($global:knownHeadsetsInfosFilePath -and (Test-Path -LiteralPath $global:knownHeadsetsInfosFilePath)) {
+            $raw = @(Import-Csv -LiteralPath $global:knownHeadsetsInfosFilePath -Delimiter ";")
+        }
+        $knownHeadsetsInfo = [System.Collections.ArrayList]$raw
     }
 
     # Generate the dynamic content for headsets
@@ -85,9 +92,6 @@ function Write-htmlMonitor {
 # Output file naming: <DisplayName>[video].html  e.g. Q3_BLUE[video].html
 function Update-HeadsetVideoFile {
     param(
-        [Parameter(Mandatory=$true)]
-        [System.Collections.ArrayList]$knownHeadsetsInfo,
-
         [string]$templatePath = $global:Monitoring_videoTemplate,
 
         [string]$outputPath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\generated\")
@@ -99,13 +103,11 @@ function Update-HeadsetVideoFile {
     }
 
     $allKnown = Get-KnownHeadsets
-    foreach ($headset in $knownHeadsetsInfo) {
+    foreach ($headset in $allKnown) {
         # Compute the mediamtx stream path from the headset name.
         # Matches ConvertTo-RestreamPathName in restream.ps1:
         #   Convert-Displayname replaces spaces with underscores, then lowercase.
         $streamPath = (Convert-Displayname -displayName $headset.Name).ToLower()
-
-        $km = $allKnown | Where-Object { $_.Name -eq $headset.Name } | Select-Object -First 1
 
         $videoInfo = @{
             name                  = $headset.Name
@@ -113,7 +115,7 @@ function Update-HeadsetVideoFile {
             stream_path           = $streamPath
             mediamtx_webrtc_port  = $global:mediamtxWebrtcPort
             mediamtx_hls_port     = $global:mediamtxHlsPort
-            headset_id            = if ($km) { [int]$km.ID } else { 0 }
+            headset_id            = [int]$headset.ID
         }
 
         $videoHtml = Invoke-EpsTemplate -Path $templatePath -Safe -binding $videoInfo

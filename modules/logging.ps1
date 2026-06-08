@@ -73,3 +73,39 @@ Write-Log -Message "Process completed successfully" -Level "INFO"
 Write-Log -Message "Warning: A configuration item is missing" -Level "WARNING"
 Write-Log -Message "Fatal error: Cannot continue" -Level "ERROR"
 #>
+
+
+function Remove-OldLogFiles {
+    if (-not $global:logFolder -or -not (Test-Path -LiteralPath $global:logFolder)) { return }
+
+    $retention = if ($global:logRetentionDays -and $global:logRetentionDays -gt 0) { [int]$global:logRetentionDays } else { 30 }
+    $cutoff = (Get-Date).AddDays(-$retention)
+
+    try {
+        $files = Get-ChildItem -LiteralPath $global:logFolder -Filter 'log_*.txt' -File -ErrorAction Stop
+    } catch {
+        Write-Log "Log retention: failed to list folder '$($global:logFolder)': $($_.Exception.Message)" -Level WARNING
+        return
+    }
+
+    $deleted = 0
+    foreach ($file in $files) {
+        if ($global:logFile -and ($file.FullName -eq $global:logFile)) { continue }
+        if ($file.LastWriteTime -ge $cutoff) { continue }
+        try {
+            Remove-Item -LiteralPath $file.FullName -Force -ErrorAction Stop
+            Write-Log "Deleted old log file: $($file.Name)" -Level INFO
+            $deleted++
+        } catch {
+            Write-Log "Failed to delete log file '$($file.Name)': $($_.Exception.Message)" -Level WARNING
+        }
+    }
+
+    if ($deleted -gt 0) {
+        if ($global:msg -and $global:msg.LogRetentionPurged) {
+            Write-Log ($global:msg.LogRetentionPurged -f $deleted, $retention) -Level SUCCESS
+        } else {
+            Write-Log "Deleted $deleted old log file(s) older than $retention days." -Level SUCCESS
+        }
+    }
+}
