@@ -43,6 +43,7 @@ desktop.ini
 OBS/timer/
 .gdoc
 /.github/
+/.claude/
 *_test.ps1
 /version.txt
 
