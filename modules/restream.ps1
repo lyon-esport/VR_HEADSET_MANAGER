@@ -55,6 +55,7 @@ hlsAddress: :$($global:mediamtxHlsPort)
 
 webrtc: true
 webrtcAddress: :$($global:mediamtxWebrtcPort)
+webrtcICEUDPMuxAddress: :$($global:mediamtxWebrtcPort)
 
 api: true
 apiAddress: :$($global:mediamtxApiPort)
@@ -179,7 +180,7 @@ function Add-RestreamPath {
     # -rtsp_transport tcp: avoids UDP hole-punching issues on loopback.
     # -pkt_size 1316: keeps RTP packets within Ethernet MTU (mediamtx warns at >1440).
     $cmd = "$ffmpegFwd -f gdigrab -framerate $($global:mediamtxFramerate) -draw_mouse 0" +
-           " -i title=$windowTitle -pix_fmt yuv420p -c:v libx264 -preset ultrafast" +
+           " -i title=$windowTitle -vf scale=trunc(iw/2)*2:trunc(ih/2)*2 -pix_fmt yuv420p -c:v libx264 -preset ultrafast" +
            " -tune zerolatency -b:v $($global:mediamtxBitrate)" +
            " -maxrate $($global:mediamtxBitrate) -bufsize $($global:mediamtxBitrate)" +
            " -pkt_size 1316 -rtsp_transport tcp -f rtsp $rtspUrl"
