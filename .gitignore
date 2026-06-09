@@ -3,22 +3,19 @@
 *.logs
 
 # ignore config files
-config/*
+config/
 /*.json
 !/templates/*
 
-# ignore known-headsets data
+# ignore user data
 /data/
-known_headsets*.csv
 
 # ignore generated html files
-/website/*\[video].html
-/website/*\[monitoring].html
-website/monitor.html
+website/generated/
 website/timer/*
 website/assets/app_icons/*
-website/generated/
-!/website/template/
+
+
 
 # ignore records
 records/*
@@ -28,6 +25,7 @@ scrcpy_manualScripts/
 
 # ignore large sources
 /sources/ffmpeg-8.1-essentials_build.zip
+/sources/Archives/
 
 #Web and app data
 /app_icons
