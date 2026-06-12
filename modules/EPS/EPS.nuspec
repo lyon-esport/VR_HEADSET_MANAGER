@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2011/08/nuspec.xsd">
+  <metadata>
+    <id>EPS</id>
+    <version>0.4.0</version>
+    <authors>Dave Wu, Dominique Broeglin</authors>
+    <owners>Dave Wu, Dominique Broeglin</owners>
+    <licenseUrl>https://opensource.org/licenses/MIT</licenseUrl>
+    <projectUrl>https://github.com/straightdave/eps</projectUrl>
+    <requireLicenseAcceptance>true</requireLicenseAcceptance>
+    <description>EPS (Embedded PowerShell), inspired by ERB (see https://en.wikipedia.org/wiki/ERuby), is a templating language that embeds PowerShell code into a text document. It is conceptually and syntactically similar to ERB for Ruby or Twig (see http://twig.sensiolabs.org/) for PHP.
+EPS can be used to generate any kind of text. The example below illustrates generating plain text, but it could be used to generate HTML in a web application or PowerShell code as in the Forge Module generator (see https://github.com/dbroeglin/Forge.Module)</description>
+    <releaseNotes />
+    <copyright>(c) 2014 Dave Wu. All rights reserved.</copyright>
+    <tags>PowerShell Template PSModule PSIncludes_Function PSFunction_Invoke-EpsTemplate PSCommand_Invoke-EpsTemplate</tags>
+  </metadata>
+</package>

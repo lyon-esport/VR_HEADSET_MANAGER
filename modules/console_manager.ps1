@@ -763,6 +763,20 @@ function Show-SubMenu-Recording { #CHOICE 6
             Write-Log -Message ($msg.DeactivateRecording -f $choice, $headsets[$choice-1].Name) -Level "INFO"
             $headsets[$choice-1].Record = $false
         } else {
+            $driveInfo = Get-RecordingDriveInfo
+            if ($driveInfo -and $driveInfo.IsLow) {
+                Write-Host ""
+                Write-Host ("[WARNING] Recording drive {0}: only {1} GB free (minimum: {2} GB). Recording cannot be enabled." -f $driveInfo.DriveLetter, $driveInfo.FreeGB, $driveInfo.MinFreeGB) -ForegroundColor Red
+                Write-Host "Options: [C] Change record folder   [L] Change minimum space limit   [Enter] Cancel" -ForegroundColor Yellow
+                $key = [Console]::ReadKey($true)
+                if ($key.Key -eq 'C') {
+                    Write-Host "Edit 'scrcpy.recordFolder' in config.json to point to a drive with more space." -ForegroundColor Cyan
+                } elseif ($key.Key -eq 'L') {
+                    Write-Host "Edit 'scrcpy.recordMinFreeSpaceGB' in config.json to lower the required free space." -ForegroundColor Cyan
+                }
+                Start-Sleep -Seconds 2
+                break
+            }
             Write-Log -Message ($msg.ActivateRecording -f $choice, $headsets[$choice-1].Name) -Level "INFO"
             $headsets[$choice-1].Record = $true
         }

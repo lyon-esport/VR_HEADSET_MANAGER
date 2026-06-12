@@ -13,22 +13,6 @@ if (Test-Path -Path $scripts_init) {
 #>
 
 
-# Install or import EPS module
-    if (-not (Get-Module -ListAvailable -Name EPS)) {
-        Install-Module -Name EPS -Scope CurrentUser -Force
-    } 
-    else {
-        Import-Module EPS
-    }
-# Install or import Pode module
-    if (-not (Get-Module -ListAvailable -Name Pode)) {
-        Install-Module -Name Pode -Scope CurrentUser -Force
-    } 
-    else {
-        Import-Module Pode
-    }
-
-
 # Get the base path
 $global:ScriptPath = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 
@@ -49,6 +33,17 @@ $ModulesPath = Join-Path -Path $global:ScriptPath -ChildPath "modules"
             Write-Warning "The script cannot continue without the modules folder $ModulesPath."
             return
     }
+
+# Load EPS from bundled local copy (no NuGet / internet required)
+if (-not (Get-Module -Name EPS)) {
+    $_epsManifest = Join-Path $ModulesPath "EPS\EPS.psd1"
+    if (Test-Path -LiteralPath $_epsManifest) {
+        Import-Module -Name $_epsManifest -Global
+    } else {
+        Write-Host "[ERROR] EPS module not found at $_epsManifest" -ForegroundColor Red
+        exit 1
+    }
+}
 
 # Pre-read config.json (cheap, no globals) to decide whether to load the VQA
 # module. When VideoQualityAutomation.enabled is false we skip

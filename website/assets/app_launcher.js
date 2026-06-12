@@ -423,7 +423,7 @@
     document.getElementById('lm-close').addEventListener('click', closeLaunchModal);
     document.getElementById('lm-search').addEventListener('input', function () { _applySearch(this.value.trim()); });
     document.getElementById('lm-search').addEventListener('search', function () { _applySearch(this.value.trim()); });
-    document.getElementById('app-launcher').addEventListener('click', function (e) { if (e.target === this) closeLaunchModal(); });
+    // click-outside intentionally disabled — use Escape or the close button
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && _launchDn) closeLaunchModal(); });
 
     document.getElementById('lm-system-toggle').addEventListener('click', function () {

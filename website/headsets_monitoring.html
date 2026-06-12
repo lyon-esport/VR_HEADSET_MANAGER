@@ -281,6 +281,12 @@
     .comp-refresh-btn:hover { color: #3b82f6; border-color: rgba(59,130,246,0.5); background: rgba(59,130,246,0.08); }
     .comp-refresh-btn.spinning svg { animation: comp-spin 0.7s linear infinite; }
     @keyframes comp-spin { to { transform: rotate(360deg); } }
+
+    .vqa-hdr-short { display: none; }
+    @media (max-width: 1100px) {
+      .vqa-hdr-full  { display: none; }
+      .vqa-hdr-short { display: inline; }
+    }
   </style>
 </head>
 <body>
@@ -343,10 +349,18 @@
         <span class="pill pill-green" id="vqa-status-pill" style="margin-left:10px;color:#15803d">OK</span>
         <!-- Header badge is display-only: ON if any of the 3 per-section auto-apply
              flags is true, OFF otherwise. The actual toggles live in each card title. -->
-        <span class="comp-refresh-btn" id="vqa-vqo-btn" title="ON if any per-section auto-apply is enabled" style="margin-left:auto;gap:8px;cursor:default">
-          <span>VIDEO QUALITY AUTO-OPTIMIZER</span>
-          <span id="vqa-vqo-state" style="padding:2px 8px;border-radius:10px;font-size:10px;font-weight:800;background:#dc2626;color:#fff">OFF</span>
-        </span>
+        <button class="comp-refresh-btn" id="vqa-hdr-profiles-btn" style="margin-left:auto;gap:6px" onclick="event.preventDefault();event.stopPropagation();toggleVqoSection('profiles')">
+          <span class="vqa-hdr-full">Capture Resolution</span><span class="vqa-hdr-short">Size</span>
+          <span id="vqa-hdr-profiles-state" style="padding:2px 7px;border-radius:10px;font-size:10px;font-weight:800;background:#dc2626;color:#fff">OFF</span>
+        </button>
+        <button class="comp-refresh-btn" id="vqa-hdr-headsets-btn" style="gap:6px" onclick="event.preventDefault();event.stopPropagation();toggleVqoSection('headsets')">
+          <span class="vqa-hdr-full">FPS/Bitrate</span><span class="vqa-hdr-short">FPS</span>
+          <span id="vqa-hdr-headsets-state" style="padding:2px 7px;border-radius:10px;font-size:10px;font-weight:800;background:#dc2626;color:#fff">OFF</span>
+        </button>
+        <button class="comp-refresh-btn" id="vqa-hdr-mediamtx-btn" style="gap:6px" onclick="event.preventDefault();event.stopPropagation();toggleVqoSection('mediamtx')">
+          <span>MediaMTX</span>
+          <span id="vqa-hdr-mediamtx-state" style="padding:2px 7px;border-radius:10px;font-size:10px;font-weight:800;background:#dc2626;color:#fff">OFF</span>
+        </button>
         <svg class="chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
       </summary>
       <div class="comp-body" id="vqa-body" style="grid-template-columns:1fr">
@@ -602,6 +616,24 @@
           '<div class="comp-row"><span class="lbl">Used</span><span class="val">' + esc(r.UsedGB) + ' GB (' + esc(r.UsedPercent) + '%)</span></div>' +
           '<div class="comp-row"><span class="lbl">Free</span><span class="val">' + esc(r.FreeGB) + ' GB</span></div>' +
           compBar(r.UsedPercent) +
+          '</div>';
+      }
+
+      // Recording drive card
+      if (d.RecordingDrive) {
+        var rd = d.RecordingDrive;
+        var rdLow = !!rd.IsLow;
+        html += '<div class="comp-card">' +
+          '<div class="comp-card-title" style="' + (rdLow ? 'color:#ef4444' : '') + '">' +
+            'Record Drive (' + esc(rd.DriveLetter) + ':)' +
+            (rdLow ? '&nbsp;<span style="color:#ef4444;font-size:9px;font-weight:800;letter-spacing:0.05em">LOW</span>' : '') +
+          '</div>' +
+          (rd.DriveType ? '<div class="comp-row"><span class="lbl">Type</span><span class="val">' + esc(rd.DriveType) + (rd.SpeedGbps ? ' / ' + esc(rd.SpeedGbps) : '') + '</span></div>' : '') +
+          '<div class="comp-row"><span class="lbl">Total</span><span class="val">' + esc(rd.TotalGB) + ' GB</span></div>' +
+          '<div class="comp-row"><span class="lbl">Used</span><span class="val">' + esc(rd.UsedGB) + ' GB (' + esc(rd.UsedPercent) + '%)</span></div>' +
+          '<div class="comp-row"><span class="lbl">Free</span><span class="val" style="' + (rdLow ? 'color:#ef4444;font-weight:700' : '') + '">' + esc(rd.FreeGB) + ' GB</span></div>' +
+          '<div class="comp-row"><span class="lbl">Min free</span><span class="val" style="color:#888">' + esc(rd.MinFreeGB) + ' GB</span></div>' +
+          (function() { var p = Math.min(100, Math.max(0, rd.UsedPercent || 0)); return '<div class="comp-bar-wrap"><div class="comp-bar" style="width:' + p + '%;background:' + (rdLow ? '#ef4444' : '#3b82f6') + '"></div></div>'; })() +
           '</div>';
       }
 
@@ -915,20 +947,27 @@
         });
     }
 
-    // Repaint the ON/OFF badge inside one of the 3 per-section AUTO-APPLY buttons.
+    // Repaint the ON/OFF badge inside one of the 3 per-section AUTO-APPLY buttons (card + header).
     function vqaPaintAutoApplyState(section, enabled) {
       var st = document.getElementById('vqa-auto-' + section + '-state');
-      if (!st) return;
-      st.textContent      = enabled ? 'ON' : 'OFF';
-      st.style.background = enabled ? '#16a34a' : '#dc2626';
-      st.style.color      = '#ffffff';
+      if (st) {
+        st.textContent      = enabled ? 'ON' : 'OFF';
+        st.style.background = enabled ? '#16a34a' : '#dc2626';
+        st.style.color      = '#ffffff';
+      }
+      var hst = document.getElementById('vqa-hdr-' + section + '-state');
+      if (hst) {
+        hst.textContent      = enabled ? 'ON' : 'OFF';
+        hst.style.background = enabled ? '#16a34a' : '#dc2626';
+        hst.style.color      = '#ffffff';
+      }
     }
 
     // Repaint the derived header VIDEO QUALITY AUTO-OPTIMIZER badge.
     function vqaPaintVqoState(enabled) {
       var st = document.getElementById('vqa-vqo-state');
       if (!st) return;
-      st.textContent      = enabled ? 'ON' : 'OFF';
+      st.textContent      = enabled ? 'ENABLED' : 'DISABLED';
       st.style.background = enabled ? '#16a34a' : '#dc2626';
       st.style.color      = '#ffffff';
     }

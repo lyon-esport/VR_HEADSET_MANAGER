@@ -53,6 +53,7 @@
   "scrcpy":{
 	  "folder":"scrcpy-win64-v4.0",
 	  "recordFolder":"C:\\DATA\\MEDIA\\VR_Records",
+	  "recordMinFreeSpaceGB": 5,
 	  "parameters": {
       "Quest 3": {
         "views": {

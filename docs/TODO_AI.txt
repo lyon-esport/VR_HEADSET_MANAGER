@@ -152,6 +152,23 @@ Config schema parity: pwsh scripts\Test-ConfigSchema.ps1 must exit 0.
 
 ------------------------------------------
 
+# PROFILE EDITOR #
+
+While creating or modifying a capture profile, it should get a screenshot of the full view of a connected headset (to select from a list if any is connected).
+Then it should allow clicking on the windows and select px position of 2 dots, to define the screen 
+
+
+------------------------------------------
+
+
+
+
+
+
+
+
+
+
 
 #### RELEASE ####
 

@@ -529,6 +529,32 @@ try {
                 $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
                 if ($headset) {
                     $newVal = if ([string]$json.value -eq 'True' -or [string]$json.value -eq 'true') { 'True' } else { 'False' }
+
+                    # Guard: block enabling when recording drive space is low
+                    if ($newVal -eq 'True') {
+                        $rdInfo = $null
+                        try {
+                            if (Test-Path -LiteralPath $global:computerMonitoringFilePath) {
+                                $monJson = Get-Content -LiteralPath $global:computerMonitoringFilePath -Raw -ErrorAction Stop | ConvertFrom-Json
+                                $rdInfo  = $monJson.RecordingDrive
+                            }
+                        } catch {}
+                        if (-not $rdInfo) {
+                            try { $rdInfo = Get-RecordingDriveInfo } catch {}
+                        }
+                        if ($rdInfo -and $rdInfo.IsLow) {
+                            $lowBody = ('{"ok":false,"storageLow":true,"freeGB":' + $rdInfo.FreeGB + ',"minFreeGB":' + $rdInfo.MinFreeGB + ',"driveLetter":"' + $rdInfo.DriveLetter + '"}')
+                            $respBytes = [System.Text.Encoding]::UTF8.GetBytes($lowBody)
+                            $response.StatusCode      = 200
+                            $response.ContentType     = 'application/json; charset=utf-8'
+                            $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                            $response.ContentLength64 = $respBytes.Length
+                            $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+                            $response.Close()
+                            continue
+                        }
+                    }
+
                     Update-HeadsetField -headsets $rows -ID ([int]$headset.ID) -Field "Record" -NewValue $newVal
                     $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
                 } else {
@@ -547,6 +573,32 @@ try {
                     $response.ContentLength64 = $errBytes.Length
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: GET /api/recording-drive  - returns RecordingDrive node from computer_monitoring.json
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/recording-drive') {
+            try {
+                $rdInfo = $null
+                try {
+                    if (Test-Path -LiteralPath $global:computerMonitoringFilePath) {
+                        $monJson = Get-Content -LiteralPath $global:computerMonitoringFilePath -Raw -ErrorAction Stop | ConvertFrom-Json
+                        $rdInfo  = $monJson.RecordingDrive
+                    }
+                } catch {}
+                if (-not $rdInfo) {
+                    try { $rdInfo = Get-RecordingDriveInfo } catch {}
+                }
+                if ($rdInfo) {
+                    Send-JsonResponse -Response $response -Body $rdInfo
+                } else {
+                    Send-JsonResponse -Response $response -Body @{ error = 'unavailable' }
+                }
+            } catch {
+                try { Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = 'server error' } } catch {}
             } finally {
                 $response.Close()
             }
@@ -952,7 +1004,7 @@ try {
                 try {
                     $liveConfig = Get-Content -LiteralPath $global:configFilePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
                     if ($modelParam -and $liveConfig.scrcpy.parameters.$modelParam -and $liveConfig.scrcpy.parameters.$modelParam.views) {
-                        $views = @($liveConfig.scrcpy.parameters.$modelParam.views | Get-Member -MemberType NoteProperty | Select-Object -ExpandProperty Name)
+                        $views = @($liveConfig.scrcpy.parameters.$modelParam.views.PSObject.Properties | Select-Object -ExpandProperty Name)
                     }
                 } catch {}
                 $json = $views | ConvertTo-Json -Compress

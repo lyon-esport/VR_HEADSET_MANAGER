@@ -136,7 +136,8 @@ function Get-Config {
     } else {
         $global:scrcpyRecordFolder = Join-Path -Path $global:ScriptPath -ChildPath $configContent.scrcpy.recordFolder
     }
-   
+    $global:scrcpyRecordMinFreeSpaceGB = if ($null -ne $configContent.scrcpy.recordMinFreeSpaceGB) { [int]$configContent.scrcpy.recordMinFreeSpaceGB } else { 5 }
+
 
     $global:ADBWirelessActivatorAPK = Join-Path -Path $(Join-Path -Path $sourcesPath -ChildPath $configContent.apk.adbWirelessActivatorFolder) -ChildPath $configContent.apk.adbWirelessActivatorApk
     $global:ADBWirelessActivatorPackageName = $configContent.apk.adbWirelessActivatorPackageName

@@ -527,6 +527,75 @@ function Get-AppWorkload {
 }
 
 
+function Get-RecordingDriveInfo {
+    if ([string]::IsNullOrEmpty($global:scrcpyRecordFolder)) { return $null }
+
+    # Extract drive letter (first char when second char is ':')
+    $driveLetter = $null
+    if ($global:scrcpyRecordFolder.Length -ge 2 -and $global:scrcpyRecordFolder[1] -eq ':') {
+        $driveLetter = $global:scrcpyRecordFolder[0].ToString().ToUpper()
+    }
+    if (-not $driveLetter) { return $null }
+
+    # Space data via Get-PSDrive (no WMI, PS-native)
+    try {
+        $psDrive = Get-PSDrive -Name $driveLetter -ErrorAction Stop
+        $freeBytes  = $psDrive.Free
+        $usedBytes  = $psDrive.Used
+        $totalBytes = $freeBytes + $usedBytes
+        $totalGB    = [Math]::Round($totalBytes / 1GB, 1)
+        $usedGB     = [Math]::Round($usedBytes  / 1GB, 1)
+        $freeGB     = [Math]::Round($freeBytes  / 1GB, 1)
+        $usedPct    = if ($totalBytes -gt 0) { [int]([Math]::Round($usedBytes / $totalBytes * 100)) } else { 0 }
+        $freePct    = 100 - $usedPct
+    } catch {
+        Write-Log ("Get-RecordingDriveInfo: failed to read drive {0}: {1}" -f $driveLetter, $_) -Level WARNING
+        return $null
+    }
+
+    # Drive type detection via Storage module (Win8+)
+    $driveType = "Unknown"
+    $speedLabel = $null
+    try {
+        $partition = Get-Partition -DriveLetter $driveLetter -ErrorAction Stop
+        $disk      = Get-Disk -Number $partition.DiskNumber -ErrorAction Stop
+        $physDisk  = Get-PhysicalDisk | Where-Object { $_.DeviceId -eq $disk.Number.ToString() } | Select-Object -First 1
+        $busType   = if ($disk.BusType) { $disk.BusType.ToString() } else { '' }
+
+        if ($busType -eq 'NVMe') {
+            $driveType = "NVMe"
+            $speedLabel = "~32 Gbps"
+        } elseif ($physDisk -and $physDisk.MediaType -eq 'SSD') {
+            $driveType = "SSD"
+            $speedLabel = if ($busType -eq 'SATA') { "~6 Gbps" } else { $null }
+        } elseif ($physDisk -and $physDisk.MediaType -eq 'HDD') {
+            $driveType = "HDD"
+        } elseif ($busType -eq 'USB') {
+            $driveType = if ($physDisk -and $physDisk.MediaType -eq 'SSD') { "USB SSD" } else { "USB" }
+        }
+    } catch {
+        # Storage module may be unavailable - silently fall back to Unknown
+    }
+
+    $minFree = if ($null -ne $global:scrcpyRecordMinFreeSpaceGB) { [int]$global:scrcpyRecordMinFreeSpaceGB } else { 5 }
+    $isLow   = $freeGB -lt $minFree
+
+    return [PSCustomObject]@{
+        DriveLetter  = $driveLetter
+        RecordFolder = $global:scrcpyRecordFolder
+        TotalGB      = $totalGB
+        UsedGB       = $usedGB
+        FreeGB       = $freeGB
+        UsedPercent  = $usedPct
+        FreePercent  = $freePct
+        DriveType    = $driveType
+        SpeedGbps    = $speedLabel
+        IsLow        = $isLow
+        MinFreeGB    = $minFree
+    }
+}
+
+
 function Update-ComputerMonitoring {
     # Skip if file is recent enough and no force-refresh flag file present
     $flagFile = Join-Path -Path $global:ScriptPath -ChildPath "data\computer_monitoring_forcerefresh.flag"
@@ -558,18 +627,38 @@ function Update-ComputerMonitoring {
     $gpu       = Get-GpuInfo
     $workload  = Get-AppWorkload -ProcessNames @("scrcpy", "ffmpeg", "powershell")
     $scrcpyRow = $workload | Where-Object { $_.ProcessName -eq "scrcpy" }
+    $recDrive  = Get-RecordingDriveInfo
 
     $snapshot = [PSCustomObject]@{
-        Timestamp   = [datetime]::Now.ToString("yyyy-MM-ddTHH:mm:ss")
-        CPU         = $cpu
-        RAM         = $ram
-        GPU         = $gpu
-        AppWorkload = $workload
-        ScrcpyCount = if ($scrcpyRow) { [int]$scrcpyRow.Count } else { 0 }
+        Timestamp      = [datetime]::Now.ToString("yyyy-MM-ddTHH:mm:ss")
+        CPU            = $cpu
+        RAM            = $ram
+        GPU            = $gpu
+        AppWorkload    = $workload
+        ScrcpyCount    = if ($scrcpyRow) { [int]$scrcpyRow.Count } else { 0 }
+        RecordingDrive = $recDrive
     }
 
     $json = $snapshot | ConvertTo-Json -Depth 5
     Write-FileWithoutBom -Path $global:computerMonitoringFilePath -Content $json
 
     Write-Log $msg.ComputerMonitoringUpdated -Level DEBUG
+
+    # Auto-disable recording on all headsets when drive space drops below threshold
+    if ($recDrive -and $recDrive.IsLow) {
+        try {
+            $rows    = Get-KnownHeadsets
+            $changed = $false
+            foreach ($h in $rows) {
+                if (ConvertTo-BoolField $h.Record) {
+                    $h.Record = 'False'
+                    $changed  = $true
+                    Write-Log ("Recording auto-disabled on {0} - drive {1}: only {2} GB free (min {3} GB)" -f $h.Name, $recDrive.DriveLetter, $recDrive.FreeGB, $recDrive.MinFreeGB) -Level WARNING
+                }
+            }
+            if ($changed) { Save-Headsets -headsets $rows }
+        } catch {
+            Write-Log ("Update-ComputerMonitoring: failed to auto-disable recording: {0}" -f $_) -Level WARNING
+        }
+    }
 }

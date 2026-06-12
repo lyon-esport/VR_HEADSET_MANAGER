@@ -334,6 +334,10 @@
       font-weight: 600; font-size: 11px;
       border-bottom: 1px solid var(--card-border); white-space: nowrap;
     }
+    .pro-table th.pro-th-drag { width: 18px; padding: 7px 4px 7px 8px; }
+    .pro-table th.pro-th-crop { font-family: 'Consolas', monospace; font-size: 11px; padding-right: 2px; }
+    .pro-table th.pro-th-angle { text-align: center; min-width: 52px; padding-left: 2px; padding-right: 18px; }
+    .pro-table th.pro-th-actions { text-align: right; }
     .pro-table td {
       padding: 6px 8px; border-bottom: 1px solid var(--card-border);
       color: var(--text); vertical-align: middle;
@@ -342,8 +346,8 @@
     .pro-table tr:hover > td { background: rgba(255,255,255,.025); }
     [data-theme=light] .pro-table tr:hover > td { background: rgba(0,0,0,.02); }
     .pro-td-name { font-weight: 600; white-space: nowrap; min-width: 80px; }
-    .pro-td-crop { font-family: 'Consolas', monospace; font-size: 11px; white-space: nowrap; }
-    .pro-td-angle { text-align: right; white-space: nowrap; min-width: 52px; }
+    .pro-td-crop { font-family: 'Consolas', monospace; font-size: 11px; white-space: nowrap; padding-right: 2px !important; }
+    .pro-td-angle { text-align: center; white-space: nowrap; min-width: 52px; padding-left: 2px !important; padding-right: 18px !important; }
     .pro-td-actions { white-space: nowrap; text-align: right; }
     .pro-icon-btn {
       padding: 3px 8px; border-radius: 4px; background: none;
@@ -361,6 +365,10 @@
     .pro-name-inp  { width: 96px; }
     .pro-empty { padding: 32px; text-align: center; color: var(--muted); font-size: 12px; }
     .pro-unsaved { font-size: 11px; color: #fbbf24; margin-right: auto; }
+    .pro-td-drag { width: 18px; padding: 6px 4px 6px 8px !important; cursor: grab; color: var(--muted); opacity: .45; user-select: none; }
+    .pro-td-drag:active { cursor: grabbing; }
+    .pro-table tr.pro-drag-over > td { background: rgba(59,130,246,.13); }
+    [data-theme=light] .pro-table tr.pro-drag-over > td { background: rgba(59,130,246,.09); }
   </style>
 </head>
 <body>
@@ -498,6 +506,17 @@
             </button>
           </div>
         </div>
+        <div class="scrcpy-folder-row" style="margin-top:14px">
+          <div class="scrcpy-folder-label">
+            <div class="scrcpy-lbl">Min. Free Space</div>
+            <div class="scrcpy-sub">Minimum free space (GB) required on the recording drive. Recording is automatically disabled on all headsets when space drops below this value.</div>
+          </div>
+          <div class="scrcpy-folder-ctrl" style="align-items:center">
+            <input type="number" id="scrcpy-minfree-input" class="cfg-input" min="1" max="9999" step="1" style="max-width:100px" placeholder="5">
+            <span style="font-size:12px;color:var(--muted);white-space:nowrap">GB</span>
+            <button id="scrcpy-minfree-save" class="cfg-save-btn">Save</button>
+          </div>
+        </div>
         <hr class="scrcpy-divider">
         <div class="scrcpy-folder-row">
           <div class="scrcpy-folder-label">
@@ -585,13 +604,6 @@
       </div>
       <div class="pro-panel-body" id="pro-body">
         <div class="pro-empty">Loading...</div>
-      </div>
-      <div class="pro-panel-foot">
-        <span class="pro-unsaved" id="pro-unsaved-notice" style="display:none">Unsaved changes</span>
-        <div style="display:flex;gap:8px;margin-left:auto">
-          <button class="cfg-cancel-btn" id="pro-close-bot">Cancel</button>
-          <button class="cfg-save-btn" id="pro-save-bot">Save All Changes</button>
-        </div>
       </div>
     </div>
   </div>
@@ -899,8 +911,10 @@
 
     document.getElementById('cfg-save-bot').addEventListener('click', saveCfg);
     document.getElementById('cfg-close-bot').addEventListener('click', closeCfgModal);
-    document.getElementById('cfg-modal').addEventListener('click', function(e) {
-      if (e.target === this) closeCfgModal();
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape' && document.getElementById('cfg-modal').style.display !== 'none') {
+        closeCfgModal();
+      }
     });
 
     // Reset to template
@@ -935,6 +949,8 @@
         document.getElementById('scrcpy-folder-input').value = f;
         var r = (cfg.scrcpy && cfg.scrcpy.recordFolder) ? cfg.scrcpy.recordFolder : '';
         document.getElementById('scrcpy-record-input').value = r;
+        var mf = (cfg.scrcpy && cfg.scrcpy.recordMinFreeSpaceGB != null) ? cfg.scrcpy.recordMinFreeSpaceGB : 5;
+        document.getElementById('scrcpy-minfree-input').value = mf;
       })
       .catch(function() {});
 
@@ -954,6 +970,26 @@
         .then(function(r) { return r.json(); })
         .then(function(j) {
           showToast(j.ok ? 'Record folder saved. Restart required.' : 'Save failed: ' + (j.error || 'error'), 3000);
+        })
+        .catch(function() { showToast('Server unreachable', 2500); });
+    });
+
+    document.getElementById('scrcpy-minfree-save').addEventListener('click', function() {
+      var val = parseInt(document.getElementById('scrcpy-minfree-input').value, 10);
+      if (isNaN(val) || val < 1) { showToast('Enter a valid number of GB (minimum 1)', 2500); return; }
+      fetch('/api/config')
+        .then(function(r) { return r.json(); })
+        .then(function(cfg) {
+          if (!cfg.scrcpy) cfg.scrcpy = {};
+          cfg.scrcpy.recordMinFreeSpaceGB = val;
+          return fetch('/api/config/save', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(cfg, null, 2)
+          });
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          showToast(j.ok ? 'Min. free space saved. Takes effect on the next monitoring cycle.' : 'Save failed: ' + (j.error || 'error'), 3000);
         })
         .catch(function() { showToast('Server unreachable', 2500); });
     });
@@ -1025,7 +1061,8 @@
       });
       html += '<button class="pro-tab pro-tab-add" data-action="show-add-model">+ Add Model</button>';
       document.getElementById('pro-tabs').innerHTML = html;
-      document.getElementById('pro-unsaved-notice').style.display = _proDirty ? '' : 'none';
+      var unsavedNotice = document.getElementById('pro-unsaved-notice');
+      if (unsavedNotice) unsavedNotice.style.display = _proDirty ? '' : 'none';
     }
 
     function renderProBody() {
@@ -1069,9 +1106,9 @@
       html += '<div class="pro-section-hd"><span>Views</span>'
         + '<button data-action="add-view">+ Add View</button></div>'
         + '<div class="pro-table-wrap"><table class="pro-table"><thead><tr>'
-        + '<th>View Name</th><th>Left Eye Crop</th><th>L Angle</th>'
-        + '<th>Right Eye Crop</th><th>R Angle</th><th></th>'
-        + '</tr></thead><tbody>';
+        + '<th class="pro-th-drag"></th><th>View Name</th><th class="pro-th-crop">Left Eye Crop</th><th class="pro-th-angle">L Angle</th>'
+        + '<th class="pro-th-crop">Right Eye Crop</th><th class="pro-th-angle">R Angle</th><th class="pro-th-actions"></th>'
+        + '</tr></thead><tbody id="pro-views-tbody">';
 
       var vnames = Object.keys(views);
       vnames.forEach(function(vn) {
@@ -1088,10 +1125,12 @@
       html += '</div>';
 
       document.getElementById('pro-body').innerHTML = html;
+      initProDragDrop();
     }
 
     function proViewReadRow(vn, le, re) {
-      return '<tr>'
+      return '<tr draggable="true" data-view="' + proEsc(vn) + '">'
+        + '<td class="pro-td-drag" title="Drag to reorder">&#8942;</td>'
         + '<td class="pro-td-name">' + proEsc(vn) + '</td>'
         + '<td class="pro-td-crop">' + proEsc(le.crop || '') + '</td>'
         + '<td class="pro-td-angle">' + (le.angle != null ? le.angle : 0) + '</td>'
@@ -1104,6 +1143,7 @@
     }
     function proViewEditRow(vn, le, re) {
       return '<tr>'
+        + '<td class="pro-td-drag"></td>'
         + '<td><input id="ev-name" class="cfg-input pro-name-inp" value="' + proEsc(vn) + '"></td>'
         + '<td><input id="ev-le-crop" class="cfg-input pro-crop-inp" value="' + proEsc(le.crop||'') + '" placeholder="w:h:x:y"></td>'
         + '<td><input type="number" id="ev-le-angle" class="cfg-input pro-angle-inp" value="' + (le.angle!=null?le.angle:0) + '"></td>'
@@ -1116,6 +1156,7 @@
     }
     function proViewNewRow() {
       return '<tr>'
+        + '<td class="pro-td-drag"></td>'
         + '<td><input id="nv-name" class="cfg-input pro-name-inp" placeholder="e.g. wide"></td>'
         + '<td><input id="nv-le-crop" class="cfg-input pro-crop-inp" placeholder="w:h:x:y"></td>'
         + '<td><input type="number" id="nv-le-angle" class="cfg-input pro-angle-inp" value="0"></td>'
@@ -1125,6 +1166,55 @@
         + '<button class="pro-icon-btn pro-icon-ok" data-action="confirm-new-view" title="Add">&#10003;</button>'
         + '<button class="pro-icon-btn" data-action="cancel-new-view" title="Cancel">&#10005;</button>'
         + '</td></tr>';
+    }
+
+    function sanitizeViewName(s) { return s.replace(/[\s\-]+/g, '_'); }
+
+    function initProDragDrop() {
+      var tbody = document.getElementById('pro-views-tbody');
+      if (!tbody) return;
+      var dragSrc = null;
+      tbody.querySelectorAll('tr[draggable]').forEach(function(row) {
+        row.addEventListener('dragstart', function(e) {
+          dragSrc = this;
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('text/plain', this.dataset.view);
+        });
+        row.addEventListener('dragover', function(e) {
+          if (!dragSrc || dragSrc === this) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          tbody.querySelectorAll('tr').forEach(function(r) { r.classList.remove('pro-drag-over'); });
+          this.classList.add('pro-drag-over');
+        });
+        row.addEventListener('dragleave', function() {
+          this.classList.remove('pro-drag-over');
+        });
+        row.addEventListener('drop', function(e) {
+          e.preventDefault();
+          if (!dragSrc || dragSrc === this) return;
+          this.classList.remove('pro-drag-over');
+          var rows = Array.from(tbody.querySelectorAll('tr[draggable]'));
+          var srcIdx = rows.indexOf(dragSrc);
+          var tgtIdx = rows.indexOf(this);
+          if (srcIdx < tgtIdx) tbody.insertBefore(dragSrc, this.nextSibling);
+          else tbody.insertBefore(dragSrc, this);
+          // Rebuild views object in new DOM order to persist insertion order in JSON
+          var oldViews = _proData[_proModel].views || {};
+          var newViews = {};
+          tbody.querySelectorAll('tr[data-view]').forEach(function(r) {
+            var vn = r.dataset.view;
+            if (oldViews[vn] !== undefined) newViews[vn] = oldViews[vn];
+          });
+          _proData[_proModel].views = newViews;
+          _proDirty = true;
+          dragSrc = null;
+        });
+        row.addEventListener('dragend', function() {
+          tbody.querySelectorAll('tr').forEach(function(r) { r.classList.remove('pro-drag-over'); });
+          dragSrc = null;
+        });
+      });
     }
 
     function collectProGeneralSettings() {
@@ -1144,7 +1234,6 @@
 
     // All events inside the profiles modal via delegation
     document.getElementById('pro-modal').addEventListener('click', function(e) {
-      if (e.target === this) { closeProModal(); return; }
       var btn = e.target.closest('[data-action]');
       if (!btn) return;
       var action = btn.dataset.action;
@@ -1227,7 +1316,7 @@
       }
       if (action === 'confirm-edit-view') {
         var oldVn = btn.dataset.oldview;
-        var newVn = (document.getElementById('ev-name').value || '').trim();
+        var newVn = sanitizeViewName((document.getElementById('ev-name').value || '').trim());
         if (!newVn) return;
         var leCrop  = (document.getElementById('ev-le-crop').value  || '').trim();
         var leAngle = parseFloat(document.getElementById('ev-le-angle').value) || 0;
@@ -1244,7 +1333,7 @@
       }
       if (action === 'cancel-edit-view') { _proEditView = null; renderProBody(); return; }
       if (action === 'confirm-new-view') {
-        var nn = (document.getElementById('nv-name').value || '').trim();
+        var nn = sanitizeViewName((document.getElementById('nv-name').value || '').trim());
         if (!nn) { showToast('View name is required', 2000); return; }
         var m3 = _proData[_proModel];
         if (!m3.views) m3.views = {};
@@ -1287,6 +1376,42 @@
       document.getElementById('pro-modal').style.display = 'none';
     }
     function doSaveToDisk(closeOnSuccess) {
+      // Auto-confirm any open edit-view row so values are not lost
+      if (_proEditView !== null) {
+        var oldVn = _proEditView;
+        var evName = document.getElementById('ev-name');
+        var newVn = sanitizeViewName((evName && evName.value || '').trim());
+        if (newVn) {
+          var leCrop  = (document.getElementById('ev-le-crop').value  || '').trim();
+          var leAngle = parseFloat(document.getElementById('ev-le-angle').value) || 0;
+          var reCrop  = (document.getElementById('ev-re-crop').value  || '').trim();
+          var reAngle = parseFloat(document.getElementById('ev-re-angle').value) || 0;
+          var m2 = _proData[_proModel];
+          if (!m2.views) m2.views = {};
+          if (oldVn !== newVn) delete m2.views[oldVn];
+          m2.views[newVn] = { left_eye: { crop: leCrop, angle: leAngle }, right_eye: { crop: reCrop, angle: reAngle } };
+          _proDirty = true;
+        }
+        _proEditView = null;
+      }
+      // Auto-confirm any open new-view row
+      if (_proNewView) {
+        var nvName = document.getElementById('nv-name');
+        var nn = sanitizeViewName((nvName && nvName.value || '').trim());
+        if (nn) {
+          var m3 = _proData[_proModel];
+          if (!m3.views) m3.views = {};
+          if (!m3.views[nn]) {
+            var lc = (document.getElementById('nv-le-crop').value  || '').trim();
+            var la = parseFloat(document.getElementById('nv-le-angle').value) || 0;
+            var rc = (document.getElementById('nv-re-crop').value  || '').trim();
+            var ra = parseFloat(document.getElementById('nv-re-angle').value) || 0;
+            m3.views[nn] = { left_eye: { crop: lc, angle: la }, right_eye: { crop: rc, angle: ra } };
+            _proDirty = true;
+          }
+        }
+        _proNewView = false;
+      }
       var payload;
       try {
         collectProGeneralSettings();
@@ -1316,9 +1441,12 @@
 
     document.getElementById('btn-profiles').addEventListener('click', openProModal);
     document.getElementById('pro-save-top').addEventListener('click', saveProfiles);
-    document.getElementById('pro-save-bot').addEventListener('click', saveProfiles);
     document.getElementById('pro-close-top').addEventListener('click', closeProModal);
-    document.getElementById('pro-close-bot').addEventListener('click', closeProModal);
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape' && document.getElementById('pro-modal').style.display !== 'none') {
+        closeProModal();
+      }
+    });
 
     // ── WiFi Networks ────────────────────────────────────────────────────────
     var _wifiEditSsid = null;

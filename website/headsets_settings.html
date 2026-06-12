@@ -1075,6 +1075,26 @@
     </div>
   </div>
 
+  <!-- Storage Low warning modal -->
+  <div class="profile-modal" id="storage-low-modal" style="display:none">
+    <div class="profile-modal-box" style="min-width:340px;max-width:480px">
+      <div class="profile-modal-title">
+        <div class="pm-headset" style="color:#ef4444">Recording Drive</div>
+        <div class="pm-subtitle">Storage Space Low</div>
+      </div>
+      <div class="profile-modal-body">
+        <div id="storage-low-msg" style="font-size:13px;color:#ccc;line-height:1.6"></div>
+        <div style="margin-top:10px;font-size:12px;color:#888">To re-enable recording, free up space on the drive, change the recording folder, or lower the minimum free space threshold in the configuration.</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-top:6px">
+        <button class="pm-btn" onclick="document.getElementById('storage-low-modal').style.display='none';window.location.href='vrhm_config.html'" style="background:rgba(59,130,246,0.15);border-color:rgba(59,130,246,0.4);color:#3b82f6">
+          Open Recording Parameters
+        </button>
+        <button class="pm-btn" onclick="document.getElementById('storage-low-modal').style.display='none'" style="color:#888">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Manage New Devices modal -->
   <div class="profile-modal" id="wifi-adb-modal" style="display:none">
     <div class="wifi-modal-box">
@@ -1669,7 +1689,15 @@
           })
           .then(function(r) { return r.json(); })
           .then(function(j) {
-            if (!j.ok) { recBtn.classList.toggle('on', !newVal); recBtn.textContent = !newVal ? 'ON' : 'OFF'; }
+            if (!j.ok) {
+              recBtn.classList.toggle('on', !newVal);
+              recBtn.textContent = !newVal ? 'ON' : 'OFF';
+              if (j.storageLow) {
+                var msg = document.getElementById('storage-low-msg');
+                if (msg) msg.innerHTML = 'Drive <strong>' + (j.driveLetter || '?') + ':</strong> has only <strong style="color:#ef4444">' + (j.freeGB != null ? j.freeGB : '?') + ' GB</strong> free.<br>Minimum required: <strong>' + (j.minFreeGB != null ? j.minFreeGB : '?') + ' GB</strong>.<br>Recording has been automatically disabled on all headsets.';
+                document.getElementById('storage-low-modal').style.display = 'flex';
+              }
+            }
           })
           .catch(function() { recBtn.classList.toggle('on', !newVal); recBtn.textContent = !newVal ? 'ON' : 'OFF'; });
           return;
@@ -2152,13 +2180,14 @@
           viewSel.innerHTML = '';
           views.forEach(function(v) {
             var opt = document.createElement('option');
-            opt.value = v; opt.textContent = v.charAt(0).toUpperCase() + v.slice(1);
+            opt.value = v; opt.textContent = v.replace(/_/g, ' ');
             viewSel.appendChild(opt);
           });
-          viewSel.value = currentView;
+          // Case-insensitive match for backward compat with profiles saved in lowercase
+          var match = views.filter(function(v) { return v.toLowerCase() === currentView; })[0];
+          viewSel.value = match || currentView;
         })
         .catch(function() {
-          // Fallback: keep existing options
           viewSel.value = currentView;
         });
 
@@ -2185,7 +2214,7 @@
     document.getElementById('pm-save').addEventListener('click', function() {
       var dn = _editingProfileDn;
       if (!dn) return;
-      var view  = document.getElementById('pm-view').value.toLowerCase();
+      var view  = document.getElementById('pm-view').value;
       var eye   = document.getElementById('pm-eye').value.toUpperCase();
       var audio = document.getElementById('pm-audio').value.toUpperCase();
       var fps   = parseInt(document.getElementById('pm-fps').value, 10);
@@ -2483,6 +2512,22 @@
 
     // â"€â"€ Boot â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     var _headsetFilter = (new URLSearchParams(location.search)).get('headset') || '';
+
+    // Check recording drive space on page load and show banner if low
+    fetch('/api/recording-drive')
+      .then(function(r) { return r.json(); })
+      .then(function(rd) {
+        if (!rd || !rd.IsLow) return;
+        var banner = document.createElement('div');
+        banner.id = 'storage-low-banner';
+        banner.style.cssText = 'padding:10px 16px;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.4);border-radius:6px;color:#ef4444;font-size:12px;font-weight:600;margin-bottom:12px;display:flex;align-items:center;gap:10px';
+        banner.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>' +
+          '<span>Recording drive <strong>' + (rd.DriveLetter || '?') + ':</strong> only <strong>' + (rd.FreeGB != null ? rd.FreeGB : '?') + ' GB</strong> free (min ' + (rd.MinFreeGB != null ? rd.MinFreeGB : '?') + ' GB). Recording is automatically disabled on all headsets.</span>' +
+          '<a href="vrhm_config.html" style="margin-left:auto;white-space:nowrap;color:#3b82f6;font-size:11px;text-decoration:none;border:1px solid rgba(59,130,246,0.4);border-radius:4px;padding:2px 8px">Open parameters</a>';
+        var page = document.querySelector('.page');
+        if (page) page.insertBefore(banner, page.firstChild);
+      })
+      .catch(function() {});
 
     pollHeadsetsCsv();
     pollInfosCsv();
@@ -2966,7 +3011,7 @@
     }
 
     document.getElementById('wifi-modal-close').addEventListener('click', closeNewDevicesModal);
-    document.getElementById('wifi-adb-modal').addEventListener('click', function(e) { if (e.target === this) closeNewDevicesModal(); });
+    // click-outside intentionally disabled — use Escape or the close button
     document.addEventListener('keydown', function(e) {
       if (e.key === 'Escape' && document.getElementById('wifi-adb-modal').style.display !== 'none') closeNewDevicesModal();
     });
