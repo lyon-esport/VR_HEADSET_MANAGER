@@ -1705,7 +1705,7 @@ function Resolve-LocalAppIcon {
     .SYNOPSIS
     Resolves an app icon from local storage, copying from sources if needed.
     Returns the web-relative path (/assets/app_icons/<file>) or $null.
-    Priority: 1) already in app_icons, 2) in sources\vr_games_icons, 3) $null (go online).
+    Priority: 1) already in app_icons, 2) in templates\website\assets\app_icons, 3) $null (go online).
     #>
     param(
         [string]$PackageName,
@@ -1713,11 +1713,11 @@ function Resolve-LocalAppIcon {
         [switch]$SourcesOnly
     )
 
-    # 1. sources\vr_games_icons has highest priority (operator choice overrides web cache).
+    # 1. templates\website\assets\app_icons has highest priority (operator choice overrides web cache).
     #    Longest-prefix match: exact package name wins over shorter prefixes.
     #    e.g. com.android.png matches com.android.* but com.android.server.telecom.png wins for that package.
     #    The matched file is copied under its original stem name (shared, no per-package duplication).
-    $sourcesDir = Join-Path $global:ScriptPath "sources\vr_games_icons"
+    $sourcesDir = Join-Path $global:ScriptPath "templates\website\assets\app_icons"
     $sourceFile = $null
     $destExt    = $null
     if (Test-Path -LiteralPath $sourcesDir) {
@@ -1815,7 +1815,7 @@ function Get-AppInfo {
         }
     }
     # If the cache contains the package with all info let's return it !
-    # But first, always check sources\vr_games_icons — operator-supplied icons take priority
+    # But first, always check templates\website\assets\app_icons — operator-supplied icons take priority
     # and must be copied to app_icons even on early-return paths.
     if ($cache.ContainsKey($PackageName) -and $cache[$PackageName].DisplayName -and ($cache[$PackageName].DisplayName -ne $PackageName_short)) {
         $localResolved = Resolve-LocalAppIcon -PackageName $PackageName -IconCacheDir $IconCacheDir
@@ -1831,7 +1831,7 @@ function Get-AppInfo {
     }
 
     # Resolve from local storage before going online.
-    # SourcesOnly when ForceOnline: skip app_icons cache, but still honour sources\vr_games_icons.
+    # SourcesOnly when ForceOnline: skip app_icons cache, but still honour templates\website\assets\app_icons.
     $localResolved = Resolve-LocalAppIcon -PackageName $PackageName -IconCacheDir $IconCacheDir -SourcesOnly:$ForceOnline
     if ($localResolved) {
         $appInfos.LocalIconPath = $localResolved
@@ -2044,7 +2044,7 @@ function Update-AppCacheOnline {
         if (-not $entry) { continue }
 
         $localPath = ''
-        # SourcesOnly when ForceOnline: still honour sources\vr_games_icons but skip app_icons cache.
+        # SourcesOnly when ForceOnline: still honour templates\website\assets\app_icons but skip app_icons cache.
         $localPath = Resolve-LocalAppIcon -PackageName $pkg -IconCacheDir $IconCacheDir -SourcesOnly:$ForceOnline
         if (-not $localPath -and $r.IconUrl) {
             $ext = '.png'
@@ -2078,9 +2078,9 @@ function Update-AppCacheOnline {
         $changed = $true
     }
 
-    # Phase 3: sync operator icons from sources\vr_games_icons for ALL packages in cache.
+    # Phase 3: sync operator icons from templates\website\assets\app_icons for ALL packages in cache.
     # Runs regardless of $toResolve so fully-resolved packages are also covered.
-    $sourcesDir = Join-Path $global:ScriptPath "sources\vr_games_icons"
+    $sourcesDir = Join-Path $global:ScriptPath "templates\website\assets\app_icons"
     if (Test-Path -LiteralPath $sourcesDir) {
         foreach ($pkg in $cache.Keys) {
             $localPath = Resolve-LocalAppIcon -PackageName $pkg -IconCacheDir $IconCacheDir -SourcesOnly
@@ -2150,7 +2150,7 @@ function Clear-AppNamesCache {
     - Renames known_apps.csv to known_apps_old_<timestamp>.csv (preserves data).
     - Creates a fresh empty known_apps.csv with the correct header.
     - Deletes all files in website\assets\app_icons\ except those that originated
-      from sources\vr_games_icons (operator-supplied icons are never deleted).
+      from templates\website\assets\app_icons (operator-supplied icons are never deleted).
     Returns $true on success, $false on failure.
 
     .EXAMPLE
@@ -2178,9 +2178,9 @@ function Clear-AppNamesCache {
         # Re-initialize from template (pre-fills OS app names)
         Initialize-AppNamesCache -AppCacheFilePath $AppCacheFilePath
 
-        # Wipe app_icons cache — preserve files that came from sources\vr_games_icons
+        # Wipe app_icons cache — preserve files that came from templates\website\assets\app_icons
         $iconCacheDir = Join-Path $global:ScriptPath "website\assets\app_icons"
-        $sourcesDir   = Join-Path $global:ScriptPath "sources\vr_games_icons"
+        $sourcesDir   = Join-Path $global:ScriptPath "templates\website\assets\app_icons"
         if (Test-Path -LiteralPath $iconCacheDir) {
             $sourceNames = @{}
             if (Test-Path -LiteralPath $sourcesDir) {
