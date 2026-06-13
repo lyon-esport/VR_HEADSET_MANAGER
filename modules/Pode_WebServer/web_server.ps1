@@ -113,7 +113,7 @@ function Send-JsonResponse {
         [int]$Depth = 6
     )
     try {
-        $json = if ($Raw) { $Raw } else { $Body | ConvertTo-Json -Compress -Depth $Depth }
+        $json = if ($Raw) { $Raw } else { ConvertTo-Json -InputObject $Body -Compress -Depth $Depth }
         if ($null -eq $json) { $json = 'null' }
         $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
 
@@ -176,6 +176,10 @@ Write-Log ($msg.WebServerListening -f $port) -Level SUCCESS
 
 # Tracks active install background jobs by jobId
 $script:installJobs = @{}
+
+# mtime-based cache for known_headsets.csv (mirrors $script:headsetInfosCache pattern)
+$script:knownHeadsetsCache      = $null
+$script:knownHeadsetsCacheMtime = $null
 
 # Background job script block for async app installs.
 # Runs in a NEW PowerShell process - no access to web server functions.
@@ -1158,6 +1162,70 @@ try {
                     $response.ContentLength64 = $errBytes.Length
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: GET /api/headsets-status  - all headsets combined status (ping/scrcpy/adb/runningApp/model/autoRestart)
+        # Shared by video_monitor, headsets_monitoring, headsets_settings. Uses mtime caches so at most
+        # one CSV read per write cycle regardless of how many pages poll simultaneously.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/headsets-status') {
+            try {
+                # Refresh infos cache (reuse existing $script:headsetInfosCache pattern)
+                $infosPath = $global:knownHeadsetsInfosFilePath
+                if ($infosPath -and (Test-Path -LiteralPath $infosPath)) {
+                    $infosMtime = (Get-Item -LiteralPath $infosPath -ErrorAction SilentlyContinue).LastWriteTimeUtc
+                    if (-not $script:headsetInfosCache -or $script:headsetInfosCacheMtime -ne $infosMtime) {
+                        $rows = Import-Csv -LiteralPath $infosPath -Delimiter ";"
+                        $script:headsetInfosCache      = @{}
+                        foreach ($r in $rows) { $script:headsetInfosCache[$r.Name] = $r }
+                        $script:headsetInfosCacheMtime = $infosMtime
+                    }
+                }
+
+                # Refresh known headsets config cache
+                $headsetsPath = $global:knownHeadsetsFilePath
+                $headsetsMtime = (Get-Item -LiteralPath $headsetsPath -ErrorAction SilentlyContinue).LastWriteTimeUtc
+                if (-not $script:knownHeadsetsCache -or $script:knownHeadsetsCacheMtime -ne $headsetsMtime) {
+                    $script:knownHeadsetsCache      = @{}
+                    foreach ($h in (Get-KnownHeadsets)) { $script:knownHeadsetsCache[$h.Name] = $h }
+                    $script:knownHeadsetsCacheMtime = $headsetsMtime
+                }
+
+                # Build response: one entry per known headset joined with live infos
+                $items = @($script:knownHeadsetsCache.Values |
+                    Sort-Object { [int]$_.ID } |
+                    ForEach-Object {
+                        $h    = $_
+                        $info = if ($script:headsetInfosCache) { $script:headsetInfosCache[$h.Name] } else { $null }
+                        @{
+                            display_name          = Convert-Displayname $h.Name
+                            name                  = $h.Name
+                            id                    = [int]$h.ID
+                            ip_address            = if ($h.IPAddress) { $h.IPAddress } else { '' }
+                            ping                  = [bool]($info.Ping    -eq 'True')
+                            scrcpy                = [bool]($info.SCRCPY  -eq 'ok')
+                            adb                   = [bool]($info.ADBWifi -eq 'True')
+                            charging              = [bool]($info.Charging -eq 'True')
+                            charging_wattage      = if ($info.ChargingWattage -and $info.ChargingWattage -ne '-') { $info.ChargingWattage } else { '' }
+                            power_state           = if ($info.PowerState -and $info.PowerState -ne '-') { $info.PowerState } else { '' }
+                            time_remaining_min    = if ($info.TimeRemainingMin -and $info.TimeRemainingMin -ne '-') { $info.TimeRemainingMin } else { '' }
+                            battery               = if ($info.Battery -and $info.Battery -ne '-') { $info.Battery } else { '-' }
+                            battery_ctrl_left     = if ($info.BatteryControllerLeft  -and $info.BatteryControllerLeft  -ne '-') { $info.BatteryControllerLeft  } else { '-' }
+                            battery_ctrl_right    = if ($info.BatteryControllerRight -and $info.BatteryControllerRight -ne '-') { $info.BatteryControllerRight } else { '-' }
+                            temp                  = if ($info.Temp -and $info.Temp -ne '-') { $info.Temp } else { '-' }
+                            running_app           = if ($info.RunningApp)     { $info.RunningApp }     else { '' }
+                            running_app_icon      = if ($info.RunningAppIcon) { $info.RunningAppIcon } else { '' }
+                            model                 = if ($info.Model -and $info.Model -ne '-') { $info.Model } elseif ($h.Model) { $h.Model } else { '' }
+                            scrcpy_auto_restart   = [bool]($h.scrcpy_AutoRestart -eq 'True')
+                        }
+                    }
+                )
+                Send-JsonResponse -Response $response -Body $items
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ error = $_.Exception.Message }
             } finally {
                 $response.Close()
             }

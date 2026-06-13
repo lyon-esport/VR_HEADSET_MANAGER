@@ -1116,7 +1116,6 @@
 
   <script>
     var HEADSETS_API_PATH = '/api/headsets';
-    var INFOS_CSV_PATH    = '../data/known_headsets_infos.csv';
     var REFRESH_MS        = 5000;
 
     var headsetConfig = {};
@@ -2005,20 +2004,20 @@
         .catch(function() {});
     }
 
-    function pollInfosCsv() {
-      fetch(INFOS_CSV_PATH + '?_=' + Date.now())
-        .then(function(r) { if (!r.ok) throw new Error(r.status); return r.text(); })
-        .then(function(text) {
-          parseCsvText(text, ';').forEach(function(row) {
-            var dn = toDisplayName(row.Name || '');
+    function pollHeadsetsStatus() {
+      fetch('/api/headsets-status')
+        .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function(items) {
+          items.forEach(function(item) {
+            var dn = item.display_name || toDisplayName(item.name || '');
             if (!dn) return;
             headsetStatus[dn] = {
-              ping:           (row.Ping    || '').toLowerCase() === 'true',
-              adb:            (row.ADBWifi || '').toLowerCase() === 'true',
-              scrcpy:         (row.SCRCPY  || '').toLowerCase() === 'ok',
-              model:          row.Model || '',
-              runningApp:     row.RunningApp     || '',
-              runningAppIcon: row.RunningAppIcon || ''
+              ping:           !!item.ping,
+              adb:            !!item.adb,
+              scrcpy:         !!item.scrcpy,
+              model:          item.model || '',
+              runningApp:     item.running_app     || '',
+              runningAppIcon: item.running_app_icon || ''
             };
           });
           if (cardsBuilt) updateStatusDots();
@@ -2530,10 +2529,10 @@
       .catch(function() {});
 
     pollHeadsetsCsv();
-    pollInfosCsv();
+    pollHeadsetsStatus();
     pollForNewUsbHeadset();
     setInterval(pollHeadsetsCsv, 10000);
-    setInterval(pollInfosCsv, REFRESH_MS);
+    setInterval(pollHeadsetsStatus, REFRESH_MS);
     setInterval(pollForNewUsbHeadset, REFRESH_MS);
 
     // Timer helpers

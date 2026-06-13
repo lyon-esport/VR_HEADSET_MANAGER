@@ -434,8 +434,6 @@
   </div>
 
   <script>
-    var CSV_PATH      = '../data/known_headsets_infos.csv';
-    var CSV_DELIMITER = ';';
     var REFRESH_MS    = 4000;
     var activeFilter  = 'all';
     var lastRows      = [];
@@ -454,23 +452,6 @@
         if (activeFilter === 'scrcpy')  show = scrcpy;
         if (activeFilter === 'offline') show = !ping;
         tr.style.display = show ? '' : 'none';
-      });
-    }
-
-    function parseCsv(text) {
-      text = text.replace(/^\uFEFF/, '');
-      var lines = text.trim().split(/\r?\n/);
-      if (lines.length < 2) return [];
-      var headers = lines[0].split(CSV_DELIMITER).map(function(h) {
-        return h.replace(/^"|"$/g, '').trim();
-      });
-      return lines.slice(1).map(function(line) {
-        var cols = line.split(CSV_DELIMITER).map(function(c) {
-          return c.replace(/^"|"$/g, '').trim();
-        });
-        var obj = {};
-        headers.forEach(function(h, i) { obj[h] = cols[i] !== undefined ? cols[i] : ''; });
-        return obj;
       });
     }
 
@@ -502,24 +483,24 @@
         return;
       }
       body.innerHTML = rows.map(function(r) {
-        var dn       = (r['Name'] || '').replace(/ /g, '_');
-        var pingOk   = (r['Ping']    || '').toLowerCase() === 'true';
-        var adbOk    = (r['ADBWifi'] || '').toLowerCase() === 'true';
-        var scrcpyOk = (r['SCRCPY']  || '').toLowerCase() === 'ok';
-        var charging = (r['Charging']|| '').toLowerCase() === 'true';
-        var chargingWattage = r['ChargingWattage'] || '';
-        var chargingLabel = (charging && chargingWattage && chargingWattage !== '-') ? chargingWattage + ' W' : (charging ? 'Yes' : 'No');
-        var powerState = (r['PowerState'] || '-').toLowerCase();
+        var dn       = r['display_name'] || (r['name'] || '').replace(/ /g, '_');
+        var pingOk   = !!r['ping'];
+        var adbOk    = !!r['adb'];
+        var scrcpyOk = !!r['scrcpy'];
+        var charging = !!r['charging'];
+        var chargingWattage = r['charging_wattage'] || '';
+        var chargingLabel = (charging && chargingWattage) ? chargingWattage + ' W' : (charging ? 'Yes' : 'No');
+        var powerState = (r['power_state'] || '').toLowerCase();
         var powerPill  = powerState === 'charging'    ? pill('Charging',    'pill-green')
                        : powerState === 'discharging' ? pill('Discharging', 'pill-orange')
                        : '<span style="color:#333">-</span>';
-        var timeCell = fmtMin(r['TimeRemainingMin'] || '-');
+        var timeCell = fmtMin(r['time_remaining_min'] || '-');
 
         var appCell = '';
-        if (r['RunningApp'] && r['RunningApp'] !== '-') {
-          var icon = r['RunningAppIcon'] || '';
+        if (r['running_app'] && r['running_app'] !== '-') {
+          var icon = r['running_app_icon'] || '';
           appCell = (icon ? '<img class="app-icon" src="' + esc(icon) + '" onerror="this.style.display=\'none\'">' : '') +
-                    '<span class="app-name">' + esc(r['RunningApp']) + '</span>';
+                    '<span class="app-name">' + esc(r['running_app']) + '</span>';
         } else {
           appCell = '<span style="color:#333">-</span>';
         }
@@ -527,35 +508,35 @@
         var pingStr   = pingOk   ? 'true' : 'false';
         var scrcpyStr = scrcpyOk ? 'true' : 'false';
         return '<tr data-ping="' + pingStr + '" data-scrcpy="' + scrcpyStr + '">' +
-          '<td>' + esc(r['ID'] || '') + '</td>' +
-          '<td><strong>' + esc(r['Name'] || '') + '</strong></td>' +
-          '<td style="font-family:monospace;font-size:12px">' + esc(r['IPAddress'] || '') + '</td>' +
+          '<td>' + esc(r['id'] || '') + '</td>' +
+          '<td><strong>' + esc(r['name'] || '') + '</strong></td>' +
+          '<td style="font-family:monospace;font-size:12px">' + esc(r['ip_address'] || '') + '</td>' +
           '<td class="center">' + pill(pingOk ? 'OK' : 'KO', pingOk ? 'pill-green' : 'pill-red') + '</td>' +
           '<td class="center">' + pill(adbOk  ? 'OK' : 'KO', adbOk  ? 'pill-green' : 'pill-red') + '</td>' +
           '<td class="center">' + pill(scrcpyOk ? 'OK' : 'OFF', scrcpyOk ? 'pill-blue' : 'pill-orange') + '</td>' +
           '<td class="center">' + (charging ? pill(chargingLabel,'pill-green') : pill('No','pill-red')) + '</td>' +
           '<td class="center">' + powerPill + '</td>' +
-          '<td>' + esc(r['Battery'] || '-') + '</td>' +
+          '<td>' + esc(r['battery'] || '-') + '</td>' +
           '<td style="color:#888;font-size:12px">' + esc(timeCell) + '</td>' +
-          '<td>' + esc(r['BatteryControllerLeft']  || '-') + '</td>' +
-          '<td>' + esc(r['BatteryControllerRight'] || '-') + '</td>' +
-          '<td>' + esc(r['Temp'] || '-') + (r['Temp'] && r['Temp'] !== '-' ? ' C' : '') + '</td>' +
-          '<td style="color:#666">' + esc(r['Model'] || '-') + '</td>' +
+          '<td>' + esc(r['battery_ctrl_left']  || '-') + '</td>' +
+          '<td>' + esc(r['battery_ctrl_right'] || '-') + '</td>' +
+          '<td>' + esc(r['temp'] || '-') + (r['temp'] && r['temp'] !== '-' ? ' C' : '') + '</td>' +
+          '<td style="color:#666">' + esc(r['model'] || '-') + '</td>' +
           '<td>' + appCell + '</td>' +
-          '<td><button class="mon-launch-btn" data-launch-app="' + dn + '" title="Launch an app on ' + esc(r['Name'] || '') + '">' +
+          '<td><button class="mon-launch-btn" data-launch-app="' + dn + '" title="Launch an app on ' + esc(r['name'] || '') + '">' +
             '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>' +
           '</button></td>' +
         '</tr>';
       }).join('');
     }
 
-    function pollCsv() {
+    function pollHeadsetsStatus() {
       var ind = document.getElementById('refresh-indicator');
       ind.style.display = 'inline';
-      fetch(CSV_PATH + '?_=' + Date.now())
-        .then(function(r) { if (!r.ok) throw new Error(r.status); return r.text(); })
-        .then(function(text) {
-          renderTable(parseCsv(text));
+      fetch('/api/headsets-status')
+        .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function(items) {
+          renderTable(items);
           applyFilter();
           ind.style.display = 'none';
         })
@@ -1010,8 +991,8 @@
       });
     // ── /Video Quality Automation ───────────────────────────────────────────
 
-    pollCsv();
-    setInterval(pollCsv, REFRESH_MS);
+    pollHeadsetsStatus();
+    setInterval(pollHeadsetsStatus, REFRESH_MS);
 
     document.getElementById('headsets-table').addEventListener('click', function(e) {
       var btn = e.target.closest('[data-launch-app]');

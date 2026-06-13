@@ -393,17 +393,14 @@
 
   <script>
     // ------ Configuration ------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-    var CSV_PATH      = '../data/known_headsets_infos.csv';
-    var CSV_DELIMITER = ';';
-    var REFRESH_MS    = 5000;   // CSV poll interval in ms
+    var REFRESH_MS    = 5000;   // status poll interval in ms
     var NATURAL_W     = 480;    // natural render width of the status iframe
-    var NO_STREAM_W   = 240;    // CSS width of offline tile (matches min() in .cell.no-stream)    // natural render width of the status iframe
+    var NO_STREAM_W   = 240;    // CSS width of offline tile (matches min() in .cell.no-stream)
     var NATURAL_H     = 260;    // fallback render height of the status iframe
     var naturalHeights = {};    // detected per-headset content height in px
     // ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
     var MIN_STREAM_CELL_W = 200; // px — below this, scroll rather than shrink further
-    var HEADSETS_CSV_PATH = '../data/known_headsets.csv';
     var headsetStatus = {};
     var autoRestartState = {};
     var appNameCache = {};
@@ -520,41 +517,9 @@
 
     // ------ Helpers ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-    // Parse semicolon-delimited CSV, strip surrounding quotes from every cell
-    function parseCsv(text) {
-      // Strip UTF-8 BOM that PowerShell 5 adds to Export-Csv -Encoding UTF8
-      text = text.replace(/^\uFEFF/, '');
-      var lines = text.trim().split(/\r?\n/);
-      if (lines.length < 2) return [];
-      var headers = lines[0].split(CSV_DELIMITER).map(function(h) {
-        return h.replace(/^"|"$/g, '').trim();
-      });
-      return lines.slice(1).map(function(line) {
-        var cols = line.split(CSV_DELIMITER).map(function(c) {
-          return c.replace(/^"|"$/g, '').trim();
-        });
-        var obj = {};
-        headers.forEach(function(h, i) { obj[h] = cols[i] !== undefined ? cols[i] : ''; });
-        return obj;
-      });
-    }
-
     // Mirrors PowerShell Convert-Displayname: replace spaces with underscores
     function toDisplayName(name) {
       return name.replace(/ /g, '_');
-    }
-
-    function parseCsvText(text, delimiter) {
-      text = text.replace(/^\uFEFF/, '');
-      var lines = text.trim().split(/\r?\n/);
-      if (lines.length < 2) return [];
-      var headers = lines[0].split(delimiter).map(function(h) { return h.replace(/^"|"$/g, '').trim(); });
-      return lines.slice(1).map(function(line) {
-        var cols = line.split(delimiter).map(function(c) { return c.replace(/^"|"$/g, '').trim(); });
-        var obj = {};
-        headers.forEach(function(h, i) { obj[h] = cols[i] !== undefined ? cols[i] : ''; });
-        return obj;
-      });
     }
 
     function updateAutoRestartButtons() {
@@ -580,19 +545,6 @@
       .catch(function() { autoRestartState[dn] = !newVal; updateAutoRestartButtons(); });
     }
 
-    function pollHeadsetsCsv() {
-      fetch(HEADSETS_CSV_PATH + '?_=' + Date.now())
-        .then(function(r) { if (!r.ok) throw new Error(r.status); return r.text(); })
-        .then(function(text) {
-          parseCsvText(text, ',').forEach(function(row) {
-            var dn = toDisplayName(row['Name'] || '');
-            if (!dn) return;
-            autoRestartState[dn] = (row['scrcpy_AutoRestart'] || '').toLowerCase() === 'true';
-          });
-          updateAutoRestartButtons();
-        })
-        .catch(function() {});
-    }
 
     document.getElementById('grid').addEventListener('click', function(e) {
       var arBtn = e.target.closest('.autorestart-btn');
@@ -601,25 +553,24 @@
       if (launchBtn) openLaunchModal(launchBtn.dataset.launchApp);
     });
 
-    // ------ CSV polling ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-    function pollCsv() {
-      fetch(CSV_PATH + '?_=' + Date.now())
-        .then(function(r) { if (!r.ok) throw new Error(r.status); return r.text(); })
-        .then(function(text) {
-          var rows = parseCsv(text);
+    // ------ Headsets status polling (single API call replaces two CSV reads) -------------------------------------------------------------------------------
+    function pollHeadsetsStatus() {
+      fetch('/api/headsets-status')
+        .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function(items) {
           var newStatus = {};
-          rows.forEach(function(row) {
-            var dn = toDisplayName(row['Name'] || '');
-            if (!dn) return;
-            newStatus[dn] = {
-              ping:       (row['Ping']  || '').toLowerCase() === 'true',
-              scrcpy:     (row['SCRCPY'] || '').toLowerCase() === 'ok',
-              adb:       (row['ADBWifi'] || '').toLowerCase() === 'true',
-              runningApp: row['RunningApp'] || ''
+          items.forEach(function(item) {
+            newStatus[item.display_name] = {
+              ping:       item.ping,
+              scrcpy:     item.scrcpy,
+              adb:        item.adb,
+              runningApp: item.running_app || ''
             };
+            autoRestartState[item.display_name] = item.scrcpy_auto_restart;
           });
           headsetStatus = newStatus;
           updateRunningApps();
+          updateAutoRestartButtons();
           if (!initialFilterApplied) {
             initialFilterApplied = true;
             var anyActive = Object.keys(headsetVisible).some(function(dn) {
@@ -638,7 +589,7 @@
           }
           applyOfflineState();
         })
-        .catch(function() { /* keep last known state on network error */ });;
+        .catch(function() { /* keep last known state on network error */ });
     }
 
     // ------ Running app badges ------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -1066,10 +1017,9 @@
     }
 
     function buildGrid(callback) {
-      fetch(HEADSETS_CSV_PATH + '?_=' + Date.now())
-        .then(function(r) { if (!r.ok) throw new Error(r.status); return r.text(); })
-        .then(function(text) {
-          var rows = parseCsvText(text, ',');
+      fetch('/api/headsets')
+        .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function(rows) {
           var grid = document.getElementById('grid');
           var breakEl = grid.querySelector('.stream-break');
           if (!rows.length) {
@@ -1087,11 +1037,11 @@
           }
           rows.forEach(function(row) {
             var name = (row['Name'] || '').trim();
-            var id   = (row['ID']   || '').trim();
+            var id   = String(row['ID'] || '').trim();
             if (!name) return;
-            var dn   = toDisplayName(name);
+            var dn = toDisplayName(name);
+            autoRestartState[dn] = String(row['scrcpy_AutoRestart'] || '').toLowerCase() === 'true';
             var cell = buildCellHTML(name, dn, id);
-            // insert before the stream-break sentinel
             grid.insertBefore(cell, breakEl);
             var fr = cell.querySelector('.status-frame');
             if (fr) fr.addEventListener('load', function() { detectFrameHeight(fr, cell); });
@@ -1138,10 +1088,8 @@
             if (btn) btn.style.display = 'flex';
           });
         }
-        pollCsv();
-        setInterval(pollCsv, REFRESH_MS);
-        pollHeadsetsCsv();
-        setInterval(pollHeadsetsCsv, 10000);
+        pollHeadsetsStatus();
+        setInterval(pollHeadsetsStatus, REFRESH_MS);
         document.querySelectorAll('#grid .cell').forEach(function(cell) {
           var dn = cell.dataset.display;
           if (!dn) return;

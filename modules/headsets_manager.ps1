@@ -228,7 +228,7 @@ function Show-HeadsetsTableColored {
         # Display each row with appropriate formatting
         foreach ($headset in $knownHeadsetsInfo) {
             # Determine the background color
-            $bgColor = "$null"
+            $bgColor = $null
             
             if (-not (ConvertTo-BoolField $headset.Ping)) {
                 $bgColor = "DarkGray" # Headset not responding
@@ -236,7 +236,7 @@ function Show-HeadsetsTableColored {
             elseif (-not (ConvertTo-BoolField $headset.ADBWifi)) {
                 $bgColor = "Black"  # Headset ADB not responding on the specified port
             }
-            elseif ($headset.Temp -and [int]($headset.Temp -replace ',','.') -gt 55) {
+            elseif ($headset.Temp -match '^\d' -and [int]($headset.Temp -replace ',','.') -gt 55) {
                 $bgColor = "DarkRed" # Temperature > 50 degrees
             }
             elseif ($headset.Battery -and [int]($headset.Battery -replace '[^\d]','') -lt 40 -and -not (ConvertTo-BoolField $headset.Charging)) {
