@@ -317,6 +317,25 @@ function Get-Config {
         $global:headset_charging_power_W = [double]$configContent.Battery.headset_charging_power_W
     }
 
+    # Performance / GPU acceleration
+    if ($null -ne $configContent.Performance) {
+        $perf = $configContent.Performance
+        $global:GPU_Acceleration       = if ($null -ne $perf.GPU_Acceleration) { [bool]$perf.GPU_Acceleration } else { $true }
+        $global:GPU_Index              = if ($null -ne $perf.GPU_Index) { [int]$perf.GPU_Index } else { 0 }
+        $validCaptureModes             = @('Headless','WindowHeadless','WindowOnly')
+        $cm                            = if ($perf.Capture_Mode) { [string]$perf.Capture_Mode } else { 'WindowHeadless' }
+        if ($cm -notin $validCaptureModes) { $cm = 'WindowHeadless' }
+        $global:CaptureMode            = $cm
+        $global:AdaptiveMonitoring_Enabled = if ($null -ne $perf.Adaptive_Monitoring.enabled) { [bool]$perf.Adaptive_Monitoring.enabled } else { $true }
+    } else {
+        $global:GPU_Acceleration           = $true
+        $global:GPU_Index                  = 0
+        $global:CaptureMode                = 'WindowHeadless'
+        $global:AdaptiveMonitoring_Enabled = $true
+    }
+    # Session cache for the resolved GPU encoder, populated lazily by Get-GpuEncoder.
+    $global:GpuEncoder = $null
+
     # GLOBAL VARIABLES FOR SCRCPY PROCESS TRACKING AND AUTO-RESTART
     $global:scrcpyProcesses = @() #will keep track of launched scrcpy processes
     $global:scrcpyRestartAuto = $true

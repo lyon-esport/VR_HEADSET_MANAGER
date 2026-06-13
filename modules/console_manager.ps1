@@ -1218,6 +1218,13 @@ function Show-SubMenu-Config {
         Write-Host "  W. WiFi Networks  - List, add, edit, delete, set preferred"
         $dashboardStatus = if ($global:Dashboard_showConsole) { "Shown" } else { "Hidden" }
         Write-Host "  D. VR Headset Monitoring Console  - Currently: $dashboardStatus"
+        $captureLabel = switch ($global:CaptureMode) {
+            'Headless'       { "Headless (no window)" }
+            'WindowHeadless' { "Window visible + pipe" }
+            'WindowOnly'     { "Legacy (window + GDI grab)" }
+            default          { "$global:CaptureMode" }
+        }
+        Write-Host "  V. Video Capture Mode  - Currently: $captureLabel"
         if ($global:VQA_Enabled) {
             Write-Host "  Q. Video Quality Automation (VQR / VQO)"
         }
@@ -1227,6 +1234,7 @@ function Show-SubMenu-Config {
         $choice = (Read-Host $msg.EnterChoice).Trim().ToUpper()
         switch ($choice) {
             'W' { Show-SubMenu-WifiNetworks }
+            'V' { Show-SubMenu-CaptureMode }
             'Q' {
                 if ($global:VQA_Enabled -and (Get-Command Show-SubMenu-Monitoring -ErrorAction SilentlyContinue)) {
                     Show-SubMenu-Monitoring
@@ -1263,6 +1271,42 @@ function Show-SubMenu-Config {
                 }
             }
             '0' { return }
+        }
+    } while ($true)
+}
+
+
+function Show-SubMenu-CaptureMode {
+    do {
+        Clear-Host
+        Write-Host ""
+        Write-Host "  === Video Capture Mode ===" -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host "  Current: $global:CaptureMode"
+        Write-Host ""
+        Write-Host "  1. Headless         - No scrcpy window. Lowest CPU. Stream still available on the website."
+        Write-Host "  2. WindowHeadless   - scrcpy window visible + stream via named pipe (GPU rendering)."
+        Write-Host "  3. WindowOnly       - Legacy: visible window, GDI capture, software H.264 encode (high CPU)."
+        Write-Host ""
+        Write-Host "  Switching restarts any running scrcpy session in the new mode."
+        Write-Host ""
+        Write-Host "  0. Back"
+        Write-Host ""
+        $choice = (Read-Host $msg.EnterChoice).Trim()
+        $newMode = switch ($choice) {
+            '1' { 'Headless' }
+            '2' { 'WindowHeadless' }
+            '3' { 'WindowOnly' }
+            '0' { return }
+            default { $null }
+        }
+        if ($newMode) {
+            if (Set-CaptureMode -Mode $newMode) {
+                Write-Host ""
+                Write-Host "  CaptureMode set to $newMode" -ForegroundColor Green
+                Write-Host ""
+                Read-Host $msg.PressEnterToContinue | Out-Null
+            }
         }
     } while ($true)
 }

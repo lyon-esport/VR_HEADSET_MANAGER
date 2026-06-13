@@ -609,6 +609,36 @@ try {
             continue
         }
 
+        # API: GET /api/capture-mode  - returns the current global capture mode
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/capture-mode') {
+            try {
+                Send-JsonResponse -Response $response -Body @{ ok = $true; mode = "$global:CaptureMode" }
+            } catch {
+                try { Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = 'server error' } } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/capture-mode  body: {"mode":"Headless|WindowHeadless|WindowOnly"}
+        # Switches global capture mode, persists to config.json, restarts any running
+        # scrcpy session in the new mode. Mirrors the CLI Config -> V sub-menu.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/capture-mode') {
+            try {
+                $body = (New-Object System.IO.StreamReader($request.InputStream)).ReadToEnd()
+                $j = $body | ConvertFrom-Json -ErrorAction Stop
+                $mode = "$($j.mode)"
+                if ($mode -notin @('Headless','WindowHeadless','WindowOnly')) {
+                    Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = 'invalid mode' }
+                } else {
+                    $ok = [bool](Set-CaptureMode -Mode $mode)
+                    Send-JsonResponse -Response $response -Body @{ ok = $ok; mode = "$global:CaptureMode" }
+                }
+            } catch {
+                try { Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = "$($_.Exception.Message)" } } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
         # API: POST /api/removeheadset  body: {"name":"Q3_BLUE"}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/removeheadset') {
             try {

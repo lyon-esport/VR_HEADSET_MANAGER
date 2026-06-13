@@ -176,5 +176,13 @@
   },
   "Battery": {
     "headset_charging_power_W": 13
+  },
+  "Performance": {
+    "GPU_Acceleration": true,
+    "GPU_Index": 0,
+    "Capture_Mode": "WindowHeadless",
+    "Adaptive_Monitoring": {
+      "enabled": true
+    }
   }
 }

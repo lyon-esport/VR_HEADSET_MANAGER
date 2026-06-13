@@ -774,3 +774,154 @@ function Find-NextFreePortInPool {
     }
     return $null
 }
+
+
+# -------------------------------------------------------------------
+# GPU encoder resolution and adaptive monitoring interval
+# Used by the ffmpeg restream path and the VRMonitor slow path.
+# -------------------------------------------------------------------
+
+# Probe a single ffmpeg encoder with a 1-frame smoke test.
+# Returns $true when the encoder accepted the test input (i.e. the GPU/driver
+# stack is functional), $false otherwise. Stdout/stderr are discarded.
+function Test-FfmpegEncoder {
+    param(
+        [Parameter(Mandatory)] [string] $Encoder,
+        [string[]] $ExtraArgs = @()
+    )
+    if (-not (Test-Path -LiteralPath $global:ffmpegFilePath)) { return $false }
+    $ffArgs = @('-hide_banner','-loglevel','error','-f','lavfi','-i','color=c=black:s=320x240:r=10:d=0.1')
+    $ffArgs += $ExtraArgs
+    $ffArgs += @('-c:v',$Encoder,'-frames:v','1','-f','null','-')
+    try {
+        $null = & $global:ffmpegFilePath @ffArgs 2>&1
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        return $false
+    }
+}
+
+# Return the vendor tag for a Get-GpuInfo entry.
+function Get-GpuVendor {
+    param([Parameter(Mandatory)] $Gpu)
+    $m = $Gpu.Model
+    if     ($m -match '(?i)nvidia|geforce|quadro|rtx|gtx') { return 'NVIDIA' }
+    elseif ($m -match '(?i)intel')                         { return 'Intel' }
+    elseif ($m -match '(?i)amd|radeon')                    { return 'AMD' }
+    else                                                   { return 'Unknown' }
+}
+
+# Build the priority list of GPU encoders ordered by the selected GPU's vendor.
+# Returns an array of @{Name; ExtraArgs; Vendor} (libx264 is always last).
+#
+# Important: ffmpeg's `-gpu` (nvenc) and `-init_hw_device qsv=hw:N` flags use
+# vendor-local enumeration (Nth NVIDIA / Intel device), NOT the system-wide
+# index. We translate $GpuIndex (system-wide, from Get-GpuInfo) to a vendor-
+# local index, and omit the flag entirely when only one device of that vendor
+# is present - it's both unnecessary and rejected by some driver builds.
+function Get-GpuEncoderCandidates {
+    param([int]$GpuIndex = 0)
+    $gpus = @(); try { $gpus = @(Get-GpuInfo) } catch { $gpus = @() }
+    $selected = $null
+    if ($gpus.Count -gt 0) {
+        if ($GpuIndex -ge 0 -and $GpuIndex -lt $gpus.Count) { $selected = $gpus[$GpuIndex] }
+        else { $selected = $gpus[0] }
+    }
+    $vendor = if ($selected) { Get-GpuVendor -Gpu $selected } else { 'Unknown' }
+
+    # Per-vendor device counts and vendor-local index of the selected GPU
+    function _LocalIndex { param($gpus,$vendor,$selected)
+        $count = 0; $idx = -1
+        for ($i=0; $i -lt $gpus.Count; $i++) {
+            if ((Get-GpuVendor -Gpu $gpus[$i]) -eq $vendor) {
+                if ($selected -and $gpus[$i].Index -eq $selected.Index) { $idx = $count }
+                $count++
+            }
+        }
+        return @{ Count=$count; Local=$idx }
+    }
+    $nv = _LocalIndex $gpus 'NVIDIA' $selected
+    $it = _LocalIndex $gpus 'Intel'  $selected
+
+    $nvencArgs = @()
+    if ($vendor -eq 'NVIDIA' -and $nv.Count -gt 1 -and $nv.Local -ge 0) { $nvencArgs = @('-gpu',"$($nv.Local)") }
+    $qsvArgs = @()
+    if ($vendor -eq 'Intel' -and $it.Count -gt 1 -and $it.Local -ge 0) { $qsvArgs = @('-init_hw_device',"qsv=hw:$($it.Local)",'-filter_hw_device','hw') }
+
+    $nvenc = @{ Name='h264_nvenc'; Vendor='NVIDIA'; ExtraArgs=$nvencArgs }
+    $qsv   = @{ Name='h264_qsv';   Vendor='Intel';  ExtraArgs=$qsvArgs }
+    $amf   = @{ Name='h264_amf';   Vendor='AMD';    ExtraArgs=@() }
+    $mf    = @{ Name='h264_mf';    Vendor='Any';    ExtraArgs=@() }
+    $x264  = @{ Name='libx264';    Vendor='CPU';    ExtraArgs=@() }
+
+    switch ($vendor) {
+        'NVIDIA' { return @($nvenc,$qsv,$amf,$mf,$x264) }
+        'Intel'  { return @($qsv,$nvenc,$amf,$mf,$x264) }
+        'AMD'    { return @($amf,$nvenc,$qsv,$mf,$x264) }
+        default  { return @($nvenc,$qsv,$amf,$mf,$x264) }
+    }
+}
+
+# Resolve the best GPU encoder once per session. Cached in $global:GpuEncoder.
+# Pass -Force to re-probe (e.g. after the operator changed GPU_Index at runtime).
+# Returns @{Name; ExtraArgs; Vendor} - never $null (libx264 is the guaranteed last resort).
+function Get-GpuEncoder {
+    param([switch]$Force)
+    if (-not $Force -and $null -ne $global:GpuEncoder) { return $global:GpuEncoder }
+
+    # GPU acceleration disabled -> always libx264
+    if (-not $global:GPU_Acceleration) {
+        $global:GpuEncoder = @{ Name='libx264'; Vendor='CPU'; ExtraArgs=@() }
+        return $global:GpuEncoder
+    }
+
+    # Enumerate encoders actually built into the bundled ffmpeg
+    $available = @()
+    try {
+        $out = & $global:ffmpegFilePath -hide_banner -encoders 2>&1
+        foreach ($line in $out) {
+            if ($line -match '^\s*V[\.A-Z]+\s+(\S+)\s+') { $available += $Matches[1] }
+        }
+    } catch { }
+
+    $candidates = Get-GpuEncoderCandidates -GpuIndex $global:GPU_Index
+    foreach ($c in $candidates) {
+        if ($c.Name -eq 'libx264') {
+            # No probe needed - libx264 is always present in the bundled ffmpeg.
+            $global:GpuEncoder = $c
+            try { Write-Log ("GpuEncoder resolved: {0} (vendor {1}) - fallback" -f $c.Name, $c.Vendor) -Level INFO } catch {}
+            return $c
+        }
+        if ($available -notcontains $c.Name) { continue }
+        if (Test-FfmpegEncoder -Encoder $c.Name -ExtraArgs $c.ExtraArgs) {
+            $global:GpuEncoder = $c
+            try { Write-Log ("GpuEncoder resolved: {0} (vendor {1}) GpuIndex={2}" -f $c.Name, $c.Vendor, $global:GPU_Index) -Level SUCCESS } catch {}
+            return $c
+        } else {
+            try { Write-Log ("GpuEncoder probe failed for {0}, trying next" -f $c.Name) -Level DEBUG } catch {}
+        }
+    }
+    # Should never reach here (libx264 is in the list and returned unconditionally above).
+    $global:GpuEncoder = @{ Name='libx264'; Vendor='CPU'; ExtraArgs=@() }
+    return $global:GpuEncoder
+}
+
+# Returns the slow-path interval (seconds) for the VRMonitor's
+# Update-ComputerMonitoring throttle, based on the last recorded CPU load.
+# Adaptive thresholds reuse the VQA settings - no extra config.
+function Get-AdaptiveMonitorInterval {
+    $base = if ($null -ne $global:ComputerMonitoring_refresh_timer_sec) { [int]$global:ComputerMonitoring_refresh_timer_sec } else { 60 }
+    if (-not $global:AdaptiveMonitoring_Enabled) { return $base }
+    if (-not $global:VQA_Enabled)                { return $base }
+    if (-not (Test-Path -LiteralPath $global:computerMonitoringFilePath)) { return $base }
+    try {
+        $snap = Get-Content -LiteralPath $global:computerMonitoringFilePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    } catch { return $base }
+    $cpu = $null
+    if     ($null -ne $snap.Cpu.LoadPercent) { $cpu = [int]$snap.Cpu.LoadPercent }
+    elseif ($null -ne $snap.CpuLoadPercent)  { $cpu = [int]$snap.CpuLoadPercent }
+    if ($null -eq $cpu) { return $base }
+    if ($cpu -ge [int]$global:VQA_CpuMaxThreshold)        { return 10 }
+    if ($cpu -ge [int]$global:VQA_CpuMitigationThreshold) { return 5 }
+    return $base
+}

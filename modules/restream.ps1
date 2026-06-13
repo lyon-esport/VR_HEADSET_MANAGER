@@ -39,6 +39,13 @@ function Write-MediaMtxYml {
     # adds a BOM which breaks YAML parsers, so we use .NET directly.
     $mediamtxLogFile = (Join-Path $global:logFolder "mediamtx.log").Replace('\', '/')
 
+    # In pipe capture modes the app pushes RTSP into mediamtx from per-headset ffmpeg
+    # processes, so the YAML needs an "all_others" path that accepts publishers without
+    # an explicit per-path entry. In legacy WindowOnly mode, paths are registered one
+    # by one via Add-RestreamPath (runOnDemand) so the empty hash is enough.
+    $captureMode = if ($global:CaptureMode) { $global:CaptureMode } else { 'WindowOnly' }
+    $pathsBlock  = if ($captureMode -ne 'WindowOnly') { "paths:`n  all_others:" } else { "paths: {}" }
+
     $yaml = @"
 # VR_HEADSET_MANAGER - mediamtx configuration
 # Auto-generated: $timestamp - do not edit manually
@@ -60,7 +67,7 @@ webrtcICEUDPMuxAddress: :$($global:mediamtxWebrtcPort)
 api: true
 apiAddress: :$($global:mediamtxApiPort)
 
-paths: {}
+$pathsBlock
 "@
     # Write UTF-8 without BOM - required for YAML and to preserve non-ASCII path chars.
     [System.IO.File]::WriteAllText($YmlPath, $yaml, [System.Text.UTF8Encoding]::new($false))
@@ -173,24 +180,31 @@ function Add-RestreamPath {
     $ffmpegFwd   = "`"" + $global:ffmpegFilePath.Replace('\', '/') + "`""
     $rtspUrl     = "rtsp://127.0.0.1:$($global:mediamtxRtspPort)/$pathName"
 
-    # ffmpeg captures the scrcpy window by its exact title using Windows GDI grab,
-    # encodes to H.264 with low-latency settings, and pushes RTSP to mediamtx.
-    # -pix_fmt yuv420p: GDI grab outputs BGR0 which makes libx264 pick yuv444p by default;
-    #   mediamtx and most RTSP clients only accept standard yuv420p H.264 - must be explicit.
-    # -rtsp_transport tcp: avoids UDP hole-punching issues on loopback.
-    # -pkt_size 1316: keeps RTP packets within Ethernet MTU (mediamtx warns at >1440).
-    $cmd = "$ffmpegFwd -f gdigrab -framerate $($global:mediamtxFramerate) -draw_mouse 0" +
-           " -i title=$windowTitle -vf scale=trunc(iw/2)*2:trunc(ih/2)*2 -pix_fmt yuv420p -c:v libx264 -preset ultrafast" +
-           " -tune zerolatency -b:v $($global:mediamtxBitrate)" +
-           " -maxrate $($global:mediamtxBitrate) -bufsize $($global:mediamtxBitrate)" +
-           " -pkt_size 1316 -rtsp_transport tcp -f rtsp $rtspUrl"
+    $captureMode = if ($global:CaptureMode) { $global:CaptureMode } else { 'WindowOnly' }
 
-    $body = @{
-        runOnDemand             = $cmd
-        runOnDemandRestart      = $true
-        runOnDemandStartTimeout = "15s"
-        runOnDemandCloseAfter   = "30s"
-    } | ConvertTo-Json -Compress
+    if ($captureMode -ne 'WindowOnly') {
+        # Pipe modes: start-screenCopy publishes the stream directly via ffmpeg -c copy.
+        # We only need mediamtx to accept the publisher on this path - empty config is enough.
+        $body = "{}"
+    } else {
+        # Legacy: mediamtx runs ffmpeg gdigrab on-demand to capture the visible scrcpy window.
+        # -pix_fmt yuv420p: GDI grab outputs BGR0 which makes libx264 pick yuv444p by default;
+        #   mediamtx and most RTSP clients only accept standard yuv420p H.264 - must be explicit.
+        # -rtsp_transport tcp: avoids UDP hole-punching issues on loopback.
+        # -pkt_size 1316: keeps RTP packets within Ethernet MTU (mediamtx warns at >1440).
+        $cmd = "$ffmpegFwd -f gdigrab -framerate $($global:mediamtxFramerate) -draw_mouse 0" +
+               " -i title=$windowTitle -vf scale=trunc(iw/2)*2:trunc(ih/2)*2 -pix_fmt yuv420p -c:v libx264 -preset ultrafast" +
+               " -tune zerolatency -b:v $($global:mediamtxBitrate)" +
+               " -maxrate $($global:mediamtxBitrate) -bufsize $($global:mediamtxBitrate)" +
+               " -pkt_size 1316 -rtsp_transport tcp -f rtsp $rtspUrl"
+
+        $body = @{
+            runOnDemand             = $cmd
+            runOnDemandRestart      = $true
+            runOnDemandStartTimeout = "15s"
+            runOnDemandCloseAfter   = "30s"
+        } | ConvertTo-Json -Compress
+    }
 
     $apiUrl = "http://localhost:$($global:mediamtxApiPort)/v3/config/paths/add/$pathName"
     try {

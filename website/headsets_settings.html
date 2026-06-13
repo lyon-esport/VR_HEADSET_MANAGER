@@ -847,6 +847,13 @@
       <script>document.write(TopBar.filtersHTML)</script>
     </div>
     <div class="topbar-right">
+      <button id="capture-mode-btn" class="shutdown-all-topbar-btn" title="Click to cycle global capture mode (Headless / Window+pipe / Legacy)"
+              style="background:rgba(59,130,246,0.10);border-color:rgba(59,130,246,0.35);color:#3b82f6">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="6" width="14" height="12" rx="2"/><polyline points="22 8 16 12 22 16 22 8"/>
+        </svg>
+        <span id="capture-mode-label" class="shutdown-all-label">Capture: ...</span>
+      </button>
       <button id="shutdown-all-btn" class="shutdown-all-topbar-btn" title="Shutdown all ADB-connected headsets">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>
@@ -2085,6 +2092,31 @@
         body: JSON.stringify({ name: dn })
       }).catch(function() {});
     });
+
+    // -- Capture-mode toggle (cycles Headless -> WindowHeadless -> WindowOnly) ---
+    (function() {
+      var labels = { Headless: 'Capture: Headless', WindowHeadless: 'Capture: Window+Pipe', WindowOnly: 'Capture: Legacy' };
+      var cycle  = { Headless: 'WindowHeadless', WindowHeadless: 'WindowOnly', WindowOnly: 'Headless' };
+      var btn    = document.getElementById('capture-mode-btn');
+      var lab    = document.getElementById('capture-mode-label');
+      var current = null;
+      function render(mode) { current = mode; lab.textContent = labels[mode] || ('Capture: ' + mode); }
+      function load() {
+        fetch('/api/capture-mode').then(function(r){return r.json();}).then(function(j){
+          if (j && j.mode) render(j.mode);
+        }).catch(function(){});
+      }
+      btn.addEventListener('click', function() {
+        if (!current) return;
+        var next = cycle[current] || 'WindowHeadless';
+        lab.textContent = 'Switching...';
+        fetch('/api/capture-mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: next }) })
+          .then(function(r){return r.json();})
+          .then(function(j){ if (j && j.mode) render(j.mode); else load(); })
+          .catch(function(){ load(); });
+      });
+      load();
+    })();
 
     // -- Shutdown-all modal -------------------------------------------------
     document.getElementById('shutdown-all-btn').addEventListener('click', function() {
