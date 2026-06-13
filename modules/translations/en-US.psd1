@@ -505,4 +505,23 @@
     VqaWarningThresholdExceeded= "CPU/GPU above mitigation threshold - quality reduction recommended."
     VqaHistoryReset            = "VQA: per-session history reset."
     VqaInvalidApiResponse      = "VQA: mediamtx API returned invalid response."
+
+    # ==========================================
+    # Port conflict resolution (Resolve-PortConflict)
+    # ==========================================
+    PortConflictHeader         = "PORT CONFLICT - {0}"
+    PortConflictDetails        = "Port {0}/{1} is used by {2} (PID {3})"
+    PortConflictPath           = "Path: {0}"
+    PortMenuIncrement          = "[1] Increment port to {0}"
+    PortMenuManual             = "[2] Define new port manually"
+    PortMenuKill               = "[3] Kill the process and keep port {0}"
+    PortAdbMenuKill            = "[1] Kill the process (PID {0}) and keep port {1}"
+    PortAdbMenuSkip            = "[2] Skip and proceed anyway"
+    PortPromptDefault          = "  Choice [1]: "
+    PortKillFailed             = "Could not kill PID {0}: {1}"
+    PortKillSucceeded          = "Process PID {0} terminated."
+    PortKillNeedsAdmin         = "Killing PID {0} ({1}) requires admin rights. A UAC prompt will appear."
+    PortChanged                = "{0}: port changed from {1} to {2}."
+    PortNoFreeInPool           = "No free port available in the pool ({0}-{1}). Please enter one manually."
+    PortAllClear               = "All required ports are available."
 }

@@ -51,19 +51,7 @@ function Get-DefaultRecordingFolder {
     return (Join-Path ([Environment]::GetFolderPath('MyVideos')) "VR_Records")
 }
 
-function Read-ValidPort {
-    param([string]$Label, [int]$Default)
-    while ($true) {
-        Write-Host "  $Label [default: $Default]: " -ForegroundColor White -NoNewline
-        $raw = Read-Host
-        if ([string]::IsNullOrWhiteSpace($raw)) { return $Default }
-        $val = 0
-        if ([int]::TryParse($raw, [ref]$val) -and $val -ge 1024 -and $val -le 65535) {
-            return $val
-        }
-        Write-Host "  Invalid. Enter a number between 1024 and 65535." -ForegroundColor Red
-    }
-}
+# Read-ValidPort lives in modules/utils.ps1 (dot-sourced at wizard startup).
 
 
 function Invoke-FfmpegDownload {
@@ -168,6 +156,28 @@ function Invoke-WelcomeSetup {
 
     $totalSteps = 6
 
+    # Early-load the modules needed for port-conflict resolution during the
+    # port prompts (steps 3-4). The auth phase (step 6) re-uses the same
+    # modules. Order matters: utils -> logging -> console_manager -> computer_setup.
+    . (Join-Path $global:ScriptPath "modules\utils.ps1")
+    . (Join-Path $global:ScriptPath "modules\logging.ps1")
+    . (Join-Path $global:ScriptPath "modules\console_manager.ps1")
+    . (Join-Path $global:ScriptPath "modules\computer_setup.ps1")
+
+    # Default port pools used by Resolve-PortConflict in the wizard. Mirrors
+    # the values set by Get-Config; declared here because Get-Config has not
+    # run yet (config.json does not exist on first launch).
+    if (-not $global:AppPortPools) {
+        $global:AppPortPools = @{
+            WebServer       = @{ Default = 8080;  Pool = (8080..8099);  Protocol = 'TCP';  AllowIncrement = $true  }
+            MediaMtxRtsp    = @{ Default = 8554;  Pool = (8554..8574);  Protocol = 'Both'; AllowIncrement = $true  }
+            MediaMtxHls     = @{ Default = 8888;  Pool = (8888..8908);  Protocol = 'TCP';  AllowIncrement = $true  }
+            MediaMtxWebrtc  = @{ Default = 8889;  Pool = (8889..8909);  Protocol = 'Both'; AllowIncrement = $true  }
+            MediaMtxApi     = @{ Default = 9997;  Pool = (9997..10017); Protocol = 'TCP';  AllowIncrement = $true  }
+            AdbServer       = @{ Default = 5037;  Pool = @();           Protocol = 'TCP';  AllowIncrement = $false }
+        }
+    }
+
     Show-WelcomeBanner
 
     Write-Host "  Welcome! This wizard will configure VR Headset Manager." -ForegroundColor White
@@ -233,6 +243,9 @@ function Invoke-WelcomeSetup {
     Show-WizardStep -Step 3 -Total $totalSteps -Title "Web Server Port"
     Write-Host "  The built-in web server shows headset status in your browser." -ForegroundColor White
     $wsPort = Read-ValidPort -Label "Web server port" -Default 8080
+    $wsPool = $global:AppPortPools.WebServer
+    $wsRes  = Resolve-PortConflict -Service 'WebServer' -CurrentPort $wsPort -Pool $wsPool.Pool -Protocol $wsPool.Protocol -AllowIncrement:$wsPool.AllowIncrement
+    $wsPort = [int]$wsRes.NewPort
     $config.WebServer.port = $wsPort
     Write-Host "  Web server: http://localhost:$wsPort" -ForegroundColor Green
 
@@ -256,6 +269,21 @@ function Invoke-WelcomeSetup {
         Write-Host "  MediaMTX ports configured." -ForegroundColor Green
     } else {
         Write-Host "  Keeping default MediaMTX ports." -ForegroundColor Yellow
+    }
+
+    # Validate every MediaMTX port (whether default or custom) against the
+    # local port-availability check. Conflicts trigger Resolve-PortConflict.
+    $mtxChecks = @(
+        @{ Service='MediaMTX RTSP';   ConfigKey='rtsp_port';   PoolKey='MediaMtxRtsp'   }
+        @{ Service='MediaMTX HLS';    ConfigKey='hls_port';    PoolKey='MediaMtxHls'    }
+        @{ Service='MediaMTX WebRTC'; ConfigKey='webrtc_port'; PoolKey='MediaMtxWebrtc' }
+        @{ Service='MediaMTX API';    ConfigKey='api_port';    PoolKey='MediaMtxApi'    }
+    )
+    foreach ($m in $mtxChecks) {
+        $pool   = $global:AppPortPools[$m.PoolKey]
+        $curVal = [int]$config.mediamtx.($m.ConfigKey)
+        $res    = Resolve-PortConflict -Service $m.Service -CurrentPort $curVal -Pool $pool.Pool -Protocol $pool.Protocol -AllowIncrement:$pool.AllowIncrement
+        $config.mediamtx.($m.ConfigKey) = [int]$res.NewPort
     }
 
     # ------------------------------------------------------------------

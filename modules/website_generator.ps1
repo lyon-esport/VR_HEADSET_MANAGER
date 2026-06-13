@@ -61,6 +61,39 @@ function Update-HeadsetMonitoringFile {
             $script:_monitoringHashes[$outputFile] = $hashStr
         }
     }
+
+    # Generate a placeholder ("-" for all values) for every known headset that has no live data
+    # row yet and no existing file. Prevents 404 on first startup or before the first poll cycle.
+    $coveredNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($h in $knownHeadsetsInfo) { [void]$coveredNames.Add($h.Name) }
+
+    foreach ($headset in @(Get-KnownHeadsets)) {
+        if ($coveredNames.Contains($headset.Name)) { continue }
+        $placeholderFile = Join-Path -Path $outputPath -ChildPath ((Convert-Displayname($headset.Name)) + "[monitoring].html")
+        if (Test-Path -LiteralPath $placeholderFile) { continue }
+
+        $placeholderInfo = @{
+            name               = $headset.Name
+            ping               = $false
+            battery            = "-"
+            battery_ctrl_left  = "-"
+            battery_ctrl_right = "-"
+            charging           = $false
+            temp               = "-"
+            temperature_highLevel             = $global:Monitoring_temperature_highLevel
+            model                            = if ($headset.Model -and $headset.Model -ne "-") { $headset.Model } else { "" }
+            headset_battery_warningLevel     = $global:Monitoring_headset_battery_warningLevel
+            headset_battery_criticalLevel    = $global:Monitoring_headset_battery_criticalLevel
+            controllers_battery_warningLevel  = $global:Monitoring_controllers_battery_warningLevel
+            controllers_battery_criticalLevel = $global:Monitoring_controllers_battery_criticalLevel
+            running_app        = "-"
+            running_app_icon   = ""
+            power_state        = ""
+            time_remaining_min = ""
+        }
+        $placeholderHtml = Invoke-EpsTemplate -Path $templatePath -Safe -binding $placeholderInfo
+        Write-FileWithoutBom -Path $placeholderFile -Content $placeholderHtml
+    }
 }
 
 # Function Write-htmlMonitor $newHeadsets

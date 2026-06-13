@@ -231,6 +231,21 @@ function Get-Config {
     $global:WebServer_enabled = if ($null -ne $configContent.WebServer.enabled) { [bool]$configContent.WebServer.enabled } else { $false }
     $global:WebServer_port    = if ($configContent.WebServer.port)               { [int]$configContent.WebServer.port }    else { 8080 }
 
+    # Port pools used by Resolve-PortConflict (console_manager.ps1) and the
+    # startup orchestrator Confirm-AppPortsAvailable. Each pool is the range
+    # the "[1] Increment" option walks when the default port is taken.
+    # AllowIncrement = $false (ADB) means the per-call -P override is not wired
+    # through the app yet, so increment is not offered; operator can only kill
+    # the foreign process or skip.
+    $global:AppPortPools = @{
+        WebServer       = @{ Default = 8080;  Pool = (8080..8099);  Protocol = 'TCP';  AllowIncrement = $true  }
+        MediaMtxRtsp    = @{ Default = 8554;  Pool = (8554..8574);  Protocol = 'Both'; AllowIncrement = $true  }
+        MediaMtxHls     = @{ Default = 8888;  Pool = (8888..8908);  Protocol = 'TCP';  AllowIncrement = $true  }
+        MediaMtxWebrtc  = @{ Default = 8889;  Pool = (8889..8909);  Protocol = 'Both'; AllowIncrement = $true  }
+        MediaMtxApi     = @{ Default = 9997;  Pool = (9997..10017); Protocol = 'TCP';  AllowIncrement = $true  }
+        AdbServer       = @{ Default = 5037;  Pool = @();           Protocol = 'TCP';  AllowIncrement = $false }
+    }
+
     # VR Monitor console visibility
     $global:Dashboard_showConsole = if ($null -ne $configContent.VRMonitor.showConsole) { [bool]$configContent.VRMonitor.showConsole } else { $false }
 

@@ -119,7 +119,7 @@
       <main class="card" role="main" aria-label="Status <%= $name %>">
         <h1 class="title"><%= $name %>
            <span class="muted" id="status-emoji">
-            <% if (-not $ping) { %>☠️<% } elseif ( ($temp -gt $temperature_highLevel) -or ($battery -lt $headset_battery_criticalLevel) -or (-not $charging) ) { %>⚠️<% } else { %>✅<% } %>
+            <% if (-not $ping) { %>&#x2620;&#xFE0F;<% } elseif ( ($temp -gt $temperature_highLevel) -or ($battery -lt $headset_battery_criticalLevel) -or (-not $charging) ) { %>&#x26A0;&#xFE0F;<% } else { %>&#x2705;<% } %>
         </span>
         </h1>
 <%
@@ -186,11 +186,11 @@
         <div class="values" aria-live="polite">
           <span class="batt" aria-label="Battery percentage">
             <span class="emoji" aria-hidden="true" id="batt-emoji">
-            <% if ($battery -lt $headset_battery_criticalLevel) { %>🪫<% } else { %>🔋<% } %>
+            <% if ($battery -lt $headset_battery_criticalLevel) { %>&#x1FAAB;<% } else { %>&#x1F50B;<% } %>
             </span>
             <strong id="batt-value"><%= $battery %> %</strong>
             <span class="muted" id="charge-emoji">
-              <% if ($charging) { %>⚡<% } else { %>🚫<% } %>
+              <% if ($ping -and $charging) { %>&#x26A1;<% } else { %>&#x1F6AB;<% } %>
             </span>
             <span id="time-remaining-wrap"<% if (-not $timeDisplay) { %> style="display:none"<% } %>>
               <% if ($power_state) { %><span id="power-state-arrow" style="font-size:0.85em;margin-left:4px;color:<% if ($power_state -eq 'charging') { %>limegreen<% } else { %>crimson<% } %>;font-weight:bold"><% if ($power_state -eq 'charging') { %>&#x2197;<% } else { %>&#x2198;<% } %></span><% } else { %><span id="power-state-arrow" style="display:none"></span><% } %><span class="muted" id="time-val" style="font-size:0.75em;margin-left:2px">~<%= $timeDisplay %></span>
@@ -198,9 +198,9 @@
           </span>
           <span class="temp" aria-label="Temperature in Celsius">
             <span class="emoji" aria-hidden="true" id="temp-emoji">
-              <% if ($temp -gt $temperature_highLevel) { %>🔥<% } else { %>❄️<% } %>
+              <% if ($temp -gt $temperature_highLevel) { %>&#x1F525;<% } else { %>&#x2744;&#xFE0F;<% } %>
             </span>
-            <strong id="temp-value"><%= $temp %>&nbsp;°C</strong>
+            <strong id="temp-value"><%= $temp %>&nbsp;&#xB0;C</strong>
           </span>
         </div>
       </main>
@@ -274,14 +274,14 @@
         var se = document.getElementById('status-emoji');
         if (se) {
           if (!d.ping) se.textContent = '☠️';
-          else if ((d.temp !== null && d.temp > _TEMP_HIGH) || (d.battery !== null && d.battery < _CRIT) || !d.charging) se.textContent = '⚠️';
+          else if ((d.temp != null && d.temp > _TEMP_HIGH) || (d.battery != null && d.battery < _CRIT) || !d.charging) se.textContent = '⚠️';
           else se.textContent = '✅';
         }
 
         // Battery
-        _setText('batt-value', d.battery !== null ? d.battery + ' %' : '-');
-        _setText('batt-emoji', d.battery !== null && d.battery < _CRIT ? '🪫' : '🔋');
-        _setText('charge-emoji', d.charging ? '⚡' : '🚫');
+        _setText('batt-value', d.battery != null ? d.battery + ' %' : '- %');
+        _setText('batt-emoji', d.battery != null && d.battery < _CRIT ? '🪫' : '🔋');
+        _setText('charge-emoji', d.ping && d.charging ? '⚡' : '🚫');
 
         // Time remaining
         var tw = document.getElementById('time-remaining-wrap');
@@ -302,8 +302,8 @@
         }
 
         // Temperature
-        _setText('temp-value', d.temp !== null ? d.temp + ' °C' : '-');
-        _setText('temp-emoji', d.temp !== null && d.temp > _TEMP_HIGH ? '🔥' : '❄️');
+        _setText('temp-value', d.temp != null ? d.temp + ' °C' : '- °C');
+        _setText('temp-emoji', d.temp != null && d.temp > _TEMP_HIGH ? '🔥' : '❄️');
 
         // Device icons (only when model is known)
         if (_MODEL) {

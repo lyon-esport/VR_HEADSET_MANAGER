@@ -201,6 +201,28 @@ Write-Host "  Rules created successfully." -ForegroundColor Green
 Start-Sleep -Seconds 1
 '@)
 
+# Elevated scriptblock used by Resolve-PortConflict when the operator picks
+# the "Kill" option and the in-process Stop-Process call returns access-denied.
+# Shows a confirmation box in the admin console (Y/Enter = kill, any other key
+# = skip) and runs Stop-Process -Force inside the elevated session.
+# Params: ProcPid, ProcName, ProcPath, Port, Protocol, Service
+$script:killPidBlock = [scriptblock]::Create(@'
+param($ProcPid, $ProcName, $ProcPath, $Port, $Protocol, $Service)
+'@ + $script:SetupPromptFn + @'
+$details = "PID    : $ProcPid`nProcess: $ProcName`nPath   : $ProcPath`nPort   : $Port/$Protocol"
+$title   = "KILL PROCESS - $Service"
+if (-not (Show-SetupBox -Title $title -Details $details -ActionLabel "Kill process")) {
+    return
+}
+try {
+    Stop-Process -Id ([int]$ProcPid) -Force -ErrorAction Stop
+    Write-Host "  Process PID $ProcPid terminated." -ForegroundColor Green
+} catch {
+    Write-Host ("  Failed to kill PID {0}: {1}" -f $ProcPid, $_.Exception.Message) -ForegroundColor Red
+}
+Start-Sleep -Seconds 1
+'@)
+
 # Generic elevated scriptblock: registers an HTTP URL ACL via netsh.
 # Uses SID S-1-1-0 (Everyone) to avoid locale issues (e.g. French Windows).
 # Params: Url
@@ -219,6 +241,29 @@ $result = netsh http add urlacl url=$Url sddl="D:(A;;GX;;;S-1-1-0)" 2>&1
 Write-Host "  $result" -ForegroundColor Green
 Start-Sleep -Seconds 1
 '@)
+
+
+# Public wrapper around $script:killPidBlock so callers outside this module
+# (e.g. Resolve-PortConflict in console_manager.ps1) do not need to know
+# about the script-scope variable. Opens one elevated console, shows the
+# confirmation box, then Stop-Process -Force.
+function Invoke-KillProcessElevated {
+    param(
+        [Parameter(Mandatory=$true)][int]$ProcPid,
+        [Parameter(Mandatory=$true)][string]$ProcName,
+        [string]$ProcPath = "",
+        [Parameter(Mandatory=$true)][int]$Port,
+        [string]$Protocol = "TCP",
+        [string]$Service  = ""
+    )
+    Invoke-AsAdmin -ScriptBlock $script:killPidBlock `
+        -ProcPid   $ProcPid `
+        -ProcName  $ProcName `
+        -ProcPath  $ProcPath `
+        -Port      $Port `
+        -Protocol  $Protocol `
+        -Service   $Service
+}
 
 
 function Unblock-ADBFirewallRule {
@@ -240,28 +285,43 @@ function Unblock-ADBFirewallRule {
     } catch {
         Write-Log ($msg.NetworkProfileFailed -f $_) -Level WARNING
     }
+    # Reading firewall rules requires admin on some Win10 SKUs (CIM access denied
+    # for standard users). Treat any read failure as "cannot determine state"
+    # and emit the task so the elevated batch handles it. The elevated script
+    # already removes stale *VR_HEADSET_MANAGER* rules first, so re-emitting is safe.
+    $rules         = $null
+    $existingPaths = $null
+    $invalidPaths  = $null
     try {
-        $rules         = Get-NetFirewallRule | Where-Object DisplayName -ilike "*VR_HEADSET_MANAGER*"
-        $existingPaths = ($rules | Where-Object DisplayName -ilike "*ADB*" | Get-NetFirewallApplicationFilter).Program
+        $rules = Get-NetFirewallRule -ErrorAction Stop | Where-Object DisplayName -ilike "*VR_HEADSET_MANAGER*"
+        $existingPaths = ($rules | Where-Object DisplayName -ilike "*ADB*" | Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue).Program
         $invalidPaths  = $existingPaths | Where-Object { $_ -ne $AdbPath }
+    } catch {
+        Write-Log ("Unblock-ADBFirewallRule: cannot read firewall state ({0}) - will request rule creation via elevation." -f $_.Exception.Message) -Level DEBUG
+        $rules = $null
+    }
+    try {
         if ((-not $rules) -or $invalidPaths) {
             Write-Log $msg.FirewallRuleCreating -Level INFO
+            # Resolve canonical path so Defender's running-process matcher hits the rule
+            # even when the on-disk path contains non-ASCII characters (e.g. "partages").
+            $adbResolved = try { (Get-Item -LiteralPath $AdbPath -ErrorAction Stop).FullName } catch { $AdbPath }
             $title   = "FIREWALL RULE REQUIRED - ADB"
-            $details = "Allowing ADB traffic (inbound + outbound)`nProgram : $AdbPath`nProfile : All (Domain, Private, Public)"
+            $details = "Allowing ADB traffic (inbound + outbound)`nProgram : $adbResolved`nProfile : All (Domain, Private, Public)"
             if ($ReturnTask) {
-                $adbEsc = $AdbPath -replace "'", "''"
+                $adbEsc = $adbResolved -replace "'", "''"
                 return @{
                     Title       = $title
                     Details     = $details
                     ActionLabel = "Create rules"
                     Script      = @"
-Get-NetFirewallRule | Where-Object DisplayName -ilike '*VR_HEADSET_MANAGER*' | Remove-NetFirewallRule -ErrorAction Continue
+Get-NetFirewallRule | Where-Object DisplayName -ilike '*VR_HEADSET_MANAGER*ADB*' | Remove-NetFirewallRule -ErrorAction Continue
 New-NetFirewallRule -DisplayName '_[VR_HEADSET_MANAGER]ADB_Allowed [OUT]' -Direction Outbound -Program '$adbEsc' -Action Allow -Profile Any -Description 'Allow VR Headset Manager ADB connections' -ErrorAction Continue | Out-Null
-New-NetFirewallRule -DisplayName '_[VR_HEADSET_MANAGER]ADB_Allowed [IN]'  -Direction Inbound  -Program '$adbEsc' -Action Allow -Description 'Allow VR Headset Manager ADB connections' -ErrorAction Continue | Out-Null
+New-NetFirewallRule -DisplayName '_[VR_HEADSET_MANAGER]ADB_Allowed [IN]'  -Direction Inbound  -Program '$adbEsc' -Action Allow -Profile Any -Description 'Allow VR Headset Manager ADB connections' -ErrorAction Continue | Out-Null
 "@
                 }
             } else {
-                Invoke-AsAdmin -ScriptBlock $script:fwProgramRuleBlock -RuleName $ruleName -Program $AdbPath -Title $title -Details $details
+                Invoke-AsAdmin -ScriptBlock $script:fwProgramRuleBlock -RuleName $ruleName -Program $adbResolved -Title $title -Details $details
                 return $true
             }
         } else {
@@ -349,13 +409,14 @@ function Test-MediaMtxFirewallCurrent {
     $rtspPort   = if ($global:mediamtxRtspPort)   { $global:mediamtxRtspPort   } else { 8554 }
     $hlsPort    = if ($global:mediamtxHlsPort)    { $global:mediamtxHlsPort    } else { 8888 }
     $webrtcPort = if ($global:mediamtxWebrtcPort) { $global:mediamtxWebrtcPort } else { 8889 }
+    $apiPort    = if ($global:mediamtxApiPort)    { $global:mediamtxApiPort    } else { 9997 }
     try {
         $rules = Get-NetFirewallRule -ErrorAction SilentlyContinue |
                  Where-Object { $_.DisplayName -ilike "*VR_HEADSET_MANAGER*MediaMtx*" }
         if (-not $rules) { return $false }
         $ports = $rules | Get-NetFirewallPortFilter -ErrorAction SilentlyContinue |
                           Select-Object -ExpandProperty LocalPort
-        $needed = @([string]$rtspPort, [string]$hlsPort, [string]$webrtcPort)
+        $needed = @([string]$rtspPort, [string]$hlsPort, [string]$webrtcPort, [string]$apiPort)
         foreach ($p in $needed) {
             if ($ports -notcontains $p) { return $false }
         }
@@ -383,15 +444,19 @@ function Unblock-MediaMtxFirewallRule {
     $rtspPort   = if ($global:mediamtxRtspPort)   { $global:mediamtxRtspPort   } else { 8554 }
     $hlsPort    = if ($global:mediamtxHlsPort)    { $global:mediamtxHlsPort    } else { 8888 }
     $webrtcPort = if ($global:mediamtxWebrtcPort) { $global:mediamtxWebrtcPort } else { 8889 }
+    $apiPort    = if ($global:mediamtxApiPort)    { $global:mediamtxApiPort    } else { 9997 }
     $progPath   = $global:mediamtxFilePath
+    # Resolve canonical path so Defender's running-process matcher hits the rule
+    # even when the on-disk path contains non-ASCII characters (e.g. "partages").
+    $progResolved = try { (Get-Item -LiteralPath $progPath -ErrorAction Stop).FullName } catch { $progPath }
     try {
         if ($ReturnTask) {
             # Caller already determined rules need updating; return task for batch elevation.
             # Script includes removal of stale rules so the elevated process handles everything.
             Write-Log ($msg.MediaMtxFirewallRuleCreating -f $rtspPort, $hlsPort) -Level INFO
             $title   = "FIREWALL RULE REQUIRED - MediaMTX"
-            $details = "Allowing inbound streaming ports:`nRTSP   : port $rtspPort  (TCP + UDP)`nHLS    : port $hlsPort  (TCP)`nWebRTC : port $webrtcPort (TCP + UDP)`nProgram: $progPath`nProfile: All (Domain, Private, Public)"
-            $progEsc = $progPath -replace "'", "''"
+            $details = "Allowing inbound streaming ports:`nRTSP   : port $rtspPort  (TCP + UDP)`nHLS    : port $hlsPort  (TCP)`nWebRTC : port $webrtcPort (TCP + UDP)`nAPI    : port $apiPort  (TCP)`nProgram: $progResolved`nProfile: All (Domain, Private, Public)"
+            $progEsc = $progResolved -replace "'", "''"
             return @{
                 Title       = $title
                 Details     = $details
@@ -399,7 +464,7 @@ function Unblock-MediaMtxFirewallRule {
                 Script      = @"
 Get-NetFirewallRule | Where-Object { `$_.DisplayName -ilike '*VR_HEADSET_MANAGER*MediaMtx*' } | Remove-NetFirewallRule -ErrorAction Continue
 `$rn = '_[VR_HEADSET_MANAGER]MediaMtx_Allowed'
-foreach (`$spec in @('RTSP-TCP [IN]|TCP|$rtspPort','RTSP-UDP [IN]|UDP|$rtspPort','HLS-TCP [IN]|TCP|$hlsPort','WebRTC-TCP [IN]|TCP|$webrtcPort','WebRTC-UDP [IN]|UDP|$webrtcPort')) {
+foreach (`$spec in @('RTSP-TCP [IN]|TCP|$rtspPort','RTSP-UDP [IN]|UDP|$rtspPort','HLS-TCP [IN]|TCP|$hlsPort','WebRTC-TCP [IN]|TCP|$webrtcPort','WebRTC-UDP [IN]|UDP|$webrtcPort','API-TCP [IN]|TCP|$apiPort')) {
     `$parts = `$spec -split '\|'
     New-NetFirewallRule -DisplayName (`$rn + ' ' + `$parts[0]) -Direction Inbound -Protocol `$parts[1] -LocalPort ([int]`$parts[2]) -Action Allow -Profile Any -ErrorAction Continue | Out-Null
 }
@@ -420,9 +485,9 @@ New-NetFirewallRule -DisplayName (`$rn + ' [PROG-IN]')  -Direction Inbound  -Pro
         if (-not $existing) {
             Write-Log ($msg.MediaMtxFirewallRuleCreating -f $rtspPort, $hlsPort) -Level INFO
             $title   = "FIREWALL RULE REQUIRED - MediaMTX"
-            $details = "Allowing inbound streaming ports:`nRTSP   : port $rtspPort  (TCP + UDP)`nHLS    : port $hlsPort  (TCP)`nWebRTC : port $webrtcPort (TCP + UDP)`nProgram: $progPath`nProfile: All (Domain, Private, Public)"
-            $specs   = "RTSP-TCP [IN]|TCP|$rtspPort`nRTSP-UDP [IN]|UDP|$rtspPort`nHLS-TCP [IN]|TCP|$hlsPort`nWebRTC-TCP [IN]|TCP|$webrtcPort`nWebRTC-UDP [IN]|UDP|$webrtcPort"
-            Invoke-AsAdmin -ScriptBlock $script:fwMediaMtxBlock -RuleName $ruleName -Program $progPath -Title $title -Details $details -RuleSpec $specs
+            $details = "Allowing inbound streaming ports:`nRTSP   : port $rtspPort  (TCP + UDP)`nHLS    : port $hlsPort  (TCP)`nWebRTC : port $webrtcPort (TCP + UDP)`nAPI    : port $apiPort  (TCP)`nProgram: $progResolved`nProfile: All (Domain, Private, Public)"
+            $specs   = "RTSP-TCP [IN]|TCP|$rtspPort`nRTSP-UDP [IN]|UDP|$rtspPort`nHLS-TCP [IN]|TCP|$hlsPort`nWebRTC-TCP [IN]|TCP|$webrtcPort`nWebRTC-UDP [IN]|UDP|$webrtcPort`nAPI-TCP [IN]|TCP|$apiPort"
+            Invoke-AsAdmin -ScriptBlock $script:fwMediaMtxBlock -RuleName $ruleName -Program $progResolved -Title $title -Details $details -RuleSpec $specs
         } else {
             Write-Log $msg.MediaMtxFirewallRuleExists -Level DEBUG
         }
@@ -616,6 +681,7 @@ function Initialize-ComputerSetup {
         MediaMtxRtsp    = $global:mediamtxRtspPort
         MediaMtxHls     = $global:mediamtxHlsPort
         MediaMtxWebrtc  = $global:mediamtxWebrtcPort
+        MediaMtxApi     = $global:mediamtxApiPort
         MediaMtxProgram = $global:mediamtxFilePath
     }
 

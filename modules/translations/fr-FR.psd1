@@ -119,6 +119,12 @@
     ScrcpyOptions = " M. Modifier les options scrcpy par casque "
     RecordingManagement = " R. Gestion du Recording "
     VideoRecast = " V. Recast video (RTSP/WebRTC) "
+    VideoRecastTitle = "== RECAST VIDEO - RTSP / WebRTC =="
+    VideoRecastHeader = "Copier une URL de flux dans le presse-papiers"
+    VideoRecastProtocol = "Protocole : {0}  |  [P] Changer de protocole"
+    VideoRecastURLLine = " {0}. {1,-20}  {2}"
+    VideoRecastCopied = "  Copie dans le presse-papiers : {0}"
+    VideoRecastInvalidChoice = "  Choix invalide. Appuyez sur une touche pour revenir."
     FilesFolders = " F. Gestion des fichiers et dossiers "
     ServicesManagement = " W. Gestion des services (serveur web / mediamtx) "
     Quit = " 0. Quitter "
@@ -497,4 +503,23 @@
     VqaWarningThresholdExceeded= "CPU/GPU au-dessus du seuil de mitigation - reduction de qualite recommandee."
     VqaHistoryReset            = "VQA : historique de session reinitialise."
     VqaInvalidApiResponse      = "VQA : API mediamtx a retourne une reponse invalide."
+
+    # ==========================================
+    # Resolution de conflits de port (Resolve-PortConflict)
+    # ==========================================
+    PortConflictHeader         = "CONFLIT DE PORT - {0}"
+    PortConflictDetails        = "Le port {0}/{1} est utilise par {2} (PID {3})"
+    PortConflictPath           = "Chemin : {0}"
+    PortMenuIncrement          = "[1] Incrementer le port vers {0}"
+    PortMenuManual             = "[2] Definir un nouveau port manuellement"
+    PortMenuKill               = "[3] Tuer le processus et conserver le port {0}"
+    PortAdbMenuKill            = "[1] Tuer le processus (PID {0}) et conserver le port {1}"
+    PortAdbMenuSkip            = "[2] Ignorer et continuer"
+    PortPromptDefault          = "  Choix [1] : "
+    PortKillFailed             = "Impossible de tuer le PID {0} : {1}"
+    PortKillSucceeded          = "Processus PID {0} termine."
+    PortKillNeedsAdmin         = "Tuer le PID {0} ({1}) necessite les droits admin. Une invite UAC va apparaitre."
+    PortChanged                = "{0} : port modifie de {1} a {2}."
+    PortNoFreeInPool           = "Aucun port libre dans la plage ({0}-{1}). Veuillez en entrer un manuellement."
+    PortAllClear               = "Tous les ports requis sont disponibles."
 }

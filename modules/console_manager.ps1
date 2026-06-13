@@ -34,6 +34,197 @@ function Read-MenuChoice {
 }
 
 
+# Operator-facing resolver for a single port conflict.
+# Tests whether the port is free; if not, shows the offender + a 3-way menu
+# ([1] Increment / [2] Manual / [3] Kill) and applies the chosen action.
+# Returns:
+#   @{ Resolved=$bool; NewPort=<int>; KilledPid=<int|null>; Action=<string> }
+# Where Action is one of 'None','Increment','Manual','Kill','Skip'.
+# -AllowIncrement:$false collapses the menu to [1] Kill / [2] Skip (used for ADB,
+# which is not currently routable through a non-default port).
+function Resolve-PortConflict {
+    param(
+        [Parameter(Mandatory=$true)][string]$Service,
+        [Parameter(Mandatory=$true)][int]$CurrentPort,
+        [int[]]$Pool = @(),
+        [ValidateSet('TCP','UDP','Both')][string]$Protocol = 'TCP',
+        [switch]$AllowIncrement
+    )
+
+    # ---- 1. Fast path: port is free, nothing to do ------------------------
+    if (Test-LocalPortFree -Port $CurrentPort -Protocol $Protocol) {
+        return @{ Resolved = $true; NewPort = $CurrentPort; KilledPid = $null; Action = 'None' }
+    }
+
+    # ---- 2. Identify the owner -------------------------------------------
+    $owner = Get-LocalPortOwner -Port $CurrentPort -Protocol $Protocol
+    if (-not $owner) {
+        # Port shows busy but no owner found (rare; possibly TIME_WAIT or driver-level).
+        Write-Host ""
+        Write-Host ("  PORT CONFLICT - {0}" -f $Service) -ForegroundColor Red
+        Write-Host ("  Port {0}/{1} is busy but the owning process could not be identified." -f $CurrentPort, $Protocol) -ForegroundColor Yellow
+        $owner = @{ Pid = 0; ProcessName = "<unknown>"; ProcessPath = ""; Port = $CurrentPort; Protocol = $Protocol }
+    }
+
+    # ---- 3. Display conflict + pre-compute the [1] increment candidate ----
+    $title = if ($global:msg -and $global:msg.PortConflictHeader) { $global:msg.PortConflictHeader -f $Service } else { "PORT CONFLICT - $Service" }
+    $line1 = if ($global:msg -and $global:msg.PortConflictDetails) { $global:msg.PortConflictDetails -f $CurrentPort, $Protocol, $owner.ProcessName, $owner.Pid } else { "Port $CurrentPort/$Protocol is used by $($owner.ProcessName) (PID $($owner.Pid))" }
+    $line2 = if ($global:msg -and $global:msg.PortConflictPath)    { $global:msg.PortConflictPath    -f ($owner.ProcessPath) }                       else { "Path: $($owner.ProcessPath)" }
+    Write-Host ""
+    Write-Host ("  +" + ("-" * 62) + "+") -ForegroundColor Red
+    Write-Host ("  | {0,-62}|" -f $title) -ForegroundColor Red
+    Write-Host ("  +" + ("-" * 62) + "+") -ForegroundColor Red
+    Write-Host ("    " + $line1) -ForegroundColor Yellow
+    if ($owner.ProcessPath) { Write-Host ("    " + $line2) -ForegroundColor DarkGray }
+    Write-Host ""
+
+    $candidate = $null
+    if ($AllowIncrement -and $Pool -and $Pool.Count -gt 0) {
+        $candidate = Find-NextFreePortInPool -Pool $Pool -SkipPort $CurrentPort -Protocol $Protocol
+        if (-not $candidate -and $global:msg -and $global:msg.PortNoFreeInPool) {
+            Write-Host ("  " + ($global:msg.PortNoFreeInPool -f $Pool[0], $Pool[-1])) -ForegroundColor Yellow
+        } elseif (-not $candidate) {
+            Write-Host ("  No free port available in the pool ({0}-{1}). Manual entry only." -f $Pool[0], $Pool[-1]) -ForegroundColor Yellow
+        }
+    }
+
+    # ---- 4. Print the menu ------------------------------------------------
+    if ($AllowIncrement) {
+        $m1 = if ($candidate -and $global:msg -and $global:msg.PortMenuIncrement) { $global:msg.PortMenuIncrement -f $candidate } `
+              elseif ($candidate)                                                 { "[1] Increment port to $candidate" } `
+              else                                                                { "[1] Increment port - (no free port in pool)" }
+        $m2 = if ($global:msg -and $global:msg.PortMenuManual) { $global:msg.PortMenuManual }            else { "[2] Define new port manually" }
+        $m3 = if ($global:msg -and $global:msg.PortMenuKill)   { $global:msg.PortMenuKill   -f $CurrentPort } else { "[3] Kill the process and keep port $CurrentPort" }
+        Write-Host ("  " + $m1) -ForegroundColor White
+        Write-Host ("  " + $m2) -ForegroundColor White
+        Write-Host ("  " + $m3) -ForegroundColor White
+    } else {
+        $m1 = if ($global:msg -and $global:msg.PortAdbMenuKill) { $global:msg.PortAdbMenuKill -f $owner.Pid, $CurrentPort } else { "[1] Kill the process (PID $($owner.Pid)) and keep port $CurrentPort" }
+        $m2 = if ($global:msg -and $global:msg.PortAdbMenuSkip) { $global:msg.PortAdbMenuSkip }                              else { "[2] Skip and proceed anyway" }
+        Write-Host ("  " + $m1) -ForegroundColor White
+        Write-Host ("  " + $m2) -ForegroundColor White
+    }
+    $prompt = if ($global:msg -and $global:msg.PortPromptDefault) { $global:msg.PortPromptDefault } else { "  Choice [1]: " }
+    Write-Host $prompt -ForegroundColor Yellow -NoNewline
+    $choice = Read-MenuChoice
+
+    # ---- 5. Apply the choice ---------------------------------------------
+    # Default (Enter) = [1]. Digit 1/2/3 = same; everything else = default.
+    $picked = 1
+    if ($choice.Kind -eq 'Digit' -and $choice.Value -ge 1 -and $choice.Value -le 3) { $picked = $choice.Value }
+    Write-Host ""
+
+    if ($AllowIncrement) {
+        switch ($picked) {
+            1 {
+                if ($candidate) {
+                    if ($global:msg -and $global:msg.PortChanged) {
+                        Write-Host ("  " + ($global:msg.PortChanged -f $Service, $CurrentPort, $candidate)) -ForegroundColor Green
+                    } else {
+                        Write-Host ("  {0}: port changed from {1} to {2}." -f $Service, $CurrentPort, $candidate) -ForegroundColor Green
+                    }
+                    return @{ Resolved = $true; NewPort = $candidate; KilledPid = $null; Action = 'Increment' }
+                }
+                # No candidate -> fall through to manual
+                $picked = 2
+            }
+        }
+        switch ($picked) {
+            2 {
+                while ($true) {
+                    $new = Read-ValidPort -Label "$Service port" -Default $CurrentPort
+                    if ($new -eq $CurrentPort) {
+                        Write-Host "  Same port - re-checking..." -ForegroundColor DarkGray
+                    }
+                    if (Test-LocalPortFree -Port $new -Protocol $Protocol) {
+                        if ($global:msg -and $global:msg.PortChanged) {
+                            Write-Host ("  " + ($global:msg.PortChanged -f $Service, $CurrentPort, $new)) -ForegroundColor Green
+                        } else {
+                            Write-Host ("  {0}: port changed from {1} to {2}." -f $Service, $CurrentPort, $new) -ForegroundColor Green
+                        }
+                        return @{ Resolved = $true; NewPort = $new; KilledPid = $null; Action = 'Manual' }
+                    }
+                    Write-Host ("  Port {0} is also in use. Try another." -f $new) -ForegroundColor Red
+                }
+            }
+            3 {
+                $killed = Invoke-PortConflictKill -Owner $owner -Service $Service
+                if ($killed -and (Test-LocalPortFree -Port $CurrentPort -Protocol $Protocol)) {
+                    return @{ Resolved = $true; NewPort = $CurrentPort; KilledPid = $owner.Pid; Action = 'Kill' }
+                }
+                # Kill failed or port still busy -> fall back to manual entry
+                Write-Host ("  Falling back to manual port entry.") -ForegroundColor Yellow
+                while ($true) {
+                    $new = Read-ValidPort -Label "$Service port" -Default $CurrentPort
+                    if (Test-LocalPortFree -Port $new -Protocol $Protocol) {
+                        return @{ Resolved = $true; NewPort = $new; KilledPid = $null; Action = 'Manual' }
+                    }
+                    Write-Host ("  Port {0} is also in use. Try another." -f $new) -ForegroundColor Red
+                }
+            }
+        }
+    } else {
+        # ADB degraded menu: [1] Kill (default) / [2] Skip
+        if ($picked -le 1) {
+            $killed = Invoke-PortConflictKill -Owner $owner -Service $Service
+            if ($killed -and (Test-LocalPortFree -Port $CurrentPort -Protocol $Protocol)) {
+                return @{ Resolved = $true; NewPort = $CurrentPort; KilledPid = $owner.Pid; Action = 'Kill' }
+            }
+            Write-Host ("  Kill did not free port {0} - skipping." -f $CurrentPort) -ForegroundColor Yellow
+            return @{ Resolved = $false; NewPort = $CurrentPort; KilledPid = $null; Action = 'Skip' }
+        } else {
+            return @{ Resolved = $false; NewPort = $CurrentPort; KilledPid = $null; Action = 'Skip' }
+        }
+    }
+}
+
+
+# Internal helper used by Resolve-PortConflict for the "Kill" branch.
+# Tries Stop-Process in-process first. On Access-Denied, falls back to
+# Invoke-KillProcessElevated (which opens one UAC prompt + confirmation box).
+# Returns $true when Stop-Process succeeded somewhere along the chain.
+function Invoke-PortConflictKill {
+    param(
+        [Parameter(Mandatory=$true)][hashtable]$Owner,
+        [Parameter(Mandatory=$true)][string]$Service
+    )
+    if (-not $Owner.Pid -or [int]$Owner.Pid -le 0) {
+        Write-Host "  Cannot kill: no PID available." -ForegroundColor Red
+        return $false
+    }
+    # ---- Attempt 1: in-process kill ----
+    try {
+        Stop-Process -Id ([int]$Owner.Pid) -Force -ErrorAction Stop
+        $okMsg = if ($global:msg -and $global:msg.PortKillSucceeded) { $global:msg.PortKillSucceeded -f $Owner.Pid } else { "Process PID $($Owner.Pid) terminated." }
+        Write-Host ("  " + $okMsg) -ForegroundColor Green
+        return $true
+    } catch {
+        $needAdmin = $true   # any failure -> try elevation
+        $errMsg = $_.Exception.Message
+        $warn = if ($global:msg -and $global:msg.PortKillNeedsAdmin) { $global:msg.PortKillNeedsAdmin -f $Owner.Pid, $Owner.ProcessName } else { "Killing PID $($Owner.Pid) ($($Owner.ProcessName)) requires admin rights. A UAC prompt will appear." }
+        Write-Host ("  " + $warn) -ForegroundColor Yellow
+        try {
+            Invoke-KillProcessElevated -ProcPid ([int]$Owner.Pid) `
+                                        -ProcName $Owner.ProcessName `
+                                        -ProcPath ([string]$Owner.ProcessPath) `
+                                        -Port     ([int]$Owner.Port) `
+                                        -Protocol ([string]$Owner.Protocol) `
+                                        -Service  $Service
+            # Re-check: if Get-Process still finds the PID, kill failed (operator skipped, etc.)
+            $stillThere = Get-Process -Id ([int]$Owner.Pid) -ErrorAction SilentlyContinue
+            if (-not $stillThere) { return $true }
+            $failMsg = if ($global:msg -and $global:msg.PortKillFailed) { $global:msg.PortKillFailed -f $Owner.Pid, "operator skipped or process respawned" } else { "Could not kill PID $($Owner.Pid): operator skipped or process respawned" }
+            Write-Host ("  " + $failMsg) -ForegroundColor Red
+            return $false
+        } catch {
+            $failMsg = if ($global:msg -and $global:msg.PortKillFailed) { $global:msg.PortKillFailed -f $Owner.Pid, $_.Exception.Message } else { "Could not kill PID $($Owner.Pid): $($_.Exception.Message)" }
+            Write-Host ("  " + $failMsg) -ForegroundColor Red
+            return $false
+        }
+    }
+}
+
+
 # Picker scaffolding shared by every "show table -> pick a headset -> do action" sub-menu.
 # - Calls $RenderTable to draw the headset list (defaults to Show-HeadsetsTable).
 # - Reads a single key. Digits 1..9 select the matching headset (1-based ID).
