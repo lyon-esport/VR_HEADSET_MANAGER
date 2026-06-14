@@ -609,6 +609,30 @@ try {
             continue
         }
 
+        # API: GET /api/load-tier  - returns the current adaptive-monitoring tier so the
+        # browser can scale its own polling intervals (status, computer-stats) up under load.
+        # Tier and multiplier come from Get-LoadTier / Get-LoadMultiplier in utils.ps1; base
+        # values come from the live config-driven globals so the operator can re-tune in one place.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/load-tier') {
+            try {
+                $tier = try { Get-LoadTier } catch { 'idle' }
+                $mult = try { Get-LoadMultiplier } catch { 1 }
+                $vrm  = if ($null -ne $global:VRMonitor_refresh_timer) { [int]$global:VRMonitor_refresh_timer } else { 5 }
+                $cm   = if ($null -ne $global:ComputerMonitoring_refresh_timer_sec) { [int]$global:ComputerMonitoring_refresh_timer_sec } else { 60 }
+                Send-JsonResponse -Response $response -Body @{
+                    ok       = $true
+                    loadTier = @{
+                        tier       = "$tier"
+                        multiplier = [int]$mult
+                        base       = @{ vrmonitor = $vrm; computer_monitoring = $cm }
+                    }
+                }
+            } catch {
+                try { Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = 'server error' } } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
         # API: GET /api/capture-mode  - returns the current global capture mode
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/capture-mode') {
             try {
@@ -627,7 +651,7 @@ try {
                 $body = (New-Object System.IO.StreamReader($request.InputStream)).ReadToEnd()
                 $j = $body | ConvertFrom-Json -ErrorAction Stop
                 $mode = "$($j.mode)"
-                if ($mode -notin @('Headless','WindowHeadless','WindowOnly')) {
+                if ($mode -notin @('Headless','WindowHeadless','WindowOnly','LocalOnly')) {
                     Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = 'invalid mode' }
                 } else {
                     $ok = [bool](Set-CaptureMode -Mode $mode)

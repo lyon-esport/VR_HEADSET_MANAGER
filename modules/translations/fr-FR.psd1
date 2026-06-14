@@ -309,6 +309,8 @@
     WebServerListening            = "[WebServeur] En ecoute sur http://+:{0}/ - Ctrl+C pour arreter"
     AwakeModeActivated = "Mode eveil active : le verrouillage ecran et la veille sont desactives."
     AwakeModeDeactivated = "Mode eveil desactive : comportement de veille/verrouillage normal restaure."
+    DefenderExclusionSkipped    = "Exclusion Windows Defender : protection temps reel inactive ou dossier deja exclu"
+    DefenderExclusionPending    = "Exclusion Windows Defender : planification de la tache pour {0}"
 
     # ==========================================
     # headsets_manager.ps1

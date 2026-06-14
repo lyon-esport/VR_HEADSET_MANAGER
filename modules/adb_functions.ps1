@@ -90,19 +90,15 @@ function Invoke-Adb {
     $proc = [System.Diagnostics.Process]::new()
     $proc.StartInfo = $psi
 
-    $stdoutSb = [System.Text.StringBuilder]::new()
-    $stderrSb = [System.Text.StringBuilder]::new()
-    $outHandler = {
-        param($s, $e)
-        if ($null -ne $e.Data) { [void]$Event.MessageData.AppendLine($e.Data) }
-    }
-    Register-ObjectEvent -InputObject $proc -EventName 'OutputDataReceived' -Action $outHandler -MessageData $stdoutSb | Out-Null
-    Register-ObjectEvent -InputObject $proc -EventName 'ErrorDataReceived'  -Action $outHandler -MessageData $stderrSb | Out-Null
-
     try {
         [void]$proc.Start()
-        $proc.BeginOutputReadLine()
-        $proc.BeginErrorReadLine()
+
+        # Read streams synchronously via Task.ReadToEndAsync. Avoids:
+        # - PowerShell event-pump latency (Register-ObjectEvent races, truncates large output)
+        # - Deadlock when one buffer fills while waiting on the other (read one async, one sync)
+        $stderrTask = $proc.StandardError.ReadToEndAsync()
+        $stdoutRaw  = $proc.StandardOutput.ReadToEnd()
+
         if ($TimeoutSeconds -gt 0) {
             if (-not $proc.WaitForExit($TimeoutSeconds * 1000)) {
                 try { $proc.Kill() } catch {}
@@ -111,17 +107,21 @@ function Invoke-Adb {
         } else {
             $proc.WaitForExit()
         }
-    } finally {
-        Get-EventSubscriber | Where-Object { $_.SourceObject -eq $proc } | Unregister-Event
+
+        $stderrRaw = $stderrTask.GetAwaiter().GetResult()
+
+        $stdout = $stdoutRaw.TrimEnd("`r","`n").Split("`n") | ForEach-Object { $_.TrimEnd("`r") }
+        $stderr = $stderrRaw.TrimEnd("`r","`n").Split("`n") | ForEach-Object { $_.TrimEnd("`r") }
+        if ($stdout.Count -eq 1 -and $stdout[0] -eq '') { $stdout = @() }
+        if ($stderr.Count -eq 1 -and $stderr[0] -eq '') { $stderr = @() }
+
+        $code = $proc.ExitCode
+        return @{ ExitCode = $code; StdOut = $stdout; StdErr = $stderr; Ok = ($code -eq 0) }
     }
-
-    $stdout = $stdoutSb.ToString().TrimEnd("`r","`n").Split("`n") | ForEach-Object { $_.TrimEnd("`r") }
-    $stderr = $stderrSb.ToString().TrimEnd("`r","`n").Split("`n") | ForEach-Object { $_.TrimEnd("`r") }
-    if ($stdout.Count -eq 1 -and $stdout[0] -eq '') { $stdout = @() }
-    if ($stderr.Count -eq 1 -and $stderr[0] -eq '') { $stderr = @() }
-
-    $code = $proc.ExitCode
-    return @{ ExitCode = $code; StdOut = $stdout; StdErr = $stderr; Ok = ($code -eq 0) }
+    finally {
+        # Release SafeProcessHandle, stdout/stderr pipe handles, wait handle
+        if ($proc) { $proc.Dispose() }
+    }
 }
 
 

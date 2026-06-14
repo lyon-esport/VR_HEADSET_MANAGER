@@ -259,6 +259,47 @@
     /* In no-stream mode the OFFLINE label sits behind the monitoring frame */
     .cell.no-stream .offline-overlay { z-index: 5; }
 
+    /* Local-only capture mode banner */
+    .local-mode-banner {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 10px 16px;
+      margin: 6px 6px 0 6px;
+      background: rgba(59,130,246,0.12);
+      border: 1px solid rgba(59,130,246,0.35);
+      border-radius: 6px;
+      color: #cfe0ff;
+      font-size: 13px;
+      flex-shrink: 0;
+    }
+    .local-mode-banner[hidden] { display: none; }
+    .local-mode-banner .lmb-msg { flex: 1; }
+    .local-mode-banner .lmb-msg strong { color: #fff; }
+    .local-mode-banner .lmb-btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 6px 14px;
+      background: rgba(59,130,246,0.25);
+      border: 1px solid rgba(59,130,246,0.55);
+      border-radius: 6px;
+      color: #fff;
+      font-size: 12px; font-weight: 600;
+      cursor: pointer; text-decoration: none;
+      font-family: inherit;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .local-mode-banner .lmb-btn:hover {
+      background: rgba(59,130,246,0.45);
+      border-color: rgba(59,130,246,0.8);
+    }
+    [data-theme="light"] .local-mode-banner {
+      background: rgba(59,130,246,0.10);
+      color: #1e3a8a;
+    }
+    [data-theme="light"] .local-mode-banner .lmb-msg strong { color: #0b1e4a; }
+    [data-theme="light"] .local-mode-banner .lmb-btn { color: #0b1e4a; }
+    [data-theme="light"] .local-mode-banner .lmb-btn:hover { color: #fff; }
+
     /* Override topbar-filters for this page: shrink to content, allow dropdowns to escape */
     .topbar-filters { flex: 0 0 auto; overflow: visible; }
 
@@ -385,6 +426,13 @@
 
   </header>
 
+  <div id="local-mode-banner" class="local-mode-banner" hidden>
+    <div class="lmb-msg">
+      Capture mode is set to <strong>Local only</strong> &mdash; no video stream is available here. Headsets are mirrored in local scrcpy windows.
+    </div>
+    <button type="button" class="lmb-btn" id="local-mode-change-btn">Change capture mode</button>
+  </div>
+
   <div class="grid" id="grid">
   <div class="stream-break"></div>
   </div>
@@ -393,7 +441,19 @@
 
   <script>
     // ------ Configuration ------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-    var REFRESH_MS    = 5000;   // status poll interval in ms
+    var REFRESH_MS    = 5000;   // defensive fallback only - real value comes from /api/load-tier on bootstrap
+    // Load-tier state: populated by /api/load-tier on page-init, refreshed on every poll completion.
+    // multiplier = 1 (idle) | 2 (mitigation) | 5 (max). base.vrmonitor is in seconds.
+    var loadTier = { tier: 'idle', multiplier: 1, base: { vrmonitor: 5, computer_monitoring: 60 } };
+    function nextStatusDelay() {
+      try { return Math.max(500, (loadTier.base.vrmonitor || 5) * (loadTier.multiplier || 1) * 1000); }
+      catch (e) { return REFRESH_MS; }
+    }
+    function refreshLoadTier() {
+      return fetch('/api/load-tier').then(function(r){ return r.json(); }).then(function(j){
+        if (j && j.loadTier) loadTier = j.loadTier;
+      }).catch(function(){});
+    }
     var NATURAL_W     = 480;    // natural render width of the status iframe
     var NO_STREAM_W   = 240;    // CSS width of offline tile (matches min() in .cell.no-stream)
     var NATURAL_H     = 260;    // fallback render height of the status iframe
@@ -402,6 +462,28 @@
 
     var MIN_STREAM_CELL_W = 200; // px — below this, scroll rather than shrink further
     var headsetStatus = {};
+    var captureMode = null;
+
+    function refreshCaptureMode() {
+      return fetch('/api/capture-mode').then(function(r){ return r.json(); }).then(function(j){
+        if (j && j.mode) captureMode = j.mode;
+        updateLocalModeBanner();
+      }).catch(function(){});
+    }
+    function updateLocalModeBanner() {
+      var banner = document.getElementById('local-mode-banner');
+      if (!banner) return;
+      var anyScrcpy = Object.keys(headsetStatus).some(function(k){ return headsetStatus[k] && headsetStatus[k].scrcpy; });
+      var show = (captureMode === 'LocalOnly') && anyScrcpy;
+      banner.hidden = !show;
+    }
+    document.addEventListener('DOMContentLoaded', function() {
+      var btn = document.getElementById('local-mode-change-btn');
+      if (btn) btn.addEventListener('click', function(){
+        window.open('headsets_settings.html#capture-mode', '_blank');
+      });
+    });
+
     var autoRestartState = {};
     var appNameCache = {};
     var initialFilterApplied = false;
@@ -555,7 +637,7 @@
 
     // ------ Headsets status polling (single API call replaces two CSV reads) -------------------------------------------------------------------------------
     function pollHeadsetsStatus() {
-      fetch('/api/headsets-status')
+      return fetch('/api/headsets-status')
         .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
         .then(function(items) {
           var newStatus = {};
@@ -588,6 +670,7 @@
             }
           }
           applyOfflineState();
+          updateLocalModeBanner();
         })
         .catch(function() { /* keep last known state on network error */ });
     }
@@ -1088,8 +1171,15 @@
             if (btn) btn.style.display = 'flex';
           });
         }
-        pollHeadsetsStatus();
-        setInterval(pollHeadsetsStatus, REFRESH_MS);
+        // Bootstrap: learn the tier + base from the server BEFORE scheduling polls.
+        // After every poll completion, refresh the tier in parallel and re-schedule using
+        // setTimeout (not setInterval) so each tick re-reads the current multiplier.
+        function statusLoop() {
+          Promise.all([pollHeadsetsStatus(), refreshLoadTier(), refreshCaptureMode()]).finally(function() {
+            setTimeout(statusLoop, nextStatusDelay());
+          });
+        }
+        refreshLoadTier().finally(statusLoop);
         document.querySelectorAll('#grid .cell').forEach(function(cell) {
           var dn = cell.dataset.display;
           if (!dn) return;

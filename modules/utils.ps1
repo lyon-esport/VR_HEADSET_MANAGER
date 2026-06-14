@@ -228,6 +228,7 @@ function Test-InternetConnectivity {
 # Uses Win32_Processor; averages LoadPercentage across all sockets.
 # Returns $null on failure.
 function Get-CpuInfo {
+    $procs = $null
     try {
         $procs = @(Get-CimInstance -ClassName Win32_Processor -ErrorAction Stop)
         if ($procs.Count -eq 0) { return $null }
@@ -240,6 +241,8 @@ function Get-CpuInfo {
         }
     } catch {
         return $null
+    } finally {
+        if ($procs) { foreach ($p in $procs) { if ($p) { $p.Dispose() } } }
     }
 }
 
@@ -249,6 +252,8 @@ function Get-CpuInfo {
 # Returns $null on failure.
 function Get-RamInfo {
     $ddrMap = @{ 20 = 'DDR'; 21 = 'DDR2'; 24 = 'DDR3'; 26 = 'DDR4'; 34 = 'DDR5' }
+    $dimms = $null
+    $os = $null
     try {
         $dimms = @(Get-CimInstance -ClassName Win32_PhysicalMemory -ErrorAction Stop)
         $os    = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
@@ -281,6 +286,9 @@ function Get-RamInfo {
         }
     } catch {
         return $null
+    } finally {
+        if ($dimms) { foreach ($d in $dimms) { if ($d) { $d.Dispose() } } }
+        if ($os)    { $os.Dispose() }
     }
 }
 
@@ -448,6 +456,8 @@ function Get-GpuInfo {
             VramFreePercent = $vramFreePct
         }
     }
+    # Release CIM handles on Win32_VideoController instances
+    foreach ($c in $controllers) { if ($c) { $c.Dispose() } }
     return $results
 }
 
@@ -463,10 +473,12 @@ function Get-AppWorkload {
 
     # Logical core count for CPU% normalisation; fall back to 1 on failure
     $logicalCores = 1
+    $cpuProcs = $null
     try {
-        $logicalCores = [int](Get-CimInstance -ClassName Win32_Processor -ErrorAction Stop |
-                              Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum
+        $cpuProcs = @(Get-CimInstance -ClassName Win32_Processor -ErrorAction Stop)
+        $logicalCores = [int]($cpuProcs | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum
         if ($logicalCores -lt 1) { $logicalCores = 1 }
+        foreach ($cp in $cpuProcs) { if ($cp) { $cp.Dispose() } }
     } catch { }
 
     # Snapshot helper: returns @{ pid = @{ CPU=[double]; MemMB=[double] } } for one name
@@ -597,7 +609,10 @@ function Get-RecordingDriveInfo {
 
 
 function Update-ComputerMonitoring {
-    # Skip if file is recent enough and no force-refresh flag file present
+    # Skip if file is recent enough and no force-refresh flag file present.
+    # The throttle interval is adaptive: when CPU pressure is high, slow the
+    # snapshot down so the monitor itself stops adding load (saves WMI + perf-
+    # counter calls). See Get-AdaptiveMonitorInterval for thresholds.
     $flagFile = Join-Path -Path $global:ScriptPath -ChildPath "data\computer_monitoring_forcerefresh.flag"
     $forceRefresh = Test-Path -LiteralPath $flagFile
     $needsRefresh = $forceRefresh
@@ -605,8 +620,9 @@ function Update-ComputerMonitoring {
         if (-not (Test-Path -LiteralPath $global:computerMonitoringFilePath)) {
             $needsRefresh = $true
         } else {
+            $threshold = Get-AdaptiveMonitorInterval
             $age = (Get-Date) - (Get-Item -LiteralPath $global:computerMonitoringFilePath).LastWriteTime
-            if ($age.TotalSeconds -ge $global:ComputerMonitoring_refresh_timer_sec) {
+            if ($age.TotalSeconds -ge $threshold) {
                 $needsRefresh = $true
             }
         }
@@ -906,22 +922,51 @@ function Get-GpuEncoder {
     return $global:GpuEncoder
 }
 
-# Returns the slow-path interval (seconds) for the VRMonitor's
-# Update-ComputerMonitoring throttle, based on the last recorded CPU load.
-# Adaptive thresholds reuse the VQA settings - no extra config.
-function Get-AdaptiveMonitorInterval {
-    $base = if ($null -ne $global:ComputerMonitoring_refresh_timer_sec) { [int]$global:ComputerMonitoring_refresh_timer_sec } else { 60 }
-    if (-not $global:AdaptiveMonitoring_Enabled) { return $base }
-    if (-not $global:VQA_Enabled)                { return $base }
-    if (-not (Test-Path -LiteralPath $global:computerMonitoringFilePath)) { return $base }
+# -------------------------------------------------------------------
+# Load-aware monitoring throttle (single source of truth)
+#
+# Get-LoadTier classifies the latest CPU snapshot into three levels;
+# Get-LoadMultiplier converts that into 1 / 2 / 5; every adaptive interval
+# in the app (Update-ComputerMonitoring throttle, browser polling, VQR
+# slow-path tick gating) reads from these two helpers.
+#
+# Reuses the existing VQA CPU thresholds so the operator does not have to
+# maintain a second set of values. When VQA is disabled, or Adaptive_Monitoring
+# is disabled, or there is no snapshot to read, the tier collapses to 'idle'
+# (multiplier 1) and every interval reverts to its configured base.
+# -------------------------------------------------------------------
+
+function Get-LoadTier {
+    if (-not $global:AdaptiveMonitoring_Enabled) { return 'idle' }
+    if (-not $global:VQA_Enabled)                { return 'idle' }
+    if (-not (Test-Path -LiteralPath $global:computerMonitoringFilePath)) { return 'idle' }
     try {
         $snap = Get-Content -LiteralPath $global:computerMonitoringFilePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-    } catch { return $base }
+    } catch { return 'idle' }
     $cpu = $null
-    if     ($null -ne $snap.Cpu.LoadPercent) { $cpu = [int]$snap.Cpu.LoadPercent }
+    if     ($null -ne $snap.CPU.LoadPercent) { $cpu = [int]$snap.CPU.LoadPercent }
+    elseif ($null -ne $snap.Cpu.LoadPercent) { $cpu = [int]$snap.Cpu.LoadPercent }
     elseif ($null -ne $snap.CpuLoadPercent)  { $cpu = [int]$snap.CpuLoadPercent }
-    if ($null -eq $cpu) { return $base }
-    if ($cpu -ge [int]$global:VQA_CpuMaxThreshold)        { return 10 }
-    if ($cpu -ge [int]$global:VQA_CpuMitigationThreshold) { return 5 }
-    return $base
+    if ($null -eq $cpu) { return 'idle' }
+    if ($cpu -ge [int]$global:VQA_CpuMaxThreshold)        { return 'max' }
+    if ($cpu -ge [int]$global:VQA_CpuMitigationThreshold) { return 'mitigation' }
+    return 'idle'
+}
+
+function Get-LoadMultiplier {
+    switch (Get-LoadTier) {
+        'max'        { return 5 }
+        'mitigation' { return 2 }
+        default      { return 1 }
+    }
+}
+
+# Returns the slow-path interval (seconds) for the VRMonitor's
+# Update-ComputerMonitoring throttle. Always >= base; high CPU LENGTHENS the
+# interval (so the monitor stops adding to the load it is measuring).
+# Clamped at 600 s to avoid runaway intervals on long-running max-tier load.
+function Get-AdaptiveMonitorInterval {
+    $base = if ($null -ne $global:ComputerMonitoring_refresh_timer_sec) { [int]$global:ComputerMonitoring_refresh_timer_sec } else { 60 }
+    $m    = Get-LoadMultiplier
+    return [Math]::Min(600, $base * $m)
 }

@@ -434,7 +434,17 @@
   </div>
 
   <script>
-    var REFRESH_MS    = 4000;
+    var REFRESH_MS    = 4000;   // defensive fallback only - real value comes from /api/load-tier on bootstrap
+    // Load-tier state: populated by /api/load-tier on page-init, refreshed periodically.
+    // multiplier = 1 (idle) | 2 (mitigation) | 5 (max).
+    var loadTier = { tier: 'idle', multiplier: 1, base: { vrmonitor: 4, computer_monitoring: 30 } };
+    function nextStatusDelay()  { try { return Math.max(500, (loadTier.base.vrmonitor || 4) * (loadTier.multiplier || 1) * 1000); }    catch (e) { return REFRESH_MS; } }
+    function nextComputerDelay(){ try { return Math.max(1000, (loadTier.base.computer_monitoring || 30) * (loadTier.multiplier || 1) * 1000); } catch (e) { return 30000; } }
+    function refreshLoadTier()  {
+      return fetch('/api/load-tier').then(function(r){ return r.json(); }).then(function(j){
+        if (j && j.loadTier) loadTier = j.loadTier;
+      }).catch(function(){});
+    }
     var activeFilter  = 'all';
     var lastRows      = [];
 
@@ -533,7 +543,7 @@
     function pollHeadsetsStatus() {
       var ind = document.getElementById('refresh-indicator');
       ind.style.display = 'inline';
-      fetch('/api/headsets-status')
+      return fetch('/api/headsets-status')
         .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
         .then(function(items) {
           renderTable(items);
@@ -621,13 +631,15 @@
       // GPU cards
       if (d.GPU && d.GPU.length) {
         d.GPU.forEach(function(g) {
-          var load3d = (g.Load3DPercent != null) ? g.Load3DPercent : null;
+          var load3d   = (g.Load3DPercent   != null) ? g.Load3DPercent   : null;
+          var decode   = (g.DecodePercent   != null) ? g.DecodePercent   : null;
           var vramUsed = (g.VramUsedPercent != null) ? g.VramUsedPercent : null;
           html += '<div class="comp-card">' +
             '<div class="comp-card-title">GPU ' + (d.GPU.length > 1 ? esc(g.Index) + ' ' : '') + '</div>' +
             (g.Model ? '<div class="comp-row"><span class="lbl">Model</span><span class="val" style="font-size:11px;max-width:130px;overflow:hidden;text-overflow:ellipsis" title="' + esc(g.Model) + '">' + esc(g.Model) + '</span></div>' : '') +
             '<div class="comp-row"><span class="lbl">VRAM</span><span class="val">' + esc(g.DedicatedVramGB) + ' GB</span></div>' +
             (load3d != null ? '<div class="comp-row"><span class="lbl">3D Load</span><span class="val">' + esc(load3d) + ' %</span></div>' + compBarVqa(load3d, 'gpu') : '') +
+            (decode != null ? '<div class="comp-row" style="margin-top:4px"><span class="lbl">Video Decode</span><span class="val">' + esc(decode) + ' %</span></div>' + compBar(decode) : '') +
             (vramUsed != null ? '<div class="comp-row" style="margin-top:4px"><span class="lbl">VRAM used</span><span class="val">' + esc(g.VramUsedGB) + ' GB (' + esc(vramUsed) + '%)</span></div>' + compBar(vramUsed) : '') +
             '</div>';
         });
@@ -663,7 +675,7 @@
     }
 
     function pollComp() {
-      fetch(COMP_JSON_PATH + '?_=' + Date.now())
+      return fetch(COMP_JSON_PATH + '?_=' + Date.now())
         .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
         .then(function(d) { renderComp(d); })
         .catch(function() { renderComp(null); });
@@ -705,8 +717,15 @@
         .catch(function() { btn.classList.remove('spinning'); btn.disabled = false; });
     }
 
-    pollComp();
-    setInterval(pollComp, COMP_REFRESH_MS);
+    // Computer-stats loop: chains a single VQA fetch immediately after each successful
+    // comp fetch (no separate VQA timer). Tier multiplier widens cadence under load:
+    // idle = 30 s, mitigation = 60 s, max = 150 s (config-driven base x multiplier).
+    function compLoop() {
+      Promise.all([pollComp(), refreshLoadTier()])
+        .then(function(){ if (typeof pollVqa === 'function') { return pollVqa(); } })
+        .finally(function(){ setTimeout(compLoop, nextComputerDelay()); });
+    }
+    refreshLoadTier().finally(compLoop);
     // ── /Computer monitoring ─────────────────────────────────────────────────
 
     // ── Video Quality Automation ────────────────────────────────────────────
@@ -853,8 +872,8 @@
     }
 
     function pollVqa() {
-      if (!vqaEnabled) return;
-      fetch(VQA_JSON_PATH + '?_=' + Date.now())
+      if (!vqaEnabled) return Promise.resolve();
+      return fetch(VQA_JSON_PATH + '?_=' + Date.now())
         .then(function(r) { if (!r.ok) throw 0; return r.json(); })
         .then(vqaRender)
         .catch(function() { /* no recommendation yet */ });
@@ -983,7 +1002,8 @@
         vqaPaintAutoApplyState('mediamtx', vqaState.autoApply_mediamtx);
         vqaPaintVqoState(vqaState.derivedVqo);
         pollVqa();
-        setInterval(pollVqa, VQA_REFRESH_MS);
+        // No separate interval: pollVqa now rides on compLoop, firing immediately after every
+        // successful computer-stats fetch. Inherits the load-tier scaled cadence (30 s / 60 s / 150 s).
       })
       .catch(function() {
         var el = document.getElementById('vqa-section');
@@ -991,8 +1011,13 @@
       });
     // ── /Video Quality Automation ───────────────────────────────────────────
 
-    pollHeadsetsStatus();
-    setInterval(pollHeadsetsStatus, REFRESH_MS);
+    // Status loop: bootstrap-then-recursive setTimeout so each tick re-reads the multiplier.
+    function statusLoop() {
+      Promise.all([pollHeadsetsStatus(), refreshLoadTier()]).finally(function() {
+        setTimeout(statusLoop, nextStatusDelay());
+      });
+    }
+    statusLoop();
 
     document.getElementById('headsets-table').addEventListener('click', function(e) {
       var btn = e.target.closest('[data-launch-app]');

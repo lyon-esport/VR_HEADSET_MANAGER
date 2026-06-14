@@ -248,6 +248,10 @@ function Start-VRMonitor {
         # Two-speed loop: 500ms fast tick for CSV/HTML, slow tick (refresh_timer) for heavy ops
         $slowEvery       = [Math]::Max(1, [int]($global:VRMonitor_refresh_timer / 0.5))
         $slowCounter     = $slowEvery  # trigger slow path immediately on first tick
+        # VQR tick counter: incremented once per slow-path tick. Used to gate
+        # Invoke-VideoQualityRecommendation so it runs every Nth tick based on
+        # the current load tier (1=every tick, 2=every 2nd, 5=every 5th).
+        $vqrTickCounter  = 0
         $lastFingerprint = ""
         $knownHeadsets   = @()
 
@@ -361,11 +365,19 @@ function Start-VRMonitor {
                 Update-ComputerMonitoring
 
                 if ($global:VQA_Enabled -and (Get-Command Invoke-VideoQualityRecommendation -ErrorAction SilentlyContinue)) {
-                    try {
-                        Invoke-VideoQualityRecommendation | Out-Null
-                        if ($global:VQA_EnabledVQO) { Invoke-VideoQualityOptimizer }
-                    } catch {
-                        Write-Log ("VQA: cycle failed: " + $_.Exception.Message) -Level WARNING
+                    # Tier-gated: idle=every tick (m=1), mitigation=every 2nd (m=2), max=every 5th (m=5).
+                    # Increment first so the first tick always runs (counter % 1 == 0).
+                    $vqrTickCounter++
+                    $m = try { Get-LoadMultiplier } catch { 1 }
+                    if ($vqrTickCounter % $m -eq 0) {
+                        try {
+                            Invoke-VideoQualityRecommendation | Out-Null
+                            if ($global:VQA_EnabledVQO) { Invoke-VideoQualityOptimizer }
+                        } catch {
+                            Write-Log ("VQA: cycle failed: " + $_.Exception.Message) -Level WARNING
+                        }
+                    } else {
+                        Write-Log ("VQA: skipped tick (multiplier={0}, counter={1})" -f $m, $vqrTickCounter) -Level DEBUG
                     }
                 }
 
@@ -416,8 +428,8 @@ function Get-KnownHeadsetInfos {
     $IPAddress = $knownHeadset.IPAddress
 
     # 1. Test ping
+    $ping = New-Object System.Net.NetworkInformation.Ping
     try {
-        $ping = New-Object System.Net.NetworkInformation.Ping
         $pingReply = $ping.Send($knownHeadset.IPAddress, $PingTimeout)
         $result.Ping = $pingReply.Status -eq "Success"
 
@@ -427,6 +439,9 @@ function Get-KnownHeadsetInfos {
     }
     catch {
         return $result
+    }
+    finally {
+        $ping.Dispose()
     }
 
     # 2. Check ADB port
@@ -477,7 +492,9 @@ function Get-KnownHeadsetInfos {
             foreach ($proc in $scrcpyProcesses) {
                 Write-Log ($msg.ScrcpyProcessChecking -f $proc.Id, $proc.Path) -Level DEBUG
                 if ($proc.Path -like "$($global:scrcpyFolder)\scrcpy.exe") {
-                    $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($proc.Id)").CommandLine
+                    $cimProc = Get-CimInstance Win32_Process -Filter "ProcessId = $($proc.Id)"
+                    $cmdLine = $cimProc.CommandLine
+                    $cimProc.Dispose()
                     Write-Log ($msg.ScrcpyProcessCmdLine -f $cmdLine) -Level DEBUG
                     Write-Log ($msg.ScrcpyLookingFor -f $IPAddress, $ADBPort) -Level DEBUG
                     if ($cmdLine -match ([regex]::Escape($IPAddress) + "(:$ADBPort)?")) {

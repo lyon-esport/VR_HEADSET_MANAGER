@@ -42,9 +42,10 @@ function Write-MediaMtxYml {
     # In pipe capture modes the app pushes RTSP into mediamtx from per-headset ffmpeg
     # processes, so the YAML needs an "all_others" path that accepts publishers without
     # an explicit per-path entry. In legacy WindowOnly mode, paths are registered one
-    # by one via Add-RestreamPath (runOnDemand) so the empty hash is enough.
+    # by one via Add-RestreamPath (runOnDemand) so the empty hash is enough. In LocalOnly
+    # mode no path is registered at all (no streaming), empty hash is also fine.
     $captureMode = if ($global:CaptureMode) { $global:CaptureMode } else { 'WindowOnly' }
-    $pathsBlock  = if ($captureMode -ne 'WindowOnly') { "paths:`n  all_others:" } else { "paths: {}" }
+    $pathsBlock  = if ($captureMode -in @('WindowOnly','LocalOnly')) { "paths: {}" } else { "paths:`n  all_others:" }
 
     $yaml = @"
 # VR_HEADSET_MANAGER - mediamtx configuration
@@ -174,13 +175,20 @@ function Add-RestreamPath {
         return
     }
 
+    $captureMode = if ($global:CaptureMode) { $global:CaptureMode } else { 'WindowOnly' }
+
+    # LocalOnly mode: scrcpy window only, no streaming pipeline at all.
+    # Skip mediamtx path registration entirely.
+    if ($captureMode -eq 'LocalOnly') {
+        Write-Log ("Add-RestreamPath: skipped for {0} (mode LocalOnly)" -f $HeadsetName) -Level DEBUG
+        return
+    }
+
     $pathName    = ConvertTo-RestreamPathName -HeadsetName $HeadsetName
     $windowTitle = Convert-Displayname -displayName $HeadsetName
     # Wrap ffmpeg path in double-quotes: the sources path contains spaces.
     $ffmpegFwd   = "`"" + $global:ffmpegFilePath.Replace('\', '/') + "`""
     $rtspUrl     = "rtsp://127.0.0.1:$($global:mediamtxRtspPort)/$pathName"
-
-    $captureMode = if ($global:CaptureMode) { $global:CaptureMode } else { 'WindowOnly' }
 
     if ($captureMode -ne 'WindowOnly') {
         # Pipe modes: start-screenCopy publishes the stream directly via ffmpeg -c copy.

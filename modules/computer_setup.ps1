@@ -619,6 +619,70 @@ function Reset-AwakeMode {
 }
 
 
+function Register-WindowsDefenderExclusion {
+    param(
+        [string]$ExclusionPath = $global:ScriptPath,
+        # Pass $priorState from Initialize-ComputerSetup to skip live check when
+        # fw_state.json already records that the exclusion was confirmed for this path.
+        $PriorState = $null,
+        [switch]$ReturnTask
+    )
+    try {
+        # If fw_state.json already records the exclusion for this exact path, trust it
+        # and skip the live Get-MpPreference check (which can fail for mapped drives
+        # where Defender stores the UNC form instead of the drive-letter form).
+        if ($PriorState -and $PriorState.DefenderExclusionPath) {
+            if (([string]$PriorState.DefenderExclusionPath).TrimEnd('\') -ieq $ExclusionPath.TrimEnd('\')) {
+                Write-Log $msg.DefenderExclusionSkipped -Level DEBUG
+                return $null
+            }
+        }
+        $mpStatus = Get-MpComputerStatus -ErrorAction SilentlyContinue
+        if (-not ($mpStatus -and $mpStatus.AntivirusEnabled -and $mpStatus.RealTimeProtectionEnabled)) {
+            Write-Log $msg.DefenderExclusionSkipped -Level DEBUG
+            return $null
+        }
+        $mpPref = Get-MpPreference -ErrorAction SilentlyContinue
+        $normalizedPath = $ExclusionPath.TrimEnd('\')
+        # Also resolve UNC equivalent for mapped network drives: Defender may store
+        # \\server\share\... even when we passed L:\... to Add-MpPreference.
+        $uncPath = $null
+        if ($ExclusionPath -match '^[A-Za-z]:') {
+            $drv = Get-PSDrive ($ExclusionPath.Substring(0, 1)) -ErrorAction SilentlyContinue
+            if ($drv -and $drv.DisplayRoot -match '^\\\\') {
+                $uncPath = ($drv.DisplayRoot.TrimEnd('\') + $ExclusionPath.Substring(2)).TrimEnd('\')
+            }
+        }
+        $alreadyExcluded = $mpPref -and ($mpPref.ExclusionPath | Where-Object {
+            $p = $_.TrimEnd('\')
+            $p -ieq $normalizedPath -or ($uncPath -and $p -ieq $uncPath)
+        })
+        if ($alreadyExcluded) {
+            Write-Log $msg.DefenderExclusionSkipped -Level DEBUG
+            return $null
+        }
+        Write-Log ($msg.DefenderExclusionPending -f $ExclusionPath) -Level INFO
+        $title       = "WINDOWS DEFENDER EXCLUSION"
+        $details     = "Windows Defender real-time scanning may cause high CPU usage`nwhile scrcpy, ffmpeg and ADB processes are running.`n`nExcluding the application folder is strongly recommended.`n`nFolder : $ExclusionPath"
+        $actionLabel = "Add exclusion for this folder"
+        $pathEsc     = $ExclusionPath -replace "'", "''"
+        if ($ReturnTask) {
+            return @{
+                Title       = $title
+                Details     = $details
+                ActionLabel = $actionLabel
+                Script      = "Add-MpPreference -ExclusionPath '$pathEsc' -ErrorAction SilentlyContinue"
+            }
+        } else {
+            Invoke-AsAdmin -ScriptBlock { param($P) Add-MpPreference -ExclusionPath $P -ErrorAction SilentlyContinue } -P $ExclusionPath
+        }
+    } catch {
+        Write-Log ("Register-WindowsDefenderExclusion: {0}" -f $_.Exception.Message) -Level DEBUG
+        return $null
+    }
+}
+
+
 function Initialize-ComputerSetup {
     <#
     .SYNOPSIS
@@ -668,21 +732,37 @@ function Initialize-ComputerSetup {
     $aclTask = Register-WebServerUrlAcl -ReturnTask -PriorState $priorState
     if ($aclTask -is [hashtable]) { $pendingTasks += $aclTask }
 
+    $defenderTask = Register-WindowsDefenderExclusion -ReturnTask -PriorState $priorState
+    if ($defenderTask -is [hashtable]) { $pendingTasks += $defenderTask }
+
     # Open one admin console for all pending tasks (zero UAC prompts if nothing to do)
     if ($pendingTasks.Count -gt 0) {
         Invoke-BatchAsAdmin -Tasks $pendingTasks
     }
 
+    # Persist Defender exclusion state. We record the path the moment the task was
+    # generated (not after the batch) to avoid a race where Get-MpPreference does
+    # not reflect the new exclusion immediately after the elevated process exits.
+    # The user has been shown the recommendation; we do not re-prompt on restarts.
+    $defenderExclusionPath = if ($priorState -and $priorState.DefenderExclusionPath) {
+        $priorState.DefenderExclusionPath   # carry forward from prior run
+    } elseif ($defenderTask -is [hashtable]) {
+        $global:ScriptPath                  # task was presented this run - record it
+    } else {
+        $null
+    }
+
     # Persist what we just (re)applied so the next run can detect drift.
     # Written even when no tasks ran - the values still describe the live OS state.
     Set-FwState -State @{
-        AdbPath         = $global:adbPath
-        WebServerPort   = $global:WebServer_port
-        MediaMtxRtsp    = $global:mediamtxRtspPort
-        MediaMtxHls     = $global:mediamtxHlsPort
-        MediaMtxWebrtc  = $global:mediamtxWebrtcPort
-        MediaMtxApi     = $global:mediamtxApiPort
-        MediaMtxProgram = $global:mediamtxFilePath
+        AdbPath               = $global:adbPath
+        WebServerPort         = $global:WebServer_port
+        MediaMtxRtsp          = $global:mediamtxRtspPort
+        MediaMtxHls           = $global:mediamtxHlsPort
+        MediaMtxWebrtc        = $global:mediamtxWebrtcPort
+        MediaMtxApi           = $global:mediamtxApiPort
+        MediaMtxProgram       = $global:mediamtxFilePath
+        DefenderExclusionPath = $defenderExclusionPath
     }
 
     # Write the ready flag so headsets_dashboard.ps1 knows firewall setup is done.

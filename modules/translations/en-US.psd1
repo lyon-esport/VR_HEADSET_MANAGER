@@ -311,6 +311,8 @@
     FirewallConfigSkipped = "Firewall configuration for ADB failed or skipped"
     AwakeModeActivated = "Awake mode activated: screen lock and sleep are disabled."
     AwakeModeDeactivated = "Awake mode deactivated: normal sleep/lock behaviour restored."
+    DefenderExclusionSkipped    = "Windows Defender exclusion: real-time protection not active or folder already excluded"
+    DefenderExclusionPending    = "Windows Defender exclusion: scheduling setup task for {0}"
 
     # ==========================================
     # headsets_manager.ps1

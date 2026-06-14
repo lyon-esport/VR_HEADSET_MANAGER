@@ -169,7 +169,9 @@ function Get-ScrcpyProcess {
     # Fallback: match by command line - handles windows on inactive virtual desktops
     # where MainWindowTitle is empty. Requires either displayName or headsetIP in the cmdline.
     return $ownedProcs | Where-Object {
-        $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($_.Id)" -ErrorAction SilentlyContinue).CommandLine
+        $cimProc = Get-CimInstance Win32_Process -Filter "ProcessId = $($_.Id)" -ErrorAction SilentlyContinue
+        $cmdLine = $cimProc.CommandLine
+        if ($cimProc) { $cimProc.Dispose() }
         if (-not $cmdLine) { return $false }
         if ($headsetIP -and $cmdLine -match [regex]::Escape($headsetIP)) { return $true }
         if ($cmdLine -match [regex]::Escape($displayName)) { return $true }
@@ -283,7 +285,7 @@ function Start-FfmpegStreamPush {
 function Set-CaptureMode {
     param(
         [Parameter(Mandatory)]
-        [ValidateSet('Headless','WindowHeadless','WindowOnly')]
+        [ValidateSet('Headless','WindowHeadless','WindowOnly','LocalOnly')]
         [string]$Mode
     )
     if ($global:CaptureMode -eq $Mode) {
@@ -314,8 +316,10 @@ function Set-CaptureMode {
     $global:CaptureMode = $Mode
 
     # mediamtx YAML structure depends on the mode (paths: {} vs all_others:).
-    # Regenerate and restart only when crossing the WindowOnly <-> pipe boundary.
-    $crossedBoundary = (($previous -eq 'WindowOnly') -ne ($Mode -eq 'WindowOnly'))
+    # WindowOnly and LocalOnly both use paths: {} (no publishers accepted),
+    # pipe modes (Headless/WindowHeadless) need all_others:. Restart mediamtx
+    # only when crossing that boundary.
+    $crossedBoundary = (($previous -in @('WindowOnly','LocalOnly')) -ne ($Mode -in @('WindowOnly','LocalOnly')))
     if ($crossedBoundary) {
         try { Stop-MediaMtx; Start-Sleep -Milliseconds 500; Start-MediaMtx } catch {
             Write-Log ("Set-CaptureMode: mediamtx restart failed: {0}" -f $_.Exception.Message) -Level WARNING
@@ -463,13 +467,18 @@ function start-screenCopy {
         $recordOption = ""
     }
     # Dispatch on capture mode:
-    #   WindowOnly     -> legacy path (visible window + GDI-grab from mediamtx side, gated by Add-RestreamPath)
+    #   WindowOnly     -> legacy: visible window + GDI-grab from mediamtx side (gated by Add-RestreamPath)
     #   WindowHeadless -> visible window + record-to-pipe + ffmpeg push to RTSP (no GDI)
     #   Headless       -> --no-window + record-to-pipe + ffmpeg push to RTSP
+    #   LocalOnly      -> visible window only, no streaming pipeline (file recording via scrcpy)
     $captureMode = if ($global:CaptureMode) { $global:CaptureMode } else { 'WindowOnly' }
-    $usePipe = ($captureMode -ne 'WindowOnly')
+    $usePipe = ($captureMode -in @('Headless','WindowHeadless'))
 
-    if ($usePipe) {
+    if ($captureMode -eq 'LocalOnly') {
+        # No streaming, no gdigrab - GPU SDL is fine here. File recording (if any)
+        # uses scrcpy's native --record directly.
+        $arguments = "-s $adb_device $options --window-title=$displayName $recordOption"
+    } elseif ($usePipe) {
         $names    = Get-HeadsetPipeNames -SafeName $displayName
         # Pipe mode forces periodic IDR frames so late RTSP subscribers can start decoding immediately.
         $pipeArgs = "--record=\\.\pipe\$($names.In) --record-format=mkv --video-codec-options=i-frame-interval=1"
@@ -581,7 +590,9 @@ function Watch-ScrcpyProcesses {
                 $headsetProfile = if ($headset.ScrcpyProfile) { $headset.ScrcpyProfile } else { "R-N-45-20" }
                 $expectedRecording = ($headset.Record -eq "True")
 
-                $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($runningScrcpyProcess_forThisheadset.Id)" -ErrorAction SilentlyContinue).CommandLine
+                $cimProc = Get-CimInstance Win32_Process -Filter "ProcessId = $($runningScrcpyProcess_forThisheadset.Id)" -ErrorAction SilentlyContinue
+                $cmdLine = $cimProc.CommandLine
+                if ($cimProc) { $cimProc.Dispose() }
 
                 # Check recording option mismatch only when we could actually read the command line.
                 # If $cmdLine is null (process vanished from WMI), skip the check to avoid a

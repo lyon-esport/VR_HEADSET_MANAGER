@@ -1221,7 +1221,8 @@ function Show-SubMenu-Config {
         $captureLabel = switch ($global:CaptureMode) {
             'Headless'       { "Stream only" }
             'WindowHeadless' { "Stream + local scrcpy window" }
-            'WindowOnly'     { "Local scrcpy window (legacy mode)" }
+            'WindowOnly'     { "Stream + local Window (legacy)" }
+            'LocalOnly'      { "Local scrcpy window only" }
             default          { "$global:CaptureMode" }
         }
         Write-Host "  V. Video Capture Mode  - Currently: $captureLabel"
@@ -1284,9 +1285,10 @@ function Show-SubMenu-CaptureMode {
         Write-Host ""
         Write-Host "  Current: $global:CaptureMode"
         Write-Host ""
-        Write-Host "  1. Stream only                              - No scrcpy window. Lowest CPU. Stream still available on the website."
-        Write-Host "  2. Stream + local scrcpy window             - scrcpy window visible + stream via named pipe (GPU rendering)."
-        Write-Host "  3. Local scrcpy window (legacy mode)        - Visible window, GDI capture, software/GPU H.264 encode."
+        Write-Host "  1. Stream only                       - No scrcpy window. Lowest CPU. Stream available on the website."
+        Write-Host "  2. Stream + local scrcpy window      - scrcpy window visible + stream via named pipe (GPU rendering)."
+        Write-Host "  3. Stream + local Window (legacy)    - Visible window, GDI capture, software/GPU H.264 encode."
+        Write-Host "  4. Local scrcpy window only          - Window only. No streaming pipeline (lowest CPU when no viewer)."
         Write-Host ""
         Write-Host "  Switching restarts any running scrcpy session in the new mode."
         Write-Host ""
@@ -1297,10 +1299,24 @@ function Show-SubMenu-CaptureMode {
             '1' { 'Headless' }
             '2' { 'WindowHeadless' }
             '3' { 'WindowOnly' }
+            '4' { 'LocalOnly' }
             '0' { return }
             default { $null }
         }
         if ($newMode) {
+            # Warn before switching to LocalOnly - no stream/web/restream
+            if ($newMode -eq 'LocalOnly' -and $global:CaptureMode -ne 'LocalOnly') {
+                Write-Host ""
+                Write-Host "  WARNING: Only the local scrcpy windows will open." -ForegroundColor Yellow
+                Write-Host "  Video capture will NOT be available on the web interface or via restream links." -ForegroundColor Yellow
+                Write-Host ""
+                $ack = (Read-Host "  Continue? [Y/N]").Trim().ToUpper()
+                if ($ack -ne 'Y') {
+                    Write-Host "  Cancelled." -ForegroundColor DarkGray
+                    Start-Sleep -Seconds 1
+                    continue
+                }
+            }
             if (Set-CaptureMode -Mode $newMode) {
                 Write-Host ""
                 Write-Host "  CaptureMode set to $newMode" -ForegroundColor Green
