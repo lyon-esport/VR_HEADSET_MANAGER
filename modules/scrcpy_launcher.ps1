@@ -233,7 +233,7 @@ function Start-HeadsetPipeBridge {
             $arOut = $srvOut.BeginWaitForConnection($null, $null)
             $srvIn.EndWaitForConnection($arIn)
             $srvOut.EndWaitForConnection($arOut)
-            $buf = New-Object byte[] 65536
+            $buf = New-Object byte[] 4096
             while ($true) {
                 $n = $srvIn.Read($buf, 0, $buf.Length)
                 if ($n -le 0) { break }
@@ -259,9 +259,21 @@ function Start-FfmpegStreamPush {
     $names = Get-HeadsetPipeNames -SafeName $SafeName
     $logErr = Join-Path $global:logFolder ("${SafeName}_ffmpegPush_stderr.txt")
     $argList = [System.Collections.Generic.List[string]]::new()
-    $argList.AddRange([string[]]@(
-        '-hide_banner','-loglevel','warning',
-        '-f','matroska','-i',"\\.\pipe\$($names.Out)"))
+    $argList.AddRange([string[]]@('-hide_banner','-loglevel','warning'))
+    # Low-latency input flags applied ONLY when we are going to re-encode. They
+    # cut libavformat's default 5s analyzeduration / 5MB probesize down to the
+    # minimum the matroska demuxer needs to identify the H.264 stream (without
+    # this it cannot fulfil -map 0:v:0 and ffmpeg exits immediately). 100ms /
+    # 32KB is enough in practice while still saving ~400-700ms vs the defaults.
+    # -fflags +nobuffer + -flags low_delay disable libavformat's read-ahead and
+    # frame-reorder delay. -avioflags direct is intentionally NOT used: it
+    # bypasses I/O buffering for the named pipe which proved unstable.
+    if ($global:mediamtxReencode) {
+        $argList.AddRange([string[]]@(
+            '-fflags','+nobuffer','-flags','low_delay',
+            '-analyzeduration','100000','-probesize','32768'))
+    }
+    $argList.AddRange([string[]]@('-f','matroska','-i',"\\.\pipe\$($names.Out)"))
     # Output 1: RTSP push into mediamtx. mediamtx remuxes this single source into
     # RTSP / HLS / WebRTC (WHEP) for downstream viewers, so re-encoding here caps
     # bandwidth on every viewer protocol (including the video_monitor web page).
@@ -278,21 +290,28 @@ function Start-FfmpegStreamPush {
         # safer. Short GOP (= framerate) ensures new WHEP subscribers receive a
         # keyframe within ~1s of joining.
         $gop = [string]$fps
+        # Per-encoder low-latency tails: disable async pipelining / lookahead so
+        # frames flow through with minimal in-encoder queuing. qsv defaults to
+        # async_depth=4 (~130 ms at 30 fps); nvenc has an implicit -delay; the
+        # libx264 fallback uses sliced threading to avoid frame-level latency.
         $encParams = switch ($enc.Name) {
-            'h264_nvenc' { @('-c:v','h264_nvenc','-preset','p1','-tune','ll','-rc','cbr','-b:v',$bw,'-maxrate',$bw,'-bufsize',$bw,'-bf','0','-g',$gop) }
-            'h264_qsv'   { @('-c:v','h264_qsv','-preset','veryfast','-b:v',$bw,'-maxrate',$bw,'-bufsize',$bw,'-bf','0','-g',$gop) }
-            'h264_amf'   { @('-c:v','h264_amf','-usage','ultralowlatency','-b:v',$bw,'-maxrate',$bw,'-bufsize',$bw,'-bf','0','-g',$gop) }
-            'h264_mf'    { @('-c:v','h264_mf','-b:v',$bw,'-bf','0','-g',$gop) }
-            default      { @('-c:v','libx264','-preset','ultrafast','-tune','zerolatency','-b:v',$bw,'-maxrate',$bw,'-bufsize',$bw,'-bf','0','-g',$gop) }
+            'h264_nvenc' { @('-c:v','h264_nvenc','-preset','p1','-tune','ll','-rc','cbr','-b:v',$bw,'-maxrate',$bw,'-bufsize',$bw,'-bf','0','-g',$gop,'-delay','0','-rc-lookahead','0') }
+            'h264_qsv'   { @('-c:v','h264_qsv','-preset','veryfast','-b:v',$bw,'-maxrate',$bw,'-bufsize',$bw,'-bf','0','-g',$gop,'-async_depth','1','-look_ahead','0') }
+            'h264_amf'   { @('-c:v','h264_amf','-usage','ultralowlatency','-b:v',$bw,'-maxrate',$bw,'-bufsize',$bw,'-bf','0','-g',$gop,'-quality','speed','-rc','cbr','-async_depth','1') }
+            'h264_mf'    { @('-c:v','h264_mf','-b:v',$bw,'-bf','0','-g',$gop,'-rc_mode','CBR') }
+            default      { @('-c:v','libx264','-preset','ultrafast','-tune','zerolatency','-b:v',$bw,'-maxrate',$bw,'-bufsize',$bw,'-bf','0','-g',$gop,'-x264-params','nal-hrd=cbr:force-cfr=1:sliced-threads=1','-threads','4') }
         }
         $rtspOut = [System.Collections.Generic.List[string]]::new()
         $rtspOut.AddRange([string[]]@('-map','0:v:0'))
         $rtspOut.AddRange([string[]]$encParams)
         if ($enc.ExtraArgs -and $enc.ExtraArgs.Count -gt 0) { $rtspOut.AddRange([string[]]$enc.ExtraArgs) }
+        # -flush_packets / -muxdelay / -muxpreload: tell the RTSP muxer to push
+        # every packet immediately and not pre-buffer any startup interval.
         $rtspOut.AddRange([string[]]@('-r',[string]$fps,'-pix_fmt','yuv420p',
-            '-pkt_size','1316','-f','rtsp','-rtsp_transport','tcp',$RtspUrl))
+            '-pkt_size','1316','-flush_packets','1','-muxdelay','0','-muxpreload','0',
+            '-f','rtsp','-rtsp_transport','tcp',$RtspUrl))
         $argList.AddRange([string[]]$rtspOut.ToArray())
-        Write-Log ("Start-FfmpegStreamPush: {0} re-encoding with {1} @ {2}fps / {3}" -f $SafeName, $enc.Name, $fps, $bw) -Level DEBUG
+        Write-Log ("Start-FfmpegStreamPush: {0} re-encoding with {1} @ {2}fps / {3} (low-latency tuning on)" -f $SafeName, $enc.Name, $fps, $bw) -Level DEBUG
     } else {
         # Passthrough (Annex-B is required by mediamtx; MKV stores AVCC)
         $argList.AddRange([string[]]@('-map','0','-c','copy','-bsf:v','h264_mp4toannexb',
