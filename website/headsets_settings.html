@@ -847,13 +847,17 @@
       <script>document.write(TopBar.filtersHTML)</script>
     </div>
     <div class="topbar-right">
-      <button id="capture-mode-btn" class="shutdown-all-topbar-btn" title="Click to cycle global capture mode (Headless / Window+pipe / Legacy)"
-              style="background:rgba(59,130,246,0.10);border-color:rgba(59,130,246,0.35);color:#3b82f6">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="2" y="6" width="14" height="12" rx="2"/><polyline points="22 8 16 12 22 16 22 8"/>
-        </svg>
-        <span id="capture-mode-label" class="shutdown-all-label">Capture: ...</span>
-      </button>
+      <div id="capture-mode-wrap" class="shutdown-all-topbar-btn"
+           title="Global video capture mode"
+           style="background:rgba(59,130,246,0.10);border-color:rgba(59,130,246,0.35);color:#3b82f6;cursor:pointer;position:relative;padding-left:8px;padding-right:8px;gap:0;margin-right:8px">
+        <span id="capture-mode-icon" aria-hidden="true" style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px"></span>
+        <select id="capture-mode-select" aria-label="Capture mode"
+                style="position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;border:0;font:inherit">
+          <option value="Headless">Stream only</option>
+          <option value="WindowHeadless">Stream + local scrcpy window</option>
+          <option value="WindowOnly">Local scrcpy window (legacy mode)</option>
+        </select>
+      </div>
       <button id="shutdown-all-btn" class="shutdown-all-topbar-btn" title="Shutdown all ADB-connected headsets">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>
@@ -2093,27 +2097,60 @@
       }).catch(function() {});
     });
 
-    // -- Capture-mode toggle (cycles Headless -> WindowHeadless -> WindowOnly) ---
+    // -- Capture-mode dropdown ----------------------------------------------
     (function() {
-      var labels = { Headless: 'Capture: Headless', WindowHeadless: 'Capture: Window+Pipe', WindowOnly: 'Capture: Legacy' };
-      var cycle  = { Headless: 'WindowHeadless', WindowHeadless: 'WindowOnly', WindowOnly: 'Headless' };
-      var btn    = document.getElementById('capture-mode-btn');
-      var lab    = document.getElementById('capture-mode-label');
-      var current = null;
-      function render(mode) { current = mode; lab.textContent = labels[mode] || ('Capture: ' + mode); }
+      var sel  = document.getElementById('capture-mode-select');
+      var icon = document.getElementById('capture-mode-icon');
+      var wrap = document.getElementById('capture-mode-wrap');
+      // Three mode-specific icons. currentColor inherits from the wrapper.
+      var ICONS = {
+        // Stream only: broadcast waves emanating from a dot
+        Headless: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+                  '<path d="M3 9c4.5-5 13.5-5 18 0"/>' +
+                  '<path d="M6 12.5c3-3.3 9-3.3 12 0"/>' +
+                  '<path d="M9 16c1.5-1.8 4.5-1.8 6 0"/>' +
+                  '<circle cx="12" cy="19.5" r="1.4" fill="currentColor"/></svg>',
+        // Stream + local window: TV in bottom-left, large broadcast waves filling the upper-right
+        WindowHeadless: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+                        '<rect x="0.5" y="13" width="11" height="7" rx="1"/>' +
+                        '<path d="M3.5 22.5h5"/>' +
+                        '<path d="M6 20v2.5"/>' +
+                        '<circle cx="14" cy="14" r="1.4" fill="currentColor" stroke="none"/>' +
+                        '<path d="M14 10.5 A 3.5 3.5 0 0 1 17.5 14"/>' +
+                        '<path d="M14 7.5 A 6.5 6.5 0 0 1 20.5 14"/>' +
+                        '<path d="M14 4.5 A 9.5 9.5 0 0 1 23.5 14"/></svg>',
+        // Local window only: TV/monitor
+        WindowOnly: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+                    '<rect x="2" y="4.5" width="20" height="14" rx="1.5"/>' +
+                    '<path d="M7.5 21.5h9"/>' +
+                    '<path d="M12 18.5v3"/></svg>'
+      };
+      var TITLES = {
+        Headless:       'Capture: Stream only',
+        WindowHeadless: 'Capture: Stream + local scrcpy window',
+        WindowOnly:     'Capture: Local scrcpy window (legacy mode)'
+      };
+      var previous = null;
+      function render(mode) {
+        sel.value = mode;
+        previous  = mode;
+        icon.innerHTML = ICONS[mode] || ICONS.WindowHeadless;
+        wrap.title = TITLES[mode] || ('Capture: ' + mode);
+      }
       function load() {
         fetch('/api/capture-mode').then(function(r){return r.json();}).then(function(j){
           if (j && j.mode) render(j.mode);
         }).catch(function(){});
       }
-      btn.addEventListener('click', function() {
-        if (!current) return;
-        var next = cycle[current] || 'WindowHeadless';
-        lab.textContent = 'Switching...';
+      sel.addEventListener('change', function() {
+        var next = sel.value;
+        if (next === previous) return;
+        sel.disabled = true;
         fetch('/api/capture-mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: next }) })
           .then(function(r){return r.json();})
-          .then(function(j){ if (j && j.mode) render(j.mode); else load(); })
-          .catch(function(){ load(); });
+          .then(function(j){ if (j && j.mode) render(j.mode); else render(previous); })
+          .catch(function(){ render(previous); })
+          .finally(function(){ sel.disabled = false; });
       });
       load();
     })();

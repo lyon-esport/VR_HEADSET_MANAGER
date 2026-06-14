@@ -192,11 +192,30 @@ function Add-RestreamPath {
         #   mediamtx and most RTSP clients only accept standard yuv420p H.264 - must be explicit.
         # -rtsp_transport tcp: avoids UDP hole-punching issues on loopback.
         # -pkt_size 1316: keeps RTP packets within Ethernet MTU (mediamtx warns at >1440).
+        #
+        # Encoder selection: when GPU_Acceleration is on, Get-GpuEncoder returns the
+        # best available hardware encoder for the chosen GPU (NVENC/QSV/AMF) with low-
+        # latency tuning. Falls back to libx264 -preset ultrafast -tune zerolatency
+        # automatically if probing fails or GPU_Acceleration is off, so behaviour is
+        # never worse than before.
+        $enc       = Get-GpuEncoder
+        $bw        = $global:mediamtxBitrate
+        $encParams = switch ($enc.Name) {
+            'h264_nvenc' { "-c:v h264_nvenc -preset p1 -tune ll -rc cbr -b:v $bw -maxrate $bw -bufsize $bw" }
+            'h264_qsv'   { "-c:v h264_qsv -preset veryfast -b:v $bw -maxrate $bw -bufsize $bw" }
+            'h264_amf'   { "-c:v h264_amf -usage ultralowlatency -b:v $bw -maxrate $bw -bufsize $bw" }
+            'h264_mf'    { "-c:v h264_mf -b:v $bw" }
+            default      { "-c:v libx264 -preset ultrafast -tune zerolatency -b:v $bw -maxrate $bw -bufsize $bw" }
+        }
+        # nvenc accepts a vendor-local -gpu index when multiple NVIDIA GPUs are present;
+        # the candidate builder in utils.ps1 already supplied it via ExtraArgs.
+        $encExtra = if ($enc.ExtraArgs -and $enc.ExtraArgs.Count -gt 0) { ' ' + ($enc.ExtraArgs -join ' ') } else { '' }
+
         $cmd = "$ffmpegFwd -f gdigrab -framerate $($global:mediamtxFramerate) -draw_mouse 0" +
-               " -i title=$windowTitle -vf scale=trunc(iw/2)*2:trunc(ih/2)*2 -pix_fmt yuv420p -c:v libx264 -preset ultrafast" +
-               " -tune zerolatency -b:v $($global:mediamtxBitrate)" +
-               " -maxrate $($global:mediamtxBitrate) -bufsize $($global:mediamtxBitrate)" +
+               " -i title=$windowTitle -vf scale=trunc(iw/2)*2:trunc(ih/2)*2 -pix_fmt yuv420p" +
+               " $encParams$encExtra" +
                " -pkt_size 1316 -rtsp_transport tcp -f rtsp $rtspUrl"
+        Write-Log ("Add-RestreamPath: {0} encoder for {1} (mode WindowOnly)" -f $enc.Name, $HeadsetName) -Level DEBUG
 
         $body = @{
             runOnDemand             = $cmd

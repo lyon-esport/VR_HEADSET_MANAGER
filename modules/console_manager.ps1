@@ -1219,9 +1219,9 @@ function Show-SubMenu-Config {
         $dashboardStatus = if ($global:Dashboard_showConsole) { "Shown" } else { "Hidden" }
         Write-Host "  D. VR Headset Monitoring Console  - Currently: $dashboardStatus"
         $captureLabel = switch ($global:CaptureMode) {
-            'Headless'       { "Headless (no window)" }
-            'WindowHeadless' { "Window visible + pipe" }
-            'WindowOnly'     { "Legacy (window + GDI grab)" }
+            'Headless'       { "Stream only" }
+            'WindowHeadless' { "Stream + local scrcpy window" }
+            'WindowOnly'     { "Local scrcpy window (legacy mode)" }
             default          { "$global:CaptureMode" }
         }
         Write-Host "  V. Video Capture Mode  - Currently: $captureLabel"
@@ -1284,9 +1284,9 @@ function Show-SubMenu-CaptureMode {
         Write-Host ""
         Write-Host "  Current: $global:CaptureMode"
         Write-Host ""
-        Write-Host "  1. Headless         - No scrcpy window. Lowest CPU. Stream still available on the website."
-        Write-Host "  2. WindowHeadless   - scrcpy window visible + stream via named pipe (GPU rendering)."
-        Write-Host "  3. WindowOnly       - Legacy: visible window, GDI capture, software H.264 encode (high CPU)."
+        Write-Host "  1. Stream only                              - No scrcpy window. Lowest CPU. Stream still available on the website."
+        Write-Host "  2. Stream + local scrcpy window             - scrcpy window visible + stream via named pipe (GPU rendering)."
+        Write-Host "  3. Local scrcpy window (legacy mode)        - Visible window, GDI capture, software/GPU H.264 encode."
         Write-Host ""
         Write-Host "  Switching restarts any running scrcpy session in the new mode."
         Write-Host ""
