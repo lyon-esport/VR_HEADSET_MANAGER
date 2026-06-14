@@ -3392,11 +3392,84 @@ Start-Process powershell.exe -ArgumentList @('-File',$Script,'-ScriptPath',$Scri
                 $reader = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
                 $body   = $reader.ReadToEnd(); $reader.Close()
                 # Validate JSON before touching disk
-                $null   = $body | ConvertFrom-Json
+                $newCfg = $body | ConvertFrom-Json
                 $cfgFile = Join-Path $ScriptPath "config\config.json"
+
+                # Snapshot the three live-applicable mediamtx streaming fields
+                # against the in-memory globals BEFORE writing. If any change,
+                # we mirror the VQA restart sequence (running scrcpy + mediamtx)
+                # so the new framerate / bitrate / re-encode flag take effect
+                # without an app restart.
+                $oldFps      = $global:mediamtxFramerate
+                $oldBw       = $global:mediamtxBitrate
+                $oldReencode = [bool]$global:mediamtxReencode
+                $newFps      = $null; $newBw = $null; $newReencode = $false
+                if ($newCfg -and $newCfg.mediamtx) {
+                    $newFps      = $newCfg.mediamtx.stream_framerate
+                    $newBw       = $newCfg.mediamtx.stream_bitrate
+                    $newReencode = [bool]$newCfg.mediamtx.reencode_in_ffmpeg
+                }
+                $streamingChanged = ($newFps -ne $oldFps) -or ($newBw -ne $oldBw) -or ($newReencode -ne $oldReencode)
+
                 $utf8NoBom = New-Object System.Text.UTF8Encoding $false
                 [System.IO.File]::WriteAllText($cfgFile, $body, $utf8NoBom)
-                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+
+                $restarted = @{ mediamtx = $false; scrcpy = @(); pending = $false }
+                if ($streamingChanged) {
+                    $lock = Enter-VqaLock -TimeoutMs 3000
+                    if (-not $lock) {
+                        # VQA is busy applying a change. Skipping in-band restart
+                        # keeps us from racing on mediamtx / scrcpy lifecycles.
+                        $restarted.pending = $true
+                        Write-Log "config/save: mediamtx streaming fields changed but VQA lock contended - restart deferred to operator." -Level WARNING
+                    } else {
+                        try {
+                            $null = Get-Config -ConfigFilePath $cfgFile
+                            # Order matters: restart mediamtx FIRST, then scrcpy.
+                            # If we restart scrcpy first, the freshly-spawned ffmpeg
+                            # pusher connects to the *old* mediamtx, then Stop-MediaMtx
+                            # kills it underneath, the RTSP push dies with a broken
+                            # pipe, and nothing respawns ffmpeg (Watch-ScrcpyProcesses
+                            # only watches scrcpy itself). Bouncing mediamtx first
+                            # ensures every new ffmpeg push connects to a healthy
+                            # server it will keep talking to.
+                            try {
+                                Stop-MediaMtx
+                                Start-Sleep -Seconds 1
+                                Start-MediaMtx
+                                # Brief settle so mediamtx is accepting RTSP before
+                                # ffmpeg pushers try to connect.
+                                Start-Sleep -Milliseconds 800
+                                $restarted.mediamtx = $true
+                            } catch {
+                                Write-Log ("config/save: mediamtx restart failed: " + $_.Exception.Message) -Level WARNING
+                            }
+                            # Restart any scrcpy session that is currently running so
+                            # Start-FfmpegStreamPush re-reads the new globals and
+                            # connects to the freshly-restarted mediamtx.
+                            $runningNames = @()
+                            foreach ($row in (Get-KnownHeadsets)) {
+                                $safe = Convert-Displayname $row.Name
+                                if (Get-ScrcpyProcess -displayName $safe -headsetIP $row.IPAddress) {
+                                    try {
+                                        Stop-Scrcpy -HeadsetName $row.Name -HeadsetIP $row.IPAddress | Out-Null
+                                        Start-Sleep -Milliseconds 500
+                                        start-screenCopy -headsetIP $row.IPAddress -displayName $row.Name -scrcpyProfile $row.ScrcpyProfile
+                                        $runningNames += $row.Name
+                                    } catch {
+                                        Write-Log ("config/save: scrcpy restart failed for " + $row.Name + ": " + $_.Exception.Message) -Level WARNING
+                                    }
+                                }
+                            }
+                            $restarted.scrcpy = $runningNames
+                        } finally {
+                            Exit-VqaLock -Stream $lock
+                        }
+                    }
+                }
+
+                $respObj = @{ ok = $true; restarted = $restarted }
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes(($respObj | ConvertTo-Json -Compress -Depth 4))
                 $response.StatusCode      = 200
                 $response.ContentType     = 'application/json; charset=utf-8'
                 $response.Headers.Add('Access-Control-Allow-Origin', '*')

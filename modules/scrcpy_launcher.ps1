@@ -262,9 +262,42 @@ function Start-FfmpegStreamPush {
     $argList.AddRange([string[]]@(
         '-hide_banner','-loglevel','warning',
         '-f','matroska','-i',"\\.\pipe\$($names.Out)"))
-    # Output 1: RTSP push (Annex-B is required by mediamtx; MKV stores AVCC)
-    $argList.AddRange([string[]]@('-map','0','-c','copy','-bsf:v','h264_mp4toannexb',
-        '-f','rtsp','-rtsp_transport','tcp',$RtspUrl))
+    # Output 1: RTSP push into mediamtx. mediamtx remuxes this single source into
+    # RTSP / HLS / WebRTC (WHEP) for downstream viewers, so re-encoding here caps
+    # bandwidth on every viewer protocol (including the video_monitor web page).
+    # The optional file recording output below stays -c copy regardless, so on-disk
+    # captures keep source quality.
+    if ($global:mediamtxReencode) {
+        $enc = Get-GpuEncoder
+        $bw  = $global:mediamtxBitrate
+        $fps = $global:mediamtxFramerate
+        # -bf 0 and -g $fps are required on EVERY arm: mediamtx WebRTC/WHEP rejects
+        # H.264 streams containing B-frames ("WebRTC doesn't support H264 streams
+        # with B-frames" closes the session). qsv/amf/mf emit B-frames by default;
+        # nvenc and libx264 already disable them via tune presets but explicit is
+        # safer. Short GOP (= framerate) ensures new WHEP subscribers receive a
+        # keyframe within ~1s of joining.
+        $gop = [string]$fps
+        $encParams = switch ($enc.Name) {
+            'h264_nvenc' { @('-c:v','h264_nvenc','-preset','p1','-tune','ll','-rc','cbr','-b:v',$bw,'-maxrate',$bw,'-bufsize',$bw,'-bf','0','-g',$gop) }
+            'h264_qsv'   { @('-c:v','h264_qsv','-preset','veryfast','-b:v',$bw,'-maxrate',$bw,'-bufsize',$bw,'-bf','0','-g',$gop) }
+            'h264_amf'   { @('-c:v','h264_amf','-usage','ultralowlatency','-b:v',$bw,'-maxrate',$bw,'-bufsize',$bw,'-bf','0','-g',$gop) }
+            'h264_mf'    { @('-c:v','h264_mf','-b:v',$bw,'-bf','0','-g',$gop) }
+            default      { @('-c:v','libx264','-preset','ultrafast','-tune','zerolatency','-b:v',$bw,'-maxrate',$bw,'-bufsize',$bw,'-bf','0','-g',$gop) }
+        }
+        $rtspOut = [System.Collections.Generic.List[string]]::new()
+        $rtspOut.AddRange([string[]]@('-map','0:v:0'))
+        $rtspOut.AddRange([string[]]$encParams)
+        if ($enc.ExtraArgs -and $enc.ExtraArgs.Count -gt 0) { $rtspOut.AddRange([string[]]$enc.ExtraArgs) }
+        $rtspOut.AddRange([string[]]@('-r',[string]$fps,'-pix_fmt','yuv420p',
+            '-pkt_size','1316','-f','rtsp','-rtsp_transport','tcp',$RtspUrl))
+        $argList.AddRange([string[]]$rtspOut.ToArray())
+        Write-Log ("Start-FfmpegStreamPush: {0} re-encoding with {1} @ {2}fps / {3}" -f $SafeName, $enc.Name, $fps, $bw) -Level DEBUG
+    } else {
+        # Passthrough (Annex-B is required by mediamtx; MKV stores AVCC)
+        $argList.AddRange([string[]]@('-map','0','-c','copy','-bsf:v','h264_mp4toannexb',
+            '-f','rtsp','-rtsp_transport','tcp',$RtspUrl))
+    }
     # Optional output 2: file recording (MKV/MP4 - ffmpeg picks from extension).
     # The path must be double-quoted when it contains spaces because Start-Process
     # -ArgumentList with an array does NOT auto-quote elements - it joins them with

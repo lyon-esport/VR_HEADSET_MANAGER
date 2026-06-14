@@ -220,6 +220,7 @@ function Get-Config {
         $global:mediamtxApiPort      = $configContent.mediamtx.api_port
         $global:mediamtxFramerate    = $configContent.mediamtx.stream_framerate
         $global:mediamtxBitrate      = $configContent.mediamtx.stream_bitrate
+        $global:mediamtxReencode     = [bool]$configContent.mediamtx.reencode_in_ffmpeg
     } else {
         $global:mediamtxEnabled = $false
     }

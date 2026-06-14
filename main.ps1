@@ -168,11 +168,43 @@ if (Test-Path -Path $scripts_init) {
         $headers -join "," | Out-File -FilePath $global:knownHeadsetsFilePath -Encoding UTF8
     }
 
-# Data file initialization of the headsets infos file
+# Data file initialization of the headsets infos file.
+# Seed one row per known headset using the same default shape that
+# Get-KnownHeadsetInfos returns when a headset is offline, so the UI
+# renders the full list immediately instead of waiting for the first
+# VRMonitor poll cycle (~10-20s with several headsets).
 $global:knownHeadsetsInfosFilePath = "$ScriptPath\data\known_headsets_infos.csv"
 $global:knownHeadsetsInfos = @()
-$headerLine = '"ID","Name","IPAddress","AdbPort","Ping","ADBWifi","Brand","Model","SerialNumber","BatteryLevel","Charging","Scrcpy","LastUpdateTimeStamp"'
-$headerLine | Out-File -FilePath $global:knownHeadsetsInfosFilePath -Encoding UTF8
+$seedRows = @()
+foreach ($h in $global:knownHeadsets) {
+    $seedRows += [PSCustomObject]@{
+        ID                     = $h.ID
+        Name                   = $h.Name
+        IPAddress              = $h.IPAddress
+        Ping                   = $false
+        ADBWifi                = $false
+        Battery                = "-"
+        Charging               = "-"
+        ChargingWattage        = "-"
+        Temp                   = "-"
+        BatteryControllerLeft  = "-"
+        BatteryControllerRight = "-"
+        PowerState             = "-"
+        TimeRemainingMin       = "-"
+        BatteryHistory         = ""
+        SCRCPY                 = "-"
+        Model                  = "-"
+        SerialNumber           = if ($h.PSObject.Properties.Name -contains 'SerialNumber' -and $h.SerialNumber) { $h.SerialNumber } else { "-" }
+        RunningApp             = "-"
+        RunningAppIcon         = ""
+    }
+}
+if ($seedRows.Count -gt 0) {
+    $seedRows | Export-Csv -LiteralPath $global:knownHeadsetsInfosFilePath -Delimiter ";" -Encoding UTF8 -NoTypeInformation
+} else {
+    $headerLine = '"ID";"Name";"IPAddress";"Ping";"ADBWifi";"Battery";"Charging";"ChargingWattage";"Temp";"BatteryControllerLeft";"BatteryControllerRight";"PowerState";"TimeRemainingMin";"BatteryHistory";"SCRCPY";"Model";"SerialNumber";"RunningApp";"RunningAppIcon"'
+    $headerLine | Out-File -LiteralPath $global:knownHeadsetsInfosFilePath -Encoding UTF8
+}
 
 
 

@@ -208,12 +208,16 @@ function Add-RestreamPath {
         # never worse than before.
         $enc       = Get-GpuEncoder
         $bw        = $global:mediamtxBitrate
+        # -bf 0 + short GOP (= framerate) on every arm: mediamtx WebRTC/WHEP rejects
+        # H.264 streams containing B-frames. qsv/amf/mf default to emitting B-frames;
+        # nvenc/libx264 disable them implicitly via tune presets but explicit is safer.
+        $gop       = $global:mediamtxFramerate
         $encParams = switch ($enc.Name) {
-            'h264_nvenc' { "-c:v h264_nvenc -preset p1 -tune ll -rc cbr -b:v $bw -maxrate $bw -bufsize $bw" }
-            'h264_qsv'   { "-c:v h264_qsv -preset veryfast -b:v $bw -maxrate $bw -bufsize $bw" }
-            'h264_amf'   { "-c:v h264_amf -usage ultralowlatency -b:v $bw -maxrate $bw -bufsize $bw" }
-            'h264_mf'    { "-c:v h264_mf -b:v $bw" }
-            default      { "-c:v libx264 -preset ultrafast -tune zerolatency -b:v $bw -maxrate $bw -bufsize $bw" }
+            'h264_nvenc' { "-c:v h264_nvenc -preset p1 -tune ll -rc cbr -b:v $bw -maxrate $bw -bufsize $bw -bf 0 -g $gop" }
+            'h264_qsv'   { "-c:v h264_qsv -preset veryfast -b:v $bw -maxrate $bw -bufsize $bw -bf 0 -g $gop" }
+            'h264_amf'   { "-c:v h264_amf -usage ultralowlatency -b:v $bw -maxrate $bw -bufsize $bw -bf 0 -g $gop" }
+            'h264_mf'    { "-c:v h264_mf -b:v $bw -bf 0 -g $gop" }
+            default      { "-c:v libx264 -preset ultrafast -tune zerolatency -b:v $bw -maxrate $bw -bufsize $bw -bf 0 -g $gop" }
         }
         # nvenc accepts a vendor-local -gpu index when multiple NVIDIA GPUs are present;
         # the candidate builder in utils.ps1 already supplied it via ExtraArgs.

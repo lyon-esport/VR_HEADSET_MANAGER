@@ -774,7 +774,9 @@
           min: 1, max: 120, unit: 'fps',
           desc: 'Target framerate for restreamed content.' },
         { path: 'mediamtx.stream_bitrate', label: 'Stream Bitrate', type: 'text',
-          desc: 'Target bitrate for restreamed content. Examples: 4M, 6M, 8M.' }
+          desc: 'Target bitrate for restreamed content. Examples: 4M, 6M, 8M.' },
+        { path: 'mediamtx.reencode_in_ffmpeg', label: 'Re-encode in ffmpeg', type: 'boolean',
+          desc: 'OFF: scrcpy stream is forwarded as-is (low CPU, on-wire bitrate equals each headset ScrcpyProfile - can saturate the LAN with many headsets). ON: ffmpeg re-encodes on this PC to the Stream Framerate / Stream Bitrate above before pushing into MediaMTX, so RTSP / HLS / WebRTC (WHEP) viewers - including the video_monitor web page - all receive the compressed stream. Local recording stays at source quality. WARNING: saves LAN bandwidth but increases CPU / GPU usage on this PC. Takes effect when scrcpy is (re)started.' }
       ]},
       { title: 'Web Server', fields: [
         { path: 'WebServer.enabled', label: 'Enabled', type: 'boolean',
@@ -885,7 +887,17 @@
         .then(function(j) {
           if (j.ok) {
             closeCfgModal();
-            showToast('Configuration saved. Restart the app to apply changes.', 3500);
+            var r = j.restarted || {};
+            var msg;
+            if (r.mediamtx) {
+              var n = (r.scrcpy && r.scrcpy.length) ? r.scrcpy.length : 0;
+              msg = 'Configuration saved. MediaMTX restarted; restarted scrcpy for ' + n + ' headset(s).';
+            } else if (r.pending) {
+              msg = 'Configuration saved. MediaMTX restart deferred (VQA busy) - retry shortly or restart the app.';
+            } else {
+              msg = 'Configuration saved. Restart the app to apply changes.';
+            }
+            showToast(msg, 3500);
           } else {
             showToast('Save failed: ' + (j.error || 'unknown error'), 4000);
           }
