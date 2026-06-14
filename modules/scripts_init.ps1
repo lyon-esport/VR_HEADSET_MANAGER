@@ -393,7 +393,7 @@ function Confirm-AppPortsAvailable {
 
 
 # Run all computer-level setup tasks (firewall rules, service auto-starts, etc.)
-if (-not $global:IsWebServerProcess -and -not $global:IsDashboardProcess) {
+if (-not $global:IsWebServerProcess -and -not $global:IsDashboardProcess -and -not $global:IsVRMonitorJob) {
     Confirm-AppPortsAvailable
     Initialize-ComputerSetup
 }

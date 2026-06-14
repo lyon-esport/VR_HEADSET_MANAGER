@@ -659,7 +659,10 @@ function Register-WindowsDefenderExclusion {
         })
         if ($alreadyExcluded) {
             Write-Log $msg.DefenderExclusionSkipped -Level DEBUG
-            return $null
+            # Sentinel: live check confirmed the exclusion exists. Initialize-ComputerSetup
+            # persists this into fw_state.json so the next run's PriorState short-circuit
+            # fires and we never hit the brittle path-normalization comparison again.
+            return @{ AlreadyApplied = $true }
         }
         Write-Log ($msg.DefenderExclusionPending -f $ExclusionPath) -Level INFO
         $title       = "WINDOWS DEFENDER EXCLUSION"
@@ -733,7 +736,9 @@ function Initialize-ComputerSetup {
     if ($aclTask -is [hashtable]) { $pendingTasks += $aclTask }
 
     $defenderTask = Register-WindowsDefenderExclusion -ReturnTask -PriorState $priorState
-    if ($defenderTask -is [hashtable]) { $pendingTasks += $defenderTask }
+    # Only append actual tasks (with a Script payload). The AlreadyApplied sentinel is a
+    # hashtable too but carries no Script - it just signals the live check found the exclusion.
+    if ($defenderTask -is [hashtable] -and $defenderTask.Script) { $pendingTasks += $defenderTask }
 
     # Open one admin console for all pending tasks (zero UAC prompts if nothing to do)
     if ($pendingTasks.Count -gt 0) {
@@ -746,8 +751,8 @@ function Initialize-ComputerSetup {
     # The user has been shown the recommendation; we do not re-prompt on restarts.
     $defenderExclusionPath = if ($priorState -and $priorState.DefenderExclusionPath) {
         $priorState.DefenderExclusionPath   # carry forward from prior run
-    } elseif ($defenderTask -is [hashtable]) {
-        $global:ScriptPath                  # task was presented this run - record it
+    } elseif ($defenderTask -is [hashtable] -and ($defenderTask.Script -or $defenderTask.AlreadyApplied)) {
+        $global:ScriptPath                  # task was presented OR live check confirmed - record it
     } else {
         $null
     }
