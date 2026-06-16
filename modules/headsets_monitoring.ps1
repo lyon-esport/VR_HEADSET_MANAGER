@@ -121,6 +121,18 @@ function Sync-HeadsetRunspaces {
         }
     }
 
+    # Detect dead runspaces (uncaught exception in poll loop) and remove their registry
+    # entry so the start-new loop below will respawn them.
+    foreach ($ip in @($runspaceRegistry.Value.Keys)) {
+        $entry = $runspaceRegistry.Value[$ip]
+        if ($entry.Handle.IsCompleted) {
+            Write-Log ("VRMonitor: detected dead runspace for $ip, restarting") -Level WARNING
+            try { $entry.PS.Dispose() }       catch {}
+            try { $entry.Runspace.Dispose() } catch {}
+            $runspaceRegistry.Value.Remove($ip)
+        }
+    }
+
     foreach ($headset in $knownHeadsets) {
         if (-not $runspaceRegistry.Value.ContainsKey($headset.IPAddress)) {
             $runspaceRegistry.Value[$headset.IPAddress] = Start-HeadsetRunspace `
@@ -210,31 +222,65 @@ function Start-VRMonitor {
                 } catch {}
             }
 
+            # Progressive publishing only on the very first cycle (fast initial UX);
+            # subsequent cycles build the full record locally then publish atomically once
+            # so the dashboard never renders a half-filled row.
+            $firstCycle = $true
+            # Installed-apps cache is heavy (dumpsys package list + per-app sizes) and not
+            # latency-critical. Refresh on first cycle, then every N cycles afterward.
+            $appsCacheEvery   = 100
+            $appsCacheCounter = 0
+
             while ($true) {
                 if ($sharedState["_stop_all"] -or $sharedState[$stopKey]) { return }
 
-                $headsetInfo = Get-KnownHeadsetInfos -knownHeadset $headset
+                try {
+                    $headsetInfo = New-DefaultHeadsetInfo -knownHeadset $headset
 
-                # Battery history and time estimate (local variable persists across runspace cycles)
-                if ((ConvertTo-BoolField $headsetInfo.ADBWifi) -and $headsetInfo.Battery -ne "-") {
-                    $currentLevel = [int]($headsetInfo.Battery -replace ' %','')
-                    $allEntries   = @($localBattHistory -split '\|' | Where-Object { $_ -match '=' })
-                    $lastLevel    = if ($allEntries.Count -gt 0) { [int](($allEntries[-1] -split '=')[1]) } else { -1 }
-                    if ($currentLevel -ne $lastLevel) { $allEntries += "$([datetime]::Now.ToString('yyyy-MM-ddTHH:mm:ss'))=$currentLevel" }
-                    $localBattHistory           = ($allEntries | Select-Object -Last 3) -join '|'
-                    $headsetInfo.BatteryHistory = $localBattHistory
-                    $estimate = Get-BatteryTimeEstimate -HistoryString $localBattHistory
-                    if ($null -ne $estimate.PowerState)       { $headsetInfo.PowerState = $estimate.PowerState }
-                    $headsetInfo.TimeRemainingMin = if ($null -ne $estimate.MinutesRemaining) { $estimate.MinutesRemaining } else { "-" }
+                    # --- Stage 1: reachability ---
+                    $s1 = Get-HeadsetInfoStage1Reachability -knownHeadset $headset
+                    foreach ($k in $s1.Keys) { $headsetInfo.$k = $s1[$k] }
+                    if ($firstCycle) { $sharedState[$ip] = $headsetInfo }
+
+                    if ($headsetInfo.ADBWifi) {
+                        $device = Get-AdbWifiDevice -headsetIP $ip
+                        if (-not $device) {
+                            $headsetInfo.ADBWifi = $false
+                        } else {
+                            # --- Stage 2: identity + battery ---
+                            $s2 = Get-HeadsetInfoStage2Identity -knownHeadset $headset -Device $device
+                            foreach ($k in $s2.Keys) { $headsetInfo.$k = $s2[$k] }
+
+                            # Battery history + time estimate (local var persists across cycles)
+                            if ($headsetInfo.Battery -ne "-") {
+                                $currentLevel = [int]($headsetInfo.Battery -replace ' %','')
+                                $allEntries   = @($localBattHistory -split '\|' | Where-Object { $_ -match '=' })
+                                $lastLevel    = if ($allEntries.Count -gt 0) { [int](($allEntries[-1] -split '=')[1]) } else { -1 }
+                                if ($currentLevel -ne $lastLevel) { $allEntries += "$([datetime]::Now.ToString('yyyy-MM-ddTHH:mm:ss'))=$currentLevel" }
+                                $localBattHistory           = ($allEntries | Select-Object -Last 3) -join '|'
+                                $headsetInfo.BatteryHistory = $localBattHistory
+                                $estimate = Get-BatteryTimeEstimate -HistoryString $localBattHistory
+                                if ($null -ne $estimate.PowerState)       { $headsetInfo.PowerState = $estimate.PowerState }
+                                $headsetInfo.TimeRemainingMin = if ($null -ne $estimate.MinutesRemaining) { $estimate.MinutesRemaining } else { "-" }
+                            }
+                            if ($firstCycle) { $sharedState[$ip] = $headsetInfo }
+
+                            # --- Stage 3: foreground app + installed-apps cache ---
+                            $s3 = Get-HeadsetInfoStage3App -knownHeadset $headset -Device $device
+                            foreach ($k in $s3.Keys) { $headsetInfo.$k = $s3[$k] }
+                            if ($firstCycle -or ($appsCacheCounter % $appsCacheEvery -eq 0)) {
+                                Update-InstalledAppsCache -Device $device -headsetName $headset.Name
+                            }
+                            $appsCacheCounter++
+                        }
+                    }
+
+                    # Final atomic publish (every cycle, including first)
+                    $sharedState[$ip] = $headsetInfo
+                    $firstCycle = $false
+                } catch {
+                    Write-Log ("VRMonitor[" + $ip + "]: poll cycle failed: " + $_.Exception.Message) -Level WARNING
                 }
-
-                # Installed apps cache (per-headset file - safe to write from runspace)
-                if (ConvertTo-BoolField $headsetInfo.ADBWifi) {
-                    $device = Get-AdbWifiDevice -headsetIP $ip
-                    if ($device) { Update-InstalledAppsCache -Device $device -headsetName $headset.Name }
-                }
-
-                $sharedState[$ip] = $headsetInfo
 
                 # Sleep refresh_timer seconds with per-second stop-flag checks
                 $timer = if ($sharedState["_refresh_timer"]) { [int]$sharedState["_refresh_timer"] } else { 5 }
@@ -254,6 +300,24 @@ function Start-VRMonitor {
         $vqrTickCounter  = 0
         $lastFingerprint = ""
         $knownHeadsets   = @()
+
+        # Eager first load + immediate runspace start so the first real poll lands within
+        # a few seconds of job start instead of waiting one full slow-tick.
+        if (Test-Path -LiteralPath $global:knownHeadsetsFilePath) {
+            $knownHeadsets = @(Import-Csv -LiteralPath $global:knownHeadsetsFilePath)
+        }
+        if ($knownHeadsets.Count -gt 0) {
+            Sync-HeadsetRunspaces -knownHeadsets $knownHeadsets -runspaceRegistry ([ref]$runspaceRegistry) `
+                -sharedState $sharedState -scriptPath $global:ScriptPath `
+                -configFilePath $global:ConfigFilePath -pollBlock $headsetPollBlock
+        }
+
+        # Fire service watchdogs eagerly so scrcpy / mediamtx / web server start at the same
+        # time as the runspaces, instead of waiting one full slow-tick (~refresh_timer seconds)
+        # after the job has finished bootstrapping.
+        try { Watch-ScrcpyProcesses } catch { Write-Log ("VRMonitor: scrcpy watchdog (eager) failed: " + $_.Exception.Message) -Level WARNING }
+        try { Start-MediaMtx }         catch { Write-Log ("VRMonitor: mediamtx watchdog (eager) failed: " + $_.Exception.Message) -Level WARNING }
+        try { Start-WebServer }        catch { Write-Log ("VRMonitor: web server watchdog (eager) failed: " + $_.Exception.Message) -Level WARNING }
 
         while ($true) {
 
@@ -287,19 +351,13 @@ function Start-VRMonitor {
                 if ($info) {
                     [void]$knownHeadsetsInfo.Add($info)
                 } else {
-                    [void]$knownHeadsetsInfo.Add([PSCustomObject]@{
-                        ID="$($h.ID)"; Name=$h.Name; IPAddress=$h.IPAddress
-                        Ping=$false; ADBWifi=$false; Battery="-"; Charging="-"; ChargingWattage="-"
-                        Temp="-"; BatteryControllerLeft="-"; BatteryControllerRight="-"
-                        PowerState="-"; TimeRemainingMin="-"; BatteryHistory=""
-                        SCRCPY="-"; Model="-"; SerialNumber="-"; RunningApp="-"; RunningAppIcon=""
-                    })
+                    [void]$knownHeadsetsInfo.Add((New-DefaultHeadsetInfo -knownHeadset $h))
                 }
             }
 
             # Fingerprint of key display fields - triggers CSV/HTML write on any change
             $fp = ($knownHeadsetsInfo | ForEach-Object {
-                "$($_.IPAddress)|$($_.Battery)|$($_.Charging)|$($_.Ping)|$($_.ADBWifi)|$($_.SCRCPY)|$($_.RunningApp)|$($_.Temp)"
+                "$($_.IPAddress)|$($_.Ping)|$($_.ADBWifi)|$($_.Battery)|$($_.Charging)|$($_.ChargingWattage)|$($_.Temp)|$($_.BatteryControllerLeft)|$($_.BatteryControllerRight)|$($_.PowerState)|$($_.TimeRemainingMin)|$($_.SCRCPY)|$($_.Model)|$($_.SerialNumber)|$($_.RunningApp)"
             }) -join '~'
 
             if ($fp -ne $lastFingerprint -and $knownHeadsets.Count -gt 0) {
@@ -390,21 +448,12 @@ function Start-VRMonitor {
 }
 
 
-function Get-KnownHeadsetInfos {
-    param(
-        [Parameter(Mandatory=$true)]
-        [PSCustomObject]$knownHeadset,
-
-        [int]$ADBPort = 5555,
-
-        [int]$PingTimeout = 1000,
-
-        [string]$adb = $global:adbPath
-    )
-
-
-    #$result = @()
-    $result = [PSCustomObject]@{
+function New-DefaultHeadsetInfo {
+    # Canonical schema for the per-headset info record stored in $sharedState and exported
+    # to known_headsets_infos.csv. Single source of truth - reused by Get-KnownHeadsetInfos
+    # and by the main-loop placeholder.
+    param([Parameter(Mandatory=$true)][PSCustomObject]$knownHeadset)
+    return [PSCustomObject]@{
         ID              = $knownHeadset.ID
         Name            = $knownHeadset.Name
         IPAddress       = $knownHeadset.IPAddress
@@ -425,94 +474,140 @@ function Get-KnownHeadsetInfos {
         RunningApp       = "-"
         RunningAppIcon   = ""
     }
+}
+
+function Get-HeadsetInfoStage1Reachability {
+    # Stage 1 (fast, no ADB connection): ping + ADB port + local scrcpy process scan.
+    # Target latency: <2s. Lets the UI flip Ping/ADBWifi/SCRCPY immediately.
+    param(
+        [Parameter(Mandatory=$true)][PSCustomObject]$knownHeadset,
+        [int]$ADBPort = 5555,
+        [int]$PingTimeout = 1000
+    )
+    $out = @{ Ping = $false; ADBWifi = $false; SCRCPY = "-" }
     $IPAddress = $knownHeadset.IPAddress
 
-    # 1. Test ping
     $ping = New-Object System.Net.NetworkInformation.Ping
     try {
-        $pingReply = $ping.Send($knownHeadset.IPAddress, $PingTimeout)
-        $result.Ping = $pingReply.Status -eq "Success"
-
-        if (-not $result.Ping) {
-            return $result
-        }
-    }
-    catch {
-        return $result
-    }
-    finally {
+        $pingReply = $ping.Send($IPAddress, $PingTimeout)
+        $out.Ping = $pingReply.Status -eq "Success"
+    } catch {
+        $out.Ping = $false
+    } finally {
         $ping.Dispose()
     }
 
-    # 2. Check ADB port
-    if (-not (Test-Port -hostname $IPAddress -port $ADBPort -timeout 400).open) {
-        return $result
+    if ($out.Ping) {
+        if ((Test-Port -hostname $IPAddress -port $ADBPort -timeout 400).open) {
+            $out.ADBWifi = $true
+        }
     }
-    $result.ADBWifi = $true
 
-    # 3. Get device info via ADB
-    try {
-        # Connect to device and get a device object for subsequent calls
-        $device = Get-AdbWifiDevice -headsetIP $IPAddress -AdbPort $ADBPort -adb $adb
-        if (-not $device) {
-            $result.ADBWifi = $false
-            return $result
-        }
-
-        # Get device model
-        $model = Invoke-AdbCmd -Device $device -Command "shell getprop ro.product.model" -adb $adb
-        if ($model) { $result.Model = ($model -join '').Trim() }
-
-        # Get serial number
-        $serial = Invoke-AdbCmd -Device $device -Command "shell getprop ro.serialno" -adb $adb
-        if ($serial) { $result.SerialNumber = ($serial -join '').Trim() }
-
-        # Get battery info (headset + controllers)
-        $batteryInfo = Get-HeadsetBatteryStatus -Device $device -adb $adb
-        if ($batteryInfo) {
-            if ($null -ne $batteryInfo.Level)    { $result.Battery  = "$($batteryInfo.Level) %" }
-            if ($null -ne $batteryInfo.Charging) { $result.Charging = $batteryInfo.Charging }
-            if ($null -ne $batteryInfo.MaxChargingWattageW -and $batteryInfo.Charging -eq $true) { $result.ChargingWattage = "$($batteryInfo.MaxChargingWattageW)" }
-            if ($null -ne $batteryInfo.TempC)    { $result.Temp     = $batteryInfo.TempC.ToString("0.0") }
-            $result.BatteryControllerLeft  = if ($null -ne $batteryInfo.BatteryControllerLeft)  { "$($batteryInfo.BatteryControllerLeft) %" }  else { "-" }
-            $result.BatteryControllerRight = if ($null -ne $batteryInfo.BatteryControllerRight) { "$($batteryInfo.BatteryControllerRight) %" } else { "-" }
-        }
-        # Get running app
-        $pkg = Get-HeadsetForegroundApp -Device $device -adb $adb
-        if ($pkg) {
-            $appInfo = Get-AppInfo -PackageName $pkg -searchOnline $false
-            $result.RunningApp   = if ($appInfo.DisplayName) { $appInfo.DisplayName } else { $pkg }
-            $result.RunningAppIcon = if ($appInfo.LocalIconPath) { $appInfo.LocalIconPath } elseif ($appInfo.IconUrl) { $appInfo.IconUrl } else { "" }
-        }
-
-        # Check if scrcpy is running
-        $scrcpyProcesses = Get-Process -Name "scrcpy" -ErrorAction SilentlyContinue
-        if ($scrcpyProcesses) {
-            Write-Log ($msg.ScrcpyProcessesFound -f $scrcpyProcesses.Count) -Level DEBUG
-            foreach ($proc in $scrcpyProcesses) {
-                Write-Log ($msg.ScrcpyProcessChecking -f $proc.Id, $proc.Path) -Level DEBUG
-                if ($proc.Path -like "$($global:scrcpyFolder)\scrcpy.exe") {
-                    $cimProc = Get-CimInstance Win32_Process -Filter "ProcessId = $($proc.Id)"
-                    $cmdLine = $cimProc.CommandLine
-                    $cimProc.Dispose()
-                    Write-Log ($msg.ScrcpyProcessCmdLine -f $cmdLine) -Level DEBUG
-                    Write-Log ($msg.ScrcpyLookingFor -f $IPAddress, $ADBPort) -Level DEBUG
-                    if ($cmdLine -match ([regex]::Escape($IPAddress) + "(:$ADBPort)?")) {
-                        $result.SCRCPY = "OK"
-                        Write-Log ($msg.ScrcpyRunningFor -f $knownHeadset.Name, $IPAddress) -Level DEBUG
-                        break
-                    }
+    # Local scrcpy process scan (no ADB dependency)
+    $scrcpyProcesses = Get-Process -Name "scrcpy" -ErrorAction SilentlyContinue
+    if ($scrcpyProcesses) {
+        foreach ($proc in $scrcpyProcesses) {
+            if ($proc.Path -like "$($global:scrcpyFolder)\scrcpy.exe") {
+                $cimProc = Get-CimInstance Win32_Process -Filter "ProcessId = $($proc.Id)"
+                $cmdLine = $cimProc.CommandLine
+                $cimProc.Dispose()
+                if ($cmdLine -match ([regex]::Escape($IPAddress) + "(:$ADBPort)?")) {
+                    $out.SCRCPY = "OK"
+                    break
                 }
             }
         }
     }
-    catch {
-        Write-Log -Message ($msg.AdbInfoFailed -f $IPAddress, $_) -Level "ERROR"
+    return $out
+}
+
+function Get-HeadsetInfoStage2Identity {
+    # Stage 2 (medium): model + serial + battery dumpsys. Requires a connected $Device.
+    param(
+        [Parameter(Mandatory=$true)][PSCustomObject]$knownHeadset,
+        [Parameter(Mandatory=$true)]$Device,
+        [string]$adb = $global:adbPath
+    )
+    $out = @{
+        Model = "-"; SerialNumber = "-"
+        Battery = "-"; Charging = "-"; ChargingWattage = "-"; Temp = "-"
+        BatteryControllerLeft = "-"; BatteryControllerRight = "-"
     }
-    finally {
-        # Disconnect ADB
-        #& $adb disconnect "${IPAddress}:$ADBPort" | Out-Null
+    try {
+        $model = Invoke-AdbCmd -Device $Device -Command "shell getprop ro.product.model" -adb $adb
+        if ($model)  { $out.Model        = ($model  -join '').Trim() }
+        $serial = Invoke-AdbCmd -Device $Device -Command "shell getprop ro.serialno" -adb $adb
+        if ($serial) { $out.SerialNumber = ($serial -join '').Trim() }
+
+        $batteryInfo = Get-HeadsetBatteryStatus -Device $Device -adb $adb
+        if ($batteryInfo) {
+            if ($null -ne $batteryInfo.Level)    { $out.Battery  = "$($batteryInfo.Level) %" }
+            if ($null -ne $batteryInfo.Charging) { $out.Charging = $batteryInfo.Charging }
+            if ($null -ne $batteryInfo.MaxChargingWattageW -and $batteryInfo.Charging -eq $true) { $out.ChargingWattage = "$($batteryInfo.MaxChargingWattageW)" }
+            if ($null -ne $batteryInfo.TempC)    { $out.Temp     = $batteryInfo.TempC.ToString("0.0") }
+            $out.BatteryControllerLeft  = if ($null -ne $batteryInfo.BatteryControllerLeft)  { "$($batteryInfo.BatteryControllerLeft) %" }  else { "-" }
+            $out.BatteryControllerRight = if ($null -ne $batteryInfo.BatteryControllerRight) { "$($batteryInfo.BatteryControllerRight) %" } else { "-" }
+        }
+    } catch {
+        Write-Log -Message ($msg.AdbInfoFailed -f $knownHeadset.IPAddress, $_) -Level "ERROR"
     }
+    return $out
+}
+
+function Get-HeadsetInfoStage3App {
+    # Stage 3 (slowest): foreground app + display-name/icon resolution.
+    param(
+        [Parameter(Mandatory=$true)][PSCustomObject]$knownHeadset,
+        [Parameter(Mandatory=$true)]$Device,
+        [string]$adb = $global:adbPath
+    )
+    $out = @{ RunningApp = "-"; RunningAppIcon = "" }
+    try {
+        $pkg = Get-HeadsetForegroundApp -Device $Device -adb $adb
+        if ($pkg) {
+            $appInfo = Get-AppInfo -PackageName $pkg -searchOnline $false
+            $out.RunningApp     = if ($appInfo.DisplayName) { $appInfo.DisplayName } else { $pkg }
+            $out.RunningAppIcon = if ($appInfo.LocalIconPath) { $appInfo.LocalIconPath } elseif ($appInfo.IconUrl) { $appInfo.IconUrl } else { "" }
+        }
+    } catch {
+        Write-Log -Message ($msg.AdbInfoFailed -f $knownHeadset.IPAddress, $_) -Level "ERROR"
+    }
+    return $out
+}
+
+function Get-KnownHeadsetInfos {
+    # Thin orchestrator preserved for public callers (web API, CLI). Runs all three
+    # stages back-to-back into one PSCustomObject. The VRMonitor runspace bypasses this
+    # and calls the stage helpers directly so it can publish partial results to
+    # $sharedState between stages.
+    param(
+        [Parameter(Mandatory=$true)]
+        [PSCustomObject]$knownHeadset,
+
+        [int]$ADBPort = 5555,
+
+        [int]$PingTimeout = 1000,
+
+        [string]$adb = $global:adbPath
+    )
+
+    $result = New-DefaultHeadsetInfo -knownHeadset $knownHeadset
+
+    $s1 = Get-HeadsetInfoStage1Reachability -knownHeadset $knownHeadset -ADBPort $ADBPort -PingTimeout $PingTimeout
+    foreach ($k in $s1.Keys) { $result.$k = $s1[$k] }
+    if (-not $result.ADBWifi) { return $result }
+
+    $device = Get-AdbWifiDevice -headsetIP $knownHeadset.IPAddress -AdbPort $ADBPort -adb $adb
+    if (-not $device) {
+        $result.ADBWifi = $false
+        return $result
+    }
+
+    $s2 = Get-HeadsetInfoStage2Identity -knownHeadset $knownHeadset -Device $device -adb $adb
+    foreach ($k in $s2.Keys) { $result.$k = $s2[$k] }
+
+    $s3 = Get-HeadsetInfoStage3App -knownHeadset $knownHeadset -Device $device -adb $adb
+    foreach ($k in $s3.Keys) { $result.$k = $s3[$k] }
 
     return $result
 }

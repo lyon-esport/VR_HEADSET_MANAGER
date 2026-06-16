@@ -352,7 +352,7 @@ function Get-FwState {
     $path = Get-FwStatePath
     if (-not (Test-Path -LiteralPath $path)) { return $null }
     try {
-        $raw = Get-Content -LiteralPath $path -Raw -ErrorAction Stop
+        $raw = Get-Content -LiteralPath $path -Raw -Encoding UTF8 -ErrorAction Stop
         return ($raw | ConvertFrom-Json -ErrorAction Stop)
     } catch {
         return $null
@@ -628,14 +628,16 @@ function Register-WindowsDefenderExclusion {
         [switch]$ReturnTask
     )
     try {
-        # If fw_state.json already records the exclusion for this exact path, trust it
-        # and skip the live Get-MpPreference check (which can fail for mapped drives
-        # where Defender stores the UNC form instead of the drive-letter form).
+        # If fw_state.json records ANY prior DefenderExclusionPath, the operator has
+        # already been prompted at least once - never re-prompt for Defender exclusion.
+        # We deliberately do NOT compare paths here: a mismatch can mean (a) the persisted
+        # value was corrupted by an old encoding bug, or (b) the app folder was moved.
+        # Re-prompting on move would also be wrong - per product rule, ask once ever.
+        # The caller (Initialize-ComputerSetup) heals the persisted value by overwriting
+        # with the current $global:ScriptPath when this sentinel returns.
         if ($PriorState -and $PriorState.DefenderExclusionPath) {
-            if (([string]$PriorState.DefenderExclusionPath).TrimEnd('\') -ieq $ExclusionPath.TrimEnd('\')) {
-                Write-Log $msg.DefenderExclusionSkipped -Level DEBUG
-                return $null
-            }
+            Write-Log $msg.DefenderExclusionSkipped -Level DEBUG
+            return @{ AlreadyApplied = $true }
         }
         $mpStatus = Get-MpComputerStatus -ErrorAction SilentlyContinue
         if (-not ($mpStatus -and $mpStatus.AntivirusEnabled -and $mpStatus.RealTimeProtectionEnabled)) {
@@ -749,13 +751,13 @@ function Initialize-ComputerSetup {
     # generated (not after the batch) to avoid a race where Get-MpPreference does
     # not reflect the new exclusion immediately after the elevated process exits.
     # The user has been shown the recommendation; we do not re-prompt on restarts.
-    $defenderExclusionPath = if ($priorState -and $priorState.DefenderExclusionPath) {
-        $priorState.DefenderExclusionPath   # carry forward from prior run
-    } elseif ($defenderTask -is [hashtable] -and ($defenderTask.Script -or $defenderTask.AlreadyApplied)) {
-        $global:ScriptPath                  # task was presented OR live check confirmed - record it
-    } else {
-        $null
-    }
+    # Always persist the CURRENT $global:ScriptPath when we have any indication the
+    # exclusion has been applied (prior state recorded it, or this run presented/confirmed
+    # the task). Never carry the prior raw string forward - it may be mojibake from the
+    # old UTF-8 encoding bug, and the operator should not be re-prompted to heal it.
+    $defenderApplied = ($priorState -and $priorState.DefenderExclusionPath) -or
+                       ($defenderTask -is [hashtable] -and ($defenderTask.Script -or $defenderTask.AlreadyApplied))
+    $defenderExclusionPath = if ($defenderApplied) { $global:ScriptPath } else { $null }
 
     # Persist what we just (re)applied so the next run can detect drift.
     # Written even when no tasks ran - the values still describe the live OS state.
