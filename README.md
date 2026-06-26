@@ -33,7 +33,8 @@ I personally use it during showrooms and gaming exhibitions to capture the live 
    >   - add Windows Firewall exceptions to allow adb.exe to talk with headsets over the network.
    >   - add Windows Firewall exceptions to allow mediamtx to restream over the network.
    >   - add Windows Firewall exceptions to allow the programm to scan mdns headsets over the network.
-   >   - create a config file from the template
+   >   - ask you if you want to exclude the application folder from Windows Defender. It's not mandatory but I experienced high CPU usage from Windows Defender while using the app.
+   > - create config files from the template
 
 4. **Open the web page**
    > - The webserver is automatically started once the application is running.
