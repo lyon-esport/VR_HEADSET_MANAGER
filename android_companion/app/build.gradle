@@ -1,0 +1,56 @@
+plugins {
+    id 'com.android.application'
+    id 'kotlin-android'
+}
+
+android {
+    namespace 'com.vrheadsetmanager.companion'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.vrheadsetmanager.companion"
+        minSdk 29
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            // Sign the release APK with Android's built-in debug keystore.
+            // This keeps the package id 'com.vrheadsetmanager.companion' and makes the
+            // APK directly installable via 'adb install' - no keystore setup required.
+            // Sideload only; do NOT publish a debug-signed APK to any store.
+            signingConfig signingConfigs.debug
+        }
+        debug {
+            // No applicationIdSuffix: keep the same package id in both variants so the
+            // 'pm grant com.vrheadsetmanager.companion ...' commands work for either build.
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
+
+    sourceSets {
+        main {
+            kotlin.srcDirs = ['src/main/kotlin']
+        }
+    }
+}
+
+dependencies {
+    implementation 'androidx.core:core-ktx:1.12.0'
+    // Embedded HTTP server (~250 KB)
+    implementation 'org.nanohttpd:nanohttpd:2.3.1'
+    // JSON serialization
+    implementation 'com.google.code.gson:gson:2.10.1'
+}

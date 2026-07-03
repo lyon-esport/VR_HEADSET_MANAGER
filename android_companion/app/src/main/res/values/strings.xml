@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">VRHM Companion</string>
+    <string name="notification_channel_name">VR Headset Manager Companion</string>
+    <string name="notification_channel_desc">Background service for ADB WiFi and HTTP API</string>
+    <string name="notification_title">VRHM Companion Active</string>
+    <string name="label_auto_adb">Auto-enable ADB WiFi on boot</string>
+    <string name="label_adb_status">ADB WiFi status</string>
+    <string name="btn_enable_adb">Enable ADB WiFi</string>
+    <string name="btn_disable_adb">Disable ADB WiFi</string>
+    <string name="btn_grant_settings">Grant WRITE_SETTINGS</string>
+    <string name="btn_grant_settings_ok">WRITE_SETTINGS: Granted</string>
+    <string name="hint_grant_adb">Grant WRITE_SECURE_SETTINGS via ADB once:\nadb shell pm grant com.vrheadsetmanager.companion android.permission.WRITE_SECURE_SETTINGS</string>
+</resources>
