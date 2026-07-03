@@ -30,8 +30,6 @@
       overflow-x: hidden;
     }
 
-    #refresh-indicator { color: #3b82f6; }
-
     /* ── Page content ── */
     .page { padding: 24px; }
     h1 {
@@ -305,7 +303,6 @@
     </div>
 
     <div class="topbar-right">
-      <span id="refresh-indicator" style="padding:0 14px;font-size:11px;display:none;">Refreshing...</span>
       <script>document.write(TopBar.monitoringBtnHTML)</script>
       <script>document.write(TopBar.manageDevicesBtnHTML)</script>
       <script>document.write(TopBar.configMenuHTML)</script>
@@ -541,16 +538,13 @@
     }
 
     function pollHeadsetsStatus() {
-      var ind = document.getElementById('refresh-indicator');
-      ind.style.display = 'inline';
       return fetch('/api/headsets-status')
         .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
         .then(function(items) {
           renderTable(items);
           applyFilter();
-          ind.style.display = 'none';
         })
-        .catch(function() { ind.style.display = 'none'; });
+        .catch(function() {});
     }
 
     // ── Computer monitoring ──────────────────────────────────────────────────

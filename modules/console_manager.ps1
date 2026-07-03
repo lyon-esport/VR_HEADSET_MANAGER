@@ -732,15 +732,15 @@ function Show-SubMenu-LaunchApp {
         Write-Host "  [0]   Return" -ForegroundColor DarkGray
         Write-Host ""
         Write-Host "  Enter a number to launch, F<n> to toggle favorite (e.g. F1, F12):" -ForegroundColor White
-        $input = (Read-Host " >>").Trim()
+        $menuInput = (Read-Host " >>").Trim()
 
-        if ($input -eq '0') { return }
+        if ($menuInput -eq '0') { return }
 
         # Toggle favorite: F<number>
-        if ($input -match '^[Ff](\d+)$') {
+        if ($menuInput -match '^[Ff](\d+)$') {
             $favIdx = [int]$Matches[1] - 1
             if ($favIdx -lt 0 -or $favIdx -ge $displayList.Count) {
-                Write-Log ($msg.LaunchAppInvalidChoice -f $input) -Level WARNING
+                Write-Log ($msg.LaunchAppInvalidChoice -f $menuInput) -Level WARNING
                 Start-Sleep -Seconds 2
                 continue
             }
@@ -763,10 +763,10 @@ function Show-SubMenu-LaunchApp {
         }
 
         # Launch: plain number
-        if ($input -match '^\d+$') {
-            $launchIdx = [int]$input - 1
+        if ($menuInput -match '^\d+$') {
+            $launchIdx = [int]$menuInput - 1
             if ($launchIdx -lt 0 -or $launchIdx -ge $displayList.Count) {
-                Write-Log ($msg.LaunchAppInvalidChoice -f $input) -Level WARNING
+                Write-Log ($msg.LaunchAppInvalidChoice -f $menuInput) -Level WARNING
                 Start-Sleep -Seconds 2
                 continue
             }
@@ -783,7 +783,7 @@ function Show-SubMenu-LaunchApp {
             continue
         }
 
-        Write-Log ($msg.LaunchAppInvalidChoice -f $input) -Level WARNING
+        Write-Log ($msg.LaunchAppInvalidChoice -f $menuInput) -Level WARNING
         Start-Sleep -Seconds 2
 
     } while ($true)
@@ -1054,6 +1054,8 @@ function Show-SubMenu-ScrcpyOptions {
                 $availableViews = @($global:scrcpyParameters.$headsetModel.views | Get-Member -MemberType NoteProperty | Select-Object -ExpandProperty Name)
             }
             if ($availableViews.Count -eq 0) { $availableViews = @('portrait','square','wide') }
+            # Built-in non-removable view: works on any headset, no per-model crop entry needed.
+            if ('fullscreen' -notin $availableViews) { $availableViews += 'fullscreen' }
             $viewList = $availableViews -join ', '
 
             Clear-Host
@@ -1358,14 +1360,14 @@ function Show-SubMenu-WifiNetworks {
         if ($choice.ToUpper() -eq 'A') {
             $ssid = (Read-Host $msg.WifiNetworkSsidPrompt).Trim()
             if (-not $ssid) { continue }
-            $pwd  = (Read-Host $msg.WifiNetworkPasswordPrompt).Trim()
+            $wifiPassword  = (Read-Host $msg.WifiNetworkPasswordPrompt).Trim()
             $existing = $networks | Where-Object { $_.SSID -eq $ssid }
             if ($existing) {
-                $existing.Password = $pwd
+                $existing.Password = $wifiPassword
                 Write-Log ($msg.WifiNetworkUpdated -f $ssid) -Level SUCCESS
             } else {
                 $isFirst = ($networks.Count -eq 0)
-                $networks += [PSCustomObject]@{ SSID = $ssid; Password = $pwd; Preferred = $isFirst }
+                $networks += [PSCustomObject]@{ SSID = $ssid; Password = $wifiPassword; Preferred = $isFirst }
                 Write-Log ($msg.WifiNetworkAdded -f $ssid) -Level SUCCESS
             }
             Save-WifiNetworks -Networks $networks
@@ -1438,17 +1440,17 @@ function Show-SubMenu-VideoRecast {
         Write-Host " 0. Return to main menu" -ForegroundColor Gray
         Write-Host ""
 
-        $input = (Read-Host $msg.EnterChoice).ToUpper()
+        $choiceInput = (Read-Host $msg.EnterChoice).ToUpper()
 
-        if ($input -eq '0') {
+        if ($choiceInput -eq '0') {
             return
         }
-        elseif ($input -eq 'P') {
+        elseif ($choiceInput -eq 'P') {
             # Cycle to next protocol
             $protocolIndex = ($protocolIndex + 1) % $protocols.Count
         }
-        elseif ($urls.ContainsKey($input)) {
-            $selectedUrl = $urls[$input]
+        elseif ($urls.ContainsKey($choiceInput)) {
+            $selectedUrl = $urls[$choiceInput]
             Set-Clipboard -Value $selectedUrl
             Write-Host ($msg.VideoRecastCopied -f $selectedUrl) -ForegroundColor Green
             Start-Sleep -Seconds 2

@@ -31,11 +31,17 @@ function Get-WifiPassword {
 # Password is resolved from the encrypted store when omitted.
 # Returns $true on success, $false on failure.
 function Connect-HeadsetToWifi {
+    # Meta Quest: `cmd wifi connect-network` works for shell uid - automated push.
+    # Pico (probed on Pico 4 Ultra): BOTH `cmd wifi connect-network` AND `add-network`
+    # throw SecurityException for uid 2000 (shell). No public ADB path can write
+    # WPA credentials. Best we can do is open the system WiFi picker on the headset
+    # so the operator completes the join interactively.
     param(
         [Parameter(Mandatory)][object]$Device,
         [Parameter(Mandatory)][string]$Ssid,
         [string]$Password,
-        [bool]$UseRandomMac = $false
+        [bool]$UseRandomMac = $false,
+        [string]$Brand = ""
     )
 
     if (-not $Password) {
@@ -46,17 +52,29 @@ function Connect-HeadsetToWifi {
         }
     }
 
+    Invoke-AdbCmd -Device $Device -Command "shell svc wifi enable" -SilentOnFail | Out-Null
+
+    if ($Brand -eq "Pico") {
+        Write-Log ("Automated WiFi push not supported on Pico (uid 2000 SecurityException on cmd wifi connect-network). Opening WiFi picker on headset for SSID '{0}'." -f $Ssid) -Level WARNING
+        Invoke-AdbCmd -Device $Device -Command "shell am start -a android.settings.WIFI_SETTINGS" -SilentOnFail | Out-Null
+        return $false
+    }
+
     $macFlag = if ($UseRandomMac) { 'persistent' } else { 'none' }
 
-    Invoke-AdbCmd -Device $Device -Command "shell svc wifi enable" | Out-Null
-
-    $out = Invoke-AdbCmd -Device $Device -Command "shell cmd -w wifi connect-network `"$Ssid`" wpa2 `"$Password`" -r $macFlag"
+    # SilentOnFail: keep the password out of WARN logs (Invoke-AdbCmd would otherwise
+    # log the full command string verbatim on non-zero exit).
+    $out = Invoke-AdbCmd -Device $Device -Command "shell cmd -w wifi connect-network `"$Ssid`" wpa2 `"$Password`" -r $macFlag" -SilentOnFail
 
     if ($out -ne $false -and ($out -join '') -notmatch 'error|failed|unknown') {
         Write-Log ($msg.WifiConnectSuccess -f $Ssid, $Device.DeviceId) -Level SUCCESS
         return $true
     } else {
-        Write-Log ($msg.WifiConnectFailed -f $Ssid, $Device.DeviceId, ($out -join ' ').Trim()) -Level ERROR
+        # Mask password before logging the response. Generic redaction in case the
+        # response echoes the command line on some firmware.
+        $resp = ($out -join ' ').Trim()
+        $resp = $resp -replace [regex]::Escape($Password), '***'
+        Write-Log ($msg.WifiConnectFailed -f $Ssid, $Device.DeviceId, $resp) -Level ERROR
         return $false
     }
 }
@@ -507,8 +525,11 @@ function Enable-WiFiADB {
         }
 
         $deviceId = $usbDevice.DeviceId
-        # Retrieve the model:
-        $headsetModel = ((Invoke-AdbCmd -Device $usbDevice -Command "shell getprop ro.product.model" -adb $adb) -join '').Trim()
+        # Retrieve brand + friendly model name (brand-aware: Quest uses ro.product.model,
+        # Pico uses pxr.vendorhw.product.model).
+        $bm = Get-HeadsetBrandModel -Device $usbDevice -adb $adb
+        $headsetBrand = $bm.Brand
+        $headsetModel = $bm.Model
         Write-Log ($msg.HeadsetDetected -f $headsetModel, $deviceId) -Level INFO
 
         # Step 3: Check SSID (filter in PowerShell to avoid shell pipe issues on some Android builds)
@@ -528,7 +549,7 @@ function Enable-WiFiADB {
 
             $switchChoice = (Read-Host ($msg.SwitchToSsidPrompt -f $wifi_ssid)).ToUpper()
             if ($switchChoice -eq 'Y') {
-                if (-not (Connect-HeadsetToWifi -Device $usbDevice -Ssid $wifi_ssid -Password $wifi_pwd)) {
+                if (-not (Connect-HeadsetToWifi -Device $usbDevice -Ssid $wifi_ssid -Password $wifi_pwd -Brand $headsetBrand)) {
                     return $false
                 }
                 Start-Sleep -Seconds 5
@@ -877,7 +898,11 @@ function Get-AdbUsbDeviceDetails {
             }
         }
 
-        $model        = ((Invoke-AdbCmd -Device $usbDevice -Command "shell getprop ro.product.model" -adb $adb) -join '').Trim()
+        # Brand-aware friendly model name: Meta -> ro.product.model (e.g. "Quest 3"),
+        # Pico -> pxr.vendorhw.product.model (e.g. "PICO 4 Ultra" instead of code "A9210").
+        $bm           = Get-HeadsetBrandModel -Device $usbDevice -adb $adb
+        $brand        = if ($bm) { $bm.Brand } else { "" }
+        $model        = if ($bm) { $bm.Model } else { "" }
         $serialNumber = ((Invoke-AdbCmd -Device $usbDevice -Command "shell getprop ro.serialno" -adb $adb) -join '').Trim()
 
         # Current WiFi SSID - robust fallback chain for Quest 3 / Android 12+ firmware changes
@@ -925,6 +950,7 @@ function Get-AdbUsbDeviceDetails {
             DeviceId       = $deviceId
             ConnectionType = 'USB'
             IP             = $ip
+            Brand          = $brand
             Model          = $model
             SerialNumber   = $serialNumber
             WiFiSSID       = $ssid
@@ -1007,15 +1033,47 @@ function Get-AdbWifiDevice {
 }
 
 
+function Get-HeadsetBrandModel {
+    # Returns @{Brand; Model} where Brand is "Meta", "Pico", or "" (unknown).
+    # Friendly model name comes from a brand-specific getprop because no single
+    # AOSP prop carries a human-readable model on both vendors:
+    #   - Meta: ro.product.model = "Quest 3" / "Quest Pro" / ...
+    #   - Pico: ro.product.model = "A9210" (useless code); use pxr.vendorhw.product.model
+    #          (= "PICO 4 Ultra") with sys.pxr.product.name as secondary fallback.
+    param (
+        [Parameter(Mandatory=$true)]
+        [PSCustomObject]$Device,
+        [string]$adb = $global:adbPath
+    )
+    if (-not $Device) { return @{ Brand = ""; Model = $null } }
+
+    $manufacturer = ((Invoke-AdbCmd -Device $Device -Command "shell getprop ro.product.manufacturer" -adb $adb) -join '').Trim()
+
+    if ($manufacturer -match '(?i)pico') {
+        $model = ((Invoke-AdbCmd -Device $Device -Command "shell getprop pxr.vendorhw.product.model" -adb $adb) -join '').Trim()
+        if ([string]::IsNullOrWhiteSpace($model)) {
+            $model = ((Invoke-AdbCmd -Device $Device -Command "shell getprop sys.pxr.product.name" -adb $adb) -join '').Trim()
+        }
+        if ([string]::IsNullOrWhiteSpace($model)) {
+            $model = ((Invoke-AdbCmd -Device $Device -Command "shell getprop ro.product.model" -adb $adb) -join '').Trim()
+        }
+        return @{ Brand = "Pico"; Model = $model }
+    }
+
+    $model = ((Invoke-AdbCmd -Device $Device -Command "shell getprop ro.product.model" -adb $adb) -join '').Trim()
+    $brand = if ($manufacturer -match '(?i)oculus|meta') { "Meta" } else { "" }
+    return @{ Brand = $brand; Model = $model }
+}
+
 function Get-HeadsetModel {
+    # Back-compat wrapper. Returns the friendly model string only.
     param (
         [Parameter(Mandatory=$true)]
         [PSCustomObject]$Device,
         [string]$adb = $global:adbPath
     )
     if (-not $Device) { return $null }
-    $headsetModel = ((Invoke-AdbCmd -Device $Device -Command "shell getprop ro.product.model" -adb $adb) -join '').Trim()
-    return $headsetModel
+    return (Get-HeadsetBrandModel -Device $Device -adb $adb).Model
 }
 
 
@@ -1103,11 +1161,16 @@ function Get-HeadsetBatteryStatus {
     <#
     .SYNOPSIS
     Retrieves battery level, charging state and temperature from a VR headset via ADB.
+    Controller battery: Meta uses dumpsys OVRRemoteService (works). Pico controller
+    battery is not reachable from public ADB (the level lives behind the
+    PXR.IPxrControllerService binder, only callable from a signed system-priv APK)
+    so we return $null for Brand=Pico. TODO: ship a companion APK if needed.
     #>
     param (
         [Parameter(Mandatory=$true)]
         [PSCustomObject]$Device,
-        [string]$adb = $global:adbPath
+        [string]$adb = $global:adbPath,
+        [string]$Brand = ""
     )
     if (-not $Device) { return $null }
     $DeviceId = $Device.DeviceId
@@ -1170,11 +1233,13 @@ function Get-HeadsetBatteryStatus {
             $result.MaxChargingWattageW = [math]::Round($result.MaxChargingCurrentA * $result.MaxChargingVoltageV, 2)
         }
 
-        # Controller battery levels (left & right)
-        $controllers = Get-QuestControllerBatteryStatus -Device $Device -adb $adb
-        if ($controllers) {
-            $result.BatteryControllerLeft  = $controllers.Left.Battery
-            $result.BatteryControllerRight = $controllers.Right.Battery
+        # Controller battery levels (left & right) - Meta only.
+        if ($Brand -ne "Pico") {
+            $controllers = Get-QuestControllerBatteryStatus -Device $Device -adb $adb
+            if ($controllers) {
+                $result.BatteryControllerLeft  = $controllers.Left.Battery
+                $result.BatteryControllerRight = $controllers.Right.Battery
+            }
         }
 
         Write-Log ($msg.BatteryStatus -f $DeviceId, $result.Level, $result.Charging, $result.TempC, $result.MaxChargingWattageW) -Level DEBUG
@@ -1421,10 +1486,16 @@ function Invoke-HeadsetRecenter {
     param (
         [Parameter(Mandatory=$true)]
         [PSCustomObject]$Device,
-        [string]$adb = $global:adbPath
+        [string]$adb = $global:adbPath,
+        [string]$Brand = ""
     )
     if (-not $Device) { Write-Log ($msg.AdbWifiConnectFailed -f 'unknown', 'no device') -Level ERROR; return $false }
     $DeviceId = $Device.DeviceId
+
+    if ($Brand -eq "Pico") {
+        Write-Log "Recenter not supported on Pico ($DeviceId) - no public broadcast surface. Use the in-headset long-press gesture." -Level WARNING
+        return $false
+    }
 
     try {
         Write-Log ($msg.HeadsetRecentering -f $DeviceId) -Level INFO
@@ -1910,6 +1981,24 @@ function Get-AppInfo {
         $appInfos.DisplayName = $cache[$PackageName].DisplayName
     }
 
+    # Final fallback: no per-package icon resolved (MetaMetadata miss, no operator
+    # override, no cached image). Point LocalIconPath at the shared generic
+    # Android icon shipped under templates\website\assets\app_icons\android.png.
+    # Applies to both Pico and Meta unknowns.
+    if ([string]::IsNullOrWhiteSpace($appInfos.LocalIconPath)) {
+        $defaultSrc = Join-Path $global:ScriptPath "templates\website\assets\app_icons\android.png"
+        if (Test-Path -LiteralPath $defaultSrc) {
+            $defaultDest = Join-Path $IconCacheDir "android.png"
+            if (-not (Test-Path -LiteralPath $IconCacheDir)) {
+                New-Item -ItemType Directory -Path $IconCacheDir -Force | Out-Null
+            }
+            if (-not (Test-Path -LiteralPath $defaultDest)) {
+                Copy-Item -LiteralPath $defaultSrc -Destination $defaultDest -Force
+            }
+            $appInfos.LocalIconPath = "/assets/app_icons/android.png"
+        }
+    }
+
     # Update cache file if we got new info
     $changed = (-not $cache.ContainsKey($PackageName)) -or
                ($appInfos.DisplayName -ne $cache[$PackageName].DisplayName) -or
@@ -2086,6 +2175,22 @@ function Update-AppCacheOnline {
             $localPath = Resolve-LocalAppIcon -PackageName $pkg -IconCacheDir $IconCacheDir -SourcesOnly
             if ($localPath -and $cache[$pkg].LocalIconPath -ne $localPath) {
                 $cache[$pkg].LocalIconPath = $localPath
+                $changed = $true
+            }
+        }
+    }
+
+    # Phase 4: ensure every cache entry has a LocalIconPath. Packages that miss
+    # MetaMetadata AND have no operator override get the shared generic Android icon.
+    $defaultSrc  = Join-Path $global:ScriptPath "templates\website\assets\app_icons\android.png"
+    $defaultDest = Join-Path $IconCacheDir "android.png"
+    if (Test-Path -LiteralPath $defaultSrc) {
+        if (-not (Test-Path -LiteralPath $defaultDest)) {
+            Copy-Item -LiteralPath $defaultSrc -Destination $defaultDest -Force
+        }
+        foreach ($pkg in $cache.Keys) {
+            if ([string]::IsNullOrWhiteSpace($cache[$pkg].LocalIconPath)) {
+                $cache[$pkg].LocalIconPath = "/assets/app_icons/android.png"
                 $changed = $true
             }
         }
@@ -2687,15 +2792,21 @@ function Install-HeadsetApp {
 
 function Set-HeadsetGuardianPause {
     # Pauses (disables) or resumes the Guardian boundary display via debug.oculus.guardian_pause.
-    # Session-only - resets on reboot.
+    # Session-only - resets on reboot. Pico exposes no equivalent debug prop, so the
+    # call is a no-op + WARNING for Brand=Pico (operator must use the headset UI).
     param (
         [Parameter(Mandatory=$true)]
         [PSCustomObject]$Device,
         [bool]$Pause = $true,
-        [string]$adb = $global:adbPath
+        [string]$adb = $global:adbPath,
+        [string]$Brand = ""
     )
     if (-not $Device) { Write-Log ($msg.ErrorOccurred -f 'No device') -Level ERROR; return $false }
     $DeviceId = $Device.DeviceId
+    if ($Brand -eq "Pico") {
+        Write-Log "Guardian pause toggle not supported on Pico ($DeviceId) - no equivalent debug prop. Use the headset UI." -Level WARNING
+        return $false
+    }
     $val = if ($Pause) { '1' } else { '0' }
     try {
         Write-Log ($msg.SettingGuardianMode -f "pause=$val", $DeviceId) -Level INFO
@@ -2710,21 +2821,41 @@ function Set-HeadsetGuardianPause {
 }
 
 function Set-HeadsetGuardian {
-    # Guardian mode cannot be changed via ADB broadcasts or settings on Quest 3 user builds.
-    # The IGuardianManagerService binder is inaccessible without a system session.
-    # Opens the guardian setup UI so the user can run the initialization on the headset.
+    # Opens the guardian/boundary setup UI on the headset so the user can
+    # run the initialization. Meta: com.oculus.guardiansetup/.MainActivity.
+    # Pico: tries candidate activities in order until one succeeds (exit code 0).
     param (
         [Parameter(Mandatory=$true)]
         [PSCustomObject]$Device,
-        [string]$adb = $global:adbPath
+        [string]$adb = $global:adbPath,
+        [string]$Brand = ""
     )
     if (-not $Device) { Write-Log ($msg.ErrorOccurred -f 'No device') -Level ERROR; return $false }
     $DeviceId = $Device.DeviceId
+    Write-Log ($msg.SettingGuardianMode -f 'init', $DeviceId) -Level INFO
     try {
-        Write-Log ($msg.SettingGuardianMode -f 'init', $DeviceId) -Level INFO
-        Invoke-AdbCmd -Device $Device -Command "shell am start -n com.oculus.guardiansetup/.MainActivity" -adb $adb | Out-Null
-        Write-Log ($msg.HeadsetSettingApplied -f $DeviceId) -Level SUCCESS
-        return $true
+        if ($Brand -eq "Pico") {
+            $candidates = @(
+                "com.pico.guardian/.GuardianActivity",
+                "com.pico.guardian/.GuardianSetupActivity",
+                "com.pico.guardian/.MainActivity",
+                "com.pvr.guardian/.MainActivity"
+            )
+            foreach ($component in $candidates) {
+                $result = Invoke-Adb -adb $adb -Arguments @("-s", $DeviceId, "shell", "am", "start", "-n", $component)
+                if ($result.Ok -and $result.StdOut -notmatch 'Error|does not exist|No activities found') {
+                    Write-Log ($msg.HeadsetSettingApplied -f $DeviceId) -Level SUCCESS
+                    return $true
+                }
+                Write-Log "Pico guardian candidate failed: $component" -Level DEBUG
+            }
+            Write-Log "No Pico guardian activity responded. Guardian init may not be supported via ADB on this firmware." -Level WARNING
+            return $false
+        } else {
+            Invoke-AdbCmd -Device $Device -Command "shell am start -n com.oculus.guardiansetup/.MainActivity" -adb $adb | Out-Null
+            Write-Log ($msg.HeadsetSettingApplied -f $DeviceId) -Level SUCCESS
+            return $true
+        }
     }
     catch {
         Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
@@ -2733,18 +2864,41 @@ function Set-HeadsetGuardian {
 }
 
 function Get-HeadsetScreenTimeout {
+    # Meta: persist.ovr.prefs_overrides.idle_time_threshold (seconds, *1000 -> ms)
+    # Pico: those props don't exist; fall back to the universal AOSP setting
+    #       screen_off_timeout (already ms). When $Brand is empty the Meta path
+    #       is tried first, then the AOSP fallback - covers older registry rows.
     param (
         [Parameter(Mandatory=$true)]
         [PSCustomObject]$Device,
-        [string]$adb = $global:adbPath
+        [string]$adb = $global:adbPath,
+        [string]$Brand = ""
     )
     if (-not $Device) { return '-1' }
     try {
-        $raw = ((Invoke-AdbCmd -Device $Device -Command "shell getprop persist.ovr.prefs_overrides.idle_time_threshold" -adb $adb) -join '').Trim()
-        if ($raw -and $raw -match '^\d+$') {
-            $ms = [int]$raw * 1000
+        if ($Brand -ne "Pico") {
+            $raw = ((Invoke-AdbCmd -Device $Device -Command "shell getprop persist.ovr.prefs_overrides.idle_time_threshold" -adb $adb) -join '').Trim()
+            if ($raw -and $raw -match '^\d+$') {
+                $ms = [int]$raw * 1000
+                if ($ms -eq 0) { return '-1' }
+                return [string]$ms
+            }
+            if ($Brand -eq "Meta") { return '-1' }
+        }
+        $raw = ((Invoke-AdbCmd -Device $Device -Command "shell settings get system screen_off_timeout" -adb $adb) -join '').Trim()
+        if ($raw -and $raw -ne 'null' -and $raw -match '^\d+$') {
+            $ms = [int]$raw
             if ($ms -eq 0) { return '-1' }
             return [string]$ms
+        }
+        # Pico-specific fallback: persist.pxr.idle_time_threshold (in seconds)
+        if ($Brand -eq "Pico") {
+            $raw = ((Invoke-AdbCmd -Device $Device -Command "shell getprop persist.pxr.idle_time_threshold" -adb $adb) -join '').Trim()
+            if ($raw -and $raw -match '^\d+$') {
+                $ms = [int]$raw * 1000
+                if ($ms -eq 0) { return '-1' }
+                return [string]$ms
+            }
         }
         return '-1'
     }
@@ -2752,16 +2906,29 @@ function Get-HeadsetScreenTimeout {
 }
 
 function Get-HeadsetSleepTimeout {
+    # Meta: persist.ovr.prefs_overrides.autosleep_time
+    # Pico: no separate sleep prop. Reuse screen_off_timeout (same value as
+    #       Get-HeadsetScreenTimeout on Pico - the UI can show identical values).
     param (
         [Parameter(Mandatory=$true)]
         [PSCustomObject]$Device,
-        [string]$adb = $global:adbPath
+        [string]$adb = $global:adbPath,
+        [string]$Brand = ""
     )
     if (-not $Device) { return '-1' }
     try {
-        $raw = ((Invoke-AdbCmd -Device $Device -Command "shell getprop persist.ovr.prefs_overrides.autosleep_time" -adb $adb) -join '').Trim()
-        if ($raw -and $raw -match '^\d+$') {
-            $ms = [int]$raw * 1000
+        if ($Brand -ne "Pico") {
+            $raw = ((Invoke-AdbCmd -Device $Device -Command "shell getprop persist.ovr.prefs_overrides.autosleep_time" -adb $adb) -join '').Trim()
+            if ($raw -and $raw -match '^\d+$') {
+                $ms = [int]$raw * 1000
+                if ($ms -eq 0) { return '-1' }
+                return [string]$ms
+            }
+            if ($Brand -eq "Meta") { return '-1' }
+        }
+        $raw = ((Invoke-AdbCmd -Device $Device -Command "shell settings get system screen_off_timeout" -adb $adb) -join '').Trim()
+        if ($raw -and $raw -ne 'null' -and $raw -match '^\d+$') {
+            $ms = [int]$raw
             if ($ms -eq 0) { return '-1' }
             return [string]$ms
         }
@@ -2771,23 +2938,28 @@ function Get-HeadsetSleepTimeout {
 }
 
 
-$script:BrightnessMinRaw = 38   # Quest hardware minimum (~15% on 0-255 scale)
+# Quest hardware uses 0-255 with a ~38 minimum (~15% useful range).
+# Pico uses 0-100 directly (no scale factor; screen_brightness_max returns null).
+$script:BrightnessMinRaw = 38
 $script:BrightnessMaxRaw = 255
 
 function Get-HeadsetBrightness {
     param (
         [Parameter(Mandatory=$true)]
         [PSCustomObject]$Device,
-        [string]$adb = $global:adbPath
+        [string]$adb = $global:adbPath,
+        [string]$Brand = ""
     )
     if (-not $Device) { return '50' }
     try {
         $raw = ((Invoke-AdbCmd -Device $Device -Command "shell settings get system screen_brightness" -adb $adb) -join '').Trim()
-        if ($raw -and $raw -ne 'null' -and $raw -match '^\d+$') {
-            $pct = [int]([Math]::Round(([int]$raw - $script:BrightnessMinRaw) / ($script:BrightnessMaxRaw - $script:BrightnessMinRaw) * 100))
-            return [string][Math]::Max(0, [Math]::Min(100, $pct))
+        if (-not ($raw -and $raw -ne 'null' -and $raw -match '^\d+$')) { return '50' }
+        $rawInt = [int]$raw
+        if ($Brand -eq "Pico") {
+            return [string][Math]::Max(0, [Math]::Min(100, $rawInt))
         }
-        return '50'
+        $pct = [int]([Math]::Round(($rawInt - $script:BrightnessMinRaw) / ($script:BrightnessMaxRaw - $script:BrightnessMinRaw) * 100))
+        return [string][Math]::Max(0, [Math]::Min(100, $pct))
     }
     catch { Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR; return '50' }
 }
@@ -2798,11 +2970,16 @@ function Set-HeadsetBrightness {
         [PSCustomObject]$Device,
         [ValidateRange(0,100)]
         [int]$Percent = 50,
-        [string]$adb = $global:adbPath
+        [string]$adb = $global:adbPath,
+        [string]$Brand = ""
     )
     if (-not $Device) { Write-Log ($msg.ErrorOccurred -f 'No device') -Level ERROR; return $false }
     $DeviceId = $Device.DeviceId
-    $raw = [int]([Math]::Round($Percent / 100.0 * ($script:BrightnessMaxRaw - $script:BrightnessMinRaw) + $script:BrightnessMinRaw))
+    $raw = if ($Brand -eq "Pico") {
+        [int]([Math]::Max(0, [Math]::Min(100, $Percent)))
+    } else {
+        [int]([Math]::Round($Percent / 100.0 * ($script:BrightnessMaxRaw - $script:BrightnessMinRaw) + $script:BrightnessMinRaw))
+    }
     try {
         Write-Log ($msg.SettingBrightness -f $Percent, $DeviceId) -Level INFO
         Invoke-AdbCmd -Device $Device -Command "shell settings put system screen_brightness $raw" -adb $adb | Out-Null
@@ -2890,10 +3067,30 @@ function Get-HeadsetFirmwareInfo {
     param (
         [Parameter(Mandatory=$true)]
         [PSCustomObject]$Device,
-        [string]$adb = $global:adbPath
+        [string]$adb = $global:adbPath,
+        [string]$Brand = ""
     )
     if (-not $Device) { return $null }
     try {
+        if ($Brand -eq "Pico") {
+            # Pico: ro.build.version.release = Android version (e.g. 14)
+            # ro.build.version.incremental = numeric build (e.g. 1769174699)
+            # com.picovr.updatesystem dump has versionName (operator-friendly: "3.0.0")
+            $version = ((Invoke-AdbCmd -Device $Device -Command "shell getprop ro.build.version.release" -adb $adb) -join '').Trim()
+            $build   = ((Invoke-AdbCmd -Device $Device -Command "shell getprop ro.build.version.incremental" -adb $adb) -join '').Trim()
+            $updateVersion = $null
+            $dump = Invoke-AdbCmd -Device $Device -Command "shell dumpsys package com.picovr.updatesystem" -adb $adb
+            if ($dump) {
+                $vn = ($dump | Select-String 'versionName=([\S]+)' | Select-Object -First 1)
+                if ($vn) { $updateVersion = $vn.Matches[0].Groups[1].Value }
+            }
+            return [PSCustomObject]@{
+                Version       = $version
+                Build         = $build
+                UpdateVersion = $updateVersion
+            }
+        }
+
         # ro.hzos.build.display_name gives the Meta Quest OS version (e.g. "2.3")
         # ro.vros.build.version gives the numeric release (e.g. "203") used as fallback
         # All ro.*version.release props return Android version "14", not the Meta OS version
@@ -2935,17 +3132,38 @@ function Get-HeadsetFirmwareInfo {
     }
 }
 
+function Get-UpdaterPackages {
+    # Brand -> updater package names. Pico ships two updater apps that both run
+    # OTA background work, so both must be denied/allowed for the block to stick.
+    param([string]$Brand)
+    if ($Brand -eq "Pico") {
+        return @('com.picovr.updatesystem', 'com.picovr.firmwareupdate')
+    }
+    return @('com.oculus.updater')
+}
+
 function Get-HeadsetUpdateBlockStatus {
     param (
         $Device,
-        [string]$adb = $global:adbPath
+        [string]$adb = $global:adbPath,
+        [string]$Brand = ""
     )
     if (-not (Test-Path -LiteralPath $adb)) { return $null }
     try {
-        $output = Invoke-AdbCmd -Device $Device -Command "shell appops get com.oculus.updater" -adb $adb
-        if ($null -eq $output) { return $null }
-        $blocked = ($output -join "`n") -match 'RUN_IN_BACKGROUND:\s*deny'
-        return [bool]$blocked
+        # Blocked iff EVERY updater package has RUN_IN_BACKGROUND: deny.
+        # Any package with allow flips the result to false (the block is partial).
+        $packages = Get-UpdaterPackages -Brand $Brand
+        $sawAny   = $false
+        foreach ($pkg in $packages) {
+            $output = Invoke-AdbCmd -Device $Device -Command "shell appops get $pkg" -adb $adb
+            if ($null -eq $output) { continue }
+            $sawAny = $true
+            if (-not (($output -join "`n") -match 'RUN_IN_BACKGROUND:\s*deny')) {
+                return $false
+            }
+        }
+        if (-not $sawAny) { return $null }
+        return $true
     }
     catch {
         Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
@@ -2957,20 +3175,23 @@ function Set-HeadsetUpdateBlocked {
     param (
         $Device,
         [bool]$Block,
-        [string]$adb = $global:adbPath
+        [string]$adb = $global:adbPath,
+        [string]$Brand = ""
     )
     if (-not (Test-Path -LiteralPath $adb)) { return $false }
     try {
         $displayName = if ($Device -is [string]) { $Device } else { $Device.DisplayName }
+        $packages = Get-UpdaterPackages -Brand $Brand
+        $action   = if ($Block) { 'deny' } else { 'allow' }
         if ($Block) {
             Write-Log ($msg.BlockingUpdates -f $displayName) -Level INFO
-            Invoke-AdbCmd -Device $Device -Command "shell appops set com.oculus.updater RUN_IN_BACKGROUND deny" -adb $adb | Out-Null
-            $result = Invoke-AdbCmd -Device $Device -Command "shell appops set com.oculus.updater RUN_ANY_IN_BACKGROUND deny" -adb $adb
-        }
-        else {
+        } else {
             Write-Log ($msg.UnblockingUpdates -f $displayName) -Level INFO
-            Invoke-AdbCmd -Device $Device -Command "shell appops set com.oculus.updater RUN_IN_BACKGROUND allow" -adb $adb | Out-Null
-            $result = Invoke-AdbCmd -Device $Device -Command "shell appops set com.oculus.updater RUN_ANY_IN_BACKGROUND allow" -adb $adb
+        }
+        $result = $null
+        foreach ($pkg in $packages) {
+            Invoke-AdbCmd -Device $Device -Command "shell appops set $pkg RUN_IN_BACKGROUND $action" -adb $adb | Out-Null
+            $result = Invoke-AdbCmd -Device $Device -Command "shell appops set $pkg RUN_ANY_IN_BACKGROUND $action" -adb $adb
         }
         if ($result -ne $false) {
             Write-Log ($msg.UpdateBlockApplied -f $displayName) -Level SUCCESS
@@ -3094,6 +3315,100 @@ function Get-HeadsetAppStorageSizes {
     catch {
         Write-Log "Get-HeadsetAppStorageSizes failed: $_" -Level WARNING
         return @{}
+    }
+}
+
+
+function Get-CompanionInfo {
+    <#
+    .SYNOPSIS
+    Calls GET http://<IP>:<CompanionPort>/info on the VRHM Companion app running on the headset.
+    Returns the parsed JSON object, or $null if the companion is unreachable.
+    .PARAMETER IP
+    Headset IP address.
+    .PARAMETER CompanionPort
+    HTTP port the companion listens on (default 8765).
+    .PARAMETER TimeoutSec
+    Request timeout in seconds (default 2).
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$IP,
+        [int]$CompanionPort = 8765,
+        [int]$TimeoutSec    = 2
+    )
+    try {
+        $url  = "http://${IP}:${CompanionPort}/info"
+        $resp = Invoke-RestMethod -Uri $url -Method GET -TimeoutSec $TimeoutSec -ErrorAction Stop
+        return $resp
+    } catch {
+        Write-Log "Get-CompanionInfo $IP :${CompanionPort} unreachable: $_" -Level DEBUG
+        return $null
+    }
+}
+
+
+function Set-CompanionAutoAdb {
+    <#
+    .SYNOPSIS
+    POSTs {"auto_adb_wifi": <bool>} to the companion app running on the headset.
+    Returns $true on success, $false on failure (companion not installed or unreachable).
+    .PARAMETER IP
+    Headset IP address.
+    .PARAMETER Enabled
+    Whether to enable auto-ADB-WiFi on next boot.
+    .PARAMETER CompanionPort
+    HTTP port the companion listens on (default 8765).
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$IP,
+        [Parameter(Mandatory)]
+        [bool]$Enabled,
+        [int]$CompanionPort = 8765
+    )
+    try {
+        $body = ConvertTo-Json -Compress @{ auto_adb_wifi = $Enabled }
+        $url  = "http://${IP}:${CompanionPort}/settings"
+        $resp = Invoke-RestMethod -Uri $url -Method POST -Body $body `
+                    -ContentType "application/json" -TimeoutSec 3 -ErrorAction Stop
+        if ($resp.ok) {
+            Write-Log "Set-CompanionAutoAdb $IP -> auto_adb_wifi=$Enabled" -Level DEBUG
+            return $true
+        }
+        Write-Log "Set-CompanionAutoAdb $IP returned ok=false" -Level WARNING
+        return $false
+    } catch {
+        Write-Log "Set-CompanionAutoAdb $IP failed: $_" -Level WARNING
+        return $false
+    }
+}
+
+
+function Set-HeadsetBrightnessCompanion {
+    <#
+    .SYNOPSIS
+    Sets screen brightness (0-100%) via the companion app HTTP API.
+    Faster than ADB round-trip. Falls back gracefully if companion is unreachable.
+    Returns $true on success.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$IP,
+        [Parameter(Mandatory)]
+        [ValidateRange(0, 100)]
+        [int]$Percent,
+        [int]$CompanionPort = 8765
+    )
+    try {
+        $body = ConvertTo-Json -Compress @{ brightness = $Percent }
+        $url  = "http://${IP}:${CompanionPort}/settings"
+        $resp = Invoke-RestMethod -Uri $url -Method POST -Body $body `
+                    -ContentType "application/json" -TimeoutSec 3 -ErrorAction Stop
+        return [bool]$resp.ok
+    } catch {
+        Write-Log "Set-HeadsetBrightnessCompanion $IP failed: $_" -Level DEBUG
+        return $false
     }
 }
 

@@ -429,7 +429,7 @@ try {
         }
 
         # API: POST /api/reorderheadsets  body: {"order":["Q3_BLUE","Q3_RED",...]}
-        # Delegates to Reorder-Headsets (headsets_manager.ps1) which saves CSV and regenerates HTML monitors.
+        # Delegates to Set-HeadsetsOrder (headsets_manager.ps1) which saves CSV and regenerates HTML monitors.
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/reorderheadsets') {
             try {
                 $reader  = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
@@ -444,7 +444,7 @@ try {
                     if ($tok -notmatch '^[\w\-]+$') { throw "Invalid name token: $tok" }
                 }
 
-                Reorder-Headsets -OrderedDisplayNames ([string[]]$json.order)
+                Set-HeadsetsOrder -OrderedDisplayNames ([string[]]$json.order)
 
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
                 $response.StatusCode      = 200
@@ -878,11 +878,12 @@ try {
                 $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort -adb $adbPath
                 if (-not $device) { throw "Could not connect to headset via ADB" }
 
-                $screenTimeout    = Get-HeadsetScreenTimeout    -Device $device -adb $adbPath
-                $sleepTimeout     = Get-HeadsetSleepTimeout     -Device $device -adb $adbPath
+                $brand = if ($headset.PSObject.Properties['Brand'] -and $headset.Brand) { $headset.Brand } else { (Get-HeadsetBrandModel -Device $device -adb $adbPath).Brand }
+                $screenTimeout    = Get-HeadsetScreenTimeout    -Device $device -adb $adbPath -Brand $brand
+                $sleepTimeout     = Get-HeadsetSleepTimeout     -Device $device -adb $adbPath -Brand $brand
                 $soundLevel       = Get-HeadsetSoundLevel       -Device $device -adb $adbPath
-                $brightness       = Get-HeadsetBrightness       -Device $device -adb $adbPath
-                $blockUpdates     = Get-HeadsetUpdateBlockStatus -Device $device -adb $adbPath
+                $brightness       = Get-HeadsetBrightness       -Device $device -adb $adbPath -Brand $brand
+                $blockUpdates     = Get-HeadsetUpdateBlockStatus -Device $device -adb $adbPath -Brand $brand
 
                 Send-JsonResponse -Response $response -Body @{
                     ok               = $true
@@ -911,13 +912,65 @@ try {
                 $device  = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort -adb $adbPath
                 if (-not $device) { throw "Could not connect to headset via ADB" }
 
-                $fw = Get-HeadsetFirmwareInfo -Device $device -adb $adbPath
+                $brand = if ($headset.PSObject.Properties['Brand'] -and $headset.Brand) { $headset.Brand } else { (Get-HeadsetBrandModel -Device $device -adb $adbPath).Brand }
+                $fw = Get-HeadsetFirmwareInfo -Device $device -adb $adbPath -Brand $brand
                 Send-JsonResponse -Response $response -Body @{
                     ok            = $true
                     version       = $fw.Version
                     build         = $fw.Build
                     updateVersion = $fw.UpdateVersion
                 }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: GET /api/companion-info?name=Q3_BLUE
+        # Calls GET http://<IP>:8765/info on the VRHM Companion app and returns the result.
+        # Returns {"ok":false,"companion":false} when the companion app is not running.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/companion-info') {
+            try {
+                $safeName = [regex]::Match($request.QueryString['name'], '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+                $rows    = Get-KnownHeadsets
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                if (-not $headset) { throw "Headset not found" }
+                $info = Get-CompanionInfo -IP $headset.IPAddress
+                if ($null -ne $info) {
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; companion = $true; data = $info }
+                } else {
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; companion = $false }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/companion-settings?name=Q3_BLUE  body: {"auto_adb_wifi":bool}
+        # Forwards settings to the Companion app running on the headset.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/companion-settings') {
+            try {
+                $safeName = [regex]::Match($request.QueryString['name'], '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+                $rows    = Get-KnownHeadsets
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                if (-not $headset) { throw "Headset not found" }
+
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $bodyRaw = $reader.ReadToEnd()
+                $reader.Close()
+                $json = $bodyRaw | ConvertFrom-Json
+
+                $url  = "http://$($headset.IPAddress):8765/settings"
+                $resp2 = Invoke-RestMethod -Uri $url -Method POST -Body $bodyRaw `
+                             -ContentType "application/json" -TimeoutSec 3 -ErrorAction Stop
+                Send-JsonResponse -Response $response -Body @{ ok = [bool]$resp2.ok }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
@@ -971,12 +1024,13 @@ try {
                 if (-not $device) { throw "Could not connect to headset via ADB" }
 
                 $s = $json.settings
+                $brand = if ($headset.PSObject.Properties['Brand'] -and $headset.Brand) { $headset.Brand } else { (Get-HeadsetBrandModel -Device $device -adb $adbPath).Brand }
                 if ($null -ne $s.guardianMode) {
-                    Set-HeadsetGuardian -Device $device -adb $adbPath | Out-Null
+                    Set-HeadsetGuardian -Device $device -adb $adbPath -Brand $brand | Out-Null
                 }
 
                 if ($null -ne $s.guardianPause) {
-                    Set-HeadsetGuardianPause -Device $device -Pause ([bool]$s.guardianPause) -adb $adbPath | Out-Null
+                    Set-HeadsetGuardianPause -Device $device -Pause ([bool]$s.guardianPause) -adb $adbPath -Brand $brand | Out-Null
                 }
 
                 if ($null -ne $s.soundLevel) {
@@ -984,7 +1038,7 @@ try {
                 }
 
                 if ($null -ne $s.brightness) {
-                    Set-HeadsetBrightness -Device $device -Percent ([int]$s.brightness) -adb $adbPath | Out-Null
+                    Set-HeadsetBrightness -Device $device -Percent ([int]$s.brightness) -adb $adbPath -Brand $brand | Out-Null
                 }
 
                 if ($null -ne $s.proxOverride) {
@@ -992,7 +1046,7 @@ try {
                 }
 
                 if ($null -ne $s.blockUpdates) {
-                    Set-HeadsetUpdateBlocked -Device $device -Block ([bool]$s.blockUpdates) -adb $adbPath | Out-Null
+                    Set-HeadsetUpdateBlocked -Device $device -Block ([bool]$s.blockUpdates) -adb $adbPath -Brand $brand | Out-Null
                 }
 
                 Send-JsonResponse -Response $response -Body @{ ok = $true }
@@ -1065,6 +1119,8 @@ try {
                         $views = @($liveConfig.scrcpy.parameters.$modelParam.views.PSObject.Properties | Select-Object -ExpandProperty Name)
                     }
                 } catch {}
+                # Built-in non-removable view available on every model.
+                if ('fullscreen' -notin $views) { $views += 'fullscreen' }
                 $json = $views | ConvertTo-Json -Compress
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes($json)
                 $response.StatusCode      = 200
@@ -1195,6 +1251,7 @@ try {
                     ',"Name":' + ($row.Name         | ConvertTo-Json) +
                     ',"IPAddress":' + ($row.IPAddress  | ConvertTo-Json) +
                     ',"Model":' + ($row.Model         | ConvertTo-Json) +
+                    ',"Brand":' + ($row.Brand         | ConvertTo-Json) +
                     ',"SerialNumber":' + ($row.SerialNumber | ConvertTo-Json) +
                     ',"ScrcpyProfile":' + ($row.ScrcpyProfile | ConvertTo-Json) +
                     ',"scrcpy_AutoRestart":' + ($row.scrcpy_AutoRestart | ConvertTo-Json) +
@@ -2117,8 +2174,15 @@ try {
                         $result.error = 'No USB device found.'
                     } else {
                         $usbDev    = [PSCustomObject]@{ DeviceId = $usbDeviceId; ConnectionType = 'USB'; IP = $null; Port = $null }
-                        $result.ok = Connect-HeadsetToWifi -Device $usbDev -Ssid $wifiSsid -Password $wifiPwd
-                        if (-not $result.ok) { $result.error = 'WiFi connection failed.' }
+                        $usbBrand  = (Get-HeadsetBrandModel -Device $usbDev -adb $adbPath).Brand
+                        $result.ok = Connect-HeadsetToWifi -Device $usbDev -Ssid $wifiSsid -Password $wifiPwd -Brand $usbBrand
+                        if (-not $result.ok) {
+                            if ($usbBrand -eq 'Pico') {
+                                $result.error = "WiFi picker opened on Pico headset - automated push is not supported (uid 2000 SecurityException). Complete the join on the headset for SSID '$wifiSsid'."
+                            } else {
+                                $result.error = 'WiFi connection failed.'
+                            }
+                        }
                     }
                     }
                 }
@@ -2307,7 +2371,7 @@ try {
                     $raw = [System.IO.File]::ReadAllText($script:usbInfoResultFile)
                     if ($raw -and $raw -ne 'null') { $raw | ConvertFrom-Json } else { $null }
                 } catch { $null }
-                $result  = @{ found = $false; ip = ''; model = ''; serialNumber = ''; ssid = ''; expectedSsid = ''; wifiAdbOpen = $false; apkInstalled = $false; alreadyRegistered = $false }
+                $result  = @{ found = $false; ip = ''; brand = ''; model = ''; serialNumber = ''; ssid = ''; expectedSsid = ''; ssidMatch = $false; wifiAdbOpen = $false; apkInstalled = $false; alreadyRegistered = $false }
                 if ($details) {
                     $knownNetworks   = Get-WifiNetworks
                     $preferredWifi   = $knownNetworks | Where-Object { $_.Preferred } | Select-Object -First 1
@@ -2318,9 +2382,13 @@ try {
                     if ($details.SerialNumber) { $alreadyReg = [bool]($rows | Where-Object { $_.SerialNumber -eq $details.SerialNumber }) }
                     if (-not $alreadyReg -and $details.IP) { $alreadyReg = [bool]($rows | Where-Object { $_.IPAddress -eq $details.IP }) }
                     $result = @{
-                        found = $true; ip = $details.IP; model = $details.Model
+                        found = $true; ip = $details.IP
+                        brand = if ($details.PSObject.Properties['Brand']) { $details.Brand } else { '' }
+                        model = $details.Model
                         serialNumber = $details.SerialNumber; ssid = $details.WiFiSSID
-                        expectedSsid = $expectedSsidVal; wifiAdbOpen = $details.WifiAdbOpen
+                        expectedSsid = $expectedSsidVal
+                        ssidMatch = (Test-SsidMatch -Reported $details.WiFiSSID -Expected $expectedSsidVal)
+                        wifiAdbOpen = $details.WifiAdbOpen
                         apkInstalled = $details.ApkInstalled; alreadyRegistered = $alreadyReg
                     }
                 }

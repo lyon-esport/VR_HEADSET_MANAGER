@@ -6,6 +6,25 @@
 ###############################################################
 
 
+# Tolerant SSID comparison. Pico headsets mask part of the SSID returned by
+# dumpsys/cmd wifi (e.g. "*****yWifi_Unifi" for "CrazyWifi_Unifi"). Strip all
+# '*' characters and treat the remaining substring as the visible suffix; the
+# match succeeds when the expected SSID ends with that suffix (case-insensitive)
+# and the unmasked suffix is at least 3 chars (avoids false positives).
+# Exact equality also returns true. Empty values never match.
+function Test-SsidMatch {
+    param(
+        [string]$Reported,
+        [string]$Expected
+    )
+    if ([string]::IsNullOrWhiteSpace($Reported) -or [string]::IsNullOrWhiteSpace($Expected)) { return $false }
+    if ([string]::Equals($Reported, $Expected, [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
+    $unmasked = $Reported -replace '\*', ''
+    if ($unmasked.Length -lt 3) { return $false }
+    return $Expected.EndsWith($unmasked, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+
 # Parse a CSV/JSON field that may be the string "True"/"False" or a real
 # boolean and return a real [bool]. Empty/null returns $false.
 # Use this everywhere instead of comparing $row.Field -eq $True/$False.
@@ -729,6 +748,46 @@ function Test-LocalPortFree {
 # Returns @{Pid; ProcessName; ProcessPath; Port; Protocol} for the process
 # that owns the listening socket on $Port, or $null when the port is free.
 # Path may be empty for system processes when access is denied.
+# Parse `netsh http show servicestate view=session` and return the userspace
+# PID that registered a URL for -Port on HTTP.sys. Returns $null when nothing
+# active is bound to that port. Locale-independent: the netsh output uses
+# the ASCII markers "ID:" (process attachment) and "HTTP://...:<port>/"
+# regardless of Windows display language.
+#
+# Note: the output has two kinds of blocks that reference a port URL:
+#   1. URL group reservations (no process attached) - MUST be skipped.
+#   2. Request queue sessions (PID + attached URLs) - the answer we want.
+# We track the last-seen PID and only return it when its FOLLOWING URL list
+# contains the target port. Reservation-only blocks never set a PID, so
+# their URLs (encountered first in the output) fall through harmlessly.
+function Get-HttpSysPortOwnerPid {
+    param([Parameter(Mandatory=$true)][int]$Port)
+    try {
+        $lines = & netsh http show servicestate view=session 2>$null
+    } catch { return $null }
+    if (-not $lines) { return $null }
+
+    $currentPid  = $null
+    $portPattern = ':' + $Port + '/'
+    foreach ($raw in $lines) {
+        $line = "$raw"
+        # PID markers observed across Windows versions / locales:
+        #   "ID: 12345, image: <path>"   (Win10/11, all locales)
+        #   "PID : 12345"                (older builds)
+        #   "process ID is: 12345"       (English long-form)
+        if ($line -match '^\s*ID\s*:\s*(\d+)' `
+                -or $line -match '\bPID\s*:\s*(\d+)' `
+                -or $line -match 'process ID is[:\s]+(\d+)') {
+            $currentPid = [int]$Matches[1]
+            continue
+        }
+        if ($currentPid -and $line -match '^\s*https?://' -and $line -like "*$portPattern*") {
+            return $currentPid
+        }
+    }
+    return $null
+}
+
 function Get-LocalPortOwner {
     param(
         [Parameter(Mandatory=$true)][int]$Port,
@@ -751,6 +810,18 @@ function Get-LocalPortOwner {
             $proto     = 'UDP'
         }
     }
+
+    # HTTP.sys reserved ports (e.g. HttpListener behind a URL ACL) report the
+    # System kernel PID 4 instead of the userspace listener. Ask http.sys who
+    # actually registered the URL. Same fallback if the query returned nothing.
+    if ((-not $owningPid -or $owningPid -eq 4) -and $Protocol -in @('TCP','Both')) {
+        $httpPid = Get-HttpSysPortOwnerPid -Port $Port
+        if ($httpPid) {
+            $owningPid = $httpPid
+            $proto     = 'TCP'
+        }
+    }
+
     if (-not $owningPid) { return $null }
 
     $procName = $null

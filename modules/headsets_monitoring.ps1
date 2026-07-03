@@ -357,7 +357,7 @@ function Start-VRMonitor {
 
             # Fingerprint of key display fields - triggers CSV/HTML write on any change
             $fp = ($knownHeadsetsInfo | ForEach-Object {
-                "$($_.IPAddress)|$($_.Ping)|$($_.ADBWifi)|$($_.Battery)|$($_.Charging)|$($_.ChargingWattage)|$($_.Temp)|$($_.BatteryControllerLeft)|$($_.BatteryControllerRight)|$($_.PowerState)|$($_.TimeRemainingMin)|$($_.SCRCPY)|$($_.Model)|$($_.SerialNumber)|$($_.RunningApp)"
+                "$($_.IPAddress)|$($_.Ping)|$($_.ADBWifi)|$($_.Battery)|$($_.Charging)|$($_.ChargingWattage)|$($_.Temp)|$($_.BatteryControllerLeft)|$($_.BatteryControllerRight)|$($_.PowerState)|$($_.TimeRemainingMin)|$($_.SCRCPY)|$($_.Brand)|$($_.Model)|$($_.SerialNumber)|$($_.RunningApp)"
             }) -join '~'
 
             if ($fp -ne $lastFingerprint -and $knownHeadsets.Count -gt 0) {
@@ -373,6 +373,14 @@ function Start-VRMonitor {
                         -and $fetchedModel -ne "-" -and $fetchedModel -ne $headset.Model) {
                         Write-Log ($msg.UpdatingModel -f $headset.Name, $headset.IPAddress, $fetchedModel) -Level INFO
                         Update-HeadsetField -ID $headset.ID -Field "Model" -NewValue $fetchedModel
+                    }
+                    $fetchedBrand = $headsetInfo.Brand
+                    $currentBrand = if ($headset.PSObject.Properties['Brand']) { $headset.Brand } else { "" }
+                    if ((ConvertTo-BoolField $headsetInfo.ADBWifi) `
+                        -and -not [string]::IsNullOrWhiteSpace($fetchedBrand) `
+                        -and $fetchedBrand -ne $currentBrand) {
+                        Write-Log ("Updating brand for headset {0} ({1}): {2}" -f $headset.Name, $headset.IPAddress, $fetchedBrand) -Level INFO
+                        Update-HeadsetField -ID $headset.ID -Field "Brand" -NewValue $fetchedBrand
                     }
                     $fetchedSerial = $headsetInfo.SerialNumber
                     if ((ConvertTo-BoolField $headsetInfo.ADBWifi) `
@@ -408,6 +416,15 @@ function Start-VRMonitor {
                 }
 
                 Invoke-UsbHeadsetActions | Out-Null
+
+                # Discover companion apps: heals IP drift silently and returns companion states
+                try {
+                    if (Get-Command Invoke-CompanionDiscovery -ErrorAction SilentlyContinue) {
+                        Invoke-CompanionDiscovery -TimeoutMs 1500 | Out-Null
+                    }
+                } catch {
+                    Write-Log ("VRMonitor: companion discovery failed: " + $_.Exception.Message) -Level DEBUG
+                }
 
                 Sync-HeadsetRunspaces -knownHeadsets $knownHeadsets -runspaceRegistry ([ref]$runspaceRegistry) `
                     -sharedState $sharedState -scriptPath $global:ScriptPath `
@@ -469,6 +486,7 @@ function New-DefaultHeadsetInfo {
         TimeRemainingMin = "-"
         BatteryHistory   = ""
         SCRCPY           = "-"
+        Brand            = ""
         Model            = "-"
         SerialNumber     = "-"
         RunningApp       = "-"
@@ -529,17 +547,20 @@ function Get-HeadsetInfoStage2Identity {
         [string]$adb = $global:adbPath
     )
     $out = @{
-        Model = "-"; SerialNumber = "-"
+        Brand = ""; Model = "-"; SerialNumber = "-"
         Battery = "-"; Charging = "-"; ChargingWattage = "-"; Temp = "-"
         BatteryControllerLeft = "-"; BatteryControllerRight = "-"
     }
     try {
-        $model = Invoke-AdbCmd -Device $Device -Command "shell getprop ro.product.model" -adb $adb
-        if ($model)  { $out.Model        = ($model  -join '').Trim() }
+        $bm = Get-HeadsetBrandModel -Device $Device -adb $adb
+        if ($bm) {
+            if ($bm.Brand) { $out.Brand = $bm.Brand }
+            if (-not [string]::IsNullOrWhiteSpace($bm.Model)) { $out.Model = $bm.Model }
+        }
         $serial = Invoke-AdbCmd -Device $Device -Command "shell getprop ro.serialno" -adb $adb
         if ($serial) { $out.SerialNumber = ($serial -join '').Trim() }
 
-        $batteryInfo = Get-HeadsetBatteryStatus -Device $Device -adb $adb
+        $batteryInfo = Get-HeadsetBatteryStatus -Device $Device -adb $adb -Brand $out.Brand
         if ($batteryInfo) {
             if ($null -ne $batteryInfo.Level)    { $out.Battery  = "$($batteryInfo.Level) %" }
             if ($null -ne $batteryInfo.Charging) { $out.Charging = $batteryInfo.Charging }

@@ -142,6 +142,55 @@
         "video_encoder": "",
         "video_buffer": 50,
         "stay_awake": true
+      },
+      "PICO 4 Ultra": {
+        "views": {
+          "max": {
+            "left_eye": {
+              "crop": "1664:1304:200:450",
+              "angle": 22
+            },
+            "right_eye": {
+              "crop": "1664:1304:2260:450",
+              "angle": -21
+            }
+          },
+          "square": {
+            "left_eye": {
+              "crop": "1580:1580:240:250",
+              "angle": 22
+            },
+            "right_eye": {
+              "crop": "1580:1580:2300:250",
+              "angle": -21
+            }
+          },
+          "portrait": {
+            "left_eye": {
+              "crop": "1400:1800:350:200",
+              "angle": 22
+            },
+            "right_eye": {
+              "crop": "1400:1800:2350:200",
+              "angle": -21
+            }
+          },
+          "wide": {
+            "left_eye": {
+              "crop": "1700:1300:190:500",
+              "angle": 22
+            },
+            "right_eye": {
+              "crop": "1700:1300:2240:290",
+              "angle": -21
+            }
+          }
+        },
+        "max_size": 0,
+        "video_codec": "h264",
+        "video_encoder": "",
+        "video_buffer": 50,
+        "stay_awake": true
       }
     }
   },

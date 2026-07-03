@@ -543,3 +543,92 @@ function Test-ValidIPv4 {
     return $true
 }
 
+
+function Invoke-CompanionDiscovery {
+    <#
+    .SYNOPSIS
+    Broadcasts a UDP discovery probe on the LAN and collects replies from headsets
+    running the VRHM Companion app. Updates known_headsets.csv when a headset IP
+    has changed (matched by serial number). Returns an array of discovered companions.
+    .PARAMETER TimeoutMs
+    How long to wait for replies after broadcasting (default 2000 ms).
+    .PARAMETER UdpPort
+    UDP port used for discovery (default 5556, same as companion DiscoveryServer).
+    #>
+    param(
+        [int]$TimeoutMs = 2000,
+        [int]$UdpPort   = 5556
+    )
+
+    $discovered = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $udp        = $null
+
+    try {
+        # Get our local LAN IPs to populate server_ip in the probe
+        $localIPs = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object { $_.IPAddress -match '^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)' } |
+            Select-Object -ExpandProperty IPAddress)
+        $serverIp = if ($localIPs.Count -gt 0) { $localIPs[0] } else { "127.0.0.1" }
+
+        $probe = [System.Text.Encoding]::UTF8.GetBytes(
+            (ConvertTo-Json -Compress @{
+                type      = "VRHM_DISCOVER"
+                server_ip = $serverIp
+                ws_port   = $global:WebServer_port
+            })
+        )
+
+        # Bind on the discovery port so replies come back to us on that same port
+        $udp = [System.Net.Sockets.UdpClient]::new($UdpPort)
+        $udp.EnableBroadcast = $true
+        $udp.Client.ReceiveTimeout = $TimeoutMs
+
+        $bcastEp = [System.Net.IPEndPoint]::new([System.Net.IPAddress]::Broadcast, $UdpPort)
+        [void]$udp.Send($probe, $probe.Length, $bcastEp)
+        Write-Log "Invoke-CompanionDiscovery: broadcast sent on port $UdpPort, waiting ${TimeoutMs}ms" -Level DEBUG
+
+        $deadline = [datetime]::UtcNow.AddMilliseconds($TimeoutMs)
+        while ([datetime]::UtcNow -lt $deadline) {
+            try {
+                $remoteEp = [System.Net.IPEndPoint]::new([System.Net.IPAddress]::Any, 0)
+                $bytes    = $udp.Receive([ref]$remoteEp)
+                $json     = [System.Text.Encoding]::UTF8.GetString($bytes) | ConvertFrom-Json -ErrorAction Stop
+
+                if ($json.type -ne "VRHM_COMPANION") { continue }
+                if (-not $json.serial) { continue }
+
+                $companion = [PSCustomObject]@{
+                    Serial         = $json.serial
+                    Model          = $json.model
+                    IP             = $json.ip
+                    CompanionPort  = [int]$json.companion_port
+                    AutoAdbWifi    = [bool]$json.auto_adb_wifi
+                    AdbWifiEnabled = [bool]$json.adb_wifi_enabled
+                    Version        = $json.version
+                }
+                $discovered.Add($companion)
+                Write-Log "Invoke-CompanionDiscovery: found $($companion.Model) serial=$($companion.Serial) ip=$($companion.IP)" -Level DEBUG
+
+                # Heal IP drift: if serial matches a known headset and IP has changed, update CSV
+                $headsets = Get-KnownHeadsets
+                $known    = $headsets | Where-Object { $_.SerialNumber -eq $companion.Serial } | Select-Object -First 1
+                if ($known -and $known.IPAddress -ne $companion.IP) {
+                    Write-Log ("Invoke-CompanionDiscovery: updating IP for '{0}' {1} -> {2}" -f $known.Name, $known.IPAddress, $companion.IP) -Level INFO
+                    Update-HeadsetField -Id $known.Id -Field "IPAddress" -Value $companion.IP
+                }
+            } catch [System.Net.Sockets.SocketException] {
+                break  # timeout
+            } catch {
+                Write-Log "Invoke-CompanionDiscovery: parse error: $_" -Level DEBUG
+            }
+        }
+    } catch {
+        Write-Log "Invoke-CompanionDiscovery: error: $_" -Level WARNING
+    } finally {
+        if ($null -ne $udp) { try { $udp.Close() } catch {} }
+    }
+
+    Write-Log "Invoke-CompanionDiscovery: $($discovered.Count) companion(s) found" -Level DEBUG
+    return $discovered.ToArray()
+}
+

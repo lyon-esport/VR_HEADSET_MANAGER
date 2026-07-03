@@ -172,7 +172,7 @@
     InternetOK = "Connexion reseau internet operationnelle"
     InternetProblem = " Probleme de connexion a internet "
     WifiADBActivation = "== ACTIVATION WIFI ADB DEPUIS L'USB =="
-    Goodbye = "Au revoir !"
+    Goodbye = "Au revoir ! Fermeture de l'application et des processus associes..."
     Refresh = "Refresh"
     # SubMenu Stream
     SelectHeadsetToStream = "=== [1] SELECTIONNER LE CASQUE A STREAMER ==="

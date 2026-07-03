@@ -1414,7 +1414,7 @@
               '</svg>' +
               'Advanced Settings' +
             '</span>' +
-            '<button class="hs-adv-btn" data-adv-settings="' + dn + '">Configure</button>' +
+            '<button class="hs-adv-btn" data-adv-settings="' + dn + '" data-adv-brand="' + esc(cfg.Brand || '') + '">Configure</button>' +
           '</div>' +
           '<div class="card-power-row">' +
             '<span class="power-label">' +
@@ -1546,7 +1546,7 @@
         // Advanced settings button
         var advBtn = e.target.closest('[data-adv-settings]');
         if (advBtn) {
-          openAdvSettingsModal(advBtn.dataset.advSettings);
+          openAdvSettingsModal(advBtn.dataset.advSettings, advBtn.dataset.advBrand || '');
           return;
         }
         // Name edit button
@@ -2374,6 +2374,7 @@
 
     // -- Advanced settings modal --------------------------------------------------
     var _advDn = null;
+    var _advBrand = '';
 
     function refreshAdvSettings() {
       var dn = _advDn;
@@ -2424,10 +2425,12 @@
           }
           document.getElementById('adv-loading').style.display = 'none';
           document.getElementById('adv-fields').style.display = 'flex';
+          applyAdvBrandVisibility(_advBrand);
         })
         .catch(function() {
           document.getElementById('adv-loading').textContent = 'Could not read current settings. You can still apply changes.';
           document.getElementById('adv-fields').style.display = 'flex';
+          applyAdvBrandVisibility(_advBrand);
         })
         .finally(function() {
           if (refreshBtn) refreshBtn.disabled = false;
@@ -2449,8 +2452,20 @@
         .catch(function() {});
     }
 
-    function openAdvSettingsModal(dn) {
+    function applyAdvBrandVisibility(brand) {
+      var isPico = brand === 'Pico';
+      document.getElementById('adv-guardian-pause').style.display = isPico ? 'none' : '';
+      var proxRow = document.getElementById('adv-prox-disable').closest('.adv-field');
+      if (proxRow) proxRow.style.display = isPico ? 'none' : '';
+      var updRow = document.getElementById('adv-updates-toggle').closest('.adv-field');
+      if (updRow) updRow.style.display = isPico ? 'none' : '';
+      var sleepRow = document.getElementById('adv-sleep-timeout').closest('.adv-field');
+      if (sleepRow) sleepRow.style.display = isPico ? 'none' : '';
+    }
+
+    function openAdvSettingsModal(dn, brand) {
       _advDn = dn;
+      _advBrand = brand || '';
       document.getElementById('adv-headset').textContent = dn.replace(/_/g, ' ');
       document.getElementById('advsettings-modal').style.display = 'flex';
       var proxBtn = document.getElementById('adv-prox-disable');
@@ -2460,12 +2475,14 @@
       if (updBtn) { updBtn.dataset.blocked = ''; updBtn.classList.remove('on'); updBtn.disabled = true; }
       var updLabel = document.getElementById('adv-updates-toggle-label');
       if (updLabel) updLabel.textContent = '...';
+      applyAdvBrandVisibility(_advBrand);
       refreshAdvSettings();
     }
 
     function closeAdvSettingsModal() {
       document.getElementById('advsettings-modal').style.display = 'none';
       _advDn = null;
+      _advBrand = '';
     }
 
     document.getElementById('adv-cancel').addEventListener('click', closeAdvSettingsModal);
@@ -2836,9 +2853,12 @@
           // WiFi Connection section
           var expectedSsid = (_ndmData.expectedSsid || '').trim();
           var currentSsid  = (_ndmData.ssid || '').trim();
+          // Server-computed tolerant match: covers Pico's masked SSID ("*****yWifi_Unifi")
+          // by stripping '*' and matching the suffix against the expected SSID.
+          var ssidMatch    = _ndmData.ssidMatch === true;
           if (expectedSsid) {
             html += '<div class="ndm-section"><div class="ndm-section-label">WiFi Connection</div>';
-            if (currentSsid && currentSsid === expectedSsid) {
+            if (currentSsid && ssidMatch) {
               html += '<div style="display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:#22c55e">' +
                         '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>' +
                         'Connected to ' + esc(expectedSsid) +

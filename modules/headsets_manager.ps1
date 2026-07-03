@@ -24,12 +24,24 @@ function Get-KnownHeadsets {
 
     # Read the CSV file and return data as PowerShell objects
     try {
-        $headsets = @(Import-Csv -LiteralPath $knownHeadsetsFilePath)
+        $headsets = @(Import-Csv -LiteralPath $knownHeadsetsFilePath -Encoding UTF8)
+        # Back-compat: ensure every row has a Brand property. Legacy CSVs (pre-Pico
+        # support) had no Brand column; populate with a best-effort guess from Model
+        # so brand-dispatch sites have something to work with on first read.
+        # Allowed values: "Meta", "Pico", or "" (empty = unknown).
+        foreach ($row in $headsets) {
+            if (-not $row.PSObject.Properties['Brand']) {
+                $guess = ""
+                if ($row.Model -match '(?i)quest') { $guess = "Meta" }
+                elseif ($row.Model -match '(?i)pico') { $guess = "Pico" }
+                $row | Add-Member -MemberType NoteProperty -Name Brand -Value $guess -Force
+            }
+        }
         return $headsets
     }
     catch {
         Write-Log -Message $msg.HeadsetCsvReadError -Level "ERROR"
-    } 
+    }
 } # OK
 
 
@@ -364,6 +376,7 @@ function Add-Headset {
         scrcpy_AutoRestart = "True"
         Record       = "False"
         ScrcpyProfile = "square-R-N-45-20"
+        Brand        = ""
         Model        = $Model
         SerialNumber = $SerialNumber
         #AdbPort      = $AdbPort
@@ -560,8 +573,15 @@ function Save-Headsets {
 
     # Save to the CSV file
     if ($newHeadsets.Count -eq 0) {
-        Set-Content -LiteralPath $FilePath -Value '"ID","Name","IPAddress","scrcpy_AutoRestart","Record","ScrcpyProfile","Model","SerialNumber"' -Encoding UTF8
+        Set-Content -LiteralPath $FilePath -Value '"ID","Name","IPAddress","scrcpy_AutoRestart","Record","ScrcpyProfile","Brand","Model","SerialNumber"' -Encoding UTF8
     } else {
+        # Ensure every row has a Brand column before export so the union of
+        # properties (used by Export-Csv) includes Brand.
+        foreach ($row in $newHeadsets) {
+            if (-not $row.PSObject.Properties['Brand']) {
+                $row | Add-Member -MemberType NoteProperty -Name Brand -Value "" -Force
+            }
+        }
         $newHeadsets | Export-Csv -LiteralPath $FilePath -NoTypeInformation -Encoding UTF8
     }
     Write-Log ($msg.HeadsetsSaved -f $FilePath) -Level INFO
@@ -573,7 +593,7 @@ function Save-Headsets {
 } #OK
 
 
-function Reorder-Headsets {
+function Set-HeadsetsOrder {
     <#
     .SYNOPSIS
     Reorders the headset registry to match the given list of display names.

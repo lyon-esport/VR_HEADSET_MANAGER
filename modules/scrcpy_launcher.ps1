@@ -99,6 +99,27 @@ function ConvertTo-ScrcpyArguments {
 
     $audioArg = if ($audioPref -eq 'D') { "--audio-dup" } else { "--no-audio" }
 
+    # Built-in "fullscreen" view: works for any headset (incl. brands with no
+    # config entry). Emits the captured panel as-is - no --crop, no --angle.
+    # Eye field is ignored when view=fullscreen.
+    if ($viewName -eq 'fullscreen') {
+        $argParts = [System.Collections.Generic.List[string]]::new()
+        $argParts.Add("--max-fps=$fps")
+        $argParts.Add("-b ${bw}M")
+        if ($modelTemplate -and $modelTemplate -isnot [string]) {
+            if ($modelTemplate.max_size)      { $argParts.Add("--max-size=$($modelTemplate.max_size)") }
+            if ($modelTemplate.video_codec)   { $argParts.Add("--video-codec=$($modelTemplate.video_codec)") }
+            if ($modelTemplate.video_encoder -and $modelTemplate.video_encoder -ne "") { $argParts.Add("--video-encoder=$($modelTemplate.video_encoder)") }
+            if ($modelTemplate.video_buffer)  {
+                $argParts.Add("--video-buffer=$($modelTemplate.video_buffer)")
+                $argParts.Add("--audio-buffer=$($modelTemplate.video_buffer)")
+            }
+            if ($modelTemplate.stay_awake -eq $true) { $argParts.Add("--stay-awake") }
+        }
+        $argParts.Add($audioArg)
+        return ($argParts -join ' ')
+    }
+
     if ($null -eq $modelTemplate) {
         Write-Log $msg.ScrcpyModelUnknown -Level WARNING
         return "--max-fps=$fps -b ${bw}M $audioArg"
@@ -260,18 +281,21 @@ function Start-FfmpegStreamPush {
     $logErr = Join-Path $global:logFolder ("${SafeName}_ffmpegPush_stderr.txt")
     $argList = [System.Collections.Generic.List[string]]::new()
     $argList.AddRange([string[]]@('-hide_banner','-loglevel','warning'))
-    # Low-latency input flags applied ONLY when we are going to re-encode. They
-    # cut libavformat's default 5s analyzeduration / 5MB probesize down to the
-    # minimum the matroska demuxer needs to identify the H.264 stream (without
-    # this it cannot fulfil -map 0:v:0 and ffmpeg exits immediately). 100ms /
-    # 32KB is enough in practice while still saving ~400-700ms vs the defaults.
+    # Low-latency input flags applied ONLY when we are going to re-encode.
+    # Historical values (100ms / 32KB) proved too tight for scrcpy-in-mkv at
+    # high resolutions / low keyframe-density: the matroska demuxer bailed
+    # with "not enough frames to estimate rate" and never opened the RTSP
+    # output (mediamtx then serves 404 to WHEP clients). At ~15 Mbps a single
+    # keyframe can be ~40 KB, so 32KB probesize fails on the very first cluster.
+    # 2s / 1 MB is still ~60% below ffmpeg defaults (5s / 5MB) and reliably
+    # covers at least one SPS/PPS+IDR pair.
     # -fflags +nobuffer + -flags low_delay disable libavformat's read-ahead and
     # frame-reorder delay. -avioflags direct is intentionally NOT used: it
     # bypasses I/O buffering for the named pipe which proved unstable.
     if ($global:mediamtxReencode) {
         $argList.AddRange([string[]]@(
             '-fflags','+nobuffer','-flags','low_delay',
-            '-analyzeduration','100000','-probesize','32768'))
+            '-analyzeduration','2000000','-probesize','1048576'))
     }
     $argList.AddRange([string[]]@('-f','matroska','-i',"\\.\pipe\$($names.Out)"))
     # Output 1: RTSP push into mediamtx. mediamtx remuxes this single source into

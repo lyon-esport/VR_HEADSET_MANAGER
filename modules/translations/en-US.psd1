@@ -156,7 +156,7 @@
     InternetOK = "Network internet connection operational"
     InternetProblem = " Internet connection problem "
     WifiADBActivation = "== WIFI ADB ACTIVATION FROM USB =="
-    Goodbye = "Goodbye !"
+    Goodbye = "Goodbye ! Closing the application and related processes..."
     Refresh = "Refresh"
     # SubMenu Stream
     SelectHeadsetToStream = "=== [1] SELECT HEADSET TO STREAM ==="
