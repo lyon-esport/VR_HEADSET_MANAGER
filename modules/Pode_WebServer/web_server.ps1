@@ -3524,6 +3524,54 @@ Start-Process powershell.exe -ArgumentList @('-File',$Script,'-ScriptPath',$Scri
             continue
         }
 
+        # API: GET /api/config/defaults  - returns templates/config/config.json content as JSON
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/config/defaults') {
+            try {
+                $tplFile = Join-Path $ScriptPath "templates\config\config.json"
+                if (Test-Path -LiteralPath $tplFile) {
+                    $raw = Get-Content -LiteralPath $tplFile -Raw -Encoding UTF8
+                    if ($raw -and $raw[0] -eq [char]0xFEFF) { $raw = $raw.Substring(1) }
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes($raw)
+                    $response.StatusCode = 200
+                } else {
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{}')
+                    $response.StatusCode = 404
+                }
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $eb = [System.Text.Encoding]::UTF8.GetBytes('{}')
+                    $response.StatusCode = 500; $response.ContentType = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
+                } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: GET /api/server-info  - returns server local IPs so the client can detect local access
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/server-info') {
+            try {
+                $ips = @('127.0.0.1', 'localhost') + @($lanIPs | Where-Object { $_ })
+                $ipJson = ($ips | ForEach-Object { '"' + $_ + '"' }) -join ','
+                $rb = [System.Text.Encoding]::UTF8.GetBytes("{`"localIPs`":[$ipJson]}")
+                $response.StatusCode = 200
+                $response.ContentType = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $rb.Length
+                $response.OutputStream.Write($rb, 0, $rb.Length)
+            } catch {
+                try {
+                    $eb = [System.Text.Encoding]::UTF8.GetBytes('{"localIPs":["127.0.0.1","localhost"]}')
+                    $response.StatusCode = 200; $response.ContentType = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
+                } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
         # API: POST /api/config/save  - validates and writes the posted JSON as config.json
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/config/save') {
             try {
