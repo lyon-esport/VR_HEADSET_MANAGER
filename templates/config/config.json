@@ -96,6 +96,16 @@
               "crop": "1700:1300:2240:290",
               "angle": -21
             }
+          },
+          "fullscreen": {
+            "left_eye": {
+              "crop": "0:0:0:0",
+              "angle": 0
+            },
+            "right_eye": {
+              "crop": "0:0:0:0",
+              "angle": 0
+            }
           }
         },
         "max_size": 0,
@@ -135,6 +145,16 @@
               "crop": "1630:1150:1955:350",
               "angle": 0
             }
+          },
+          "fullscreen": {
+            "left_eye": {
+              "crop": "0:0:0:0",
+              "angle": 0
+            },
+            "right_eye": {
+              "crop": "0:0:0:0",
+              "angle": 0
+            }
           }
         },
         "max_size": 0,
@@ -147,42 +167,52 @@
         "views": {
           "max": {
             "left_eye": {
-              "crop": "1664:1304:200:450",
-              "angle": 22
+              "crop": "1750:1550:212:316",
+              "angle": 0
             },
             "right_eye": {
-              "crop": "1664:1304:2260:450",
-              "angle": -21
+              "crop": "1750:1550:2360:316",
+              "angle": 0
             }
           },
           "square": {
             "left_eye": {
-              "crop": "1580:1580:240:250",
-              "angle": 22
+              "crop": "1680:1680:246:240",
+              "angle": 0
             },
             "right_eye": {
-              "crop": "1580:1580:2300:250",
-              "angle": -21
+              "crop": "1680:1680:2400:240",
+              "angle": 0
             }
           },
           "portrait": {
             "left_eye": {
-              "crop": "1400:1800:350:200",
-              "angle": 22
+              "crop": "1500:1750:330:200",
+              "angle": 0
             },
             "right_eye": {
-              "crop": "1400:1800:2350:200",
-              "angle": -21
+              "crop": "1500:1750:2480:200",
+              "angle": 0
             }
           },
           "wide": {
             "left_eye": {
-              "crop": "1700:1300:190:500",
-              "angle": 22
+              "crop": "1800:1440:186:370",
+              "angle": 0
             },
             "right_eye": {
-              "crop": "1700:1300:2240:290",
-              "angle": -21
+              "crop": "1800:1440:2325:390",
+              "angle": 0
+            }
+          },
+          "fullscreen": {
+            "left_eye": {
+              "crop": "0:0:0:0",
+              "angle": 0
+            },
+            "right_eye": {
+              "crop": "0:0:0:0",
+              "angle": 0
             }
           }
         },

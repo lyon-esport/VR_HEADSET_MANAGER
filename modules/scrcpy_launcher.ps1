@@ -12,7 +12,7 @@ start-screenCopy -displayName $displayName -headsetIP $ip
 
 # Parse a scrcpy profile string into a typed object.
 # Format: [view-]EYE-AUDIO-FPS-BW   (view defaults to 'portrait')
-#   view  = portrait | square | wide  (selects view in model template)
+#   view  = portrait | square | wide | fullscreen  (fullscreen = crop 0:0:0:0, no angle)
 #   EYE   = L | R                     (left or right eye)
 #   AUDIO = D | N                     (audio-dup or no-audio)
 #   FPS   = integer                   (max-fps)
@@ -133,7 +133,7 @@ function ConvertTo-ScrcpyArguments {
     }
 
     $argParts = [System.Collections.Generic.List[string]]::new()
-    if ($crop)  { $argParts.Add("--crop $crop") }
+    if ($crop -and $crop -ne '0:0:0:0') { $argParts.Add("--crop $crop") }
     if ($null -ne $angle -and "$angle" -ne "" -and [int]"$angle" -ne 0) { $argParts.Add("--angle=$angle") }
     $argParts.Add("--max-fps=$fps")
     $argParts.Add("-b ${bw}M")
