@@ -44,6 +44,50 @@ if (Test-Path -LiteralPath $scripts_init) {
 
 $websitePath = Join-Path $ScriptPath "website"
 
+# P/Invoke type for injecting keystrokes into the main process console (used by /api/app-shutdown)
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public class VrmConsoleInput {
+    [DllImport("kernel32.dll")] public static extern bool FreeConsole();
+    [DllImport("kernel32.dll")] public static extern bool AttachConsole(uint dwProcessId);
+    [DllImport("kernel32.dll")] public static extern IntPtr GetStdHandle(int nStdHandle);
+    [DllImport("kernel32.dll")] public static extern bool WriteConsoleInput(
+        IntPtr hConsoleInput, INPUT_RECORD[] lpBuffer, uint nLength, out uint lpNumberOfEventsWritten);
+    [StructLayout(LayoutKind.Explicit, CharSet=CharSet.Unicode)]
+    public struct INPUT_RECORD {
+        [FieldOffset(0)] public short EventType;
+        [FieldOffset(4)] public KEY_EVENT_RECORD KeyEvent;
+    }
+    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
+    public struct KEY_EVENT_RECORD {
+        public int bKeyDown;
+        public short wRepeatCount;
+        public short wVirtualKeyCode;
+        public short wVirtualScanCode;
+        public char UnicodeChar;
+        public int dwControlKeyState;
+    }
+    public static bool InjectKey(uint pid, char ch, short vk) {
+        FreeConsole();
+        if (!AttachConsole(pid)) return false;
+        IntPtr hIn = GetStdHandle(-10);
+        var records = new INPUT_RECORD[2];
+        records[0].EventType = 1;
+        records[0].KeyEvent.bKeyDown = 1;
+        records[0].KeyEvent.wRepeatCount = 1;
+        records[0].KeyEvent.wVirtualKeyCode = vk;
+        records[0].KeyEvent.UnicodeChar = ch;
+        records[1] = records[0];
+        records[1].KeyEvent.bKeyDown = 0;
+        uint written;
+        bool ok = WriteConsoleInput(hIn, records, 2, out written);
+        FreeConsole();
+        return ok;
+    }
+}
+'@
+
 # Read port, enabled flag, and ADB settings from config.json
 $port       = 8080
 $enabled    = $true
@@ -2491,6 +2535,24 @@ try {
                     $response.ContentLength64 = $errBytes.Length
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/app-shutdown
+        # Injects '0' + Enter into the main process console input so Show-MainMenu triggers Invoke-AppShutdown.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/app-shutdown') {
+            try {
+                $mainProc = Get-WmiObject Win32_Process |
+                    Where-Object { $_.CommandLine -match 'main\.ps1' } |
+                    Select-Object -First 1
+                if (-not $mainProc) { throw 'Main process not found' }
+                $mainPid = [uint32]$mainProc.ProcessId
+                [void][VrmConsoleInput]::InjectKey($mainPid, '0', 0x30)
+                [void][VrmConsoleInput]::InjectKey($mainPid, [char]13, 0x0D)
+                Send-JsonResponse -Response $response -Raw '{"ok":true}'
+            } catch {
+                try { Send-JsonResponse -Response $response -Raw '{"ok":false,"error":"server error"}' -StatusCode 500 } catch {}
             } finally { $response.Close() }
             continue
         }

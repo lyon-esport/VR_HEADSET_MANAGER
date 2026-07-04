@@ -64,6 +64,11 @@
     .action-btn:disabled { opacity: .5; cursor: default; }
     .action-btn svg { flex-shrink: 0; stroke: var(--accent); }
     .action-btn .btn-desc { font-size: 11px; color: var(--muted); margin-top: 2px; font-weight: 400; }
+    .action-btn-danger { border-color: #7f1d1d; }
+    .action-btn-danger svg { stroke: #f87171; }
+    .action-btn-danger:hover { background: #450a0a; border-color: #ef4444; }
+    [data-theme=light] .action-btn-danger { border-color: #fecaca; }
+    [data-theme=light] .action-btn-danger:hover { background: #fff1f2; border-color: #ef4444; }
 
     /* Status banner */
     .status-banner {
@@ -281,6 +286,30 @@
     </div>
     <p class="page-subtitle">Restart services and access troubleshooting resources.</p>
     <p id="app-version" style="font-size:12px;color:var(--muted);margin-bottom:20px;margin-top:-18px"></p>
+
+    <!-- Application Shutdown -->
+    <section class="section">
+      <div class="section-title">Application</div>
+      <div class="card card-pad">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <button class="action-btn action-btn-danger" id="btn-shutdown-app" style="flex:0 0 auto">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>
+            </svg>
+            <div>
+              <div>Shutdown Application</div>
+              <div class="btn-desc">Stops all services and exits</div>
+            </div>
+          </button>
+        </div>
+        <div class="status-banner info" id="shutdown-app-info" style="display:none">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          Application is shutting down - all services will stop.
+        </div>
+      </div>
+    </section>
 
     <!-- Web Server -->
     <section class="section">
@@ -658,6 +687,12 @@
       el.style.display = 'flex';
       setTimeout(function() { el.style.display = 'none'; }, 5000);
     }
+
+    document.getElementById('btn-shutdown-app').addEventListener('click', function() {
+      if (!confirm('Shutdown the VR Headset Manager application?\n\nAll services will stop.')) return;
+      TopBar.apiPost('/api/app-shutdown', 'Shutdown Application', this);
+      showInfo('shutdown-app-info');
+    });
 
     document.getElementById('btn-restart-webserver').addEventListener('click', function() {
       TopBar.apiPost('/api/restartwebserver', 'Restart Web Server', this);
