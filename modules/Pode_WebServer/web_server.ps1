@@ -687,7 +687,7 @@ try {
             continue
         }
 
-        # API: POST /api/capture-mode  body: {"mode":"Headless|WindowHeadless|WindowOnly"}
+        # API: POST /api/capture-mode  body: {"mode":"StreamOnly|StreamAndLocalWindow|LocalWindow"}
         # Switches global capture mode, persists to config.json, restarts any running
         # scrcpy session in the new mode. Mirrors the CLI Config -> V sub-menu.
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/capture-mode') {
@@ -695,7 +695,15 @@ try {
                 $body = (New-Object System.IO.StreamReader($request.InputStream)).ReadToEnd()
                 $j = $body | ConvertFrom-Json -ErrorAction Stop
                 $mode = "$($j.mode)"
-                if ($mode -notin @('Headless','WindowHeadless','WindowOnly','LocalOnly')) {
+                # Accept both new and legacy key names for backward compat
+                $mode = switch ($mode) {
+                    'Headless'       { 'StreamOnly' }
+                    'WindowHeadless' { 'StreamAndLocalWindow' }
+                    'WindowOnly'     { 'StreamAndLocalWindow' }
+                    'LocalOnly'      { 'LocalWindow' }
+                    default          { $mode }
+                }
+                if ($mode -notin @('StreamOnly','StreamAndLocalWindow','LocalWindow')) {
                     Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = 'invalid mode' }
                 } else {
                     $ok = [bool](Set-CaptureMode -Mode $mode)

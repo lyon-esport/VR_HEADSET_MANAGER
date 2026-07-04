@@ -90,9 +90,9 @@
 [data-theme="light"] .topbar-btn.active   { color: #1d4ed8; border-bottom-color: #1d4ed8; }
 [data-theme="light"] .drop-item.active    { color: #1d4ed8; border-left-color: #1d4ed8; }
 
-/* ── Topbar filter buttons (center section) ── */
+/* ── Topbar filter buttons (center section) — always replaced by compact dropdown ── */
 .topbar-filters {
-  display: flex;
+  display: none;
   align-items: center;
   gap: 4px;
   padding: 0 14px;
@@ -244,9 +244,9 @@
 [data-theme="light"] .drop-item-danger { color: #dc2626 !important; }
 [data-theme="light"] .drop-item-danger:hover { background: rgba(220,38,38,0.08) !important; color: #b91c1c !important; }
 
-/* ── Compact dropdown (shown when topbar overflows on narrow viewports) ── */
-.headset-compact { display: none; position: relative; flex-shrink: 0; }
-.headset-compact-btn {
+/* ── Compact filter dropdown (always visible) ── */
+.headset-filter-compact { display: flex; align-items: center; position: relative; flex-shrink: 0; }
+.headset-filter-compact-btn {
   display: inline-flex; align-items: center; gap: 7px;
   height: var(--bar-h); padding: 0 14px;
   background: transparent; border: none;
@@ -255,29 +255,26 @@
   white-space: nowrap; font-family: inherit;
   transition: background 0.15s, color 0.15s;
 }
-.headset-compact-btn:hover { background: #1e1e1e; color: #aaa; }
-.headset-compact-btn.open  { background: #1e1e1e; color: #ddd; }
-.headset-compact-panel {
+.headset-filter-compact-btn:hover { background: #1e1e1e; color: #aaa; }
+.headset-filter-compact-btn.open  { background: #1e1e1e; color: #ddd; }
+.headset-filter-compact-panel {
   display: none; position: absolute; top: calc(var(--bar-h) + 1px); left: 0;
   min-width: 190px; background: var(--drop-bg);
   border: 1px solid var(--drop-border); border-radius: 0 0 6px 6px;
   box-shadow: 0 10px 30px rgba(0,0,0,0.6); z-index: 300; padding: 4px 0;
 }
-.headset-compact-panel.open { display: block; }
-.headset-compact-item {
+.headset-filter-compact-panel.open { display: block; }
+.headset-filter-compact-item {
   display: flex; align-items: center; gap: 9px;
   width: 100%; padding: 7px 13px; background: transparent; border: none;
   color: #888; font-size: 13px; font-family: inherit;
   text-align: left; cursor: pointer; transition: background 0.1s, color 0.1s;
 }
-.headset-compact-item:hover { background: var(--drop-item-hover); color: #ddd; }
-.headset-compact-item .item-check { width: 13px; flex-shrink: 0; opacity: 0; }
-.headset-compact-item.checked .item-check { opacity: 1; color: var(--filter-active-bg); }
-.headset-compact-item.checked.offline .item-check { color: #a06030; }
-.headset-compact-divider { height: 1px; background: var(--drop-border); margin: 3px 0; }
-/* Hide filter bar and show compact button when topbar is too narrow */
-.topbar.compact .topbar-filters { display: none; }
-.topbar.compact .headset-compact { display: flex; align-items: center; }
+.headset-filter-compact-item:hover { background: var(--drop-item-hover); color: #ddd; }
+.headset-filter-compact-item .item-check { width: 13px; flex-shrink: 0; opacity: 0; }
+.headset-filter-compact-item.checked .item-check { opacity: 1; color: var(--filter-active-bg); }
+.headset-filter-compact-item.checked.offline .item-check { color: #a06030; }
+.headset-filter-compact-divider { height: 1px; background: var(--drop-border); margin: 3px 0; }
 
 /* ── Light mode overrides ─────────────────────────────────────────────── */
 [data-theme="light"] {
@@ -301,12 +298,12 @@
 [data-theme="light"] .drop-item                    { color: #555; }
 [data-theme="light"] .drop-item:hover              { color: #111; }
 [data-theme="light"] .actions-dropdown             { box-shadow: 0 10px 30px rgba(0,0,0,0.12); }
-[data-theme="light"] .headset-compact-btn          { color: #666; }
-[data-theme="light"] .headset-compact-btn:hover    { background: #f5f5f5; color: #222; }
-[data-theme="light"] .headset-compact-btn.open     { background: #f0f0f0; color: #111; }
-[data-theme="light"] .headset-compact-panel        { box-shadow: 0 10px 30px rgba(0,0,0,0.12); }
-[data-theme="light"] .headset-compact-item         { color: #555; }
-[data-theme="light"] .headset-compact-item:hover   { color: #111; }
+[data-theme="light"] .headset-filter-compact-btn          { color: #666; }
+[data-theme="light"] .headset-filter-compact-btn:hover    { background: #f5f5f5; color: #222; }
+[data-theme="light"] .headset-filter-compact-btn.open     { background: #f0f0f0; color: #111; }
+[data-theme="light"] .headset-filter-compact-panel        { box-shadow: 0 10px 30px rgba(0,0,0,0.12); }
+[data-theme="light"] .headset-filter-compact-item         { color: #555; }
+[data-theme="light"] .headset-filter-compact-item:hover   { color: #111; }
 [data-theme="light"] .topbar-btn:hover             { background: #f5f5f5; color: #333; }
 [data-theme="light"] .topbar-title                 { color: #aaa; }
 

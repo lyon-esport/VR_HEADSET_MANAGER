@@ -41,11 +41,18 @@ function Write-MediaMtxYml {
 
     # In pipe capture modes the app pushes RTSP into mediamtx from per-headset ffmpeg
     # processes, so the YAML needs an "all_others" path that accepts publishers without
-    # an explicit per-path entry. In legacy WindowOnly mode, paths are registered one
-    # by one via Add-RestreamPath (runOnDemand) so the empty hash is enough. In LocalOnly
-    # mode no path is registered at all (no streaming), empty hash is also fine.
-    $captureMode = if ($global:CaptureMode) { $global:CaptureMode } else { 'WindowOnly' }
-    $pathsBlock  = if ($captureMode -in @('WindowOnly','LocalOnly')) { "paths: {}" } else { "paths:`n  all_others:" }
+    # an explicit per-path entry. In LocalWindow mode no path is registered at all
+    # (no streaming), so the empty hash is enough.
+    $captureMode = if ($global:CaptureMode) { $global:CaptureMode } else { 'StreamAndLocalWindow' }
+    # Normalize legacy key names
+    $captureMode = switch ($captureMode) {
+        'Headless'       { 'StreamOnly' }
+        'WindowHeadless' { 'StreamAndLocalWindow' }
+        'LocalOnly'      { 'LocalWindow' }
+        'WindowOnly'     { 'StreamAndLocalWindow' }
+        default          { $captureMode }
+    }
+    $pathsBlock  = if ($captureMode -eq 'LocalWindow') { "paths: {}" } else { "paths:`n  all_others:" }
 
     $yaml = @"
 # VR_HEADSET_MANAGER - mediamtx configuration
@@ -151,11 +158,10 @@ function Add-RestreamPath {
     Registers a mediamtx path for one headset via the mediamtx REST API.
 
     .DESCRIPTION
-    Uses the mediamtx runOnDemand feature: when a remote viewer connects to the path,
-    mediamtx starts ffmpeg to capture the corresponding scrcpy window (matched by its
-    window title) using Windows GDI grab, encodes to H.264 and publishes the stream
-    back to mediamtx as RTSP. The capture starts on demand and stops when no viewers
-    remain.
+    In pipe modes (StreamOnly / StreamAndLocalWindow), start-screenCopy publishes
+    the stream directly via ffmpeg -c copy. We only need mediamtx to accept the
+    publisher on this path - an empty config body is enough.
+    In LocalWindow mode, no streaming pipeline exists and this function exits early.
 
     .PARAMETER HeadsetName
     Headset name as stored in known_headsets.csv.
@@ -170,72 +176,27 @@ function Add-RestreamPath {
         [string]$HeadsetIP
     )
 
-    if (-not (Test-Path $global:ffmpegFilePath)) {
-        Write-Log ($msg.MediaMtxFfmpegNotFound -f $global:ffmpegFilePath) -Level WARNING
+    $captureMode = if ($global:CaptureMode) { $global:CaptureMode } else { 'StreamAndLocalWindow' }
+    # Normalize legacy key names
+    $captureMode = switch ($captureMode) {
+        'Headless'       { 'StreamOnly' }
+        'WindowHeadless' { 'StreamAndLocalWindow' }
+        'LocalOnly'      { 'LocalWindow' }
+        'WindowOnly'     { 'StreamAndLocalWindow' }
+        default          { $captureMode }
+    }
+
+    # LocalWindow mode: scrcpy window only, no streaming pipeline at all.
+    if ($captureMode -eq 'LocalWindow') {
+        Write-Log ("Add-RestreamPath: skipped for {0} (mode LocalWindow)" -f $HeadsetName) -Level DEBUG
         return
     }
 
-    $captureMode = if ($global:CaptureMode) { $global:CaptureMode } else { 'WindowOnly' }
-
-    # LocalOnly mode: scrcpy window only, no streaming pipeline at all.
-    # Skip mediamtx path registration entirely.
-    if ($captureMode -eq 'LocalOnly') {
-        Write-Log ("Add-RestreamPath: skipped for {0} (mode LocalOnly)" -f $HeadsetName) -Level DEBUG
-        return
-    }
-
-    $pathName    = ConvertTo-RestreamPathName -HeadsetName $HeadsetName
-    $windowTitle = Convert-Displayname -displayName $HeadsetName
-    # Wrap ffmpeg path in double-quotes: the sources path contains spaces.
-    $ffmpegFwd   = "`"" + $global:ffmpegFilePath.Replace('\', '/') + "`""
-    $rtspUrl     = "rtsp://127.0.0.1:$($global:mediamtxRtspPort)/$pathName"
-
-    if ($captureMode -ne 'WindowOnly') {
-        # Pipe modes: start-screenCopy publishes the stream directly via ffmpeg -c copy.
-        # We only need mediamtx to accept the publisher on this path - empty config is enough.
-        $body = "{}"
-    } else {
-        # Legacy: mediamtx runs ffmpeg gdigrab on-demand to capture the visible scrcpy window.
-        # -pix_fmt yuv420p: GDI grab outputs BGR0 which makes libx264 pick yuv444p by default;
-        #   mediamtx and most RTSP clients only accept standard yuv420p H.264 - must be explicit.
-        # -rtsp_transport tcp: avoids UDP hole-punching issues on loopback.
-        # -pkt_size 1316: keeps RTP packets within Ethernet MTU (mediamtx warns at >1440).
-        #
-        # Encoder selection: when GPU_Acceleration is on, Get-GpuEncoder returns the
-        # best available hardware encoder for the chosen GPU (NVENC/QSV/AMF) with low-
-        # latency tuning. Falls back to libx264 -preset ultrafast -tune zerolatency
-        # automatically if probing fails or GPU_Acceleration is off, so behaviour is
-        # never worse than before.
-        $enc       = Get-GpuEncoder
-        $bw        = $global:mediamtxBitrate
-        # -bf 0 + short GOP (= framerate) on every arm: mediamtx WebRTC/WHEP rejects
-        # H.264 streams containing B-frames. qsv/amf/mf default to emitting B-frames;
-        # nvenc/libx264 disable them implicitly via tune presets but explicit is safer.
-        $gop       = $global:mediamtxFramerate
-        $encParams = switch ($enc.Name) {
-            'h264_nvenc' { "-c:v h264_nvenc -preset p1 -tune ll -rc cbr -b:v $bw -maxrate $bw -bufsize $bw -bf 0 -g $gop" }
-            'h264_qsv'   { "-c:v h264_qsv -preset veryfast -b:v $bw -maxrate $bw -bufsize $bw -bf 0 -g $gop" }
-            'h264_amf'   { "-c:v h264_amf -usage ultralowlatency -b:v $bw -maxrate $bw -bufsize $bw -bf 0 -g $gop" }
-            'h264_mf'    { "-c:v h264_mf -b:v $bw -bf 0 -g $gop" }
-            default      { "-c:v libx264 -preset ultrafast -tune zerolatency -b:v $bw -maxrate $bw -bufsize $bw -bf 0 -g $gop" }
-        }
-        # nvenc accepts a vendor-local -gpu index when multiple NVIDIA GPUs are present;
-        # the candidate builder in utils.ps1 already supplied it via ExtraArgs.
-        $encExtra = if ($enc.ExtraArgs -and $enc.ExtraArgs.Count -gt 0) { ' ' + ($enc.ExtraArgs -join ' ') } else { '' }
-
-        $cmd = "$ffmpegFwd -f gdigrab -framerate $($global:mediamtxFramerate) -draw_mouse 0" +
-               " -i title=$windowTitle -vf scale=trunc(iw/2)*2:trunc(ih/2)*2 -pix_fmt yuv420p" +
-               " $encParams$encExtra" +
-               " -pkt_size 1316 -rtsp_transport tcp -f rtsp $rtspUrl"
-        Write-Log ("Add-RestreamPath: {0} encoder for {1} (mode WindowOnly)" -f $enc.Name, $HeadsetName) -Level DEBUG
-
-        $body = @{
-            runOnDemand             = $cmd
-            runOnDemandRestart      = $true
-            runOnDemandStartTimeout = "15s"
-            runOnDemandCloseAfter   = "30s"
-        } | ConvertTo-Json -Compress
-    }
+    $pathName = ConvertTo-RestreamPathName -HeadsetName $HeadsetName
+    $rtspUrl  = "rtsp://127.0.0.1:$($global:mediamtxRtspPort)/$pathName"
+    # Pipe modes: start-screenCopy publishes the stream directly via ffmpeg -c copy.
+    # We only need mediamtx to accept the publisher on this path - empty config is enough.
+    $body = "{}"
 
     $apiUrl = "http://localhost:$($global:mediamtxApiPort)/v3/config/paths/add/$pathName"
     try {

@@ -1225,9 +1225,13 @@ function Show-SubMenu-Config {
         $dashboardStatus = if ($global:Dashboard_showConsole) { "Shown" } else { "Hidden" }
         Write-Host "  D. VR Headset Monitoring Console  - Currently: $dashboardStatus"
         $captureLabel = switch ($global:CaptureMode) {
+            'StreamOnly'           { "Stream only" }
+            'StreamAndLocalWindow' { "Stream + local scrcpy window" }
+            'LocalWindow'          { "Local scrcpy window only" }
+            # Legacy key names (backward compat for old config/CSV values)
             'Headless'       { "Stream only" }
             'WindowHeadless' { "Stream + local scrcpy window" }
-            'WindowOnly'     { "Stream + local Window (legacy)" }
+            'WindowOnly'     { "Stream + local scrcpy window" }
             'LocalOnly'      { "Local scrcpy window only" }
             default          { "$global:CaptureMode" }
         }
@@ -1289,12 +1293,17 @@ function Show-SubMenu-CaptureMode {
         Write-Host ""
         Write-Host "  === Video Capture Mode ===" -ForegroundColor Cyan
         Write-Host ""
-        Write-Host "  Current: $global:CaptureMode"
+        $captureCurrentLabel = switch ($global:CaptureMode) {
+            'StreamOnly'           { "Stream only" }
+            'StreamAndLocalWindow' { "Stream + local scrcpy window" }
+            'LocalWindow'          { "Local scrcpy window only" }
+            default                { "$global:CaptureMode" }
+        }
+        Write-Host "  Current: $captureCurrentLabel"
         Write-Host ""
-        Write-Host "  1. Stream only                       - No scrcpy window. Lowest CPU. Stream available on the website."
-        Write-Host "  2. Stream + local scrcpy window      - scrcpy window visible + stream via named pipe (GPU rendering)."
-        Write-Host "  3. Stream + local Window (legacy)    - Visible window, GDI capture, software/GPU H.264 encode."
-        Write-Host "  4. Local scrcpy window only          - Window only. No streaming pipeline (lowest CPU when no viewer)."
+        Write-Host "  1. Stream only                  - No scrcpy window. Lowest CPU. Stream available on the website."
+        Write-Host "  2. Stream + local scrcpy window - scrcpy window visible + stream via named pipe (GPU rendering)."
+        Write-Host "  3. Local scrcpy window only     - Window only. No streaming pipeline (lowest CPU when no viewer)."
         Write-Host ""
         Write-Host "  Switching restarts any running scrcpy session in the new mode."
         Write-Host ""
@@ -1302,16 +1311,15 @@ function Show-SubMenu-CaptureMode {
         Write-Host ""
         $choice = (Read-Host $msg.EnterChoice).Trim()
         $newMode = switch ($choice) {
-            '1' { 'Headless' }
-            '2' { 'WindowHeadless' }
-            '3' { 'WindowOnly' }
-            '4' { 'LocalOnly' }
+            '1' { 'StreamOnly' }
+            '2' { 'StreamAndLocalWindow' }
+            '3' { 'LocalWindow' }
             '0' { return }
             default { $null }
         }
         if ($newMode) {
-            # Warn before switching to LocalOnly - no stream/web/restream
-            if ($newMode -eq 'LocalOnly' -and $global:CaptureMode -ne 'LocalOnly') {
+            # Warn before switching to LocalWindow - no stream/web/restream
+            if ($newMode -eq 'LocalWindow' -and $global:CaptureMode -notin @('LocalWindow','LocalOnly')) {
                 Write-Host ""
                 Write-Host "  WARNING: Only the local scrcpy windows will open." -ForegroundColor Yellow
                 Write-Host "  Video capture will NOT be available on the web interface or via restream links." -ForegroundColor Yellow

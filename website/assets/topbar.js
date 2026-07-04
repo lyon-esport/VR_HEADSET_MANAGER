@@ -64,17 +64,17 @@
 
     vsepHTML: '<div class="v-sep"></div>',
 
-    // Compact dropdown shell — inject between v-sep and topbar-filters
+    // Compact filter dropdown shell — always visible
     compactDropdownHTML:
-      '<div class="headset-compact" id="headset-compact">' +
-        '<button class="headset-compact-btn" id="headset-compact-toggle">' +
+      '<div class="headset-filter-compact" id="headset-filter-compact">' +
+        '<button class="headset-filter-compact-btn" id="headset-filter-compact-toggle">' +
           '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
             '<rect x="2" y="3" width="20" height="14" rx="2"/><polyline points="8 21 12 17 16 21"/>' +
           '</svg>' +
           '<span class="topbar-btn-label">Filters</span>' +
           CHEVRON_SVG +
         '</button>' +
-        '<div class="headset-compact-panel" id="headset-compact-panel"></div>' +
+        '<div class="headset-filter-compact-panel" id="headset-filter-compact-panel"></div>' +
       '</div>',
 
     // Shared preset filter buttons — inject into .topbar-filters with document.write
@@ -82,7 +82,7 @@
     // Wire actions with TopBar.initFilters(callback) or TopBar.setActiveFilter(id)
     filtersHTML:
       '<button class="filter-btn active" id="filter-all">' +
-        '<span class="dot" style="background:#444"></span><span class="topbar-btn-label">All</span>' +
+        '<span class="dot" style="background:#666"></span><span class="topbar-btn-label">All</span>' +
       '</button>' +
       '<button class="filter-btn" id="filter-online">' +
         '<span class="dot" style="background:#22c55e"></span><span class="topbar-btn-label">Online</span>' +
@@ -115,11 +115,13 @@
       if (_filterCallback) _filterCallback(id);
     },
 
-    // Set one preset button active, deactivate the others
+    // Set one preset button active, deactivate the others (pill buttons + compact items)
     setActiveFilter: function (id) {
       ['all', 'online', 'scrcpy', 'offline'].forEach(function (b) {
         var el = document.getElementById('filter-' + b);
         if (el) el.classList.toggle('active', b === id);
+        var cel = document.getElementById('compact-filter-' + b);
+        if (cel) cel.classList.toggle('checked', b === id);
       });
     },
 
@@ -131,22 +133,25 @@
       });
     },
 
-    // Wire compact dropdown: open/close, overflow detection, and preset items.
+    // Wire compact filter dropdown: open/close and preset items with colored dots.
     // Call once at boot. For per-headset items call addCompactDivider/addCompactItem after.
     initCompact: function () {
       document.addEventListener('DOMContentLoaded', function () {
-        var toggle  = document.getElementById('headset-compact-toggle');
-        var panel   = document.getElementById('headset-compact-panel');
-        var topbar  = document.querySelector('.topbar');
-        var filters = document.querySelector('.topbar-filters');
+        var toggle = document.getElementById('headset-filter-compact-toggle');
+        var panel  = document.getElementById('headset-filter-compact-panel');
         if (!toggle || !panel) return;
 
-        // Populate preset section
+        // Populate preset section with colored dots
         var LABELS = { all: 'All', online: 'Online', scrcpy: 'Scrcpy', offline: 'Offline' };
+        var DOTS   = { all: '#666', online: '#22c55e', scrcpy: '#3b82f6', offline: '#ef4444' };
         ['all', 'online', 'scrcpy', 'offline'].forEach(function (id) {
           var item = document.createElement('button');
-          item.className = 'headset-compact-item';
-          item.innerHTML = '<span class="item-check"></span>' + LABELS[id];
+          item.className = 'headset-filter-compact-item' + (id === 'all' ? ' checked' : '');
+          item.id = 'compact-filter-' + id;
+          item.innerHTML =
+            CHECK_SVG +
+            '<span style="width:8px;height:8px;border-radius:50%;background:' + DOTS[id] + ';flex-shrink:0;display:inline-block"></span>' +
+            LABELS[id];
           item.addEventListener('click', function () {
             TopBar.triggerFilter(id);
             panel.classList.remove('open');
@@ -165,40 +170,31 @@
           panel.classList.remove('open');
           toggle.classList.remove('open');
         });
-
-        // Overflow detection
-        if (topbar && filters) {
-          var check = function () {
-            topbar.classList.remove('compact');
-            topbar.classList.toggle('compact', filters.scrollWidth > filters.clientWidth);
-          };
-          new ResizeObserver(check).observe(topbar);
-        }
       });
     },
 
     // Add a divider to the compact panel
     addCompactDivider: function () {
-      var panel = document.getElementById('headset-compact-panel');
+      var panel = document.getElementById('headset-filter-compact-panel');
       if (!panel) return;
       var div = document.createElement('div');
-      div.className = 'headset-compact-divider';
+      div.className = 'headset-filter-compact-divider';
       panel.appendChild(div);
     },
 
-    // Add a per-item entry to the compact panel
+    // Add a per-headset entry to the compact panel
     addCompactItem: function (label, dn, checked, onClick) {
-      var panel = document.getElementById('headset-compact-panel');
+      var panel = document.getElementById('headset-filter-compact-panel');
       if (!panel) return;
       var item = document.createElement('button');
-      item.className = 'headset-compact-item' + (checked ? ' checked' : '');
+      item.className = 'headset-filter-compact-item' + (checked ? ' checked' : '');
       item.dataset.compactHeadset = dn;
       item.innerHTML = CHECK_SVG + label;
       item.addEventListener('click', onClick);
       panel.appendChild(item);
     },
 
-    // Update a per-item compact entry's checked state
+    // Update a per-headset compact entry's checked state
     setCompactItemChecked: function (dn, checked) {
       var item = document.querySelector('[data-compact-headset="' + dn + '"]');
       if (item) item.classList.toggle('checked', checked);
@@ -505,8 +501,11 @@
     if (hsShutdownAll) {
       hsShutdownAll.addEventListener('click', function (e) {
         e.stopPropagation();
-        if (!confirm('Shutdown ALL headsets? This will power them off.')) return;
-        TopBar.apiPost('/api/shutdown-all', 'Shutdown All', hsShutdownAll);
+        if (typeof TopBar._shutdownAllOverride === 'function') {
+          TopBar._shutdownAllOverride();
+        } else {
+          TopBar._showShutdownAllModal(hsShutdownAll);
+        }
       });
     }
 
@@ -575,6 +574,55 @@
         if (btn) { btn.disabled = false; btn.style.opacity = ''; }
         alert((label || 'Action') + ': server unreachable.');
       });
+  };
+
+  // Custom confirm modal for "Shutdown All Headsets" with an optional app-shutdown checkbox.
+  window.TopBar._showShutdownAllModal = function(triggerBtn) {
+    var existing = document.getElementById('vrhm-shutdown-modal');
+    if (existing) existing.remove();
+
+    var overlay = document.createElement('div');
+    overlay.id = 'vrhm-shutdown-modal';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:9999';
+
+    var box = document.createElement('div');
+    box.style.cssText = 'background:#1a1a1a;border:1px solid #333;border-radius:12px;padding:24px 28px;max-width:360px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.7)';
+
+    var isLight = document.documentElement.getAttribute('data-theme') === 'light';
+    if (isLight) box.style.background = '#fff';
+    if (isLight) box.style.border = '1px solid #e5e7eb';
+
+    box.innerHTML =
+      '<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">' +
+        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+          '<path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>' +
+        '</svg>' +
+        '<span style="font-size:15px;font-weight:700;color:' + (isLight ? '#111' : '#e5e7eb') + '">Shutdown All Headsets</span>' +
+      '</div>' +
+      '<p style="font-size:13px;color:' + (isLight ? '#555' : '#9ca3af') + ';margin-bottom:18px;line-height:1.5">This will power off all connected headsets.</p>' +
+      '<label id="vrhm-shutdown-app-row" style="display:flex;align-items:center;gap:9px;padding:10px 12px;border-radius:7px;border:1px solid ' + (isLight ? '#e5e7eb' : '#2a2a2a') + ';background:' + (isLight ? '#f9fafb' : '#111') + ';cursor:pointer;margin-bottom:20px;user-select:none">' +
+        '<input type="checkbox" id="vrhm-shutdown-app-chk" style="accent-color:#ef4444;width:14px;height:14px;cursor:pointer;flex-shrink:0">' +
+        '<span style="font-size:12px;color:' + (isLight ? '#374151' : '#9ca3af') + '">Also shutdown VRHM application</span>' +
+      '</label>' +
+      '<div style="display:flex;gap:8px;justify-content:flex-end">' +
+        '<button id="vrhm-shutdown-cancel" style="padding:7px 16px;border-radius:6px;border:1px solid ' + (isLight ? '#d1d5db' : '#333') + ';background:transparent;color:' + (isLight ? '#374151' : '#9ca3af') + ';font-size:13px;cursor:pointer">Cancel</button>' +
+        '<button id="vrhm-shutdown-confirm" style="padding:7px 16px;border-radius:6px;border:1px solid #991b1b;background:#7f1d1d;color:#fca5a5;font-size:13px;font-weight:600;cursor:pointer">Shutdown</button>' +
+      '</div>';
+
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+
+    function close() { overlay.remove(); }
+    document.getElementById('vrhm-shutdown-cancel').addEventListener('click', close);
+    overlay.addEventListener('click', function(e) { if (e.target === overlay) close(); });
+
+    document.getElementById('vrhm-shutdown-confirm').addEventListener('click', function() {
+      var alsoShutdownApp = document.getElementById('vrhm-shutdown-app-chk').checked;
+      close();
+      TopBar.apiPost('/api/shutdown-all', 'Shutdown All', triggerBtn, alsoShutdownApp ? function() {
+        fetch('/api/app-shutdown', { method: 'POST' }).catch(function() {});
+      } : null);
+    });
   };
 
   // Placeholder kept for compatibility (modal moved to vrhm_config.html)

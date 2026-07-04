@@ -337,7 +337,7 @@ function Start-FfmpegStreamPush {
 function Set-CaptureMode {
     param(
         [Parameter(Mandatory)]
-        [ValidateSet('Headless','WindowHeadless','WindowOnly','LocalOnly')]
+        [ValidateSet('StreamOnly','StreamAndLocalWindow','LocalWindow')]
         [string]$Mode
     )
     if ($global:CaptureMode -eq $Mode) {
@@ -368,10 +368,10 @@ function Set-CaptureMode {
     $global:CaptureMode = $Mode
 
     # mediamtx YAML structure depends on the mode (paths: {} vs all_others:).
-    # WindowOnly and LocalOnly both use paths: {} (no publishers accepted),
-    # pipe modes (Headless/WindowHeadless) need all_others:. Restart mediamtx
+    # LocalWindow uses paths: {} (no publishers accepted),
+    # pipe modes (StreamOnly/StreamAndLocalWindow) need all_others:. Restart mediamtx
     # only when crossing that boundary.
-    $crossedBoundary = (($previous -in @('WindowOnly','LocalOnly')) -ne ($Mode -in @('WindowOnly','LocalOnly')))
+    $crossedBoundary = (($previous -eq 'LocalWindow') -ne ($Mode -eq 'LocalWindow'))
     if ($crossedBoundary) {
         try { Stop-MediaMtx; Start-Sleep -Milliseconds 500; Start-MediaMtx } catch {
             Write-Log ("Set-CaptureMode: mediamtx restart failed: {0}" -f $_.Exception.Message) -Level WARNING
@@ -519,30 +519,35 @@ function start-screenCopy {
         $recordOption = ""
     }
     # Dispatch on capture mode:
-    #   WindowOnly     -> legacy: visible window + GDI-grab from mediamtx side (gated by Add-RestreamPath)
-    #   WindowHeadless -> visible window + record-to-pipe + ffmpeg push to RTSP (no GDI)
-    #   Headless       -> --no-window + record-to-pipe + ffmpeg push to RTSP
-    #   LocalOnly      -> visible window only, no streaming pipeline (file recording via scrcpy)
-    $captureMode = if ($global:CaptureMode) { $global:CaptureMode } else { 'WindowOnly' }
-    $usePipe = ($captureMode -in @('Headless','WindowHeadless'))
+    #   StreamOnly          -> --no-window + record-to-pipe + ffmpeg push to RTSP
+    #   StreamAndLocalWindow-> visible window + record-to-pipe + ffmpeg push to RTSP (no GDI)
+    #   LocalWindow         -> visible window only, no streaming pipeline (file recording via scrcpy)
+    $captureMode = if ($global:CaptureMode) { $global:CaptureMode } else { 'StreamAndLocalWindow' }
+    # Normalize legacy key names stored in CSV or config from older versions
+    $captureMode = switch ($captureMode) {
+        'Headless'       { 'StreamOnly' }
+        'WindowHeadless' { 'StreamAndLocalWindow' }
+        'LocalOnly'      { 'LocalWindow' }
+        'WindowOnly'     { 'StreamAndLocalWindow' }
+        default          { $captureMode }
+    }
+    $usePipe = ($captureMode -in @('StreamOnly','StreamAndLocalWindow'))
 
-    if ($captureMode -eq 'LocalOnly') {
-        # No streaming, no gdigrab - GPU SDL is fine here. File recording (if any)
+    if ($captureMode -eq 'LocalWindow') {
+        # No streaming - GPU SDL is fine here. File recording (if any)
         # uses scrcpy's native --record directly.
         $arguments = "-s $adb_device $options --window-title=$displayName $recordOption"
-    } elseif ($usePipe) {
+    } else {
         $names    = Get-HeadsetPipeNames -SafeName $displayName
         # Pipe mode forces periodic IDR frames so late RTSP subscribers can start decoding immediately.
         $pipeArgs = "--record=\\.\pipe\$($names.In) --record-format=mkv --video-codec-options=i-frame-interval=1"
-        if ($captureMode -eq 'Headless') { $pipeArgs += " --no-window --no-playback" }
-        # In window-visible mode, prefer GPU SDL rendering when GPU is on; gdigrab is no longer used.
-        $renderArg = if ($captureMode -eq 'WindowHeadless' -and -not $global:GPU_Acceleration) { "--render-driver=software" } else { "" }
+        if ($captureMode -eq 'StreamOnly') { $pipeArgs += " --no-window --no-playback" }
+        # In window-visible mode, prefer GPU SDL rendering when GPU is on.
+        $renderArg = if ($captureMode -eq 'StreamAndLocalWindow' -and -not $global:GPU_Acceleration) { "--render-driver=software" } else { "" }
         # In pipe mode scrcpy can only have ONE --record target (the pipe), so we
         # do not pass the file-record option here. ffmpeg writes the recording
         # file as a second -c copy output below.
         $arguments = "-s $adb_device $options --window-title=$displayName $renderArg $pipeArgs"
-    } else {
-        $arguments = "-s $adb_device $options --window-title=$displayName --render-driver=software $recordOption"
     }
     #.\scrcpy.exe --crop 1664:1304:2260:450 --angle=-21 --max-fps 45 -b 16M --no-audio --video-buffer=100 --video-codec=h264 --video-encoder=OMX.qcom.video.encoder.avc -s $adb_device
     #.\sources\scrcpy-win64-v3.3\scrcpy.exe -s 192.168.1.243:5555 -b20m --crop=1664:1304:2260:450 --angle=-21 --max-size=800 --max-fps=30 --video-codec=h265 --no-audio --window-title=Q3_BLUE
