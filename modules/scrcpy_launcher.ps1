@@ -61,12 +61,33 @@ function ConvertTo-ScrcpyProfile {
 }
 
 
+# Appends the shared model-template options (max-size, codec, encoder, buffers,
+# stay-awake) to an argument list. Used by both the fullscreen and the crop-based
+# branches of ConvertTo-ScrcpyArguments so the two cannot drift apart.
+function Add-ScrcpyTemplateOptions {
+    param(
+        [Parameter(Mandatory)]$ArgParts,
+        $ModelTemplate
+    )
+    if (-not $ModelTemplate -or $ModelTemplate -is [string]) { return }
+    if ($ModelTemplate.max_size)      { $ArgParts.Add("--max-size=$($ModelTemplate.max_size)") }
+    if ($ModelTemplate.video_codec)   { $ArgParts.Add("--video-codec=$($ModelTemplate.video_codec)") }
+    if ($ModelTemplate.video_encoder -and $ModelTemplate.video_encoder -ne "") { $ArgParts.Add("--video-encoder=$($ModelTemplate.video_encoder)") }
+    if ($ModelTemplate.video_buffer)  {
+        $ArgParts.Add("--video-buffer=$($ModelTemplate.video_buffer)")
+        $ArgParts.Add("--audio-buffer=$($ModelTemplate.video_buffer)")
+    }
+    if ($ModelTemplate.stay_awake -eq $true) { $ArgParts.Add("--stay-awake") }
+}
+
 # Build the scrcpy argument string from a model template (config.json) and a per-headset profile.
-# Profile format: [L/R]-[D/N]-FPS-BW  e.g. "R-N-45-20"
-#   L/R = Left or Right eye  (selects crop + angle from model template)
-#   D/N = audio-dup or no-audio
-#   FPS = max-fps value
-#   BW  = bitrate in Mbps
+# Profile format: [view-]EYE-AUDIO-FPS-BW  e.g. "portrait-R-N-45-20" (view defaults to portrait)
+#   view = portrait | square | wide | ... (named view in model template)
+#          or the built-in "fullscreen" (full panel, no crop/angle, Eye ignored)
+#   EYE  = L or R eye         (selects crop + angle from model template view)
+#   AUDIO= D=audio-dup or N=no-audio
+#   FPS  = max-fps value
+#   BW   = bitrate in Mbps
 function ConvertTo-ScrcpyArguments {
     param(
         [string]$headsetModel,
@@ -106,16 +127,7 @@ function ConvertTo-ScrcpyArguments {
         $argParts = [System.Collections.Generic.List[string]]::new()
         $argParts.Add("--max-fps=$fps")
         $argParts.Add("-b ${bw}M")
-        if ($modelTemplate -and $modelTemplate -isnot [string]) {
-            if ($modelTemplate.max_size)      { $argParts.Add("--max-size=$($modelTemplate.max_size)") }
-            if ($modelTemplate.video_codec)   { $argParts.Add("--video-codec=$($modelTemplate.video_codec)") }
-            if ($modelTemplate.video_encoder -and $modelTemplate.video_encoder -ne "") { $argParts.Add("--video-encoder=$($modelTemplate.video_encoder)") }
-            if ($modelTemplate.video_buffer)  {
-                $argParts.Add("--video-buffer=$($modelTemplate.video_buffer)")
-                $argParts.Add("--audio-buffer=$($modelTemplate.video_buffer)")
-            }
-            if ($modelTemplate.stay_awake -eq $true) { $argParts.Add("--stay-awake") }
-        }
+        Add-ScrcpyTemplateOptions -ArgParts $argParts -ModelTemplate $modelTemplate
         $argParts.Add($audioArg)
         return ($argParts -join ' ')
     }
@@ -136,7 +148,8 @@ function ConvertTo-ScrcpyArguments {
     if ($modelTemplate.views) {
         $view = $modelTemplate.views.$viewName
         if (-not $view) {
-            $firstKey = ($modelTemplate.views | Get-Member -MemberType NoteProperty | Select-Object -First 1).Name
+            # PSObject.Properties preserves declaration order (Get-Member would sort alphabetically)
+            $firstKey = ($modelTemplate.views.PSObject.Properties | Select-Object -First 1).Name
             $view = $modelTemplate.views.$firstKey
             Write-Log ($msg.ScrcpyInvalidProfile -f "view '$viewName' not found, using '$firstKey'") -Level WARNING
         }
@@ -155,17 +168,16 @@ function ConvertTo-ScrcpyArguments {
 
     $argParts = [System.Collections.Generic.List[string]]::new()
     if ($crop)  { $argParts.Add("--crop $crop") }
-    if ($null -ne $angle -and "$angle" -ne "" -and [int]"$angle" -ne 0) { $argParts.Add("--angle=$angle") }
+    $angleVal = 0.0
+    if ($null -ne $angle -and "$angle" -ne "" -and
+        [double]::TryParse("$angle", [System.Globalization.NumberStyles]::Float,
+            [System.Globalization.CultureInfo]::InvariantCulture, [ref]$angleVal) -and
+        $angleVal -ne 0) {
+        $argParts.Add("--angle=$angle")
+    }
     $argParts.Add("--max-fps=$fps")
     $argParts.Add("-b ${bw}M")
-    if ($modelTemplate.max_size)       { $argParts.Add("--max-size=$($modelTemplate.max_size)") }
-    if ($modelTemplate.video_codec)   { $argParts.Add("--video-codec=$($modelTemplate.video_codec)") }
-    if ($modelTemplate.video_encoder -and $modelTemplate.video_encoder -ne "") { $argParts.Add("--video-encoder=$($modelTemplate.video_encoder)") }
-    if ($modelTemplate.video_buffer)  {
-        $argParts.Add("--video-buffer=$($modelTemplate.video_buffer)")
-        $argParts.Add("--audio-buffer=$($modelTemplate.video_buffer)")
-    }
-    if ($modelTemplate.stay_awake -eq $true) { $argParts.Add("--stay-awake") }
+    Add-ScrcpyTemplateOptions -ArgParts $argParts -ModelTemplate $modelTemplate
     $argParts.Add($audioArg)
 
     return ($argParts -join ' ')
@@ -203,13 +215,19 @@ function Get-ScrcpyProcess {
 # -------------------------------------------------------------------
 # Pipe-mode streaming pipeline (Headless / WindowHeadless capture modes)
 #
-# Architecture: scrcpy records its H.264 stream to a Windows named pipe;
-# ffmpeg reads from a paired pipe and pushes RTSP to mediamtx with -c copy.
-# A tiny PowerShell background job acts as the named-pipe SERVER on both
-# ends (scrcpy and ffmpeg both connect as CLIENTS), so the byte stream
-# flows scrcpy -> pipeIn -> bridge -> pipeOut -> ffmpeg -> mediamtx without
-# any re-encoding. CPU cost is near-zero compared to the legacy gdigrab+
-# libx264 path.
+# Architecture: scrcpy records its H.264 stream to a RELAY FILE on disk
+# (scrcpy 4.0's recorder opens its output with CREATE_ALWAYS, which fails
+# on Windows named pipes - they require OPEN_EXISTING - so recording
+# directly to a pipe is impossible). A tiny PowerShell background job
+# tail-reads the growing relay file and feeds the bytes into the named
+# pipe vrm_<SafeName>_out, where ffmpeg reads them and pushes RTSP to
+# mediamtx. The byte stream flows:
+#   scrcpy -> relay file -> bridge job -> pipeOut -> ffmpeg -> mediamtx
+# No re-encoding happens in the bridge; CPU cost is near-zero compared
+# to the legacy gdigrab+libx264 path.
+#
+# The relay file is deleted at every pipeline start/stop, so it only
+# grows for the duration of one scrcpy session.
 #
 # Per-headset state is tracked in $global:HeadsetPipelines keyed by the
 # safe display name (spaces -> underscores), so Stop-Scrcpy can tear down
@@ -222,49 +240,68 @@ if (-not (Get-Variable -Name HeadsetPipelines -Scope Global -ErrorAction Silentl
 function Get-HeadsetPipeNames {
     param([Parameter(Mandatory)][string]$SafeName)
     return @{
-        In  = "vrm_${SafeName}_in"
-        Out = "vrm_${SafeName}_out"
+        RelayFile = (Join-Path $global:ScriptPath ("data\vrm_relay_{0}.mkv" -f $SafeName))
+        Out       = "vrm_${SafeName}_out"
     }
 }
 
-# Starts a PowerShell job hosting two named-pipe servers and relaying bytes
-# from In (scrcpy writes) to Out (ffmpeg reads). Returns the job object.
-# The job blocks on WaitForConnection until both clients are attached, then
-# loops on Read/Write. It exits cleanly when the writer (scrcpy) disconnects.
+# Starts a PowerShell job that tail-reads the relay file written by scrcpy and
+# relays the bytes into the Out named pipe (ffmpeg reads it). Returns the job.
+# The job creates the pipe server immediately (async accept, so ffmpeg can
+# connect at any time), waits for scrcpy to create the relay file, then loops
+# tail-reading it. It exits when the pipe write fails (ffmpeg gone) or when it
+# is stopped by Stop-HeadsetPipeline. Errors are emitted to the job output so
+# Receive-Job surfaces them.
 function Start-HeadsetPipeBridge {
     param(
         [Parameter(Mandatory)][string]$SafeName
     )
     $names = Get-HeadsetPipeNames -SafeName $SafeName
+    Remove-Item -LiteralPath $names.RelayFile -Force -ErrorAction SilentlyContinue
     $job = Start-Job -Name "VrmBridge_$SafeName" -ScriptBlock {
-        param($pipeIn, $pipeOut)
+        param($relayFile, $pipeOut)
+        $srvOut = $null; $fs = $null
         try {
-            $srvIn  = New-Object System.IO.Pipes.NamedPipeServerStream(
-                $pipeIn,  [System.IO.Pipes.PipeDirection]::In,  1,
-                [System.IO.Pipes.PipeTransmissionMode]::Byte,
-                [System.IO.Pipes.PipeOptions]::Asynchronous, 1048576, 1048576)
             $srvOut = New-Object System.IO.Pipes.NamedPipeServerStream(
                 $pipeOut, [System.IO.Pipes.PipeDirection]::Out, 1,
                 [System.IO.Pipes.PipeTransmissionMode]::Byte,
                 [System.IO.Pipes.PipeOptions]::Asynchronous, 1048576, 1048576)
-            # Accept both connections IN PARALLEL via async begin/end. If we wait
-            # sequentially (In first, then Out), scrcpy fills the pipe-in kernel
-            # buffer and errors out long before ffmpeg gets a chance to connect.
-            $arIn  = $srvIn.BeginWaitForConnection($null, $null)
+            # Begin the accept BEFORE waiting for the relay file, so ffmpeg can
+            # connect as soon as it starts (a client CreateFile on a non-listening
+            # instance would fail immediately).
             $arOut = $srvOut.BeginWaitForConnection($null, $null)
-            $srvIn.EndWaitForConnection($arIn)
-            $srvOut.EndWaitForConnection($arOut)
-            $buf = New-Object byte[] 4096
-            while ($true) {
-                $n = $srvIn.Read($buf, 0, $buf.Length)
-                if ($n -le 0) { break }
-                try { $srvOut.Write($buf, 0, $n); $srvOut.Flush() } catch { break }
+
+            # Wait for scrcpy to create the relay file (device connect + server
+            # push can take several seconds).
+            $deadline = (Get-Date).AddSeconds(30)
+            while (-not (Test-Path -LiteralPath $relayFile)) {
+                if ((Get-Date) -gt $deadline) { throw "relay file never appeared: $relayFile" }
+                Start-Sleep -Milliseconds 100
             }
+            $srvOut.EndWaitForConnection($arOut)
+
+            # ReadWrite+Delete sharing: scrcpy keeps writing while we read, and
+            # Stop-HeadsetPipeline can delete the file under us without error.
+            $fs = New-Object System.IO.FileStream($relayFile,
+                [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read,
+                ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+            $buf = New-Object byte[] 65536
+            while ($true) {
+                $n = $fs.Read($buf, 0, $buf.Length)
+                if ($n -gt 0) {
+                    try { $srvOut.Write($buf, 0, $n); $srvOut.Flush() } catch { break }
+                } else {
+                    # At EOF: scrcpy may still be appending - poll for growth.
+                    Start-Sleep -Milliseconds 50
+                }
+            }
+        } catch {
+            Write-Output ("BRIDGE ERROR [{0}]: {1}" -f $pipeOut, $_.Exception.Message)
         } finally {
-            try { $srvIn.Dispose()  } catch {}
-            try { $srvOut.Dispose() } catch {}
+            try { if ($fs)     { $fs.Dispose()     } } catch {}
+            try { if ($srvOut) { $srvOut.Dispose() } } catch {}
         }
-    } -ArgumentList $names.In, $names.Out
+    } -ArgumentList $names.RelayFile, $names.Out
     return $job
 }
 
@@ -437,18 +474,39 @@ function Set-CaptureMode {
 }
 
 # Tears down the bridge job + ffmpeg push for one headset. Called by Stop-Scrcpy.
+# Also performs registry-independent cleanup: the $global:HeadsetPipelines
+# registry is per-process, so bridge jobs / ffmpeg pushers started by another
+# process (or a previous instance) would otherwise leak and hold the pipe name.
 function Stop-HeadsetPipeline {
     param([Parameter(Mandatory)][string]$SafeName)
+    $names = Get-HeadsetPipeNames -SafeName $SafeName
     $entry = $global:HeadsetPipelines[$SafeName]
-    if (-not $entry) { return }
-    if ($entry.FfmpegProcess) {
-        try { Stop-Process -Id $entry.FfmpegProcess.Id -Force -ErrorAction Stop } catch {}
+    if ($entry) {
+        if ($entry.FfmpegProcess) {
+            try { Stop-Process -Id $entry.FfmpegProcess.Id -Force -ErrorAction Stop } catch {}
+        }
+        $global:HeadsetPipelines.Remove($SafeName)
     }
-    if ($entry.Bridge) {
-        try { Stop-Job   $entry.Bridge -ErrorAction SilentlyContinue } catch {}
-        try { Remove-Job $entry.Bridge -Force -ErrorAction SilentlyContinue } catch {}
+    # Bridge jobs for this headset (registered or not) - surface their output
+    # (BRIDGE ERROR lines) at DEBUG before removing them.
+    foreach ($j in @(Get-Job -Name "VrmBridge_$SafeName" -ErrorAction SilentlyContinue)) {
+        try {
+            $jobOut = @(Receive-Job $j -ErrorAction SilentlyContinue)
+            if ($jobOut.Count -gt 0) { Write-Log ("Bridge[{0}]: {1}" -f $SafeName, ($jobOut -join ' | ')) -Level DEBUG }
+        } catch {}
+        try { Stop-Job   $j -ErrorAction SilentlyContinue } catch {}
+        try { Remove-Job $j -Force -ErrorAction SilentlyContinue } catch {}
     }
-    $global:HeadsetPipelines.Remove($SafeName)
+    # Orphan ffmpeg pushers still reading this headset's out-pipe (cross-process)
+    foreach ($p in @(Get-Process -Name "ffmpeg" -ErrorAction SilentlyContinue)) {
+        $cimProc = Get-CimInstance Win32_Process -Filter "ProcessId = $($p.Id)" -ErrorAction SilentlyContinue
+        $cmdLine = $cimProc.CommandLine
+        if ($cimProc) { $cimProc.Dispose() }
+        if ($cmdLine -and $cmdLine -match [regex]::Escape($names.Out)) {
+            try { Stop-Process -Id $p.Id -Force -ErrorAction Stop } catch {}
+        }
+    }
+    Remove-Item -LiteralPath $names.RelayFile -Force -ErrorAction SilentlyContinue
 }
 
 function start-screenCopy {
@@ -462,7 +520,7 @@ function start-screenCopy {
 
         [int]$adbPort = $global:adbPort_default,
 
-        [string]$scrcpyProfile = "R-N-45-20"
+        [string]$scrcpyProfile = "portrait-R-N-45-20"
 
     )
 
@@ -523,7 +581,7 @@ function start-screenCopy {
 
     # Check that scrcpy exists
     if (-not (Test-Path $scrcpy)) {
-        Write-Log -Message ($msg.ScrcpyNotFound -f $scrcpyPath) -Level "ERROR"
+        Write-Log -Message ($msg.ScrcpyNotFound -f $scrcpy) -Level "ERROR"
         return
     }
     
@@ -556,8 +614,11 @@ function start-screenCopy {
         $arguments = "-s $adb_device $options --window-title=$displayName $recordOption"
     } elseif ($usePipe) {
         $names    = Get-HeadsetPipeNames -SafeName $displayName
+        # scrcpy records to the relay FILE (recording straight to a named pipe fails
+        # with scrcpy 4.0 - see pipeline architecture comment above). Quoted because
+        # the project path contains spaces.
         # Pipe mode forces periodic IDR frames so late RTSP subscribers can start decoding immediately.
-        $pipeArgs = "--record=\\.\pipe\$($names.In) --record-format=mkv --video-codec-options=i-frame-interval=1"
+        $pipeArgs = "--record=`"$($names.RelayFile)`" --record-format=mkv --video-codec-options=i-frame-interval=1"
         if ($captureMode -eq 'Headless') { $pipeArgs += " --no-window --no-playback" }
         # In window-visible mode, prefer GPU SDL rendering when GPU is on; gdigrab is no longer used.
         $renderArg = if ($captureMode -eq 'WindowHeadless' -and -not $global:GPU_Acceleration) { "--render-driver=software" } else { "" }
@@ -573,18 +634,30 @@ function start-screenCopy {
 
 	Write-Log -Message ($msg.ScrcpyLaunching -f $arguments) -Level "SUCCESS"
 
-    # Pipe modes: start the bridge BEFORE scrcpy so the pipe-in server is listening.
-    # Defensively clear any leftover pipeline entry first - if a previous scrcpy died
-    # but its bridge job or ffmpeg push was still tracked, the named-pipe server names
-    # would still be in use and a fresh bridge would fail to create.
+    # Pipe modes: start the bridge BEFORE scrcpy so the out-pipe server is listening
+    # when ffmpeg starts. Defensively clear any leftover pipeline entry first - if a
+    # previous scrcpy died but its bridge job or ffmpeg push was still alive, the
+    # named-pipe server name would still be in use and a fresh bridge would fail.
     $bridgeJob = $null
     if ($usePipe) {
         Stop-HeadsetPipeline -SafeName $displayName
         try {
             $bridgeJob = Start-HeadsetPipeBridge -SafeName $displayName
-            Start-Sleep -Milliseconds 500   # let the job create both pipe-server objects
+            # Wait until the job has actually created the out-pipe server (Start-Job
+            # spawns a whole new process; a fixed 500ms was sometimes not enough).
+            $pipePath = "\\.\pipe\$((Get-HeadsetPipeNames -SafeName $displayName).Out)"
+            $pipeDeadline = (Get-Date).AddSeconds(10)
+            while (-not ([System.IO.Directory]::GetFiles('\\.\pipe\') -contains $pipePath)) {
+                if ((Get-Date) -gt $pipeDeadline) { throw "bridge did not create pipe $pipePath in time" }
+                if ($bridgeJob.State -in @('Failed','Completed','Stopped')) {
+                    $jobOut = @(Receive-Job $bridgeJob -ErrorAction SilentlyContinue) -join ' | '
+                    throw "bridge job ended prematurely (state=$($bridgeJob.State)): $jobOut"
+                }
+                Start-Sleep -Milliseconds 100
+            }
         } catch {
             Write-Log -Message ("Failed to start pipe bridge for {0}: {1}" -f $displayName, $_.Exception.Message) -Level "ERROR"
+            if ($bridgeJob) { try { Stop-Job $bridgeJob -EA SilentlyContinue; Remove-Job $bridgeJob -Force -EA SilentlyContinue } catch {} }
             return
         }
     }
@@ -600,10 +673,22 @@ function start-screenCopy {
     }
 
     if ($usePipe) {
-        # Wait for scrcpy to open its record file (connect to pipe-in) and produce the first
-        # video packets so the H.264 extradata is available - ffmpeg needs it for the RTSP
+        # Wait for scrcpy to create the relay file and produce the first video
+        # packets so the H.264 extradata is available - ffmpeg needs it for the RTSP
         # PUBLISH SDP, otherwise mediamtx rejects with 400 Bad Request.
         Start-Sleep -Milliseconds 3000
+        # Fast-death detection: if scrcpy already exited (bad option, device gone,
+        # record-open failure), surface its stderr and tear down instead of
+        # launching ffmpeg into a dead pipeline.
+        if ($scrcpyProc.HasExited) {
+            $errFile = Join-Path -Path $global:logFolder -ChildPath ($displayName+"_StandardError.txt")
+            $errTail = ""
+            try { $errTail = (Get-Content -LiteralPath $errFile -Encoding UTF8 -Tail 5 -ErrorAction Stop) -join ' | ' } catch {}
+            Write-Log ("scrcpy for {0} exited immediately (code={1}): {2}" -f $displayName, $scrcpyProc.ExitCode, $errTail) -Level ERROR
+            if ($bridgeJob) { try { Stop-Job $bridgeJob -EA SilentlyContinue; Remove-Job $bridgeJob -Force -EA SilentlyContinue } catch {} }
+            Stop-HeadsetPipeline -SafeName $displayName
+            return
+        }
         try {
             $pathName = (ConvertTo-RestreamPathName -HeadsetName $displayName)
             $rtspUrl  = "rtsp://127.0.0.1:$($global:mediamtxRtspPort)/$pathName"
@@ -620,7 +705,7 @@ function start-screenCopy {
                 Bridge         = $bridgeJob
                 ScrcpyProcess  = $scrcpyProc
                 FfmpegProcess  = $ffmpegProc
-                PipeInName     = (Get-HeadsetPipeNames -SafeName $displayName).In
+                RelayFile      = (Get-HeadsetPipeNames -SafeName $displayName).RelayFile
                 PipeOutName    = (Get-HeadsetPipeNames -SafeName $displayName).Out
                 RtspUrl        = $rtspUrl
                 CaptureMode    = $captureMode
@@ -658,12 +743,12 @@ function Watch-ScrcpyProcesses {
             
             Write-Log ($msg.ScrcpyProcessFound -f $runningScrcpyProcess_forThisheadset) -Level DEBUG
             if (-not $runningScrcpyProcess_forThisheadset) {
-                $headsetProfile = if ($headset.ScrcpyProfile) { $headset.ScrcpyProfile } else { "R-N-45-20" }
+                $headsetProfile = if ($headset.ScrcpyProfile) { $headset.ScrcpyProfile } else { "portrait-R-N-45-20" }
                 start-screenCopy -displayName $headset.Name -headsetIP $headset.IPAddress -recording (ConvertTo-BoolField $headset.Record) -scrcpyProfile $headsetProfile
             } else {
                 # scrcpy is running - check if parameters have changed
                 $shouldRestart = $false
-                $headsetProfile = if ($headset.ScrcpyProfile) { $headset.ScrcpyProfile } else { "R-N-45-20" }
+                $headsetProfile = if ($headset.ScrcpyProfile) { $headset.ScrcpyProfile } else { "portrait-R-N-45-20" }
                 $expectedRecording = ($headset.Record -eq "True")
 
                 $cimProc = Get-CimInstance Win32_Process -Filter "ProcessId = $($runningScrcpyProcess_forThisheadset.Id)" -ErrorAction SilentlyContinue
@@ -673,15 +758,40 @@ function Watch-ScrcpyProcesses {
                 # Check recording option mismatch only when we could actually read the command line.
                 # If $cmdLine is null (process vanished from WMI), skip the check to avoid a
                 # spurious restart caused by $false -ne $true when recording is expected.
-                # In pipe mode, scrcpy's --record always points to a named pipe (streaming);
+                # In pipe mode, scrcpy's --record always points to the relay file (streaming);
                 # the recording file is written by ffmpeg as a second output. The cmdline does
                 # NOT carry that file, so we compare against the pipeline registry instead.
-                $inPipeMode = $cmdLine -and ($cmdLine -match '--record=\\\\\.\\pipe\\')
+                $inPipeMode = $cmdLine -and ($cmdLine -match 'vrm_relay_\S+\.mkv|--record=\\\\\.\\pipe\\')
                 if ($inPipeMode) {
                     $safeName = Convert-Displayname $headset.Name
                     $pipeline = $global:HeadsetPipelines[$safeName]
+                    # Orphan-adoption guard: after an app restart the watchdog can find a
+                    # scrcpy inherited from the previous instance. Its bridge/ffmpeg died
+                    # with the old process (or lost its mediamtx session), so the local
+                    # window works but the stream serves 404. If this process has no
+                    # live ffmpeg pusher for the headset, rebuild the whole pipeline.
+                    $ffmpegAlive = $pipeline -and $pipeline.FfmpegProcess -and (-not $pipeline.FfmpegProcess.HasExited)
+                    if (-not $ffmpegAlive) {
+                        Write-Log ($msg.ScrcpyPipelineDead -f $headset.Name) -Level INFO
+                        $shouldRestart = $true
+                    } elseif ($global:mediamtxEnabled -and $pipeline.StartedAt -and
+                              ((Get-Date) - $pipeline.StartedAt).TotalSeconds -gt 30) {
+                        # Zombie-pusher guard: ffmpeg can survive a lost/failed RTSP publish
+                        # (e.g. mediamtx restarted right after the publish) while feeding
+                        # nothing. Ask mediamtx whether the path actually has a publisher.
+                        # 30s grace covers normal publish ramp-up; on API error assume OK
+                        # (never restart-loop on transient API hiccups).
+                        try {
+                            $mtxPath  = ConvertTo-RestreamPathName -HeadsetName $safeName
+                            $mtxState = Invoke-RestMethod -Uri "http://localhost:$($global:mediamtxApiPort)/v3/paths/get/$mtxPath" -TimeoutSec 2 -ErrorAction Stop
+                            if (-not $mtxState.ready) {
+                                Write-Log ($msg.ScrcpyPipelineDead -f $headset.Name) -Level INFO
+                                $shouldRestart = $true
+                            }
+                        } catch {}
+                    }
                     $currentRecording = if ($pipeline) { [bool]$pipeline.Recording } else { $false }
-                    if ($currentRecording -ne $expectedRecording) {
+                    if (-not $shouldRestart -and $currentRecording -ne $expectedRecording) {
                         Write-Log ($msg.ScrcpyRecordingChanged -f $headset.Name) -Level INFO
                         $shouldRestart = $true
                     }
@@ -702,7 +812,8 @@ function Watch-ScrcpyProcesses {
                         # output) from the cmdline before comparison, otherwise the watchdog will see them as
                         # "options changed" and restart-loop every cycle.
                         $cmdLineForCompare = $cmdLine
-                        $cmdLineForCompare = $cmdLineForCompare -replace '--record=\\\\\.\\pipe\\\S+', ''
+                        $cmdLineForCompare = $cmdLineForCompare -replace '--record="[^"]*"', ''
+                        $cmdLineForCompare = $cmdLineForCompare -replace '--record=\S+', ''
                         $cmdLineForCompare = $cmdLineForCompare -replace '--record-format=\S+', ''
                         $cmdLineForCompare = $cmdLineForCompare -replace '--video-codec-options=\S+', ''
                         $cmdLineForCompare = $cmdLineForCompare -replace '--no-window', ''
@@ -779,7 +890,12 @@ function Stop-Scrcpy {
         $safe = Convert-Displayname $HeadsetName
         Stop-HeadsetPipeline -SafeName $safe
     } else {
-        foreach ($key in @($global:HeadsetPipelines.Keys)) { Stop-HeadsetPipeline -SafeName $key }
+        # Stop-all (shutdown path): the registry is per-process and is typically
+        # EMPTY in the main process (pipelines live in the VRMonitor job), so also
+        # sweep every known headset name to catch cross-process orphans.
+        $safeNames = @($global:HeadsetPipelines.Keys)
+        try { $safeNames += @(Get-KnownHeadsets | ForEach-Object { Convert-Displayname $_.Name }) } catch {}
+        foreach ($key in ($safeNames | Select-Object -Unique)) { Stop-HeadsetPipeline -SafeName $key }
     }
 
     if ($HeadsetName) {

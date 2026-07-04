@@ -358,6 +358,8 @@ function Show-MainMenu {
             $headsetName = ($headsets | Where-Object { $_.ID -eq $choice }).Name
             $headsetIPAddress = ($headsets | Where-Object { $_.ID -eq $choice }).IPAddress
             $headsetRecording = ($headsets | Where-Object { $_.ID -eq $choice }).Record
+            $headsetProfile = ($headsets | Where-Object { $_.ID -eq $choice }).ScrcpyProfile
+            if (-not $headsetProfile) { $headsetProfile = "portrait-R-N-45-20" }
             #convert $headsetRecording to boolean
             if ($headsetRecording -in @("True", "true", $true)) {
                 $headsetRecording = $true
@@ -368,7 +370,7 @@ function Show-MainMenu {
             Write-Log -Message ($msg.TryingConnection -f $headsetName, $headsetIPAddress) -Level "INFO"
             #Check ping headset first !
             if (Test-Connection -ComputerName $headsetIPAddress -Count 1 -Quiet){
-                start-screenCopy -displayName $headsetName -headsetIP $headsetIPAddress -recording $headsetRecording
+                start-screenCopy -displayName $headsetName -headsetIP $headsetIPAddress -recording $headsetRecording -scrcpyProfile $headsetProfile
             }
             else {
                 Write-Log -Message ($msg.PingKO -f $headsetIPAddress) -Level "WARNING"
@@ -450,6 +452,8 @@ function Show-SubMenu-StreamHeadset { # CHOICE 1
             $headsetName = ($headsets | Where-Object { $_.ID -eq $userInput }).Name
             $headsetIPAddress = ($headsets | Where-Object { $_.ID -eq $userInput }).IPAddress
             $headsetRecording = ($headsets | Where-Object { $_.ID -eq $userInput }).Record
+            $headsetProfile = ($headsets | Where-Object { $_.ID -eq $userInput }).ScrcpyProfile
+            if (-not $headsetProfile) { $headsetProfile = "portrait-R-N-45-20" }
             #convert $headsetRecording to boolean
             if ($headsetRecording -in @("True", "true", $true)) {
                 $headsetRecording = $true
@@ -459,7 +463,7 @@ function Show-SubMenu-StreamHeadset { # CHOICE 1
             Write-Log -Message ($msg.TryingConnection -f $headsetName, $headsetIPAddress) -Level "INFO"
             #Check ping headset first !
             if (Test-Connection -ComputerName $headsetIPAddress -Count 1 -Quiet){
-                start-screenCopy -displayName $headsetName  -headsetIP $headsetIPAddress -recording $headsetRecording
+                start-screenCopy -displayName $headsetName  -headsetIP $headsetIPAddress -recording $headsetRecording -scrcpyProfile $headsetProfile
             }
             else {
                 Write-Log -Message ($msg.PingKO -f $headsetIPAddress) -Level "WARNING"

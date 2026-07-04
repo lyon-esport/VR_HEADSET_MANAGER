@@ -315,8 +315,12 @@ function Start-VRMonitor {
         # Fire service watchdogs eagerly so scrcpy / mediamtx / web server start at the same
         # time as the runspaces, instead of waiting one full slow-tick (~refresh_timer seconds)
         # after the job has finished bootstrapping.
-        try { Watch-ScrcpyProcesses } catch { Write-Log ("VRMonitor: scrcpy watchdog (eager) failed: " + $_.Exception.Message) -Level WARNING }
+        # ORDER MATTERS: mediamtx MUST be up before Watch-ScrcpyProcesses - the scrcpy
+        # pipe pipeline spawns an ffmpeg RTSP publisher a few seconds after scrcpy, and
+        # if mediamtx starts (or restarts) after that publish, the session is lost and
+        # the ffmpeg pusher goes zombie (stream serves 404 while scrcpy looks healthy).
         try { Start-MediaMtx }         catch { Write-Log ("VRMonitor: mediamtx watchdog (eager) failed: " + $_.Exception.Message) -Level WARNING }
+        try { Watch-ScrcpyProcesses } catch { Write-Log ("VRMonitor: scrcpy watchdog (eager) failed: " + $_.Exception.Message) -Level WARNING }
         try { Start-WebServer }        catch { Write-Log ("VRMonitor: web server watchdog (eager) failed: " + $_.Exception.Message) -Level WARNING }
 
         while ($true) {
@@ -433,8 +437,9 @@ function Start-VRMonitor {
                 Update-HeadsetVideoFile
                 Sync-RestreamPaths
 
-                try { Watch-ScrcpyProcesses } catch { Write-Log ("VRMonitor: scrcpy watchdog failed: " + $_.Exception.Message) -Level WARNING }
+                # mediamtx before scrcpy watchdog (publisher ordering - see eager block above)
                 try { Start-MediaMtx }         catch { Write-Log ("VRMonitor: mediamtx watchdog failed: " + $_.Exception.Message) -Level WARNING }
+                try { Watch-ScrcpyProcesses } catch { Write-Log ("VRMonitor: scrcpy watchdog failed: " + $_.Exception.Message) -Level WARNING }
                 try { Start-WebServer }        catch { Write-Log ("VRMonitor: web server watchdog failed: " + $_.Exception.Message) -Level WARNING }
 
                 Update-ComputerMonitoring

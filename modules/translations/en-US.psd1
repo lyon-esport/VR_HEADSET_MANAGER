@@ -387,6 +387,7 @@
     ScrcpyCheckProcess = "Checking scrcpy process for headset {0} ({1})"
     ScrcpyProcessFound = "Scrcpy process found for this headset: {0}"
     ScrcpyRecordingChanged = "Recording option changed for {0}, restarting scrcpy..."
+    ScrcpyPipelineDead = "Stream pipeline missing or dead for {0} (ffmpeg pusher not running in this process), restarting scrcpy..."
     ScrcpyOptionsChanged = "Scrcpy parameters changed for {0} ({1}), restarting..."
     ScrcpyRestarting = "Restarting scrcpy for headset {0}"
     ScrcpyStopTimeout = "scrcpy did not exit cleanly for {0} - force killing (recording may be incomplete)"

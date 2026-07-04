@@ -144,6 +144,11 @@ $moduleFiles = Get-ChildItem -Path $ModulesPath -Filter "*.ps1" -File | Sort-Obj
             if (Get-Command Remove-OldLogFiles -ErrorAction SilentlyContinue) {
                 try { Remove-OldLogFiles } catch { Write-Log ("Log retention purge failed: " + $_.Exception.Message) -Level WARNING }
             }
+            # Stale scrcpy relay files from a previous (crashed) run
+            try {
+                Get-ChildItem -LiteralPath (Join-Path $global:ScriptPath "data") -Filter "vrm_relay_*.mkv" -ErrorAction SilentlyContinue |
+                    Remove-Item -Force -ErrorAction SilentlyContinue
+            } catch { }
         }
     }
 

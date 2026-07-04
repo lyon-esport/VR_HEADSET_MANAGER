@@ -385,6 +385,7 @@
     ScrcpyCheckProcess = "Verification du processus scrcpy pour le casque {0} ({1})"
     ScrcpyProcessFound = "Processus scrcpy trouve pour ce casque : {0}"
     ScrcpyRecordingChanged = "Option d'enregistrement modifiee pour {0}, redemarrage de scrcpy..."
+    ScrcpyPipelineDead = "Pipeline de flux absent ou mort pour {0} (ffmpeg absent dans ce processus), redemarrage de scrcpy..."
     ScrcpyOptionsChanged = "Parametres scrcpy modifies pour {0} ({1}), redemarrage..."
     ScrcpyRestarting = "Redemarrage de scrcpy pour le casque {0}"
     ScrcpyStopTimeout = "scrcpy ne s'est pas arrete proprement pour {0} - arret force (enregistrement potentiellement incomplet)"
