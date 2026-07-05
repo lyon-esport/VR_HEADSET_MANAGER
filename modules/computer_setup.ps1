@@ -403,6 +403,24 @@ function Test-WebServerUrlAclCurrent {
     }
 }
 
+# Returns $true if the mDNS responder firewall rule exists (UDP 5353 inbound).
+# Port 5353 is fixed by the mDNS standard so there is no drift to detect.
+function Test-MdnsFirewallCurrent {
+    try {
+        $rules = Get-NetFirewallRule -ErrorAction SilentlyContinue |
+                 Where-Object { $_.DisplayName -ilike "*VR_HEADSET_MANAGER*mDNS*" }
+        if (-not $rules) { return $false }
+        $filters = $rules | Get-NetFirewallPortFilter -ErrorAction SilentlyContinue
+        if (-not $filters) { return $false }
+        foreach ($f in @($filters)) {
+            if ([string]$f.Protocol -ieq 'UDP' -and [string]$f.LocalPort -eq '5353') { return $true }
+        }
+        return $false
+    } catch {
+        return $false
+    }
+}
+
 # Returns $true if MediaMTX firewall rules exist AND their ports match current config.
 # Used to detect port changes in config.json that require rule recreation.
 function Test-MediaMtxFirewallCurrent {
@@ -535,6 +553,87 @@ New-NetFirewallRule -DisplayName '_[VR_HEADSET_MANAGER]WebServer_Allowed TCP [IN
         }
     } catch {
         Write-Log ($msg.WebServerFirewallRuleFailed -f $_) -Level ERROR
+    }
+}
+
+
+function Unblock-MdnsFirewallRule {
+    param([switch]$ReturnTask)
+    if (-not $global:MdnsResponder_enabled) { return }
+    try {
+        if (Test-MdnsFirewallCurrent) {
+            Write-Log $msg.MdnsFirewallRuleExists -Level DEBUG
+            return
+        }
+        $title   = "FIREWALL RULE REQUIRED - mDNS Responder"
+        $details = "Allowing inbound mDNS traffic:`nUDP port : 5353 (inbound)`nProfile  : All (Domain, Private, Public)`n(Any previous VR_HEADSET_MANAGER mDNS rule will be removed first.)"
+        if ($ReturnTask) {
+            return @{
+                Title       = $title
+                Details     = $details
+                ActionLabel = "Create rule"
+                Script      = @"
+Get-NetFirewallRule | Where-Object { `$_.DisplayName -ilike '*VR_HEADSET_MANAGER*mDNS*' } | Remove-NetFirewallRule -ErrorAction Continue
+New-NetFirewallRule -DisplayName '_[VR_HEADSET_MANAGER]mDNS_Responder UDP [IN]' -Direction Inbound -Protocol UDP -LocalPort 5353 -Action Allow -Profile Any -ErrorAction Continue | Out-Null
+"@
+            }
+        } else {
+            Get-NetFirewallRule -ErrorAction SilentlyContinue |
+                Where-Object { $_.DisplayName -ilike "*VR_HEADSET_MANAGER*mDNS*" } |
+                Remove-NetFirewallRule -ErrorAction SilentlyContinue
+            $specs = "UDP [IN]|UDP|5353"
+            Invoke-AsAdmin -ScriptBlock $script:fwPortRuleBlock -RuleName "_[VR_HEADSET_MANAGER]mDNS_Responder" `
+                -Title $title -Details $details -RuleSpec $specs
+        }
+    } catch {
+        Write-Log ("Failed to manage mDNS firewall rule: " + $_) -Level ERROR
+    }
+}
+
+
+# Returns $true if the Windows DNS Client has mDNS resolution enabled
+# (HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters\EnableMDNS = 1 or absent).
+function Test-MdnsClientEnabled {
+    try {
+        $val = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters' `
+            -Name 'EnableMDNS' -ErrorAction SilentlyContinue).EnableMDNS
+        # $null means key absent -> default is enabled; 1 = explicitly enabled; 0 = disabled
+        return ($null -eq $val -or $val -eq 1)
+    } catch {
+        return $true  # assume enabled if registry unreadable
+    }
+}
+
+# Returns a batch task hashtable to enable mDNS in Windows DNS Client (requires elevation).
+# Sets EnableMDNS = 1 and restarts the DNS Client service so the change takes effect.
+function Enable-WindowsMdnsClient {
+    param([switch]$ReturnTask)
+    if (-not $global:MdnsResponder_enabled) { return }
+    try {
+        if (Test-MdnsClientEnabled) {
+            Write-Log "Windows mDNS client already enabled" -Level DEBUG
+            return
+        }
+        Write-Log "Windows mDNS client is disabled - will enable it" -Level INFO
+        $title   = "WINDOWS mDNS CLIENT REQUIRED"
+        $details = "The Windows DNS Client has mDNS disabled (EnableMDNS=0).`nThis prevents .local name resolution (vrhm.local) on the LAN.`nThe following registry change will be applied:`n  HKLM:\...\Dnscache\Parameters\EnableMDNS = 1`nA REBOOT IS REQUIRED for the change to take effect.`n(The DNS Client service is protected and cannot be restarted at runtime.)"
+        if ($ReturnTask) {
+            return @{
+                Title       = $title
+                Details     = $details
+                ActionLabel = "Enable mDNS (reboot needed)"
+                Script      = @"
+Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters' -Name 'EnableMDNS' -Value 1 -Type DWord -Force
+Write-Host 'mDNS enabled in registry. A reboot is required for vrhm.local resolution to work.' -ForegroundColor Yellow
+"@
+            }
+        } else {
+            Invoke-AsAdmin -ScriptBlock {
+                Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters' -Name 'EnableMDNS' -Value 1 -Type DWord -Force
+            }
+        }
+    } catch {
+        Write-Log ("Failed to enable Windows mDNS client: " + $_) -Level ERROR
     }
 }
 
@@ -734,6 +833,17 @@ function Initialize-ComputerSetup {
     $wsTask = Unblock-WebServerFirewallRule -ReturnTask
     if ($wsTask -is [hashtable]) { $pendingTasks += $wsTask }
 
+    if ($global:MdnsResponder_enabled) {
+        if (Test-MdnsFirewallCurrent) {
+            Write-Log $msg.MdnsFirewallRuleExists -Level DEBUG
+        } else {
+            $mdnsTask = Unblock-MdnsFirewallRule -ReturnTask
+            if ($mdnsTask -is [hashtable]) { $pendingTasks += $mdnsTask }
+        }
+        $mdnsClientTask = Enable-WindowsMdnsClient -ReturnTask
+        if ($mdnsClientTask -is [hashtable]) { $pendingTasks += $mdnsClientTask }
+    }
+
     $aclTask = Register-WebServerUrlAcl -ReturnTask -PriorState $priorState
     if ($aclTask -is [hashtable]) { $pendingTasks += $aclTask }
 
@@ -770,6 +880,7 @@ function Initialize-ComputerSetup {
         MediaMtxApi           = $global:mediamtxApiPort
         MediaMtxProgram       = $global:mediamtxFilePath
         DefenderExclusionPath = $defenderExclusionPath
+        MdnsEnabled           = $global:MdnsResponder_enabled
     }
 
     # Write the ready flag so headsets_dashboard.ps1 knows firewall setup is done.

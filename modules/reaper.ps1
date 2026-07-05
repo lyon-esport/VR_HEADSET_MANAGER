@@ -17,7 +17,8 @@ $reaperExitFlag    = Join-Path $dataFolder "reaper_exit.flag"
 $pidFiles          = @(
     (Join-Path $dataFolder "webserver.pid"),
     (Join-Path $dataFolder "mediamtx.pid"),
-    (Join-Path $dataFolder "dashboard.pid")
+    (Join-Path $dataFolder "dashboard.pid"),
+    (Join-Path $dataFolder "mdns_responder.pid")
 )
 
 function Stop-ByPidFile {

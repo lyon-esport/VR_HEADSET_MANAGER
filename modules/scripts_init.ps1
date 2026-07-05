@@ -271,8 +271,9 @@ function Invoke-AppShutdown {
         if (Test-Path -LiteralPath $dashPidFile) { Remove-Item -LiteralPath $dashPidFile -Force -ErrorAction SilentlyContinue }
     } catch { }
 
-    try { Stop-WebServer } catch { }
-    try { Stop-MediaMtx  } catch { }
+    try { Stop-WebServer    } catch { }
+    try { Stop-MdnsResponder } catch { }
+    try { Stop-MediaMtx    } catch { }
 
     # Restore any VQA-applied parameters back to operator originals before exit.
     if ($global:VQA_Enabled -and (Get-Command Restore-VqaOriginals -ErrorAction SilentlyContinue)) {
@@ -493,6 +494,7 @@ if (-not $global:IsVRMonitorJob -and -not $global:IsDashboardProcess) {
 # Start the Pode web server in a separate PowerShell window (guarded: skip if already running)
 if (-not $global:IsWebServerProcess -and -not $global:IsDashboardProcess) {
     Start-WebServer
+    Start-MdnsResponder
 }
 
 

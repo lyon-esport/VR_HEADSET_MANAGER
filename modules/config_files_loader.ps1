@@ -232,6 +232,11 @@ function Get-Config {
     $global:WebServer_enabled = if ($null -ne $configContent.WebServer.enabled) { [bool]$configContent.WebServer.enabled } else { $false }
     $global:WebServer_port    = if ($configContent.WebServer.port)               { [int]$configContent.WebServer.port }    else { 8080 }
 
+    # mDNS responder
+    $mdnsEnabledRaw = if ($null -ne $configContent.MdnsResponder.enabled) { $configContent.MdnsResponder.enabled } else { $true }
+    $global:MdnsResponder_enabled  = ConvertTo-BoolField $mdnsEnabledRaw
+    $global:MdnsResponder_hostname = if ($configContent.MdnsResponder.hostname) { $configContent.MdnsResponder.hostname } else { "vrhm" }
+
     # Port pools used by Resolve-PortConflict (console_manager.ps1) and the
     # startup orchestrator Confirm-AppPortsAvailable. Each pool is the range
     # the "[1] Increment" option walks when the default port is taken.

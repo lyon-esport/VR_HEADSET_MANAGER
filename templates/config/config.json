@@ -254,6 +254,10 @@
     "enabled": true,
     "port": 8080
   },
+  "MdnsResponder": {
+    "enabled": true,
+    "hostname": "vrhm"
+  },
   "Battery": {
     "headset_charging_power_W": 13
   },

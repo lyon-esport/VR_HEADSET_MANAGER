@@ -3054,6 +3054,21 @@ function Set-HeadsetProximitySensorOverride {
     catch { Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR; return $false }
 }
 
+function Reset-HeadsetDisplaySize {
+    param (
+        [Parameter(Mandatory=$true)][PSCustomObject]$Device,
+        [string]$adb = $global:adbPath
+    )
+    if (-not $Device) { Write-Log ($msg.ErrorOccurred -f 'No device') -Level ERROR; return $false }
+    try {
+        Write-Log "Resetting display size on $($Device.DeviceId)" -Level INFO
+        Invoke-AdbCmd -Device $Device -Command "shell wm size reset" -adb $adb | Out-Null
+        Write-Log ($msg.HeadsetSettingApplied -f $Device.DeviceId) -Level SUCCESS
+        return $true
+    }
+    catch { Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR; return $false }
+}
+
 
 function Get-HeadsetFirmwareInfo {
     <#

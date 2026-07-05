@@ -184,6 +184,9 @@ $lanIPs = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
 Write-Log ($msg.WebServerStartingOnPort -f $port) -Level INFO
 Write-Log ($msg.WebServerServingFrom -f $websitePath) -Level DEBUG
 if ($lanIPs) {
+    if ($global:MdnsResponder_enabled -and $global:MdnsResponder_hostname) {
+        Write-Log ("  http://" + $global:MdnsResponder_hostname + ".local/ [mDNS]") -Level INFO
+    }
     foreach ($ip in $lanIPs) {
         Write-Log ($msg.WebServerLinkLine -f $ip, $port, "") -Level INFO
     }
@@ -1119,6 +1122,10 @@ try {
 
                 if ($null -ne $s.proxOverride) {
                     Set-HeadsetProximitySensorOverride -Device $device -adb $adbPath | Out-Null
+                }
+
+                if ($null -ne $s.displaySizeReset) {
+                    Reset-HeadsetDisplaySize -Device $device -adb $adbPath | Out-Null
                 }
 
                 if ($null -ne $s.blockUpdates) {
