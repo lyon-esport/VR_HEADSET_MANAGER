@@ -233,7 +233,7 @@ function Get-Config {
     $global:WebServer_port    = if ($configContent.WebServer.port)               { [int]$configContent.WebServer.port }    else { 8080 }
 
     # mDNS responder
-    $mdnsEnabledRaw = if ($null -ne $configContent.MdnsResponder.enabled) { $configContent.MdnsResponder.enabled } else { $true }
+    $mdnsEnabledRaw = if ($null -ne $configContent.MdnsResponder.enabled) { $configContent.MdnsResponder.enabled } else { $false }
     $global:MdnsResponder_enabled  = ConvertTo-BoolField $mdnsEnabledRaw
     $global:MdnsResponder_hostname = if ($configContent.MdnsResponder.hostname) { $configContent.MdnsResponder.hostname } else { "vrhm" }
 

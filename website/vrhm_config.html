@@ -791,7 +791,7 @@
           desc: 'HTTP port for the web UI. Default: 8080. Full restart required.' },
         { type: 'subgroup', label: 'mDNS Responder' },
         { path: 'MdnsResponder.enabled', label: 'Enabled', type: 'boolean',
-          desc: 'Broadcast vrhm.local on the LAN so any browser can reach the web UI by name. Requires restart.' },
+          desc: 'Broadcast vrhm.local on the LAN so any browser can reach the web UI by name. Only works on computers (Windows/macOS) - Android and iOS phones/tablets do not support resolving .local names in the browser, so this will not work on mobile devices. Requires restart. Disabled by default.' },
         { path: 'MdnsResponder.hostname', label: 'Hostname', type: 'text',
           desc: 'Hostname advertised on the LAN (without .local). Default: vrhm.' },
         { type: 'subgroup', label: 'ADB' },

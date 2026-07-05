@@ -293,7 +293,7 @@
     WebServerLinkLine    = "  http://{0}:{1}/ {2}"
     WebServerStarted = "Web server started on port {0}"
     WebServerStopped = "Web server stopped"
-    MdnsResponderStarted   = "mDNS responder started - you can now browse to http://{0}.local"
+    MdnsResponderStarted   = "mDNS responder started - you can now browse to http://{0}.local:{1}"
     MdnsResponderStopped   = "mDNS responder stopped"
     MdnsResponderError     = "mDNS responder failed to bind port 5353: {0}"
     MdnsFirewallRuleExists = "mDNS firewall rule already current (UDP 5353)"

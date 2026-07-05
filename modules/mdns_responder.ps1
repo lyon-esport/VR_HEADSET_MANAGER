@@ -26,6 +26,14 @@ function Start-MdnsResponder {
             [System.IO.File]::WriteAllText($pidFilePath, "$PID", $utf8NoBom)
         } catch { }
 
+        # This job runs in its own separate powershell.exe process (Start-Job), so none of
+        # the main process's globals exist here. Load config + the shared Write-Log so all
+        # mDNS logging lands in the same log file as everything else, tagged "[MDNS]".
+        . (Join-Path $ScriptPath "modules\config_files_loader.ps1")
+        . (Join-Path $ScriptPath "modules\logging.ps1")
+        $global:ScriptPath = $ScriptPath
+        Get-Config -ConfigFilePath (Join-Path $ScriptPath "config\config.json") | Out-Null
+
         # Inline helpers (avoids dot-sourcing mdns_scanner.ps1 which has $PSScriptRoot side-effects in job context)
         function Read-DnsName {
             param([byte[]]$Data, [int]$Offset)
@@ -102,7 +110,7 @@ function Start-MdnsResponder {
             }
         } catch { }
 
-        if ($respondIPs.Count -eq 0) { Write-RLog "No suitable LAN IPs found - exiting"; return }
+        if ($respondIPs.Count -eq 0) { Write-Log "[MDNS] No suitable LAN IPs found - exiting" -Level WARNING; return }
 
         $targetFqdn = "$Hostname.local"
 
@@ -115,13 +123,6 @@ function Start-MdnsResponder {
         }
         $nameBytes.Add(0x00)
         $nameArr = $nameBytes.ToArray()
-
-        $logPath = Join-Path $ScriptPath "data\mdns_responder.log"
-        $utf8NoBom = New-Object System.Text.UTF8Encoding $false
-
-        function Write-RLog { param($msg)
-            try { [System.IO.File]::AppendAllText($logPath, "$(Get-Date -Format 'HH:mm:ss') $msg`n", $utf8NoBom) } catch { }
-        }
 
         $udp = $null
         try {
@@ -143,7 +144,7 @@ function Start-MdnsResponder {
                         [System.Net.IPAddress]::Parse("224.0.0.251"),
                         $localIp
                     )
-                } catch { Write-RLog "JoinMulticast failed on ${localIp}: $_" }
+                } catch { Write-Log "[MDNS] JoinMulticast failed on ${localIp}: $_" -Level WARNING }
             }
 
             $udp.Client.ReceiveTimeout = 500
@@ -151,7 +152,7 @@ function Start-MdnsResponder {
                 [System.Net.IPAddress]::Parse("224.0.0.251"), 5353
             )
 
-            Write-RLog "mDNS responder listening for $targetFqdn -> $($respondIPs -join ', ')"
+            Write-Log "[MDNS] mDNS responder listening for $targetFqdn -> $($respondIPs -join ', ')" -Level INFO
 
             while ($true) {
                 try {
@@ -159,6 +160,7 @@ function Start-MdnsResponder {
                     $data     = $udp.Receive([ref]$remoteEP)
 
                     if ($data.Length -lt 12) { continue }
+                    Write-Log "[MDNS] DIAG: packet from $($remoteEP.Address):$($remoteEP.Port), $($data.Length) bytes, flags=0x$($data[2].ToString('X2'))$($data[3].ToString('X2'))" -Level DEBUG
                     # Ignore mDNS responses (QR bit = 1 in flags byte)
                     if (($data[2] -band 0x80) -ne 0) { continue }
 
@@ -178,6 +180,7 @@ function Start-MdnsResponder {
                         if ($rawClass -band 0x8000) { $quBitSet = $true }
                         $offset += 4
                         # TYPE=1 (A) or TYPE=255 (ANY), CLASS=1 (IN)
+                        Write-Log "[MDNS] DIAG: question name='$($parsed.Name)' qtype=$qtype qclass=$qclass QU=$($rawClass -band 0x8000)" -Level DEBUG
                         if (($qtype -eq 1 -or $qtype -eq 255) -and $qclass -eq 1 `
                             -and $parsed.Name -ieq $targetFqdn) {
                             $shouldRespond = $true
@@ -185,6 +188,7 @@ function Start-MdnsResponder {
                     }
 
                     if (-not $shouldRespond) { continue }
+                    Write-Log "[MDNS] DIAG: responding to $($remoteEP.Address), quBitSet=$quBitSet" -Level DEBUG
 
                     # RFC 6762 response: one A record per usable LAN IP.
                     # Multi-homed machines advertise all IPs; clients pick whichever is reachable.
@@ -220,12 +224,12 @@ function Start-MdnsResponder {
                 } catch [System.Net.Sockets.SocketException] {
                     continue  # Receive timeout (500 ms) - expected, keep looping
                 } catch {
-                    Write-RLog "Loop error: $_"
+                    Write-Log "[MDNS] Loop error: $_" -Level WARNING
                     continue
                 }
             }
         } catch {
-            Write-RLog "Fatal: $_"
+            Write-Log "[MDNS] Fatal: $_" -Level ERROR
         } finally {
             if ($udp) { try { $udp.Close() } catch { } }
         }
@@ -235,7 +239,7 @@ function Start-MdnsResponder {
         -ScriptBlock $responderBlock `
         -ArgumentList $scriptPath, $hostname
 
-    Write-Log ($msg.MdnsResponderStarted -f $hostname) -Level INFO
+    Write-Log ($msg.MdnsResponderStarted -f $hostname, $global:WebServer_port) -Level INFO
 }
 
 function Stop-MdnsResponder {

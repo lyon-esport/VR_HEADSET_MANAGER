@@ -345,7 +345,7 @@ function Show-MainMenu {
                 Write-Host ""
                 Write-Host $msg.WebServerLinksHeader -ForegroundColor DarkCyan
                 if ($global:MdnsResponder_enabled -and $global:MdnsResponder_hostname) {
-                    Write-Host ("  http://{0}.local/ [mDNS]" -f $global:MdnsResponder_hostname) -ForegroundColor Cyan
+                    Write-Host ("  http://{0}.local:{1}/ [mDNS]" -f $global:MdnsResponder_hostname, $global:WebServer_port) -ForegroundColor Cyan
                 }
                 foreach ($entry in $lanEntries) {
                     Write-Host ($msg.WebServerLinkLine -f $entry.IPAddress, $global:WebServer_port, $entry.Label) -ForegroundColor Cyan

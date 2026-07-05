@@ -255,7 +255,7 @@
     "port": 8080
   },
   "MdnsResponder": {
-    "enabled": true,
+    "enabled": false,
     "hostname": "vrhm"
   },
   "Battery": {

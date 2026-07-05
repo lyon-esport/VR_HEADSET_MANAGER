@@ -297,7 +297,7 @@
     WebServerLinkLine    = "  http://{0}:{1}/ {2}"
     WebServerStarted = "Serveur web demarre sur le port {0}"
     WebServerStopped = "Serveur web arrete"
-    MdnsResponderStarted   = "Repondeur mDNS demarre - vous pouvez naviguer vers http://{0}.local"
+    MdnsResponderStarted   = "Repondeur mDNS demarre - vous pouvez naviguer vers http://{0}.local:{1}"
     MdnsResponderStopped   = "Repondeur mDNS arrete"
     MdnsResponderError     = "Le repondeur mDNS n a pas pu se lier au port 5353 : {0}"
     MdnsFirewallRuleExists = "Regle pare-feu mDNS deja a jour (UDP 5353)"
