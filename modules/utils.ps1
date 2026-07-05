@@ -249,14 +249,26 @@ function Test-InternetConnectivity {
 
 
 # Returns CPU model, physical/logical core counts, and current load percentage.
-# Uses Win32_Processor; averages LoadPercentage across all sockets.
+# Model/core counts come from Win32_Processor (static metadata). LoadPercent is
+# sampled from Win32_PerfFormattedData_PerfOS_Processor (instance "_Total")
+# once per second for 5 seconds and averaged - Win32_Processor.LoadPercentage
+# is a single stale/noisy WMI sample and is not accurate enough on its own.
+# Get-Counter is avoided here because its counter paths are locale-localized
+# (e.g. "Processeur" on FR Windows) and fail on non-English systems; the WMI
+# class name is not localized.
 # Returns $null on failure.
 function Get-CpuInfo {
     $procs = $null
     try {
         $procs = @(Get-CimInstance -ClassName Win32_Processor -ErrorAction Stop)
         if ($procs.Count -eq 0) { return $null }
-        $load = [int][Math]::Round(($procs | Measure-Object -Property LoadPercentage -Average).Average)
+
+        $samples = for ($i = 0; $i -lt 5; $i++) {
+            (Get-CimInstance -ClassName Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'" -ErrorAction Stop).PercentProcessorTime
+            if ($i -lt 4) { Start-Sleep -Seconds 1 }
+        }
+        $load = [int][Math]::Round(($samples | Measure-Object -Average).Average)
+
         return [PSCustomObject]@{
             Model         = ($procs[0].Name -replace '\s+', ' ').Trim()
             PhysicalCores = ($procs | Measure-Object -Property NumberOfCores -Sum).Sum

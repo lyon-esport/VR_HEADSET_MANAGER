@@ -219,13 +219,3 @@ Get-WinEvent -LogName "Microsoft-Windows-WMI-Activity/Operational" -MaxEvents 30
 
 
 
-Add mdns :
-	## Verification
-
-	1. Start the app normally; verify `Write-Log "mDNS responder started"` appears in the log.
-	2. From another machine on the same LAN, open a browser and navigate to `http://vhrm.local` — the web server page should load.
-	3. From the same machine, `Resolve-DnsName vhrm.local` in a PowerShell prompt should return the host's IP.
-	4. Close the app; verify the mDNS responder job is gone (`Get-Job -Name MdnsResponder` returns nothing).
-	5. Kill the app process forcibly (Task Manager); reaper should kill the PID from `data\mdns_responder.pid`.
-	6. Check Windows Firewall — rule `VR_HEADSET_MANAGER mDNS Responder [UDP 5353 IN]` should exist after first run.
-	7. Run `scripts\Test-TranslationParity.ps1` — should exit 0.

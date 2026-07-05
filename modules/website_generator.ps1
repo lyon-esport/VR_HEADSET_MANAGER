@@ -4,6 +4,25 @@
 # Per-file hash cache - avoids rewriting HTML when data has not changed since last render
 $script:_monitoringHashes = @{}
 
+# Resolves the website/assets subfolder to use for a headset's hardware icons (Ctrl_Left/Right, Headset).
+# Returns "" when Model is empty/"-" (hides icons, unchanged legacy behavior).
+# Returns the URL-encoded Model name when website/assets/<Model>/ already exists.
+# Otherwise falls back to the checked-in website/assets/default_headset_icons/ folder.
+function Resolve-HeadsetIconAssetPath {
+    param(
+        [string]$Model
+    )
+
+    if (-not $Model -or $Model -eq "-") { return "" }
+
+    $modelDir = Join-Path -Path $global:ScriptPath -ChildPath "website\assets\$Model"
+    if (Test-Path -LiteralPath $modelDir) {
+        return [System.Uri]::EscapeDataString($Model)
+    }
+
+    return "default_headset_icons"
+}
+
 function Update-HeadsetMonitoringFile {
     param(
         [System.Collections.ArrayList]$knownHeadsetsInfo = $null,
@@ -40,6 +59,7 @@ function Update-HeadsetMonitoringFile {
             temp            = if ($headset.Temp -ne "-"){ ([int]($headset.Temp -replace ',','.')) } else { $headset.Temp } # convert to int
             temperature_highLevel             = $global:Monitoring_temperature_highLevel
             model                            = if ($headset.Model -and $headset.Model -ne "-") { $headset.Model } else { "" }
+            model_asset_folder               = Resolve-HeadsetIconAssetPath -Model $headset.Model
             headset_battery_warningLevel     = $global:Monitoring_headset_battery_warningLevel
             headset_battery_criticalLevel    = $global:Monitoring_headset_battery_criticalLevel
             controllers_battery_warningLevel  = $global:Monitoring_controllers_battery_warningLevel
@@ -82,6 +102,7 @@ function Update-HeadsetMonitoringFile {
             temp               = "-"
             temperature_highLevel             = $global:Monitoring_temperature_highLevel
             model                            = if ($headset.Model -and $headset.Model -ne "-") { $headset.Model } else { "" }
+            model_asset_folder               = Resolve-HeadsetIconAssetPath -Model $headset.Model
             headset_battery_warningLevel     = $global:Monitoring_headset_battery_warningLevel
             headset_battery_criticalLevel    = $global:Monitoring_headset_battery_criticalLevel
             controllers_battery_warningLevel  = $global:Monitoring_controllers_battery_warningLevel

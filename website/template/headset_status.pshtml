@@ -158,8 +158,9 @@
     $ctrlRightColor = "GREEN"
   }
 
-  # URL-encode model name for use in asset path (e.g., 'Quest 3' -> 'Quest%203')
-  $assetModelPath = if ($model -and $model -ne "-") { [System.Uri]::EscapeDataString($model) } else { "" }
+  # Resolved server-side by Resolve-HeadsetIconAssetPath: either the URL-encoded Model
+  # folder name, or "Headset_icons" fallback when no per-model asset folder exists.
+  $assetModelPath = $model_asset_folder
 
   # Compute time display string from time_remaining_min
   $timeDisplay = ""
