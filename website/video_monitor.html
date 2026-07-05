@@ -474,7 +474,7 @@
       var banner = document.getElementById('local-mode-banner');
       if (!banner) return;
       var anyScrcpy = Object.keys(headsetStatus).some(function(k){ return headsetStatus[k] && headsetStatus[k].scrcpy; });
-      var show = (captureMode === 'LocalOnly') && anyScrcpy;
+      var show = (captureMode === 'LocalWindow') && anyScrcpy;
       banner.hidden = !show;
     }
     document.addEventListener('DOMContentLoaded', function() {

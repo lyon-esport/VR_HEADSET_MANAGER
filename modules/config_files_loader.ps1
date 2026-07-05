@@ -323,15 +323,22 @@ function Get-Config {
         $perf = $configContent.Performance
         $global:GPU_Acceleration       = if ($null -ne $perf.GPU_Acceleration) { [bool]$perf.GPU_Acceleration } else { $true }
         $global:GPU_Index              = if ($null -ne $perf.GPU_Index) { [int]$perf.GPU_Index } else { 0 }
-        $validCaptureModes             = @('Headless','WindowHeadless','WindowOnly','LocalOnly')
-        $cm                            = if ($perf.Capture_Mode) { [string]$perf.Capture_Mode } else { 'WindowHeadless' }
-        if ($cm -notin $validCaptureModes) { $cm = 'WindowHeadless' }
+        $validCaptureModes             = @('StreamOnly','StreamAndLocalWindow','LocalWindow','Headless','WindowHeadless','WindowOnly','LocalOnly')
+        $cm                            = if ($perf.Capture_Mode) { [string]$perf.Capture_Mode } else { 'StreamAndLocalWindow' }
+        if ($cm -notin $validCaptureModes) { $cm = 'StreamAndLocalWindow' }
+        $cm                            = switch ($cm) {
+            'Headless'       { 'StreamOnly' }
+            'WindowHeadless' { 'StreamAndLocalWindow' }
+            'WindowOnly'     { 'StreamAndLocalWindow' }
+            'LocalOnly'      { 'LocalWindow' }
+            default          { $cm }
+        }
         $global:CaptureMode            = $cm
         $global:AdaptiveMonitoring_Enabled = if ($null -ne $perf.Adaptive_Monitoring.enabled) { [bool]$perf.Adaptive_Monitoring.enabled } else { $true }
     } else {
         $global:GPU_Acceleration           = $true
         $global:GPU_Index                  = 0
-        $global:CaptureMode                = 'WindowHeadless'
+        $global:CaptureMode                = 'StreamAndLocalWindow'
         $global:AdaptiveMonitoring_Enabled = $true
     }
     # Session cache for the resolved GPU encoder, populated lazily by Get-GpuEncoder.

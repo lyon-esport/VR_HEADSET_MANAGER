@@ -695,14 +695,6 @@ try {
                 $body = (New-Object System.IO.StreamReader($request.InputStream)).ReadToEnd()
                 $j = $body | ConvertFrom-Json -ErrorAction Stop
                 $mode = "$($j.mode)"
-                # Accept both new and legacy key names for backward compat
-                $mode = switch ($mode) {
-                    'Headless'       { 'StreamOnly' }
-                    'WindowHeadless' { 'StreamAndLocalWindow' }
-                    'WindowOnly'     { 'StreamAndLocalWindow' }
-                    'LocalOnly'      { 'LocalWindow' }
-                    default          { $mode }
-                }
                 if ($mode -notin @('StreamOnly','StreamAndLocalWindow','LocalWindow')) {
                     Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = 'invalid mode' }
                 } else {
@@ -821,22 +813,39 @@ try {
             continue
         }
 
-        # API: POST /api/shutdown-all  - shuts down all ADB-reachable headsets
+        # API: POST /api/shutdown-all  - shuts down selected (or all) ADB-reachable headsets
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/shutdown-all') {
             try {
-                $rows    = Get-KnownHeadsets
+                $filter          = $null
+                $alsoShutdownApp = $false
+                if ($request.HasEntityBody) {
+                    $reader  = New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)
+                    $bodyStr = $reader.ReadToEnd()
+                    $reader.Close()
+                    if ($bodyStr -and $bodyStr.Trim() -ne '') {
+                        try {
+                            $parsed = $bodyStr | ConvertFrom-Json
+                            if ($parsed.headsets) { $filter = @($parsed.headsets) }
+                            if ($parsed.PSObject.Properties.Name -contains 'alsoShutdownApp') {
+                                $alsoShutdownApp = [bool]$parsed.alsoShutdownApp
+                            }
+                        } catch {}
+                    }
+                }
+                $rows = Get-KnownHeadsets
+                if ($filter) { $rows = $rows | Where-Object { $filter -contains ($_.Name -replace ' ', '_') } }
                 $results = @()
                 foreach ($h in $rows) {
                     $device = Get-BestAdbDevice -Headset $h -AdbPort $adbPort -adb $adbPath
                     if ($device) {
                         $ok = Invoke-HeadsetShutdown -Device $device -adb $adbPath
-                        Write-Log "Shutdown-all: $($h.DisplayName) => ok=$ok" -Level INFO
-                        $results += @{ name = $h.DisplayName; ok = [bool]$ok }
+                        Write-Log "Shutdown-all: $($h.Name) => ok=$ok" -Level INFO
+                        $results += @{ name = ($h.Name -replace ' ', '_'); ok = [bool]$ok }
                     } else {
-                        $results += @{ name = $h.DisplayName; ok = $false }
+                        $results += @{ name = ($h.Name -replace ' ', '_'); ok = $false }
                     }
                 }
-                $respJson  = $results | ConvertTo-Json -Compress
+                $respJson  = if ($results.Count -gt 0) { ConvertTo-Json -InputObject @($results) -Compress } else { '[]' }
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes("{`"ok`":true,`"results`":$respJson}")
                 $response.StatusCode      = 200
                 $response.ContentType     = 'application/json; charset=utf-8'
@@ -850,9 +859,24 @@ try {
                     $response.ContentType     = 'application/json; charset=utf-8'
                     $response.ContentLength64 = $errBytes.Length
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                    $alsoShutdownApp = $false
                 } catch {}
             } finally {
                 $response.Close()
+                # App shutdown injected AFTER response is flushed so the browser receives
+                # the JSON before the web server process begins its own teardown.
+                if ($alsoShutdownApp) {
+                    try {
+                        $mainProc = Get-WmiObject Win32_Process |
+                            Where-Object { $_.CommandLine -match 'main\.ps1' } |
+                            Select-Object -First 1
+                        if ($mainProc) {
+                            $mainPid = [uint32]$mainProc.ProcessId
+                            [void][VrmConsoleInput]::InjectKey($mainPid, '0', 0x30)
+                            [void][VrmConsoleInput]::InjectKey($mainPid, [char]13, 0x0D)
+                        }
+                    } catch {}
+                }
             }
             continue
         }

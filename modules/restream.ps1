@@ -44,14 +44,6 @@ function Write-MediaMtxYml {
     # an explicit per-path entry. In LocalWindow mode no path is registered at all
     # (no streaming), so the empty hash is enough.
     $captureMode = if ($global:CaptureMode) { $global:CaptureMode } else { 'StreamAndLocalWindow' }
-    # Normalize legacy key names
-    $captureMode = switch ($captureMode) {
-        'Headless'       { 'StreamOnly' }
-        'WindowHeadless' { 'StreamAndLocalWindow' }
-        'LocalOnly'      { 'LocalWindow' }
-        'WindowOnly'     { 'StreamAndLocalWindow' }
-        default          { $captureMode }
-    }
     $pathsBlock  = if ($captureMode -eq 'LocalWindow') { "paths: {}" } else { "paths:`n  all_others:" }
 
     $yaml = @"
@@ -177,14 +169,6 @@ function Add-RestreamPath {
     )
 
     $captureMode = if ($global:CaptureMode) { $global:CaptureMode } else { 'StreamAndLocalWindow' }
-    # Normalize legacy key names
-    $captureMode = switch ($captureMode) {
-        'Headless'       { 'StreamOnly' }
-        'WindowHeadless' { 'StreamAndLocalWindow' }
-        'LocalOnly'      { 'LocalWindow' }
-        'WindowOnly'     { 'StreamAndLocalWindow' }
-        default          { $captureMode }
-    }
 
     # LocalWindow mode: scrcpy window only, no streaming pipeline at all.
     if ($captureMode -eq 'LocalWindow') {

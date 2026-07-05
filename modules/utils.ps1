@@ -5,6 +5,11 @@
 # ASCII only (no em dashes, no curly quotes, no accents).
 ###############################################################
 
+# Drive type cache for Get-RecordingDriveInfo.
+# Keyed by drive letter; value: @{DriveType; SpeedGbps}.
+# Drive type (NVMe/SSD/HDD) never changes at runtime, so we query StorageWMI once and cache.
+$script:DriveTypeCache = @{}
+
 
 # Tolerant SSID comparison. Pico headsets mask part of the SSID returned by
 # dumpsys/cmd wifi (e.g. "*****yWifi_Unifi" for "CrazyWifi_Unifi"). Strip all
@@ -584,28 +589,39 @@ function Get-RecordingDriveInfo {
         return $null
     }
 
-    # Drive type detection via Storage module (Win8+)
+    # Drive type detection via Storage module (Win8+).
+    # Result is cached per drive letter - drive type never changes at runtime.
+    # This avoids StorageWMI cold-starting on every monitoring cycle (~75s),
+    # which was the cause of WmiPrvSE.exe running at 13% CPU continuously.
     $driveType = "Unknown"
     $speedLabel = $null
-    try {
-        $partition = Get-Partition -DriveLetter $driveLetter -ErrorAction Stop
-        $disk      = Get-Disk -Number $partition.DiskNumber -ErrorAction Stop
-        $physDisk  = Get-PhysicalDisk | Where-Object { $_.DeviceId -eq $disk.Number.ToString() } | Select-Object -First 1
-        $busType   = if ($disk.BusType) { $disk.BusType.ToString() } else { '' }
 
-        if ($busType -eq 'NVMe') {
-            $driveType = "NVMe"
-            $speedLabel = "~32 Gbps"
-        } elseif ($physDisk -and $physDisk.MediaType -eq 'SSD') {
-            $driveType = "SSD"
-            $speedLabel = if ($busType -eq 'SATA') { "~6 Gbps" } else { $null }
-        } elseif ($physDisk -and $physDisk.MediaType -eq 'HDD') {
-            $driveType = "HDD"
-        } elseif ($busType -eq 'USB') {
-            $driveType = if ($physDisk -and $physDisk.MediaType -eq 'SSD') { "USB SSD" } else { "USB" }
+    if ($script:DriveTypeCache.ContainsKey($driveLetter)) {
+        $driveType  = $script:DriveTypeCache[$driveLetter].DriveType
+        $speedLabel = $script:DriveTypeCache[$driveLetter].SpeedGbps
+    } else {
+        try {
+            $partition = Get-Partition -DriveLetter $driveLetter -ErrorAction Stop
+            $disk      = Get-Disk -Number $partition.DiskNumber -ErrorAction Stop
+            $physDisk  = Get-PhysicalDisk | Where-Object { $_.DeviceId -eq $disk.Number.ToString() } | Select-Object -First 1
+            $busType   = if ($disk.BusType) { $disk.BusType.ToString() } else { '' }
+
+            if ($busType -eq 'NVMe') {
+                $driveType = "NVMe"
+                $speedLabel = "~32 Gbps"
+            } elseif ($physDisk -and $physDisk.MediaType -eq 'SSD') {
+                $driveType = "SSD"
+                $speedLabel = if ($busType -eq 'SATA') { "~6 Gbps" } else { $null }
+            } elseif ($physDisk -and $physDisk.MediaType -eq 'HDD') {
+                $driveType = "HDD"
+            } elseif ($busType -eq 'USB') {
+                $driveType = if ($physDisk -and $physDisk.MediaType -eq 'SSD') { "USB SSD" } else { "USB" }
+            }
+
+            $script:DriveTypeCache[$driveLetter] = @{ DriveType = $driveType; SpeedGbps = $speedLabel }
+        } catch {
+            # Storage module unavailable - leave DriveType as Unknown, do not cache so next cycle retries
         }
-    } catch {
-        # Storage module may be unavailable - silently fall back to Unknown
     }
 
     $minFree = if ($null -ne $global:scrcpyRecordMinFreeSpaceGB) { [int]$global:scrcpyRecordMinFreeSpaceGB } else { 5 }

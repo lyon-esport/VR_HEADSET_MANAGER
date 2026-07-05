@@ -202,3 +202,25 @@ DEBUG
 		Find a way to start adbwifi on headset startup... Lets dev an app ?
 	
 	
+
+####### TESTS TODO ########
+
+
+Solving WinPe workload
+	Restart the app with a scrcpy session active
+	Run: Get-WinEvent -LogName "Microsoft-Windows-WMI-Activity/Operational" -MaxEvents 30 | Where-Object { $_.Message -like "*StorageWMI*" } — should show only one StorageWMI start event shortly after app launch, then silence
+	Monitor WmiPrvSE CPU in Task Manager — should drop to near 0% within ~2 minutes of app start
+
+Get-WinEvent -LogName "Microsoft-Windows-WMI-Activity/Operational" -MaxEvents 30 |
+    Where-Object { $_.Message -like "*StorageWMI*" } |
+    Select-Object TimeCreated, Message
+
+
+
+shutdown button on top bar
+	Open the web UI → click "Shutdown All" button
+	Confirm all headsets appear ticked by default
+	Untick one headset → confirm button remains enabled, that headset is skipped
+	Untick all headsets → confirm button becomes disabled unless "Also shutdown app" is checked
+	Untick all headsets + tick "Also shutdown app" → no YES required, clicking confirm only calls /api/app-shutdown
+	Check PowerShell web server log confirms only selected headsets receive the shutdown command

@@ -13,10 +13,49 @@
   // Apply saved theme immediately to avoid flash of wrong theme
   try { if (localStorage.getItem('vrm-theme') === 'light') document.documentElement.setAttribute('data-theme', 'light'); } catch (e) {}
 
-  // Inject responsive rule: hide the MITIGATION label on narrow viewports, keep only the icon.
+  // Inject shared styles: responsive topbar rule + shutdown-all modal.
   (function () {
     var s = document.createElement('style');
-    s.textContent = '@media (max-width:700px){#topbar-vqa-warning-label{display:none!important}}';
+    s.textContent = [
+      '@media (max-width:700px){#topbar-vqa-warning-label{display:none!important}}',
+      '.shutdown-all-modal{position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center}',
+      '.shutdown-all-modal__box{background:#1a1a1a;border:1px solid #333;border-radius:10px;min-width:300px;max-width:380px;width:90%;padding:24px 26px;display:flex;flex-direction:column;gap:14px;box-shadow:0 8px 32px rgba(0,0,0,.6)}',
+      '.shutdown-all-modal__title{display:flex;align-items:center;gap:10px;font-size:14px;font-weight:700;color:#ef4444}',
+      '.shutdown-all-modal__sub{font-size:12px;color:#9ca3af;line-height:1.5}',
+      '.shutdown-all-modal__sub strong{color:#e0e0e0}',
+      '.shutdown-all-modal__list{display:flex;flex-direction:column;gap:5px;max-height:160px;overflow-y:auto;padding:8px 10px;border-radius:6px;background:rgba(239,68,68,.07);border:1px solid rgba(239,68,68,.2)}',
+      '.shutdown-all-modal__list-item{display:flex;align-items:center;gap:7px;font-size:12px;color:#e0e0e0;padding:4px 6px;border-radius:5px;cursor:pointer;user-select:none}',
+      '.shutdown-all-modal__list-item:hover{background:rgba(239,68,68,.1)}',
+      '.shutdown-all-modal__list-item input[type=checkbox]{accent-color:#ef4444;width:13px;height:13px;cursor:pointer;flex-shrink:0}',
+      '.shutdown-all-modal__list-item svg{flex-shrink:0;color:#ef4444}',
+      '.shutdown-all-modal__empty{font-size:12px;color:#9ca3af;text-align:center;padding:4px 0}',
+      '.shutdown-all-modal__app-row{display:flex;align-items:center;gap:9px;padding:9px 11px;border-radius:7px;background:#111;border:1px solid #2a2a2a;cursor:pointer;user-select:none}',
+      '.shutdown-all-modal__app-row input[type=checkbox]{accent-color:#ef4444;width:14px;height:14px;cursor:pointer;flex-shrink:0}',
+      '.shutdown-all-modal__app-row span{font-size:12px;color:#9ca3af}',
+      '.shutdown-all-modal__confirm-row{font-size:12px;color:#9ca3af}',
+      '.shutdown-all-modal__confirm-row strong{color:#e5e7eb}',
+      '.shutdown-all-modal__input{display:block;margin-top:8px;background:#111;border:1px solid #444;border-radius:6px;color:#e0e0e0;font-size:13px;padding:7px 10px;width:100%;box-sizing:border-box;letter-spacing:2px;outline:none}',
+      '.shutdown-all-modal__input:focus{border-color:#ef4444}',
+      '.shutdown-all-modal__actions{display:flex;justify-content:flex-end;gap:8px}',
+      '.shutdown-all-modal__status{font-size:12px;color:#9ca3af;text-align:center}',
+      '.vrhm-sd-btn{padding:7px 16px;border-radius:6px;border:1px solid #333;background:transparent;color:#9ca3af;font-size:13px;font-weight:600;cursor:pointer;transition:background .12s,color .12s,border-color .12s}',
+      '.vrhm-sd-btn:hover{color:#ccc;border-color:#444}',
+      '.vrhm-sd-btn.danger{border-color:rgba(239,68,68,.4);background:rgba(239,68,68,.15);color:#ef4444}',
+      '.vrhm-sd-btn.danger:hover{background:rgba(239,68,68,.25)}',
+      '.vrhm-sd-btn:disabled{opacity:.35;cursor:not-allowed;pointer-events:none}',
+      '[data-theme=light] .shutdown-all-modal__box{background:#fff;border-color:#e0e0e0;box-shadow:0 8px 32px rgba(0,0,0,.12)}',
+      '[data-theme=light] .shutdown-all-modal__sub{color:#6b7280}',
+      '[data-theme=light] .shutdown-all-modal__sub strong{color:#111}',
+      '[data-theme=light] .shutdown-all-modal__list{background:rgba(239,68,68,.05)}',
+      '[data-theme=light] .shutdown-all-modal__list-item{color:#111}',
+      '[data-theme=light] .shutdown-all-modal__app-row{background:#f9fafb;border-color:#e5e7eb}',
+      '[data-theme=light] .shutdown-all-modal__app-row span{color:#374151}',
+      '[data-theme=light] .shutdown-all-modal__confirm-row{color:#374151}',
+      '[data-theme=light] .shutdown-all-modal__confirm-row strong{color:#111}',
+      '[data-theme=light] .shutdown-all-modal__input{background:#f5f5f5;border-color:#ccc;color:#111}',
+      '[data-theme=light] .vrhm-sd-btn{background:#e8e8e8;border-color:#ccc;color:#444}',
+      '[data-theme=light] .vrhm-sd-btn:hover{background:#ddd;border-color:#aaa;color:#111}',
+    ].join('');
     document.head.appendChild(s);
   }());
 
@@ -576,52 +615,125 @@
       });
   };
 
-  // Custom confirm modal for "Shutdown All Headsets" with an optional app-shutdown checkbox.
-  window.TopBar._showShutdownAllModal = function(triggerBtn) {
+  // Shutdown-all modal: headset checklist + YES guard + optional app shutdown.
+  // CSS is injected by the style block above; HTML uses .shutdown-all-modal__ classes
+  // shared with headsets_settings.html so both entry points render identically.
+  window.TopBar._showShutdownAllModal = function() {
     var existing = document.getElementById('vrhm-shutdown-modal');
     if (existing) existing.remove();
 
+    var powerIcon = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>';
+
     var overlay = document.createElement('div');
-    overlay.id = 'vrhm-shutdown-modal';
-    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:9999';
-
-    var box = document.createElement('div');
-    box.style.cssText = 'background:#1a1a1a;border:1px solid #333;border-radius:12px;padding:24px 28px;max-width:360px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.7)';
-
-    var isLight = document.documentElement.getAttribute('data-theme') === 'light';
-    if (isLight) box.style.background = '#fff';
-    if (isLight) box.style.border = '1px solid #e5e7eb';
-
-    box.innerHTML =
-      '<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">' +
-        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
-          '<path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>' +
-        '</svg>' +
-        '<span style="font-size:15px;font-weight:700;color:' + (isLight ? '#111' : '#e5e7eb') + '">Shutdown All Headsets</span>' +
-      '</div>' +
-      '<p style="font-size:13px;color:' + (isLight ? '#555' : '#9ca3af') + ';margin-bottom:18px;line-height:1.5">This will power off all connected headsets.</p>' +
-      '<label id="vrhm-shutdown-app-row" style="display:flex;align-items:center;gap:9px;padding:10px 12px;border-radius:7px;border:1px solid ' + (isLight ? '#e5e7eb' : '#2a2a2a') + ';background:' + (isLight ? '#f9fafb' : '#111') + ';cursor:pointer;margin-bottom:20px;user-select:none">' +
-        '<input type="checkbox" id="vrhm-shutdown-app-chk" style="accent-color:#ef4444;width:14px;height:14px;cursor:pointer;flex-shrink:0">' +
-        '<span style="font-size:12px;color:' + (isLight ? '#374151' : '#9ca3af') + '">Also shutdown VRHM application</span>' +
-      '</label>' +
-      '<div style="display:flex;gap:8px;justify-content:flex-end">' +
-        '<button id="vrhm-shutdown-cancel" style="padding:7px 16px;border-radius:6px;border:1px solid ' + (isLight ? '#d1d5db' : '#333') + ';background:transparent;color:' + (isLight ? '#374151' : '#9ca3af') + ';font-size:13px;cursor:pointer">Cancel</button>' +
-        '<button id="vrhm-shutdown-confirm" style="padding:7px 16px;border-radius:6px;border:1px solid #991b1b;background:#7f1d1d;color:#fca5a5;font-size:13px;font-weight:600;cursor:pointer">Shutdown</button>' +
+    overlay.id        = 'vrhm-shutdown-modal';
+    overlay.className = 'shutdown-all-modal';
+    overlay.innerHTML =
+      '<div class="shutdown-all-modal__box">' +
+        '<div class="shutdown-all-modal__title">' +
+          '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' +
+            '<path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>' +
+          '</svg>Shutdown ALL headsets?' +
+        '</div>' +
+        '<div class="shutdown-all-modal__sub">This will power off every ADB-connected headset.</div>' +
+        '<div id="vrhm-sd-list"></div>' +
+        '<label class="shutdown-all-modal__app-row" id="vrhm-sd-app-row">' +
+          '<input type="checkbox" id="vrhm-sd-app-chk">' +
+          '<span>Also shutdown VRHM application</span>' +
+        '</label>' +
+        '<div class="shutdown-all-modal__confirm-row" id="vrhm-sd-confirm-row">' +
+          'Type <strong>YES</strong> to confirm:' +
+          '<input class="shutdown-all-modal__input" id="vrhm-sd-input" type="text" placeholder="YES" autocomplete="off" spellcheck="false">' +
+        '</div>' +
+        '<div class="shutdown-all-modal__actions">' +
+          '<button class="vrhm-sd-btn" id="vrhm-sd-cancel">Cancel</button>' +
+          '<button class="vrhm-sd-btn danger" id="vrhm-sd-confirm" disabled>Shutdown All</button>' +
+        '</div>' +
+        '<div class="shutdown-all-modal__status" id="vrhm-sd-status" style="display:none"></div>' +
       '</div>';
 
-    overlay.appendChild(box);
     document.body.appendChild(overlay);
 
-    function close() { overlay.remove(); }
-    document.getElementById('vrhm-shutdown-cancel').addEventListener('click', close);
-    overlay.addEventListener('click', function(e) { if (e.target === overlay) close(); });
+    var listEl    = document.getElementById('vrhm-sd-list');
+    var inputEl   = document.getElementById('vrhm-sd-input');
+    var appChk    = document.getElementById('vrhm-sd-app-chk');
+    var confirmBtn= document.getElementById('vrhm-sd-confirm');
+    var cancelBtn = document.getElementById('vrhm-sd-cancel');
+    var statusEl  = document.getElementById('vrhm-sd-status');
 
-    document.getElementById('vrhm-shutdown-confirm').addEventListener('click', function() {
-      var alsoShutdownApp = document.getElementById('vrhm-shutdown-app-chk').checked;
-      close();
-      TopBar.apiPost('/api/shutdown-all', 'Shutdown All', triggerBtn, alsoShutdownApp ? function() {
-        fetch('/api/app-shutdown', { method: 'POST' }).catch(function() {});
-      } : null);
+    function updateBtn() {
+      var anyHeadset = !!listEl.querySelector('.vrhm-sd-chk:checked');
+      var ok = inputEl.value === 'YES' && (anyHeadset || appChk.checked);
+      confirmBtn.disabled = !ok;
+    }
+
+    function renderList(connected) {
+      if (!connected || connected.length === 0) {
+        listEl.innerHTML = '<div class="shutdown-all-modal__empty">No connected headset to shutdown.</div>';
+        return;
+      }
+      var items = connected.map(function(dn) {
+        var safe = dn.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+        return '<label class="shutdown-all-modal__list-item">' +
+          '<input type="checkbox" class="vrhm-sd-chk" data-dn="' + safe + '" checked>' +
+          powerIcon + dn.replace(/_/g, ' ') + '</label>';
+      }).join('');
+      listEl.innerHTML = '<div class="shutdown-all-modal__list">' + items + '</div>';
+      listEl.addEventListener('change', updateBtn);
+    }
+
+    // Fetch connected headsets - API returns an array of {display_name, adb, ...}
+    fetch('/api/headsets-status').then(function(r) { return r.json(); }).then(function(items) {
+      var connected = [];
+      if (Array.isArray(items)) {
+        items.forEach(function(item) {
+          if (item && item.adb && item.display_name) connected.push(item.display_name);
+        });
+      }
+      renderList(connected);
+      updateBtn();
+      setTimeout(function() { if (inputEl) inputEl.focus(); }, 50);
+    }).catch(function() {
+      listEl.innerHTML = '<div class="shutdown-all-modal__empty">Could not load headset status.</div>';
+      updateBtn();
+    });
+
+    inputEl.addEventListener('input', updateBtn);
+    appChk.addEventListener('change', updateBtn);
+
+    function close() { overlay.remove(); }
+    cancelBtn.addEventListener('click', close);
+    overlay.addEventListener('click', function(e) { if (e.target === overlay) close(); });
+    document.addEventListener('keydown', function onEsc(e) {
+      if (e.key === 'Escape' && document.getElementById('vrhm-shutdown-modal')) { close(); document.removeEventListener('keydown', onEsc); }
+    });
+
+    confirmBtn.addEventListener('click', function() {
+      var alsoShutdownApp = appChk.checked;
+      var selected = Array.from(listEl.querySelectorAll('.vrhm-sd-chk:checked')).map(function(c) { return c.dataset.dn; });
+      statusEl.style.display = 'block';
+      confirmBtn.disabled = true;
+      cancelBtn.disabled  = true;
+
+      if (selected.length === 0) {
+        statusEl.textContent = alsoShutdownApp ? 'Shutting down application...' : 'Nothing to do.';
+        if (alsoShutdownApp) fetch('/api/app-shutdown', { method: 'POST' }).catch(function() {});
+        setTimeout(close, 1500);
+        return;
+      }
+
+      statusEl.textContent = 'Shutting down selected headsets...';
+      fetch('/api/shutdown-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ headsets: selected, alsoShutdownApp: alsoShutdownApp })
+      }).then(function(r) { return r.json(); }).then(function(data) {
+        statusEl.textContent = data.ok ? 'Done. Selected headsets shutting down.' : ('Error: ' + (data.error || 'unknown'));
+        cancelBtn.disabled = false;
+        setTimeout(close, 2000);
+      }).catch(function() {
+        statusEl.textContent = 'Request failed.';
+        cancelBtn.disabled = false;
+      });
     });
   };
 

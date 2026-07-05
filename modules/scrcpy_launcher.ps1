@@ -180,7 +180,7 @@ function Get-ScrcpyProcess {
 }
 
 # -------------------------------------------------------------------
-# Pipe-mode streaming pipeline (Headless / WindowHeadless capture modes)
+# Pipe-mode streaming pipeline (StreamOnly / StreamAndLocalWindow capture modes)
 #
 # Architecture: scrcpy records its H.264 stream to a Windows named pipe;
 # ffmpeg reads from a paired pipe and pushes RTSP to mediamtx with -c copy.
@@ -523,14 +523,6 @@ function start-screenCopy {
     #   StreamAndLocalWindow-> visible window + record-to-pipe + ffmpeg push to RTSP (no GDI)
     #   LocalWindow         -> visible window only, no streaming pipeline (file recording via scrcpy)
     $captureMode = if ($global:CaptureMode) { $global:CaptureMode } else { 'StreamAndLocalWindow' }
-    # Normalize legacy key names stored in CSV or config from older versions
-    $captureMode = switch ($captureMode) {
-        'Headless'       { 'StreamOnly' }
-        'WindowHeadless' { 'StreamAndLocalWindow' }
-        'LocalOnly'      { 'LocalWindow' }
-        'WindowOnly'     { 'StreamAndLocalWindow' }
-        default          { $captureMode }
-    }
     $usePipe = ($captureMode -in @('StreamOnly','StreamAndLocalWindow'))
 
     if ($captureMode -eq 'LocalWindow') {

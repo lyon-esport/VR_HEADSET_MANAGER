@@ -1228,12 +1228,7 @@ function Show-SubMenu-Config {
             'StreamOnly'           { "Stream only" }
             'StreamAndLocalWindow' { "Stream + local scrcpy window" }
             'LocalWindow'          { "Local scrcpy window only" }
-            # Legacy key names (backward compat for old config/CSV values)
-            'Headless'       { "Stream only" }
-            'WindowHeadless' { "Stream + local scrcpy window" }
-            'WindowOnly'     { "Stream + local scrcpy window" }
-            'LocalOnly'      { "Local scrcpy window only" }
-            default          { "$global:CaptureMode" }
+            default                { "$global:CaptureMode" }
         }
         Write-Host "  V. Video Capture Mode  - Currently: $captureLabel"
         if ($global:VQA_Enabled) {
@@ -1319,7 +1314,7 @@ function Show-SubMenu-CaptureMode {
         }
         if ($newMode) {
             # Warn before switching to LocalWindow - no stream/web/restream
-            if ($newMode -eq 'LocalWindow' -and $global:CaptureMode -notin @('LocalWindow','LocalOnly')) {
+            if ($newMode -eq 'LocalWindow' -and $global:CaptureMode -ne 'LocalWindow') {
                 Write-Host ""
                 Write-Host "  WARNING: Only the local scrcpy windows will open." -ForegroundColor Yellow
                 Write-Host "  Video capture will NOT be available on the web interface or via restream links." -ForegroundColor Yellow
