@@ -631,6 +631,15 @@ function Watch-ScrcpyProcesses {
 
             Write-Log ($msg.ScrcpyProcessFound -f $runningScrcpyProcess_forThisheadset) -Level DEBUG
             if (-not $runningScrcpyProcess_forThisheadset) {
+                # Re-read capture mode from config.json to avoid a stale mode when
+                # Set-CaptureMode fires between the slow-path Get-Config and this watchdog.
+                # Uses -LiteralPath and -Encoding UTF8 (mandatory for the accented project root).
+                try {
+                    $freshJson = Get-Content -LiteralPath (Join-Path $global:ScriptPath "config\config.json") -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+                    if ($freshJson -and $freshJson.Performance -and $freshJson.Performance.Capture_Mode) {
+                        $global:CaptureMode = $freshJson.Performance.Capture_Mode
+                    }
+                } catch {}
                 $headsetProfile = if ($headset.ScrcpyProfile) { $headset.ScrcpyProfile } else { "R-N-45-20" }
                 start-screenCopy -displayName $headset.Name -headsetIP $headset.IPAddress -recording (ConvertTo-BoolField $headset.Record) -scrcpyProfile $headsetProfile
             } else {
