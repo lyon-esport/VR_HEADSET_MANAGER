@@ -2,6 +2,8 @@
 # MANAGE DETAILED INFOS OF KNOWN HEADSETS
 #################
 
+$script:ScrcpyPidCache = @{}   # keyed by IP; value: scrcpy PID. Persists for runspace lifetime.
+
 function Test-VRMonitor { #For tests purpose only
 Copilot: Check Status
 
@@ -526,17 +528,45 @@ function Get-HeadsetInfoStage1Reachability {
         }
     }
 
-    # Local scrcpy process scan (no ADB dependency)
-    $scrcpyProcesses = Get-Process -Name "scrcpy" -ErrorAction SilentlyContinue
-    if ($scrcpyProcesses) {
-        foreach ($proc in $scrcpyProcesses) {
-            if ($proc.Path -like "$($global:scrcpyFolder)\scrcpy.exe") {
-                $cimProc = Get-CimInstance Win32_Process -Filter "ProcessId = $($proc.Id)"
-                $cmdLine = $cimProc.CommandLine
-                $cimProc.Dispose()
-                if ($cmdLine -match ([regex]::Escape($IPAddress) + "(:$ADBPort)?")) {
-                    $out.SCRCPY = "OK"
-                    break
+    # Fast path: check cached scrcpy PID (avoids WMI on every cycle)
+    $cachedPid = $script:ScrcpyPidCache[$IPAddress]
+    if ($cachedPid) {
+        $alive = Get-Process -Id $cachedPid -ErrorAction SilentlyContinue
+        if ($alive -and -not $alive.HasExited) {
+            $out.SCRCPY = "OK"
+        } else {
+            $script:ScrcpyPidCache.Remove($IPAddress)
+        }
+    }
+
+    # Slow path: full scan only on cache miss or after PID death
+    if ($out.SCRCPY -ne "OK") {
+        $safeName = $knownHeadset.Name -replace ' ', '_'
+        $scrcpyProcesses = Get-Process -Name "scrcpy" -ErrorAction SilentlyContinue
+        if ($scrcpyProcesses) {
+            foreach ($proc in $scrcpyProcesses) {
+                if ($proc.Path -like "$($global:scrcpyFolder)\scrcpy.exe") {
+                    $matched = $false
+                    # No-WMI path: scrcpy sets --window-title to the safe display name
+                    if ($proc.MainWindowTitle -eq $safeName) {
+                        $matched = $true
+                    }
+                    # WMI fallback: StreamOnly uses --no-window so title is always empty
+                    if (-not $matched -and -not $proc.MainWindowTitle) {
+                        $cimProc = Get-CimInstance Win32_Process -Filter "ProcessId = $($proc.Id)" -ErrorAction SilentlyContinue
+                        if ($cimProc) {
+                            $cmdLine = $cimProc.CommandLine
+                            $cimProc.Dispose()
+                            if ($cmdLine -match ([regex]::Escape($IPAddress) + "(:$ADBPort)?")) {
+                                $matched = $true
+                            }
+                        }
+                    }
+                    if ($matched) {
+                        $script:ScrcpyPidCache[$IPAddress] = $proc.Id
+                        $out.SCRCPY = "OK"
+                        break
+                    }
                 }
             }
         }

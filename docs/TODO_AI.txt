@@ -217,10 +217,14 @@ Get-WinEvent -LogName "Microsoft-Windows-WMI-Activity/Operational" -MaxEvents 30
 
 
 
-shutdown button on top bar
-	Open the web UI → click "Shutdown All" button
-	Confirm all headsets appear ticked by default
-	Untick one headset → confirm button remains enabled, that headset is skipped
-	Untick all headsets → confirm button becomes disabled unless "Also shutdown app" is checked
-	Untick all headsets + tick "Also shutdown app" → no YES required, clicking confirm only calls /api/app-shutdown
-	Check PowerShell web server log confirms only selected headsets receive the shutdown command
+
+Remove WMI workload 
+	Verification
+	Start a scrcpy session in StreamOnly mode (named pipe, no window)
+	Monitor WMI Provider Host CPU in Task Manager - should show a brief spike at session start then drop to near 0%
+	Confirm SCRCPY status shows "OK" in the web dashboard or CLI table for the headset
+	Stop and restart scrcpy - confirm status updates correctly (brief spike on restart, then silent again)
+	Optionally run the 60s measurement script used in diagnosis to confirm PID 45116 stays flat
+
+
+
