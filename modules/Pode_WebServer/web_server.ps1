@@ -3620,13 +3620,15 @@ Start-Process powershell.exe -ArgumentList @('-File',$Script,'-ScriptPath',$Scri
                 $oldFps      = $global:mediamtxFramerate
                 $oldBw       = $global:mediamtxBitrate
                 $oldReencode = [bool]$global:mediamtxReencode
-                $newFps      = $null; $newBw = $null; $newReencode = $false
+                $oldCodec    = if ($global:mediamtxCodec) { $global:mediamtxCodec } else { 'h264' }
+                $newFps      = $null; $newBw = $null; $newReencode = $false; $newCodec = 'h264'
                 if ($newCfg -and $newCfg.mediamtx) {
                     $newFps      = $newCfg.mediamtx.stream_framerate
                     $newBw       = $newCfg.mediamtx.stream_bitrate
                     $newReencode = [bool]$newCfg.mediamtx.reencode_in_ffmpeg
+                    $newCodec    = if ($newCfg.mediamtx.codec) { $newCfg.mediamtx.codec } else { 'h264' }
                 }
-                $streamingChanged = ($newFps -ne $oldFps) -or ($newBw -ne $oldBw) -or ($newReencode -ne $oldReencode)
+                $streamingChanged = ($newFps -ne $oldFps) -or ($newBw -ne $oldBw) -or ($newReencode -ne $oldReencode) -or ($newCodec -ne $oldCodec)
 
                 $utf8NoBom = New-Object System.Text.UTF8Encoding $false
                 [System.IO.File]::WriteAllText($cfgFile, $body, $utf8NoBom)

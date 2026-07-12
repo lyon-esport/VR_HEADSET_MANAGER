@@ -221,6 +221,7 @@ function Get-Config {
         $global:mediamtxFramerate    = $configContent.mediamtx.stream_framerate
         $global:mediamtxBitrate      = $configContent.mediamtx.stream_bitrate
         $global:mediamtxReencode     = [bool]$configContent.mediamtx.reencode_in_ffmpeg
+        $global:mediamtxCodec        = if ($configContent.mediamtx.codec) { $configContent.mediamtx.codec } else { 'h264' }
     } else {
         $global:mediamtxEnabled = $false
     }

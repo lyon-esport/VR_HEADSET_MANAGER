@@ -43,42 +43,6 @@ function Get-ClampedValue {
 
 
 ###############################################################
-# CROSS-PROCESS LOCK
-# The web server process and the VRMonitor background job can both call
-# apply/restore concurrently (operator clicks Apply while VQO is firing).
-# Enter-VqaLock acquires an exclusive handle on data\vqa.lock so writes
-# to config.json / vqa_*.json are serialised. Always release in finally.
-###############################################################
-
-
-function Enter-VqaLock {
-    param([int]$TimeoutMs = 3000)
-    $lockPath = Join-Path $global:ScriptPath 'data\vqa.lock'
-    $deadline = (Get-Date).AddMilliseconds($TimeoutMs)
-    while ((Get-Date) -lt $deadline) {
-        try {
-            return [System.IO.FileStream]::new(
-                $lockPath,
-                [System.IO.FileMode]::OpenOrCreate,
-                [System.IO.FileAccess]::Write,
-                [System.IO.FileShare]::None)
-        } catch [System.IO.IOException] {
-            Start-Sleep -Milliseconds 100
-        }
-    }
-    return $null
-}
-
-
-function Exit-VqaLock {
-    param($Stream)
-    if ($Stream) {
-        try { $Stream.Dispose() } catch { }
-    }
-}
-
-
-###############################################################
 # INPUT GATHERING
 ###############################################################
 

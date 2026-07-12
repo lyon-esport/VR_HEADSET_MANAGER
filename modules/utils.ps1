@@ -935,7 +935,7 @@ function Get-GpuVendor {
 # local index, and omit the flag entirely when only one device of that vendor
 # is present - it's both unnecessary and rejected by some driver builds.
 function Get-GpuEncoderCandidates {
-    param([int]$GpuIndex = 0)
+    param([int]$GpuIndex = 0, [string]$Codec = 'h264')
     $gpus = @(); try { $gpus = @(Get-GpuInfo) } catch { $gpus = @() }
     $selected = $null
     if ($gpus.Count -gt 0) {
@@ -963,11 +963,18 @@ function Get-GpuEncoderCandidates {
     $qsvArgs = @()
     if ($vendor -eq 'Intel' -and $it.Count -gt 1 -and $it.Local -ge 0) { $qsvArgs = @('-init_hw_device',"qsv=hw:$($it.Local)",'-filter_hw_device','hw') }
 
-    $nvenc = @{ Name='h264_nvenc'; Vendor='NVIDIA'; ExtraArgs=$nvencArgs }
-    $qsv   = @{ Name='h264_qsv';   Vendor='Intel';  ExtraArgs=$qsvArgs }
-    $amf   = @{ Name='h264_amf';   Vendor='AMD';    ExtraArgs=@() }
-    $mf    = @{ Name='h264_mf';    Vendor='Any';    ExtraArgs=@() }
-    $x264  = @{ Name='libx264';    Vendor='CPU';    ExtraArgs=@() }
+    $isHevc = ($Codec -eq 'h265')
+    $nvencName = if ($isHevc) { 'hevc_nvenc' } else { 'h264_nvenc' }
+    $qsvName   = if ($isHevc) { 'hevc_qsv' }   else { 'h264_qsv' }
+    $amfName   = if ($isHevc) { 'hevc_amf' }   else { 'h264_amf' }
+    $mfName    = if ($isHevc) { 'hevc_mf' }    else { 'h264_mf' }
+    $x264Name  = if ($isHevc) { 'libx265' }    else { 'libx264' }
+
+    $nvenc = @{ Name=$nvencName; Vendor='NVIDIA'; ExtraArgs=$nvencArgs; Codec=$Codec }
+    $qsv   = @{ Name=$qsvName;   Vendor='Intel';  ExtraArgs=$qsvArgs;   Codec=$Codec }
+    $amf   = @{ Name=$amfName;   Vendor='AMD';    ExtraArgs=@();        Codec=$Codec }
+    $mf    = @{ Name=$mfName;    Vendor='Any';    ExtraArgs=@();        Codec=$Codec }
+    $x264  = @{ Name=$x264Name;  Vendor='CPU';    ExtraArgs=@();        Codec=$Codec }
 
     switch ($vendor) {
         'NVIDIA' { return @($nvenc,$qsv,$amf,$mf,$x264) }
@@ -982,11 +989,14 @@ function Get-GpuEncoderCandidates {
 # Returns @{Name; ExtraArgs; Vendor} - never $null (libx264 is the guaranteed last resort).
 function Get-GpuEncoder {
     param([switch]$Force)
-    if (-not $Force -and $null -ne $global:GpuEncoder) { return $global:GpuEncoder }
+    $codec = if ($global:mediamtxCodec) { $global:mediamtxCodec } else { 'h264' }
+    if (-not $Force -and $null -ne $global:GpuEncoder -and $global:GpuEncoder.Codec -eq $codec) { return $global:GpuEncoder }
 
-    # GPU acceleration disabled -> always libx264
+    $x264Name = if ($codec -eq 'h265') { 'libx265' } else { 'libx264' }
+
+    # GPU acceleration disabled -> always CPU software encoder
     if (-not $global:GPU_Acceleration) {
-        $global:GpuEncoder = @{ Name='libx264'; Vendor='CPU'; ExtraArgs=@() }
+        $global:GpuEncoder = @{ Name=$x264Name; Vendor='CPU'; ExtraArgs=@(); Codec=$codec }
         return $global:GpuEncoder
     }
 
@@ -999,10 +1009,10 @@ function Get-GpuEncoder {
         }
     } catch { }
 
-    $candidates = Get-GpuEncoderCandidates -GpuIndex $global:GPU_Index
+    $candidates = Get-GpuEncoderCandidates -GpuIndex $global:GPU_Index -Codec $codec
     foreach ($c in $candidates) {
-        if ($c.Name -eq 'libx264') {
-            # No probe needed - libx264 is always present in the bundled ffmpeg.
+        if ($c.Name -eq $x264Name) {
+            # No probe needed - the software encoder is always present in the bundled ffmpeg.
             $global:GpuEncoder = $c
             try { Write-Log ("GpuEncoder resolved: {0} (vendor {1}) - fallback" -f $c.Name, $c.Vendor) -Level INFO } catch {}
             return $c
@@ -1016,9 +1026,44 @@ function Get-GpuEncoder {
             try { Write-Log ("GpuEncoder probe failed for {0}, trying next" -f $c.Name) -Level DEBUG } catch {}
         }
     }
-    # Should never reach here (libx264 is in the list and returned unconditionally above).
-    $global:GpuEncoder = @{ Name='libx264'; Vendor='CPU'; ExtraArgs=@() }
+    # Should never reach here (the software encoder is in the list and returned unconditionally above).
+    $global:GpuEncoder = @{ Name=$x264Name; Vendor='CPU'; ExtraArgs=@(); Codec=$codec }
     return $global:GpuEncoder
+}
+
+# -------------------------------------------------------------------
+# Cross-process lock (data\vqa.lock)
+# The web server process and the VRMonitor background job can both call
+# VQA apply/restore, and the web server's /api/config/save handler also
+# uses this lock around its own mediamtx/scrcpy restart sequence. Lives
+# here (not in video_quality_automation.ps1) so it is always loaded even
+# when VideoQualityAutomation.enabled is false and that module is skipped.
+# Always release via Exit-VqaLock in a finally block.
+# -------------------------------------------------------------------
+
+function Enter-VqaLock {
+    param([int]$TimeoutMs = 3000)
+    $lockPath = Join-Path $global:ScriptPath 'data\vqa.lock'
+    $deadline = (Get-Date).AddMilliseconds($TimeoutMs)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            return [System.IO.FileStream]::new(
+                $lockPath,
+                [System.IO.FileMode]::OpenOrCreate,
+                [System.IO.FileAccess]::Write,
+                [System.IO.FileShare]::None)
+        } catch [System.IO.IOException] {
+            Start-Sleep -Milliseconds 100
+        }
+    }
+    return $null
+}
+
+function Exit-VqaLock {
+    param($Stream)
+    if ($Stream) {
+        try { $Stream.Dispose() } catch { }
+    }
 }
 
 # -------------------------------------------------------------------
