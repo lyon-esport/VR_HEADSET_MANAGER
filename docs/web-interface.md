@@ -49,7 +49,14 @@ One card per headset with every day-to-day control:
 - **Timer** — set and start a session countdown
 - **Advanced Settings** (Configure) — brightness, guardian, proximity sensor, OTA update blocking, firmware info...
 - **Power** — reboot or shut the headset down remotely
-- Top bar: **Manage New Devices** (add headsets — see [Getting started](getting-started.md#2-add-your-first-headset)) and **Shutdown All**
+- Top bar: **Manage New Devices** (add headsets — see [Getting started](getting-started.md#2-add-your-first-headset)), the **capture mode** selector (see [Streaming → capture modes](streaming.md#capture-modes)), and **Shutdown All**
+
+![Manage New Devices dialog](pics/web_add_headset.png)
+*Manage New Devices: USB detection with WiFi/ADB status checks, plus manual add by IP address.*
+
+**Shutdown All** powers off every ADB-connected headset at once (with a confirmation dialog — it can optionally close the VRHM application too):
+
+![Shutdown All confirmation](pics/web_shutdown.png)
 
 ## Config menu
 

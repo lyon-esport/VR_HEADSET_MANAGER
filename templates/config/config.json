@@ -269,7 +269,7 @@
   "Performance": {
     "GPU_Acceleration": true,
     "GPU_Index": 0,
-    "Capture_Mode": "StreamAndLocalWindow",
+    "Capture_Mode": "StreamOnly",
     "Adaptive_Monitoring": {
       "enabled": true
     }

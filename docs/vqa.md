@@ -34,10 +34,8 @@ VQA works on three independent sections, each with its own auto-apply switch:
 
 With all switches **off** (the default), VQA only *recommends*: the Monitoring page shows what it would change and you decide. Turn a section's switch **on** and VQA applies that section automatically after enough consecutive "down" recommendations.
 
-> 📸 **SCREENSHOT TO ADD** — save as `docs/pics/web_vqa_section.png`
-> *What to capture:* the Monitoring web page with `VideoQualityAutomation.enabled = true` in the config, showing the VQA panel: the three per-section auto-apply toggles, the Video Quality Auto-Optimizer ON/OFF badge, and a current recommendation table if one is displayed.
-
-<!-- ![VQA panel on the Monitoring page](pics/web_vqa_section.png) -->
+![VQA panel on the Monitoring page](pics/web_VQA.png)
+*The Video Quality Automation panel on the Monitoring page: the SIZE / FPS / MEDIAMTX auto-apply toggles at the top, then one recommendation table per section (original / current / recommended values) with per-row APPLY buttons, APPLY ALL, and RESTORE ORIGINALS.*
 
 ## Restoring your settings
 

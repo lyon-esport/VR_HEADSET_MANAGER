@@ -19,6 +19,18 @@
 
 Everything is supervised: if a headset drops and comes back and **Auto-restart scrcpy** is enabled, the whole chain restarts by itself.
 
+## Capture modes
+
+The capture-mode selector in the **Headset Settings** top bar (config key `Performance.Capture_Mode`) chooses what happens with the scrcpy capture:
+
+![Capture mode selector](pics/web_streamingMode_Settings.png)
+
+| Mode | Effect |
+|---|---|
+| **Stream only** | Publish to MediaMTX, no window on the PC (lightest on the GPU display side) |
+| **Stream + local scrcpy window** (default) | Publish to MediaMTX and show the local mirror window |
+| **Local scrcpy window only** | Just the mirror window — nothing is restreamed |
+
 ## scrcpy capture profiles
 
 VR headsets render one image per eye with lens distortion, so raw mirroring looks bad on a flat screen. VRHM ships **per-model crop profiles** that extract one eye and straighten it.

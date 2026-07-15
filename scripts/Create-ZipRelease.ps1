@@ -20,12 +20,17 @@
 .PARAMETER Version
     Release version string (e.g. "1.2.3" or "26.05B"). Prompted if omitted.
 
+.PARAMETER Unzip
+    Automatically extracts the created zip to a sibling folder after packaging, for testing the release.
+
 .EXAMPLE
     .\Create-ZipRelease.ps1
     .\Create-ZipRelease.ps1 -Version "26.05B"
+    .\Create-ZipRelease.ps1 -Version "26.05B" -Unzip
 #>
 param(
-    [string]$Version = ""
+    [string]$Version = "",
+    [switch]$Unzip
 )
 
 Set-StrictMode -Version Latest
@@ -177,9 +182,9 @@ Write-Host "  Output : $zipPath" -ForegroundColor White
 Write-Host "  Size   : $zipSizeMB MB" -ForegroundColor White
 Write-Host ""
 
-if ($Version -match 'TEST') {
+if ($Unzip -or $Version -match 'TEST') {
     $extractDir = Join-Path $outputDir ([System.IO.Path]::GetFileNameWithoutExtension($zipName))
-    Write-Host "[ TEST release detected - extracting to folder ]" -ForegroundColor Yellow
+    Write-Host "[ Extracting release for testing ]" -ForegroundColor Yellow
     Write-Host "  $extractDir" -ForegroundColor White
     if (Test-Path -LiteralPath $extractDir) {
         Remove-Item -LiteralPath $extractDir -Recurse -Force

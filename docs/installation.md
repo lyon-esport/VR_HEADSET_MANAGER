@@ -41,27 +41,36 @@ The more headsets you capture — and the more viewers watch the restreams — t
 
 1. **Download** the [latest release](https://github.com/lyon-esport/VR_HEADSET_MANAGER/releases) and **unzip** it anywhere on your machine (keep `VR_HEADSET_MANAGER` in the folder name).
 
-2. **Run `START_VR_HEADSET_MANAGER.cmd`** (double-click). It starts PowerShell with the correct execution policy and launches the manager.
+2. **Run `START_VR_HEADSET_MANAGER.cmd`** (double-click). It starts PowerShell with the correct execution policy and launches the manager. On first start, the **Setup Wizard** welcomes you:
 
-> 📸 **SCREENSHOT TO ADD** — save as `docs/pics/console_first_start.png`
-> *What to capture:* the PowerShell console right after the first launch of `START_VR_HEADSET_MANAGER.cmd`, showing the welcome banner, the first-run setup messages (firewall configuration), and the main menu with the web server URL displayed.
+   ![First-time Setup Wizard](pics/newInstall_startWizard.png)
 
-<!-- ![Console on first start](pics/console_first_start.png) -->
+3. **Follow the Setup Wizard.** It walks you through 5 quick steps (every choice can be changed later in `config\config.json` or from the web interface):
 
-3. **First-run setup** happens automatically:
+   1. **Recording folder** — where scrcpy saves screen recordings
+   2. **Web server port** — default `8080`
+   3. **MediaMTX streaming ports** — defaults RTSP `8554` / HLS `8888` / WebRTC `8889` / API `9997`
+   4. **FFmpeg** — downloaded automatically from GitHub (recommended), or point to an existing `ffmpeg.exe`
+   5. **System authorizations** — ⚠️ a **User Account Control (admin) prompt appears once** to register:
+      - Windows Firewall rules so `adb.exe` can talk to the headsets
+      - Windows Firewall rules so MediaMTX can restream on the network
+      - Windows Firewall rule for the web server, plus the HTTP URL reservation (so the web server runs without admin)
 
-   - ⚠️ **A User Account Control (admin) prompt appears once.** It is used to run the initial computer setup:
-     - Windows Firewall rules so `adb.exe` can talk to the headsets
-     - Windows Firewall rules so MediaMTX can restream on the network
-     - Windows Firewall rules for the web server and the mDNS headset scan
-   - You are asked whether you want to **exclude the application folder from Windows Defender**. This is optional but recommended: real-time scanning of the video pipeline can cause high CPU usage.
-   - The runtime configuration is created from the template (`config\config.json`).
+   ![Setup Wizard steps](pics/newInstall_setp2.png)
+
+   You may also be asked whether you want to **exclude the application folder from Windows Defender**. This is optional but recommended: real-time scanning of the video pipeline can cause high CPU usage.
+
+   The wizard ends with a summary and launches the manager:
+
+   ![Setup complete summary](pics/newInstall_step3.png)
 
 4. **Open the web interface.** The web server starts automatically; its URL is printed in the console — by default:
 
    ```
    http://<your-pc-ip>:8080
    ```
+
+   ![Console main menu showing the web monitor URLs](pics/console_Started.png)
 
    You can open it from the VRHM PC itself or from any device on the same LAN (some management features, like installing APK files, are only available when browsing from the VRHM PC itself).
 

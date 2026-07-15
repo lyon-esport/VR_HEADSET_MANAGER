@@ -28,11 +28,15 @@ Open it in a browser. The top navigation bar gives you access to every page:
 
 1. Connect the headset to the PC with a USB cable.
 2. Put the headset on and **accept the "Allow USB debugging" prompt** shown inside it.
-3. In the web interface, go to **Headset Settings** and click the **Manage New Devices** button (the small headset icon at the top), or open `http://<your-pc-ip>:8080/headsets_settings.html#manage` directly.
-4. Your headset appears in the dialog. Follow the assistant: VRHM reads the model and serial number, **enables ADB over WiFi automatically**, and registers the headset with a friendly name.
+3. In the web interface, go to **Headset Settings** and click the **Manage New Devices** button (the small headset icon at the top), or open `http://<your-pc-ip>:8080/headsets_settings.html#manage` directly. (On a fresh install the page also shows a big **"Click here to add your first headset"** button.)
+4. Your headset appears in the dialog. Click **Add this headset to the list**: VRHM reads the model and serial number, **enables ADB over WiFi automatically** (Enable WiFi ADB), and registers the headset with a friendly name.
 
-![Manage New Devices dialog](pics/web_add_headset.png)
-*The Manage New Devices dialog. When a USB headset is detected it is listed here with a one-click add button; otherwise you can add one manually by IP address.*
+![Manage New Devices dialog with a USB headset detected](pics/web_add_newheadset.png)
+*The Manage New Devices dialog with a USB-detected Quest 3, ready to be added in one click — WiFi ADB can be enabled from the same dialog.*
+
+Once added, the headset gets its own card in **Headset Settings**:
+
+![Freshly added headset card](pics/new_headset-added.png)
 
 ### Option B — manually by IP address
 

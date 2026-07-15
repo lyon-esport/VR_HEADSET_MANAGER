@@ -15,6 +15,12 @@ VR HEADSET MANAGER lets the operator drive every application on every headset **
 
 Wherever you see a **launch button (▶)** — on Video Monitor tiles, on Headset Settings cards, next to each app in the Application Manager — clicking it starts that application inside the headset immediately. The person wearing the headset does not need to do anything: you play the operator, they stay in the matrix.
 
+![Launch app button on a Video Monitor tile](pics/web_AppLauncher.png)
+*The Launch app button on a Video Monitor tile...*
+
+![Launch App dialog](pics/web_AppLauncher_Launch.png)
+*...opens the app picker: favorites on top, then every installed app, with search and one-click Launch.*
+
 Each headset also has **favorite apps** (star icon) so your event's games are always one click away.
 
 ## The Application Manager page

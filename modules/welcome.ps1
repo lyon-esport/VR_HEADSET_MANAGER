@@ -5,8 +5,8 @@ function Show-WelcomeBanner {
     Write-Host ""
     Write-Host "  $line" -ForegroundColor Cyan
     Write-Host "  ||                                                          ||" -ForegroundColor Cyan
-    Write-Host "  ||           VR HEADSET MANAGER - Setup Wizard             ||" -ForegroundColor White
-    Write-Host "  ||                    First-time setup                     ||" -ForegroundColor Yellow
+    Write-Host "  ||           VR HEADSET MANAGER - Setup Wizard              ||" -ForegroundColor White
+    Write-Host "  ||                    First-time setup                      ||" -ForegroundColor Yellow
     Write-Host "  ||                                                          ||" -ForegroundColor Cyan
     Write-Host "  $line" -ForegroundColor Cyan
     Write-Host ""
@@ -154,7 +154,7 @@ function Invoke-WelcomeSetup {
         [string]$ConfigOutputPath
     )
 
-    $totalSteps = 6
+    $totalSteps = 5
 
     # Early-load the modules needed for port-conflict resolution during the
     # port prompts (steps 3-4). The auth phase (step 6) re-uses the same
@@ -193,27 +193,30 @@ function Invoke-WelcomeSetup {
     # ------------------------------------------------------------------
     # Step 1 - Language
     # ------------------------------------------------------------------
-    Show-WizardStep -Step 1 -Total $totalSteps -Title "Language"
-    Write-Host "  [1] English (en-US)" -ForegroundColor White
-    Write-Host "  [2] Francais (fr-FR)" -ForegroundColor White
-    Write-Host ""
-    Write-Host "  Choice [1]: " -ForegroundColor Yellow -NoNewline
-    $key = Read-WizardKey -EchoMap @{
-        '1' = 'English (en-US)'
-        '2' = 'Francais (fr-FR)'
-    } -DefaultLabel 'English (en-US) (default)'
-    if ($key -eq '2') {
-        $config.language = "fr-FR"
-        Write-Host "  Language: fr-FR" -ForegroundColor Green
-    } else {
-        $config.language = "en-US"
-        Write-Host "  Language: en-US" -ForegroundColor Green
-    }
+    # HIDDEN FOR NOW - fr-FR not production-ready. Re-enable this block and
+    # remove the hardcoded $config.language line below once French is ready.
+    # Show-WizardStep -Step 1 -Total $totalSteps -Title "Language"
+    # Write-Host "  [1] English (en-US)" -ForegroundColor White
+    # Write-Host "  [2] Francais (fr-FR)" -ForegroundColor White
+    # Write-Host ""
+    # Write-Host "  Choice [1]: " -ForegroundColor Yellow -NoNewline
+    # $key = Read-WizardKey -EchoMap @{
+    #     '1' = 'English (en-US)'
+    #     '2' = 'Francais (fr-FR)'
+    # } -DefaultLabel 'English (en-US) (default)'
+    # if ($key -eq '2') {
+    #     $config.language = "fr-FR"
+    #     Write-Host "  Language: fr-FR" -ForegroundColor Green
+    # } else {
+    #     $config.language = "en-US"
+    #     Write-Host "  Language: en-US" -ForegroundColor Green
+    # }
+    $config.language = "en-US"
 
     # ------------------------------------------------------------------
-    # Step 2 - Recording folder
+    # Step 1 - Recording folder
     # ------------------------------------------------------------------
-    Show-WizardStep -Step 2 -Total $totalSteps -Title "Recording Folder"
+    Show-WizardStep -Step 1 -Total $totalSteps -Title "Recording Folder"
     $defaultFolder = Get-DefaultRecordingFolder
     Write-Host "  Where should scrcpy save screen recordings?" -ForegroundColor White
     Write-Host "  Default: $defaultFolder" -ForegroundColor DarkGray
@@ -238,9 +241,9 @@ function Invoke-WelcomeSetup {
     $config.scrcpy.recordFolder = $recordFolder
 
     # ------------------------------------------------------------------
-    # Step 3 - Web server port
+    # Step 2 - Web server port
     # ------------------------------------------------------------------
-    Show-WizardStep -Step 3 -Total $totalSteps -Title "Web Server Port"
+    Show-WizardStep -Step 2 -Total $totalSteps -Title "Web Server Port"
     Write-Host "  The built-in web server shows headset status in your browser." -ForegroundColor White
     $wsPort = Read-ValidPort -Label "Web server port" -Default 8080
     $wsPool = $global:AppPortPools.WebServer
@@ -250,9 +253,9 @@ function Invoke-WelcomeSetup {
     Write-Host "  Web server: http://localhost:$wsPort" -ForegroundColor Green
 
     # ------------------------------------------------------------------
-    # Step 5 - MediaMTX ports
+    # Step 3 - MediaMTX ports
     # ------------------------------------------------------------------
-    Show-WizardStep -Step 4 -Total $totalSteps -Title "MediaMTX Streaming Ports"
+    Show-WizardStep -Step 3 -Total $totalSteps -Title "MediaMTX Streaming Ports"
     Write-Host "  MediaMTX streams headset video to OBS and the web dashboard." -ForegroundColor White
     Write-Host "  Default ports: RTSP 8554 | HLS 8888 | WebRTC 8889 | API 9997" -ForegroundColor DarkGray
     Write-Host ""
@@ -287,9 +290,9 @@ function Invoke-WelcomeSetup {
     }
 
     # ------------------------------------------------------------------
-    # Step 6 - FFmpeg
+    # Step 4 - FFmpeg
     # ------------------------------------------------------------------
-    Show-WizardStep -Step 5 -Total $totalSteps -Title "FFmpeg"
+    Show-WizardStep -Step 4 -Total $totalSteps -Title "FFmpeg"
     Write-Host "  FFmpeg is used by MediaMTX to capture and re-encode streams." -ForegroundColor White
     $sourcesFolder = Join-Path $global:ScriptPath "sources"
     $ffmpegFolder = Invoke-FfmpegDownload -SourcesFolder $sourcesFolder
@@ -309,7 +312,7 @@ function Invoke-WelcomeSetup {
     # Bundled into ONE elevated console so the operator deals with admin
     # rights once before the app launches.
     # ------------------------------------------------------------------
-    Show-WizardStep -Step 6 -Total $totalSteps -Title "System Authorizations"
+    Show-WizardStep -Step 5 -Total $totalSteps -Title "System Authorizations"
     Write-Host "  The next step will request administrator rights once to register:" -ForegroundColor White
     Write-Host "    - ADB firewall rule" -ForegroundColor DarkGray
     Write-Host "    - MediaMTX firewall rules (RTSP/HLS/WebRTC ports)" -ForegroundColor DarkGray
