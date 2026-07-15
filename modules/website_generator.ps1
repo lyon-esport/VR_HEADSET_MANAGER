@@ -170,6 +170,8 @@ function Update-HeadsetVideoFile {
             mediamtx_webrtc_port  = $global:mediamtxWebrtcPort
             mediamtx_hls_port     = $global:mediamtxHlsPort
             headset_id            = [int]$headset.ID
+            pause_when_hidden           = $global:VideoMonitor_pauseWhenHidden
+            pause_when_hidden_delay_sec = $global:VideoMonitor_pauseWhenHiddenDelaySec
         }
 
         $videoHtml = Invoke-EpsTemplate -Path $templatePath -Safe -binding $videoInfo

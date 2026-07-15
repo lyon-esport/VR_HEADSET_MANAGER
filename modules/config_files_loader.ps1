@@ -225,6 +225,9 @@ function Get-Config {
     } else {
         $global:mediamtxEnabled = $false
     }
+    # Video monitor pages: pause WHEP stream when browser tab is hidden
+    $global:VideoMonitor_pauseWhenHidden = if ($null -ne $configContent.VideoMonitor.pauseWhenHidden) { [bool]$configContent.VideoMonitor.pauseWhenHidden } else { $true }
+    $global:VideoMonitor_pauseWhenHiddenDelaySec = if ($null -ne $configContent.VideoMonitor.pauseWhenHiddenDelay_sec) { [int]$configContent.VideoMonitor.pauseWhenHiddenDelay_sec } else { 10 }
     # ffmpeg.exe
     $ffmpegFolder = if ($configContent.ffmpeg) { $configContent.ffmpeg.folder } else { "ffmpeg" }
     $global:ffmpegFilePath = Join-Path -Path $sourcesPath -ChildPath "$ffmpegFolder\ffmpeg.exe"

@@ -248,6 +248,10 @@
     "reencode_in_ffmpeg": false,
     "codec": "h264"
   },
+  "VideoMonitor": {
+    "pauseWhenHidden": true,
+    "pauseWhenHiddenDelay_sec": 10
+  },
   "ffmpeg": {
     "folder": "ffmpeg"
   },

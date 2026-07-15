@@ -194,6 +194,8 @@
       var WHEP_HOST = window.location.hostname || 'localhost';
       var WHEP_URL = 'http://' + WHEP_HOST + ':<%= $mediamtx_webrtc_port %>/<%= $stream_path %>/whep';
       var RETRY_DELAY_MS = 5000;   // retry interval when stream is unavailable
+      var PAUSE_WHEN_HIDDEN = <%= if ($pause_when_hidden) { 'true' } else { 'false' } %>;
+      var PAUSE_DELAY_MS = <%= $pause_when_hidden_delay_sec %> * 1000;
 
       var videoEl  = document.getElementById('stream');
       var statusEl = document.getElementById('status');
@@ -283,6 +285,31 @@
           scheduleRetry();
         }
       }
+
+      // ---- Pause the stream when the browser tab/window is hidden ----
+      var hiddenPauseTimer = null;
+      var pausedForVisibility = false;
+
+      function onVisibilityChange() {
+        if (!PAUSE_WHEN_HIDDEN) { return; }
+        if (document.hidden) {
+          if (hiddenPauseTimer) { return; }
+          hiddenPauseTimer = setTimeout(function() {
+            hiddenPauseTimer = null;
+            pausedForVisibility = true;
+            cleanup();
+            showStatus('');
+          }, PAUSE_DELAY_MS);
+        } else {
+          if (hiddenPauseTimer) { clearTimeout(hiddenPauseTimer); hiddenPauseTimer = null; }
+          if (pausedForVisibility) {
+            pausedForVisibility = false;
+            connect();
+          }
+        }
+      }
+
+      document.addEventListener('visibilitychange', onVisibilityChange);
 
       // Start as soon as the DOM is ready
       document.addEventListener('DOMContentLoaded', function() {
