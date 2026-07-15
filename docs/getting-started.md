@@ -73,7 +73,7 @@ You usually do not want to click a button every time a headset wakes up. Enable 
 ![Headset Settings cards](pics/web_headset_settings.png)
 *One card per headset: stream status, IP/serial, capture profile, auto-restart, recording, session timer, and power controls.*
 
-From now on, whenever the headset is reachable on the network, VRHM (re)starts the capture automatically — including after the headset went to sleep or rebooted.
+From now on, whenever the headset is reachable on the network, VRHM (re)starts the capture automatically — including after the headset went to sleep or rebooted (ADB over WiFi needs to be re-enabled after a headset reboot so use *Oculus Wireless ADB application* or replug the headset to USB port for few seconds and it will re-enable automatically WiFi ADB).
 
 ## 5. Check headset health
 
