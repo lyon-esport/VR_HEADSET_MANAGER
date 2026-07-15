@@ -63,7 +63,7 @@ A scrcpy window also opens on the VRHM computer itself — this is the local cap
 
 <!-- ![scrcpy capture window](pics/scrcpy_window.png) -->
 
-## 4. Make the stream automatic
+## 4. Make the stream automatic (enabled by default)
 
 You usually do not want to click a button every time a headset wakes up. Enable auto-restart:
 
