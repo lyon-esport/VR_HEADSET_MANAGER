@@ -69,7 +69,7 @@ Full details: [Installation](installation.md) → [Getting started](getting-star
 | Other Android-based headsets | Should work over WiFi ADB — profiles may need tuning |
 
 > [!NOTE]
-> Support for a new model is mostly a matter of adding a capture profile. Open a [GitHub issue](https://github.com/lyon-esport/VR_HEADSET_MANAGER/issues) if you need a new headset supported. *(And if you want to offer the author a headset, he will be pleased to support it in the next release!)*
+> Support for a new model is mostly a matter of adding a capture profile. Open a [GitHub issue](https://github.com/lyon-esport/VR_HEADSET_MANAGER/issues) if you need a new headset supported. *(And if you want to offer the author a headset, he will be pleased to support it in the next release! 😁)*
 
 ## Requirements at a glance
 
