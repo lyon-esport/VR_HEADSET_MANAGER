@@ -67,6 +67,10 @@ webrtcICEUDPMuxAddress: :$($global:mediamtxWebrtcPort)
 api: true
 apiAddress: :$($global:mediamtxApiPort)
 
+moq: false
+
+srt: false
+
 $pathsBlock
 "@
     # Write UTF-8 without BOM - required for YAML and to preserve non-ASCII path chars.
