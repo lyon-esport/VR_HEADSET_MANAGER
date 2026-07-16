@@ -58,10 +58,8 @@ If the headset already has ADB over WiFi enabled (see [how to enable it](docs_Ho
 
 A scrcpy window also opens on the VRHM computer itself — this is the local capture window that feeds the stream.
 
-> 📸 **SCREENSHOT TO ADD** — save as `docs/pics/scrcpy_window.png`
-> *What to capture:* the Windows desktop of the VRHM computer showing the scrcpy mirror window of a headset (a single-eye cropped view of the VR content), ideally with the window title visible (it contains the headset name).
-
-<!-- ![scrcpy capture window](pics/scrcpy_window.png) -->
+![scrcpy capture window over the Video Monitor page](pics/scrcpy_window.png)
+*The live tile on the Video Monitor page, with the local scrcpy mirror window (titled with the headset name) that feeds the stream.*
 
 ## 4. Make the stream automatic (enabled by default)
 
@@ -70,8 +68,8 @@ You usually do not want to click a button every time a headset wakes up. Enable 
 1. Go to **Headset Settings**.
 2. On your headset's card, switch **Auto-restart scrcpy** to **ON**.
 
-![Headset Settings cards](pics/web_headset_settings.png)
-*One card per headset: stream status, IP/serial, capture profile, auto-restart, recording, session timer, and power controls.*
+![Headset Settings cards with the Auto-restart scrcpy toggle highlighted](pics/web_headset_settings_focus_scrcpyAutoRestart.png)
+*The Auto-restart scrcpy toggle (highlighted) on each headset card.*
 
 From now on, whenever the headset is reachable on the network, VRHM (re)starts the capture automatically — including after the headset went to sleep or rebooted (ADB over WiFi needs to be re-enabled after a headset reboot so use *Oculus Wireless ADB application* or replug the headset to USB port for few seconds and it will re-enable automatically WiFi ADB).
 

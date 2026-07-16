@@ -36,5 +36,5 @@
 
 # --- Sources: explicitly included subfolders ---
 /sources/ADB Wireless activator/
-/sources/MediaMTX/mediamtx_v1.19.0_windows_amd64/
-/sources/scrcpy-win64-v4.0/
+/sources/MediaMTX/mediamtx_v1.19.2_windows_amd64/
+/sources/scrcpy-win64-v4.1/
