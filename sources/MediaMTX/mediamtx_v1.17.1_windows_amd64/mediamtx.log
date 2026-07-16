@@ -1,0 +1,338 @@
+2026/04/12 04:22:22 INF MediaMTX v1.17.1, windows, amd64
+2026/04/12 04:22:22 INF configuration loaded from l:\Drive partagés\04 Equipe Technique\20 VR\VR_HEADSET_MANAGER\DEV_VERSION\VR_HEADSET_MANAGER\config\mediamtx_headsets.yml
+2026/04/12 04:22:22 INF [RTSP] listener opened on :8554 (TCP/RTSP), :8000 (UDP/RTP), :8001 (UDP/RTCP)
+2026/04/12 04:22:22 INF [RTMP] listener opened on :1935
+2026/04/12 04:22:22 INF [HLS] listener opened on :8888
+2026/04/12 04:22:22 INF [WebRTC] listener opened on :8889 (HTTP), :8189 (ICE/UDP)
+2026/04/12 04:22:22 INF [WebRTC] [session ec1d29c1] created by 127.0.0.1:63678
+2026/04/12 04:22:22 INF [WebRTC] [session ec1d29c1] closed: path 'q3_blue' is not configured
+2026/04/12 04:22:22 INF [SRT] listener opened on :8890 (UDP)
+2026/04/12 04:22:22 INF [API] listener opened on :9997
+2026/04/12 04:22:24 INF reloading configuration (API request)
+2026/04/12 04:22:24 INF reloading configuration (API request)
+2026/04/12 04:22:24 INF reloading configuration (API request)
+2026/04/12 04:22:24 INF reloading configuration (API request)
+2026/04/12 04:22:27 INF [WebRTC] [session 96891bbc] created by 127.0.0.1:63678
+2026/04/12 04:22:27 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:22:27 INF [path q3_blue] runOnDemand command exited: fork/exec L:/Drive partag�s/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/ffmpeg/ffmpeg.exe: Le chemin d’accès spécifié est introuvable.
+2026/04/12 04:22:32 INF [path q3_blue] runOnDemand command exited: fork/exec L:/Drive partag�s/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/ffmpeg/ffmpeg.exe: Le chemin d’accès spécifié est introuvable.
+2026/04/12 04:22:37 INF [path q3_blue] runOnDemand command exited: fork/exec L:/Drive partag�s/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/ffmpeg/ffmpeg.exe: Le chemin d’accès spécifié est introuvable.
+2026/04/12 04:22:42 INF [path q3_blue] runOnDemand command stopped: timed out
+2026/04/12 04:22:42 INF [WebRTC] [session 96891bbc] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:22:47 INF [WebRTC] [session 6bdd17c3] created by 127.0.0.1:63678
+2026/04/12 04:22:47 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:22:47 INF [path q3_blue] runOnDemand command exited: fork/exec L:/Drive partag�s/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/ffmpeg/ffmpeg.exe: Le chemin d’accès spécifié est introuvable.
+2026/04/12 04:22:52 INF [path q3_blue] runOnDemand command exited: fork/exec L:/Drive partag�s/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/ffmpeg/ffmpeg.exe: Le chemin d’accès spécifié est introuvable.
+2026/04/12 04:22:57 INF [path q3_blue] runOnDemand command exited: fork/exec L:/Drive partag�s/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/ffmpeg/ffmpeg.exe: Le chemin d’accès spécifié est introuvable.
+2026/04/12 04:23:02 INF [path q3_blue] runOnDemand command stopped: timed out
+2026/04/12 04:23:02 INF [WebRTC] [session 6bdd17c3] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:23:08 INF [WebRTC] [session 250fd830] created by 127.0.0.1:63678
+2026/04/12 04:23:08 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:23:08 INF [path q3_blue] runOnDemand command exited: fork/exec L:/Drive partag�s/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/ffmpeg/ffmpeg.exe: Le chemin d’accès spécifié est introuvable.
+2026/04/12 04:23:13 INF [path q3_blue] runOnDemand command exited: fork/exec L:/Drive partag�s/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/ffmpeg/ffmpeg.exe: Le chemin d’accès spécifié est introuvable.
+2026/04/12 04:23:18 INF [path q3_blue] runOnDemand command exited: fork/exec L:/Drive partag�s/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/ffmpeg/ffmpeg.exe: Le chemin d’accès spécifié est introuvable.
+2026/04/12 04:23:23 INF [path q3_blue] runOnDemand command stopped: timed out
+2026/04/12 04:23:23 INF [WebRTC] [session 250fd830] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:23:28 INF [WebRTC] [session 9cb9f7a9] created by 127.0.0.1:63678
+2026/04/12 04:23:28 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:23:28 INF [path q3_blue] runOnDemand command exited: fork/exec L:/Drive partag�s/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/ffmpeg/ffmpeg.exe: Le chemin d’accès spécifié est introuvable.
+2026/04/12 04:23:33 INF [path q3_blue] runOnDemand command exited: fork/exec L:/Drive partag�s/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/ffmpeg/ffmpeg.exe: Le chemin d’accès spécifié est introuvable.
+2026/04/12 04:23:38 INF [path q3_blue] runOnDemand command exited: fork/exec L:/Drive partag�s/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/ffmpeg/ffmpeg.exe: Le chemin d’accès spécifié est introuvable.
+2026/04/12 04:23:43 INF [path q3_blue] runOnDemand command stopped: timed out
+2026/04/12 04:23:43 INF [WebRTC] [session 9cb9f7a9] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:23:48 INF [RTSP] [conn 127.0.0.1:60876] opened
+2026/04/12 04:23:48 INF [RTSP] [session 665dcd72] created by 127.0.0.1:60876
+2026/04/12 04:23:48 INF [RTSP] [conn 127.0.0.1:60876] closed: path 'test_rtsp' is not configured
+2026/04/12 04:23:48 INF [RTSP] [session 665dcd72] destroyed: not in use
+2026/04/12 04:23:48 INF [WebRTC] [session c8b48cbd] created by 127.0.0.1:63678
+2026/04/12 04:23:48 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:23:48 INF [path q3_blue] runOnDemand command exited: fork/exec L:/Drive partag�s/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/ffmpeg/ffmpeg.exe: Le chemin d’accès spécifié est introuvable.
+2026/04/12 04:23:53 INF [path q3_blue] runOnDemand command exited: fork/exec L:/Drive partag�s/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/ffmpeg/ffmpeg.exe: Le chemin d’accès spécifié est introuvable.
+2026/04/12 04:23:58 INF [path q3_blue] runOnDemand command exited: fork/exec L:/Drive partag�s/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/ffmpeg/ffmpeg.exe: Le chemin d’accès spécifié est introuvable.
+2026/04/12 04:24:03 INF [path q3_blue] runOnDemand command stopped: timed out
+2026/04/12 04:24:03 INF [WebRTC] [session c8b48cbd] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:24:08 INF [WebRTC] [session f3093d1e] created by 127.0.0.1:63678
+2026/04/12 04:24:08 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:24:08 INF [path q3_blue] runOnDemand command exited: fork/exec L:/Drive partag�s/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/ffmpeg/ffmpeg.exe: Le chemin d’accès spécifié est introuvable.
+2026/04/12 04:24:13 INF [path q3_blue] runOnDemand command exited: fork/exec L:/Drive partag�s/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/ffmpeg/ffmpeg.exe: Le chemin d’accès spécifié est introuvable.
+2026/04/12 04:24:18 INF [path q3_blue] runOnDemand command exited: fork/exec L:/Drive partag�s/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/ffmpeg/ffmpeg.exe: Le chemin d’accès spécifié est introuvable.
+2026/04/12 04:24:23 INF [path q3_blue] runOnDemand command stopped: timed out
+2026/04/12 04:24:23 INF [WebRTC] [session f3093d1e] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:24:28 INF [WebRTC] [session 741793a2] created by 127.0.0.1:63678
+2026/04/12 04:24:28 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:24:28 INF [path q3_blue] runOnDemand command exited: fork/exec L:/Drive partag�s/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/ffmpeg/ffmpeg.exe: Le chemin d’accès spécifié est introuvable.
+2026/04/12 04:24:33 INF [path q3_blue] runOnDemand command exited: fork/exec L:/Drive partag�s/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/ffmpeg/ffmpeg.exe: Le chemin d’accès spécifié est introuvable.
+2026/04/12 04:24:38 INF [path q3_blue] runOnDemand command exited: fork/exec L:/Drive partag�s/04 Equipe Technique/20 VR/VR_HEADSET_MANAGER/DEV_VERSION/VR_HEADSET_MANAGER/sources/ffmpeg/ffmpeg.exe: Le chemin d’accès spécifié est introuvable.
+2026/04/12 04:24:40 INF reloading configuration (API request)
+2026/04/12 04:24:40 INF reloading configuration (API request)
+2026/04/12 04:24:40 INF [path q3_blue] runOnDemand command stopped: path destroyed
+2026/04/12 04:24:40 INF [WebRTC] [session 741793a2] closed: terminated
+2026/04/12 04:24:40 INF reloading configuration (API request)
+2026/04/12 04:24:40 INF reloading configuration (API request)
+2026/04/12 04:24:40 INF reloading configuration (API request)
+2026/04/12 04:24:40 INF reloading configuration (API request)
+2026/04/12 04:24:40 INF reloading configuration (API request)
+2026/04/12 04:24:40 INF reloading configuration (API request)
+2026/04/12 04:24:45 INF [WebRTC] [session 6c246ace] created by 127.0.0.1:63678
+2026/04/12 04:24:45 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:24:45 INF [RTSP] [conn 127.0.0.1:61267] opened
+2026/04/12 04:24:45 INF [RTSP] [session dc50f8f0] created by 127.0.0.1:61267
+2026/04/12 04:24:45 INF [path q3_blue] stream is available and online, 1 track (H264)
+2026/04/12 04:24:45 INF [RTSP] [session dc50f8f0] is publishing to path 'q3_blue'
+2026/04/12 04:24:46 INF [WebRTC] [session 6c246ace] peer connection established, local candidate: host/udp/fe80::bda6:d849:75dc:95a3/8189, remote candidate: prflx/udp/2a01:e0a:a58:85d0::726a:e5de/59143
+2026/04/12 04:24:46 INF [WebRTC] [session 6c246ace] is reading from path 'q3_blue', 1 track (H264)
+2026/04/12 04:24:47 INF reloading configuration (API request)
+2026/04/12 04:24:47 INF reloading configuration (API request)
+2026/04/12 04:24:47 INF [path q3_blue] runOnDemand command stopped: path destroyed
+2026/04/12 04:24:47 INF [RTSP] [conn 127.0.0.1:61267] closed: terminated
+2026/04/12 04:24:47 INF [WebRTC] [session 6c246ace] closed: terminated
+2026/04/12 04:24:47 INF reloading configuration (API request)
+2026/04/12 04:24:47 INF [RTSP] [session dc50f8f0] destroyed: terminated
+2026/04/12 04:24:47 INF reloading configuration (API request)
+2026/04/12 04:24:47 INF reloading configuration (API request)
+2026/04/12 04:24:47 INF reloading configuration (API request)
+2026/04/12 04:24:47 INF reloading configuration (API request)
+2026/04/12 04:24:47 INF reloading configuration (API request)
+2026/04/12 04:24:58 INF [WebRTC] [session aa33317f] created by 127.0.0.1:63678
+2026/04/12 04:24:58 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:24:58 INF [RTSP] [conn 127.0.0.1:61333] opened
+2026/04/12 04:24:58 INF [RTSP] [session b9533ae3] created by 127.0.0.1:61333
+2026/04/12 04:24:58 INF [path q3_blue] stream is available and online, 1 track (H264)
+2026/04/12 04:24:58 INF [RTSP] [session b9533ae3] is publishing to path 'q3_blue'
+2026/04/12 04:24:59 INF [WebRTC] [session aa33317f] peer connection established, local candidate: host/udp/fe80::7cc5:25dc:371c:9f25/8189, remote candidate: prflx/udp/2a01:e0a:a58:85d0::726a:e5de/64215
+2026/04/12 04:24:59 INF [WebRTC] [session aa33317f] is reading from path 'q3_blue', 1 track (H264)
+2026/04/12 04:25:18 INF [RTSP] [conn 127.0.0.1:61677] opened
+2026/04/12 04:25:18 INF [RTSP] [session a7b478ee] created by 127.0.0.1:61677
+2026/04/12 04:25:18 INF [RTSP] [session a7b478ee] is reading from path 'q3_blue', with UDP, 1 track (H264)
+2026/04/12 04:26:24 INF [RTSP] [session b9533ae3] destroyed: torn down by 127.0.0.1:61333
+2026/04/12 04:26:24 INF [RTSP] [conn 127.0.0.1:61333] closed: read tcp 127.0.0.1:8554->127.0.0.1:61333: wsarecv: Une connexion établie a été abandonnée par un logiciel de votre ordinateur hôte.
+2026/04/12 04:26:24 INF [RTSP] [conn 127.0.0.1:61677] closed: terminated
+2026/04/12 04:26:24 INF [path q3_blue] runOnDemand command stopped: not needed by anyone
+2026/04/12 04:26:24 INF [WebRTC] [session aa33317f] closed: terminated
+2026/04/12 04:26:24 INF [RTSP] [session a7b478ee] destroyed: terminated
+2026/04/12 04:26:34 INF [RTSP] [conn 127.0.0.1:62235] opened
+2026/04/12 04:26:34 INF [RTSP] [conn 127.0.0.1:62235] closed: EOF
+2026/04/12 04:26:36 INF [WebRTC] [session 97ec111d] created by [::1]:54300
+2026/04/12 04:26:36 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:26:36 INF [RTSP] [conn 127.0.0.1:54302] opened
+2026/04/12 04:26:36 INF [RTSP] [session d23f4ef7] created by 127.0.0.1:54302
+2026/04/12 04:26:36 INF [path q3_blue] stream is available and online, 1 track (H264)
+2026/04/12 04:26:36 INF [RTSP] [session d23f4ef7] is publishing to path 'q3_blue'
+2026/04/12 04:26:36 INF [WebRTC] [session 97ec111d] peer connection established, local candidate: host/udp/fd67:2cae:b18f:54fd:1c71:ad4a:e8af:6e98/8189, remote candidate: prflx/udp/2a01:e0a:a58:85d0::726a:e5de/60542
+2026/04/12 04:26:36 INF [WebRTC] [session 97ec111d] is reading from path 'q3_blue', 1 track (H264)
+2026/04/12 04:26:54 INF [RTSP] [conn 127.0.0.1:54393] opened
+2026/04/12 04:26:54 INF [RTSP] [session be3883d2] created by 127.0.0.1:54393
+2026/04/12 04:26:54 INF [RTSP] [session be3883d2] is reading from path 'q3_blue', with UDP, 1 track (H264)
+2026/04/12 04:27:59 INF [HLS] [muxer q3_blue] created (requested by [::1]:58809)
+2026/04/12 04:27:59 INF [HLS] [muxer q3_blue] is converting into HLS, 1 track (H264)
+2026/04/12 04:30:43 INF [HLS] [muxer q3_blue] destroyed: not used anymore
+2026/04/12 04:33:57 INF [WebRTC] [session 5dd6efbb] created by 192.168.1.75:54246
+2026/04/12 04:33:57 INF [WebRTC] [session 5dd6efbb] peer connection established, local candidate: host/udp/fd67:2cae:b18f:54fd:9678:a368:f768:76cd/8189, remote candidate: host/udp/fd67:2cae:b18f:54fd:8ea3:bf48:213:862c/54168
+2026/04/12 04:33:57 INF [WebRTC] [session 5dd6efbb] is reading from path 'q3_blue', 1 track (H264)
+2026/04/12 04:35:40 INF [RTSP] [session d23f4ef7] destroyed: torn down by 127.0.0.1:54302
+2026/04/12 04:35:40 INF [RTSP] [conn 127.0.0.1:54302] closed: read tcp 127.0.0.1:8554->127.0.0.1:54302: wsarecv: Une connexion établie a été abandonnée par un logiciel de votre ordinateur hôte.
+2026/04/12 04:35:40 INF [RTSP] [conn 127.0.0.1:54393] closed: terminated
+2026/04/12 04:35:40 INF [path q3_blue] runOnDemand command stopped: not needed by anyone
+2026/04/12 04:35:40 INF [WebRTC] [session 5dd6efbb] closed: terminated
+2026/04/12 04:35:40 INF [WebRTC] [session 97ec111d] closed: terminated
+2026/04/12 04:35:40 INF [RTSP] [session be3883d2] destroyed: terminated
+2026/04/12 04:35:44 INF [RTSP] [conn 127.0.0.1:52637] opened
+2026/04/12 04:35:44 INF [RTSP] [conn 127.0.0.1:52637] closed: session not found
+2026/04/12 04:35:45 INF [RTSP] [conn 127.0.0.1:52638] opened
+2026/04/12 04:35:45 INF [RTSP] [conn 127.0.0.1:52638] closed: EOF
+2026/04/12 04:35:50 INF [WebRTC] [session 1091d05c] created by [::1]:63031
+2026/04/12 04:35:50 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:35:50 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:35:55 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:36:00 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:36:05 INF [path q3_blue] runOnDemand command stopped: timed out
+2026/04/12 04:36:05 INF [WebRTC] [session 1091d05c] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:36:10 INF [WebRTC] [session 3adf537d] created by [::1]:63031
+2026/04/12 04:36:10 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:36:10 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:36:15 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:36:20 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:36:25 INF [WebRTC] [session 3adf537d] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:36:25 INF [path q3_blue] runOnDemand command stopped: timed out
+2026/04/12 04:36:30 INF [WebRTC] [session 106e022e] created by [::1]:63031
+2026/04/12 04:36:30 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:36:30 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:36:35 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:36:40 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:36:45 INF [path q3_blue] runOnDemand command stopped: timed out
+2026/04/12 04:36:45 INF [WebRTC] [session 106e022e] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:36:50 INF [WebRTC] [session b9217c27] created by [::1]:63031
+2026/04/12 04:36:50 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:36:50 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:36:56 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:37:01 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:37:05 INF [path q3_blue] runOnDemand command stopped: timed out
+2026/04/12 04:37:05 INF [WebRTC] [session b9217c27] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:37:11 INF [WebRTC] [session 7874810f] created by [::1]:63031
+2026/04/12 04:37:11 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:37:11 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:37:16 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:37:21 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:37:26 INF [path q3_blue] runOnDemand command stopped: timed out
+2026/04/12 04:37:26 INF [WebRTC] [session 7874810f] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:37:31 INF [WebRTC] [session 052c483b] created by [::1]:63031
+2026/04/12 04:37:31 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:37:31 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:37:36 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:37:42 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:37:46 INF [path q3_blue] runOnDemand command stopped: timed out
+2026/04/12 04:37:46 INF [WebRTC] [session 052c483b] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:37:51 INF [WebRTC] [session 59efa74a] created by [::1]:63031
+2026/04/12 04:37:51 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:37:51 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:37:56 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:38:02 INF [RTSP] [conn 127.0.0.1:56623] opened
+2026/04/12 04:38:02 INF [RTSP] [session 88253258] created by 127.0.0.1:56623
+2026/04/12 04:38:02 INF [path q3_blue] stream is available and online, 1 track (H264)
+2026/04/12 04:38:02 INF [RTSP] [session 88253258] is publishing to path 'q3_blue'
+2026/04/12 04:38:02 INF [WebRTC] [session 59efa74a] peer connection established, local candidate: host/udp/2a01:e0a:a58:85d0::726a:e5de/8189, remote candidate: prflx/udp/2a01:e0a:a58:85d0::726a:e5de/58306
+2026/04/12 04:38:02 INF [WebRTC] [session 59efa74a] is reading from path 'q3_blue', 1 track (H264)
+2026/04/12 04:39:10 INF [WebRTC] [session 3894d219] created by [::1]:49181
+2026/04/12 04:39:10 INF [WebRTC] [session 3894d219] peer connection established, local candidate: host/udp/2a01:e0a:a58:85d0::726a:e5de/8189, remote candidate: prflx/udp/2a01:e0a:a58:85d0::726a:e5de/55438
+2026/04/12 04:39:10 INF [WebRTC] [session 3894d219] is reading from path 'q3_blue', 1 track (H264)
+2026/04/12 04:39:28 INF [WebRTC] [session 59efa74a] closed: peer connection closed
+2026/04/12 04:39:28 INF [WebRTC] [session fadd770f] created by [::1]:56725
+2026/04/12 04:39:28 INF [WebRTC] [session fadd770f] peer connection established, local candidate: host/udp/2a01:e0a:a58:85d0::726a:e5de/8189, remote candidate: prflx/udp/2a01:e0a:a58:85d0::726a:e5de/62660
+2026/04/12 04:39:28 INF [WebRTC] [session fadd770f] is reading from path 'q3_blue', 1 track (H264)
+2026/04/12 04:39:52 INF [WebRTC] [session fadd770f] closed: peer connection closed
+2026/04/12 04:39:52 INF [WebRTC] [session d4ae9a09] created by [::1]:56725
+2026/04/12 04:39:52 INF [WebRTC] [session d4ae9a09] peer connection established, local candidate: host/udp/fd67:2cae:b18f:54fd:9678:a368:f768:76cd/8189, remote candidate: prflx/udp/2a01:e0a:a58:85d0::726a:e5de/55873
+2026/04/12 04:39:52 INF [WebRTC] [session d4ae9a09] is reading from path 'q3_blue', 1 track (H264)
+2026/04/12 04:40:09 INF [WebRTC] [session d4ae9a09] closed: peer connection closed
+2026/04/12 04:40:10 INF [WebRTC] [session c715db8e] created by [::1]:56725
+2026/04/12 04:40:10 INF [WebRTC] [session c715db8e] peer connection established, local candidate: host/udp/fd67:2cae:b18f:54fd:9678:a368:f768:76cd/8189, remote candidate: prflx/udp/2a01:e0a:a58:85d0::726a:e5de/59708
+2026/04/12 04:40:10 INF [WebRTC] [session c715db8e] is reading from path 'q3_blue', 1 track (H264)
+2026/04/12 04:40:17 INF [RTSP] [session 88253258] destroyed: torn down by 127.0.0.1:56623
+2026/04/12 04:40:17 INF [RTSP] [conn 127.0.0.1:56623] closed: read tcp 127.0.0.1:8554->127.0.0.1:56623: wsarecv: Une connexion établie a été abandonnée par un logiciel de votre ordinateur hôte.
+2026/04/12 04:40:17 INF [path q3_blue] runOnDemand command stopped: not needed by anyone
+2026/04/12 04:40:17 INF [WebRTC] [session c715db8e] closed: terminated
+2026/04/12 04:40:17 INF [WebRTC] [session 3894d219] closed: terminated
+2026/04/12 04:40:28 INF [WebRTC] [session 26934fea] created by [::1]:56725
+2026/04/12 04:40:28 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:40:28 INF [RTSP] [conn 127.0.0.1:57163] opened
+2026/04/12 04:40:28 INF [RTSP] [session 4fb49b6d] created by 127.0.0.1:57163
+2026/04/12 04:40:28 INF [path q3_blue] stream is available and online, 1 track (H264)
+2026/04/12 04:40:28 INF [RTSP] [session 4fb49b6d] is publishing to path 'q3_blue'
+2026/04/12 04:40:28 INF [WebRTC] [session 26934fea] peer connection established, local candidate: host/udp/2a01:e0a:a58:85d0::726a:e5de/8189, remote candidate: prflx/udp/2a01:e0a:a58:85d0::726a:e5de/54631
+2026/04/12 04:40:28 INF [WebRTC] [session 26934fea] is reading from path 'q3_blue', 1 track (H264)
+2026/04/12 04:40:35 INF [WebRTC] [session 21b09121] created by [::1]:63636
+2026/04/12 04:40:35 INF [WebRTC] [session 21b09121] peer connection established, local candidate: host/udp/2a01:e0a:a58:85d0::726a:e5de/8189, remote candidate: prflx/udp/2a01:e0a:a58:85d0::726a:e5de/56793
+2026/04/12 04:40:35 INF [WebRTC] [session 21b09121] is reading from path 'q3_blue', 1 track (H264)
+2026/04/12 04:42:37 INF [RTSP] [session 4fb49b6d] destroyed: torn down by 127.0.0.1:57163
+2026/04/12 04:42:37 INF [RTSP] [conn 127.0.0.1:57163] closed: read tcp 127.0.0.1:8554->127.0.0.1:57163: wsarecv: Une connexion établie a été abandonnée par un logiciel de votre ordinateur hôte.
+2026/04/12 04:42:37 INF [path q3_blue] runOnDemand command stopped: not needed by anyone
+2026/04/12 04:42:37 INF [WebRTC] [session 21b09121] closed: terminated
+2026/04/12 04:42:37 INF [WebRTC] [session 26934fea] closed: terminated
+2026/04/12 04:42:48 INF [WebRTC] [session 52f73fd7] created by [::1]:65117
+2026/04/12 04:42:48 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:42:48 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:42:54 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:42:54 INF [WebRTC] [session b0a01b09] created by [::1]:65122
+2026/04/12 04:42:59 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:43:03 INF [path q3_blue] runOnDemand command stopped: timed out
+2026/04/12 04:43:03 INF [WebRTC] [session 52f73fd7] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:43:03 INF [WebRTC] [session b0a01b09] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:43:05 INF [WebRTC] [session 448a6157] created by [::1]:65122
+2026/04/12 04:43:05 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:43:06 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:43:09 INF [WebRTC] [session 17e2ab28] created by [::1]:65117
+2026/04/12 04:43:11 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:43:16 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:43:20 INF [path q3_blue] runOnDemand command stopped: timed out
+2026/04/12 04:43:20 INF [WebRTC] [session 448a6157] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:43:20 INF [WebRTC] [session 17e2ab28] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:43:22 INF [WebRTC] [session 32dee460] created by [::1]:65122
+2026/04/12 04:43:22 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:43:22 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:43:26 INF [WebRTC] [session 7e2b5376] created by [::1]:65117
+2026/04/12 04:43:28 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:43:33 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:43:37 INF [path q3_blue] runOnDemand command stopped: timed out
+2026/04/12 04:43:37 INF [WebRTC] [session 32dee460] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:43:37 INF [WebRTC] [session 7e2b5376] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:43:39 INF [WebRTC] [session 09deb284] created by [::1]:65122
+2026/04/12 04:43:39 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:43:40 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:43:43 INF [WebRTC] [session 4b5d4f3e] created by [::1]:65117
+2026/04/12 04:43:45 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:43:50 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:43:54 INF [path q3_blue] runOnDemand command stopped: timed out
+2026/04/12 04:43:54 INF [WebRTC] [session 09deb284] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:43:54 INF [WebRTC] [session 4b5d4f3e] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:43:57 INF [WebRTC] [session 4642ba79] created by [::1]:65122
+2026/04/12 04:43:57 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:43:57 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:44:00 INF [WebRTC] [session c046d545] created by [::1]:65117
+2026/04/12 04:44:02 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:44:07 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:44:12 INF [path q3_blue] runOnDemand command stopped: timed out
+2026/04/12 04:44:12 INF [WebRTC] [session 4642ba79] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:44:12 INF [WebRTC] [session c046d545] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:44:14 INF [WebRTC] [session 5f3fb14c] created by [::1]:65122
+2026/04/12 04:44:14 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:44:14 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:44:17 INF [WebRTC] [session e9e0a918] created by [::1]:65117
+2026/04/12 04:44:19 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:44:24 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:44:29 INF [path q3_blue] runOnDemand command stopped: timed out
+2026/04/12 04:44:29 INF [WebRTC] [session e9e0a918] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:44:29 INF [WebRTC] [session 5f3fb14c] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:44:31 INF [WebRTC] [session 32db537a] created by [::1]:65122
+2026/04/12 04:44:31 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:44:31 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:44:34 INF [WebRTC] [session 81bdd5c0] created by [::1]:65117
+2026/04/12 04:44:36 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:44:41 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:44:46 INF [path q3_blue] runOnDemand command stopped: timed out
+2026/04/12 04:44:46 INF [WebRTC] [session 32db537a] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:44:46 INF [WebRTC] [session 81bdd5c0] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:44:48 INF [WebRTC] [session d489a449] created by [::1]:65122
+2026/04/12 04:44:48 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:44:48 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:44:51 INF [WebRTC] [session 893868b7] created by [::1]:65117
+2026/04/12 04:44:53 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:44:58 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:45:03 INF [path q3_blue] runOnDemand command stopped: timed out
+2026/04/12 04:45:03 INF [WebRTC] [session d489a449] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:45:03 INF [WebRTC] [session 893868b7] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:45:05 INF [WebRTC] [session 51b730ec] created by [::1]:65122
+2026/04/12 04:45:05 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:45:05 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:45:08 INF [WebRTC] [session 735bb37a] created by [::1]:65117
+2026/04/12 04:45:10 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:45:15 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:45:20 INF [path q3_blue] runOnDemand command stopped: timed out
+2026/04/12 04:45:20 INF [WebRTC] [session 51b730ec] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:45:20 INF [WebRTC] [session 735bb37a] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:45:22 INF [WebRTC] [session 8f5d7332] created by [::1]:65122
+2026/04/12 04:45:22 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:45:23 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:45:25 INF [WebRTC] [session dc5a49f2] created by [::1]:65117
+2026/04/12 04:45:28 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:45:33 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:45:37 INF [path q3_blue] runOnDemand command stopped: timed out
+2026/04/12 04:45:37 INF [WebRTC] [session 8f5d7332] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:45:37 INF [WebRTC] [session dc5a49f2] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:45:39 INF [WebRTC] [session 9cf0ea14] created by [::1]:65122
+2026/04/12 04:45:39 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:45:39 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:45:42 INF [WebRTC] [session d78721d8] created by [::1]:65117
+2026/04/12 04:45:44 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:45:49 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:45:54 INF [path q3_blue] runOnDemand command stopped: timed out
+2026/04/12 04:45:54 INF [WebRTC] [session 9cf0ea14] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:45:54 INF [WebRTC] [session d78721d8] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:45:56 INF [WebRTC] [session f69b4c7e] created by [::1]:65122
+2026/04/12 04:45:56 INF [path q3_blue] runOnDemand command started
+2026/04/12 04:45:56 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:45:59 INF [WebRTC] [session 465dcb2e] created by [::1]:65117
+2026/04/12 04:46:01 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:46:06 INF [path q3_blue] runOnDemand command exited: command exited with code 4294967291
+2026/04/12 04:46:11 INF [path q3_blue] runOnDemand command stopped: timed out
+2026/04/12 04:46:11 INF [WebRTC] [session f69b4c7e] closed: source of path 'q3_blue' has timed out
+2026/04/12 04:46:11 INF [WebRTC] [session 465dcb2e] closed: source of path 'q3_blue' has timed out

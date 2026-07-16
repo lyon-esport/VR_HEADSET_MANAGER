@@ -173,7 +173,7 @@ function Get-Config {
         $global:VQA_MinMaxSize             = if ($null -ne $vqa.min_max_size_px) { [int]$vqa.min_max_size_px } else { 480 }
         $global:VQA_MinFps                 = if ($null -ne $vqa.min_fps) { [int]$vqa.min_fps } else { 15 }
         $global:VQA_MinBitrateMbps         = if ($null -ne $vqa.min_bitrate_mbps) { [int]$vqa.min_bitrate_mbps } else { 2 }
-        $global:VQA_DefaultUncappedMaxSize = if ($null -ne $vqa.default_uncapped_max_size_px) { [int]$vqa.default_uncapped_max_size_px } else { 1280 }
+        $global:VQA_DefaultUncappedMaxSize = if ($null -ne $vqa.default_uncapped_max_size_px) { [int]$vqa.default_uncapped_max_size_px } else { 1800 }
         $global:VQA_VqoConsecutiveCount    = if ($null -ne $vqa.vqo_consecutive_count) { [int]$vqa.vqo_consecutive_count } else { 5 }
         $historyName        = if ($vqa.history_file_name)        { $vqa.history_file_name }        else { "vqa_history.csv" }
         $recommendationName = if ($vqa.recommendation_file_name) { $vqa.recommendation_file_name } else { "vqa_recommendation.json" }

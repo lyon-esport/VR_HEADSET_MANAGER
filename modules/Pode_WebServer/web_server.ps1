@@ -3630,10 +3630,21 @@ Start-Process powershell.exe -ArgumentList @('-File',$Script,'-ScriptPath',$Scri
                 }
                 $streamingChanged = ($newFps -ne $oldFps) -or ($newBw -ne $oldBw) -or ($newReencode -ne $oldReencode) -or ($newCodec -ne $oldCodec)
 
+                # Snapshot Capture Mode against the in-memory global BEFORE writing.
+                # Performance.Capture_Mode is not live-applied by a plain config
+                # write - Set-CaptureMode (used by the dedicated /api/capture-mode
+                # endpoint) is the single owner of updating $global:CaptureMode,
+                # bouncing mediamtx across the LocalWindow boundary, and killing
+                # owned scrcpy so VRMonitor respawns it in the new mode.
+                $oldCaptureMode = $global:CaptureMode
+                $newCaptureMode = $null
+                if ($newCfg -and $newCfg.Performance) { $newCaptureMode = $newCfg.Performance.Capture_Mode }
+                $captureModeChanged = $newCaptureMode -and ($newCaptureMode -ne $oldCaptureMode) -and ($newCaptureMode -in @('StreamOnly','StreamAndLocalWindow','LocalWindow'))
+
                 $utf8NoBom = New-Object System.Text.UTF8Encoding $false
                 [System.IO.File]::WriteAllText($cfgFile, $body, $utf8NoBom)
 
-                $restarted = @{ mediamtx = $false; scrcpy = @(); pending = $false }
+                $restarted = @{ mediamtx = $false; scrcpy = @(); pending = $false; captureMode = $false }
                 if ($streamingChanged) {
                     $lock = Enter-VqaLock -TimeoutMs 3000
                     if (-not $lock) {
@@ -3681,6 +3692,23 @@ Start-Process powershell.exe -ArgumentList @('-File',$Script,'-ScriptPath',$Scri
                                 }
                             }
                             $restarted.scrcpy = $runningNames
+                        } finally {
+                            Exit-VqaLock -Stream $lock
+                        }
+                    }
+                }
+
+                if ($captureModeChanged) {
+                    $lock = Enter-VqaLock -TimeoutMs 3000
+                    if (-not $lock) {
+                        $restarted.pending = $true
+                        Write-Log "config/save: Capture Mode changed but VQA lock contended - apply deferred to operator." -Level WARNING
+                    } else {
+                        try {
+                            $null = Set-CaptureMode -Mode $newCaptureMode
+                            $restarted.captureMode = $true
+                        } catch {
+                            Write-Log ("config/save: Set-CaptureMode failed: " + $_.Exception.Message) -Level WARNING
                         } finally {
                             Exit-VqaLock -Stream $lock
                         }

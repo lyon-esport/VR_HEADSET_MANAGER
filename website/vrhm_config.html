@@ -814,6 +814,13 @@
       ],
       'acc-streaming-body': [
         { type: 'subgroup', label: 'Streaming' },
+        { path: 'Performance.Capture_Mode', label: 'Capture Mode', type: 'select',
+          options: [
+            { value: 'StreamOnly',           label: 'Stream only' },
+            { value: 'StreamAndLocalWindow', label: 'Stream + local scrcpy window' },
+            { value: 'LocalWindow',          label: 'Local scrcpy window only' }
+          ],
+          desc: 'Stream only: no local window, lowest CPU, stream available on website. Stream + local window: scrcpy window visible and stream via pipe. Local window only: no streaming pipeline, lowest CPU when no viewer.' },
         { path: 'mediamtx.reencode_in_ffmpeg', label: 'Re-encode in FFmpeg', type: 'boolean',
           desc: 'ON: FFmpeg re-encodes to Stream Framerate/Bitrate before pushing to MediaMTX (saves LAN bandwidth, increases CPU/GPU). OFF: raw scrcpy stream forwarded as-is (low CPU, bitrate equals each headset ScrcpyProfile). Takes effect when scrcpy is (re)started.' },
         { path: 'mediamtx.codec', label: 'Re-encode Codec', type: 'select',
@@ -832,23 +839,11 @@
           desc: 'Folder where scrcpy recordings are saved. Use forward slashes, e.g. D:/DATA/Records.' },
         { path: 'scrcpy.recordMinFreeSpaceGB', label: 'Min. Free Space', type: 'number', min: 1, max: 9999, unit: 'GB',
           desc: 'Recording is auto-disabled on all headsets when free space drops below this value.' },
-        { type: 'subgroup', label: 'Battery Charging Reference' },
-        { path: 'Battery.headset_charging_power_W', label: 'Charging Power', type: 'number', min: 1, max: 200, unit: 'W',
-          desc: 'Expected charging wattage used for battery time-remaining estimates.' },
         { type: 'subgroup', label: 'Performance' },
         { path: 'Performance.GPU_Acceleration', label: 'GPU Acceleration', type: 'boolean',
           desc: 'Use GPU hardware acceleration where available.' },
         { path: 'Performance.GPU_Index', label: 'GPU Index', type: 'number', min: 0, max: 8,
-          desc: 'Index of the GPU to use when GPU acceleration is enabled. 0 = primary GPU.' },
-        { path: 'Performance.Capture_Mode', label: 'Capture Mode', type: 'select',
-          options: [
-            { value: 'StreamOnly',           label: 'Stream only' },
-            { value: 'StreamAndLocalWindow', label: 'Stream + local scrcpy window' },
-            { value: 'LocalWindow',          label: 'Local scrcpy window only' }
-          ],
-          desc: 'Stream only: no local window, lowest CPU, stream available on website. Stream + local window: scrcpy window visible and stream via pipe. Local window only: no streaming pipeline, lowest CPU when no viewer.' },
-        { path: 'Performance.Adaptive_Monitoring.enabled', label: 'Adaptive Monitoring', type: 'boolean',
-          desc: 'Adjust monitoring frequency based on system load.' }
+          desc: 'Index of the GPU to use when GPU acceleration is enabled. 0 = primary GPU.' }
       ],
       'acc-monitoring-body': [
         { type: 'subgroup', label: 'Headset Monitoring' },
@@ -865,6 +860,9 @@
           desc: 'Controller battery % at which a warning colour is shown.' },
         { path: 'Monitoring.thresholds.controllers_battery_criticalLevel', label: 'Controllers Critical', type: 'number', min: 0, max: 100, unit: '%',
           desc: 'Controller battery % at which a critical alert colour is shown.' },
+        { type: 'subgroup', label: 'Battery Charging Reference' },
+        { path: 'Battery.headset_charging_power_W', label: 'Charging Power', type: 'number', min: 1, max: 200, unit: 'W',
+          desc: 'Expected charging wattage used for battery time-remaining estimates.' },
         { type: 'subgroup', label: 'Temperature' },
         { path: 'Monitoring.thresholds.temperature_highLevel', label: 'High Temperature', type: 'number', min: 30, max: 80, unit: 'C',
           desc: 'Headset temperature at which a heat warning is shown on the overlay.' }
@@ -872,6 +870,8 @@
       'acc-vqa-body': [
         { path: 'VideoQualityAutomation.enabled', label: 'Enable VQA', type: 'boolean',
           desc: 'Master switch. When disabled, the entire feature is skipped. Requires restart.' },
+        { path: 'Performance.Adaptive_Monitoring.enabled', label: 'Adaptive Monitoring', type: 'boolean',
+          desc: 'Adjust monitoring frequency based on system load.' },
         { type: 'subgroup', label: 'Auto-Apply' },
         { path: 'VideoQualityAutomation.auto_apply_profiles', label: 'Auto-Apply Profiles', type: 'boolean',
           desc: 'Auto-apply profile max_size recommendations after N consecutive down cycles.' },

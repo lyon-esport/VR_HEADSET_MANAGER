@@ -39,7 +39,7 @@
     "min_max_size_px": 480,
     "min_fps": 15,
     "min_bitrate_mbps": 3,
-    "default_uncapped_max_size_px": 1280,
+    "default_uncapped_max_size_px": 1800,
     "vqo_consecutive_count": 5,
     "history_file_name": "vqa_history.csv",
     "recommendation_file_name": "vqa_recommendation.json",

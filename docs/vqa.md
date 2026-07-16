@@ -54,7 +54,7 @@ Section `VideoQualityAutomation` of [config.json](configuration.md):
 | `downscale_step_percent` | `20` | Size of each reduction step |
 | `min_max_size_px` / `min_fps` / `min_bitrate_mbps` | `480` / `15` / `3` | Hard floors — never reduced below |
 | `fps_round_step` | `5` | Framerates are rounded down to multiples of this |
-| `default_uncapped_max_size_px` | `1280` | Starting cap applied to profiles that had no cap (`max_size = 0`) |
+| `default_uncapped_max_size_px` | `1800` | Starting cap applied to profiles that had no cap (`max_size = 0`) |
 | `vqo_consecutive_count` | `5` | Consecutive "down" cycles required before auto-apply triggers |
 | `cooldown_cycles` | `5` | Cycles to wait after any change before evaluating again |
 
