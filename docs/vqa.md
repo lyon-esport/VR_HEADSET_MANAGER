@@ -30,7 +30,7 @@ VQA works on three independent sections, each with its own auto-apply switch:
 |---|---|
 | **Profiles** | The per-model capture profiles (`max_size` resolution cap) |
 | **Headsets** | The profile string of currently-running captures (fps, bitrate) |
-| **MediaMTX** | The restream `stream_framerate` / `stream_bitrate` (when [re-encoding](streaming.md#re-encoding-bandwidth-control) is on) |
+| **MediaMTX** | The restream `stream_framerate` / `stream_bitrate` (when [re-encoding](streaming.md#ffmpeg-re-encoding-and-streaming-options) is on) |
 
 With all switches **off** (the default), VQA only *recommends*: the Monitoring page shows what it would change and you decide. Turn a section's switch **on** and VQA applies that section automatically after enough consecutive "down" recommendations.
 

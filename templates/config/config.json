@@ -245,7 +245,7 @@
     "api_port": 9997,
     "stream_framerate": 30,
     "stream_bitrate": "6M",
-    "reencode_in_ffmpeg": false,
+    "reencode_in_ffmpeg": true,
     "codec": "h264"
   },
   "VideoMonitor": {

@@ -48,7 +48,7 @@ Increase verbosity in **Config → App Configuration → General** (`Logging.deb
 - Prefer **Ethernet for the PC** and a dedicated WiFi SSID for headsets
 - Lower the profile's fps/bitrate (e.g. `max-R-N-30-8` → `max-R-N-30-4`) or the `max_size` cap
 - Check the **Monitoring** page's computer statistics: if CPU/GPU are saturated, let [Video Quality Automation](vqa.md) recommend reductions
-- Many simultaneous viewers? Enable [re-encoding](streaming.md#re-encoding-bandwidth-control) to cap per-viewer bandwidth
+- Many simultaneous viewers? Keep [re-encoding](streaming.md#ffmpeg-re-encoding-and-streaming-options) enabled (the default) to cap per-viewer bandwidth
 
 ## Web interface problems
 
@@ -66,7 +66,7 @@ VRHM detects it and offers to: use the next free port (saved to the config autom
 
 - Accept the **Windows Defender exclusion** proposed at first run (real-time scanning of the video pipeline is expensive) — or add it later in Windows Security
 - Enable [Video Quality Automation](vqa.md)
-- Keep re-encoding **off** unless you need the bandwidth cap (passthrough is nearly free)
+- Turn [re-encoding](streaming.md#ffmpeg-re-encoding-and-streaming-options) **off** (passthrough) if you do not need the per-viewer bandwidth cap — passthrough is nearly free for the CPU/GPU
 
 ### Recording refuses to enable / stopped by itself
 

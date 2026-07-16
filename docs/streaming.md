@@ -14,7 +14,7 @@
 ```
 
 1. **scrcpy** captures the headset screen over WiFi ADB, shows the local window, and writes the video to a relay pipe.
-2. **ffmpeg** reads that pipe and publishes the stream to MediaMTX over RTSP. By default it **copies the stream without re-encoding** (zero quality loss, minimal CPU).
+2. **ffmpeg** reads that pipe and publishes the stream to MediaMTX over RTSP. By default it **re-encodes the stream to a controlled framerate and bitrate** (30 fps / 6 Mbps), so the network load per viewer stays predictable — see [FFmpeg re-encoding](#ffmpeg-re-encoding-and-streaming-options).
 3. **MediaMTX** makes the stream available to any number of viewers over three protocols simultaneously.
 
 Everything is supervised: if a headset drops and comes back and **Auto-restart scrcpy** is enabled, the whole chain restarts by itself.
@@ -60,6 +60,30 @@ Available views (per model, defined in the [configuration](configuration.md#head
 
 Profiles exist out of the box for **Quest 3**, **Quest 2**, and **PICO 4 Ultra** — you can tune the crop rectangles or add new models in the config.
 
+## FFmpeg re-encoding and streaming options
+
+After scrcpy captures the headset, ffmpeg publishes the video to MediaMTX. How it does that is controlled by the **Streaming** options in **Config → App Configuration → Streaming & Recording**:
+
+![Streaming options in the App Configuration page](pics/web_vrhm_config_streamingEncoding.png)
+
+| Option | Default | What it does |
+|---|---|---|
+| **Re-encode in FFmpeg** | **ON** | ON: ffmpeg re-encodes every stream to the framerate/bitrate below before pushing it to MediaMTX — the LAN bandwidth per viewer is capped and identical for all headsets. OFF: passthrough (`-c copy`) — the raw scrcpy stream is forwarded untouched (zero quality loss, minimal CPU, but each viewer receives the full bitrate of the headset's capture profile). |
+| **Re-encode Codec** | **h264** | Codec used when re-encoding. `h264` is the most compatible. `h265` (HEVC) gives roughly 40-50% lower bitrate at the same quality, but the encoding GPU **and every viewer** (browser/OBS) must support HEVC — verify playback before relying on it. In passthrough mode the headset's native codec is always forwarded. |
+| **Stream Framerate** | **30 fps** | Target framerate when re-encoding. |
+| **Stream Bitrate** | **6M** | Target bitrate when re-encoding (examples: `4M`, `6M`, `8M`). |
+| **Pause When Hidden** | **ON** | Web viewers automatically stop their WHEP stream when the browser tab is hidden (backgrounded tab, screen off) and reconnect when visible again — idle viewers stop consuming network and MediaMTX resources. |
+| **Pause Delay** | **10 s** | How long a stream must stay hidden before it is paused, so a brief tab switch does not tear down the connection. |
+
+More about re-encoding:
+
+- The GPU encoder is **auto-detected** in priority order for your hardware — NVENC (NVIDIA), Quick Sync (Intel), AMF (AMD) — with CPU x264/x265 as the guaranteed fallback
+- Changes take effect when scrcpy is (re)started; the web UI restarts the affected streams automatically after saving
+- [Video Quality Automation](vqa.md) can lower the stream framerate/bitrate automatically under CPU/GPU pressure
+
+> [!NOTE]
+> Re-encoding trades PC CPU/GPU for network bandwidth. Turn it **off** (passthrough) if you have few viewers and want the lowest possible CPU usage. Recordings are **always** stored with the original capture quality (`-c copy`), never re-encoded.
+
 ## Stream URLs
 
 Every headset stream is published under a path derived from its name (e.g. `Q3 BLUE` → `q3_blue`), on three protocols:
@@ -95,18 +119,6 @@ It renders battery, controllers, charge and temperature with a transparent backg
 <!-- ![OBS scene with headset feed and overlay](pics/obs_integration.png) -->
 
 To limit session time on stream, pair OBS or a Stream Deck with the [Timer API](docs_timer_api.md).
-
-## Re-encoding (bandwidth control)
-
-By default ffmpeg **passes the headset's native stream through untouched** (`-c copy`): zero CPU cost, but every viewer receives the full headset bitrate.
-
-If many devices watch the streams, enable re-encoding in **Config → App Configuration → Streaming & Recording** (`mediamtx.reencode_in_ffmpeg`). VRHM then re-encodes each stream to the configured `stream_framerate` / `stream_bitrate` (default 30 fps / 6M) before publishing, which caps the LAN bandwidth per viewer on **all** protocols.
-
-- Codec is selectable: **h264** (default, most compatible) or **h265** (better quality per bit, needs decoder support on viewers)
-- The GPU encoder is **auto-detected** in priority order for your hardware — NVENC (NVIDIA), Quick Sync (Intel), AMF (AMD) — with CPU x264/x265 as the guaranteed fallback
-
-> [!NOTE]
-> Re-encoding trades PC CPU/GPU for network bandwidth. Recordings are **always** stored with the original quality (`-c copy`), never re-encoded.
 
 ## Recording
 

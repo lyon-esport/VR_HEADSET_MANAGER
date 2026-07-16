@@ -109,7 +109,7 @@ Alert thresholds used by the web UI and the OBS overlays:
 | `rtsp_port` / `hls_port` / `webrtc_port` / `api_port` | 8554 / 8888 / 8889 / 9997 | Output ports |
 | `stream_framerate` | `30` | Target fps when re-encoding |
 | `stream_bitrate` | `6M` | Target bitrate when re-encoding |
-| `reencode_in_ffmpeg` | `false` | `false` = passthrough (`-c copy`), `true` = re-encode to the values above ([details](streaming.md#re-encoding-bandwidth-control)) |
+| `reencode_in_ffmpeg` | `true` | `true` = re-encode to the values above (default), `false` = passthrough (`-c copy`) ([details](streaming.md#ffmpeg-re-encoding-and-streaming-options)) |
 | `codec` | `h264` | Re-encoding codec: `h264` or `h265` |
 
 ### `VideoMonitor`
