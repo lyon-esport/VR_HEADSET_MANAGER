@@ -1,196 +1,94 @@
-# VR HEADSET MANAGER
+<!-- NOTE: when moving this file to the repository root, prefix every relative link with "docs/" (e.g. installation.md -> docs/installation.md, pics/logo.svg -> docs/pics/logo.svg). -->
 
-## Overview
+<div align="center">
 
-**[VR HEADSET MANAGER](https://github.com/lyon-esport/VR_HEADSET_MANAGER/releases)** is a PowerShell-based automation tool designed to manage, monitor, and capture screens of **Meta Quest VR headsets** on flat screen using **ADB** over wifi and [**scrcpy**](https://github.com/Genymobile/scrcpy).
+<img src="pics/logo.svg" alt="VR Headset Manager logo" width="480">
 
-It has been developped exclusively to manage Meta Quests headsets (Quest 2 and Quest 3), but should work for many more headsets based on Android (as it's using ADB Wifi).
+**Manage, monitor and screen-mirror a fleet of VR headsets — from one PC.**
 
-Please contact me by opening an issue if you need to add support of a new headset model/brands. If you wana offer me a different headset, i'll be pleased to support it in a next realase :laughing:.
+[![Windows](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6?logo=windows)](https://www.microsoft.com/windows)
+[![PowerShell](https://img.shields.io/badge/PowerShell-5.1-5391FE?logo=powershell&logoColor=white)](https://learn.microsoft.com/powershell/)
+[![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue)](../LICENSE.md)
+[![Release](https://img.shields.io/github/v/release/lyon-esport/VR_HEADSET_MANAGER)](https://github.com/lyon-esport/VR_HEADSET_MANAGER/releases)
 
-It provides:
-- Headsets screen capture (thanks scrcpy) with auto-restart and streaming over a web page, WHEP, RTSP or HLS
-- Optional screen capture session recording
-- Web page to manage headsets, display screen captures with extra low latency
-- Graphic reporting of each headset (headsets and controllers batteries, charge status, temperature), with HTML generation for OBS integration
-- Timer for each headset (for limiting gaming sessions for players)
-- Automated wireless ADB activation while connecting the headset to the computer with USB
-- CSV-based headset configuration management
-
-The tool is intended for **VR labs, demo environments, training centers, and multi-headset deployments**.
-
-I personally use it during showrooms and gaming exhibitions to capture the live video feeds from multiple headsets simultaneously. These video streams are then managed inside OBS to present visitors with a global, real-time view of all active VR experiences.
-
-## Installation
-
-1. **Place the project folder on your machine**  
-   > Download the [last realease of **VR_HEADSET_MANAGER**](https://github.com/lyon-esport/VR_HEADSET_MANAGER/releases) and unzip on your computer.
-
-2. **Run the launcher**  
-   - **START_VR_HEADSET_MANAGER.cmd**
-   > - This will start PowerShell with the correct execution policy and launch the manager.
-   > - ⚠️ On first start it will automatically start multiple commands as admin ⚠️
-   >   - add Windows Firewall exceptions to allow adb.exe to talk with headsets over the network.
-   >   - add Windows Firewall exceptions to allow mediamtx to restream over the network.
-   >   - add Windows Firewall exceptions to allow the programm to scan mdns headsets over the network.
-   >   - ask you if you want to exclude the application folder from Windows Defender. It's not mandatory but I experienced high CPU usage from Windows Defender while using the app.
-   > - create config files from the template
-
-4. **Open the web page**
-   > - The webserver is automatically started once the application is running.
-   > - Let's open the web page - the link is provided on the main console - by default : **http://<your_server_ip>:8080**
-   
-4. **Add headset**
-   > - Connect with USB your Meta Quest Headset (⚠️ Developper mode must be already enabled)
-   > - In the web server go to the tab [CONFIG] >> Manage New Devices
-   OR
-   > - In the [Headset Management Console], press **A** to add a headset
-   > - Follow the instructions to add your headset (IP address, Firendly name...)
-   > - Installation of [oculus-wireless-adb](https://github.com/thedroidgeek/oculus-wireless-adb) is proposed to start ADB Wifi from the headset without USB connection required.
-   
-5. **in Web server, enable Auto-restart scrcpy to start screen capture automatically when the headset is available**
-5Bis. **in CLI, press the key corresponding to the ID if the headset to start screen miroring (scrcpy) manually**
-   
-6. **Modify headset parameters**
-   - Use different options to manage you headsets. You can enable recording, enable the auto-restart of the screen miroring, etc...
-
-7. **Modify VR HEADSET MANAGER parameters**
-   - Use the web server to adapt parameters as you want.
-   - You can adapt configuration in the ./config/config.json file following [this guide](/docs/docs_config.md) or from the web interface menu under Config > App Configuration
-   - Control per-headset timers from the web interface or from any external tool (Stream Deck, OBS, curl...) using the [Timer API](/docs/docs_timer_api.md)
+</div>
 
 ---
 
-## Prerequisites
+**VR HEADSET MANAGER** (VRHM) is a Windows automation tool that manages, monitors, and captures the screens of **Meta Quest** and **PICO** VR headsets over WiFi, using **ADB** and [**scrcpy**](https://github.com/Genymobile/scrcpy).
 
-Before using the tool, make sure the following requirements are met:
-- ✅ This program folder must include **VR_HEADSET_MANAGER** in the name
-- ✅ The Meta Quest headset must be in **Developer Mode**
-- ✅ **ADB over WiFi must be enabled** and will be automatically once you have connected the headset by USB and added the headset in the list of known headsets. >> [You can also follow this process to enable it using a dedicated app !](/docs/docs_HowToEnableADBWifi.md)
-- ✅ The Meta Quest headset must be connected over WIFI, and reachable from the computer where you execute the script
-> [!NOTE]
->  To limit lacencies I recommand a dedicated WIFI SSID and channels for headsets only, and an ethernet connexion for the computer which is executing VR HEADSET MANAGER.*
+It is built for **VR labs, showrooms, gaming exhibitions, training centers, and any multi-headset deployment** where an operator needs a global, real-time view of every active VR experience — typically to feed live video walls or **OBS**.
 
+![Video Monitor page showing the live wall of headsets](pics/hero_video_monitor.png)
+*The Video Monitor web page: one tile per headset with live video, battery, controllers, and session timer.*
 
-> [!IMPORTANT]
-> Without these prerequisites, the headset will not be reachable over the Wifi network and scrcpy streaming will not work.
+## Features
 
-### Hardware requirements
+- **Live screen capture** of every headset (scrcpy), restreamed over the network as **WHEP (WebRTC), RTSP, and HLS** through [MediaMTX](https://github.com/bluenviron/mediamtx)
+- **Web interface** to watch all streams with very low latency, manage headsets, and change every setting — from any device on your LAN
+- **Auto-restart**: streams come back automatically when a headset reappears on the network
+- **Health monitoring**: headset and controller battery, charge status, temperature — with per-headset HTML overlays ready to drop into OBS
+- **Session timers** per headset (limit play sessions), controllable from the web page or any external tool via a [REST API](docs_timer_api.md) (Stream Deck, OBS, curl...)
+- **Applications manager**: install (sideload), uninstall, and launch apps on any headset remotely — the player never has to touch a menu
+- **Recording** of any capture session to disk
+- **Automatic WiFi-ADB activation** when a known headset is plugged in over USB
+- **Video Quality Automation**: monitors your PC's CPU/GPU load and recommends (or applies) resolution/framerate/bitrate reductions to keep the machine responsive
 
-VR headsets streaming is power consumer...
-I recommand minimum 4 CPU, 16GB RAM and 2GB dedicated GPU VRAM for 4 headsets
-More headsets and mode viewer devices you will have to restream, and higher the consumption will be.
-I implemented a functionality named [Video Quality Automation](/docs/vqa.md) that recomand or apply automatically resolution and bandwidth reduction for keeping acceptable perfomances on your computer.
+## Quick start
 
----
-## WEBSITE & API
-Thanks Claude Code, a dedicated (vibe coded) website is available to manage your heasets and handle many options in addition of the CLI.
-I recommand to use the web interface to interract with your headsets as I added many functionalities (like headsets applications management and launcher).
+1. Download the [latest release](https://github.com/lyon-esport/VR_HEADSET_MANAGER/releases) and unzip it (keep `VR_HEADSET_MANAGER` in the folder name).
+2. Run **`START_VR_HEADSET_MANAGER.cmd`**. On first start it configures the Windows Firewall (asks for admin) and creates the config files.
+3. Open the web interface — the URL is printed in the console, by default **`http://<your-pc-ip>:8080`**.
+4. Put your headset in **Developer Mode**, plug it in over USB, and add it via **Headset Settings → Manage New Devices**.
+5. Start the stream from the **Video Monitor** page — done.
 
-The web server is enabled by default to port 8080. This port can be modified in the config.json file.
+Full details: [Installation](installation.md) → [Getting started](getting-started.md).
 
----
-## HEADSETS VIDEO CAPURE AND RESTREAM
-The application automatically starts a capure of the video using ffmpeg.exe, and then uses MediaMTX software to recast the video.
-You can reach out the streamed content using the web interface from any computer on your local network.
-Direct links to headsets video captures are available in ""Config"" > ""Help & Diagnostics"" section of the web server.
+## Documentation
 
----
-## APPLICATIONS MANAGER
+| Page | What you will find |
+|---|---|
+| [Installation](installation.md) | Prerequisites, first run, firewall/Defender setup, updating |
+| [Getting started](getting-started.md) | Add your first headset and start streaming (web interface) |
+| [Web interface tour](web-interface.md) | Every page of the web UI explained |
+| [Streaming & OBS](streaming.md) | Capture pipeline, stream URLs, re-encoding, OBS integration, recording |
+| [Applications manager](apps-manager.md) | Launch, sideload, uninstall and update apps on headsets |
+| [Configuration reference](configuration.md) | Every `config.json` setting, ports, WiFi credentials |
+| [Video Quality Automation](vqa.md) | Automatic performance mitigation explained |
+| [Timer API](docs_timer_api.md) | REST API for per-headset session timers |
+| [Enable ADB over WiFi](docs_HowToEnableADBWifi.md) | How to enable wireless ADB on a Meta Quest |
+| [Troubleshooting](troubleshooting.md) | Common problems and how to fix them |
 
-On many pages, you can see a [>] button : It's for starting an installed app directly for the web interface. It don't require any action from the enduser which is already into the matrix... You play the operator role, so you can launch all applications (built-in or 3rd party apps).
+## Supported headsets
+
+| Model | Status |
+|---|---|
+| Meta Quest 3 | Fully supported (including per-eye crop profiles) |
+| Meta Quest 2 | Fully supported |
+| PICO 4 Ultra | Supported |
+| Other Android-based headsets | Should work over WiFi ADB — profiles may need tuning |
 
 > [!NOTE]
-> **3rd party** applications are all applications installed from the store or sideloaded. This software allows you to add or delete 3rd party apps.
-> **Built-in** applications are provided by Meta and cannot be modified or deleted.
+> Support for a new model is mostly a matter of adding a capture profile. Open a [GitHub issue](https://github.com/lyon-esport/VR_HEADSET_MANAGER/issues) if you need a new headset supported. *(And if you want to offer the author a headset, he will be pleased to support it in the next release! 😁)*
 
+## Requirements at a glance
 
-This software allows you to manage (install and uninstall) 3rd party games and apps using ADB USB or ADB Wifi.
-- Go on **Config** > **Headsets Apps**
-- Select your headset in the list
-- Use the web interface to select folder or apk files to sideload data directly to your headset
+- Windows 10/11 PC on the same network as the headsets (Ethernet recommended for the PC)
+- Headsets in **Developer Mode** with **ADB over WiFi** reachable
+- Hardware: minimum 4 CPU cores, 16 GB RAM, 2 GB GPU VRAM for ~4 headsets
 
-> [!NOTE]
-> I identified the traffic is faster using Wifi connectivity instead of USB3 connectivity. It's not copying data using MTP but through ADB, I suspect that's why the transfer is slower...
+See [Installation](installation.md) for the full list.
 
-This software can automatically grab from the - [MetaMetadata database](https://github.com/threethan/MetaMetadata) applications names and logos. It have to be triggered manually and requires internet connectivity.
-Check under **Config** > **Known Apps** section.
+## License
 
----
-## OTHER FUNCTIONALITIES
+Licensed under the **PolyForm Noncommercial License 1.0.0** — free for personal use and internal non-commercial business use; selling or commercial usage is not allowed. See [LICENSE](../LICENSE.md).
 
-- Keep the computer awake while the script is running to prevent screen lockout or hibernation.
-- It the headset is already knowned by the software, wile you connect it to the computer the ADB Wifi automatically starts
-- Wifi SSID and Passwords are stored using [Marshal](https://www.secureideas.com/blog/secure-password-management-in-powershell-best-practices) (ConvertTo-SecureString / ConvertFrom-SecureString)
-- You can control few headset parameters like sound and backlight power, disable guardian or start guardiant initialization...
-- Any Scrcpy stream catched from the headset can be recrorded
-- You can create custom crop profiles as you need...
+## Credits
 
----
-## Roadmap 🎯
+VR HEADSET MANAGER stands on the shoulders of:
 
-### 🐞Known issues
-- At the moment it seems stable, let's report issues using Github Issues section
-
-### Improvements
-#### 🏃Startup checks
-
-#### 🛠️ Backend
-- [ ] REST API to provide a web page to manage it from a phone, or by Stream Deck (already done for timers)
-
-
-#### ⚙️ Headsets management (Headset Management Console)
-- [ ] Scan network process to review
-  > mdns to test for a headset in developper mode enabled
-  > check all devices availabiel with 5555 opened
-
-#### 📺 VR Headset Screen capture
-
-#### 🎨 UI and Visual customization
-
-#### Headset info scrapping and interaction
-- [ ] Force the screen to get out of the game and switch to passthrough mode >> Tried but Meta seems to lock access to these functionalities from ADB connection...
-- [ ] Force recenter >> Tried but Meta seems to lock access to these functionalities from ADB connection...
-
-#### 🧪 New functionalities
-
-- [ ] ⚠️ [⛏️ IN PROCESS] Dev of a Stream deck plugin
-  > - Manage communication with Stream Deck Plugin...
-  > - [Named Pipe ?](https://rkeithhill.wordpress.com/2014/11/01/windows-powershell-and-named-pipes/)
-
-#### 📚 Translations
-- [ ] Translation of the website
-
-### Code improvement
-- [ ] Review all powershell code with PSScriptAnalyzer and claude code...
-
----
-## LICENCE
-
-This project is licensed under the PolyForm Noncommercial License 1.0.0.
-
-✅ Allowed:
-- Personal use
-- Internal business use (non-commercial)
-
-❌ Not allowed:
-- Selling this software
-- Commercial usage
-
-See the [LICENSE file](/LICENSE.md) for details.
----
-
-## Sources
-
-This project is based on :
-- [scrcpy project](https://github.com/Genymobile/scrcpy) for screen miroring
-- [oculus-wireless-adb](https://github.com/thedroidgeek/oculus-wireless-adb) for enabling ADB over Wifi on Meta Quest VR headsets
-- [MetaMetadata : THE database that links package name to app name and related icons](https://github.com/threethan/MetaMetadata)
-- [Powershell Pode module](https://github.com/Badgerati/Pode) as web server
-- [Powershell EPS module](https://github.com/straightdave/eps) as templating tool for editing values in web pages
-- [MediaMTX : A real-time media server used for restream screen capture](https://github.com/bluenviron/mediamtx)
-- [Emoji cheat sheet](https://github.com/ikatyang/emoji-cheat-sheet)
-
-Streamdeck usefull plugins :
-- [**Stream Countdown Timer**](https://marketplace.elgato.com/product/stream-countdown-timer-625838c6-85ce-4be7-a754-30f00c809b34) by [BarRaider](https://barraider.com/)
-  - *[[FR]YT tutorial to use the timer in OBS](https://www.youtube.com/watch?v=vi4xlhSECeA)*
+- [scrcpy](https://github.com/Genymobile/scrcpy) — screen mirroring
+- [oculus-wireless-adb](https://github.com/thedroidgeek/oculus-wireless-adb) — enable ADB over WiFi from inside the headset
+- [MediaMTX](https://github.com/bluenviron/mediamtx) — real-time media server for restreaming
+- [MetaMetadata](https://github.com/threethan/MetaMetadata) — the database linking package names to app names and icons
+- [Pode](https://github.com/Badgerati/Pode) & [EPS](https://github.com/straightdave/eps) — PowerShell web server and templating
