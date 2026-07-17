@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title><%= $name %> - Timer</title>
+
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body {
+        width: 100%;
+        height: 100%;
+        background: transparent !important;
+        overflow: hidden;
+      }
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      #timer-val {
+        display: none;
+        color: #fff;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        font-weight: 700;
+        /* Fixed size (not vh-relative): text size no longer depends on the OBS source
+           box dimensions, so the box can be sized to snugly fit the text instead of
+           always leaving proportional empty margins. See docs_timer_api.md for the
+           recommended OBS Browser Source width/height for this font-size. */
+        font-size: 56px;
+        padding: 4px 14px;
+        letter-spacing: 0.03em;
+        white-space: nowrap;
+        text-shadow: 0 2px 8px rgba(0,0,0,0.9);
+      }
+      #timer-val.visible { display: block; }
+    </style>
+  </head>
+  <body>
+    <div id="timer-val"></div>
+
+    <script>
+      var TIMER_ID = '<%= $headset_id %>';
+      var INTERVAL_MS = 1000;
+
+      function refresh() {
+        fetch('/api/timer?id=' + encodeURIComponent(TIMER_ID) + '&action=status&_=' + Date.now(), { cache: 'no-store' })
+          .then(function (r) { return r.json(); })
+          .then(function (j) {
+            var el = document.getElementById('timer-val');
+            var v = (j && j.value ? j.value : '').trim();
+            if (v) {
+              el.textContent = v;
+              el.classList.add('visible');
+            } else {
+              el.classList.remove('visible');
+            }
+          })
+          .catch(function () {});
+      }
+
+      refresh();
+      setInterval(refresh, INTERVAL_MS);
+    </script>
+  </body>
+</html>

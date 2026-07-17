@@ -188,3 +188,42 @@ function Update-HeadsetVideoFile {
     }
 }
 
+# Generates one [timer].html per headset: a standalone, transparent, self-refreshing
+# timer overlay (polls /api/timer?id=<id>&action=status every second via JS) for use as
+# an OBS Browser Source from a different computer than the VRHM server, where a static
+# text-file read (website/timer/<DisplayName>[timer].txt) or a local GDI+ file source
+# cannot be used.
+# Output file naming: <DisplayName>[timer].html  e.g. Q3_BLUE[timer].html
+function Update-HeadsetTimerFile {
+    param(
+        [string]$templatePath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\template\timer_overlay.pshtml"),
+
+        [string]$outputPath = (Join-Path -Path $global:ScriptPath -ChildPath "\website\generated\")
+    )
+
+    if (-not (Test-Path -LiteralPath $templatePath)) {
+        Write-Log ("Timer overlay template not found: $templatePath") -Level WARNING
+        return
+    }
+
+    $allKnown = Get-KnownHeadsets
+    foreach ($headset in $allKnown) {
+        $timerInfo = @{
+            name        = $headset.Name
+            headset_id  = [int]$headset.ID
+        }
+
+        $timerHtml = Invoke-EpsTemplate -Path $templatePath -Safe -binding $timerInfo
+
+        $outputFile = Join-Path -Path $outputPath -ChildPath ((Convert-Displayname $headset.Name) + "[timer].html")
+
+        # Skip write if content has not changed
+        $hash = ($timerHtml | Get-FileHash -Algorithm MD5 -ErrorAction SilentlyContinue)
+        $hashStr = if ($hash) { $hash.Hash } else { [guid]::NewGuid().ToString() }
+        if ($script:_monitoringHashes[$outputFile] -ne $hashStr) {
+            Write-FileWithoutBom -Path $outputFile -Content $timerHtml
+            $script:_monitoringHashes[$outputFile] = $hashStr
+        }
+    }
+}
+

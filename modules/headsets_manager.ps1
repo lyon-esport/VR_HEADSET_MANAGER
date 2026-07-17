@@ -461,7 +461,7 @@ function Rename-Headset {
 
     # 3. Delete old per-headset HTML files (monitoring + video)
     $websiteDir = Join-Path $global:ScriptPath "website\generated"
-    foreach ($suffix in @('[monitoring].html', '[video].html')) {
+    foreach ($suffix in @('[monitoring].html', '[video].html', '[timer].html')) {
         $oldFile = Join-Path $websiteDir ($oldDisplayName + $suffix)
         if (Test-Path -LiteralPath $oldFile) {
             Remove-Item -LiteralPath $oldFile -Force -ErrorAction SilentlyContinue
@@ -473,7 +473,8 @@ function Rename-Headset {
     $renamedRow = $headsets | Where-Object { $_.Name -eq $NewName }
     if ($renamedRow) {
         Update-HeadsetVideoFile
-        Write-Log ("Regenerated [video].html for '$newDisplayName'.") -Level DEBUG
+        Update-HeadsetTimerFile
+        Write-Log ("Regenerated [video].html and [timer].html for '$newDisplayName'.") -Level DEBUG
     }
 
     # 5. Rename data files (installed_apps + favorites) if they exist
@@ -588,6 +589,7 @@ function Save-Headsets {
     Write-htmlMonitor $newHeadsets
     Update-HeadsetMonitoringFile
     Update-HeadsetVideoFile
+    Update-HeadsetTimerFile
     # Create timer files for any newly added headsets (non-destructive: skips existing files)
     Initialize-TimerFiles
 } #OK

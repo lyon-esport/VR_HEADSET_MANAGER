@@ -20,10 +20,12 @@
         font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
       }
       .wrap {
-        min-height: 100%;
-        display: grid;
-        place-items: center;
+        height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
         padding: 31px 25px;
+        box-sizing: border-box;
       }
       .card {
         width: min(749px, 74vw);
@@ -46,7 +48,7 @@
       .values {
         font-size: clamp(31px, 5.85vw, 44px);
         line-height: 1.3;
-        display: inline-flex;
+        display: flex;
         flex-direction: column;
         align-items: center;
         gap: 16px;

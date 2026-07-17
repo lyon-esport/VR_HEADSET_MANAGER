@@ -437,6 +437,7 @@ function Start-VRMonitor {
                     -configFilePath $global:ConfigFilePath -pollBlock $headsetPollBlock
 
                 Update-HeadsetVideoFile
+                Update-HeadsetTimerFile
                 Sync-RestreamPaths
 
                 # mediamtx before scrcpy watchdog (publisher ordering - see eager block above)

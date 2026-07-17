@@ -250,11 +250,40 @@ requests there is no authentication or content-type header required.
 
 #### OBS text source (read timer file)
 
-In OBS, add a **Text (GDI+)** source, enable **"Read from file"**, and point it to the
-`website/timer/<headset-name>.txt` file on disk, or use a **Browser** source with the URL:
+If OBS is running on the **same computer** as the VRHM server, add a **Text (GDI+)** source,
+enable **"Read from file"**, and point it to the `website/timer/<headset-name>[timer].txt`
+file on disk. GDI+ text sources actively re-read the file from disk, so this stays live
+automatically.
+
+#### OBS Browser source (live-updating, works from any computer on the LAN)
+
+The static `.txt` file above is plain text with no script, so a **Browser** source pointed
+directly at it loads the value once and never refreshes. For a Browser source - especially
+useful when OBS runs on a **different computer** than the VRHM server, since it only needs
+network access, not a local file path - use the dedicated self-refreshing overlay page
+instead:
 ```
-http://<your-server-ip>:<your-server-port>/timer/<headset-name>.txt
+http://<your-server-ip>:<your-server-port>/<headset-name>[timer].html
 ```
+This page polls the `status` API every second via JavaScript and updates in place; it shows
+nothing when the timer is idle/reset. It is generated per headset (like
+`<headset-name>[video].html` and `<headset-name>[monitoring].html`) from
+`website/template/timer_overlay.pshtml` by `Update-HeadsetTimerFile`, and is regenerated
+automatically whenever headsets are added/renamed/removed.
+
+**Recommended OBS Browser Source size:** the overlay uses a fixed `font-size: 56px` (not
+relative to the source box), so the box can be sized to snugly wrap the text instead of
+leaving proportional empty margins around it. With the default 56px:
+
+| Content | Recommended box (W x H) |
+|---|---|
+| `MM:SS` countdown/count-up (e.g. `04:32`) | `220 x 76` |
+| `"Time's up !"` (shown when the timer expires) | `380 x 76` |
+
+If you only care about the countdown and don't mind `"Time's up !"` being clipped at the
+edges, use the narrower box. To change the text size, edit `font-size` in
+`website/template/timer_overlay.pshtml` and scale the box proportionally (height ~= font-size
+x 1.35, width ~= font-size x 0.55 per character of the longest string you want to fit).
 
 ---
 

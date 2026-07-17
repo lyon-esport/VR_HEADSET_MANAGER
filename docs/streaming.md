@@ -69,7 +69,7 @@ After scrcpy captures the headset, ffmpeg publishes the video to MediaMTX. How i
 | Option | Default | What it does |
 |---|---|---|
 | **Re-encode in FFmpeg** | **ON** | ON: ffmpeg re-encodes every stream to the framerate/bitrate below before pushing it to MediaMTX — the LAN bandwidth per viewer is capped and identical for all headsets. OFF: passthrough (`-c copy`) — the raw scrcpy stream is forwarded untouched (zero quality loss, minimal CPU, but each viewer receives the full bitrate of the headset's capture profile). |
-| **Re-encode Codec** | **h264** | Codec used when re-encoding. `h264` is the most compatible. `h265` (HEVC) gives roughly 40-50% lower bitrate at the same quality, but the encoding GPU **and every viewer** (browser/OBS) must support HEVC — verify playback before relying on it. In passthrough mode the headset's native codec is always forwarded. |
+| **Re-encode Codec** | **h264** | Codec used when re-encoding. `h264` is the most compatible. `h265` (HEVC) gives roughly 40-50% lower bitrate at the same quality, but the encoding GPU **and every viewer** must support HEVC. **OBS Browser source does not support H265** — see the OBS integration warning below. In passthrough mode the headset's native codec is always forwarded. |
 | **Stream Framerate** | **30 fps** | Target framerate when re-encoding. |
 | **Stream Bitrate** | **6M** | Target bitrate when re-encoding (examples: `4M`, `6M`, `8M`). |
 | **Pause When Hidden** | **ON** | Web viewers automatically stop their WHEP stream when the browser tab is hidden (backgrounded tab, screen off) and reconnect when visible again — idle viewers stop consuming network and MediaMTX resources. |
@@ -100,10 +100,30 @@ You never have to build these by hand: **Config → Help & Diagnostics → Strea
 
 ## OBS integration
 
-Two ways to bring a headset into an OBS scene:
+> [!WARNING]
+> **OBS Browser source requires H264.** OBS's built-in browser (Chromium Embedded Framework) does **not** support H265/HEVC decoding for WHEP/WebRTC playback. If **Re-encode Codec** (see table above) is set to `h265`, the OBS Browser source will fail to display the video (it will work fine in a normal browser, which is why this is easy to miss). Set **Re-encode Codec** back to **h264** — or disable **Re-encode in FFmpeg** only if the headset's native passthrough codec is H264 — before adding a headset to OBS via Browser source.
 
-- **Browser source** (recommended, lowest latency): use the WHEP page URL of the headset — `http://<pc-ip>:8080/<HEADSET_NAME>[video].html` (also linked from Help & Diagnostics), or the raw WHEP URL above.
-- **Media source**: use the RTSP URL. Untick *Local file*, set *Input* to `rtsp://<pc-ip>:8554/<name>`, and reduce network buffering for lower latency.
+A complete per-headset scene is typically built from three stacked **Browser sources** — live video, monitoring overlay, and session timer:
+
+![OBS scene with a headset video feed, monitoring overlay and timer](pics/obs_integration.png)
+*A per-headset OBS scene: the WHEP video source, the monitoring overlay (battery/controllers/temperature) and the remote timer, visible in the Sources panel.*
+
+### 1. Video source
+
+The video is added as a **Browser source** (recommended, lowest latency), and there are **two ways** to do it:
+
+| Method | URL | When to use |
+|---|---|---|
+| **A. Direct WHEP stream** | `http://<pc-ip>:8889/<name>` | Raw video only, nothing else — the leanest option. Build your own overlays in OBS (methods 2 and 3 below). |
+| **B. `[video].html` page** | `http://<pc-ip>:8080/<HEADSET_NAME>[video].html?nooverlay=1` | The VRHM player page. `?nooverlay=1` starts it clean (video only), but the built-in monitoring/timer overlays can still be toggled back on at any time (e.g. via OBS's *Interact* mode) — no extra sources needed. |
+
+![OBS Browser source properties for the WHEP video](pics/obs_video_whep.png)
+*Method A — Browser source properties with the raw WHEP URL and a small Custom CSS snippet (`body { background-color: rgba(0,0,0,0); margin: 0px auto; overflow: hidden; }`) for a clean transparent embed.*
+
+> [!TIP]
+> Alternative without the OBS browser: a **Media source** with the RTSP URL. Untick *Local file*, set *Input* to `rtsp://<pc-ip>:8554/<name>`, and reduce network buffering for lower latency.
+
+### 2. Monitoring overlay
 
 For headset health on stream, add a second **Browser source** pointing to the per-headset monitoring overlay:
 
@@ -111,14 +131,23 @@ For headset health on stream, add a second **Browser source** pointing to the pe
 http://<pc-ip>:8080/<HEADSET_NAME>[monitoring].html
 ```
 
-It renders battery, controllers, charge and temperature with a transparent background, ready to overlay on the video.
+It renders battery, controllers, charge and temperature with a transparent background, ready to overlay on the video (use the same transparent-background Custom CSS):
 
-> 📸 **SCREENSHOT TO ADD** — save as `docs/pics/obs_integration.png`
-> *What to capture:* an OBS scene showing one headset video feed (Browser or Media source) with the `[monitoring].html` overlay on top displaying battery/controller icons, plus the Sources panel visible so readers can see the two sources used.
+![OBS Browser source properties for the monitoring overlay](pics/obs_monitoring.png)
 
-<!-- ![OBS scene with headset feed and overlay](pics/obs_integration.png) -->
+### 3. Session timer
 
-To limit session time on stream, pair OBS or a Stream Deck with the [Timer API](docs_timer_api.md).
+To show the player's remaining session time, add a third **Browser source** with the per-headset timer page:
+
+```
+http://<pc-ip>:8080/<HEADSET_NAME>[timer].html
+```
+
+You can resize the digits from OBS with a one-line Custom CSS, e.g. `#timer-val { font-size: 112px !important; }`:
+
+![OBS Browser source properties for the timer](pics/obs_timer.png)
+
+The timer is controlled from the web interface or from any external tool (Stream Deck, curl...) via the [Timer API](docs_timer_api.md).
 
 ## Recording
 

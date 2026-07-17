@@ -314,12 +314,19 @@
       // Start as soon as the DOM is ready
       document.addEventListener('DOMContentLoaded', function() {
         connect();
-        // Hide action buttons when embedded in an iframe (e.g. video_monitor.html)
-        if (window.self !== window.top) {
+
+        var inIframe = (window.self !== window.top);
+        var noOverlay = new URLSearchParams(window.location.search).get('nooverlay') === '1';
+
+        // Hide action buttons only when embedded in an iframe (e.g. video_monitor.html grid)
+        if (inIframe) {
           document.getElementById('actions-left').style.display  = 'none';
           document.getElementById('actions-right').style.display = 'none';
-        } else {
-          // Default both overlays visible; only hide if user explicitly turned them off
+        }
+
+        // Auto-show overlays by default, unless embedded, previously dismissed, or ?nooverlay=1
+        // (buttons stay visible/clickable in the nooverlay case so the user can toggle manually)
+        if (!inIframe && !noOverlay) {
           try {
             if (localStorage.getItem('mon-vis-'   + TIMER_ID) !== '0') { toggleMonitoring(); }
             if (localStorage.getItem('timer-vis-' + TIMER_ID) !== '0') { toggleTimer(); }

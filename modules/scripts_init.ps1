@@ -488,6 +488,7 @@ if (-not $global:IsVRMonitorJob -and -not $global:IsDashboardProcess) {
     if (-not $global:IsWebServerProcess) {
         Update-HeadsetMonitoringFile
         Update-HeadsetVideoFile
+        Update-HeadsetTimerFile
     }
 }
 
