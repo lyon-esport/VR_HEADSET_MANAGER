@@ -23,10 +23,11 @@
 
 # --- Website static pages and templates ---
 /website/
+/website/assets/favicon/
 !/website/timer/
 !/website/generated/
 !/website/assets/app_icons/
-!/website/assets/favicon/
+
 
 # --- Documentation (exclude scratch/test files) ---
 /docs/
