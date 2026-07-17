@@ -1,35 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 150" width="640" height="150" role="img" aria-label="VR Headset Manager logo">
-  <defs>
-    <linearGradient id="hs" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#60a5fa"/>
-      <stop offset="1" stop-color="#2563eb"/>
-    </linearGradient>
-    <mask id="nose">
-      <rect x="0" y="0" width="640" height="150" fill="#fff"/>
-      <circle cx="105" cy="112" r="20" fill="#000"/>
-    </mask>
-  </defs>
-
-  <!-- strap -->
-  <path d="M28 62 C 12 62 12 88 28 88" fill="none" stroke="#94a3b8" stroke-width="10" stroke-linecap="round"/>
-  <path d="M182 62 C 198 62 198 88 182 88" fill="none" stroke="#94a3b8" stroke-width="10" stroke-linecap="round"/>
-
-  <!-- headset body with nose notch -->
-  <g mask="url(#nose)">
-    <rect x="25" y="38" width="160" height="74" rx="26" fill="url(#hs)"/>
+  <!-- icon: same artwork as website/assets/favicon.svg -->
+  <g transform="translate(8,10) scale(2.03)">
+    <rect x="5" y="5" width="54" height="54" rx="11" fill="#161616"/>
+    <rect x="5" y="5" width="54" height="54" rx="11" fill="none" stroke="#2563eb" stroke-width="5"/>
+    <rect x="14" y="23" width="36" height="19" rx="9" fill="#ffffff"/>
+    <circle cx="32" cy="43" r="6" fill="#161616"/>
   </g>
 
-  <!-- lenses -->
-  <circle cx="72" cy="72" r="17" fill="#ffffff" opacity="0.85"/>
-  <circle cx="138" cy="72" r="17" fill="#ffffff" opacity="0.85"/>
-  <circle cx="72" cy="72" r="8" fill="#1e3a8a"/>
-  <circle cx="138" cy="72" r="8" fill="#1e3a8a"/>
-
-  <!-- signal waves -->
-  <path d="M196 48 C 208 60 208 90 196 102" fill="none" stroke="#3b82f6" stroke-width="6" stroke-linecap="round" opacity="0.7"/>
-  <path d="M212 40 C 230 58 230 92 212 110" fill="none" stroke="#3b82f6" stroke-width="6" stroke-linecap="round" opacity="0.4"/>
-
   <!-- wordmark -->
-  <text x="252" y="80" font-family="Segoe UI, Arial, Helvetica, sans-serif" font-size="44" font-weight="700" fill="#3b82f6" letter-spacing="1">VR HEADSET</text>
-  <text x="252" y="122" font-family="Segoe UI, Arial, Helvetica, sans-serif" font-size="34" font-weight="600" fill="#94a3b8" letter-spacing="10">MANAGER</text>
+  <text x="310" y="80" text-anchor="middle" font-family="Segoe UI, Arial, Helvetica, sans-serif" font-size="44" font-weight="700" fill="#2563eb" letter-spacing="1">VR HEADSET</text>
+  <text x="310" y="122" text-anchor="middle" font-family="Segoe UI, Arial, Helvetica, sans-serif" font-size="34" font-weight="600" fill="#94a3b8" letter-spacing="10">MANAGER</text>
 </svg>

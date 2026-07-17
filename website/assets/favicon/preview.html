@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>VRHM Favicon Proposals</title>
+<style>
+  body { font-family: "Segoe UI", Arial, sans-serif; background: #1a1d24; color: #e6e8ee; margin: 0; padding: 30px; }
+  h1 { font-size: 22px; margin: 0 0 6px 0; }
+  p.sub { color: #9aa1af; margin: 0 0 24px 0; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 18px; }
+  .card { background: #242832; border: 1px solid #343a48; border-radius: 12px; padding: 16px 18px; }
+  .card h2 { font-size: 15px; margin: 0 0 2px 0; }
+  .card .desc { font-size: 12px; color: #9aa1af; margin: 0 0 12px 0; }
+  .row { display: flex; align-items: center; gap: 14px; border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+  .row.dark  { background: #14161c; }
+  .row.light { background: #f2f3f5; }
+  .row .lbl { font-size: 11px; width: 78px; flex-shrink: 0; }
+  .row.dark  .lbl { color: #7d8494; }
+  .row.light .lbl { color: #6b7280; }
+  .row img { display: block; }
+  .tab { display: inline-flex; align-items: center; gap: 6px; background: #2e333f; border-radius: 8px 8px 0 0; padding: 5px 12px; font-size: 12px; color: #cfd3dc; }
+  .tab img { width: 16px; height: 16px; }
+</style>
+</head>
+<body>
+<h1>VR HEADSET MANAGER - favicon proposals</h1>
+<p class="sub">Final candidates. Shown at 16 / 32 / 64 / 128 px on dark and light backgrounds, plus a simulated browser tab.</p>
+<div class="grid" id="grid"></div>
+<script>
+  var variants = [
+    { file: "favicon_h-white_b-blue_bg-black.svg", name: "White headset / Blue border / Black background", desc: "favicon_h-white_b-blue_bg-black.svg (blue #2563eb)" },
+    { file: "favicon_v1.svg", name: "V1 - Meta blue-purple gradient", desc: "White headset on blue-to-purple gradient screen, dark frame" }
+  ];
+  var sizes = [16, 32, 64, 128];
+  var html = "";
+  variants.forEach(function (v) {
+    var imgs = sizes.map(function (s) {
+      return '<img src="' + v.file + '" width="' + s + '" height="' + s + '" alt="">';
+    }).join("");
+    html += '<div class="card">' +
+      '<h2>' + v.name + '</h2><p class="desc">' + v.desc + '</p>' +
+      '<div class="tab"><img src="' + v.file + '" alt="">VRHM - Video Monitor</div>' +
+      '<div class="row dark"><span class="lbl">Dark theme</span>' + imgs + '</div>' +
+      '<div class="row light"><span class="lbl">Light theme</span>' + imgs + '</div>' +
+      '</div>';
+  });
+  document.getElementById("grid").innerHTML = html;
+</script>
+</body>
+</html>
