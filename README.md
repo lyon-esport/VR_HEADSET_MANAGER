@@ -62,7 +62,7 @@ Full details: [Installation](docs/installation.md) → [Getting started](docs/ge
 | Model | Status |
 |---|---|
 | Meta Quest 3 | Fully supported (including per-eye crop profiles) |
-| Meta Quest 2 | Fully supported |
+| Meta Quest 2 | Fully supported (cropping profiles are defined for 63mm IPD) |
 | PICO 4 Ultra | Supported |
 | Other Android-based headsets | Should work over WiFi ADB — profiles may need tuning |
 
