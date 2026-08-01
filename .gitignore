@@ -46,11 +46,12 @@ OBS/timer/
 /version.txt
 TODO_AI.txt
 
+
 # Too big...
 /sources/Meta Quest Developer Hub
 
 # mediamtx auto-generated MoQ/SRT stray artifacts
-/auto.crt
-/auto.key
+auto.crt
+auto.key
 /null
 /-

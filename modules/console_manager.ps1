@@ -313,6 +313,7 @@ function Show-MainMenu {
         Write-Host $msg.RecordingManagement -BackgroundColor DarkBlue -ForegroundColor White
         Write-Host $msg.FilesFolders -BackgroundColor DarkCyan -ForegroundColor Black
         Write-Host $msg.ServicesManagement -BackgroundColor DarkGray -ForegroundColor White
+        Write-Host $msg.OpenBrowser -BackgroundColor DarkCyan -ForegroundColor White
         Write-Host "C. Configuration" -BackgroundColor DarkBlue -ForegroundColor Cyan
         Write-Host $msg.Quit
         Write-Host $msg.AnyOtherKey
@@ -400,6 +401,14 @@ function Show-MainMenu {
                         Show-SubMenu-FilesAndFolders
                     }
                 'W' { Show-SubMenu-Services }
+                'B' {
+                    if ($global:WebServer_enabled) {
+                        Start-Process ("http://localhost:{0}/" -f $global:WebServer_port)
+                    } else {
+                        Write-Host $msg.MenuWebServerDisabled -ForegroundColor Red
+                        pause
+                    }
+                }
                 'C' { Show-SubMenu-Config }
                 'I' {
                     if (Test-InternetConnectivity) {

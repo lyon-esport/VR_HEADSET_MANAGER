@@ -203,7 +203,7 @@ function Start-VRMonitor {
                 $f = Join-Path $modPath $mod
                 if (Test-Path -LiteralPath $f) { . $f }
             }
-            Get-Config -ConfigFilePath $configFilePath
+            Get-Config -ConfigFilePath $configFilePath | Out-Null
 
             # Load translations so $msg.* calls in functions do not throw
             $transFolder = Join-Path $scriptPath "modules\translations"
@@ -410,7 +410,7 @@ function Start-VRMonitor {
             if ($slowCounter -ge $slowEvery) {
                 $slowCounter = 0
 
-                Get-Config -ConfigFilePath $global:ConfigFilePath
+                Get-Config -ConfigFilePath $global:ConfigFilePath | Out-Null
                 $sharedState["_refresh_timer"] = $global:VRMonitor_refresh_timer
                 $slowEvery = [Math]::Max(1, [int]($global:VRMonitor_refresh_timer / 0.5))
 

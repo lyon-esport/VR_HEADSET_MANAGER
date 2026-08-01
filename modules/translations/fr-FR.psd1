@@ -127,6 +127,8 @@
     VideoRecastInvalidChoice = "  Choix invalide. Appuyez sur une touche pour revenir."
     FilesFolders = " F. Gestion des fichiers et dossiers "
     ServicesManagement = " W. Gestion des services (serveur web / mediamtx) "
+    OpenBrowser = " B. Ouvrir le tableau de bord web dans le navigateur "
+    MenuWebServerDisabled = "Le serveur web est desactive dans config.json. Activez-le dans Configuration pour utiliser cette option."
     Quit = " 0. Quitter "
     ServicesTitle = "== GESTION DES SERVICES =="
     ServicesWebServerStatus = "Serveur web : {0}"

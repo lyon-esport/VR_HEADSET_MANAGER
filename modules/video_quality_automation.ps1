@@ -807,7 +807,7 @@ function Invoke-VqaApply {
         }
         if ($applied.Profiles.Count -gt 0 -or $applied.MediaMtx) {
             Write-FileWithoutBom -Path $configPath -Content (($cfg | ConvertTo-Json -Depth 12))
-            try { Get-Config -ConfigFilePath $configPath } catch { }
+            try { Get-Config -ConfigFilePath $configPath | Out-Null } catch { }
         }
 
         foreach ($h in $applied.Headsets) {
@@ -931,7 +931,7 @@ function Restore-VqaOriginals {
     if ($configChanged) {
         try {
             Write-FileWithoutBom -Path $configPath -Content (($cfg | ConvertTo-Json -Depth 12))
-            try { Get-Config -ConfigFilePath $configPath } catch { }
+            try { Get-Config -ConfigFilePath $configPath | Out-Null } catch { }
         } catch {
             Write-Log ("VQA restore: config.json write failed: " + $_.Exception.Message) -Level ERROR
             $errCount++

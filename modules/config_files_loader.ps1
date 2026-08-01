@@ -358,6 +358,7 @@ function Get-Config {
     $global:scrcpyRestartAuto = $true
     
     Write-Log "Configuration variables successfully loaded" -Level DEBUG
+    return $true
 } # OK
 
 # Verifies that the known headsets file is valid

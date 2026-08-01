@@ -96,14 +96,50 @@ if ((Split-Path $global:ScriptPath -Leaf) -notmatch "VR_HEADSET_MANAGER") {
 
 ########################## INITIALISATION ##########################
 
+# Load Test-FolderWriteAccess early (utils.ps1 is re-dot-sourced later by
+# scripts_init.ps1 along with the rest of the modules - harmless).
+. (Join-Path -Path $global:ScriptPath -ChildPath "modules\utils.ps1")
+
+# Unconditional root write-access check. Catches the case where the app
+# folder (and its subfolders) already exist - e.g. created during a prior
+# elevated run - but the CURRENT (non-admin) user has no write access to
+# them. Test-Path/the per-folder loop below only guards folder CREATION,
+# so without this check an already-existing-but-unwritable folder would
+# pass silently and only fail much later (e.g. VQA writing vqa_history.csv).
+$rootDiag = Test-FolderWriteAccess -Path $global:ScriptPath
+if (-not $rootDiag.Writable) {
+    Write-Host "Error: Cannot write to the app folder '$global:ScriptPath'." -ForegroundColor Red
+    Write-Host $rootDiag.Reason -ForegroundColor Red
+    Write-Host "Fix: move the app folder to a location you can write to (e.g. Documents or a dedicated D:\Apps\... folder), or always run this app as Administrator." -ForegroundColor Yellow
+    Read-Host "Press enter to exit"
+    exit 1
+}
 
 # Check if folders exists in the same folder as the script, otherwise create them
 $requiredFolders = @("config","data","logs","website","website\generated")
 foreach ($folder in $requiredFolders) {
     $folderPath = Join-Path -Path $global:ScriptPath -ChildPath $folder
     if (-not (Test-Path -Path $folderPath)) {
-        New-Item -ItemType Directory -Path $folderPath | Out-Null
-        Write-Host "Created missing folder: $folder" -ForegroundColor Yellow
+        try {
+            New-Item -ItemType Directory -Path $folderPath -ErrorAction Stop | Out-Null
+            Write-Host "Created missing folder: $folder" -ForegroundColor Yellow
+        } catch {
+            $diag = Test-FolderWriteAccess -Path $folderPath
+            Write-Host "Error: Could not create required folder '$folderPath'." -ForegroundColor Red
+            Write-Host $diag.Reason -ForegroundColor Red
+            Write-Host "Fix: move the app folder to a location you can write to (e.g. Documents or a dedicated D:\Apps\... folder), or run this app as Administrator." -ForegroundColor Yellow
+            Read-Host "Press enter to exit"
+            exit 1
+        }
+    } else {
+        $diag = Test-FolderWriteAccess -Path $folderPath
+        if (-not $diag.Writable) {
+            Write-Host "Error: Cannot write to existing folder '$folderPath'." -ForegroundColor Red
+            Write-Host $diag.Reason -ForegroundColor Red
+            Write-Host "Fix: move the app folder to a location you can write to (e.g. Documents or a dedicated D:\Apps\... folder), or run this app as Administrator." -ForegroundColor Yellow
+            Read-Host "Press enter to exit"
+            exit 1
+        }
     }
 }
 
@@ -111,7 +147,16 @@ foreach ($folder in $requiredFolders) {
 $_csvPath = Join-Path $global:ScriptPath "data\known_headsets.csv"
 if (-not (Test-Path -LiteralPath $_csvPath)) {
     Write-Host "Initializing known_headsets.csv..." -ForegroundColor Yellow
-    "ID,Name,IPAddress,scrcpy_AutoRestart,Record,SerialNumber" | Out-File -LiteralPath $_csvPath -Encoding UTF8
+    try {
+        "ID,Name,IPAddress,scrcpy_AutoRestart,Record,SerialNumber" | Out-File -LiteralPath $_csvPath -Encoding UTF8 -ErrorAction Stop
+    } catch {
+        $diag = Test-FolderWriteAccess -Path $_csvPath
+        Write-Host "Error: Could not create '$_csvPath'." -ForegroundColor Red
+        Write-Host $diag.Reason -ForegroundColor Red
+        Write-Host "Fix: move the app folder to a location you can write to (e.g. Documents or a dedicated D:\Apps\... folder), or run this app as Administrator." -ForegroundColor Yellow
+        Read-Host "Press enter to exit"
+        exit 1
+    }
 }
 Remove-Variable _csvPath
 

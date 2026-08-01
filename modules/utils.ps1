@@ -30,6 +30,64 @@ function Test-SsidMatch {
 }
 
 
+# Diagnoses whether a folder/file path can be written to. Does NOT rely on
+# Test-Path alone (it does not reflect ACL write permission) - it walks up to
+# the nearest existing ancestor directory and attempts a real create+delete
+# write probe there. Returns @{Writable; Reason; ParentExists; ProbedPath}.
+# Use this in catch blocks after a New-Item/Out-File/WriteAllText failure to
+# give the operator a specific, actionable reason (permission denied vs.
+# missing parent vs. other) instead of a raw exception.
+function Test-FolderWriteAccess {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    $ancestor = $Path
+    while ($ancestor -and -not (Test-Path -LiteralPath $ancestor)) {
+        $parent = Split-Path -Path $ancestor -Parent
+        if (-not $parent -or $parent -eq $ancestor) { break }
+        $ancestor = $parent
+    }
+
+    $parentExists = [bool]($ancestor -and (Test-Path -LiteralPath $ancestor))
+    if (-not $parentExists) {
+        return @{
+            Writable     = $false
+            Reason       = "No existing parent directory could be found above '$Path'."
+            ParentExists = $false
+            ProbedPath   = $ancestor
+        }
+    }
+
+    $probeFile = Join-Path -Path $ancestor -ChildPath (".vrhm_write_test_{0}.tmp" -f [guid]::NewGuid().ToString("N"))
+    try {
+        [System.IO.File]::WriteAllText($probeFile, "")
+        Remove-Item -LiteralPath $probeFile -Force -ErrorAction SilentlyContinue
+        return @{
+            Writable     = $true
+            Reason       = "OK"
+            ParentExists = $true
+            ProbedPath   = $ancestor
+        }
+    } catch [System.UnauthorizedAccessException] {
+        return @{
+            Writable     = $false
+            Reason       = "Permission denied writing to '$ancestor'. This commonly happens when the app is installed under an admin-protected folder such as 'Program Files' or 'Windows'."
+            ParentExists = $true
+            ProbedPath   = $ancestor
+        }
+    } catch {
+        return @{
+            Writable     = $false
+            Reason       = "Could not write to '$ancestor': $($_.Exception.Message)"
+            ParentExists = $true
+            ProbedPath   = $ancestor
+        }
+    }
+}
+
+
 # Parse a CSV/JSON field that may be the string "True"/"False" or a real
 # boolean and return a real [bool]. Empty/null returns $false.
 # Use this everywhere instead of comparing $row.Field -eq $True/$False.

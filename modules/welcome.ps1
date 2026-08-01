@@ -53,6 +53,37 @@ function Get-DefaultRecordingFolder {
 
 # Read-ValidPort lives in modules/utils.ps1 (dot-sourced at wizard startup).
 
+function Start-WelcomeBrowserLauncher {
+    # Fires a self-terminating background job that polls the web server port
+    # until it responds, then opens the default browser. The web server is
+    # not started by the wizard - it only comes up later via Start-VRMonitor
+    # after main.ps1 finishes loading - so this cannot just call Start-Process
+    # immediately, and must not block the wizard while it waits.
+    param(
+        [int]$Port,
+        [string]$Page = "video_monitor.html",
+        [int]$TimeoutSec = 30
+    )
+    $url = "http://localhost:$Port/$Page"
+    Start-Job -ScriptBlock {
+        param($url, $port, $timeoutSec)
+        $deadline = (Get-Date).AddSeconds($timeoutSec)
+        while ((Get-Date) -lt $deadline) {
+            try {
+                $client = New-Object System.Net.Sockets.TcpClient
+                $iar = $client.BeginConnect("127.0.0.1", $port, $null, $null)
+                if ($iar.AsyncWaitHandle.WaitOne(500) -and $client.Connected) {
+                    $client.Close()
+                    Start-Process $url
+                    return
+                }
+                $client.Close()
+            } catch { }
+            Start-Sleep -Milliseconds 500
+        }
+    } -ArgumentList $url, $Port, $TimeoutSec | Out-Null
+}
+
 
 function Invoke-FfmpegDownload {
     param([string]$SourcesFolder)
@@ -305,7 +336,16 @@ function Invoke-WelcomeSetup {
     Write-WizardAction "Writing config\config.json ..."
     $outputJson = $config | ConvertTo-Json -Depth 10
     $utf8NoBom = New-Object System.Text.UTF8Encoding $false
-    [System.IO.File]::WriteAllText($ConfigOutputPath, $outputJson, $utf8NoBom)
+    try {
+        [System.IO.File]::WriteAllText($ConfigOutputPath, $outputJson, $utf8NoBom)
+    } catch {
+        $diag = Test-FolderWriteAccess -Path $ConfigOutputPath
+        Write-Host "  Error: Could not write '$ConfigOutputPath'." -ForegroundColor Red
+        Write-Host "  $($diag.Reason)" -ForegroundColor Red
+        Write-Host "  Fix: move the app folder to a location you can write to (e.g. Documents or a dedicated D:\Apps\... folder), or run this app as Administrator." -ForegroundColor Yellow
+        Read-Host "Press enter to exit"
+        exit 1
+    }
 
     # ------------------------------------------------------------------
     # Step 6 - System authorizations (firewall rules + URL ACL)
@@ -345,7 +385,10 @@ function Invoke-WelcomeSetup {
         }
 
         Write-WizardAction "Loading config values into runtime globals..."
-        Get-Config -ConfigFilePath $ConfigOutputPath | Out-Null
+        $configLoaded = Get-Config -ConfigFilePath $ConfigOutputPath
+        if (-not $configLoaded) {
+            throw "Get-Config could not load '$ConfigOutputPath' (file missing or invalid JSON)."
+        }
 
         Write-WizardAction "Requesting administrator rights and opening the batch authorization console..."
         Initialize-ComputerSetup
@@ -367,6 +410,11 @@ function Invoke-WelcomeSetup {
     Write-Host ("  RTSP stream : rtsp://localhost:" + $config.mediamtx.rtsp_port) -ForegroundColor White
     Write-Host ("  ffmpeg      : " + $config.ffmpeg.folder) -ForegroundColor White
     Write-Host "  $line" -ForegroundColor Cyan
+    Write-Host ""
+
+    Write-WizardAction "The dashboard will open automatically in your default browser once the app has started..."
+    Start-WelcomeBrowserLauncher -Port ([int]$config.WebServer.port)
+
     Write-Host ""
     Write-Host "  Press any key to launch VR Headset Manager..." -ForegroundColor Yellow
     [Console]::ReadKey($true) | Out-Null

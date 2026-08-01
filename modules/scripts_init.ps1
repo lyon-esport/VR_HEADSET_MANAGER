@@ -134,7 +134,7 @@ $moduleFiles = Get-ChildItem -Path $ModulesPath -Filter "*.ps1" -File | Sort-Obj
         exit 1
 
     } else {
-        Get-Config -ConfigFilePath $ConfigFilePath
+        Get-Config -ConfigFilePath $ConfigFilePath | Out-Null
         Write-Log "Configuration file $ConfigFilePath loaded successfully" -Level DEBUG
         Write-Host "DEBUG global:knownHeadsetsFile = $($global:knownHeadsetsFile)" -ForegroundColor Magenta
         Write-Host "DEBUG global:knownHeadsetsFilePath = $($global:knownHeadsetsFilePath)" -ForegroundColor Magenta

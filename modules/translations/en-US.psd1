@@ -121,6 +121,8 @@
     VideoRecast = " V. Video recast (RTSP/WebRTC) "
     FilesFolders = " F. Files and folders management "
     ServicesManagement = " W. Services management (web server / mediamtx) "
+    OpenBrowser = " B. Open web dashboard in browser "
+    MenuWebServerDisabled = "Web server is disabled in config.json. Enable it under Configuration to use this option."
     Quit = " 0. Quit "
     ServicesTitle = "== SERVICES MANAGEMENT =="
     ServicesWebServerStatus = "Web server  : {0}"
