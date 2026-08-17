@@ -254,12 +254,30 @@ function Start-FfmpegStreamPush {
     param(
         [Parameter(Mandatory)][string]$SafeName,
         [Parameter(Mandatory)][string]$RtspUrl,
-        [string]$RecordFile = ''
+        [string]$RecordFile = '',
+        [string]$SourceCodec = 'h264'
     )
     $names = Get-HeadsetPipeNames -SafeName $SafeName
     $logErr = Join-Path $global:logFolder ("${SafeName}_ffmpegPush_stderr.txt")
     $argList = [System.Collections.Generic.List[string]]::new()
     $argList.AddRange([string[]]@('-hide_banner','-loglevel','warning'))
+    # Passthrough needs the bitstream filter matching the actual stream codec
+    # (mkv/AVCC -> Annex-B for RTSP). An unrecognized codec cannot be safely
+    # passed through - force re-encode for this stream so it doesn't die like
+    # the h265-with-h264-filter bug this branch was fixed for.
+    $forceReencode = $global:mediamtxReencode
+    $passthroughArgs = $null
+    if (-not $forceReencode) {
+        $passthroughArgs = switch ($SourceCodec) {
+            'h264'  { @('-bsf:v','h264_mp4toannexb') }
+            'h265'  { @('-bsf:v','hevc_mp4toannexb','-tag:v','hvc1') }
+            default {
+                Write-Log ("Start-FfmpegStreamPush: unknown SourceCodec '{0}' for {1} - passthrough bitstream filter unknown, forcing re-encode for this stream" -f $SourceCodec, $SafeName) -Level ERROR
+                $forceReencode = $true
+                $null
+            }
+        }
+    }
     # Low-latency input flags applied ONLY when we are going to re-encode. They
     # cut libavformat's default 5s analyzeduration / 5MB probesize down to the
     # minimum the matroska demuxer needs to identify the H.264 stream (without
@@ -268,7 +286,7 @@ function Start-FfmpegStreamPush {
     # -fflags +nobuffer + -flags low_delay disable libavformat's read-ahead and
     # frame-reorder delay. -avioflags direct is intentionally NOT used: it
     # bypasses I/O buffering for the named pipe which proved unstable.
-    if ($global:mediamtxReencode) {
+    if ($forceReencode) {
         $argList.AddRange([string[]]@(
             '-fflags','+nobuffer','-flags','low_delay',
             '-analyzeduration','100000','-probesize','32768'))
@@ -279,7 +297,7 @@ function Start-FfmpegStreamPush {
     # bandwidth on every viewer protocol (including the video_monitor web page).
     # The optional file recording output below stays -c copy regardless, so on-disk
     # captures keep source quality.
-    if ($global:mediamtxReencode) {
+    if ($forceReencode) {
         $enc = Get-GpuEncoder
         $bw  = $global:mediamtxBitrate
         $fps = $global:mediamtxFramerate
@@ -319,8 +337,8 @@ function Start-FfmpegStreamPush {
         Write-Log ("Start-FfmpegStreamPush: {0} re-encoding with {1} @ {2}fps / {3} (low-latency tuning on)" -f $SafeName, $enc.Name, $fps, $bw) -Level DEBUG
     } else {
         # Passthrough (Annex-B is required by mediamtx; MKV stores AVCC)
-        $argList.AddRange([string[]]@('-map','0','-c','copy','-bsf:v','h264_mp4toannexb',
-            '-f','rtsp','-rtsp_transport','tcp',$RtspUrl))
+        $argList.AddRange([string[]](@('-map','0','-c','copy') + $passthroughArgs +
+            @('-f','rtsp','-rtsp_transport','tcp',$RtspUrl)))
     }
     # Optional output 2: file recording (MKV/MP4 - ffmpeg picks from extension).
     # The path must be double-quoted when it contains spaces because Start-Process
@@ -486,6 +504,8 @@ function start-screenCopy {
     $wifiDevice     = Get-AdbWifiDevice -headsetIP $headsetIP
     $headsetModel   = if ($wifiDevice) { Get-HeadsetModel -Device $wifiDevice } else { $null }
     Write-Log -Message ($msg.ScrcpyModelDetected -f $headsetModel) -Level "INFO"
+    $modelTemplate  = $global:scrcpyParameters.$headsetModel
+    $sourceCodec    = if ($modelTemplate -and $modelTemplate.video_codec) { $modelTemplate.video_codec } else { 'h264' }
 	<#
     if ($adb_model -like "Quest 2") {
 		#$options = "--crop=1550:1250:2000:280 --max-size=800 --video-bit-rate=10M --max-fps 60 --video-buffer=50 --video-codec=h265" #Oeil droit
@@ -593,7 +613,7 @@ function start-screenCopy {
             if ($recording -and $recordFile) {
                 $ffmpegRecord = [System.IO.Path]::ChangeExtension($recordFile, '.mkv')
             }
-            $ffmpegProc = Start-FfmpegStreamPush -SafeName $displayName -RtspUrl $rtspUrl -RecordFile $ffmpegRecord
+            $ffmpegProc = Start-FfmpegStreamPush -SafeName $displayName -RtspUrl $rtspUrl -RecordFile $ffmpegRecord -SourceCodec $sourceCodec
             $global:HeadsetPipelines[$displayName] = @{
                 Bridge         = $bridgeJob
                 ScrcpyProcess  = $scrcpyProc
