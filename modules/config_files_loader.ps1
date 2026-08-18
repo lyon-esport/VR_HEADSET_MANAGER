@@ -235,6 +235,7 @@ function Get-Config {
     # Web server
     $global:WebServer_enabled = if ($null -ne $configContent.WebServer.enabled) { [bool]$configContent.WebServer.enabled } else { $false }
     $global:WebServer_port    = if ($configContent.WebServer.port)               { [int]$configContent.WebServer.port }    else { 8080 }
+    $global:WebServer_openBrowserOnStartup = if ($null -ne $configContent.WebServer.openBrowserOnStartup) { [bool]$configContent.WebServer.openBrowserOnStartup } else { $true }
 
     # mDNS responder
     $mdnsEnabledRaw = if ($null -ne $configContent.MdnsResponder.enabled) { $configContent.MdnsResponder.enabled } else { $false }

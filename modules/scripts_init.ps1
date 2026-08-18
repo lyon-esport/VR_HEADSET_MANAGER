@@ -498,6 +498,13 @@ if (-not $global:IsWebServerProcess -and -not $global:IsDashboardProcess) {
     Start-MdnsResponder
 }
 
+# Auto-open the default browser to the dashboard on startup (operator-configurable via WebServer.openBrowserOnStartup)
+if (-not $global:IsVRMonitorJob -and -not $global:IsWebServerProcess -and -not $global:IsDashboardProcess) {
+    if ($global:WebServer_enabled -and $global:WebServer_openBrowserOnStartup) {
+        Start-WelcomeBrowserLauncher -Port $global:WebServer_port
+    }
+}
+
 
 
 

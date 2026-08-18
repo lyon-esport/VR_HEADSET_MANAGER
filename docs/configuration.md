@@ -118,7 +118,7 @@ Browser-side behavior of the video wall: pause hidden streams after `pauseWhenHi
 
 ### `WebServer`
 
-`enabled` (default `true`) and `port` (default `8080`).
+`enabled` (default `true`), `port` (default `8080`), and `openBrowserOnStartup` (default `true`) - automatically opens the default web browser to the dashboard when the app starts.
 
 ### `MdnsResponder`
 

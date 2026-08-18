@@ -3762,6 +3762,291 @@ Start-Process powershell.exe -ArgumentList @('-File',$Script,'-ScriptPath',$Scri
             continue
         }
 
+        # API: GET /api/ffmpeg-version - installed ffmpeg version (local, fast, no network call)
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/ffmpeg-version') {
+            try {
+                $installedVersion = Get-FfmpegVersion
+                Send-JsonResponse -Response $response -Body @{ ok = $true; installedVersion = $installedVersion }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/ffmpeg-check-update - queries GitHub for the latest ffmpeg release
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/ffmpeg-check-update') {
+            try {
+                $installedVersion = Get-FfmpegVersion
+                $latest = Get-LatestFfmpegVersion
+                if (-not $latest) {
+                    Send-JsonResponse -Response $response -StatusCode 502 -Body @{ ok = $false; error = "Could not reach GitHub to check the latest ffmpeg version." }
+                } else {
+                    $updateAvailable = ($installedVersion -ne $latest.Version)
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; installedVersion = $installedVersion; latestVersion = $latest.Version; updateAvailable = $updateAvailable }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/ffmpeg-update - stops scrcpy/mediamtx, downloads latest ffmpeg,
+        # restarts mediamtx + previously-running scrcpy sessions. Synchronous: the download
+        # itself only takes a few seconds to ~1 minute, so no background job/progress-poll
+        # is needed (mirrors the restart sequence already used by /api/config/save).
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/ffmpeg-update') {
+            $lock = $null
+            try {
+                $lock = Enter-VqaLock -TimeoutMs 3000
+                if (-not $lock) {
+                    Send-JsonResponse -Response $response -StatusCode 409 -Body @{ ok = $false; pending = $true; error = "Another config change is in progress. Please retry shortly." }
+                    $response.Close()
+                    continue
+                }
+
+                # Snapshot headsets currently running scrcpy, same shape as /api/config/save.
+                $runningHeadsets = @()
+                foreach ($row in (Get-KnownHeadsets)) {
+                    $safe = Convert-Displayname $row.Name
+                    if (Get-ScrcpyProcess -displayName $safe -headsetIP $row.IPAddress) {
+                        $runningHeadsets += $row
+                    }
+                }
+
+                try { Stop-Scrcpy } catch { Write-Log ("ffmpeg-update: Stop-Scrcpy failed: " + $_.Exception.Message) -Level WARNING }
+                try { Stop-MediaMtx } catch { Write-Log ("ffmpeg-update: Stop-MediaMtx failed: " + $_.Exception.Message) -Level WARNING }
+
+                $result = Update-FfmpegBinary -SourcesFolder (Join-Path $ScriptPath "sources")
+
+                try {
+                    Start-MediaMtx
+                    Start-Sleep -Milliseconds 800
+                } catch {
+                    Write-Log ("ffmpeg-update: Start-MediaMtx failed: " + $_.Exception.Message) -Level WARNING
+                }
+
+                $restartedNames = @()
+                foreach ($row in $runningHeadsets) {
+                    try {
+                        start-screenCopy -headsetIP $row.IPAddress -displayName $row.Name -scrcpyProfile $row.ScrcpyProfile
+                        $restartedNames += $row.Name
+                    } catch {
+                        Write-Log ("ffmpeg-update: scrcpy restart failed for " + $row.Name + ": " + $_.Exception.Message) -Level WARNING
+                    }
+                }
+
+                $restarted = @{ mediamtx = $true; scrcpy = $restartedNames }
+                if ($result.Success) {
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; newVersion = $result.Version; restarted = $restarted }
+                } else {
+                    Send-JsonResponse -Response $response -StatusCode 502 -Body @{ ok = $false; error = $result.Error; restarted = $restarted }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                if ($lock) { Exit-VqaLock -Stream $lock }
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: GET /api/mediamtx-version - installed mediamtx version (parsed from the
+        # active folder name, local/fast, no network call)
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/mediamtx-version') {
+            try {
+                $installedVersion = Get-MediaMtxVersion
+                Send-JsonResponse -Response $response -Body @{ ok = $true; installedVersion = $installedVersion }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/mediamtx-check-update - queries GitHub for the latest mediamtx release
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/mediamtx-check-update') {
+            try {
+                $installedVersion = Get-MediaMtxVersion
+                $latest = Get-LatestMediaMtxVersion
+                if (-not $latest) {
+                    Send-JsonResponse -Response $response -StatusCode 502 -Body @{ ok = $false; error = "Could not reach GitHub to check the latest mediamtx version." }
+                } else {
+                    $updateAvailable = ($installedVersion -ne $latest.Version)
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; installedVersion = $installedVersion; latestVersion = $latest.Version; updateAvailable = $updateAvailable }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/mediamtx-update - stops scrcpy/mediamtx, downloads the latest
+        # mediamtx build into a NEW versioned folder under sources\MediaMTX\ (the previously
+        # installed version's folder + files are left on disk untouched), points
+        # config.json's mediamtx.folder at the new folder, then restarts mediamtx +
+        # previously-running scrcpy sessions. Synchronous, same shape as /api/ffmpeg-update.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/mediamtx-update') {
+            $lock = $null
+            try {
+                $lock = Enter-VqaLock -TimeoutMs 3000
+                if (-not $lock) {
+                    Send-JsonResponse -Response $response -StatusCode 409 -Body @{ ok = $false; pending = $true; error = "Another config change is in progress. Please retry shortly." }
+                    $response.Close()
+                    continue
+                }
+
+                # Snapshot headsets currently running scrcpy, same shape as /api/config/save.
+                $runningHeadsets = @()
+                foreach ($row in (Get-KnownHeadsets)) {
+                    $safe = Convert-Displayname $row.Name
+                    if (Get-ScrcpyProcess -displayName $safe -headsetIP $row.IPAddress) {
+                        $runningHeadsets += $row
+                    }
+                }
+
+                try { Stop-Scrcpy } catch { Write-Log ("mediamtx-update: Stop-Scrcpy failed: " + $_.Exception.Message) -Level WARNING }
+                try { Stop-MediaMtx } catch { Write-Log ("mediamtx-update: Stop-MediaMtx failed: " + $_.Exception.Message) -Level WARNING }
+
+                $result = Update-MediaMtxBinary -SourcesFolder (Join-Path $ScriptPath "sources")
+                if ($result.Success) {
+                    try {
+                        Set-MediaMtxFolderConfig -RelativeFolder $result.Folder
+                    } catch {
+                        Write-Log ("mediamtx-update: Set-MediaMtxFolderConfig failed: " + $_.Exception.Message) -Level WARNING
+                        $result.Success = $false
+                        $result.Error = "Downloaded but failed to update config.json: " + $_.Exception.Message
+                    }
+                }
+
+                try {
+                    Start-MediaMtx
+                    Start-Sleep -Milliseconds 800
+                } catch {
+                    Write-Log ("mediamtx-update: Start-MediaMtx failed: " + $_.Exception.Message) -Level WARNING
+                }
+
+                $restartedNames = @()
+                foreach ($row in $runningHeadsets) {
+                    try {
+                        start-screenCopy -headsetIP $row.IPAddress -displayName $row.Name -scrcpyProfile $row.ScrcpyProfile
+                        $restartedNames += $row.Name
+                    } catch {
+                        Write-Log ("mediamtx-update: scrcpy restart failed for " + $row.Name + ": " + $_.Exception.Message) -Level WARNING
+                    }
+                }
+
+                $restarted = @{ mediamtx = $true; scrcpy = $restartedNames }
+                if ($result.Success) {
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; newVersion = $result.Version; folder = $result.Folder; restarted = $restarted }
+                } else {
+                    Send-JsonResponse -Response $response -StatusCode 502 -Body @{ ok = $false; error = $result.Error; restarted = $restarted }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                if ($lock) { Exit-VqaLock -Stream $lock }
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: GET /api/scrcpy-version - installed scrcpy version (parsed from the
+        # active folder name, local/fast, no network call)
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/scrcpy-version') {
+            try {
+                $installedVersion = Get-ScrcpyVersion
+                Send-JsonResponse -Response $response -Body @{ ok = $true; installedVersion = $installedVersion }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/scrcpy-check-update - queries GitHub for the latest official
+        # scrcpy release (NOTE: this project ships a patched "no flickering" build -
+        # the official release is the only public source, so an update replaces it)
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/scrcpy-check-update') {
+            try {
+                $installedVersion = Get-ScrcpyVersion
+                $latest = Get-LatestScrcpyVersion
+                if (-not $latest) {
+                    Send-JsonResponse -Response $response -StatusCode 502 -Body @{ ok = $false; error = "Could not reach GitHub to check the latest scrcpy version." }
+                } else {
+                    $updateAvailable = ($installedVersion -ne $latest.Version)
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; installedVersion = $installedVersion; latestVersion = $latest.Version; updateAvailable = $updateAvailable }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/scrcpy-update - stops scrcpy, downloads the latest official
+        # scrcpy build (bundles adb.exe) into a NEW folder under sources\scrcpy\
+        # (consolidating any legacy top-level scrcpy folder into sources\scrcpy\ too -
+        # moved, not deleted), points config.json's scrcpy.folder AND ADB.folder at
+        # the new folder, then restarts previously-running scrcpy sessions. mediamtx
+        # is untouched (scrcpy/adb are independent of it). Synchronous, same shape
+        # as /api/ffmpeg-update and /api/mediamtx-update.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/scrcpy-update') {
+            $lock = $null
+            try {
+                $lock = Enter-VqaLock -TimeoutMs 3000
+                if (-not $lock) {
+                    Send-JsonResponse -Response $response -StatusCode 409 -Body @{ ok = $false; pending = $true; error = "Another config change is in progress. Please retry shortly." }
+                    $response.Close()
+                    continue
+                }
+
+                # Snapshot headsets currently running scrcpy, same shape as /api/config/save.
+                $runningHeadsets = @()
+                foreach ($row in (Get-KnownHeadsets)) {
+                    $safe = Convert-Displayname $row.Name
+                    if (Get-ScrcpyProcess -displayName $safe -headsetIP $row.IPAddress) {
+                        $runningHeadsets += $row
+                    }
+                }
+
+                try { Stop-Scrcpy } catch { Write-Log ("scrcpy-update: Stop-Scrcpy failed: " + $_.Exception.Message) -Level WARNING }
+                try { & $global:adbPath kill-server 2>&1 | Out-Null } catch { }
+
+                $result = Update-ScrcpyBinary -SourcesFolder (Join-Path $ScriptPath "sources")
+                if ($result.Success) {
+                    try {
+                        Set-ScrcpyAdbFolderConfig -RelativeFolder $result.Folder
+                    } catch {
+                        Write-Log ("scrcpy-update: Set-ScrcpyAdbFolderConfig failed: " + $_.Exception.Message) -Level WARNING
+                        $result.Success = $false
+                        $result.Error = "Downloaded but failed to update config.json: " + $_.Exception.Message
+                    }
+                }
+
+                try { Start-AdbServer } catch { Write-Log ("scrcpy-update: Start-AdbServer failed: " + $_.Exception.Message) -Level WARNING }
+
+                $restartedNames = @()
+                foreach ($row in $runningHeadsets) {
+                    try {
+                        start-screenCopy -headsetIP $row.IPAddress -displayName $row.Name -scrcpyProfile $row.ScrcpyProfile
+                        $restartedNames += $row.Name
+                    } catch {
+                        Write-Log ("scrcpy-update: scrcpy restart failed for " + $row.Name + ": " + $_.Exception.Message) -Level WARNING
+                    }
+                }
+
+                $restarted = @{ mediamtx = $false; scrcpy = $restartedNames }
+                if ($result.Success) {
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; newVersion = $result.Version; folder = $result.Folder; restarted = $restarted }
+                } else {
+                    Send-JsonResponse -Response $response -StatusCode 502 -Body @{ ok = $false; error = $result.Error; restarted = $restarted }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                if ($lock) { Exit-VqaLock -Stream $lock }
+                $response.Close()
+            }
+            continue
+        }
+
         # ── /end Known Apps Management API ───────────────────────────────────────
 
         # API: GET /api/timer?id=<headsetID>&action=... OR ?name=<displayName>&action=...

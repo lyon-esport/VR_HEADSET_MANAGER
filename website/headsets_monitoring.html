@@ -733,8 +733,8 @@
     // `changed` is decided by the caller on the raw numeric values so that
     // "uncapped" (0) and "0" never look different, and a row with current == recommended
     // is rendered as non-actionable and neutral-coloured regardless of direction.
-    function vqaRenderRow(label, original, current, recommended, scope, target, changed) {
-      var btnAttrs = !changed
+    function vqaRenderRow(label, original, current, recommended, scope, target, changed, inCooldown) {
+      var btnAttrs = (!changed || inCooldown)
         ? 'style="pointer-events:none;opacity:0.35"'
         : 'onclick="event.preventDefault();vqaApply(\'' + scope + '\',\'' + (target || '').replace(/'/g, "\\'") + '\')"';
       // Use darker amber (#b45309) instead of #facc15 so the value is legible in light mode too.
@@ -840,7 +840,7 @@
         var cur     = vqaMaxSizeText(p.Current);
         var rec     = vqaMaxSizeText(p.Recommended);
         var changed = ((p.Recommended | 0) !== (p.Current | 0));
-        pHtml += vqaRenderRow(p.Model, orig, cur, rec, 'profile', p.Model, changed);
+        pHtml += vqaRenderRow(p.Model, orig, cur, rec, 'profile', p.Model, changed, inCooldown);
       });
       pBody.innerHTML = pHtml || '<tr><td colspan="5" style="color:#555;text-align:center">No profiles configured.</td></tr>';
 
@@ -852,7 +852,7 @@
         var cur  = h.CurrentFps  + ' / ' + h.CurrentBitrate;
         var rec  = h.RecommendedFps + ' / ' + h.RecommendedBitrate;
         var changed = (h.RecommendedFps !== h.CurrentFps || h.RecommendedBitrate !== h.CurrentBitrate);
-        hHtml += vqaRenderRow(h.Name, orig, cur, rec, 'headset', h.Name, changed);
+        hHtml += vqaRenderRow(h.Name, orig, cur, rec, 'headset', h.Name, changed, inCooldown);
       });
       hBody.innerHTML = hHtml || '<tr><td colspan="5" style="color:#555;text-align:center">No running scrcpy sessions.</td></tr>';
 
@@ -863,7 +863,7 @@
       var mCur  = (m.CurrentFramerate  || '-') + ' fps / ' + (m.CurrentBitrate  || '-') + ' Mbps';
       var mRec  = (m.RecommendedFramerate || '-') + ' fps / ' + (m.RecommendedBitrate || '-') + ' Mbps';
       var mChanged = (m.RecommendedFramerate !== m.CurrentFramerate || m.RecommendedBitrate !== m.CurrentBitrate);
-      mBody.innerHTML = vqaRenderRow('framerate / bitrate', mOrig, mCur, mRec, 'mediamtx', '', mChanged);
+      mBody.innerHTML = vqaRenderRow('framerate / bitrate', mOrig, mCur, mRec, 'mediamtx', '', mChanged, inCooldown);
     }
 
     function pollVqa() {

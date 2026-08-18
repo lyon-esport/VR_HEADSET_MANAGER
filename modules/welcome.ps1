@@ -123,57 +123,13 @@ function Invoke-FfmpegDownload {
 
     Write-Host ""
     Write-WizardAction "Querying GitHub API for latest ffmpeg release (this may take a few seconds)..."
-    try {
-        $apiUrl = "https://api.github.com/repos/GyanD/codexffmpeg/releases/latest"
-        $headers = @{ 'User-Agent' = 'VR-Headset-Manager-Setup' }
-        $release = Invoke-RestMethod -Uri $apiUrl -Headers $headers -TimeoutSec 15
-        $asset = $release.assets | Where-Object { $_.name -like "*essentials_build-www.zip" } | Select-Object -First 1
-        if (-not $asset) {
-            $asset = $release.assets | Where-Object { $_.name -like "*.zip" } | Select-Object -First 1
-        }
-        if (-not $asset) {
-            Write-Host "  No suitable zip found in release. Skipping." -ForegroundColor Red
-            return "ffmpeg"
-        }
-        $zipPath = Join-Path $env:TEMP "vrm_ffmpeg_download.zip"
-        $destFolder = Join-Path $SourcesFolder "ffmpeg"
-        Write-Host "  Downloading $($asset.name) ..." -ForegroundColor Yellow
-        $bitsOk = $false
-        try {
-            $bits = Get-Service -Name BITS -ErrorAction Stop
-            if ($bits.Status -eq 'Running' -or $bits.StartType -ne 'Disabled') {
-                Write-WizardAction "Using BITS background transfer (progress shown in status bar)..."
-                Start-BitsTransfer -Source $asset.browser_download_url -Destination $zipPath -Description "Downloading ffmpeg..." -ErrorAction Stop
-                $bitsOk = $true
-            }
-        } catch { }
-        if (-not $bitsOk) {
-            Write-WizardAction "Download in progress (no progress bar - please wait, this can take 1-2 minutes)..."
-            $wc = [System.Net.WebClient]::new()
-            $wc.Headers.Add('User-Agent', 'VR-Headset-Manager-Setup')
-            $wc.DownloadFile($asset.browser_download_url, $zipPath)
-            $wc.Dispose()
-        }
-        Write-WizardAction "Extracting ffmpeg.exe from the archive..."
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
-        $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
-        $entry = $zip.Entries | Where-Object { $_.FullName -like "*/bin/ffmpeg.exe" } | Select-Object -First 1
-        if (-not $entry) {
-            $zip.Dispose()
-            Write-Host "  Could not find bin\ffmpeg.exe in archive. Skipping." -ForegroundColor Red
-            return "ffmpeg"
-        }
-        if (-not (Test-Path -LiteralPath $destFolder)) {
-            New-Item -ItemType Directory -Path $destFolder | Out-Null
-        }
-        $destExe = Join-Path $destFolder "ffmpeg.exe"
-        [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $destExe, $true)
-        $zip.Dispose()
+    Write-WizardAction "Downloading ffmpeg (this can take 1-2 minutes)..."
+    $result = Update-FfmpegBinary -SourcesFolder $SourcesFolder
+    if ($result.Success) {
         Write-Host "  ffmpeg installed to: sources\ffmpeg" -ForegroundColor Green
-        Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
         return "ffmpeg"
-    } catch {
-        Write-Host "  Download failed: $($_.Exception.Message)" -ForegroundColor Red
+    } else {
+        Write-Host "  Download failed: $($result.Error)" -ForegroundColor Red
         Write-Host "  Skipping. You can install ffmpeg manually later." -ForegroundColor Yellow
         return "ffmpeg"
     }
@@ -413,7 +369,6 @@ function Invoke-WelcomeSetup {
     Write-Host ""
 
     Write-WizardAction "The dashboard will open automatically in your default browser once the app has started..."
-    Start-WelcomeBrowserLauncher -Port ([int]$config.WebServer.port)
 
     Write-Host ""
     Write-Host "  Press any key to launch VR Headset Manager..." -ForegroundColor Yellow

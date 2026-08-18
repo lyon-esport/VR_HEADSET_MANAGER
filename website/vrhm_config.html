@@ -790,6 +790,8 @@
           desc: 'Enable the built-in HTTP web server. Requires restart.' },
         { path: 'WebServer.port', label: 'Port', type: 'number', min: 1, max: 65535,
           desc: 'HTTP port for the web UI. Default: 8080. Full restart required.' },
+        { path: 'WebServer.openBrowserOnStartup', label: 'Auto-Open Browser on Startup', type: 'boolean',
+          desc: 'Automatically open the default web browser to the dashboard when the application starts. Enabled by default.' },
         { type: 'subgroup', label: 'mDNS Responder' },
         { path: 'MdnsResponder.enabled', label: 'Enabled', type: 'boolean',
           desc: 'Broadcast vrhm.local on the LAN so any browser can reach the web UI by name. Only works on computers (Windows/macOS) - Android and iOS phones/tablets do not support resolving .local names in the browser, so this will not work on mobile devices. Requires restart. Disabled by default.' },
@@ -932,6 +934,21 @@
       { path: 'apk.adbWirelessActivatorPackageName', label: 'APK Package Name' }
     ];
 
+    // Renders a "<Label> / installed version / check-for-update / update" row,
+    // same fld-row separators as the plain read-only ADV_FIELDS rows above it.
+    // key is the id prefix ('ffmpeg' or 'mediamtx') used to build unique element ids.
+    function binVerRowHtml(key, label) {
+      var h = '<div class="fld-row">';
+      h += '<div class="fld-lbl-col"><span class="fld-lbl" style="color:var(--muted)">' + esc(label) + '</span></div>';
+      h += '<div class="fld-ctl-col">';
+      h += '<span id="' + key + '-ver-installed" class="fld-ro">checking...</span>';
+      h += '<button class="action-btn" id="btn-' + key + '-check" style="display:inline-flex;width:auto;padding:9px 14px;font-size:12px"><div>Check for update</div></button>';
+      h += '<button class="action-btn" id="btn-' + key + '-update" style="display:none;width:auto;padding:9px 14px;font-size:12px;border-color:var(--accent)"><div>Update</div></button>';
+      h += '<span id="' + key + '-ver-status" class="fld-def"></span>';
+      h += '</div></div>';
+      return h;
+    }
+
     function renderAdvanced() {
       if (!_cfg) return;
       var html = '';
@@ -949,9 +966,21 @@
           html += '<span class="fld-def">default: ' + esc(defStr) + '</span>';
         }
         html += '</div></div>';
+        if (f.path === 'scrcpy.folder') {
+          html += binVerRowHtml('scrcpy', 'Scrcpy Version');
+        }
+        if (f.path === 'ffmpeg.folder') {
+          html += binVerRowHtml('ffmpeg', 'FFmpeg Version');
+        }
+        if (f.path === 'mediamtx.folder') {
+          html += binVerRowHtml('mediamtx', 'MediaMTX Version');
+        }
       });
       var el = document.getElementById('acc-advanced-fields');
       if (el) el.innerHTML = html;
+      loadScrcpyVersion();
+      loadFfmpegVersion();
+      loadMediaMtxVersion();
     }
 
     function renderAllSections() {
@@ -1013,6 +1042,105 @@
       }).catch(function() {
         showToast('Failed to load configuration', 3000);
       });
+    }
+
+    // ── Scrcpy / FFmpeg / MediaMTX version check / update ───────────────────
+    // Generic helpers keyed by 'scrcpy', 'ffmpeg' or 'mediamtx' - same UI flow
+    // for all three bundled binaries: GET .../<key>-version,
+    // POST .../<key>-check-update, POST .../<key>-update.
+    // Element ids are built by binVerRowHtml() above.
+    var BIN_LABELS = { scrcpy: 'Scrcpy', ffmpeg: 'FFmpeg', mediamtx: 'MediaMTX' };
+
+    function loadBinVersion(key) {
+      var verEl = document.getElementById(key + '-ver-installed');
+      if (!verEl) return;
+      fetch('/api/' + key + '-version')
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          verEl.textContent = (j.ok && j.installedVersion) ? ('v' + j.installedVersion) : 'not found';
+        })
+        .catch(function() { verEl.textContent = 'unknown'; });
+    }
+    function loadScrcpyVersion()   { loadBinVersion('scrcpy'); }
+    function loadFfmpegVersion()   { loadBinVersion('ffmpeg'); }
+    function loadMediaMtxVersion() { loadBinVersion('mediamtx'); }
+
+    // Buttons live inside #acc-advanced-fields, which is re-rendered (innerHTML
+    // replaced) by renderAdvanced() every time config reloads - delegate from
+    // the stable parent instead of binding directly to the buttons.
+    document.getElementById('acc-advanced-fields').addEventListener('click', function(e) {
+      Object.keys(BIN_LABELS).forEach(function(key) {
+        if (e.target.closest('#btn-' + key + '-check')) { onBinCheckClick(key); }
+        else if (e.target.closest('#btn-' + key + '-update')) { onBinUpdateClick(key, e.target.closest('#btn-' + key + '-update')); }
+      });
+    });
+
+    function onBinCheckClick(key) {
+      var checkBtn  = document.getElementById('btn-' + key + '-check');
+      var updateBtn = document.getElementById('btn-' + key + '-update');
+      var statusEl  = document.getElementById(key + '-ver-status');
+      checkBtn.disabled = true;
+      updateBtn.style.display = 'none';
+      statusEl.textContent = 'Checking...';
+      fetch('/api/' + key + '-check-update', { method: 'POST' })
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          checkBtn.disabled = false;
+          if (!j.ok) {
+            statusEl.textContent = 'Check failed: ' + (j.error || 'unknown error');
+            return;
+          }
+          if (j.updateAvailable) {
+            statusEl.textContent = 'Latest version: v' + j.latestVersion;
+            updateBtn.dataset.latestVersion = j.latestVersion;
+            updateBtn.style.display = 'inline-flex';
+          } else {
+            statusEl.textContent = 'You have the latest version (v' + j.latestVersion + ')';
+          }
+        })
+        .catch(function() {
+          checkBtn.disabled = false;
+          statusEl.textContent = 'Server unreachable';
+        });
+    }
+
+    function onBinUpdateClick(key, updateBtn) {
+      var checkBtn  = document.getElementById('btn-' + key + '-check');
+      var statusEl  = document.getElementById(key + '-ver-status');
+      var label     = BIN_LABELS[key];
+      var latest    = updateBtn.dataset.latestVersion || 'the latest version';
+      var confirmed = confirm(
+        'Updating ' + label + ' to v' + latest + ' will stop all live scrcpy/mediamtx streams while the download completes,\n' +
+        'then automatically restart mediamtx and any headset streams that were running.\n\n' +
+        'Continue?'
+      );
+      if (!confirmed) return;
+
+      checkBtn.disabled = true;
+      updateBtn.disabled = true;
+      statusEl.textContent = 'Updating - stopping streams, downloading ' + label + ', restarting (this may take up to a minute)...';
+
+      fetch('/api/' + key + '-update', { method: 'POST' })
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          checkBtn.disabled = false;
+          updateBtn.disabled = false;
+          if (j.ok) {
+            updateBtn.style.display = 'none';
+            var restartedCount = (j.restarted && j.restarted.scrcpy) ? j.restarted.scrcpy.length : 0;
+            statusEl.textContent = 'Updated to v' + j.newVersion + '. Restarted mediamtx' + (restartedCount ? (' + ' + restartedCount + ' headset stream(s).') : '.');
+            showToast(label + ' updated to v' + j.newVersion, 4000);
+            loadBinVersion(key);
+          } else {
+            statusEl.textContent = 'Update failed: ' + (j.error || 'unknown error');
+            showToast(label + ' update failed: ' + (j.error || 'unknown error'), 4000);
+          }
+        })
+        .catch(function() {
+          checkBtn.disabled = false;
+          updateBtn.disabled = false;
+          statusEl.textContent = 'Server unreachable';
+        });
     }
 
     // ── Profiles modal ───────────────────────────────────────────────────────

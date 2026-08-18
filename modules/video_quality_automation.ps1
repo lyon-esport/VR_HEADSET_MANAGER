@@ -471,6 +471,23 @@ function Start-VqaCooldown {
 }
 
 
+# Patches CooldownRemaining in the existing vqa_recommendation.json in place so
+# the web UI reflects a freshly-armed cooldown on its very next poll, instead
+# of waiting for the next full VQR cycle (which only runs on the VRMonitor
+# slow loop and can be tens of seconds to minutes away). No-op if the
+# recommendation file does not exist yet (e.g. very first apply of a session).
+function Set-VqaRecommendationCooldown {
+    if (-not (Test-Path -LiteralPath $global:VQA_RecommendationFilePath)) { return }
+    try {
+        $rec = Get-Content -LiteralPath $global:VQA_RecommendationFilePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $rec.CooldownRemaining = Get-VqaCooldownRemaining
+        Write-FileWithoutBom -Path $global:VQA_RecommendationFilePath -Content ($rec | ConvertTo-Json -Depth 6)
+    } catch {
+        Write-Log ("VQA: failed to patch recommendation cooldown: " + $_.Exception.Message) -Level WARNING
+    }
+}
+
+
 # Read the remaining cooldown counter (0 when no cooldown is active).
 function Get-VqaCooldownRemaining {
     if (-not (Test-Path -LiteralPath $global:VQA_CooldownFilePath)) { return 0 }
@@ -827,6 +844,21 @@ function Invoke-VqaApply {
         }
         Write-FileWithoutBom -Path $global:VQA_AppliedFilePath -Content ($appliedToWrite | ConvertTo-Json -Depth 5)
 
+        # mediamtx never reads stream_framerate/stream_bitrate - only
+        # Start-FfmpegStreamPush does. So a mediamtx-only change does not need
+        # mediamtx restarted, it needs every currently-running ffmpeg pusher
+        # bounced so it re-reads the new globals. Restarting mediamtx here
+        # would sever their RTSP sockets underneath them (broken pipe / HEVC
+        # POC corruption) for no benefit.
+        if ($restartMtx) {
+            foreach ($row in (Get-KnownHeadsets)) {
+                $safe = Convert-Displayname $row.Name
+                if ((Get-ScrcpyProcess -displayName $safe -headsetIP $row.IPAddress) -and ($restartProcs -notcontains $row.Name)) {
+                    $restartProcs += $row.Name
+                }
+            }
+        }
+
         # -- Restart affected scrcpy sessions
         foreach ($name in $restartProcs) {
             try {
@@ -841,12 +873,9 @@ function Invoke-VqaApply {
             }
         }
 
-        if ($restartMtx) {
-            try { Stop-MediaMtx; Start-Sleep -Seconds 1; Start-MediaMtx } catch { Write-Log "VQA: mediamtx restart failed." -Level WARNING }
-        }
-
         Write-Log ($msg.VqaRecommendationApplied -f $rec.Direction) -Level SUCCESS
         Start-VqaCooldown
+        Set-VqaRecommendationCooldown
         # Drop the cross-process flag read by the VRMonitor loop's
         # Update-ComputerMonitoring so CPU/GPU stats refresh within seconds
         # instead of waiting for the next throttled cycle - the UI uses those
@@ -1024,6 +1053,7 @@ function Restore-VqaOriginals {
     # Restore is also a "system mutated" event - arm the cooldown so VQR/VQO
     # let the workload re-stabilise before reacting.
     Start-VqaCooldown
+    Set-VqaRecommendationCooldown
     # Trigger immediate computer-monitoring refresh (cross-process flag read by
     # the VRMonitor loop). Without this the UI keeps showing stale CPU/GPU
     # numbers until the throttled cycle elapses.

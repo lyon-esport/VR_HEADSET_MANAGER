@@ -1172,3 +1172,335 @@ function Get-AdaptiveMonitorInterval {
     $m    = Get-LoadMultiplier
     return [Math]::Min(600, $base * $m)
 }
+
+# Returns the installed ffmpeg version string (e.g. "7.0.2"), or $null if the
+# exe is missing or the output cannot be parsed. Runs "ffmpeg -version" and
+# reads the first line ("ffmpeg version 7.0.2-full_build-www.gyan.dev ...").
+function Get-FfmpegVersion {
+    param([string]$FfmpegPath = $global:ffmpegFilePath)
+    if (-not $FfmpegPath -or -not (Test-Path -LiteralPath $FfmpegPath)) { return $null }
+    try {
+        $out = & $FfmpegPath -version 2>&1
+        $first = $out | Select-Object -First 1
+        # Gyan builds report "ffmpeg version 9.0.1-essentials_build-www.gyan.dev ...".
+        # Extract just the numeric version so it compares equal to the bare
+        # X.Y.Z string Get-LatestFfmpegVersion parses from the release asset name.
+        if ($first -match 'ffmpeg version\s+(\d+(?:\.\d+){1,2})') { return $Matches[1] }
+        if ($first -match 'ffmpeg version\s+(\S+)') { return $Matches[1] }
+        return $null
+    } catch {
+        return $null
+    }
+}
+
+# Queries the GyanD/codexffmpeg GitHub releases API for the latest available
+# build. Returns @{Version; DownloadUrl; AssetName} or $null on network/parse
+# failure. Never called automatically (only on operator-triggered "check for
+# update") to avoid hitting GitHub on every page load.
+function Get-LatestFfmpegVersion {
+    try {
+        $apiUrl = "https://api.github.com/repos/GyanD/codexffmpeg/releases/latest"
+        $headers = @{ 'User-Agent' = 'VR-Headset-Manager' }
+        $release = Invoke-RestMethod -Uri $apiUrl -Headers $headers -TimeoutSec 15
+        $asset = $release.assets | Where-Object { $_.name -like "*essentials_build-www.zip" } | Select-Object -First 1
+        if (-not $asset) {
+            $asset = $release.assets | Where-Object { $_.name -like "*.zip" } | Select-Object -First 1
+        }
+        if (-not $asset) { return $null }
+        $version = $release.tag_name
+        if ($asset.name -match '(\d+\.\d+(\.\d+)?)') { $version = $Matches[1] }
+        return @{ Version = $version; DownloadUrl = $asset.browser_download_url; AssetName = $asset.name }
+    } catch {
+        return $null
+    }
+}
+
+# Downloads and installs the latest ffmpeg build to "<SourcesFolder>\ffmpeg\ffmpeg.exe".
+# Single implementation shared by the first-run welcome wizard (Invoke-FfmpegDownload
+# in welcome.ps1) and the web UI update endpoint - same GitHub release, same
+# BITS-with-WebClient-fallback download, same zip extraction logic.
+# Returns @{Success; Version; Error}.
+function Update-FfmpegBinary {
+    param([string]$SourcesFolder = (Join-Path $global:ScriptPath "sources"))
+    try {
+        $latest = Get-LatestFfmpegVersion
+        if (-not $latest) {
+            return @{ Success = $false; Version = $null; Error = "Could not query latest ffmpeg release from GitHub." }
+        }
+        $zipPath = Join-Path $env:TEMP "vrm_ffmpeg_download.zip"
+        $destFolder = Join-Path $SourcesFolder "ffmpeg"
+
+        $bitsOk = $false
+        try {
+            $bits = Get-Service -Name BITS -ErrorAction Stop
+            if ($bits.Status -eq 'Running' -or $bits.StartType -ne 'Disabled') {
+                Start-BitsTransfer -Source $latest.DownloadUrl -Destination $zipPath -Description "Downloading ffmpeg..." -ErrorAction Stop
+                $bitsOk = $true
+            }
+        } catch { }
+        if (-not $bitsOk) {
+            $wc = [System.Net.WebClient]::new()
+            $wc.Headers.Add('User-Agent', 'VR-Headset-Manager')
+            $wc.DownloadFile($latest.DownloadUrl, $zipPath)
+            $wc.Dispose()
+        }
+
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+        $entry = $zip.Entries | Where-Object { $_.FullName -like "*/bin/ffmpeg.exe" } | Select-Object -First 1
+        if (-not $entry) {
+            $zip.Dispose()
+            Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+            return @{ Success = $false; Version = $null; Error = "Could not find bin\ffmpeg.exe in the downloaded archive." }
+        }
+        if (-not (Test-Path -LiteralPath $destFolder)) {
+            New-Item -ItemType Directory -Path $destFolder | Out-Null
+        }
+        $destExe = Join-Path $destFolder "ffmpeg.exe"
+        [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $destExe, $true)
+        $zip.Dispose()
+        Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+
+        $newVersion = Get-FfmpegVersion -FfmpegPath $destExe
+        return @{ Success = $true; Version = $newVersion; Error = $null }
+    } catch {
+        return @{ Success = $false; Version = $null; Error = $_.Exception.Message }
+    }
+}
+
+# Returns the installed mediamtx version string (e.g. "1.17.1"), or $null if
+# unparsable. mediamtx binaries are shipped one-per-version-folder (no shared
+# in-place upgrade), so the version is read from the folder name itself
+# (e.g. "mediamtx_v1.17.1_windows_amd64") rather than by invoking the exe.
+function Get-MediaMtxVersion {
+    param([string]$MediaMtxFolder = $global:mediamtxFolder)
+    if (-not $MediaMtxFolder) { return $null }
+    $leaf = Split-Path -Path $MediaMtxFolder -Leaf
+    if ($leaf -match 'v(\d+(?:\.\d+){1,2})') { return $Matches[1] }
+    return $null
+}
+
+# Queries the bluenviron/mediamtx GitHub releases API for the latest available
+# Windows amd64 build. Returns @{Version; DownloadUrl; AssetName} or $null on
+# network/parse failure. Only called on operator-triggered "check for update".
+function Get-LatestMediaMtxVersion {
+    try {
+        $apiUrl = "https://api.github.com/repos/bluenviron/mediamtx/releases/latest"
+        $headers = @{ 'User-Agent' = 'VR-Headset-Manager' }
+        $release = Invoke-RestMethod -Uri $apiUrl -Headers $headers -TimeoutSec 15
+        $asset = $release.assets | Where-Object { $_.name -like "*windows_amd64.zip" } | Select-Object -First 1
+        if (-not $asset) { return $null }
+        $version = $release.tag_name -replace '^v', ''
+        if ($asset.name -match 'v?(\d+(?:\.\d+){1,2})') { $version = $Matches[1] }
+        return @{ Version = $version; DownloadUrl = $asset.browser_download_url; AssetName = $asset.name }
+    } catch {
+        return $null
+    }
+}
+
+# Downloads and installs the latest mediamtx build to a NEW versioned folder
+# "<SourcesFolder>\MediaMTX\mediamtx_v<version>_windows_amd64\" - the existing
+# installed version's folder is left untouched on disk (mediamtx has no
+# in-place upgrade; config.mediamtx.folder is what selects the active one).
+# No-ops (returns Success=true) if that version's folder already exists.
+# Returns @{Success; Version; Folder (relative to SourcesFolder); Error}.
+function Update-MediaMtxBinary {
+    param([string]$SourcesFolder = (Join-Path $global:ScriptPath "sources"))
+    try {
+        $latest = Get-LatestMediaMtxVersion
+        if (-not $latest) {
+            return @{ Success = $false; Version = $null; Folder = $null; Error = "Could not query latest mediamtx release from GitHub." }
+        }
+        $parentFolder = Join-Path $SourcesFolder "MediaMTX"
+        $destFolder   = Join-Path $parentFolder ("mediamtx_v{0}_windows_amd64" -f $latest.Version)
+        $relFolder    = Join-Path "MediaMTX" (Split-Path -Path $destFolder -Leaf)
+
+        if (Test-Path -LiteralPath (Join-Path $destFolder "mediamtx.exe")) {
+            return @{ Success = $true; Version = $latest.Version; Folder = $relFolder; Error = $null }
+        }
+
+        $zipPath = Join-Path $env:TEMP "vrm_mediamtx_download.zip"
+        $bitsOk = $false
+        try {
+            $bits = Get-Service -Name BITS -ErrorAction Stop
+            if ($bits.Status -eq 'Running' -or $bits.StartType -ne 'Disabled') {
+                Start-BitsTransfer -Source $latest.DownloadUrl -Destination $zipPath -Description "Downloading mediamtx..." -ErrorAction Stop
+                $bitsOk = $true
+            }
+        } catch { }
+        if (-not $bitsOk) {
+            $wc = [System.Net.WebClient]::new()
+            $wc.Headers.Add('User-Agent', 'VR-Headset-Manager')
+            $wc.DownloadFile($latest.DownloadUrl, $zipPath)
+            $wc.Dispose()
+        }
+
+        if (-not (Test-Path -LiteralPath $parentFolder)) {
+            New-Item -ItemType Directory -Path $parentFolder | Out-Null
+        }
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        # destFolder must not exist yet for ExtractToDirectory - guaranteed by the
+        # early-return check above.
+        [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $destFolder)
+        Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+
+        if (-not (Test-Path -LiteralPath (Join-Path $destFolder "mediamtx.exe"))) {
+            return @{ Success = $false; Version = $null; Folder = $null; Error = "Downloaded archive did not contain mediamtx.exe." }
+        }
+        return @{ Success = $true; Version = $latest.Version; Folder = $relFolder; Error = $null }
+    } catch {
+        return @{ Success = $false; Version = $null; Folder = $null; Error = $_.Exception.Message }
+    }
+}
+
+# Persists a new mediamtx.folder value to config.json (path relative to
+# sources\, e.g. "MediaMTX\mediamtx_v1.18.0_windows_amd64") and re-runs
+# Get-Config so $global:mediamtxFolder / $global:mediamtxFilePath pick up the
+# new binary immediately - same refresh pattern used by /api/config/save.
+function Set-MediaMtxFolderConfig {
+    param([Parameter(Mandatory = $true)][string]$RelativeFolder)
+    $cfgFile = Join-Path $global:ScriptPath "config\config.json"
+    $raw = Get-Content -LiteralPath $cfgFile -Raw -Encoding UTF8
+    $cfg = $raw | ConvertFrom-Json
+    if (-not $cfg.mediamtx) {
+        $cfg | Add-Member -NotePropertyName mediamtx -NotePropertyValue ([PSCustomObject]@{ folder = $RelativeFolder }) -Force
+    } else {
+        $cfg.mediamtx.folder = $RelativeFolder
+    }
+    ($cfg | ConvertTo-Json -Depth 20) | Write-FileWithoutBom -Path $cfgFile
+    $null = Get-Config -ConfigFilePath $cfgFile
+}
+
+# Returns the installed scrcpy version string (e.g. "3.3.4"), or $null if
+# unparsable. Like mediamtx, scrcpy is shipped one folder per version, so the
+# version is read from the folder name (e.g. "scrcpy-win64-v3.3.4_patchedNoFlickering")
+# rather than by invoking the exe.
+function Get-ScrcpyVersion {
+    param([string]$ScrcpyFolder = $global:scrcpyFolder)
+    if (-not $ScrcpyFolder) { return $null }
+    $leaf = Split-Path -Path $ScrcpyFolder -Leaf
+    if ($leaf -match 'v(\d+(?:\.\d+){1,2})') { return $Matches[1] }
+    return $null
+}
+
+# Queries the official Genymobile/scrcpy GitHub releases API for the latest
+# available Windows 64-bit build. Returns @{Version; DownloadUrl; AssetName}
+# or $null on network/parse failure. Only called on operator-triggered
+# "check for update". NOTE: this is the STOCK scrcpy build, not the
+# "patchedNoFlickering" variant this project currently ships - there is no
+# public source for that patch, so updating replaces it with the official build.
+function Get-LatestScrcpyVersion {
+    try {
+        $apiUrl = "https://api.github.com/repos/Genymobile/scrcpy/releases/latest"
+        $headers = @{ 'User-Agent' = 'VR-Headset-Manager' }
+        $release = Invoke-RestMethod -Uri $apiUrl -Headers $headers -TimeoutSec 15
+        $asset = $release.assets | Where-Object { $_.name -like "*win64*.zip" } | Select-Object -First 1
+        if (-not $asset) { return $null }
+        $version = $release.tag_name -replace '^v', ''
+        if ($asset.name -match 'v?(\d+(?:\.\d+){1,2})') { $version = $Matches[1] }
+        return @{ Version = $version; DownloadUrl = $asset.browser_download_url; AssetName = $asset.name }
+    } catch {
+        return $null
+    }
+}
+
+# Downloads and installs the latest scrcpy build (which also bundles adb.exe)
+# to a NEW folder "<SourcesFolder>\scrcpy\scrcpy-win64-v<version>\". As part of
+# consolidating all scrcpy installs under one root, the CURRENTLY active
+# folder (config.scrcpy.folder, wherever it currently lives - e.g. a legacy
+# top-level "sources\scrcpy-win64-v3.3.4_patchedNoFlickering\") is moved
+# (not copied - content preserved, nothing deleted) into "<SourcesFolder>\scrcpy\"
+# too, if it is not already there. Migration is best-effort and does not fail
+# the update if it errors, since the newly downloaded version is already usable.
+# Returns @{Success; Version; Folder (relative to SourcesFolder); Error}.
+function Update-ScrcpyBinary {
+    param([string]$SourcesFolder = (Join-Path $global:ScriptPath "sources"))
+    try {
+        $latest = Get-LatestScrcpyVersion
+        if (-not $latest) {
+            return @{ Success = $false; Version = $null; Folder = $null; Error = "Could not query latest scrcpy release from GitHub." }
+        }
+        $parentFolder = Join-Path $SourcesFolder "scrcpy"
+        $destFolder   = Join-Path $parentFolder ("scrcpy-win64-v{0}" -f $latest.Version)
+        $relFolder    = Join-Path "scrcpy" (Split-Path -Path $destFolder -Leaf)
+
+        if (-not (Test-Path -LiteralPath (Join-Path $destFolder "scrcpy.exe"))) {
+            $zipPath = Join-Path $env:TEMP "vrm_scrcpy_download.zip"
+            $bitsOk = $false
+            try {
+                $bits = Get-Service -Name BITS -ErrorAction Stop
+                if ($bits.Status -eq 'Running' -or $bits.StartType -ne 'Disabled') {
+                    Start-BitsTransfer -Source $latest.DownloadUrl -Destination $zipPath -Description "Downloading scrcpy..." -ErrorAction Stop
+                    $bitsOk = $true
+                }
+            } catch { }
+            if (-not $bitsOk) {
+                $wc = [System.Net.WebClient]::new()
+                $wc.Headers.Add('User-Agent', 'VR-Headset-Manager')
+                $wc.DownloadFile($latest.DownloadUrl, $zipPath)
+                $wc.Dispose()
+            }
+
+            if (-not (Test-Path -LiteralPath $parentFolder)) {
+                New-Item -ItemType Directory -Path $parentFolder | Out-Null
+            }
+            if (Test-Path -LiteralPath $destFolder) {
+                Remove-Item -LiteralPath $destFolder -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $destFolder)
+            Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+
+            if (-not (Test-Path -LiteralPath (Join-Path $destFolder "scrcpy.exe"))) {
+                return @{ Success = $false; Version = $null; Folder = $null; Error = "Downloaded archive did not contain scrcpy.exe." }
+            }
+        }
+
+        # Consolidate: move the currently-active scrcpy folder into sources\scrcpy\
+        # if it lives elsewhere (e.g. a legacy top-level install). Best-effort.
+        try {
+            $currentFolder = $global:scrcpyFolder
+            if ($currentFolder -and (Test-Path -LiteralPath $currentFolder -PathType Container)) {
+                $currentParent = Split-Path -Path $currentFolder -Parent
+                if ($currentParent -ne $parentFolder) {
+                    $leaf = Split-Path -Path $currentFolder -Leaf
+                    $migratedPath = Join-Path $parentFolder $leaf
+                    if (-not (Test-Path -LiteralPath $migratedPath)) {
+                        if (-not (Test-Path -LiteralPath $parentFolder)) {
+                            New-Item -ItemType Directory -Path $parentFolder | Out-Null
+                        }
+                        Move-Item -LiteralPath $currentFolder -Destination $migratedPath -Force
+                    }
+                }
+            }
+        } catch { }
+
+        return @{ Success = $true; Version = $latest.Version; Folder = $relFolder; Error = $null }
+    } catch {
+        return @{ Success = $false; Version = $null; Folder = $null; Error = $_.Exception.Message }
+    }
+}
+
+# Persists a new folder value to BOTH config.scrcpy.folder and config.ADB.folder
+# (the scrcpy release bundles adb.exe, so they always point at the same folder -
+# see templates\config\config.json where both keys already share one value) and
+# re-runs Get-Config so $global:scrcpyFolder/$global:scrcpyFilePath and
+# $global:adbFolder/$global:adbPath all pick up the new binaries immediately.
+function Set-ScrcpyAdbFolderConfig {
+    param([Parameter(Mandatory = $true)][string]$RelativeFolder)
+    $cfgFile = Join-Path $global:ScriptPath "config\config.json"
+    $raw = Get-Content -LiteralPath $cfgFile -Raw -Encoding UTF8
+    $cfg = $raw | ConvertFrom-Json
+    if (-not $cfg.scrcpy) {
+        $cfg | Add-Member -NotePropertyName scrcpy -NotePropertyValue ([PSCustomObject]@{ folder = $RelativeFolder }) -Force
+    } else {
+        $cfg.scrcpy.folder = $RelativeFolder
+    }
+    if (-not $cfg.ADB) {
+        $cfg | Add-Member -NotePropertyName ADB -NotePropertyValue ([PSCustomObject]@{ folder = $RelativeFolder }) -Force
+    } else {
+        $cfg.ADB.folder = $RelativeFolder
+    }
+    ($cfg | ConvertTo-Json -Depth 20) | Write-FileWithoutBom -Path $cfgFile
+    $null = Get-Config -ConfigFilePath $cfgFile
+}
