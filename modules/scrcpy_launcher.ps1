@@ -247,6 +247,21 @@ function Start-HeadsetPipeBridge {
     return $job
 }
 
+# Quotes/escapes a single argument for ProcessStartInfo.Arguments (a single
+# command-line string), following the same rules the Win32 CRT / CommandLineToArgvW
+# parser expects: wrap in quotes if it contains whitespace or a quote, double any
+# backslashes that immediately precede a quote (or the closing quote), and escape
+# embedded quotes. Needed because ProcessStartInfo.ArgumentList is unavailable on
+# some PowerShell 5.1 / .NET runtimes (evaluates to $null there).
+function ConvertTo-ProcessArgument {
+    param([string]$Value)
+    if ($Value -eq '') { return '""' }
+    if ($Value -notmatch '[\s"]') { return $Value }
+    $escaped = $Value -replace '(\\*)"', '$1$1\"'
+    $escaped = $escaped -replace '(\\+)$', '$1$1'
+    return '"' + $escaped + '"'
+}
+
 # Launches ffmpeg as a pipe-reader -> RTSP-publisher to mediamtx, and optionally
 # a second output that writes the H.264 stream to a recording file. Both outputs
 # use -c copy so the cost is one extra muxer (no re-encode).
@@ -299,7 +314,12 @@ function Start-FfmpegStreamPush {
     # captures keep source quality.
     if ($forceReencode) {
         $enc = Get-GpuEncoder
-        $bw  = $global:mediamtxBitrate
+        $bw  = [string]$global:mediamtxBitrate
+        # config.mediamtx.stream_bitrate is expected in "<n>M" form (see templates\config\config.json,
+        # video_quality_automation.ps1's Set-VqaAutoApply/Restore-VqaOriginals writers). Guard against a
+        # bare digit value (e.g. manually edited/saved without the unit) being passed straight to -b:v -
+        # ffmpeg then interprets it as bits/sec, which is too low for the encoder to open at all.
+        if ($bw -match '^\d+$') { $bw = "${bw}M" }
         $fps = $global:mediamtxFramerate
         # -bf 0 and -g $fps are required on EVERY arm: mediamtx WebRTC/WHEP rejects
         # H.264 streams containing B-frames ("WebRTC doesn't support H264 streams
@@ -341,16 +361,45 @@ function Start-FfmpegStreamPush {
             @('-f','rtsp','-rtsp_transport','tcp',$RtspUrl)))
     }
     # Optional output 2: file recording (MKV/MP4 - ffmpeg picks from extension).
-    # The path must be double-quoted when it contains spaces because Start-Process
-    # -ArgumentList with an array does NOT auto-quote elements - it joins them with
-    # single spaces, so a path like "D:\foo bar\out.mkv" would be parsed as two
-    # arguments by the child process.
+    # Passed unquoted - manually quoted/escaped below by ConvertTo-ProcessArgument,
+    # same as every other path-bearing argument in this list (e.g. the -i pipe path).
+    # Manually pre-quoting here would double-quote the value.
     if ($RecordFile) {
-        $quotedRec = if ($RecordFile -match ' ') { '"' + $RecordFile + '"' } else { $RecordFile }
-        $argList.AddRange([string[]]@('-map','0','-c','copy','-y',$quotedRec))
+        $argList.AddRange([string[]]@('-map','0','-c','copy','-y',$RecordFile))
     }
-    return Start-Process -FilePath $global:ffmpegFilePath -ArgumentList $argList.ToArray() `
-        -NoNewWindow -PassThru -RedirectStandardError $logErr
+    # Started via raw Process/ProcessStartInfo (not Start-Process) so we retain a live,
+    # writable StandardInput stream - needed to ask ffmpeg to quit gracefully ("q") on
+    # stop, so it flushes/finalises the -c copy recording output instead of losing
+    # buffered but unwritten data to a hard kill. RedirectStandardError must then be
+    # drained asynchronously ourselves (Start-Process did this for us via its file
+    # redirection) or ffmpeg can block once its stderr pipe buffer fills.
+    # NOTE: ProcessStartInfo.ArgumentList is unusable here - on this host/PowerShell 5.1
+    # runtime it evaluates to $null (pre-.NET-4.7.2 behavior of the loaded CLR), so
+    # arguments are joined into a single quoted command-line string instead.
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName  = $global:ffmpegFilePath
+    $psi.Arguments = ($argList | ForEach-Object { ConvertTo-ProcessArgument $_ }) -join ' '
+    $psi.UseShellExecute       = $false
+    $psi.CreateNoWindow        = $true
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardError = $true
+
+    $proc = [System.Diagnostics.Process]::new()
+    $proc.StartInfo = $psi
+    $null = $proc.Start()
+
+    $errWriter = [System.IO.StreamWriter]::new($logErr, $false, [System.Text.Encoding]::UTF8)
+    $errWriter.AutoFlush = $true
+    $errSub = Register-ObjectEvent -InputObject $proc -EventName ErrorDataReceived -MessageData $errWriter -Action {
+        if ($EventArgs.Data) { $Event.MessageData.WriteLine($EventArgs.Data) }
+    }
+    $proc.BeginErrorReadLine()
+
+    return @{
+        Process              = $proc
+        ErrorWriter          = $errWriter
+        ErrorSubscriptionId  = $errSub.Id
+    }
 }
 
 # Sets the global capture mode, persists it to config.json, and restarts any
@@ -441,7 +490,30 @@ function Stop-HeadsetPipeline {
     $entry = $global:HeadsetPipelines[$SafeName]
     if (-not $entry) { return }
     if ($entry.FfmpegProcess) {
-        try { Stop-Process -Id $entry.FfmpegProcess.Id -Force -ErrorAction Stop } catch {}
+        $ff = $entry.FfmpegProcess
+        try {
+            if (-not $ff.HasExited) {
+                # Ask ffmpeg to quit gracefully ("q" on stdin) so the -c copy recording
+                # output gets flushed/finalised instead of losing buffered frames to a
+                # hard kill. Only force-kill if it doesn't exit within the timeout.
+                try {
+                    $ff.StandardInput.WriteLine('q')
+                    $ff.StandardInput.Flush()
+                    $ff.StandardInput.Close()
+                } catch {}
+                if (-not $ff.WaitForExit(5000)) {
+                    Write-Log ("Stop-HeadsetPipeline: ffmpeg for {0} did not exit gracefully within timeout - forcing kill" -f $SafeName) -Level WARNING
+                    try { Stop-Process -Id $ff.Id -Force -ErrorAction SilentlyContinue } catch {}
+                }
+            }
+        } catch {}
+        try { $ff.CancelErrorRead() } catch {}
+    }
+    if ($entry.FfmpegErrorSubId) {
+        try { Unregister-Event -SubscriptionId $entry.FfmpegErrorSubId -ErrorAction SilentlyContinue } catch {}
+    }
+    if ($entry.FfmpegErrorWriter) {
+        try { $entry.FfmpegErrorWriter.Dispose() } catch {}
     }
     if ($entry.Bridge) {
         try { Stop-Job   $entry.Bridge -ErrorAction SilentlyContinue } catch {}
@@ -613,11 +685,13 @@ function start-screenCopy {
             if ($recording -and $recordFile) {
                 $ffmpegRecord = [System.IO.Path]::ChangeExtension($recordFile, '.mkv')
             }
-            $ffmpegProc = Start-FfmpegStreamPush -SafeName $displayName -RtspUrl $rtspUrl -RecordFile $ffmpegRecord -SourceCodec $sourceCodec
+            $ffmpegPush = Start-FfmpegStreamPush -SafeName $displayName -RtspUrl $rtspUrl -RecordFile $ffmpegRecord -SourceCodec $sourceCodec
             $global:HeadsetPipelines[$displayName] = @{
-                Bridge         = $bridgeJob
-                ScrcpyProcess  = $scrcpyProc
-                FfmpegProcess  = $ffmpegProc
+                Bridge              = $bridgeJob
+                ScrcpyProcess       = $scrcpyProc
+                FfmpegProcess       = $ffmpegPush.Process
+                FfmpegErrorWriter   = $ffmpegPush.ErrorWriter
+                FfmpegErrorSubId    = $ffmpegPush.ErrorSubscriptionId
                 PipeInName     = (Get-HeadsetPipeNames -SafeName $displayName).In
                 PipeOutName    = (Get-HeadsetPipeNames -SafeName $displayName).Out
                 RtspUrl        = $rtspUrl
