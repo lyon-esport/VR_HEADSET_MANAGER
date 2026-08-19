@@ -316,6 +316,7 @@ function Show-MainMenu {
         Write-Host $msg.OpenBrowser -BackgroundColor DarkCyan -ForegroundColor White
         Write-Host "C. Configuration" -BackgroundColor DarkBlue -ForegroundColor Cyan
         Write-Host $msg.Quit
+        Write-Host $msg.RestartApp
         Write-Host $msg.AnyOtherKey
         Write-Host
         Write-Host $msg.KnownHeadsets
@@ -417,6 +418,18 @@ function Show-MainMenu {
                         Write-Host $msg.InternetProblem -ForegroundColor White -BackgroundColor Red
                     }
                     pause
+                }
+                '00' {
+                    Write-Host $msg.Restarting -ForegroundColor Yellow
+                    $mainScript = Join-Path $global:ScriptPath "main.ps1"
+                    Start-Process powershell.exe -ArgumentList @(
+                        "-NoProfile",
+                        "-ExecutionPolicy","Bypass",
+                        "-File","`"$mainScript`"",
+                        "-WaitForPid",$PID
+                    ) -WindowStyle Normal
+                    Invoke-AppShutdown
+                    return
                 }
                 '0' {
                     Write-Host $msg.Goodbye -ForegroundColor Yellow
@@ -1174,13 +1187,12 @@ function Show-SubMenu-Services {
         Write-Host $msg.ServicesTitle -ForegroundColor Cyan
 
         # --- Web server status ---
-        $wsPidFile = Join-Path $global:ScriptPath "data\webserver.pid"
-        $wsPid     = $null
-        if (Test-Path $wsPidFile) {
-            $wsPid = [int](Get-Content $wsPidFile -Raw -ErrorAction SilentlyContinue)
-        }
-        $wsRunning = $wsPid -and (Get-Process -Id $wsPid -ErrorAction SilentlyContinue)
-        $wsStatus  = if ($wsRunning) { $msg.ServicesRunning -f $wsPid } else { $msg.ServicesStopped }
+        # Get-WebServerProcess (scripts_init.ps1) is the single source of truth: it
+        # verifies PID + process identity + port, so this display always matches the
+        # VRMonitor watchdog's verdict.
+        $wsProc    = Get-WebServerProcess
+        $wsRunning = [bool]$wsProc
+        $wsStatus  = if ($wsRunning) { $msg.ServicesRunning -f $wsProc.Id } else { $msg.ServicesStopped }
         Write-Host ($msg.ServicesWebServerStatus -f $wsStatus) -ForegroundColor $(if ($wsRunning) { 'Green' } else { 'Red' })
 
         # --- MediaMtx status ---

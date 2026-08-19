@@ -194,11 +194,6 @@ if ($lanIPs) {
     Write-Log $msg.WebServerNoLanAddress -Level WARNING
 }
 
-# Write own PID to lock file so scripts_init.ps1 can detect us across reloads
-if ($PidFile) {
-    $PID | Set-Content -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
-}
-
 # Boost this process priority above Normal so the single-threaded request loop
 # is not starved when scrcpy/ffmpeg/mediamtx saturate the host. AboveNormal (not
 # High) preserves scheduling fairness for the streaming workload.
@@ -215,8 +210,22 @@ try {
     Write-Log ($msg.WebServerListenerFailed -f $port) -Level ERROR
     Write-Log $msg.WebServerUrlAclHint -Level WARNING
     Write-Log ($msg.WebServerListenerError -f $_) -Level ERROR
-    if ($PidFile -and (Test-Path -LiteralPath $PidFile)) { Remove-Item $PidFile -Force -ErrorAction SilentlyContinue }
+    # Only release the lock if it is OURS. A losing racer must never delete the
+    # winner's pid file - that used to leave the running server unclaimed and made
+    # the watchdog spawn yet another competitor.
+    if ($PidFile -and (Test-Path -LiteralPath $PidFile)) {
+        $ownedRaw = Get-Content -LiteralPath $PidFile -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+        if ($ownedRaw -and $ownedRaw.Trim() -eq "$PID") {
+            Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
+        }
+    }
     exit 1
+}
+
+# Claim the lock file only once the port is actually bound, so data\webserver.pid
+# never points at a process that failed to become the web server.
+if ($PidFile) {
+    $PID | Set-Content -LiteralPath $PidFile -Force -Encoding UTF8 -ErrorAction SilentlyContinue
 }
 
 Write-Log ($msg.WebServerListening -f $port) -Level SUCCESS
@@ -2596,10 +2605,37 @@ try {
             continue
         }
 
+        # API: POST /api/app-restart
+        # Injects '00' + Enter into the main process console input so Show-MainMenu
+        # triggers the '00' case (relaunch main.ps1, then Invoke-AppShutdown on the old instance).
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/app-restart') {
+            try {
+                $mainProc = Get-WmiObject Win32_Process |
+                    Where-Object { $_.CommandLine -match 'main\.ps1' } |
+                    Select-Object -First 1
+                if (-not $mainProc) { throw 'Main process not found' }
+                $mainPid = [uint32]$mainProc.ProcessId
+                [void][VrmConsoleInput]::InjectKey($mainPid, '0', 0x30)
+                [void][VrmConsoleInput]::InjectKey($mainPid, '0', 0x30)
+                [void][VrmConsoleInput]::InjectKey($mainPid, [char]13, 0x0D)
+                Send-JsonResponse -Response $response -Raw '{"ok":true}'
+            } catch {
+                try { Send-JsonResponse -Response $response -Raw '{"ok":false,"error":"server error"}' -StatusCode 500 } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
         # API: POST /api/restartwebserver
-        # Sends a success response then spawns a delayed process that kills and restarts this server.
-        # Uses a temp script file in $env:TEMP (ASCII path) to avoid encoding issues with accented
-        # characters in the project path when passing args through powershell -Command.
+        # Sends a success response then kills this server process after a short delay.
+        # Does NOT relaunch itself: Start-VRMonitor's watchdog already calls Start-WebServer
+        # on every slow-path tick (modules/headsets_monitoring.ps1) and detects/relaunches a
+        # dead server through its own single, already-guarded code path (the same mechanism
+        # that makes the server come back after a main-menu reload). Having this endpoint also
+        # relaunch directly used to race that watchdog: both sides could see the pid file as
+        # dead at the same time and each spawn a competing process, and the loser's
+        # HttpListener.Start() would fail while deleting the pid file behind the winner,
+        # causing the watchdog to spawn yet another competitor in a loop that never settled.
+        # Killing only, and letting the watchdog be the sole relauncher, removes that race.
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/restartwebserver') {
             try {
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
@@ -2610,23 +2646,20 @@ try {
                 $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
                 $response.Close()
 
-                $helperScript = Join-Path $env:TEMP "vrm_restart_ws_$PID.ps1"
-                [System.IO.File]::WriteAllText($helperScript, @'
-param([int]$SelfPid,[string]$Script,[string]$ScriptPath,[string]$Config,[string]$PidFile,[string]$LogFolder,[string]$LogFile)
-Start-Sleep -Seconds 2
-Stop-Process -Id $SelfPid -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 500
-Start-Process powershell.exe -ArgumentList @('-File',$Script,'-ScriptPath',$ScriptPath,'-ConfigFilePath',$Config,'-PidFile',$PidFile,'-LogFolder',$LogFolder,'-LogFile',$LogFile) -WindowStyle Hidden
-'@)
+                # The killer also releases data\webserver.pid once the process is gone:
+                # Stop-Process -Force skips our finally block, so nobody else would.
+                # A stale lock is no longer fatal (Start-WebServer identity-checks it),
+                # but clearing it lets the watchdog relaunch on its very next tick
+                # without logging a stale-PID warning.
+                $killCmd = "Start-Sleep -Milliseconds 800; " +
+                           "Stop-Process -Id $PID -Force -ErrorAction SilentlyContinue"
+                if ($PidFile) {
+                    $killCmd += "; Start-Sleep -Milliseconds 200; " +
+                                "if (-not (Get-Process -Id $PID -ErrorAction SilentlyContinue)) { " +
+                                "Remove-Item -LiteralPath '$PidFile' -Force -ErrorAction SilentlyContinue }"
+                }
                 Start-Process powershell.exe -ArgumentList @(
-                    '-NoProfile', '-File', $helperScript,
-                    '-SelfPid',   $PID,
-                    '-Script',    $PSCommandPath,
-                    '-ScriptPath',  $ScriptPath,
-                    '-Config',      $ConfigFilePath,
-                    '-PidFile',     $PidFile,
-                    '-LogFolder',   $LogFolder,
-                    '-LogFile',     $LogFile
+                    '-NoProfile', '-Command', $killCmd
                 ) -WindowStyle Hidden
                 continue
             } catch {
@@ -4396,8 +4429,12 @@ Start-Process powershell.exe -ArgumentList @('-File',$Script,'-ScriptPath',$Scri
         Stop-Job  $script:usbInfoJob -ErrorAction SilentlyContinue
         Remove-Job $script:usbInfoJob -Force -ErrorAction SilentlyContinue
     }
+    # Release the lock only if it still points at us (see the bind-failure branch).
     if ($PidFile -and (Test-Path -LiteralPath $PidFile)) {
-        Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
+        $ownedRaw = Get-Content -LiteralPath $PidFile -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+        if ($ownedRaw -and $ownedRaw.Trim() -eq "$PID") {
+            Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
+        }
     }
-    Write-Log $msg.WebServerStopped -Level INFO
+    Write-Log ($msg.WebServerStopped -f $PID) -Level INFO
 }

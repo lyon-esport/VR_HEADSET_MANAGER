@@ -10,6 +10,14 @@ VR HEADSET MANAGER
 Main controller for VR capture management
 #>
 
+param (
+    # PID of a previous instance to wait for before running the duplicate-instance
+    # check. Used by the console menu's "00. Restart application" option so the
+    # relaunched process does not trip the "already running" prompt against the
+    # instance that spawned it.
+    [int]$WaitForPid = 0
+)
+
 
 
 <#
@@ -54,6 +62,17 @@ Improvement areas:
 #Welcome message
 Write-Host "Welcome to VR HEADSET MANAGER!" -ForegroundColor Green
 Write-Host "Starting the initialization process..." -ForegroundColor Green
+
+# If relaunched by the "Restart application" menu option, wait for the previous
+# instance to fully exit before running the duplicate-instance check below.
+if ($WaitForPid -gt 0) {
+    Write-Host "Waiting for the previous instance (PID $WaitForPid) to close..." -ForegroundColor Yellow
+    $waitDeadline = (Get-Date).AddSeconds(15)
+    while ((Get-Date) -lt $waitDeadline) {
+        if (-not (Get-Process -Id $WaitForPid -ErrorAction SilentlyContinue)) { break }
+        Start-Sleep -Milliseconds 250
+    }
+}
 
 # Check if another instance of this script is already running
 $thisScriptName = "main.ps1"

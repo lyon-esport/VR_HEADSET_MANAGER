@@ -302,12 +302,27 @@
               <div class="btn-desc">Stops all services and exits</div>
             </div>
           </button>
+          <button class="action-btn" id="btn-restart-app" style="flex:0 0 auto">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.55"/>
+            </svg>
+            <div>
+              <div>Restart Application</div>
+              <div class="btn-desc">Relaunches the whole app</div>
+            </div>
+          </button>
         </div>
         <div class="status-banner info" id="shutdown-app-info" style="display:none">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
           </svg>
           Application is shutting down - all services will stop.
+        </div>
+        <div class="status-banner info" id="restart-app-info" style="display:none">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          Application is restarting - a new instance will open shortly, this page will be temporarily unreachable.
         </div>
       </div>
     </section>
@@ -530,12 +545,26 @@
     var _knownHeadsetIds = '';
     var _pollTimer = null;
 
+    // Marks the web server tag as offline. Called when /api/appinfo is unreachable -
+    // the server answering that call IS the web server, so a failed fetch means it is
+    // down (or restarting) and the last known PID must not stay on screen.
+    function markWebServerOffline() {
+      var wsTag = document.getElementById('ws-pid-tag');
+      if (!wsTag) return;
+      wsTag.innerHTML = '<span class="pid-dot"></span>not running';
+      wsTag.classList.add('offline');
+    }
+
     function updatePidTags(info) {
       var wsTag  = document.getElementById('ws-pid-tag');
       var mtxTag = document.getElementById('mtx-pid-tag');
       if (wsTag) {
-        wsTag.innerHTML = '<span class="pid-dot"></span>PID ' + (info.webServerPid || '&mdash;');
-        wsTag.classList.remove('offline');
+        if (info.webServerPid) {
+          wsTag.innerHTML = '<span class="pid-dot"></span>PID ' + info.webServerPid;
+          wsTag.classList.remove('offline');
+        } else {
+          markWebServerOffline();
+        }
       }
       if (mtxTag) {
         if (info.mediamtxPid) {
@@ -552,7 +581,7 @@
       fetch('/api/appinfo')
         .then(function(r) { return r.json(); })
         .then(function(info) { _appInfo = info; updatePidTags(info); })
-        .catch(function() {});
+        .catch(function() { markWebServerOffline(); });
     }
 
     fetch('/api/appinfo')
@@ -565,7 +594,11 @@
         _pollTimer = setInterval(loadStreamLinks, 5000);
         setInterval(refreshAppInfo, 5000);
       })
-      .catch(function() { buildLinks(9997); loadStreamLinks(); _pollTimer = setInterval(loadStreamLinks, 5000); });
+      .catch(function() {
+        markWebServerOffline();
+        buildLinks(9997); loadStreamLinks(); _pollTimer = setInterval(loadStreamLinks, 5000);
+        setInterval(refreshAppInfo, 5000);
+      });
 
     // Convert headset name to MediaMTX path (mirrors ConvertTo-RestreamPathName PS function)
     function toStreamPath(name) {
@@ -693,6 +726,12 @@
       if (!confirm('Shutdown the VR Headset Manager application?\n\nAll services will stop.')) return;
       TopBar.apiPost('/api/app-shutdown', 'Shutdown Application', this);
       showInfo('shutdown-app-info');
+    });
+
+    document.getElementById('btn-restart-app').addEventListener('click', function() {
+      if (!confirm('Restart the VR Headset Manager application?\n\nAll services will restart and this page will briefly go offline.')) return;
+      TopBar.apiPost('/api/app-restart', 'Restart Application', this);
+      showInfo('restart-app-info');
     });
 
     document.getElementById('btn-restart-webserver').addEventListener('click', function() {

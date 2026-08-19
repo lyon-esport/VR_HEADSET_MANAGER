@@ -193,27 +193,115 @@ if ($global:VQA_Enabled -and -not $global:IsVRMonitorJob -and -not $global:IsDas
 }
 
 
-function Stop-WebServer {
-    $webServerPidFile = Join-Path $global:ScriptPath "data\webserver.pid"
-    $wsPid = $null
+# Returns the path of the web server PID lock file.
+function Get-WebServerPidPath {
+    return (Join-Path $global:ScriptPath "data\webserver.pid")
+}
+
+# Reads data\webserver.pid and returns the stored PID as [int], or $null when the
+# file is missing / empty / unparsable.
+function Get-WebServerStoredPid {
+    $pidFile = Get-WebServerPidPath
+    if (-not (Test-Path -LiteralPath $pidFile)) { return $null }
+    $raw = Get-Content -LiteralPath $pidFile -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+    if (-not $raw) { return $null }
+    $parsed = 0
+    if ([int]::TryParse($raw.Trim(), [ref]$parsed) -and $parsed -gt 0) { return $parsed }
+    return $null
+}
+
+function Get-WebServerProcess {
+    <#
+    .SYNOPSIS
+    Returns the live web server process object, or $null when it is not running.
+
+    .DESCRIPTION
+    Single source of truth for "is the web server up". Three checks, cheapest first:
+
+      1. PID alive    - the PID stored in data\webserver.pid still exists.
+      2. IDENTITY     - that PID is a powershell.exe whose command line references
+                        web_server.ps1. A bare PID liveness test is NOT enough: the
+                        pid file can transiently hold a launcher PID, and latching
+                        onto it (main.ps1, the VRMonitor job host, ...) makes the
+                        watchdog believe the server is alive forever - the process
+                        never exits, so the server is never relaunched.
+      3. SERVING      - a TCP connect to 127.0.0.1:<WebServer_port> succeeds.
+                        Skipped while the process is younger than $StartupGraceSec:
+                        HttpListener binds a couple of seconds after launch.
+
+    Deliberately a TCP connect and NOT an HTTP request: the web server request loop
+    is single-threaded and some endpoints are synchronous and slow (ffmpeg / scrcpy /
+    mediamtx updates). An HTTP probe would time out during those and kill a healthy
+    but busy server. A TCP connect succeeds as long as HTTP.sys still holds the URL
+    reservation for a live process.
+
+    Get-NetTCPConnection cannot be used to identify the owner - HttpListener runs on
+    HTTP.sys, which always reports PID 4 (System), never the powershell.exe process.
+
+    .EXAMPLE
+    $ws = Get-WebServerProcess
+    if ($ws) { "running as PID $($ws.Id)" } else { "not running" }
+    #>
+    param(
+        [int]$StartupGraceSec = 20
+    )
+
+    $storedPid = Get-WebServerStoredPid
+    if (-not $storedPid) { return $null }
+
+    # 1. PID alive
+    $proc = Get-Process -Id $storedPid -ErrorAction SilentlyContinue
+    if (-not $proc) { return $null }
+
+    # 2. Identity - is this PID actually OUR web server?
+    # A blank result means the CIM query itself was unavailable, NOT that the PID is
+    # foreign: in that case skip this check and let the port probe decide, rather than
+    # declaring a healthy server dead and restart-looping it.
+    $cmdLine = $null
     try {
-        if ($global:WebServerProcess -and -not $global:WebServerProcess.HasExited) {
-            $wsPid = $global:WebServerProcess.Id
-        }
+        $cmdLine = (Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $storedPid" -ErrorAction SilentlyContinue).CommandLine
     } catch { }
-    if (-not $wsPid -and (Test-Path $webServerPidFile)) {
-        $rawPid = Get-Content $webServerPidFile -Raw -ErrorAction SilentlyContinue
-        if ($rawPid) { $wsPid = [int]$rawPid }
+    if ($cmdLine -and $cmdLine -notmatch 'web_server\.ps1') { return $null }
+
+    # 3. Serving - skipped during the startup grace window
+    $age = $null
+    try { $age = ((Get-Date) - $proc.StartTime).TotalSeconds } catch { }
+    if ($null -ne $age -and $age -lt $StartupGraceSec) { return $proc }
+
+    if ($global:WebServer_port -and (Get-Command Test-Port -ErrorAction SilentlyContinue)) {
+        $probe = $null
+        try { $probe = Test-Port -hostname "127.0.0.1" -port ([int]$global:WebServer_port) -timeout 300 } catch { }
+        if ($probe -and -not $probe.open) { return $null }
+    } elseif (-not $cmdLine) {
+        # No identity AND no port probe available - nothing actually confirmed it.
+        return $null
     }
-    if ($wsPid -and (Get-Process -Id $wsPid -ErrorAction SilentlyContinue)) {
+
+    return $proc
+}
+
+
+function Stop-WebServer {
+    $webServerPidFile = Get-WebServerPidPath
+    $ws    = Get-WebServerProcess
+    $wsPid = if ($ws) { $ws.Id } else { $null }
+
+    # Fall back to the raw stored PID: the server may be alive but no longer
+    # serving (failed bind, hung listener) - it still has to be killed.
+    if (-not $wsPid) {
+        $storedPid = Get-WebServerStoredPid
+        if ($storedPid -and (Get-Process -Id $storedPid -ErrorAction SilentlyContinue)) { $wsPid = $storedPid }
+    }
+
+    if ($wsPid) {
         Stop-Process -Id $wsPid -Force -ErrorAction SilentlyContinue
         $deadline = (Get-Date).AddSeconds(3)
         while ((Get-Date) -lt $deadline -and (Get-Process -Id $wsPid -ErrorAction SilentlyContinue)) {
             Start-Sleep -Milliseconds 100
         }
-        try { Write-Log $msg.WebServerStopped -Level INFO } catch { Write-Host "[App] Web server stopped." }
+        try { Write-Log ($msg.WebServerStopped -f $wsPid) -Level INFO } catch { Write-Host "[App] Web server stopped (PID $wsPid)." }
     }
-    Remove-Item $webServerPidFile -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $webServerPidFile -Force -ErrorAction SilentlyContinue
     $global:WebServerProcess = $null
 }
 
@@ -411,7 +499,7 @@ function Start-WebServer {
 
     if (-not $global:WebServer_enabled) { return }
 
-    $webServerPidFile = Join-Path $global:ScriptPath "data\webserver.pid"
+    $webServerPidFile = Get-WebServerPidPath
 
     # -- Stop phase (only when -Restart is requested) -------------------------
     if ($Restart) {
@@ -421,64 +509,66 @@ function Start-WebServer {
     }
 
     # -- Start phase ----------------------------------------------------------
-    # PID-file lock: a single file in the data folder records the running server PID.
-    # Written before Start-Process so any concurrent caller (dashboard loop, module
-    # reload) sees it immediately and skips the launch. Stale entries are cleaned up
-    # by verifying the stored PID is still alive.
-    $webServerRunning = $false
-
-    # 1. In-process guard (fastest path - same PS session)
-    try {
-        if ($global:WebServerProcess -and -not $global:WebServerProcess.HasExited) {
-            $webServerRunning = $true
-            Write-Log ($msg.WebServerAlreadyRunning -f $global:WebServer_port) -Level DEBUG
-        }
-    } catch { }
-
-    # 2. PID-file guard (cross-process: dashboard loop, module reload, parallel calls)
-    # NOTE: Get-NetTCPConnection cannot be used to detect the web server - HttpListener
-    # uses HTTP.sys which always shows as PID 4 (System), not the powershell.exe process.
-    if (-not $webServerRunning -and (Test-Path $webServerPidFile)) {
-        $storedPid = [int](Get-Content $webServerPidFile -Raw -ErrorAction SilentlyContinue)
-        if ($storedPid -and (Get-Process -Id $storedPid -ErrorAction SilentlyContinue)) {
-            $webServerRunning = $true
-            $global:WebServerProcess = Get-Process -Id $storedPid -ErrorAction SilentlyContinue
-            Write-Log ($msg.WebServerAlreadyRunning -f $global:WebServer_port) -Level DEBUG
-        } else {
-            # Stale PID file from a previous crashed run - remove it
-            Remove-Item $webServerPidFile -Force -ErrorAction SilentlyContinue
-        }
+    # PID-file lock: data\webserver.pid records the running server PID. Liveness is
+    # decided by Get-WebServerProcess, which verifies PID + process IDENTITY + port,
+    # never "some process with that PID exists" - see its comment block for why.
+    $ws = Get-WebServerProcess
+    if ($ws) {
+        $global:WebServerProcess = $ws
+        Write-Log ($msg.WebServerAlreadyRunning -f $global:WebServer_port, $ws.Id) -Level DEBUG
+        return
     }
 
-    if (-not $webServerRunning) {
-        $web_server_script = Join-Path $global:ScriptPath "modules\Pode_WebServer\web_server.ps1"
+    # Not running (or dead / foreign / no longer serving): clean up before relaunching.
+    $stalePid = Get-WebServerStoredPid
+    if ($stalePid) {
+        Write-Log ($msg.WebServerStale -f $stalePid, $global:WebServer_port) -Level WARNING
+        # Kill a leftover web server that is alive but no longer serving. Guarded by
+        # the same identity check so we never kill an unrelated process.
+        $staleProc = Get-Process -Id $stalePid -ErrorAction SilentlyContinue
+        if ($staleProc) {
+            $staleCmd = $null
+            try {
+                $staleCmd = (Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $stalePid" -ErrorAction SilentlyContinue).CommandLine
+            } catch { }
+            if ($staleCmd -match 'web_server\.ps1') {
+                Stop-Process -Id $stalePid -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+    Remove-Item -LiteralPath $webServerPidFile -Force -ErrorAction SilentlyContinue
 
-        # Write a placeholder PID entry BEFORE launching so concurrent callers
-        # see the file and skip. Use current PID as sentinel; overwritten by
-        # web_server.ps1 once it has its own PID.
-        $PID | Set-Content -LiteralPath $webServerPidFile -Force -ErrorAction SilentlyContinue
+    $web_server_script = Join-Path $global:ScriptPath "modules\Pode_WebServer\web_server.ps1"
 
-        $dateStamp      = Get-Date -Format 'yyyy-MM-dd'
-        $wsOutLog       = Join-Path $global:logFolder "webserver_${dateStamp}_out.log"
-        $wsErrLog       = Join-Path $global:logFolder "webserver_${dateStamp}_err.log"
+    $dateStamp      = Get-Date -Format 'yyyy-MM-dd'
+    $wsOutLog       = Join-Path $global:logFolder "webserver_${dateStamp}_out.log"
+    $wsErrLog       = Join-Path $global:logFolder "webserver_${dateStamp}_err.log"
 
-        $global:WebServerProcess = Start-Process powershell.exe -ArgumentList @(
-            "-File",
-            "`"$web_server_script`"",
-            "-ScriptPath",
-            "`"$global:ScriptPath`"",
-            "-ConfigFilePath",
-            "`"$ConfigFilePath`"",
-            "-PidFile",
-            "`"$webServerPidFile`"",
-            "-LogFolder",
-            "`"$global:logFolder`"",
-            "-LogFile",
-            "`"$global:logFile`""
-        ) -WindowStyle Hidden -PassThru `
-          -RedirectStandardOutput $wsOutLog `
-          -RedirectStandardError  $wsErrLog
-        Write-Log ($msg.WebServerStarted -f $global:WebServer_port) -Level INFO
+    $global:WebServerProcess = Start-Process powershell.exe -ArgumentList @(
+        "-File",
+        "`"$web_server_script`"",
+        "-ScriptPath",
+        "`"$global:ScriptPath`"",
+        "-ConfigFilePath",
+        "`"$ConfigFilePath`"",
+        "-PidFile",
+        "`"$webServerPidFile`"",
+        "-LogFolder",
+        "`"$global:logFolder`"",
+        "-LogFile",
+        "`"$global:logFile`""
+    ) -WindowStyle Hidden -PassThru `
+      -RedirectStandardOutput $wsOutLog `
+      -RedirectStandardError  $wsErrLog
+
+    # Claim the lock with the REAL child PID (valid the instant CreateProcess returns),
+    # never with the launcher's own $PID: a launcher PID in this file is a poison pill -
+    # any concurrent caller reading it would latch onto an immortal process and never
+    # relaunch the server again. web_server.ps1 rewrites the same value once it has
+    # successfully bound the port.
+    if ($global:WebServerProcess) {
+        $global:WebServerProcess.Id | Set-Content -LiteralPath $webServerPidFile -Force -Encoding UTF8 -ErrorAction SilentlyContinue
+        Write-Log ($msg.WebServerStarted -f $global:WebServer_port, $global:WebServerProcess.Id) -Level INFO
     }
 }
 
@@ -492,8 +582,11 @@ if (-not $global:IsVRMonitorJob -and -not $global:IsDashboardProcess) {
     }
 }
 
-# Start the Pode web server in a separate PowerShell window (guarded: skip if already running)
-if (-not $global:IsWebServerProcess -and -not $global:IsDashboardProcess) {
+# Start the Pode web server in a separate PowerShell window (guarded: skip if already running).
+# The VRMonitor job is excluded on purpose: it fires its own eager Start-WebServer once it has
+# finished bootstrapping (headsets_monitoring.ps1), and calling it here at dot-source time only
+# made the job race the main process' launcher.
+if (-not $global:IsWebServerProcess -and -not $global:IsDashboardProcess -and -not $global:IsVRMonitorJob) {
     Start-WebServer
     Start-MdnsResponder
 }
