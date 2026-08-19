@@ -3879,6 +3879,105 @@ Start-Process powershell.exe -ArgumentList @('-File',$Script,'-ScriptPath',$Scri
             continue
         }
 
+        # API: GET /api/mediamtx-list-versions - lists all mediamtx version folders
+        # present under sources\MediaMTX\ (old versions are never deleted by
+        # /api/mediamtx-update, so more than one can coexist)
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/mediamtx-list-versions') {
+            try {
+                $versions = Get-MediaMtxInstalledVersions | ForEach-Object {
+                    @{ version = $_.Version; folder = $_.RelativeFolder; active = $_.IsActive }
+                }
+                Send-JsonResponse -Response $response -Body @{ ok = $true; versions = @($versions) }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/mediamtx-switch-version - body {"folder":"MediaMTX\\mediamtx_v1.19.2_windows_amd64"}
+        # Repoints config.mediamtx.folder at an already-installed version folder
+        # (no download - the folder must already exist on disk), then restarts
+        # mediamtx + previously-running scrcpy sessions. Same restart choreography
+        # as /api/mediamtx-update, minus Update-MediaMtxBinary.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/mediamtx-switch-version') {
+            $lock = $null
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $bodyRaw = $reader.ReadToEnd()
+                $reader.Close()
+                $body = $bodyRaw | ConvertFrom-Json
+
+                $sourcesFolder = Join-Path $ScriptPath "sources"
+                $mediamtxRoot  = Join-Path $sourcesFolder "MediaMTX"
+                $requestedFolder = Join-Path $sourcesFolder ([string]$body.folder)
+                $resolved = Test-RequestPath -Path $requestedFolder -Root $mediamtxRoot
+                if (-not $resolved -or -not (Test-Path -LiteralPath (Join-Path $resolved "mediamtx.exe"))) {
+                    Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = "Invalid or missing mediamtx version folder." }
+                    $response.Close()
+                    continue
+                }
+                $relFolder = Join-Path "MediaMTX" (Split-Path -Path $resolved -Leaf)
+
+                $lock = Enter-VqaLock -TimeoutMs 3000
+                if (-not $lock) {
+                    Send-JsonResponse -Response $response -StatusCode 409 -Body @{ ok = $false; pending = $true; error = "Another config change is in progress. Please retry shortly." }
+                    $response.Close()
+                    continue
+                }
+
+                $runningHeadsets = @()
+                foreach ($row in (Get-KnownHeadsets)) {
+                    $safe = Convert-Displayname $row.Name
+                    if (Get-ScrcpyProcess -displayName $safe -headsetIP $row.IPAddress) {
+                        $runningHeadsets += $row
+                    }
+                }
+
+                try { Stop-Scrcpy } catch { Write-Log ("mediamtx-switch-version: Stop-Scrcpy failed: " + $_.Exception.Message) -Level WARNING }
+                try { Stop-MediaMtx } catch { Write-Log ("mediamtx-switch-version: Stop-MediaMtx failed: " + $_.Exception.Message) -Level WARNING }
+
+                $switchOk = $true
+                $switchError = $null
+                try {
+                    Set-MediaMtxFolderConfig -RelativeFolder $relFolder
+                } catch {
+                    Write-Log ("mediamtx-switch-version: Set-MediaMtxFolderConfig failed: " + $_.Exception.Message) -Level WARNING
+                    $switchOk = $false
+                    $switchError = $_.Exception.Message
+                }
+
+                try {
+                    Start-MediaMtx
+                    Start-Sleep -Milliseconds 800
+                } catch {
+                    Write-Log ("mediamtx-switch-version: Start-MediaMtx failed: " + $_.Exception.Message) -Level WARNING
+                }
+
+                $restartedNames = @()
+                foreach ($row in $runningHeadsets) {
+                    try {
+                        start-screenCopy -headsetIP $row.IPAddress -displayName $row.Name -scrcpyProfile $row.ScrcpyProfile
+                        $restartedNames += $row.Name
+                    } catch {
+                        Write-Log ("mediamtx-switch-version: scrcpy restart failed for " + $row.Name + ": " + $_.Exception.Message) -Level WARNING
+                    }
+                }
+
+                $restarted = @{ mediamtx = $true; scrcpy = $restartedNames }
+                if ($switchOk) {
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; newVersion = (Get-MediaMtxVersion); folder = $relFolder; restarted = $restarted }
+                } else {
+                    Send-JsonResponse -Response $response -StatusCode 502 -Body @{ ok = $false; error = $switchError; restarted = $restarted }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                if ($lock) { Exit-VqaLock -Stream $lock }
+                $response.Close()
+            }
+            continue
+        }
+
         # API: POST /api/mediamtx-update - stops scrcpy/mediamtx, downloads the latest
         # mediamtx build into a NEW versioned folder under sources\MediaMTX\ (the previously
         # installed version's folder + files are left on disk untouched), points
@@ -3977,6 +4076,100 @@ Start-Process powershell.exe -ArgumentList @('-File',$Script,'-ScriptPath',$Scri
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally { $response.Close() }
+            continue
+        }
+
+        # API: GET /api/scrcpy-list-versions - lists all scrcpy version folders
+        # present under sources\scrcpy\ (old versions are never deleted by
+        # /api/scrcpy-update, so more than one can coexist)
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/scrcpy-list-versions') {
+            try {
+                $versions = Get-ScrcpyInstalledVersions | ForEach-Object {
+                    @{ version = $_.Version; folder = $_.RelativeFolder; active = $_.IsActive }
+                }
+                Send-JsonResponse -Response $response -Body @{ ok = $true; versions = @($versions) }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/scrcpy-switch-version - body {"folder":"scrcpy\\scrcpy-win64-v4.1"}
+        # Repoints config.scrcpy.folder AND config.ADB.folder at an already-installed
+        # version folder (no download - the folder must already exist on disk), then
+        # restarts previously-running scrcpy sessions. Same restart choreography as
+        # /api/scrcpy-update, minus Update-ScrcpyBinary. mediamtx is untouched.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/scrcpy-switch-version') {
+            $lock = $null
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $bodyRaw = $reader.ReadToEnd()
+                $reader.Close()
+                $body = $bodyRaw | ConvertFrom-Json
+
+                $sourcesFolder = Join-Path $ScriptPath "sources"
+                $scrcpyRoot    = Join-Path $sourcesFolder "scrcpy"
+                $requestedFolder = Join-Path $sourcesFolder ([string]$body.folder)
+                $resolved = Test-RequestPath -Path $requestedFolder -Root $scrcpyRoot
+                if (-not $resolved -or -not (Test-Path -LiteralPath (Join-Path $resolved "scrcpy.exe"))) {
+                    Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = "Invalid or missing scrcpy version folder." }
+                    $response.Close()
+                    continue
+                }
+                $relFolder = Join-Path "scrcpy" (Split-Path -Path $resolved -Leaf)
+
+                $lock = Enter-VqaLock -TimeoutMs 3000
+                if (-not $lock) {
+                    Send-JsonResponse -Response $response -StatusCode 409 -Body @{ ok = $false; pending = $true; error = "Another config change is in progress. Please retry shortly." }
+                    $response.Close()
+                    continue
+                }
+
+                $runningHeadsets = @()
+                foreach ($row in (Get-KnownHeadsets)) {
+                    $safe = Convert-Displayname $row.Name
+                    if (Get-ScrcpyProcess -displayName $safe -headsetIP $row.IPAddress) {
+                        $runningHeadsets += $row
+                    }
+                }
+
+                try { Stop-Scrcpy } catch { Write-Log ("scrcpy-switch-version: Stop-Scrcpy failed: " + $_.Exception.Message) -Level WARNING }
+                try { & $global:adbPath kill-server 2>&1 | Out-Null } catch { }
+
+                $switchOk = $true
+                $switchError = $null
+                try {
+                    Set-ScrcpyAdbFolderConfig -RelativeFolder $relFolder
+                } catch {
+                    Write-Log ("scrcpy-switch-version: Set-ScrcpyAdbFolderConfig failed: " + $_.Exception.Message) -Level WARNING
+                    $switchOk = $false
+                    $switchError = $_.Exception.Message
+                }
+
+                try { Start-AdbServer } catch { Write-Log ("scrcpy-switch-version: Start-AdbServer failed: " + $_.Exception.Message) -Level WARNING }
+
+                $restartedNames = @()
+                foreach ($row in $runningHeadsets) {
+                    try {
+                        start-screenCopy -headsetIP $row.IPAddress -displayName $row.Name -scrcpyProfile $row.ScrcpyProfile
+                        $restartedNames += $row.Name
+                    } catch {
+                        Write-Log ("scrcpy-switch-version: scrcpy restart failed for " + $row.Name + ": " + $_.Exception.Message) -Level WARNING
+                    }
+                }
+
+                $restarted = @{ mediamtx = $false; scrcpy = $restartedNames }
+                if ($switchOk) {
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; newVersion = (Get-ScrcpyVersion); folder = $relFolder; restarted = $restarted }
+                } else {
+                    Send-JsonResponse -Response $response -StatusCode 502 -Body @{ ok = $false; error = $switchError; restarted = $restarted }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                if ($lock) { Exit-VqaLock -Stream $lock }
+                $response.Close()
+            }
             continue
         }
 

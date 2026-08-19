@@ -1353,6 +1353,27 @@ function Update-MediaMtxBinary {
     }
 }
 
+# Enumerates all installed mediamtx version folders under
+# "<SourcesFolder>\MediaMTX\" (Update-MediaMtxBinary never deletes an old
+# version folder on update, so multiple can coexist). Returns
+# [PSCustomObject[]] of @{Version; RelativeFolder; IsActive}, sorted by
+# version descending. Folders without a parsable version or without
+# mediamtx.exe are skipped.
+function Get-MediaMtxInstalledVersions {
+    param([string]$SourcesFolder = (Join-Path $global:ScriptPath "sources"))
+    $parentFolder = Join-Path $SourcesFolder "MediaMTX"
+    if (-not (Test-Path -LiteralPath $parentFolder)) { return @() }
+    $results = @()
+    Get-ChildItem -LiteralPath $parentFolder -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        if (-not (Test-Path -LiteralPath (Join-Path $_.FullName "mediamtx.exe"))) { return }
+        if ($_.Name -notmatch 'v(\d+(?:\.\d+){1,2})') { return }
+        $relFolder = Join-Path "MediaMTX" $_.Name
+        $isActive = $global:mediamtxFolder -and ((Split-Path -Path $global:mediamtxFolder -Leaf) -eq $_.Name)
+        $results += [PSCustomObject]@{ Version = $Matches[1]; RelativeFolder = $relFolder; IsActive = [bool]$isActive }
+    }
+    return @($results | Sort-Object -Property { [version]$_.Version } -Descending)
+}
+
 # Persists a new mediamtx.folder value to config.json (path relative to
 # sources\, e.g. "MediaMTX\mediamtx_v1.18.0_windows_amd64") and re-runs
 # Get-Config so $global:mediamtxFolder / $global:mediamtxFilePath pick up the
@@ -1479,6 +1500,26 @@ function Update-ScrcpyBinary {
     } catch {
         return @{ Success = $false; Version = $null; Folder = $null; Error = $_.Exception.Message }
     }
+}
+
+# Enumerates all installed scrcpy version folders under "<SourcesFolder>\scrcpy\"
+# (Update-ScrcpyBinary never deletes an old version folder on update, so
+# multiple can coexist). Returns [PSCustomObject[]] of
+# @{Version; RelativeFolder; IsActive}, sorted by version descending.
+# Folders without a parsable version or without scrcpy.exe are skipped.
+function Get-ScrcpyInstalledVersions {
+    param([string]$SourcesFolder = (Join-Path $global:ScriptPath "sources"))
+    $parentFolder = Join-Path $SourcesFolder "scrcpy"
+    if (-not (Test-Path -LiteralPath $parentFolder)) { return @() }
+    $results = @()
+    Get-ChildItem -LiteralPath $parentFolder -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        if (-not (Test-Path -LiteralPath (Join-Path $_.FullName "scrcpy.exe"))) { return }
+        if ($_.Name -notmatch 'v(\d+(?:\.\d+){1,2})') { return }
+        $relFolder = Join-Path "scrcpy" $_.Name
+        $isActive = $global:scrcpyFolder -and ((Split-Path -Path $global:scrcpyFolder -Leaf) -eq $_.Name)
+        $results += [PSCustomObject]@{ Version = $Matches[1]; RelativeFolder = $relFolder; IsActive = [bool]$isActive }
+    }
+    return @($results | Sort-Object -Property { [version]$_.Version } -Descending)
 }
 
 # Persists a new folder value to BOTH config.scrcpy.folder and config.ADB.folder

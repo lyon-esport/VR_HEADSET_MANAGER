@@ -936,15 +936,29 @@
 
     // Renders a "<Label> / installed version / check-for-update / update" row,
     // same fld-row separators as the plain read-only ADV_FIELDS rows above it.
-    // key is the id prefix ('ffmpeg' or 'mediamtx') used to build unique element ids.
-    function binVerRowHtml(key, label) {
+    // key is the id prefix ('ffmpeg', 'scrcpy' or 'mediamtx') used to build unique
+    // element ids. showSwitch adds a version-switch dropdown + button, only used
+    // for binaries that ship one folder per installed version (scrcpy, mediamtx) -
+    // ffmpeg is a single exe with no per-version folder, so it stays false there.
+    function binVerRowHtml(key, label, showSwitch) {
       var h = '<div class="fld-row">';
       h += '<div class="fld-lbl-col"><span class="fld-lbl" style="color:var(--muted)">' + esc(label) + '</span></div>';
-      h += '<div class="fld-ctl-col">';
+      h += '<div class="fld-ctl-col" style="flex-direction:column;align-items:flex-start;gap:8px">';
+      // Top row: installed version (plain, when no switch or only one version found)
+      // or the version-switch dropdown + Switch button (once 2+ versions are found).
+      h += '<div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;width:100%">';
       h += '<span id="' + key + '-ver-installed" class="fld-ro">checking...</span>';
+      if (showSwitch) {
+        h += '<select id="' + key + '-ver-switch" style="display:none;font-size:12px;padding:6px 8px"></select>';
+        h += '<button class="action-btn" id="btn-' + key + '-switch" style="display:none;width:auto;padding:9px 14px;font-size:12px"><div>Switch</div></button>';
+      }
+      h += '</div>';
+      // Bottom row: check-for-update / update controls + status text.
+      h += '<div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;width:100%">';
       h += '<button class="action-btn" id="btn-' + key + '-check" style="display:inline-flex;width:auto;padding:9px 14px;font-size:12px"><div>Check for update</div></button>';
       h += '<button class="action-btn" id="btn-' + key + '-update" style="display:none;width:auto;padding:9px 14px;font-size:12px;border-color:var(--accent)"><div>Update</div></button>';
       h += '<span id="' + key + '-ver-status" class="fld-def"></span>';
+      h += '</div>';
       h += '</div></div>';
       return h;
     }
@@ -967,13 +981,13 @@
         }
         html += '</div></div>';
         if (f.path === 'scrcpy.folder') {
-          html += binVerRowHtml('scrcpy', 'Scrcpy Version');
+          html += binVerRowHtml('scrcpy', 'Scrcpy Version', true);
         }
         if (f.path === 'ffmpeg.folder') {
-          html += binVerRowHtml('ffmpeg', 'FFmpeg Version');
+          html += binVerRowHtml('ffmpeg', 'FFmpeg Version', false);
         }
         if (f.path === 'mediamtx.folder') {
-          html += binVerRowHtml('mediamtx', 'MediaMTX Version');
+          html += binVerRowHtml('mediamtx', 'MediaMTX Version', true);
         }
       });
       var el = document.getElementById('acc-advanced-fields');
@@ -1050,6 +1064,9 @@
     // POST .../<key>-check-update, POST .../<key>-update.
     // Element ids are built by binVerRowHtml() above.
     var BIN_LABELS = { scrcpy: 'Scrcpy', ffmpeg: 'FFmpeg', mediamtx: 'MediaMTX' };
+    // Binaries that ship one folder per installed version, and so support the
+    // version-switch dropdown (ffmpeg is a single exe, no per-version folder).
+    var BIN_SWITCHABLE = { scrcpy: true, mediamtx: true };
 
     function loadBinVersion(key) {
       var verEl = document.getElementById(key + '-ver-installed');
@@ -1061,9 +1078,41 @@
         })
         .catch(function() { verEl.textContent = 'unknown'; });
     }
-    function loadScrcpyVersion()   { loadBinVersion('scrcpy'); }
+
+    // Populates the version-switch <select> for switchable binaries. Hides the
+    // select + button entirely unless 2+ installed versions are found on disk,
+    // and swaps the plain greyed-out installed-version value out for the
+    // dropdown (the dropdown's active option already shows the same version).
+    function loadBinVersions(key) {
+      if (!BIN_SWITCHABLE[key]) return;
+      var selEl = document.getElementById(key + '-ver-switch');
+      var btnEl = document.getElementById('btn-' + key + '-switch');
+      var verEl = document.getElementById(key + '-ver-installed');
+      if (!selEl || !btnEl) return;
+      fetch('/api/' + key + '-list-versions')
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          var versions = (j.ok && j.versions) ? j.versions : [];
+          if (versions.length < 2) {
+            selEl.style.display = 'none';
+            btnEl.style.display = 'none';
+            selEl.innerHTML = '';
+            if (verEl) verEl.style.display = 'inline-block';
+            return;
+          }
+          selEl.innerHTML = versions.map(function(v) {
+            return '<option value="' + esc(v.folder) + '"' + (v.active ? ' selected' : '') + '>v' + esc(v.version) + (v.active ? ' (active)' : '') + '</option>';
+          }).join('');
+          selEl.style.display = 'inline-block';
+          btnEl.style.display = 'inline-flex';
+          if (verEl) verEl.style.display = 'none';
+        })
+        .catch(function() { });
+    }
+
+    function loadScrcpyVersion()   { loadBinVersion('scrcpy');   loadBinVersions('scrcpy'); }
     function loadFfmpegVersion()   { loadBinVersion('ffmpeg'); }
-    function loadMediaMtxVersion() { loadBinVersion('mediamtx'); }
+    function loadMediaMtxVersion() { loadBinVersion('mediamtx'); loadBinVersions('mediamtx'); }
 
     // Buttons live inside #acc-advanced-fields, which is re-rendered (innerHTML
     // replaced) by renderAdvanced() every time config reloads - delegate from
@@ -1072,6 +1121,7 @@
       Object.keys(BIN_LABELS).forEach(function(key) {
         if (e.target.closest('#btn-' + key + '-check')) { onBinCheckClick(key); }
         else if (e.target.closest('#btn-' + key + '-update')) { onBinUpdateClick(key, e.target.closest('#btn-' + key + '-update')); }
+        else if (e.target.closest('#btn-' + key + '-switch')) { onBinSwitchClick(key); }
       });
     });
 
@@ -1139,6 +1189,60 @@
         .catch(function() {
           checkBtn.disabled = false;
           updateBtn.disabled = false;
+          statusEl.textContent = 'Server unreachable';
+        });
+    }
+
+    function onBinSwitchClick(key) {
+      var checkBtn  = document.getElementById('btn-' + key + '-check');
+      var updateBtn = document.getElementById('btn-' + key + '-update');
+      var switchBtn = document.getElementById('btn-' + key + '-switch');
+      var selEl     = document.getElementById(key + '-ver-switch');
+      var statusEl  = document.getElementById(key + '-ver-status');
+      var label     = BIN_LABELS[key];
+      var folder    = selEl.value;
+      if (!folder) return;
+
+      var confirmed = confirm(
+        'Switching ' + label + ' will stop all live scrcpy/mediamtx streams while it repoints to the selected version,\n' +
+        'then automatically restart mediamtx and any headset streams that were running.\n\n' +
+        'Continue?'
+      );
+      if (!confirmed) return;
+
+      checkBtn.disabled = true;
+      updateBtn.disabled = true;
+      switchBtn.disabled = true;
+      selEl.disabled = true;
+      statusEl.textContent = 'Switching ' + label + ' - stopping streams, repointing, restarting...';
+
+      fetch('/api/' + key + '-switch-version', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder: folder })
+      })
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          checkBtn.disabled = false;
+          updateBtn.disabled = false;
+          switchBtn.disabled = false;
+          selEl.disabled = false;
+          if (j.ok) {
+            var restartedCount = (j.restarted && j.restarted.scrcpy) ? j.restarted.scrcpy.length : 0;
+            statusEl.textContent = 'Switched to v' + j.newVersion + '. Restarted mediamtx' + (restartedCount ? (' + ' + restartedCount + ' headset stream(s).') : '.');
+            showToast(label + ' switched to v' + j.newVersion, 4000);
+            loadBinVersion(key);
+            loadBinVersions(key);
+          } else {
+            statusEl.textContent = 'Switch failed: ' + (j.error || 'unknown error');
+            showToast(label + ' switch failed: ' + (j.error || 'unknown error'), 4000);
+          }
+        })
+        .catch(function() {
+          checkBtn.disabled = false;
+          updateBtn.disabled = false;
+          switchBtn.disabled = false;
+          selEl.disabled = false;
           statusEl.textContent = 'Server unreachable';
         });
     }
