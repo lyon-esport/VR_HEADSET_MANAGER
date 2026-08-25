@@ -1361,6 +1361,45 @@ function Show-SubMenu-CaptureMode {
 }
 
 
+# Adds or updates one entry in the encrypted WiFi store, applying the same
+# duplicate guard the web UI enforces:
+#   - unknown SSID              -> added
+#   - known SSID, same password -> no write at all, informational message
+#   - known SSID, new password  -> WARNING + explicit Y/N confirmation
+# Returns $true when the store was written, $false otherwise.
+function Set-WifiNetworkEntry {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SSID,
+        [string]$Password
+    )
+    $networks = @(Get-WifiNetworks)
+    # -eq is case-insensitive in PowerShell (SSID match); -ceq below is not
+    # (passwords are case-sensitive).
+    $existing = $networks | Where-Object { $_.SSID -eq $SSID }
+
+    if ($existing) {
+        if ($existing.Password -ceq $Password) {
+            Write-Log ($msg.WifiNetworkUnchanged -f $SSID) -Level INFO
+            return $false
+        }
+        Write-Log ($msg.WifiNetworkDuplicate -f $SSID) -Level WARNING
+        $confirm = (Read-Host $msg.WifiNetworkOverwritePrompt).Trim().ToUpper()
+        if ($confirm -ne 'Y' -and $confirm -ne 'O') { return $false }
+        $existing.Password = $Password
+        Save-WifiNetworks -Networks $networks
+        Write-Log ($msg.WifiNetworkUpdated -f $SSID) -Level SUCCESS
+        return $true
+    }
+
+    $isFirst   = ($networks.Count -eq 0)
+    $networks += [PSCustomObject]@{ SSID = $SSID; Password = $Password; Preferred = $isFirst }
+    Save-WifiNetworks -Networks $networks
+    Write-Log ($msg.WifiNetworkAdded -f $SSID) -Level SUCCESS
+    return $true
+}
+
+
 function Show-SubMenu-WifiNetworks {
     do {
         Clear-Host
@@ -1380,6 +1419,7 @@ function Show-SubMenu-WifiNetworks {
         }
         Write-Host ""
         Write-Host "  A. Add a network"
+        Write-Host $msg.WifiPcCopyOption
         if ($networks.Count -gt 0) {
             Write-Host "  [1-$($networks.Count)]. Edit / Delete a network"
         }
@@ -1391,18 +1431,33 @@ function Show-SubMenu-WifiNetworks {
         if ($choice.ToUpper() -eq 'A') {
             $ssid = (Read-Host $msg.WifiNetworkSsidPrompt).Trim()
             if (-not $ssid) { continue }
-            $wifiPassword  = (Read-Host $msg.WifiNetworkPasswordPrompt).Trim()
-            $existing = $networks | Where-Object { $_.SSID -eq $ssid }
-            if ($existing) {
-                $existing.Password = $wifiPassword
-                Write-Log ($msg.WifiNetworkUpdated -f $ssid) -Level SUCCESS
-            } else {
-                $isFirst = ($networks.Count -eq 0)
-                $networks += [PSCustomObject]@{ SSID = $ssid; Password = $wifiPassword; Preferred = $isFirst }
-                Write-Log ($msg.WifiNetworkAdded -f $ssid) -Level SUCCESS
-            }
-            Save-WifiNetworks -Networks $networks
+            $wifiPassword = (Read-Host $msg.WifiNetworkPasswordPrompt).Trim()
+            Set-WifiNetworkEntry -SSID $ssid -Password $wifiPassword | Out-Null
             Start-Sleep -Seconds 1
+            continue
+        }
+
+        # Copy the SSID + password of the WiFi this computer is connected to -
+        # console equivalent of the web UI's "Copy Wifi parameters from the host
+        # computer" button. Both paths share Get-ComputerWifiInfo.
+        if ($choice.ToUpper() -eq 'P') {
+            $pcWifi = Get-ComputerWifiInfo
+            if (-not $pcWifi -or -not $pcWifi.Ssid) {
+                Write-Log $msg.WifiPcNotDetected -Level WARNING
+                Start-Sleep -Seconds 2
+                continue
+            }
+            Write-Host ""
+            Write-Log ($msg.WifiPcDetected -f $pcWifi.Ssid) -Level INFO
+            $wifiPassword = $pcWifi.Password
+            if (-not $wifiPassword) {
+                Write-Log ($msg.WifiPcPasswordMissing -f $pcWifi.Ssid) -Level WARNING
+                $wifiPassword = (Read-Host $msg.WifiNetworkPasswordPrompt).Trim()
+            }
+            $confirm = (Read-Host $msg.WifiPcUseConfirm).Trim().ToUpper()
+            if ($confirm -ne 'Y' -and $confirm -ne 'O') { continue }
+            Set-WifiNetworkEntry -SSID $pcWifi.Ssid -Password $wifiPassword | Out-Null
+            Start-Sleep -Seconds 2
             continue
         }
 

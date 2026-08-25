@@ -482,6 +482,18 @@
     WifiNetworkPreferred   = "WiFi network '{0}' set as preferred."
     WifiNetworkAlreadyPref = "WiFi network '{0}' is already the preferred network."
     WifiNetworkSetPref     = "Set as preferred"
+
+    # Duplicate guard when adding a network
+    WifiNetworkDuplicate        = "WiFi network '{0}' is already recorded with a different password."
+    WifiNetworkUnchanged        = "WiFi network '{0}' is already recorded with the same password. Nothing changed."
+    WifiNetworkOverwritePrompt  = "Replace the stored password? (Y/N): "
+
+    # Copy WiFi parameters from the host computer
+    WifiPcCopyOption      = "  P. Use this computer's WiFi"
+    WifiPcDetected        = "WiFi network detected on this computer: '{0}'"
+    WifiPcNotDetected     = "No active WiFi connection detected on this computer."
+    WifiPcPasswordMissing = "Password could not be read for '{0}'. Please enter it manually."
+    WifiPcUseConfirm      = "Save these WiFi parameters? (Y/N): "
     WifiNoNetworkConfigured   = "No WiFi network configured. Add one via the WiFi Networks menu (W)."
     WifiHeadsetOnKnownNetwork = "Headset is already connected to known network '{0}'."
 

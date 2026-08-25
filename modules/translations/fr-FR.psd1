@@ -480,6 +480,18 @@
     WifiNetworkPreferred   = "Reseau WiFi '{0}' defini comme prefere."
     WifiNetworkAlreadyPref = "Le reseau WiFi '{0}' est deja le reseau prefere."
     WifiNetworkSetPref     = "Definir comme prefere"
+
+    # Controle des doublons lors de l'ajout d'un reseau
+    WifiNetworkDuplicate        = "Le reseau WiFi '{0}' est deja enregistre avec un mot de passe different."
+    WifiNetworkUnchanged        = "Le reseau WiFi '{0}' est deja enregistre avec le meme mot de passe. Aucun changement."
+    WifiNetworkOverwritePrompt  = "Remplacer le mot de passe enregistre ? (O/N) : "
+
+    # Copie des parametres WiFi de l'ordinateur hote
+    WifiPcCopyOption      = "  P. Utiliser le WiFi de cet ordinateur"
+    WifiPcDetected        = "Reseau WiFi detecte sur cet ordinateur : '{0}'"
+    WifiPcNotDetected     = "Aucune connexion WiFi active detectee sur cet ordinateur."
+    WifiPcPasswordMissing = "Impossible de lire le mot de passe de '{0}'. Veuillez le saisir manuellement."
+    WifiPcUseConfirm      = "Enregistrer ces parametres WiFi ? (O/N) : "
     WifiNoNetworkConfigured   = "Aucun reseau WiFi configure. Ajoutez-en un via le menu Reseaux WiFi (W)."
     WifiHeadsetOnKnownNetwork = "Le casque est deja connecte au reseau connu '{0}'."
 

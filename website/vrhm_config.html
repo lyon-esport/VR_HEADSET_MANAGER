@@ -287,7 +287,7 @@
                   <svg id="wifi-eye-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
                 </button>
               </div>
-              <button class="cfg-cancel-btn" type="button" id="wifi-copy-pc-btn" title="Copy SSID and password from this PC WiFi">Copy from PC WiFi</button>
+              <button class="cfg-cancel-btn" type="button" id="wifi-copy-pc-btn" title="Copy the SSID and password of the WiFi network this computer is connected to">Copy Wifi parameters from the host computer</button>
               <button class="cfg-save-btn" id="wifi-form-save">Save</button>
               <button class="cfg-cancel-btn" id="wifi-form-cancel">Cancel</button>
             </div>
@@ -1628,7 +1628,18 @@
     });
 
     // ── WiFi Networks ────────────────────────────────────────────────────────
-    var _wifiEditSsid = null;
+    var _wifiEditSsid  = null;
+    var _wifiNetworks  = [];
+
+    // Case-insensitive SSID lookup, mirroring the server's -eq comparison.
+    function findWifiNetwork(ssid) {
+      if (!ssid) return null;
+      var needle = String(ssid).toLowerCase();
+      for (var i = 0; i < _wifiNetworks.length; i++) {
+        if (String(_wifiNetworks[i].ssid).toLowerCase() === needle) return _wifiNetworks[i];
+      }
+      return null;
+    }
 
     function loadWifiNetworks() {
       fetch('/api/wifi-networks')
@@ -1638,6 +1649,7 @@
     }
 
     function renderWifiTable(list) {
+      _wifiNetworks = list || [];
       var tbody = document.getElementById('wifi-tbody');
       var emptyRow = document.getElementById('wifi-empty-row');
       tbody.querySelectorAll('tr:not(#wifi-empty-row)').forEach(function(r) { r.remove(); });
@@ -1699,8 +1711,14 @@
           if (j.ok && j.ssid) {
             document.getElementById('wifi-ssid-inp').value = j.ssid;
             if (j.password) document.getElementById('wifi-pwd-inp').value = j.password;
-            showToast('Copied from PC WiFi', 2000);
-          } else { showToast('No active WiFi detected on this PC', 2500); }
+            if (findWifiNetwork(j.ssid)) {
+              showToast('SSID "' + j.ssid + '" is already in the known networks list', 3500);
+            } else if (!j.password) {
+              showToast('SSID "' + j.ssid + '" copied - password unavailable, enter it manually', 3500);
+            } else {
+              showToast('Copied from this computer WiFi: ' + j.ssid, 2000);
+            }
+          } else { showToast('No active WiFi detected on this computer', 2500); }
         })
         .catch(function() { showToast('Server unreachable', 2500); });
     });
@@ -1712,14 +1730,30 @@
       var ssid = document.getElementById('wifi-ssid-inp').value.trim();
       var pass = document.getElementById('wifi-pwd-inp').value.trim();
       if (!ssid) { showToast('SSID is required', 2000); return; }
+
+      // Editing an existing row is explicit intent and is never prompted.
+      // Adding an SSID that is already saved would silently replace its stored
+      // password, so ask first.
+      var allowOverwrite = (_wifiEditSsid !== null);
+      if (!allowOverwrite && findWifiNetwork(ssid)) {
+        if (!confirm('WiFi network "' + ssid + '" is already saved.\n\nReplace its stored password?')) return;
+        allowOverwrite = true;
+      }
+
       fetch('/api/wifi-networks/upsert', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ssid: ssid, password: pass })
+        body: JSON.stringify({ ssid: ssid, password: pass, allowOverwrite: allowOverwrite })
       })
         .then(function(r) { return r.json(); })
         .then(function(j) {
-          if (j.ok) { hideWifiForm(); loadWifiNetworks(); showToast('Network saved', 2000); }
-          else { showToast('Error: ' + (j.error || 'unknown'), 3000); }
+          if (j.ok && j.duplicate) {
+            hideWifiForm();
+            showToast('Network "' + ssid + '" is already saved with the same password - nothing changed', 3000);
+          } else if (j.ok) {
+            hideWifiForm(); loadWifiNetworks(); showToast('Network saved', 2000);
+          } else if (j.duplicate) {
+            showToast('Network "' + ssid + '" is already saved - not overwritten', 3000);
+          } else { showToast('Error: ' + (j.error || 'unknown'), 3000); }
         })
         .catch(function() { showToast('Server unreachable', 2500); });
     });

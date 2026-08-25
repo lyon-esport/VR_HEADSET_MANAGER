@@ -609,7 +609,7 @@ function start-screenCopy {
             New-Item -ItemType Directory -Path $recordFolder -Force | Out-Null
         }
         $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-        $recordFile = Join-Path -Path $recordFolder -ChildPath "${displayName}_$timestamp.mp4"
+        $recordFile = Join-Path -Path $recordFolder -ChildPath "${displayName}_$timestamp.mkv"
         $recordOption = "--record=`"$recordFile`""
         Write-Log -Message ($msg.ScrcpyRecording -f $recordFile) -Level "INFO"
     } else {

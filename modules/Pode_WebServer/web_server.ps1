@@ -2304,9 +2304,15 @@ try {
         # API: GET /api/wifi-detect  - returns the PC's currently connected WiFi SSID and password
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/wifi-detect') {
             try {
-                $detectedSsid = Get-ComputerWifiSSID
-                $detectedPwd  = if ($detectedSsid) { Get-ComputerWifiPassword -SSID $detectedSsid } else { $null }
-                $payload = @{ ok = $true; ssid = $detectedSsid; password = $detectedPwd }
+                # Single call: Get-ComputerWifiInfo resolves SSID and password in
+                # one pass, instead of two independent netsh round-trips.
+                $wifiInfo = Get-ComputerWifiInfo
+                $payload  = @{
+                    ok          = $true
+                    ssid        = $(if ($wifiInfo) { $wifiInfo.Ssid } else { $null })
+                    password    = $(if ($wifiInfo) { $wifiInfo.Password } else { $null })
+                    profileName = $(if ($wifiInfo) { $wifiInfo.ProfileName } else { $null })
+                }
                 Send-JsonResponse -Response $response -Body $payload
             } catch {
                 Send-JsonResponse -Response $response -Body @{ ok = $false; error = $_.Exception.Message } -StatusCode 500
@@ -2349,18 +2355,36 @@ try {
                 $ssid        = ([string]$json.ssid).Trim()
                 $wifiPassword = ([string]$json.password).Trim()
                 if (-not $ssid) { throw "SSID is required" }
+                $allowOverwrite = [bool]$json.allowOverwrite
                 $networks  = @(Get-WifiNetworks)
+                # -eq is case-insensitive in PowerShell: SSIDs are matched
+                # case-insensitively, the password comparison below is not.
                 $existing  = $networks | Where-Object { $_.SSID -eq $ssid }
+                $result    = $null
                 if ($existing) {
-                    $existing.Password = $wifiPassword
-                    $message = "updated"
-                } else {
-                    $isFirst = ($networks.Count -eq 0)
-                    $networks += [PSCustomObject]@{ SSID = $ssid; Password = $wifiPassword; Preferred = $isFirst }
-                    $message = "added"
+                    if ($existing.Password -ceq $wifiPassword) {
+                        # Nothing would change - do not touch the encrypted store.
+                        $result = @{ ok = $true; message = 'unchanged'; duplicate = $true; ssid = $ssid }
+                    } elseif (-not $allowOverwrite) {
+                        # Known SSID with a different password: refuse silently
+                        # overwriting it. HTTP 200 - this is a confirmable
+                        # condition the caller must acknowledge, not an error.
+                        $result = @{ ok = $false; message = 'duplicate'; duplicate = $true; ssid = $ssid }
+                    }
                 }
-                Save-WifiNetworks -Networks $networks
-                $jsonOut   = ConvertTo-Json @{ ok = $true; message = $message } -Compress
+                if (-not $result) {
+                    if ($existing) {
+                        $existing.Password = $wifiPassword
+                        $message = "updated"
+                    } else {
+                        $isFirst = ($networks.Count -eq 0)
+                        $networks += [PSCustomObject]@{ SSID = $ssid; Password = $wifiPassword; Preferred = $isFirst }
+                        $message = "added"
+                    }
+                    Save-WifiNetworks -Networks $networks
+                    $result = @{ ok = $true; message = $message }
+                }
+                $jsonOut   = ConvertTo-Json $result -Compress
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonOut)
                 $response.StatusCode      = 200
                 $response.ContentType     = 'application/json; charset=utf-8'
