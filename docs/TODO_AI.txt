@@ -23,6 +23,8 @@ PB
 Switcher sur le mode portrait bloque le restream sur mediaMTX
 
 
+Auto crop based on the IPD for Q2 headsets
+
 
 
 ## video_monitor.html ##

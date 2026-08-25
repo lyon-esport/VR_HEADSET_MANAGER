@@ -1,15 +1,24 @@
 <#
+Manual reference notes - NOT executed by the application.
+The app does all of this automatically via Install-OculusWirelessAdbApk
+(modules\adb_functions.ps1). Kept here for manual recovery / debugging.
+
 adb install app-debug.apk
 adb shell pm grant tdg.oculuswirelessadb android.permission.WRITE_SECURE_SETTINGS
 adb shell pm grant tdg.oculuswirelessadb android.permission.READ_LOGS
 #>
 
 #1 - Connect the headset with USB
-cd "L:\Drive partagés\04 Equipe Technique\20 VR\VR_HEADSET_MANAGER\sources\scrcpy-win64-v3.3.3"
+#2 - Run these from the project root. adb.exe ships inside the active scrcpy
+#    version folder (sources\scrcpy\scrcpy-win64-v<version>\), selected by
+#    config.ADB.folder in config\config.json.
 
-.\adb.exe install "C:\Users\Crazy\Documents\Scripts\Quest screen miroring Streaming\ADB Wireless activator\tdg.oculuswirelessadb-1.2.apk"
-.\adb.exe shell pm grant tdg.oculuswirelessadb android.permission.WRITE_SECURE_SETTINGS
-.\adb.exe shell pm grant tdg.oculuswirelessadb android.permission.READ_LOGS
+$adb = ".\sources\scrcpy\scrcpy-win64-v4.1\adb.exe"
+$apk = ".\sources\ADB Wireless activator\tdg.oculuswirelessadb-1.3.apk"
 
-.\adb.exe tcpip 5555
-.\adb.exe shell am start -n tdg.oculuswirelessadb/.MainActivity
+& $adb install $apk
+& $adb shell pm grant tdg.oculuswirelessadb android.permission.WRITE_SECURE_SETTINGS
+& $adb shell pm grant tdg.oculuswirelessadb android.permission.READ_LOGS
+
+& $adb tcpip 5555
+& $adb shell am start -n tdg.oculuswirelessadb/.MainActivity

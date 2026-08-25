@@ -47,11 +47,11 @@
     "applied_file_name": "vqa_applied.json"
   },
   "ADB":{
-	"folder":"scrcpy-win64-v4.1",
+	"folder":"scrcpy\\scrcpy-win64-v4.1",
     "adbPort_default": 5555
   },
   "scrcpy":{
-	  "folder":"scrcpy-win64-v4.1",
+	  "folder":"scrcpy\\scrcpy-win64-v4.1",
 	  "recordFolder":"C:\\DATA\\MEDIA\\VR_Records",
 	  "recordMinFreeSpaceGB": 5,
 	  "parameters": {
@@ -237,7 +237,7 @@
   },
   "mediamtx": {
     "enabled": true,
-    "folder": "MediaMTX\\mediamtx_v1.19.2_windows_amd64",
+    "folder": "MediaMTX\\mediamtx_v1.20.0_windows_amd64",
     "log_level": "error",
     "rtsp_port": 8554,
     "hls_port": 8888,

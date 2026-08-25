@@ -70,12 +70,18 @@ All thresholds and switches of the automatic quality mitigation — explained in
 
 ### `ADB`
 
-The scrcpy/ADB binaries folder (inside `sources\`) and the default ADB WiFi port (5555).
+| Key | Default | Description |
+|---|---|---|
+| `folder` | `scrcpy\scrcpy-win64-v...` | scrcpy/ADB binaries folder inside `sources\` (the scrcpy release bundles `adb.exe`, so this always holds the same value as `scrcpy.folder`) |
+| `adbPort_default` | `5555` | Default ADB WiFi port |
+
+Each scrcpy version lives in its own folder under `sources\scrcpy\`, so several can coexist; this key selects the active one. Switch versions from the web UI (Configuration -> Advanced) rather than editing it by hand.
 
 ### Headset Capture Profiles (`scrcpy`)
 
 | Key | Default | Description |
 |---|---|---|
+| `folder` | `scrcpy\scrcpy-win64-v...` | Same value as `ADB.folder` above |
 | `recordFolder` | `C:\DATA\MEDIA\VR_Records` | Where recordings are written |
 | `recordMinFreeSpaceGB` | `5` | Below this free space, recording is disabled automatically |
 | `parameters.<Model>` | — | Per-model capture profiles (see below) |
