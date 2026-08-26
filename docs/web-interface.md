@@ -95,3 +95,7 @@ Service control and troubleshooting from the browser:
 ### Timer control
 
 A dedicated page to drive all session timers at once; the same functions are exposed by the [Timer API](docs_timer_api.md) for Stream Deck / OBS integration.
+
+### Kiosk Screens
+
+Remote-control browser displays on the LAN (lobby TVs, showroom monitors) — push a URL, cast a headset's live feed to a screen, or kill its browser. See the dedicated [Kiosk screens](kiosk-screens.md) page.

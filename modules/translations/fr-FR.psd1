@@ -546,4 +546,65 @@
     PortChanged                = "{0} : port modifie de {1} a {2}."
     PortNoFreeInPool           = "Aucun port libre dans la plage ({0}-{1}). Veuillez en entrer un manuellement."
     PortAllClear               = "Tous les ports requis sont disponibles."
+
+    # ==========================================
+    # Ecrans Kiosk (console_manager.ps1 - Show-SubMenu-KioskScreens)
+    # NOTE : imbrique sous une seule cle de premier niveau expres.
+    # Import-PowerShellDataFile impose une limite stricte de 500 paires
+    # cle/valeur par hashtable litterale ; la table de premier niveau de
+    # en-US.psd1 etait deja proche de cette limite, donc toutes les chaines
+    # Kiosk vivent sous $msg.Kiosk.* plutot que des cles plates.
+    # ==========================================
+    Kiosk = @{
+        MenuOption          = " K. Gestion des ecrans Kiosk "
+        ScreensTitle        = "=== ECRANS KIOSK ==="
+        NoKiosksFound       = "Aucun ecran kiosk enregistre pour le moment."
+        StatusOK            = "OK"
+        StatusCdpClosed     = "Joignable, CDP ferme"
+        StatusUnreachable   = "Injoignable"
+        MenuAdd             = "  A. Ajouter un kiosk manuellement"
+        MenuScan            = "  S. Scanner le reseau pour trouver des kiosks"
+        MenuSelectRow       = "  [1-{0}]. Gerer un kiosk"
+        MenuBack            = "  0. Retour au menu principal"
+        Selected            = "Selectionne"
+        ActionPush          = "  P. Envoyer une URL"
+        ActionEdit          = "  E. Modifier (Nom/IP/Port)"
+        ActionDelete        = "  D. Supprimer"
+        ActionCancel        = "  0. Annuler"
+        PushUrlPrompt       = "Entrez l'URL a envoyer : "
+        LocalhostWarning    = "Cette URL utilise 'localhost', qui pointe vers l'ecran kiosk lui-meme, pas vers ce PC. URL suggeree : {0}"
+        LocalhostConfirm    = "Utiliser l'URL suggeree a la place ? (O/N) : "
+        PushCancelled       = "Envoi annule."
+        PushSuccess         = "URL envoyee avec succes au kiosk {0}."
+        PushFailed          = "Echec de l'envoi de l'URL au kiosk {0} : {1}"
+        EditFieldName       = "1. Nom"
+        EditFieldIP         = "2. Adresse IP"
+        EditFieldPort       = "3. Port"
+        EditFieldPrompt     = "Selectionnez le champ a modifier"
+        EditNewValuePrompt  = "Entrez la nouvelle valeur pour {0} (actuelle : {1}) : "
+        EditSuccess         = "Kiosk {0} mis a jour."
+        DeleteConfirm       = "Supprimer le kiosk '{0}' ? (O/N) : "
+        DeleteSuccess       = "Kiosk '{0}' supprime."
+        DeleteCancelled     = "Suppression annulee."
+        AddIPPrompt         = "Adresse IP du kiosk (obligatoire) : "
+        AddIPInvalid        = "L'adresse IP est obligatoire. Annulation."
+        AddNamePrompt       = "Nom du kiosk (optionnel, par defaut l'IP) : "
+        AddPortPrompt       = "Port du kiosk (par defaut 9222) : "
+        AddPortInvalid      = "Numero de port invalide. Utilisation du port par defaut 9222."
+        AddSuccess          = "Kiosk '{0}' ajoute."
+        InvalidChoice       = "Choix invalide."
+        ScanTitle           = "=== SCAN RESEAU POUR KIOSKS ==="
+        ScanNoNetworks      = "Aucun reseau prive detecte."
+        ScanSelectInterface = "Selectionnez une interface reseau (1-{0}) : "
+        ScanScanning        = "Scan du reseau {0} pour trouver des ecrans kiosk..."
+        ScanNoneFound       = "Aucun ecran kiosk detecte sur le reseau."
+        ScanResultsHeader   = "Appareils detectes :"
+        ScanAlreadyAdded    = "(deja ajoute)"
+        ScanSelectPrompt    = "Entrez les numeros des appareils a ajouter (ex : 1,3,5) : "
+        ScanNoneSelected    = "Aucun appareil selectionne."
+        ScanConfirm         = "Confirmer l'ajout de ces kiosks ? (O/N) : "
+        ScanCancelled       = "Ajout annule."
+        ScanNamePrompt      = "Nom convivial pour {0} (optionnel) : "
+        ScanAddSuccess      = "Kiosk(s) ajoute(s) avec succes."
+    }
 }

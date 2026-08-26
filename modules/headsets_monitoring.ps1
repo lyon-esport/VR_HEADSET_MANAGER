@@ -90,6 +90,95 @@ function Start-HeadsetRunspace {
     return @{ PS = $ps; Runspace = $rs; Handle = $handle }
 }
 
+function Start-KioskRunspace {
+    <#
+    .SYNOPSIS
+    Creates and starts a persistent per-kiosk polling runspace.
+    $sharedState is injected via InitialSessionState so the runspace shares the same
+    synchronized hashtable object reference - no serialization needed.
+    Returns @{PS; Runspace; Handle}.
+    #>
+    param(
+        [string]$IPAddress,
+        [int]$Port,
+        [hashtable]$sharedState,
+        [string]$scriptPath,
+        [string]$configFilePath,
+        [scriptblock]$pollBlock
+    )
+    $iss = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
+    $iss.Variables.Add([System.Management.Automation.Runspaces.SessionStateVariableEntry]::new(
+        'sharedState', $sharedState, ''))
+    $rs = [runspacefactory]::CreateRunspace($iss)
+    $rs.Open()
+    $ps = [powershell]::Create()
+    $ps.Runspace = $rs
+    $ps.AddScript($pollBlock).AddArgument($IPAddress).AddArgument($Port).AddArgument($scriptPath).AddArgument($configFilePath) | Out-Null
+    $handle = $ps.BeginInvoke()
+    return @{ PS = $ps; Runspace = $rs; Handle = $handle }
+}
+
+function Sync-KioskRunspaces {
+    <#
+    .SYNOPSIS
+    Diffs $runspaceRegistry against Get-KnownKiosks.
+    Stops runspaces for removed kiosks (signal + wait up to 5s + dispose).
+    Starts runspaces for new kiosks. Uses "_stop_kiosk_$ip" as the stop-signal key
+    (distinct from headset runspaces' "_stop_$ip") to avoid any possible IPC collision.
+    #>
+    param(
+        [ref]$runspaceRegistry,
+        [hashtable]$sharedState,
+        [string]$scriptPath,
+        [string]$configFilePath,
+        [scriptblock]$pollBlock
+    )
+
+    $knownKiosks = @()
+    if (Get-Command Get-KnownKiosks -ErrorAction SilentlyContinue) {
+        $knownKiosks = @(Get-KnownKiosks)
+    }
+    $currentIPs = @($knownKiosks | ForEach-Object { $_.IPAddress })
+
+    foreach ($ip in @($runspaceRegistry.Value.Keys)) {
+        if ($ip -notin $currentIPs) {
+            $sharedState["_stop_kiosk_$ip"] = $true
+            $deadline = (Get-Date).AddSeconds(5)
+            while (-not $runspaceRegistry.Value[$ip].Handle.IsCompleted -and (Get-Date) -lt $deadline) {
+                Start-Sleep -Milliseconds 200
+            }
+            try { $runspaceRegistry.Value[$ip].PS.Dispose() }       catch {}
+            try { $runspaceRegistry.Value[$ip].Runspace.Dispose() } catch {}
+            $runspaceRegistry.Value.Remove($ip)
+            $sharedState.Remove("_stop_kiosk_$ip")
+            $sharedState.Remove("kiosk_$ip")
+            Write-Log ("VRMonitor: stopped kiosk runspace for $ip") -Level INFO
+        }
+    }
+
+    # Detect dead runspaces (uncaught exception in poll loop) and remove their registry
+    # entry so the start-new loop below will respawn them.
+    foreach ($ip in @($runspaceRegistry.Value.Keys)) {
+        $entry = $runspaceRegistry.Value[$ip]
+        if ($entry.Handle.IsCompleted) {
+            Write-Log ("VRMonitor: detected dead kiosk runspace for $ip, restarting") -Level WARNING
+            try { $entry.PS.Dispose() }       catch {}
+            try { $entry.Runspace.Dispose() } catch {}
+            $runspaceRegistry.Value.Remove($ip)
+        }
+    }
+
+    foreach ($kiosk in $knownKiosks) {
+        if (-not $runspaceRegistry.Value.ContainsKey($kiosk.IPAddress)) {
+            $kioskPort = if ($kiosk.Port) { [int]$kiosk.Port } else { 9222 }
+            $runspaceRegistry.Value[$kiosk.IPAddress] = Start-KioskRunspace `
+                -IPAddress $kiosk.IPAddress -Port $kioskPort -sharedState $sharedState `
+                -scriptPath $scriptPath -configFilePath $configFilePath -pollBlock $pollBlock
+            Write-Log ("VRMonitor: started kiosk runspace for " + $kiosk.Name + " (" + $kiosk.IPAddress + ")") -Level INFO
+        }
+    }
+}
+
 function Sync-HeadsetRunspaces {
     <#
     .SYNOPSIS
@@ -184,6 +273,7 @@ function Start-VRMonitor {
         # Keys: $ip (headsetInfo PSCustomObject), "_refresh_timer", "_stop_all", "_stop_$ip"
         $sharedState      = [hashtable]::Synchronized(@{})
         $runspaceRegistry = @{}
+        $kioskRunspaceRegistry = @{}
         $sharedState["_refresh_timer"] = $global:VRMonitor_refresh_timer
 
         # Poll scriptblock executed inside each per-headset runspace.
@@ -293,6 +383,61 @@ function Start-VRMonitor {
             }
         }
 
+        # Poll scriptblock executed inside each per-kiosk runspace. Kept lightweight and
+        # separate from $headsetPollBlock: kiosks only need cheap reachability + CDP-open
+        # polling, no ADB/battery/app stages.
+        $kioskPollBlock = {
+            param(
+                [string]$ip,
+                [int]$port,
+                [string]$scriptPath,
+                [string]$configFilePath
+            )
+            # $sharedState available via InitialSessionState injection
+            $global:ScriptPath     = $scriptPath
+            $global:ConfigFilePath = $configFilePath
+            $modPath = Join-Path $scriptPath "modules"
+            foreach ($mod in @("logging.ps1","config_files_loader.ps1","utils.ps1","network_scanner.ps1","kiosk_functions.ps1")) {
+                $f = Join-Path $modPath $mod
+                if (Test-Path -LiteralPath $f) { . $f }
+            }
+            Get-Config -ConfigFilePath $configFilePath | Out-Null
+
+            # Load translations so $msg.* calls in functions do not throw
+            $transFolder = Join-Path $scriptPath "modules\translations"
+            $transFile   = Join-Path $transFolder "$($global:SelectedLanguage).psd1"
+            if (-not (Test-Path -LiteralPath $transFile)) { $transFile = Join-Path $transFolder "en-US.psd1" }
+            if (Test-Path -LiteralPath $transFile) { $global:msg = Import-PowerShellDataFile -Path $transFile }
+
+            $stopKey = "_stop_kiosk_$ip"
+
+            while ($true) {
+                if ($sharedState["_stop_all"] -or $sharedState[$stopKey]) { return }
+
+                try {
+                    $reach = Get-KioskReachability -IP $ip -Port $port
+                    $sharedState["kiosk_$ip"] = @{
+                        IPAddress   = $ip
+                        Port        = $port
+                        Reachable   = $reach.Reachable
+                        LatencyMs   = $reach.LatencyMs
+                        CdpOpen     = $reach.CdpOpen
+                        CurrentUrl  = $reach.CurrentUrl
+                        LastChecked = (Get-Date)
+                    }
+                } catch {
+                    Write-Log ("VRMonitor[kiosk " + $ip + "]: poll cycle failed: " + $_.Exception.Message) -Level WARNING
+                }
+
+                # Sleep refresh_timer seconds with per-second stop-flag checks
+                $timer = if ($sharedState["_refresh_timer"]) { [int]$sharedState["_refresh_timer"] } else { 5 }
+                for ($s = 0; $s -lt $timer; $s++) {
+                    Start-Sleep -Seconds 1
+                    if ($sharedState["_stop_all"] -or $sharedState[$stopKey]) { return }
+                }
+            }
+        }
+
         # Two-speed loop: 500ms fast tick for CSV/HTML, slow tick (refresh_timer) for heavy ops
         $slowEvery       = [Math]::Max(1, [int]($global:VRMonitor_refresh_timer / 0.5))
         $slowCounter     = $slowEvery  # trigger slow path immediately on first tick
@@ -301,6 +446,7 @@ function Start-VRMonitor {
         # the current load tier (1=every tick, 2=every 2nd, 5=every 5th).
         $vqrTickCounter  = 0
         $lastFingerprint = ""
+        $lastKioskFingerprint = ""
         $knownHeadsets   = @()
 
         # Eager first load + immediate runspace start so the first real poll lands within
@@ -313,6 +459,11 @@ function Start-VRMonitor {
                 -sharedState $sharedState -scriptPath $global:ScriptPath `
                 -configFilePath $global:ConfigFilePath -pollBlock $headsetPollBlock
         }
+        try {
+            Sync-KioskRunspaces -runspaceRegistry ([ref]$kioskRunspaceRegistry) `
+                -sharedState $sharedState -scriptPath $global:ScriptPath `
+                -configFilePath $global:ConfigFilePath -pollBlock $kioskPollBlock
+        } catch { Write-Log ("VRMonitor: eager kiosk sync failed: " + $_.Exception.Message) -Level WARNING }
 
         # Fire service watchdogs eagerly so scrcpy / mediamtx / web server start at the same
         # time as the runspaces, instead of waiting one full slow-tick (~refresh_timer seconds)
@@ -340,6 +491,13 @@ function Start-VRMonitor {
                 $sharedState["_stop_all"] = $true
                 $deadline = (Get-Date).AddSeconds(5)
                 foreach ($entry in $runspaceRegistry.Values) {
+                    while (-not $entry.Handle.IsCompleted -and (Get-Date) -lt $deadline) {
+                        Start-Sleep -Milliseconds 200
+                    }
+                    try { $entry.PS.Dispose() }       catch {}
+                    try { $entry.Runspace.Dispose() } catch {}
+                }
+                foreach ($entry in $kioskRunspaceRegistry.Values) {
                     while (-not $entry.Handle.IsCompleted -and (Get-Date) -lt $deadline) {
                         Start-Sleep -Milliseconds 200
                     }
@@ -405,6 +563,25 @@ function Start-VRMonitor {
                 Write-Log ($msg.JobInfoCollected -f $knownHeadsetsInfo.Count) -Level DEBUG
             }
 
+            # ---- FAST PATH: kiosk status snapshot (write-on-change, mirrors above) ----
+            $kioskKeys = @($sharedState.Keys | Where-Object { $_ -like "kiosk_*" })
+            if ($kioskKeys.Count -gt 0) {
+                $kioskStatuses = @($kioskKeys | ForEach-Object { $sharedState[$_] } | Where-Object { $_ })
+                $kioskFp = ($kioskStatuses | ForEach-Object {
+                    "$($_.IPAddress)|$($_.Port)|$($_.Reachable)|$($_.LatencyMs)|$($_.CdpOpen)|$($_.CurrentUrl)"
+                }) -join '~'
+                if ($kioskFp -ne $lastKioskFingerprint) {
+                    $lastKioskFingerprint = $kioskFp
+                    try {
+                        $kiosksStatusPath = Join-Path $global:ScriptPath "data\kiosks_status.json"
+                        $json = $kioskStatuses | ConvertTo-Json -Depth 5
+                        Write-FileWithoutBom -Path $kiosksStatusPath -Content $json
+                    } catch {
+                        Write-Log ("VRMonitor: failed to write kiosks_status.json: " + $_.Exception.Message) -Level WARNING
+                    }
+                }
+            }
+
             # ---- SLOW PATH (every refresh_timer seconds) ----
             $slowCounter++
             if ($slowCounter -ge $slowEvery) {
@@ -435,6 +612,12 @@ function Start-VRMonitor {
                 Sync-HeadsetRunspaces -knownHeadsets $knownHeadsets -runspaceRegistry ([ref]$runspaceRegistry) `
                     -sharedState $sharedState -scriptPath $global:ScriptPath `
                     -configFilePath $global:ConfigFilePath -pollBlock $headsetPollBlock
+
+                try {
+                    Sync-KioskRunspaces -runspaceRegistry ([ref]$kioskRunspaceRegistry) `
+                        -sharedState $sharedState -scriptPath $global:ScriptPath `
+                        -configFilePath $global:ConfigFilePath -pollBlock $kioskPollBlock
+                } catch { Write-Log ("VRMonitor: kiosk sync failed: " + $_.Exception.Message) -Level WARNING }
 
                 Update-HeadsetVideoFile
                 Update-HeadsetTimerFile

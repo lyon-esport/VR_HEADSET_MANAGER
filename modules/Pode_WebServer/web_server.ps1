@@ -85,6 +85,46 @@ public class VrmConsoleInput {
         FreeConsole();
         return ok;
     }
+    // Writes every character of "text" (each as a down+up pair) plus an optional
+    // trailing Enter, as ONE WriteConsoleInput call within a SINGLE
+    // AttachConsole/FreeConsole cycle. Doing this in one shot (instead of one
+    // InjectKey call per character) avoids the race between repeated
+    // attach/detach cycles that can drop or reorder keystrokes when several
+    // characters must land together as one line (e.g. "00" + Enter).
+    public static bool InjectKeys(uint pid, string text, bool withEnter) {
+        FreeConsole();
+        if (!AttachConsole(pid)) return false;
+        IntPtr hIn = GetStdHandle(-10);
+        int charCount = text.Length + (withEnter ? 1 : 0);
+        var records = new INPUT_RECORD[charCount * 2];
+        int idx = 0;
+        for (int i = 0; i < text.Length; i++) {
+            char ch = text[i];
+            short vk = (short)VkKeyScan(ch);
+            records[idx].EventType = 1;
+            records[idx].KeyEvent.bKeyDown = 1;
+            records[idx].KeyEvent.wRepeatCount = 1;
+            records[idx].KeyEvent.wVirtualKeyCode = vk;
+            records[idx].KeyEvent.UnicodeChar = ch;
+            records[idx + 1] = records[idx];
+            records[idx + 1].KeyEvent.bKeyDown = 0;
+            idx += 2;
+        }
+        if (withEnter) {
+            records[idx].EventType = 1;
+            records[idx].KeyEvent.bKeyDown = 1;
+            records[idx].KeyEvent.wRepeatCount = 1;
+            records[idx].KeyEvent.wVirtualKeyCode = 0x0D;
+            records[idx].KeyEvent.UnicodeChar = (char)13;
+            records[idx + 1] = records[idx];
+            records[idx + 1].KeyEvent.bKeyDown = 0;
+        }
+        uint written;
+        bool ok = WriteConsoleInput(hIn, records, (uint)records.Length, out written);
+        FreeConsole();
+        return ok;
+    }
+    [DllImport("user32.dll")] public static extern short VkKeyScan(char ch);
 }
 '@
 
@@ -884,8 +924,7 @@ try {
                             Select-Object -First 1
                         if ($mainProc) {
                             $mainPid = [uint32]$mainProc.ProcessId
-                            [void][VrmConsoleInput]::InjectKey($mainPid, '0', 0x30)
-                            [void][VrmConsoleInput]::InjectKey($mainPid, [char]13, 0x0D)
+                            [void][VrmConsoleInput]::InjectKeys($mainPid, '0', $true)
                         }
                     } catch {}
                 }
@@ -1059,6 +1098,231 @@ try {
                 $resp2 = Invoke-RestMethod -Uri $url -Method POST -Body $bodyRaw `
                              -ContentType "application/json" -TimeoutSec 3 -ErrorAction Stop
                 Send-JsonResponse -Response $response -Body @{ ok = [bool]$resp2.ok }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: GET /api/kiosks  - returns known kiosks merged with live status from data\kiosks_status.json
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/kiosks') {
+            try {
+                $kiosks = @(Get-KnownKiosks)
+                $statusList = @()
+                $statusPath = Join-Path $global:ScriptPath "data\kiosks_status.json"
+                if (Test-Path -LiteralPath $statusPath) {
+                    try {
+                        $raw = Get-Content -LiteralPath $statusPath -Raw -Encoding UTF8
+                        $parsedStatus = ConvertFrom-Json $raw
+                        $statusList = @($parsedStatus)
+                    } catch {
+                        $statusList = @()
+                    }
+                }
+                $merged = $kiosks | ForEach-Object {
+                    $k = $_
+                    $st = $statusList | Where-Object { $_.IPAddress -eq $k.IPAddress } | Select-Object -First 1
+                    [PSCustomObject]@{
+                        ID           = $k.ID
+                        Name         = $k.Name
+                        IPAddress    = $k.IPAddress
+                        Port         = $k.Port
+                        PushedURL    = $k.PushedURL
+                        LastPushedAt = $k.LastPushedAt
+                        Reachable    = if ($st) { $st.Reachable } else { $null }
+                        LatencyMs    = if ($st) { $st.LatencyMs } else { $null }
+                        CdpOpen      = if ($st) { $st.CdpOpen } else { $null }
+                        CurrentUrl   = if ($st) { $st.CurrentUrl } else { $null }
+                    }
+                }
+                Send-JsonResponse -Response $response -Body @{ ok = $true; kiosks = @($merged) }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/kiosks/add-manual  body: {ip, name, port}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/kiosks/add-manual') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $bodyRaw = $reader.ReadToEnd(); $reader.Close()
+                $json = $bodyRaw | ConvertFrom-Json
+                $ip = ([string]$json.ip).Trim()
+                if (-not $ip) { throw "IP address is required" }
+                $name = ([string]$json.name).Trim()
+                $port = if ($json.port) { [int]$json.port } else { 9222 }
+                Add-Kiosk -IPAddress $ip -Name $name -Port $port
+                Send-JsonResponse -Response $response -Body @{ ok = $true }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/kiosks/scan  body: {cidr, port}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/kiosks/scan') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $bodyRaw = $reader.ReadToEnd(); $reader.Close()
+                $json = $bodyRaw | ConvertFrom-Json
+                $cidr = ([string]$json.cidr).Trim()
+                if (-not $cidr) { throw "CIDR is required" }
+                $port = if ($json.port) { [int]$json.port } else { 9222 }
+                $result = @(Invoke-KioskScan -CIDR $cidr -Port $port)
+                Send-JsonResponse -Response $response -Body @{ ok = $true; discovered = $result }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: GET /api/kiosks/networks  - list local private network interfaces for the scan interface-picker
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/kiosks/networks') {
+            try {
+                $networks = @(Get-PrivateNetworks)
+                Send-JsonResponse -Response $response -Body @{ ok = $true; networks = $networks }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/kiosks/update  body: {id, field, value}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/kiosks/update') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $bodyRaw = $reader.ReadToEnd(); $reader.Close()
+                $json = $bodyRaw | ConvertFrom-Json
+                if ($null -eq $json.id) { throw "id is required" }
+                if (-not $json.field) { throw "field is required" }
+                Update-KioskField -ID ([int]$json.id) -Field ([string]$json.field) -NewValue ([string]$json.value)
+                Send-JsonResponse -Response $response -Body @{ ok = $true }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/kiosks/remove  body: {id}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/kiosks/remove') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $bodyRaw = $reader.ReadToEnd(); $reader.Close()
+                $json = $bodyRaw | ConvertFrom-Json
+                if ($null -eq $json.id) { throw "id is required" }
+                Remove-Kiosk -ID ([int]$json.id)
+                Send-JsonResponse -Response $response -Body @{ ok = $true }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/kiosks/push  body: {id, url, confirmLocalhostReplacement}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/kiosks/push') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $bodyRaw = $reader.ReadToEnd(); $reader.Close()
+                $json = $bodyRaw | ConvertFrom-Json
+                if ($null -eq $json.id) { throw "id is required" }
+                $url = [string]$json.url
+                if (-not $url) { throw "url is required" }
+                $confirmReplace = [bool]$json.confirmLocalhostReplacement
+
+                $kiosk = Get-KnownKiosks | Where-Object { $_.ID -eq [int]$json.id } | Select-Object -First 1
+                if (-not $kiosk) {
+                    Send-JsonResponse -Response $response -StatusCode 404 -Body @{ ok = $false; error = "Kiosk not found" }
+                } else {
+                    $replacement = Resolve-LocalhostReplacement -Url $url
+
+                    if ($replacement.NeedsReplacement -and -not $confirmReplace) {
+                        Send-JsonResponse -Response $response -Body @{
+                            ok                = $false
+                            needsConfirmation = $true
+                            suggestedUrl      = $replacement.SuggestedUrl
+                            suggestedIP       = $replacement.SuggestedIP
+                        }
+                    } else {
+                        $finalUrl = if ($replacement.NeedsReplacement -and $confirmReplace) { $replacement.SuggestedUrl } else { $url }
+
+                        $navResult = Invoke-CdpNavigate -IP $kiosk.IPAddress -Port ([int]$kiosk.Port) -Url $finalUrl
+
+                        if ($navResult.Success) {
+                            Update-KioskField -ID $kiosk.ID -Field 'PushedURL' -NewValue $finalUrl
+                            Update-KioskField -ID $kiosk.ID -Field 'LastPushedAt' -NewValue (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+                            Send-JsonResponse -Response $response -Body @{ ok = $true }
+                        } else {
+                            Send-JsonResponse -Response $response -Body @{ ok = $false; error = $navResult.Error }
+                        }
+                    }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/kiosks/kill-browser  body: {id}  - closes Chrome on the kiosk via CDP Browser.close
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/kiosks/kill-browser') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $bodyRaw = $reader.ReadToEnd(); $reader.Close()
+                $json = $bodyRaw | ConvertFrom-Json
+                if ($null -eq $json.id) { throw "id is required" }
+
+                $kiosk = Get-KnownKiosks | Where-Object { $_.ID -eq [int]$json.id } | Select-Object -First 1
+                if (-not $kiosk) {
+                    Send-JsonResponse -Response $response -StatusCode 404 -Body @{ ok = $false; error = "Kiosk not found" }
+                } else {
+                    $result = Close-KioskBrowser -IP $kiosk.IPAddress -Port ([int]$kiosk.Port)
+                    if ($result.Success) {
+                        Send-JsonResponse -Response $response -Body @{ ok = $true }
+                    } else {
+                        Send-JsonResponse -Response $response -Body @{ ok = $false; error = $result.Error }
+                    }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: GET /api/kiosks/cdp-info?id=  - returns live CDP info (Browser, webSocketDebuggerUrl) for one kiosk
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/kiosks/cdp-info') {
+            try {
+                $idRaw = $request.QueryString['id']
+                $safeId = [regex]::Match($idRaw, '^\d+$').Value
+                if (-not $safeId) { throw "Invalid kiosk id" }
+                $kiosk = Get-KnownKiosks | Where-Object { $_.ID -eq [int]$safeId } | Select-Object -First 1
+                if (-not $kiosk) {
+                    Send-JsonResponse -Response $response -Body @{ ok = $false; error = "Kiosk not found" }
+                } else {
+                    $info = Get-CdpInfo -IP $kiosk.IPAddress -Port ([int]$kiosk.Port)
+                    if ($null -ne $info) {
+                        Send-JsonResponse -Response $response -Body @{ ok = $true; cdp = $info }
+                    } else {
+                        Send-JsonResponse -Response $response -Body @{ ok = $false; error = "Unreachable or CDP not open" }
+                    }
+                }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
@@ -2615,13 +2879,11 @@ try {
         # Injects '0' + Enter into the main process console input so Show-MainMenu triggers Invoke-AppShutdown.
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/app-shutdown') {
             try {
-                $mainProc = Get-WmiObject Win32_Process |
-                    Where-Object { $_.CommandLine -match 'main\.ps1' } |
-                    Select-Object -First 1
-                if (-not $mainProc) { throw 'Main process not found' }
-                $mainPid = [uint32]$mainProc.ProcessId
-                [void][VrmConsoleInput]::InjectKey($mainPid, '0', 0x30)
-                [void][VrmConsoleInput]::InjectKey($mainPid, [char]13, 0x0D)
+                $mainProcs = @(Get-WmiObject Win32_Process | Where-Object { $_.CommandLine -match 'main\.ps1' })
+                if ($mainProcs.Count -eq 0) { throw 'Main process not found' }
+                if ($mainProcs.Count -gt 1) { Write-Log "app-shutdown: multiple main.ps1 processes found ($($mainProcs.Count)), using first" -Level WARNING }
+                $mainPid = [uint32]$mainProcs[0].ProcessId
+                [void][VrmConsoleInput]::InjectKeys($mainPid, '0', $true)
                 Send-JsonResponse -Response $response -Raw '{"ok":true}'
             } catch {
                 try { Send-JsonResponse -Response $response -Raw '{"ok":false,"error":"server error"}' -StatusCode 500 } catch {}
@@ -2634,14 +2896,11 @@ try {
         # triggers the '00' case (relaunch main.ps1, then Invoke-AppShutdown on the old instance).
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/app-restart') {
             try {
-                $mainProc = Get-WmiObject Win32_Process |
-                    Where-Object { $_.CommandLine -match 'main\.ps1' } |
-                    Select-Object -First 1
-                if (-not $mainProc) { throw 'Main process not found' }
-                $mainPid = [uint32]$mainProc.ProcessId
-                [void][VrmConsoleInput]::InjectKey($mainPid, '0', 0x30)
-                [void][VrmConsoleInput]::InjectKey($mainPid, '0', 0x30)
-                [void][VrmConsoleInput]::InjectKey($mainPid, [char]13, 0x0D)
+                $mainProcs = @(Get-WmiObject Win32_Process | Where-Object { $_.CommandLine -match 'main\.ps1' })
+                if ($mainProcs.Count -eq 0) { throw 'Main process not found' }
+                if ($mainProcs.Count -gt 1) { Write-Log "app-restart: multiple main.ps1 processes found ($($mainProcs.Count)), using first" -Level WARNING }
+                $mainPid = [uint32]$mainProcs[0].ProcessId
+                [void][VrmConsoleInput]::InjectKeys($mainPid, '00', $true)
                 Send-JsonResponse -Response $response -Raw '{"ok":true}'
             } catch {
                 try { Send-JsonResponse -Response $response -Raw '{"ok":false,"error":"server error"}' -StatusCode 500 } catch {}

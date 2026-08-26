@@ -179,6 +179,23 @@ if (-not (Test-Path -LiteralPath $_csvPath)) {
 }
 Remove-Variable _csvPath
 
+# Pre-boot: ensure known_kiosks.csv exists before modules load
+$_kioskCsvPath = Join-Path $global:ScriptPath "data\known_kiosks.csv"
+if (-not (Test-Path -LiteralPath $_kioskCsvPath)) {
+    Write-Host "Initializing known_kiosks.csv..." -ForegroundColor Yellow
+    try {
+        Set-Content -LiteralPath $_kioskCsvPath -Value '"ID","Name","IPAddress","Port","PushedURL","LastPushedAt"' -Encoding UTF8 -ErrorAction Stop
+    } catch {
+        $diag = Test-FolderWriteAccess -Path $_kioskCsvPath
+        Write-Host "Error: Could not create '$_kioskCsvPath'." -ForegroundColor Red
+        Write-Host $diag.Reason -ForegroundColor Red
+        Write-Host "Fix: move the app folder to a location you can write to (e.g. Documents or a dedicated D:\Apps\... folder), or run this app as Administrator." -ForegroundColor Yellow
+        Read-Host "Press enter to exit"
+        exit 1
+    }
+}
+Remove-Variable _kioskCsvPath
+
 $custom_config = $args[0]
 if ($custom_config) {
     Write-Host "Custom config file passed as argument: $custom_config" -ForegroundColor Green

@@ -191,6 +191,54 @@
     .cell-action-btn.ar-on { background: rgba(34,197,94,0.28); color: #22c55e; border-color: rgba(34,197,94,0.5); }
     .cell-action-btn.ar-on:hover { background: rgba(34,197,94,0.50); }
 
+    /* Cast-to-kiosk button - only shown once at least one kiosk screen is registered */
+    .cell-action-btn.cast-btn { display: none; }
+    body.has-kiosks .cell-action-btn.cast-btn { display: flex; }
+
+    /* Cast-to-kiosk popover (single shared instance, repositioned per click) */
+    .cast-panel {
+      display: none; position: fixed;
+      min-width: 200px; max-width: 260px;
+      background: var(--drop-bg); border: 1px solid var(--drop-border);
+      border-radius: 6px; box-shadow: 0 10px 30px rgba(0,0,0,0.6); z-index: 300; padding: 6px 0;
+    }
+    .cast-panel.open { display: block; }
+    .cast-panel-title {
+      padding: 6px 13px 4px;
+      font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+      color: var(--muted);
+    }
+    .cast-item {
+      display: flex; align-items: center; gap: 9px;
+      width: 100%; padding: 7px 13px; background: transparent; border: none;
+      color: #888; font-size: 13px; font-family: inherit; text-align: left; cursor: pointer;
+      transition: background 0.1s, color 0.1s;
+    }
+    .cast-item:hover { background: var(--drop-item-hover); color: #ddd; }
+    .cast-item .hf-check { width: 13px; flex-shrink: 0; opacity: 0; }
+    .cast-item.checked .hf-check { opacity: 1; color: var(--filter-active-bg); }
+    .cast-panel-empty { padding: 10px 13px; font-size: 12px; color: #666; }
+    .cast-panel-footer { border-top: 1px solid var(--drop-border); margin-top: 4px; padding: 8px 13px 6px; }
+    .cast-push-btn {
+      display: flex; align-items: center; justify-content: center; gap: 6px;
+      width: 100%; padding: 7px 10px;
+      background: rgba(59,130,246,0.15); border: 1px solid rgba(59,130,246,0.4);
+      border-radius: 5px; color: #60a5fa; font-size: 12px; font-weight: 600;
+      cursor: pointer; font-family: inherit;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .cast-push-btn:hover { background: rgba(59,130,246,0.28); border-color: rgba(59,130,246,0.6); }
+    .cast-push-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .cast-status { font-size: 10px; color: #888; text-align: center; margin-top: 4px; min-height: 12px; }
+    .cast-overlay-toggle {
+      display: flex; align-items: center; gap: 7px;
+      margin-top: 8px; padding: 0 2px;
+      font-size: 11px; color: #888; cursor: pointer; user-select: none;
+      transition: color 0.1s;
+    }
+    .cast-overlay-toggle:hover { color: #ccc; }
+    .cast-overlay-toggle input { margin: 0; cursor: pointer; }
+
     /* Timer overlay - white text at bottom center of the cell */
     .timer-overlay {
       position: absolute;
@@ -605,6 +653,154 @@
       return name.replace(/ /g, '_');
     }
 
+    function esc(s) {
+      return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    // ------ Cast to kiosk screen(s) ---------------------------------------------------------------------------------------------------------------------------------------------------------
+    var kioskList     = [];
+    var castSelected  = {};   // kiosk ID (string) -> bool, reset every time the popover opens
+    var castTargetDn  = null;
+    var castPanel     = document.createElement('div');
+    castPanel.className = 'cast-panel';
+    castPanel.id = 'cast-panel';
+    document.body.appendChild(castPanel);
+
+    function fetchKioskList() {
+      return fetch('/api/kiosks')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          kioskList = (d.ok && d.kiosks) ? d.kiosks : [];
+          document.body.classList.toggle('has-kiosks', kioskList.length > 0);
+        })
+        .catch(function() { kioskList = []; });
+    }
+
+    function buildCastPanel(dn) {
+      castTargetDn = dn;
+      castSelected = {};
+      var html = '<div class="cast-panel-title">Cast to kiosk screen</div>';
+      if (!kioskList.length) {
+        html += '<div class="cast-panel-empty">No kiosk screens registered.</div>';
+      } else {
+        kioskList.forEach(function(k) {
+          html += '<button class="cast-item" data-cast-id="' + k.ID + '">' + CHECK_SVG_HF + esc(k.Name || k.IPAddress) + '</button>';
+        });
+        html +=
+          '<div class="cast-panel-footer">' +
+            '<button class="cast-push-btn" id="cast-push-btn">Push to kiosk screens</button>' +
+            '<label class="cast-overlay-toggle"><input type="checkbox" id="cast-overlay-chk" checked>display monitor + timer overlay</label>' +
+            '<div class="cast-status" id="cast-status"></div>' +
+          '</div>';
+      }
+      castPanel.innerHTML = html;
+    }
+
+    function closeCastPanel() {
+      castPanel.classList.remove('open');
+      castTargetDn = null;
+    }
+
+    function openCastPanel(btn) {
+      var dn = btn.dataset.castHeadset;
+      var reopening = castPanel.classList.contains('open') && castTargetDn === dn;
+      closeCastPanel();
+      if (reopening) return; // clicking the same cast button again just toggles it closed
+      buildCastPanel(dn);
+      castPanel.classList.add('open');
+      var r = btn.getBoundingClientRect();
+      var left = Math.min(r.left, window.innerWidth - 268);
+      castPanel.style.top  = (r.bottom + 4) + 'px';
+      castPanel.style.left = Math.max(8, left) + 'px';
+    }
+
+    castPanel.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var item = e.target.closest('.cast-item');
+      if (item) {
+        var id = item.dataset.castId;
+        castSelected[id] = !castSelected[id];
+        item.classList.toggle('checked', castSelected[id]);
+        return;
+      }
+      if (e.target.closest('#cast-push-btn')) { doCastPush(); }
+    });
+    document.addEventListener('click', function(e) {
+      if (!e.target.closest('.cast-panel') && !e.target.closest('.cast-btn')) closeCastPanel();
+    });
+
+    // Builds this page's own video URL for a headset (protocol+host of the current
+    // page, same technique the kiosk push endpoint itself uses to detect and offer
+    // to replace a localhost/127.0.0.1 origin with the server's real LAN IP).
+    function castUrlForHeadset(dn) {
+      return window.location.protocol + '//' + window.location.host + '/' + dn + '[video].html';
+    }
+
+    function doCastPush() {
+      var ids = Object.keys(castSelected).filter(function(id) { return castSelected[id]; });
+      var statusEl = document.getElementById('cast-status');
+      var pushBtn  = document.getElementById('cast-push-btn');
+      if (!ids.length) {
+        if (statusEl) { statusEl.textContent = 'Select at least one screen'; statusEl.style.color = '#ef4444'; }
+        return;
+      }
+      var url = castUrlForHeadset(castTargetDn);
+      var overlayChk = document.getElementById('cast-overlay-chk');
+      if (overlayChk && !overlayChk.checked) { url += '?nooverlay=1'; }
+      if (pushBtn) pushBtn.disabled = true;
+      if (statusEl) { statusEl.textContent = 'Pushing...'; statusEl.style.color = '#888'; }
+
+      // All selected kiosks share the same source URL, so the localhost-replacement
+      // suggestion (if any) is identical for every one of them - probe with the first
+      // id only, then either fan out the confirmed push or the plain push to the rest.
+      var probeId = ids[0];
+      fetch('/api/kiosks/push', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: probeId, url: url })
+      })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          if (d.needsConfirmation) {
+            var msg = 'The URL points to localhost, which will not resolve on the kiosk screen(s).\n' +
+                      'Replace with ' + d.suggestedUrl + ' and push to ' + ids.length + ' screen(s)?';
+            if (!confirm(msg)) { return null; }
+            return Promise.all(ids.map(function(id) {
+              return fetch('/api/kiosks/push', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: id, url: url, confirmLocalhostReplacement: true })
+              }).then(function(r) { return r.json(); });
+            }));
+          }
+          var rest = ids.slice(1);
+          return Promise.all(rest.map(function(id) {
+            return fetch('/api/kiosks/push', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id: id, url: url })
+            }).then(function(r) { return r.json(); });
+          })).then(function(others) { return [d].concat(others); });
+        })
+        .then(function(results) {
+          if (pushBtn) pushBtn.disabled = false;
+          if (!results) { // user declined the localhost-replacement confirmation
+            if (statusEl) { statusEl.textContent = 'Cancelled'; statusEl.style.color = '#888'; }
+            return;
+          }
+          var okCount = results.filter(function(r) { return r && r.ok; }).length;
+          if (statusEl) {
+            if (okCount === results.length) {
+              statusEl.textContent = 'Pushed to ' + okCount + ' screen(s).'; statusEl.style.color = '#22c55e';
+              setTimeout(closeCastPanel, 1200);
+            } else {
+              statusEl.textContent = okCount + '/' + results.length + ' succeeded'; statusEl.style.color = '#eab308';
+            }
+          }
+        })
+        .catch(function() {
+          if (pushBtn) pushBtn.disabled = false;
+          if (statusEl) { statusEl.textContent = 'Server unreachable'; statusEl.style.color = '#ef4444'; }
+        });
+    }
+
     function updateAutoRestartButtons() {
       document.querySelectorAll('.autorestart-btn').forEach(function(btn) {
         var dn = btn.dataset.cellHeadset;
@@ -633,7 +829,9 @@
       var arBtn = e.target.closest('.autorestart-btn');
       if (arBtn) { toggleAutoRestart(arBtn.dataset.cellHeadset); return; }
       var launchBtn = e.target.closest('.launch-app-btn');
-      if (launchBtn) openLaunchModal(launchBtn.dataset.launchApp);
+      if (launchBtn) { openLaunchModal(launchBtn.dataset.launchApp); return; }
+      var castBtn = e.target.closest('.cast-btn');
+      if (castBtn) { e.stopPropagation(); openCastPanel(castBtn); }
     });
 
     // ------ Headsets status polling (single API call replaces two CSV reads) -------------------------------------------------------------------------------
@@ -1088,6 +1286,12 @@
               '<polygon points="5 3 19 12 5 21 5 3"/>' +
             '</svg>' +
           '</button>' +
+          '<button class="cell-action-btn cast-btn" data-cast-headset="' + dn + '" title="Cast to kiosk screen" aria-label="Cast to kiosk screen">' +
+            '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+              '<path d="M2 8V6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-6"/>' +
+              '<path d="M6 8a6 6 0 0 1 6 6"/><path d="M2 12a10 10 0 0 1 10 10"/><line x1="2" y1="20" x2="2.01" y2="20"/>' +
+            '</svg>' +
+          '</button>' +
         '</div>' +
         '<div class="running-app hidden" data-running-app="' + dn + '"><span class="running-app-name"></span></div>' +
         '<div class="timer-overlay" data-timer-cell="' + id + '"></div>' +
@@ -1138,6 +1342,9 @@
     // ------ Boot ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     TopBar.initCompact();
     TopBar.initManageDevicesBtn();
+
+    fetchKioskList();
+    setInterval(fetchKioskList, 30000); // pick up newly added/removed kiosk screens without a page reload
 
     // Override compact detection: topbar-filters is flex:0 so scrollWidth check doesn't work.
     // Instead check if the overlay-toggles right edge overlaps the topbar-right left edge.

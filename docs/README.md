@@ -53,6 +53,7 @@ Full details: [Installation](installation.md) → [Getting started](getting-star
 | [Web interface tour](web-interface.md) | Every page of the web UI explained |
 | [Streaming & OBS](streaming.md) | Capture pipeline, stream URLs, re-encoding, OBS integration, recording |
 | [Applications manager](apps-manager.md) | Launch, sideload, uninstall and update apps on headsets |
+| [Kiosk screens](kiosk-screens.md) | Remote-control browser displays (lobby TVs, showroom monitors): push URLs, cast a headset's live feed |
 | [Configuration reference](configuration.md) | Every `config.json` setting, ports, WiFi credentials |
 | [Video Quality Automation](vqa.md) | Automatic performance mitigation explained |
 | [Timer API](docs_timer_api.md) | REST API for per-headset session timers |

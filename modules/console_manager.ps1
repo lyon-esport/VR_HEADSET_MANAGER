@@ -314,6 +314,7 @@ function Show-MainMenu {
         Write-Host $msg.FilesFolders -BackgroundColor DarkCyan -ForegroundColor Black
         Write-Host $msg.ServicesManagement -BackgroundColor DarkGray -ForegroundColor White
         Write-Host $msg.OpenBrowser -BackgroundColor DarkCyan -ForegroundColor White
+        Write-Host $msg.Kiosk.MenuOption -BackgroundColor DarkGray -ForegroundColor Cyan
         Write-Host "C. Configuration" -BackgroundColor DarkBlue -ForegroundColor Cyan
         Write-Host $msg.Quit
         Write-Host $msg.RestartApp
@@ -410,6 +411,7 @@ function Show-MainMenu {
                         pause
                     }
                 }
+                'K' { Show-SubMenu-KioskScreens }
                 'C' { Show-SubMenu-Config }
                 'I' {
                     if (Test-InternetConnectivity) {
@@ -1686,6 +1688,250 @@ function Show-SubMenu-Monitoring {
             }
         }
     } while ($choice -ne '0')
+}
+
+
+function Show-SubMenu-KioskScreens {
+    do {
+        Clear-Host
+        Start-Sleep -Milliseconds 200
+        Write-Host $msg.Kiosk.ScreensTitle -BackgroundColor DarkMagenta -ForegroundColor White
+        Write-Host ""
+
+        $kiosks = @(Get-KnownKiosks)
+        if ($kiosks.Count -eq 0) {
+            Write-Log $msg.NoKiosksFound -Level INFO
+            Write-Host $msg.NoKiosksFound -ForegroundColor Yellow
+        } else {
+            $i = 1
+            foreach ($k in $kiosks) {
+                $reach = Get-KioskReachability -IP $k.IPAddress -Port $k.Port
+                if ($reach -and $reach.Reachable -and $reach.CdpOpen) {
+                    $statusColor = 'Green'
+                    $statusLabel = $msg.Kiosk.StatusOK
+                } elseif ($reach -and $reach.Reachable) {
+                    $statusColor = 'Yellow'
+                    $statusLabel = $msg.Kiosk.StatusCdpClosed
+                } else {
+                    $statusColor = 'Red'
+                    $statusLabel = $msg.Kiosk.StatusUnreachable
+                }
+                Write-Host ("  {0}. {1,-20} {2,-15} {3,-6} " -f $i, $k.Name, $k.IPAddress, $k.Port) -NoNewline
+                Write-Host $statusLabel -ForegroundColor $statusColor
+                $i++
+            }
+        }
+
+        Write-Host ""
+        Write-Host $msg.Kiosk.MenuAdd
+        Write-Host $msg.Kiosk.MenuScan
+        if ($kiosks.Count -gt 0) {
+            Write-Host ($msg.Kiosk.MenuSelectRow -f $kiosks.Count)
+        }
+        Write-Host $msg.Kiosk.MenuBack
+        Write-Host ""
+
+        $choice = (Read-Host $msg.EnterChoice).Trim()
+
+        if ($choice.ToUpper() -eq 'A') {
+            $ip = (Read-Host $msg.Kiosk.AddIPPrompt).Trim()
+            if (-not $ip) {
+                Write-Log $msg.Kiosk.AddIPInvalid -Level ERROR
+                Write-Host $msg.Kiosk.AddIPInvalid -ForegroundColor Red
+                Start-Sleep -Seconds 2
+                continue
+            }
+            $name = (Read-Host $msg.Kiosk.AddNamePrompt).Trim()
+            $portInput = (Read-Host $msg.Kiosk.AddPortPrompt).Trim()
+            $port = 9222
+            if ($portInput) {
+                if ($portInput -match '^\d+$') {
+                    $port = [int]$portInput
+                } else {
+                    Write-Host $msg.Kiosk.AddPortInvalid -ForegroundColor Yellow
+                }
+            }
+            Add-Kiosk -IPAddress $ip -Name $name -Port $port
+            Write-Log ($msg.Kiosk.AddSuccess -f (if ($name) { $name } else { $ip })) -Level SUCCESS
+            Start-Sleep -Seconds 1
+            continue
+        }
+
+        if ($choice.ToUpper() -eq 'S') {
+            Show-SubMenu-KioskScan
+            continue
+        }
+
+        if ($choice -match '^\d+$') {
+            $idx = [int]$choice - 1
+            if ($idx -ge 0 -and $idx -lt $kiosks.Count) {
+                $target = $kiosks[$idx]
+                Write-Host ""
+                Write-Host ("  {0}: {1} [{2}:{3}]" -f $msg.Kiosk.Selected, $target.Name, $target.IPAddress, $target.Port)
+                Write-Host $msg.Kiosk.ActionPush
+                Write-Host $msg.Kiosk.ActionEdit
+                Write-Host $msg.Kiosk.ActionDelete
+                Write-Host $msg.Kiosk.ActionCancel
+                $action = (Read-Host $msg.EnterChoice).Trim().ToUpper()
+
+                if ($action -eq 'P') {
+                    $url = (Read-Host $msg.Kiosk.PushUrlPrompt).Trim()
+                    if (-not $url) {
+                        Write-Host $msg.Kiosk.PushCancelled -ForegroundColor DarkGray
+                        Start-Sleep -Seconds 1
+                        continue
+                    }
+                    $finalUrl = $url
+                    $replacement = Resolve-LocalhostReplacement -Url $url
+                    if ($replacement -and $replacement.NeedsReplacement) {
+                        Write-Host ""
+                        Write-Host ($msg.Kiosk.LocalhostWarning -f $replacement.SuggestedUrl) -ForegroundColor Yellow
+                        $confirm = (Read-Host $msg.Kiosk.LocalhostConfirm).Trim().ToUpper()
+                        if ($confirm -eq 'Y' -or $confirm -eq 'O') {
+                            $finalUrl = $replacement.SuggestedUrl
+                        } else {
+                            Write-Host $msg.Kiosk.PushCancelled -ForegroundColor DarkGray
+                            Start-Sleep -Seconds 1
+                            continue
+                        }
+                    }
+                    $navResult = Invoke-CdpNavigate -IP $target.IPAddress -Port $target.Port -Url $finalUrl
+                    if ($navResult -and $navResult.Success) {
+                        Update-KioskField -ID ([int]$target.ID) -Field 'PushedURL' -NewValue $finalUrl
+                        Update-KioskField -ID ([int]$target.ID) -Field 'LastPushedAt' -NewValue (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+                        Write-Log ($msg.Kiosk.PushSuccess -f $target.Name) -Level SUCCESS
+                        Write-Host ($msg.Kiosk.PushSuccess -f $target.Name) -ForegroundColor Green
+                    } else {
+                        $errText = if ($navResult) { $navResult.Error } else { '' }
+                        Write-Log ($msg.Kiosk.PushFailed -f $target.Name, $errText) -Level ERROR
+                        Write-Host ($msg.Kiosk.PushFailed -f $target.Name, $errText) -ForegroundColor Red
+                    }
+                    Start-Sleep -Seconds 2
+                }
+                elseif ($action -eq 'E') {
+                    Write-Host ""
+                    Write-Host $msg.Kiosk.EditFieldName
+                    Write-Host $msg.Kiosk.EditFieldIP
+                    Write-Host $msg.Kiosk.EditFieldPort
+                    $fieldNum = Read-Host $msg.Kiosk.EditFieldPrompt
+                    $field = switch ($fieldNum) {
+                        '1' { 'Name' }
+                        '2' { 'IPAddress' }
+                        '3' { 'Port' }
+                        default { $null }
+                    }
+                    if (-not $field) {
+                        Write-Host $msg.Kiosk.InvalidChoice -ForegroundColor Red
+                        Start-Sleep -Seconds 1
+                        continue
+                    }
+                    $currentValue = $target.$field
+                    $newValue = Read-Host ($msg.Kiosk.EditNewValuePrompt -f $field, $currentValue)
+                    if ($newValue) {
+                        Update-KioskField -ID ([int]$target.ID) -Field $field -NewValue $newValue
+                        Write-Log ($msg.Kiosk.EditSuccess -f $target.Name) -Level SUCCESS
+                    }
+                    Start-Sleep -Seconds 1
+                }
+                elseif ($action -eq 'D') {
+                    $confirm = (Read-Host ($msg.Kiosk.DeleteConfirm -f $target.Name)).Trim().ToUpper()
+                    if ($confirm -eq 'Y' -or $confirm -eq 'O') {
+                        Remove-Kiosk -ID ([int]$target.ID)
+                        Write-Log ($msg.Kiosk.DeleteSuccess -f $target.Name) -Level SUCCESS
+                        Write-Host ($msg.Kiosk.DeleteSuccess -f $target.Name) -ForegroundColor Green
+                    } else {
+                        Write-Host $msg.Kiosk.DeleteCancelled -ForegroundColor DarkGray
+                    }
+                    Start-Sleep -Seconds 1
+                }
+            }
+        }
+    } while ($choice -ne '0')
+}
+
+
+function Show-SubMenu-KioskScan {
+    Clear-Host
+    Start-Sleep -Milliseconds 200
+    Write-Host $msg.Kiosk.ScanTitle -ForegroundColor Cyan
+
+    $networks = @(Get-PrivateNetworks)
+    if (-not $networks -or $networks.Count -eq 0) {
+        Write-Host $msg.Kiosk.ScanNoNetworks -ForegroundColor Red
+        Start-Sleep -Seconds 2
+        return
+    }
+
+    Write-Host ""
+    $i = 1
+    foreach ($net in $networks) {
+        Write-Host "$i. $($net.InterfaceAlias) - IP $($net.IPAddress) ($($net.NetworkCIDR))"
+        $i++
+    }
+
+    do {
+        $selection = Read-Host ($msg.Kiosk.ScanSelectInterface -f $networks.Count)
+    } while (-not ($selection -match '^\d+$') -or [int]$selection -lt 1 -or [int]$selection -gt $networks.Count)
+
+    $selectedNetwork = $networks[[int]$selection - 1].NetworkCIDR
+
+    Write-Host ""
+    Write-Host ($msg.Kiosk.ScanScanning -f $selectedNetwork) -ForegroundColor Yellow
+    $found = @(Invoke-KioskScan -CIDR $selectedNetwork)
+
+    if (-not $found -or $found.Count -eq 0) {
+        Write-Host $msg.Kiosk.ScanNoneFound -ForegroundColor Red
+        Start-Sleep -Seconds 2
+        return
+    }
+
+    Write-Host ""
+    Write-Host $msg.Kiosk.ScanResultsHeader -ForegroundColor Cyan
+    $i = 1
+    foreach ($dev in $found) {
+        if ($dev.AlreadyKnown) {
+            Write-Host ("  {0}. {1}  [{2}]  {3}" -f $i, $dev.IPAddress, $dev.Browser, $msg.Kiosk.ScanAlreadyAdded) -ForegroundColor DarkGray
+        } else {
+            Write-Host ("  {0}. {1}  [{2}]" -f $i, $dev.IPAddress, $dev.Browser)
+        }
+        $i++
+    }
+
+    Write-Host ""
+    $selections = Read-Host $msg.Kiosk.ScanSelectPrompt
+    $indices = $selections -split ',' | ForEach-Object { ($_ -replace '\s','') } | Where-Object { $_ -match '^\d+$' } | ForEach-Object { [int]$_ - 1 }
+
+    $selectedDevices = @()
+    foreach ($index in $indices) {
+        if ($index -ge 0 -and $index -lt $found.Count) {
+            $selectedDevices += $found[$index]
+        }
+    }
+
+    if ($selectedDevices.Count -eq 0) {
+        Write-Host $msg.Kiosk.ScanNoneSelected -ForegroundColor Yellow
+        Start-Sleep -Seconds 2
+        return
+    }
+
+    Write-Host ""
+    foreach ($dev in $selectedDevices) {
+        Write-Host "- $($dev.IPAddress)"
+    }
+    $confirm = (Read-Host $msg.Kiosk.ScanConfirm).Trim().ToUpper()
+    if ($confirm -ne 'Y' -and $confirm -ne 'O') {
+        Write-Host $msg.Kiosk.ScanCancelled -ForegroundColor Red
+        Start-Sleep -Seconds 1
+        return
+    }
+
+    foreach ($dev in $selectedDevices) {
+        $name = (Read-Host ($msg.Kiosk.ScanNamePrompt -f $dev.IPAddress)).Trim()
+        Add-Kiosk -IPAddress $dev.IPAddress -Name $name
+    }
+    Write-Log $msg.Kiosk.ScanAddSuccess -Level SUCCESS
+    Write-Host $msg.Kiosk.ScanAddSuccess -ForegroundColor Green
+    Start-Sleep -Seconds 2
 }
 
 

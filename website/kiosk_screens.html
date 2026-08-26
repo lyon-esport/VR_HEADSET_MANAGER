@@ -1,0 +1,1342 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VR Headsets - Kiosk Screens</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+  <link rel="stylesheet" href="assets/topbar.css">
+  <script src="assets/topbar.js"></script>
+  <style>
+    :root {
+      --bg:                 #111;
+      --muted:              #444;
+      --text:               #ccc;
+      --th-bg:              #1a1a1a;
+      --tr-hover:           #1c1c1e;
+      --border:             #222;
+      --ping-ok:            #22c55e;
+      --ping-ko:            #ef4444;
+      --scrcpy-ok:          #3b82f6;
+      --scrcpy-ko:          #a06030;
+      --charging:           #facc15;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      background: var(--bg);
+      min-height: 100vh;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      color: var(--text);
+      overflow-x: hidden;
+    }
+
+    .page { padding: 24px; }
+    h1 {
+      font-size: 16px;
+      font-weight: 700;
+      color: #ddd;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .page-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    .page-header-actions { display: flex; gap: 8px; }
+    .launcher-modal-desc {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.5;
+      margin-bottom: 12px;
+    }
+
+    /* ── Add kiosk device modal ── */
+    .modal-overlay {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.55);
+      display: flex; align-items: flex-start; justify-content: center;
+      padding-top: 64px;
+      z-index: 100;
+    }
+    .modal-box {
+      background: var(--th-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      width: 460px;
+      max-width: calc(100vw - 32px);
+      max-height: calc(100vh - 100px);
+      overflow-y: auto;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+    }
+    .modal-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      font-size: 12px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.07em;
+      color: #ddd;
+    }
+    .modal-close {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 22px; height: 22px; padding: 0;
+      background: transparent; border: none;
+      color: #888; cursor: pointer;
+    }
+    .modal-close:hover { color: #eee; }
+    .modal-body {
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    /* ── Panels (add manually / scan), stacked inside the modal body ── */
+    .panel {
+      background: var(--th-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+    }
+    .panel-title {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+    .form-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .form-row label {
+      font-size: 11px;
+      color: #888;
+      min-width: 40px;
+    }
+    input[type=text], input[type=number], select {
+      background: #0d0d0d;
+      border: 1px solid #333;
+      border-radius: 5px;
+      color: var(--text);
+      font-size: 13px;
+      padding: 7px 9px;
+      outline: none;
+      flex: 1;
+      min-width: 100px;
+    }
+    input[type=text]:focus, input[type=number]:focus, select:focus {
+      border-color: #3b82f6;
+    }
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 7px 14px;
+      background: rgba(59,130,246,0.12);
+      border: 1px solid rgba(59,130,246,0.35);
+      border-radius: 6px;
+      color: #3b82f6;
+      font-size: 12px; font-weight: 600;
+      cursor: pointer; text-decoration: none;
+      transition: background 0.15s, border-color 0.15s;
+      white-space: nowrap;
+    }
+    .btn:hover { background: rgba(59,130,246,0.22); border-color: rgba(59,130,246,0.6); }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-danger {
+      background: rgba(239,68,68,0.12);
+      border-color: rgba(239,68,68,0.35);
+      color: #ef4444;
+    }
+    .btn-danger:hover { background: rgba(239,68,68,0.22); border-color: rgba(239,68,68,0.6); }
+    .btn-warning {
+      background: rgba(234,179,8,0.12);
+      border-color: rgba(234,179,8,0.35);
+      color: #eab308;
+    }
+    .btn-warning:hover { background: rgba(234,179,8,0.22); border-color: rgba(234,179,8,0.6); }
+
+    .scan-list {
+      margin-top: 10px;
+      max-height: 220px;
+      overflow-y: auto;
+      border-top: 1px solid var(--border);
+      padding-top: 8px;
+    }
+    .scan-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 5px 2px;
+      font-size: 12px;
+    }
+    .scan-item input[type=checkbox] { accent-color: #3b82f6; }
+    .scan-item .ip { font-family: monospace; color: var(--text); }
+    .scan-item .browser { color: #888; font-size: 11px; }
+    .scan-item .known { color: #22c55e; font-size: 10px; font-weight: 700; text-transform: uppercase; }
+    .scan-empty { color: #555; font-size: 12px; padding: 6px 0; }
+
+    /* ── Push new link panel ── */
+    .push-panel { margin-bottom: 20px; }
+    .push-panel .form-row input[type=text] { font-size: 13px; }
+
+    /* ── Table ── */
+    .table-wrap {
+      overflow-x: auto;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+    }
+    table {
+      width: 100%;
+      table-layout: auto;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td { overflow: hidden; }
+    .name-cell { white-space: nowrap; }
+    thead th {
+      background: var(--th-bg);
+      padding: 9px 12px;
+      text-align: center;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    thead th.left { text-align: left; }
+    tbody tr { border-bottom: 1px solid var(--border); }
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: var(--tr-hover); }
+    tbody tr.row-unavailable { opacity: 0.45; }
+    tbody tr.row-unavailable:hover { background: transparent; }
+    tbody tr.row-unavailable .pushed-status { color: var(--ping-ko); font-weight: 700; letter-spacing: 0.04em; }
+    td {
+      padding: 8px 10px;
+      color: var(--text);
+      text-align: center;
+    }
+    td.left { text-align: left; }
+
+    .row-select-cb { accent-color: #3b82f6; width: 14px; height: 14px; cursor: pointer; }
+    .row-select-cb:disabled { cursor: not-allowed; opacity: 0.35; }
+
+    .dot {
+      display: inline-block;
+      width: 9px; height: 9px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .dot-green  { background: var(--ping-ok); }
+    .dot-red    { background: var(--ping-ko); }
+    .dot-yellow { background: var(--charging); }
+
+    .edit-field {
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      color: var(--text);
+      font-size: 13px;
+      padding: 4px 6px;
+      width: 100%;
+      min-width: 90px;
+      outline: none;
+      text-align: left;
+    }
+    .edit-field:hover { border-color: #333; }
+    .edit-field:focus { border-color: #3b82f6; background: #0d0d0d; }
+
+    /* Inline IP/Port/Name editor (value + pencil edit button, matches headsets_settings.html) */
+    .ip-display { display: inline-flex; align-items: center; gap: 2px; }
+    .ip-val { color: var(--muted); font-family: monospace; font-size: 13px; min-width: 108px; display: inline-block; }
+    .name-val {
+      color: #fff; font-weight: 700; font-size: 14px; font-family: inherit;
+      display: inline-block; white-space: nowrap;
+      max-width: 40ch; overflow: hidden; text-overflow: ellipsis; vertical-align: middle;
+    }
+    .row-edit-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 18px; height: 18px; padding: 0; margin-right: 4px;
+      background: transparent; border: 1px solid transparent;
+      border-radius: 4px; color: #444; cursor: pointer; flex-shrink: 0;
+      transition: color 0.12s, border-color 0.12s;
+    }
+    .row-edit-btn:hover { color: #888; border-color: #333; }
+    .ip-edit-wrap { display: inline-flex; align-items: center; gap: 4px; position: relative; }
+    .ip-edit-wrap input { width: 100px; font-family: monospace; font-size: 12px; padding: 4px 6px; flex: none; min-width: 0; }
+    .ip-edit-wrap input.name-input { width: 150px; font-family: inherit; font-weight: 700; }
+    .ip-val.compact { min-width: 40px; }
+    .ip-edit-wrap input.compact { width: 58px; }
+    .ip-action-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 20px; height: 20px; padding: 0;
+      background: transparent; border: 1px solid #333; border-radius: 4px;
+      color: #555; cursor: pointer; flex-shrink: 0;
+      transition: color 0.12s, border-color 0.12s, background 0.12s;
+    }
+    .ip-action-btn.save:hover { color: var(--ping-ok); border-color: rgba(34,197,94,0.5); }
+    .ip-action-btn.cancel:hover { color: var(--ping-ko); border-color: rgba(239,68,68,0.5); }
+    .ip-error {
+      position: absolute; top: 100%; left: 0;
+      margin-top: 3px; padding: 2px 6px;
+      background: #1a0a0a; border: 1px solid #5a1a1a; border-radius: 4px;
+      color: var(--ping-ko); font-size: 10px; font-weight: 600;
+      white-space: nowrap; pointer-events: none; z-index: 10;
+    }
+    .ip-error.warn { background: #1a1500; border-color: #5a4a00; color: var(--charging); }
+
+    .pushed-wrap {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      max-width: 100%;
+      min-width: 0;
+    }
+    .pushed-url {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+      max-width: 420px;
+      color: #888;
+      font-size: 12px;
+      vertical-align: middle;
+    }
+    /* Status label (Available to cast / Unknown / UNAVAILABLE) instead of an actual URL */
+    .pushed-url.pushed-status { font-style: italic; color: var(--muted); }
+    .copy-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 20px; height: 20px; padding: 0; flex-shrink: 0;
+      background: transparent; border: 1px solid #333; border-radius: 4px;
+      color: #555; cursor: pointer;
+      transition: color 0.12s, border-color 0.12s, background 0.12s;
+    }
+    .copy-btn:hover  { color: #3b82f6; border-color: rgba(59,130,246,0.5); }
+    .copy-btn.copied { color: var(--ping-ok); border-color: rgba(34,197,94,0.5); }
+
+
+    .del-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 24px; height: 24px; padding: 0;
+      background: #1e1e1e; border: 1px solid #333; border-radius: 4px;
+      color: #555; cursor: pointer;
+      transition: color 0.12s, border-color 0.12s, background 0.12s;
+    }
+    .del-btn:hover { color: #ef4444; border-color: rgba(239,68,68,0.5); background: rgba(239,68,68,0.1); }
+
+    #empty-msg {
+      padding: 40px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    /* ── Light mode ── */
+    [data-theme="light"] {
+      --bg:        #f0f0f0;
+      --muted:     #666;
+      --text:      #222;
+      --th-bg:     #e8e8e8;
+      --tr-hover:  #ececec;
+      --border:    #d8d8d8;
+    }
+    [data-theme="light"] h1               { color: #111; }
+    [data-theme="light"] .modal-box       { border-color: var(--border); box-shadow: 0 12px 40px rgba(0,0,0,0.15); }
+    [data-theme="light"] .modal-header    { color: #222; border-color: var(--border); }
+    [data-theme="light"] .modal-close     { color: #777; }
+    [data-theme="light"] .modal-close:hover { color: #222; }
+    [data-theme="light"] .table-wrap      { border-color: var(--border); }
+    [data-theme="light"] thead th         { border-color: var(--border); }
+    [data-theme="light"] tbody tr         { border-color: var(--border); }
+    [data-theme="light"] input[type=text],
+    [data-theme="light"] input[type=number],
+    [data-theme="light"] select           { background: #fff; border-color: #ccc; color: #222; }
+    [data-theme="light"] .edit-field:focus{ background: #fff; }
+    [data-theme="light"] .del-btn         { background: #e8e8e8; border-color: #c8c8c8; color: #555; }
+    [data-theme="light"] .del-btn:hover   { color: #ef4444; }
+    [data-theme="light"] .row-edit-btn         { color: #555; }
+    [data-theme="light"] .row-edit-btn:hover   { color: #111; border-color: #ccc; }
+    [data-theme="light"] .copy-btn             { background: #e8e8e8; border-color: #c8c8c8; color: #555; }
+    [data-theme="light"] .name-val             { color: #111; }
+    [data-theme="light"] .pushed-url           { color: #444; }
+    [data-theme="light"] .btn                  { background: rgba(59,130,246,0.16); border-color: rgba(59,130,246,0.45); color: #1d4ed8; }
+    [data-theme="light"] .btn:hover            { background: rgba(59,130,246,0.28); border-color: rgba(59,130,246,0.7); }
+    [data-theme="light"] .btn-danger           { background: rgba(239,68,68,0.16); border-color: rgba(239,68,68,0.45); color: #b91c1c; }
+    [data-theme="light"] .btn-danger:hover     { background: rgba(239,68,68,0.28); border-color: rgba(239,68,68,0.7); }
+    [data-theme="light"] .btn-warning          { background: rgba(234,179,8,0.22); border-color: rgba(234,179,8,0.55); color: #92620a; }
+    [data-theme="light"] .btn-warning:hover    { background: rgba(234,179,8,0.34); border-color: rgba(234,179,8,0.8); }
+  </style>
+</head>
+<body>
+
+  <header class="topbar">
+    <script>document.write(TopBar.brandHTML)</script>
+    <div class="v-sep"></div>
+    <span class="topbar-title">Kiosk Screens</span>
+
+    <div class="topbar-right">
+      <script>document.write(TopBar.monitoringBtnHTML)</script>
+      <script>document.write(TopBar.manageDevicesBtnHTML)</script>
+      <script>document.write(TopBar.configMenuHTML)</script>
+    </div>
+  </header>
+
+  <div class="page">
+    <div class="page-header">
+      <h1>Kiosk Screens</h1>
+      <div class="page-header-actions">
+        <button class="btn" id="open-launcher-modal-btn">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Download kiosk launcher
+        </button>
+        <button class="btn" id="open-add-kiosk-btn">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Add kiosk device
+        </button>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="launcher-modal" style="display:none">
+      <div class="modal-box">
+        <div class="modal-header">
+          <span>Download Kiosk Launcher</span>
+          <button class="modal-close" id="launcher-modal-close" title="Close">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <div class="modal-body">
+          <div class="panel">
+            <div class="panel-title">Setup Scripts</div>
+            <p class="launcher-modal-desc">
+              Copy the script matching the kiosk PC's OS and run it there. It opens the
+              firewall for Chrome's remote debugging port and launches Chrome in kiosk
+              mode. See the README for full setup steps (autostart on boot) and
+              troubleshooting.
+            </p>
+            <div class="form-row">
+              <a class="btn" href="kiosk-launcher/Start-KioskChrome.ps1" download="Start-KioskChrome.ps1">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Windows (.ps1)
+              </a>
+              <a class="btn" href="kiosk-launcher/Start-KioskChrome-Linux.sh" download="Start-KioskChrome-Linux.sh">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Debian / Raspberry Pi (.sh)
+              </a>
+            </div>
+            <div class="form-row">
+              <a class="btn" href="kiosk-launcher/README-KioskChrome.md" download="README-KioskChrome.md">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                README (setup + troubleshooting)
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel push-panel">
+      <div class="panel-title">Push New Link to Kiosk Screens</div>
+      <div class="launcher-modal-desc">Tick the screens in the table below, then push a link or kill their browser.</div>
+      <div class="launcher-modal-desc">For twitch streams use <a href="https://pwn.sh/tools/getstream.html" target="_blank" rel="noopener">this link</a> to get a clean feed.</div>
+      <div class="form-row">
+        <input type="text" id="push-url-input" placeholder="Paste the link to the web page to cast here...">
+      </div>
+      <div class="form-row">
+        <button class="btn" id="push-new-link-btn" disabled>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          Push to selected screens
+        </button>
+        <button class="btn btn-warning" id="push-waiting-screen-btn" disabled>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          Waiting screen
+        </button>
+        <button class="btn btn-danger" id="kill-browser-btn" disabled>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          Kill kiosk browser
+        </button>
+        <span id="push-new-link-status" style="font-size:11px;color:#888"></span>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="add-kiosk-modal" style="display:none">
+      <div class="modal-box">
+        <div class="modal-header">
+          <span>Add Kiosk Device</span>
+          <button class="modal-close" id="add-kiosk-modal-close" title="Close">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <div class="modal-body">
+      <div class="panel">
+        <div class="panel-title">Add Manually</div>
+        <div class="form-row">
+          <label>IP</label>
+          <input type="text" id="add-ip" placeholder="192.168.1.50">
+        </div>
+        <div class="form-row">
+          <label>Name</label>
+          <input type="text" id="add-name" placeholder="defaults to IP">
+        </div>
+        <div class="form-row">
+          <label>Port</label>
+          <input type="number" id="add-port" placeholder="9222" value="9222">
+        </div>
+        <div class="form-row">
+          <button class="btn" id="add-manual-btn">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Add
+          </button>
+          <span id="add-manual-status" style="font-size:11px;color:#888"></span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">Scan Network</div>
+        <div class="form-row">
+          <label>Iface</label>
+          <select id="scan-iface"></select>
+        </div>
+        <div class="form-row">
+          <label>Port</label>
+          <input type="number" id="scan-port" placeholder="9222" value="9222">
+          <button class="btn" id="scan-btn">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            Scan
+          </button>
+        </div>
+        <div id="scan-list" class="scan-list" style="display:none"></div>
+        <div class="form-row" id="scan-add-row" style="display:none;margin-top:6px">
+          <button class="btn" id="scan-add-selected-btn">Add selected</button>
+          <span id="scan-status" style="font-size:11px;color:#888"></span>
+        </div>
+      </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table id="kiosks-table">
+        <colgroup>
+          <col style="width:28px">
+          <col style="width:28px">
+          <col>
+          <col style="width:170px">
+          <col style="width:130px">
+          <col style="width:72px">
+          <col>
+          <col style="width:36px">
+        </colgroup>
+        <thead>
+          <tr>
+            <th></th>
+            <th></th>
+            <th class="left">Name</th>
+            <th class="left">IP Address</th>
+            <th>Port</th>
+            <th>Latency</th>
+            <th class="left">Pushed URL</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="table-body">
+          <tr><td colspan="8" id="empty-msg">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    function esc(s) {
+      return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    // ── Add kiosk device modal ─────────────────────────────────────────────
+    var addKioskModal = document.getElementById('add-kiosk-modal');
+    function openAddKioskModal() {
+      addKioskModal.style.display = 'flex';
+      loadNetworks();
+    }
+    function closeAddKioskModal() {
+      addKioskModal.style.display = 'none';
+    }
+    document.getElementById('open-add-kiosk-btn').addEventListener('click', openAddKioskModal);
+    document.getElementById('add-kiosk-modal-close').addEventListener('click', closeAddKioskModal);
+    addKioskModal.addEventListener('click', function(e) {
+      if (e.target === addKioskModal) closeAddKioskModal();
+    });
+
+    // ── Download kiosk launcher modal ───────────────────────────────────────
+    var launcherModal = document.getElementById('launcher-modal');
+    function openLauncherModal() { launcherModal.style.display = 'flex'; }
+    function closeLauncherModal() { launcherModal.style.display = 'none'; }
+    document.getElementById('open-launcher-modal-btn').addEventListener('click', openLauncherModal);
+    document.getElementById('launcher-modal-close').addEventListener('click', closeLauncherModal);
+    launcherModal.addEventListener('click', function(e) {
+      if (e.target === launcherModal) closeLauncherModal();
+    });
+
+    document.addEventListener('keydown', function(e) {
+      if (e.key !== 'Escape') return;
+      if (addKioskModal.style.display !== 'none') closeAddKioskModal();
+      if (launcherModal.style.display !== 'none') closeLauncherModal();
+    });
+
+    // ── Networks dropdown for the scan panel ──────────────────────────────
+    function loadNetworks() {
+      fetch('/api/kiosks/networks')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          var sel = document.getElementById('scan-iface');
+          sel.innerHTML = '';
+          if (!d.ok || !d.networks || !d.networks.length) {
+            var opt = document.createElement('option');
+            opt.textContent = 'No network interfaces found';
+            sel.appendChild(opt);
+            return;
+          }
+          d.networks.forEach(function(n) {
+            var opt = document.createElement('option');
+            opt.value = n.NetworkCIDR;
+            opt.textContent = (n.InterfaceAlias || '') + ' - ' + n.NetworkCIDR;
+            sel.appendChild(opt);
+          });
+        })
+        .catch(function() {});
+    }
+    // Loaded lazily when the "Add kiosk device" modal opens (openAddKioskModal), not at page load.
+
+    // ── Add manually ───────────────────────────────────────────────────────
+    document.getElementById('add-manual-btn').addEventListener('click', function() {
+      var ip = document.getElementById('add-ip').value.trim();
+      var name = document.getElementById('add-name').value.trim();
+      var port = document.getElementById('add-port').value.trim();
+      var statusEl = document.getElementById('add-manual-status');
+      if (!ip) { statusEl.textContent = 'IP is required'; statusEl.style.color = '#ef4444'; return; }
+      if (!isValidIPv4(ip)) { statusEl.textContent = 'Invalid IP address (e.g. 192.168.1.10)'; statusEl.style.color = '#ef4444'; return; }
+      statusEl.textContent = 'Adding...'; statusEl.style.color = '#888';
+      fetch('/api/kiosks/add-manual', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ip: ip, name: name, port: port ? parseInt(port, 10) : 9222 })
+      })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          if (d.ok) {
+            statusEl.textContent = 'Added.'; statusEl.style.color = '#22c55e';
+            document.getElementById('add-ip').value = '';
+            document.getElementById('add-name').value = '';
+            document.getElementById('add-port').value = '9222';
+            pollKiosks();
+          } else {
+            statusEl.textContent = d.error || 'Failed'; statusEl.style.color = '#ef4444';
+          }
+        })
+        .catch(function() { statusEl.textContent = 'Server unreachable'; statusEl.style.color = '#ef4444'; });
+    });
+
+    // ── Scan network ──────────────────────────────────────────────────────
+    var lastDiscovered = [];
+    document.getElementById('scan-btn').addEventListener('click', function() {
+      var cidr = document.getElementById('scan-iface').value;
+      var port = document.getElementById('scan-port').value.trim();
+      if (!cidr) return;
+      var btn = document.getElementById('scan-btn');
+      btn.disabled = true;
+      var listEl = document.getElementById('scan-list');
+      listEl.style.display = 'block';
+      listEl.innerHTML = '<div class="scan-empty">Scanning...</div>';
+      document.getElementById('scan-add-row').style.display = 'none';
+      fetch('/api/kiosks/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cidr: cidr, port: port ? parseInt(port, 10) : 9222 })
+      })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          btn.disabled = false;
+          lastDiscovered = (d.ok && d.discovered) ? d.discovered : [];
+          renderScanList(lastDiscovered);
+        })
+        .catch(function() {
+          btn.disabled = false;
+          listEl.innerHTML = '<div class="scan-empty">Scan failed.</div>';
+        });
+    });
+
+    function renderScanList(items) {
+      var listEl = document.getElementById('scan-list');
+      var addRow = document.getElementById('scan-add-row');
+      if (!items.length) {
+        listEl.innerHTML = '<div class="scan-empty">No Chrome debug endpoints found.</div>';
+        addRow.style.display = 'none';
+        return;
+      }
+      listEl.innerHTML = items.map(function(it, idx) {
+        var checked = it.AlreadyKnown ? '' : 'checked';
+        var disabled = it.AlreadyKnown ? 'disabled' : '';
+        return '<label class="scan-item">' +
+          '<input type="checkbox" data-idx="' + idx + '" ' + checked + ' ' + disabled + '>' +
+          '<span class="ip">' + esc(it.IPAddress) + '</span>' +
+          '<span class="browser">' + esc(it.Browser || '') + '</span>' +
+          (it.AlreadyKnown ? '<span class="known">already added</span>' : '') +
+          '</label>';
+      }).join('');
+      addRow.style.display = 'flex';
+    }
+
+    document.getElementById('scan-add-selected-btn').addEventListener('click', function() {
+      var statusEl = document.getElementById('scan-status');
+      var checks = document.querySelectorAll('#scan-list input[type=checkbox]:checked:not(:disabled)');
+      if (!checks.length) { statusEl.textContent = 'Nothing selected'; statusEl.style.color = '#ef4444'; return; }
+      statusEl.textContent = 'Adding ' + checks.length + '...'; statusEl.style.color = '#888';
+      var promises = Array.prototype.map.call(checks, function(chk) {
+        var it = lastDiscovered[parseInt(chk.dataset.idx, 10)];
+        if (!it) return Promise.resolve();
+        return fetch('/api/kiosks/add-manual', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ip: it.IPAddress, name: '', port: 9222 })
+        }).catch(function() {});
+      });
+      Promise.all(promises).then(function() {
+        statusEl.textContent = 'Done.'; statusEl.style.color = '#22c55e';
+        document.getElementById('scan-list').style.display = 'none';
+        document.getElementById('scan-add-row').style.display = 'none';
+        pollKiosks();
+      });
+    });
+
+    // ── IP validation helpers (shared by Add Manually and the inline editor) ──
+    function isValidIPv4(ip) {
+      var m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip);
+      return !!m && m.slice(1).every(function(o) { return parseInt(o, 10) <= 255; });
+    }
+    function showIpError(input, msg, isWarn) {
+      clearIpError(input);
+      input.style.borderColor = isWarn ? 'var(--charging)' : 'var(--ping-ko)';
+      var err = document.createElement('span');
+      err.className = 'ip-error' + (isWarn ? ' warn' : '');
+      err.textContent = msg;
+      err._clearTimer = setTimeout(function() { clearIpError(input); }, 2500);
+      input.parentNode.appendChild(err);
+    }
+    function clearIpError(input) {
+      input.style.borderColor = '';
+      var existing = input.parentNode && input.parentNode.querySelector('.ip-error');
+      if (existing) { clearTimeout(existing._clearTimer); existing.remove(); }
+    }
+
+    function copyTextToClipboard(text) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        return navigator.clipboard.writeText(text).catch(function() { return copyTextFallback(text); });
+      }
+      return copyTextFallback(text);
+    }
+    function copyTextFallback(text) {
+      return new Promise(function(resolve) {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); } catch (e) {}
+        document.body.removeChild(ta);
+        resolve();
+      });
+    }
+
+    // ── Kiosks table ──────────────────────────────────────────────────────
+    function fmtLatency(ms) {
+      if (ms === null || ms === undefined) return '-';
+      return ms + ' ms';
+    }
+
+    function statusDot(reachable, cdpOpen) {
+      if (!reachable) return '<span class="dot dot-red" title="Unreachable"></span>';
+      if (reachable && cdpOpen) return '<span class="dot dot-green" title="Reachable, Chrome debug open"></span>';
+      return '<span class="dot dot-yellow" title="Reachable, Chrome debug not open"></span>';
+    }
+
+    // Self-contained "Kiosk Mode / Ready to stream" waiting screen (a data: URL,
+    // no server dependency) - this is the default page Start-KioskChrome.ps1 /
+    // Start-KioskChrome-Linux.sh open on launch, and what the "Waiting screen"
+    // button pushes back to selected kiosks. Keep this string identical to the
+    // default $Url in website/kiosk-launcher/Start-KioskChrome.ps1 and the
+    // default URL in Start-KioskChrome-Linux.sh.
+    var WAITING_SCREEN_URL = "data:text/html,%3Chtml%3E%3Chead%3E%3Cmeta%20charset%3D'utf-8'%3E%3Ctitle%3EKiosk%3C%2Ftitle%3E%3Cstyle%3Ehtml%2Cbody%7Bmargin%3A0%3Bheight%3A100%25%3Bbackground%3A%23000%3Bcolor%3A%23fff%3Bdisplay%3Aflex%3Balign-items%3Acenter%3Bjustify-content%3Acenter%3Bfont-family%3Asystem-ui%2Csans-serif%3Bflex-direction%3Acolumn%7Dh1%7Bfont-size%3A3vw%3Bletter-spacing%3A.08em%3Btext-transform%3Auppercase%3Bcolor%3A%23888%3Bmargin%3A0%7Dh2%7Bfont-size%3A5vw%3Bfont-weight%3A700%3Bmargin%3A12px%200%200%7D%3C%2Fstyle%3E%3C%2Fhead%3E%3Cbody%3E%3Ch1%3EKiosk%20Mode%3C%2Fh1%3E%3Ch2%3EReady%20to%20stream%3C%2Fh2%3E%3C%2Fbody%3E%3C%2Fhtml%3E";
+
+    // A tab freshly opened (fresh Chrome start, or right after a kiosk/Chrome
+    // restart) sits on one of these - none of them is "something is cast".
+    function isBlankUrl(url) {
+      if (!url) return true;
+      var u = url.trim().toLowerCase();
+      return u === '' || u === 'about:blank' || u === 'chrome://newtab/' || u === 'chrome://new-tab-page/' ||
+        u === WAITING_SCREEN_URL.toLowerCase();
+    }
+
+    // Builds what the Pushed URL cell should actually say, based on what CDP
+    // reports is really showing on the kiosk's screen right now (CurrentUrl) -
+    // not the CSV's historical PushedURL, which goes stale the moment the
+    // kiosk PC or Chrome itself restarts back to a blank tab.
+    // Returns @{text, title, isLink} - isLink false means "text" is a status
+    // label (Available to cast / Unknown), not an actual URL to copy.
+    function pushedUrlDisplay(k) {
+      if (!k.Reachable) {
+        return { text: 'UNAVAILABLE', title: '', isLink: false };
+      }
+      if (!k.CdpOpen) {
+        return { text: 'Unknown (Chrome debug closed)', title: '', isLink: false };
+      }
+      if (isBlankUrl(k.CurrentUrl)) {
+        return { text: 'Available to cast', title: '', isLink: false };
+      }
+      return { text: k.CurrentUrl, title: k.CurrentUrl, isLink: true };
+    }
+
+    function updateEditableField(id, field, value) {
+      return fetch('/api/kiosks/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: id, field: field, value: value })
+      }).then(function(r) { return r.json(); });
+    }
+
+    function pushUrlToKiosk(id, url, confirmReplace) {
+      return fetch('/api/kiosks/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: id, url: url, confirmLocalhostReplacement: !!confirmReplace })
+      }).then(function(r) { return r.json(); });
+    }
+
+    function renderRow(k) {
+      var tr = document.createElement('tr');
+      tr.dataset.id = k.ID;
+      tr.classList.toggle('row-unavailable', !k.Reachable);
+
+      var tdSelect = document.createElement('td');
+      var selectCb = document.createElement('input');
+      selectCb.type = 'checkbox';
+      selectCb.className = 'row-select-cb';
+      selectCb.dataset.selectKiosk = k.ID;
+      selectCb.checked = !!pushKioskSelected[k.ID];
+      selectCb.disabled = !k.Reachable;
+      selectCb.title = k.Reachable ? '' : 'Unreachable';
+      tdSelect.appendChild(selectCb);
+      tr.appendChild(tdSelect);
+
+      var tdDot = document.createElement('td');
+      tdDot.innerHTML = statusDot(k.Reachable, k.CdpOpen);
+      tr.appendChild(tdDot);
+
+      var tdName = document.createElement('td');
+      tdName.className = 'left name-cell';
+      tdName.innerHTML =
+        '<span class="ip-display" id="kiosk-name-display-' + k.ID + '">' +
+          '<button class="row-edit-btn" data-edit-name="' + k.ID + '" title="Edit name">' +
+            '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+              '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>' +
+              '<path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>' +
+            '</svg>' +
+          '</button>' +
+          '<span class="name-val" id="kiosk-name-val-' + k.ID + '" title="' + esc(k.Name || k.IPAddress) + '">' + esc(k.Name || k.IPAddress) + '</span>' +
+        '</span>' +
+        '<span class="ip-edit-wrap" id="kiosk-name-edit-' + k.ID + '" style="display:none">' +
+          '<input type="text" class="name-input" id="kiosk-name-input-' + k.ID + '" maxlength="60">' +
+          '<button class="ip-action-btn save" data-name-save="' + k.ID + '" title="Save">' +
+            '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>' +
+          '</button>' +
+          '<button class="ip-action-btn cancel" data-name-cancel="' + k.ID + '" title="Cancel">' +
+            '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
+          '</button>' +
+        '</span>';
+      tr.appendChild(tdName);
+
+      var nameDisplayEl = tdName.querySelector('.ip-display');
+      var nameEditWrapEl = tdName.querySelector('.ip-edit-wrap');
+      var nameInputEl = tdName.querySelector('input');
+      var nameValEl = tdName.querySelector('.name-val');
+
+      tdName.querySelector('[data-edit-name]').addEventListener('click', function() {
+        nameInputEl.value = k.Name || '';
+        clearIpError(nameInputEl);
+        nameDisplayEl.style.display = 'none';
+        nameEditWrapEl.style.display = 'inline-flex';
+        nameInputEl.focus();
+        nameInputEl.select();
+      });
+      tdName.querySelector('[data-name-cancel]').addEventListener('click', function() {
+        clearIpError(nameInputEl);
+        nameDisplayEl.style.display = '';
+        nameEditWrapEl.style.display = 'none';
+      });
+      var nameSaveBtn = tdName.querySelector('[data-name-save]');
+      nameSaveBtn.addEventListener('click', function() {
+        var name = nameInputEl.value.trim();
+        if (!name) {
+          showIpError(nameInputEl, 'Name is required', false);
+          return;
+        }
+        nameSaveBtn.disabled = true;
+        updateEditableField(k.ID, 'Name', name).then(function() {
+          nameSaveBtn.disabled = false;
+          nameValEl.textContent = name;
+          nameValEl.title = name;
+          nameDisplayEl.style.display = '';
+          nameEditWrapEl.style.display = 'none';
+          pollKiosks();
+        });
+      });
+      nameInputEl.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter')  { nameSaveBtn.click(); }
+        if (e.key === 'Escape') { tdName.querySelector('[data-name-cancel]').click(); }
+      });
+
+      var tdIp = document.createElement('td');
+      tdIp.className = 'left';
+      tdIp.innerHTML =
+        '<span class="ip-display" id="kiosk-ip-display-' + k.ID + '">' +
+          '<button class="row-edit-btn" data-edit-ip="' + k.ID + '" title="Edit IP">' +
+            '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+              '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>' +
+              '<path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>' +
+            '</svg>' +
+          '</button>' +
+          '<span class="ip-val" id="kiosk-ip-val-' + k.ID + '">' + esc(k.IPAddress || '-') + '</span>' +
+        '</span>' +
+        '<span class="ip-edit-wrap" id="kiosk-ip-edit-' + k.ID + '" style="display:none">' +
+          '<input type="text" id="kiosk-ip-input-' + k.ID + '" maxlength="15">' +
+          '<button class="ip-action-btn save" data-ip-save="' + k.ID + '" title="Save">' +
+            '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>' +
+          '</button>' +
+          '<button class="ip-action-btn cancel" data-ip-cancel="' + k.ID + '" title="Cancel">' +
+            '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
+          '</button>' +
+        '</span>';
+      tr.appendChild(tdIp);
+
+      var ipDisplayEl = tdIp.querySelector('.ip-display');
+      var ipEditWrapEl = tdIp.querySelector('.ip-edit-wrap');
+      var ipInputEl = tdIp.querySelector('input');
+      var ipValEl = tdIp.querySelector('.ip-val');
+
+      tdIp.querySelector('[data-edit-ip]').addEventListener('click', function() {
+        ipInputEl.value = k.IPAddress || '';
+        clearIpError(ipInputEl);
+        ipDisplayEl.style.display = 'none';
+        ipEditWrapEl.style.display = 'inline-flex';
+        ipInputEl.focus();
+        ipInputEl.select();
+      });
+      tdIp.querySelector('[data-ip-cancel]').addEventListener('click', function() {
+        clearIpError(ipInputEl);
+        ipDisplayEl.style.display = '';
+        ipEditWrapEl.style.display = 'none';
+      });
+      var ipSaveBtn = tdIp.querySelector('[data-ip-save]');
+      ipSaveBtn.addEventListener('click', function() {
+        var ip = ipInputEl.value.trim();
+        if (!isValidIPv4(ip)) {
+          showIpError(ipInputEl, 'Invalid IP address (e.g. 192.168.1.10)', false);
+          return;
+        }
+        var duplicate = lastKiosks.some(function(other) { return other.ID !== k.ID && other.IPAddress === ip; });
+        if (duplicate) {
+          showIpError(ipInputEl, 'IP already used by another kiosk', true);
+          return;
+        }
+        ipSaveBtn.disabled = true;
+        updateEditableField(k.ID, 'IPAddress', ip).then(function() {
+          ipSaveBtn.disabled = false;
+          ipValEl.textContent = ip;
+          ipDisplayEl.style.display = '';
+          ipEditWrapEl.style.display = 'none';
+          pollKiosks();
+        });
+      });
+      ipInputEl.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter')  { ipSaveBtn.click(); }
+        if (e.key === 'Escape') { tdIp.querySelector('[data-ip-cancel]').click(); }
+      });
+
+      var tdPort = document.createElement('td');
+      tdPort.innerHTML =
+        '<span class="ip-display" id="kiosk-port-display-' + k.ID + '">' +
+          '<button class="row-edit-btn" data-edit-port="' + k.ID + '" title="Edit port">' +
+            '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+              '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>' +
+              '<path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>' +
+            '</svg>' +
+          '</button>' +
+          '<span class="ip-val compact" id="kiosk-port-val-' + k.ID + '">' + esc(k.Port) + '</span>' +
+        '</span>' +
+        '<span class="ip-edit-wrap" id="kiosk-port-edit-' + k.ID + '" style="display:none">' +
+          '<input type="number" class="compact" id="kiosk-port-input-' + k.ID + '" min="1" max="65535">' +
+          '<button class="ip-action-btn save" data-port-save="' + k.ID + '" title="Save">' +
+            '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>' +
+          '</button>' +
+          '<button class="ip-action-btn cancel" data-port-cancel="' + k.ID + '" title="Cancel">' +
+            '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
+          '</button>' +
+        '</span>';
+      tr.appendChild(tdPort);
+
+      var portDisplayEl = tdPort.querySelector('.ip-display');
+      var portEditWrapEl = tdPort.querySelector('.ip-edit-wrap');
+      var portInputEl = tdPort.querySelector('input');
+      var portValEl = tdPort.querySelector('.ip-val');
+
+      tdPort.querySelector('[data-edit-port]').addEventListener('click', function() {
+        portInputEl.value = k.Port;
+        clearIpError(portInputEl);
+        portDisplayEl.style.display = 'none';
+        portEditWrapEl.style.display = 'inline-flex';
+        portInputEl.focus();
+        portInputEl.select();
+      });
+      tdPort.querySelector('[data-port-cancel]').addEventListener('click', function() {
+        clearIpError(portInputEl);
+        portDisplayEl.style.display = '';
+        portEditWrapEl.style.display = 'none';
+      });
+      var portSaveBtn = tdPort.querySelector('[data-port-save]');
+      portSaveBtn.addEventListener('click', function() {
+        var portVal = portInputEl.value.trim();
+        var portNum = parseInt(portVal, 10);
+        if (!/^\d+$/.test(portVal) || portNum < 1 || portNum > 65535) {
+          showIpError(portInputEl, 'Invalid port (1-65535)', false);
+          return;
+        }
+        portSaveBtn.disabled = true;
+        updateEditableField(k.ID, 'Port', String(portNum)).then(function() {
+          portSaveBtn.disabled = false;
+          portValEl.textContent = portNum;
+          portDisplayEl.style.display = '';
+          portEditWrapEl.style.display = 'none';
+          pollKiosks();
+        });
+      });
+      portInputEl.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter')  { portSaveBtn.click(); }
+        if (e.key === 'Escape') { tdPort.querySelector('[data-port-cancel]').click(); }
+      });
+
+      var tdLat = document.createElement('td');
+      tdLat.className = 'latency-cell';
+      tdLat.textContent = fmtLatency(k.LatencyMs);
+      tr.appendChild(tdLat);
+
+      var tdPushed = document.createElement('td');
+      tdPushed.className = 'left pushed-cell';
+      var pushedWrap = document.createElement('span');
+      pushedWrap.className = 'pushed-wrap';
+      var span = document.createElement('span');
+      span.className = 'pushed-url';
+      var pd = pushedUrlDisplay(k);
+      span.textContent = pd.text;
+      span.title = pd.title;
+      span.classList.toggle('pushed-status', !pd.isLink);
+      var copyBtn = document.createElement('button');
+      copyBtn.className = 'copy-btn';
+      copyBtn.title = 'Copy link';
+      copyBtn.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+      copyBtn.style.display = pd.isLink ? '' : 'none';
+      copyBtn.addEventListener('click', function() {
+        var text = span.title;
+        if (!text) return;
+        copyTextToClipboard(text).then(function() {
+          copyBtn.classList.add('copied');
+          setTimeout(function() { copyBtn.classList.remove('copied'); }, 1200);
+        });
+      });
+      pushedWrap.appendChild(copyBtn);
+      pushedWrap.appendChild(span);
+      tdPushed.appendChild(pushedWrap);
+      tr.appendChild(tdPushed);
+
+      var tdDel = document.createElement('td');
+      var delBtn = document.createElement('button');
+      delBtn.className = 'del-btn';
+      delBtn.title = 'Remove kiosk';
+      delBtn.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+      delBtn.addEventListener('click', function() {
+        if (!confirm('Remove kiosk "' + (k.Name || k.IPAddress) + '"?')) return;
+        fetch('/api/kiosks/remove', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: k.ID })
+        }).then(function() { pollKiosks(); });
+      });
+      tdDel.appendChild(delBtn);
+      tr.appendChild(tdDel);
+
+      return tr;
+    }
+
+    var lastKiosks = [];
+
+    // Available screens first (alphabetical by Name), unavailable ones pushed to
+    // the end (also alphabetical), so a kiosk going offline doesn't scramble the
+    // rest of the list.
+    function sortKiosks(kiosks) {
+      return kiosks.slice().sort(function(a, b) {
+        var aUp = a.Reachable ? 0 : 1;
+        var bUp = b.Reachable ? 0 : 1;
+        if (aUp !== bUp) return aUp - bUp;
+        var aName = (a.Name || a.IPAddress || '').toLowerCase();
+        var bName = (b.Name || b.IPAddress || '').toLowerCase();
+        return aName.localeCompare(bName);
+      });
+    }
+
+    function renderTable(kiosksUnsorted) {
+      var body = document.getElementById('table-body');
+      if (!kiosksUnsorted.length) {
+        body.innerHTML = '<tr><td colspan="8" id="empty-msg">No kiosk screens registered yet. Use "Add kiosk device" above.</td></tr>';
+        return;
+      }
+
+      var kiosks = sortKiosks(kiosksUnsorted);
+
+      // Remove the initial "Loading..." placeholder row (and any other
+      // row without a data-id) now that real data has arrived.
+      Array.prototype.slice.call(body.querySelectorAll('tr:not([data-id])')).forEach(function(tr) { tr.remove(); });
+
+      kiosks.forEach(function(k) {
+        var existingRow = body.querySelector('tr[data-id="' + k.ID + '"]');
+        if (!existingRow) {
+          body.appendChild(renderRow(k));
+          return;
+        }
+        // Row already exists: update only the non-editable, non-focused cells so we
+        // don't clobber an in-progress edit or push-url field. Widgets are looked up
+        // by id (not the shared .ip-val/.ip-edit-wrap/.name-val classes, which match
+        // more than one field's widget in this row). Re-appending an already-attached
+        // row moves it to the end without detaching it first, which is how we keep
+        // DOM order in sync with the sorted list on every poll.
+        // Skip the move entirely while any of this row's inline editors is open:
+        // moving a DOM node that contains a focused <input> resets its caret to
+        // position 0 in most browsers even though focus is kept, so re-sorting the
+        // row mid-edit made it look like the page was fighting the operator's typing.
+        var rowBeingEdited = ['name', 'ip', 'port'].some(function(field) {
+          var wrap = existingRow.querySelector('#kiosk-' + field + '-edit-' + k.ID);
+          return wrap && wrap.style.display !== 'none';
+        });
+        if (!rowBeingEdited) { body.appendChild(existingRow); }
+
+        existingRow.classList.toggle('row-unavailable', !k.Reachable);
+
+        var selectCbEl = existingRow.querySelector('input[data-select-kiosk="' + k.ID + '"]');
+        if (selectCbEl) {
+          selectCbEl.checked  = !!pushKioskSelected[k.ID];
+          selectCbEl.disabled = !k.Reachable;
+          selectCbEl.title    = k.Reachable ? '' : 'Unreachable';
+        }
+
+        var nameEditWrapEl = existingRow.querySelector('#kiosk-name-edit-' + k.ID);
+        var nameValEl      = existingRow.querySelector('#kiosk-name-val-' + k.ID);
+        if (nameValEl && (!nameEditWrapEl || nameEditWrapEl.style.display === 'none')) {
+          var freshName = k.Name || k.IPAddress;
+          nameValEl.textContent = freshName;
+          nameValEl.title = freshName;
+        }
+
+        // Only refresh the read-only IP/Port values when their edit widget isn't
+        // open, so a poll tick can't clobber an in-progress edit.
+        var ipEditWrapEl = existingRow.querySelector('#kiosk-ip-edit-' + k.ID);
+        var ipValEl      = existingRow.querySelector('#kiosk-ip-val-' + k.ID);
+        if (ipValEl && (!ipEditWrapEl || ipEditWrapEl.style.display === 'none')) {
+          ipValEl.textContent = k.IPAddress || '-';
+        }
+
+        var portEditWrapEl = existingRow.querySelector('#kiosk-port-edit-' + k.ID);
+        var portValEl      = existingRow.querySelector('#kiosk-port-val-' + k.ID);
+        if (portValEl && (!portEditWrapEl || portEditWrapEl.style.display === 'none')) {
+          portValEl.textContent = k.Port;
+        }
+
+        var dotCell = existingRow.children[1];
+        if (dotCell) dotCell.innerHTML = statusDot(k.Reachable, k.CdpOpen);
+
+        var latCell = existingRow.querySelector('.latency-cell');
+        if (latCell) latCell.textContent = fmtLatency(k.LatencyMs);
+
+        var pushedCell = existingRow.querySelector('.pushed-cell .pushed-url');
+        if (pushedCell) {
+          var pd = pushedUrlDisplay(k);
+          pushedCell.textContent = pd.text;
+          pushedCell.title = pd.title;
+          pushedCell.classList.toggle('pushed-status', !pd.isLink);
+          var copyBtnEl = existingRow.querySelector('.copy-btn');
+          if (copyBtnEl) copyBtnEl.style.display = pd.isLink ? '' : 'none';
+        }
+      });
+
+      // Remove rows for kiosks no longer present.
+      var ids = kiosks.map(function(k) { return String(k.ID); });
+      Array.prototype.slice.call(body.querySelectorAll('tr[data-id]')).forEach(function(tr) {
+        if (ids.indexOf(tr.dataset.id) === -1) tr.remove();
+      });
+    }
+
+    // ── Screen selection (table checkboxes) ─────────────────────────────────
+    var pushKioskSelected = {}; // kiosk ID (string) -> bool
+
+    // Drop selections for kiosks that dropped off the list entirely (removed) or
+    // went offline, so a stale tick can't silently push/kill somewhere unseen.
+    function pruneSelection() {
+      var reachableIds = lastKiosks.filter(function(k) { return k.Reachable; }).map(function(k) { return String(k.ID); });
+      Object.keys(pushKioskSelected).forEach(function(id) {
+        if (reachableIds.indexOf(id) === -1) delete pushKioskSelected[id];
+      });
+    }
+
+    function updatePushBtnState() {
+      var anySelected = Object.keys(pushKioskSelected).some(function(id) { return pushKioskSelected[id]; });
+      document.getElementById('push-new-link-btn').disabled = !anySelected;
+      document.getElementById('push-waiting-screen-btn').disabled = !anySelected;
+      document.getElementById('kill-browser-btn').disabled = !anySelected;
+    }
+
+    document.getElementById('table-body').addEventListener('change', function(e) {
+      var cb = e.target.closest('input[type=checkbox][data-select-kiosk]');
+      if (!cb) return;
+      pushKioskSelected[cb.dataset.selectKiosk] = cb.checked;
+      updatePushBtnState();
+    });
+
+    document.getElementById('push-new-link-btn').addEventListener('click', function() {
+      var btn = this;
+      var url = document.getElementById('push-url-input').value.trim();
+      var statusEl = document.getElementById('push-new-link-status');
+      var ids = Object.keys(pushKioskSelected).filter(function(id) { return pushKioskSelected[id]; });
+      if (!url) { statusEl.textContent = 'URL is required'; statusEl.style.color = '#ef4444'; return; }
+      if (!ids.length) { statusEl.textContent = 'Select at least one screen'; statusEl.style.color = '#ef4444'; return; }
+
+      btn.disabled = true;
+      statusEl.textContent = 'Pushing...'; statusEl.style.color = '#888';
+
+      // All selected kiosks share the same source URL, so the localhost-replacement
+      // suggestion (if any) is identical for every one of them - probe with the first
+      // id only, then either fan out the confirmed push or the plain push to the rest.
+      var probeId = ids[0];
+      pushUrlToKiosk(probeId, url, false).then(function(d) {
+        if (d.needsConfirmation) {
+          var msg = 'The URL points to localhost, which will not resolve on the kiosk screen(s).\n' +
+                    'Replace with ' + d.suggestedUrl + ' and push to ' + ids.length + ' screen(s)?';
+          if (!confirm(msg)) { return null; }
+          return Promise.all(ids.map(function(id) { return pushUrlToKiosk(id, url, true); }));
+        }
+        var rest = ids.slice(1);
+        return Promise.all(rest.map(function(id) { return pushUrlToKiosk(id, url, false); }))
+          .then(function(others) { return [d].concat(others); });
+      })
+        .then(function(results) {
+          updatePushBtnState(); // restores the greyed-out state based on current selection
+          if (!results) { statusEl.textContent = 'Cancelled'; statusEl.style.color = '#888'; return; }
+          var okCount = results.filter(function(r) { return r && r.ok; }).length;
+          if (okCount === results.length) {
+            statusEl.textContent = 'Pushed to ' + okCount + ' screen(s).'; statusEl.style.color = '#22c55e';
+          } else {
+            statusEl.textContent = okCount + '/' + results.length + ' succeeded'; statusEl.style.color = '#eab308';
+          }
+          pollKiosks();
+        })
+        .catch(function() {
+          updatePushBtnState();
+          statusEl.textContent = 'Server unreachable'; statusEl.style.color = '#ef4444';
+        });
+    });
+
+    document.getElementById('push-waiting-screen-btn').addEventListener('click', function() {
+      var btn = this;
+      var statusEl = document.getElementById('push-new-link-status');
+      var ids = Object.keys(pushKioskSelected).filter(function(id) { return pushKioskSelected[id]; });
+      if (!ids.length) { statusEl.textContent = 'Select at least one screen'; statusEl.style.color = '#ef4444'; return; }
+
+      btn.disabled = true;
+      statusEl.textContent = 'Pushing waiting screen...'; statusEl.style.color = '#888';
+
+      Promise.all(ids.map(function(id) { return pushUrlToKiosk(id, WAITING_SCREEN_URL, false); }))
+        .then(function(results) {
+          updatePushBtnState();
+          var okCount = results.filter(function(r) { return r && r.ok; }).length;
+          if (okCount === results.length) {
+            statusEl.textContent = 'Waiting screen shown on ' + okCount + ' screen(s).'; statusEl.style.color = '#22c55e';
+          } else {
+            statusEl.textContent = okCount + '/' + results.length + ' succeeded'; statusEl.style.color = '#eab308';
+          }
+          pollKiosks();
+        })
+        .catch(function() {
+          updatePushBtnState();
+          statusEl.textContent = 'Server unreachable'; statusEl.style.color = '#ef4444';
+        });
+    });
+
+    document.getElementById('kill-browser-btn').addEventListener('click', function() {
+      var btn = this;
+      var statusEl = document.getElementById('push-new-link-status');
+      var ids = Object.keys(pushKioskSelected).filter(function(id) { return pushKioskSelected[id]; });
+      if (!ids.length) { statusEl.textContent = 'Select at least one screen'; statusEl.style.color = '#ef4444'; return; }
+
+      var names = ids.map(function(id) {
+        var k = lastKiosks.find(function(x) { return String(x.ID) === id; });
+        return k ? (k.Name || k.IPAddress) : id;
+      }).join(', ');
+      var msg = 'This will close the browser on ' + ids.length + ' kiosk screen(s): ' + names + '.\n\n' +
+                'The kiosk web page will be closed on the remote kiosk device(s), and will need to be ' +
+                'restarted manually there afterwards. Continue?';
+      if (!confirm(msg)) return;
+
+      btn.disabled = true;
+      statusEl.textContent = 'Closing browser...'; statusEl.style.color = '#888';
+
+      Promise.all(ids.map(function(id) {
+        return fetch('/api/kiosks/kill-browser', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: id })
+        }).then(function(r) { return r.json(); }).catch(function() { return { ok: false }; });
+      }))
+        .then(function(results) {
+          updatePushBtnState();
+          var okCount = results.filter(function(r) { return r && r.ok; }).length;
+          if (okCount === results.length) {
+            statusEl.textContent = 'Closed browser on ' + okCount + ' screen(s).'; statusEl.style.color = '#22c55e';
+          } else {
+            statusEl.textContent = okCount + '/' + results.length + ' succeeded'; statusEl.style.color = '#eab308';
+          }
+          pollKiosks();
+        })
+        .catch(function() {
+          updatePushBtnState();
+          statusEl.textContent = 'Server unreachable'; statusEl.style.color = '#ef4444';
+        });
+    });
+
+    function pollKiosks() {
+      return fetch('/api/kiosks?_=' + Date.now())
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          if (d.ok) {
+            lastKiosks = d.kiosks || [];
+            pruneSelection();
+            renderTable(lastKiosks);
+            updatePushBtnState();
+          }
+        })
+        .catch(function() {});
+    }
+
+    pollKiosks();
+    setInterval(pollKiosks, 4000);
+  </script>
+</body>
+</html>
