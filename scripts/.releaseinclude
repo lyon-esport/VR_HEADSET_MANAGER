@@ -9,6 +9,13 @@
 # Folder patterns: /folder/ or /folder/* includes all files recursively.
 # -------------------------------------------------------
 
+# --- Never ship the dev/test tooling ---
+# Create-ZipRelease.ps1 already hard-excludes scripts\ before reading this
+# file. This line is here so the intent is visible in the manifest too, and
+# section 10 of the non-regression harness asserts the extracted release
+# really has no scripts\ folder.
+!/scripts/
+
 # --- Root files ---
 /main.ps1
 /START_VR_HEADSET_MANAGER.cmd

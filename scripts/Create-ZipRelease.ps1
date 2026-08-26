@@ -23,14 +23,22 @@
 .PARAMETER Unzip
     Automatically extracts the created zip to a sibling folder after packaging, for testing the release.
 
+.PARAMETER TestApp
+    After packaging and extracting, runs scripts\Invoke-NonRegressionTests.ps1
+    against the extracted release. Implies -Unzip. The harness exit code becomes
+    this script's exit code (0 = all passed, 1 = failures, 2 = prerequisites).
+    Requires an exclusive run: close the dev app first.
+
 .EXAMPLE
     .\Create-ZipRelease.ps1
     .\Create-ZipRelease.ps1 -Version "26.05B"
     .\Create-ZipRelease.ps1 -Version "26.05B" -Unzip
+    .\Create-ZipRelease.ps1 -Version "26.05B" -Unzip -TestApp
 #>
 param(
     [string]$Version = "",
-    [switch]$Unzip
+    [switch]$Unzip,
+    [switch]$TestApp
 )
 
 Set-StrictMode -Version Latest
@@ -182,7 +190,8 @@ Write-Host "  Output : $zipPath" -ForegroundColor White
 Write-Host "  Size   : $zipSizeMB MB" -ForegroundColor White
 Write-Host ""
 
-if ($Unzip -or $Version -match 'TEST') {
+$extractDir = ""
+if ($Unzip -or $TestApp -or $Version -match 'TEST') {
     $extractDir = Join-Path $outputDir ([System.IO.Path]::GetFileNameWithoutExtension($zipName))
     Write-Host "[ Extracting release for testing ]" -ForegroundColor Yellow
     Write-Host "  $extractDir" -ForegroundColor White
@@ -196,3 +205,32 @@ if ($Unzip -or $Version -match 'TEST') {
 
 Write-Host "=== Zip release complete (v$Version). ===" -ForegroundColor Green
 Write-Host ""
+
+# --- OPTIONAL: NON-REGRESSION TESTS ---
+if ($TestApp) {
+    $harness = Join-Path $PSScriptRoot 'Invoke-NonRegressionTests.ps1'
+    if (-not (Test-Path -LiteralPath $harness)) {
+        Write-Host "ERROR: -TestApp requested but the harness is missing:" -ForegroundColor Red
+        Write-Host "  $harness" -ForegroundColor DarkGray
+        exit 2
+    }
+
+    Write-Host "[ Running non-regression tests against the extracted release ]" -ForegroundColor Yellow
+    Write-Host ""
+
+    # Child process, not dot-sourced: the harness sets its own strict-mode and
+    # error preferences, and its exit code must survive back to the caller.
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $harness -TargetRoot $extractDir -Version $Version
+    $testExit = $LASTEXITCODE
+
+    Write-Host ""
+    if ($testExit -eq 0) {
+        Write-Host "=== Non-regression tests PASSED for v$Version. ===" -ForegroundColor Green
+    } elseif ($testExit -eq 1) {
+        Write-Host "=== Non-regression tests FAILED for v$Version. ===" -ForegroundColor Red
+    } else {
+        Write-Host "=== Non-regression tests could not run (exit $testExit). ===" -ForegroundColor Red
+    }
+    Write-Host ""
+    exit $testExit
+}
