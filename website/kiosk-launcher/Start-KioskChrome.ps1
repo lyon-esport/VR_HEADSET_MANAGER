@@ -183,13 +183,91 @@ function Find-ChromeExe {
     return $null
 }
 
+function Show-ManualInstallInstructions {
+    Write-Host "Please install Google Chrome manually, then re-run this script." -ForegroundColor Yellow
+    Write-Host "Download page: https://www.google.com/chrome/" -ForegroundColor Yellow
+    Write-Host "Or, once installed, re-run with -ChromePath pointing at your chrome.exe, for example:" -ForegroundColor Yellow
+    Write-Host "  .\Start-KioskChrome.ps1 -ChromePath `"C:\Path\To\chrome.exe`"" -ForegroundColor Yellow
+    try {
+        Start-Process "https://www.google.com/chrome/" | Out-Null
+    } catch {
+        # No default browser available - the operator already has the URL printed above.
+    }
+}
+
+function Install-ChromeSilently {
+    Write-Host "Downloading the official Chrome installer..." -ForegroundColor Cyan
+    $installerPath = Join-Path $env:TEMP "chrome_installer.exe"
+    try {
+        try {
+            Start-BitsTransfer -Source "https://dl.google.com/chrome/install/chrome_installer.exe" -Destination $installerPath -ErrorAction Stop
+        } catch {
+            Invoke-WebRequest -Uri "https://dl.google.com/chrome/install/chrome_installer.exe" -OutFile $installerPath -UseBasicParsing
+        }
+    } catch {
+        Write-Host "Download failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        return $false
+    }
+
+    if (-not (Test-Path -LiteralPath $installerPath)) {
+        return $false
+    }
+
+    Write-Host "Running the Chrome installer silently..." -ForegroundColor Cyan
+    try {
+        $proc = Start-Process -FilePath $installerPath -ArgumentList "/silent", "/install" -PassThru -Wait
+        Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue
+        return ($proc.ExitCode -eq 0)
+    } catch {
+        Write-Host "Silent install failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue
+        return $false
+    }
+}
+
+function Install-ChromeViaWinget {
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Write-Host "winget is not available on this PC." -ForegroundColor Yellow
+        return $false
+    }
+
+    Write-Host "Installing Chrome via winget..." -ForegroundColor Cyan
+    try {
+        & winget install --id Google.Chrome -e --silent --accept-package-agreements --accept-source-agreements
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        Write-Host "winget install failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        return $false
+    }
+}
+
 $resolvedChromePath = Find-ChromeExe -ExplicitPath $ChromePath
 if (-not $resolvedChromePath) {
-    Write-Host "Could not find chrome.exe automatically." -ForegroundColor Red
-    Write-Host "Re-run this script with -ChromePath pointing at your chrome.exe, for example:" -ForegroundColor Yellow
-    Write-Host "  .\Start-KioskChrome.ps1 -ChromePath `"C:\Path\To\chrome.exe`"" -ForegroundColor Yellow
-    Read-Host "Press Enter to exit"
-    exit 1
+    Write-Host "Could not find chrome.exe automatically." -ForegroundColor Yellow
+    $choice = Read-Host "Install Google Chrome now? [A] Auto-install (recommended) / [M] I'll install it manually"
+
+    if ($choice -match '^(?i)a') {
+        $installed = Install-ChromeSilently
+        if (-not $installed) {
+            Write-Host "Direct download install did not succeed. Trying winget..." -ForegroundColor Yellow
+            $installed = Install-ChromeViaWinget
+        }
+
+        if ($installed) {
+            $resolvedChromePath = Find-ChromeExe -ExplicitPath $ChromePath
+        }
+
+        if (-not $resolvedChromePath) {
+            Write-Host "Automatic install did not succeed." -ForegroundColor Red
+            Show-ManualInstallInstructions
+            Read-Host "Press Enter to exit"
+            exit 1
+        }
+    } else {
+        Show-ManualInstallInstructions
+        Read-Host "Press Enter to exit"
+        exit 1
+    }
 }
 
 Write-Host "Chrome found at: $resolvedChromePath" -ForegroundColor Green

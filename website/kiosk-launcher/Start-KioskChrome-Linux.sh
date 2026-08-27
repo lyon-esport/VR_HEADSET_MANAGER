@@ -93,10 +93,41 @@ done
 
 if [ -z "$CHROME_BIN" ]; then
     echo "Could not find chromium-browser, chromium, google-chrome-stable, or google-chrome." >&2
-    echo "Install one first, for example on Debian/Raspberry Pi OS:" >&2
-    echo "  sudo apt-get update && sudo apt-get install -y chromium" >&2
-    echo "(older Raspberry Pi OS releases use the package name chromium-browser instead)" >&2
-    exit 1
+    echo ""
+    read -p "Install Chromium now? [A] Auto-install (recommended) / [M] I'll install it manually: " CHROME_INSTALL_CHOICE
+
+    case "$CHROME_INSTALL_CHOICE" in
+        [Aa]*)
+            echo "Installing chromium via apt-get (requires sudo)..."
+            if sudo apt-get update -y && sudo apt-get install -y chromium; then
+                :
+            else
+                echo "Package 'chromium' failed - trying 'chromium-browser' (older Raspberry Pi OS releases)..." >&2
+                sudo apt-get install -y chromium-browser
+            fi
+
+            for candidate in chromium-browser chromium google-chrome-stable google-chrome; do
+                if command -v "$candidate" >/dev/null 2>&1; then
+                    CHROME_BIN="$(command -v "$candidate")"
+                    break
+                fi
+            done
+
+            if [ -z "$CHROME_BIN" ]; then
+                echo "Automatic install did not succeed." >&2
+                echo "Install one manually, for example:" >&2
+                echo "  sudo apt-get update && sudo apt-get install -y chromium" >&2
+                echo "(older Raspberry Pi OS releases use the package name chromium-browser instead)" >&2
+                exit 1
+            fi
+            ;;
+        *)
+            echo "Install one first, for example on Debian/Raspberry Pi OS:" >&2
+            echo "  sudo apt-get update && sudo apt-get install -y chromium" >&2
+            echo "(older Raspberry Pi OS releases use the package name chromium-browser instead)" >&2
+            exit 1
+            ;;
+    esac
 fi
 
 echo "Chromium found at: $CHROME_BIN"

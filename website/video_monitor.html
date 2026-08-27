@@ -196,6 +196,9 @@
     .cell-action-btn.cast-btn { display: none; }
     body.has-kiosks .cell-action-btn.cast-btn { display: flex; }
 
+    /* Launch app button - hidden when the headset is not ADB-reachable */
+    .cell-action-btn.launch-app-btn.hidden { display: none; }
+
     /* Cast-to-kiosk popover (single shared instance, repositioned per click) */
     .cast-panel {
       display: none; position: fixed;
@@ -920,7 +923,7 @@
       var scaleNeeded = false;
       document.querySelectorAll('#grid .cell').forEach(function(cell) {
         var dn        = cell.dataset.display;
-        var stat      = headsetStatus[dn] || { ping: false, scrcpy: false };
+        var stat      = headsetStatus[dn] || { ping: false, scrcpy: false, adb: false };
         var wasStream = !cell.classList.contains('no-stream');
         var streaming = stat.scrcpy;
 
@@ -948,6 +951,9 @@
         if (btn) btn.classList.toggle('offline', !stat.scrcpy);
         var compactItem = document.querySelector('[data-compact-headset="' + dn + '"]');
         if (compactItem) compactItem.classList.toggle('offline', !stat.scrcpy);
+
+        var launchBtn = cell.querySelector('.launch-app-btn');
+        if (launchBtn) launchBtn.classList.toggle('hidden', !stat.adb);
       });
       if (scaleNeeded) { applyAll(); }
     }
