@@ -1,8 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" translate="no">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="google" content="notranslate">
   <title>VR Headsets - Video Monitor</title>
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
   <link rel="stylesheet" href="assets/topbar.css">
@@ -680,10 +681,13 @@
       castTargetDn = dn;
       castSelected = {};
       var html = '<div class="cast-panel-title">Cast to kiosk screen</div>';
+      var availableKiosks = kioskList.filter(function(k) { return k.Reachable && k.CdpOpen; });
       if (!kioskList.length) {
         html += '<div class="cast-panel-empty">No kiosk screens registered.</div>';
+      } else if (!availableKiosks.length) {
+        html += '<div class="cast-panel-empty">No kiosk screens currently available.</div>';
       } else {
-        kioskList.forEach(function(k) {
+        availableKiosks.forEach(function(k) {
           html += '<button class="cast-item" data-cast-id="' + k.ID + '">' + CHECK_SVG_HF + esc(k.Name || k.IPAddress) + '</button>';
         });
         html +=

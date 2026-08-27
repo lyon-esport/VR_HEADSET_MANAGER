@@ -7,8 +7,9 @@
     Copy this single file to any Windows PC that will act as a kiosk screen.
     Running it will:
       1. Restart itself elevated (as Administrator) if not already elevated.
-      2. Open a Windows Firewall inbound rule for the Chrome remote debugging
-         port (default 9222), so VR HEADSET MANAGER can reach it over the LAN.
+      2. Open Windows Firewall inbound rules for the Chrome remote debugging
+         port (default 9222) and for inbound ping (ICMP Echo Request), so
+         VR HEADSET MANAGER can reach and poll this PC over the LAN.
       3. Launch Google Chrome with remote debugging enabled and in kiosk mode,
          pointed at the given start URL (or a blank/default page if omitted).
 
@@ -40,8 +41,8 @@
 
 .NOTES
     Re-run this script any time (for example after a reboot) to reopen the
-    kiosk window - it is safe to run repeatedly; the firewall rule is only
-    created if it does not already exist, and any previous kiosk Chrome
+    kiosk window - it is safe to run repeatedly; the firewall rules are only
+    created if they do not already exist, and any previous kiosk Chrome
     instance using the same debug port is closed first to avoid a port
     conflict (Chrome refuses to open a second remote-debugging listener).
 
@@ -99,22 +100,48 @@ if (-not (Test-IsAdmin)) {
 Write-Host "Running as Administrator - continuing." -ForegroundColor Green
 
 # ---------------------------------------------------------------------------
-# 2. Open the firewall for the Chrome remote debugging port
+# 2. Open the firewall for the Chrome remote debugging port and for inbound
+#    ping (ICMP Echo Request), so the server's Get-KioskReachability check
+#    can reach this PC. Rule names match the "_[VR_HEADSET_MANAGER]<Feature>_
+#    Allowed <SUFFIX> [IN/OUT]" convention used by the server-side rules in
+#    computer_setup.ps1.
 # ---------------------------------------------------------------------------
-$ruleName = "VRHM Kiosk Chrome Debug $Port"
+$ruleNameBase = "_[VR_HEADSET_MANAGER]Kiosk_Allowed"
+$ruleNameTcp  = "$ruleNameBase TCP [IN]"
+$ruleNameIcmp = "$ruleNameBase ICMPv4 [IN]"
 
-$existingRule = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
-if (-not $existingRule) {
-    Write-Host "Adding firewall rule '$ruleName' for TCP port $Port..." -ForegroundColor Cyan
-    New-NetFirewallRule -DisplayName $ruleName `
+# Remove any rule created by an older version of this script (unnamed to the
+# current convention) so re-running stays idempotent and does not leave
+# duplicate/stale rules behind.
+Get-NetFirewallRule -DisplayName "VRHM Kiosk Chrome Debug $Port" -ErrorAction SilentlyContinue |
+    Remove-NetFirewallRule -ErrorAction SilentlyContinue
+
+if (-not (Get-NetFirewallRule -DisplayName $ruleNameTcp -ErrorAction SilentlyContinue)) {
+    Write-Host "Adding firewall rule '$ruleNameTcp' for TCP port $Port..." -ForegroundColor Cyan
+    New-NetFirewallRule -DisplayName $ruleNameTcp `
         -Direction Inbound `
         -Protocol TCP `
         -LocalPort $Port `
         -Action Allow `
-        -Profile Any | Out-Null
+        -Profile Any `
+        -Description "Allow VR Headset Manager to reach this kiosk's Chrome remote debugging port" | Out-Null
     Write-Host "Firewall rule created." -ForegroundColor Green
 } else {
-    Write-Host "Firewall rule '$ruleName' already exists - skipping." -ForegroundColor DarkGray
+    Write-Host "Firewall rule '$ruleNameTcp' already exists - skipping." -ForegroundColor DarkGray
+}
+
+if (-not (Get-NetFirewallRule -DisplayName $ruleNameIcmp -ErrorAction SilentlyContinue)) {
+    Write-Host "Adding firewall rule '$ruleNameIcmp' for inbound ping..." -ForegroundColor Cyan
+    New-NetFirewallRule -DisplayName $ruleNameIcmp `
+        -Direction Inbound `
+        -Protocol ICMPv4 `
+        -IcmpType 8 `
+        -Action Allow `
+        -Profile Any `
+        -Description "Allow VR Headset Manager to ping this kiosk for reachability checks" | Out-Null
+    Write-Host "Firewall rule created." -ForegroundColor Green
+} else {
+    Write-Host "Firewall rule '$ruleNameIcmp' already exists - skipping." -ForegroundColor DarkGray
 }
 
 # ---------------------------------------------------------------------------
