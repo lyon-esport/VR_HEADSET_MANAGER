@@ -1131,23 +1131,56 @@ function Find-NextFreePortInPool {
 # Used by the ffmpeg restream path and the VRMonitor slow path.
 # -------------------------------------------------------------------
 
-# Probe a single ffmpeg encoder with a 1-frame smoke test.
-# Returns $true when the encoder accepted the test input (i.e. the GPU/driver
-# stack is functional), $false otherwise. Stdout/stderr are discarded.
+# Probe a single ffmpeg encoder in two stages:
+#  Stage 1 - open check: does the encoder session even open and accept a frame?
+#            (1-frame smoke test against a black source, discarded to -f null -)
+#  Stage 2 - output check: some GPU/driver stacks accept the session and exit 0
+#            but silently emit black/corrupt frames (seen with h264_amf on some
+#            AMD Z1 Extreme / Radeon 780M driver builds, while hevc_amf on the
+#            SAME hardware works fine). Stage 1 alone cannot catch this since its
+#            source is already black. Stage 2 encodes a few frames of a non-black
+#            synthetic pattern to a temp file, decodes it back, and uses ffmpeg's
+#            `blackframe` filter to check the frames did not come back black.
+# Returns @{Ok; Reason} - Reason is 'open-failed' or 'black-output' when Ok=$false,
+# $null when Ok=$true.
 function Test-FfmpegEncoder {
     param(
         [Parameter(Mandatory)] [string] $Encoder,
         [string[]] $ExtraArgs = @()
     )
-    if (-not (Test-Path -LiteralPath $global:ffmpegFilePath)) { return $false }
-    $ffArgs = @('-hide_banner','-loglevel','error','-f','lavfi','-i','color=c=black:s=320x240:r=10:d=0.1')
-    $ffArgs += $ExtraArgs
-    $ffArgs += @('-c:v',$Encoder,'-frames:v','1','-f','null','-')
+    if (-not (Test-Path -LiteralPath $global:ffmpegFilePath)) { return @{ Ok = $false; Reason = 'open-failed' } }
+
+    $openArgs = @('-hide_banner','-loglevel','error','-f','lavfi','-i','color=c=black:s=320x240:r=10:d=0.1')
+    $openArgs += $ExtraArgs
+    $openArgs += @('-c:v',$Encoder,'-frames:v','1','-f','null','-')
     try {
-        $null = & $global:ffmpegFilePath @ffArgs 2>&1
-        return ($LASTEXITCODE -eq 0)
+        $null = & $global:ffmpegFilePath @openArgs 2>&1
+        if ($LASTEXITCODE -ne 0) { return @{ Ok = $false; Reason = 'open-failed' } }
     } catch {
-        return $false
+        return @{ Ok = $false; Reason = 'open-failed' }
+    }
+
+    $tmpFile = Join-Path $env:TEMP ("vrhm_encprobe_{0}.mkv" -f ([guid]::NewGuid().ToString('N')))
+    try {
+        $encArgs = @('-hide_banner','-loglevel','error','-f','lavfi','-i','testsrc2=size=320x240:rate=10:duration=0.5')
+        $encArgs += $ExtraArgs
+        $encArgs += @('-c:v',$Encoder,'-y',$tmpFile)
+        $null = & $global:ffmpegFilePath @encArgs 2>&1
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $tmpFile)) { return @{ Ok = $false; Reason = 'open-failed' } }
+
+        $checkArgs = @('-hide_banner','-loglevel','info','-i',$tmpFile,'-vf','blackframe=98:32','-f','null','-')
+        $checkOut = & $global:ffmpegFilePath @checkArgs 2>&1
+        $blackFrames = 0
+        foreach ($line in $checkOut) {
+            if ($line -match 'blackframe.*pblack:') { $blackFrames++ }
+        }
+        # duration=0.5 @ rate=10 -> ~5 encoded frames; treat as broken when nearly all come back black.
+        if ($blackFrames -ge 4) { return @{ Ok = $false; Reason = 'black-output' } }
+        return @{ Ok = $true; Reason = $null }
+    } catch {
+        return @{ Ok = $false; Reason = 'black-output' }
+    } finally {
+        if (Test-Path -LiteralPath $tmpFile) { Remove-Item -LiteralPath $tmpFile -Force -ErrorAction SilentlyContinue }
     }
 }
 
@@ -1253,12 +1286,14 @@ function Get-GpuEncoder {
             return $c
         }
         if ($available -notcontains $c.Name) { continue }
-        if (Test-FfmpegEncoder -Encoder $c.Name -ExtraArgs $c.ExtraArgs) {
+        $probe = Test-FfmpegEncoder -Encoder $c.Name -ExtraArgs $c.ExtraArgs
+        if ($probe.Ok) {
             $global:GpuEncoder = $c
             try { Write-Log ("GpuEncoder resolved: {0} (vendor {1}) GpuIndex={2}" -f $c.Name, $c.Vendor, $global:GPU_Index) -Level SUCCESS } catch {}
             return $c
         } else {
-            try { Write-Log ("GpuEncoder probe failed for {0}, trying next" -f $c.Name) -Level DEBUG } catch {}
+            $reasonText = if ($probe.Reason -eq 'black-output') { 'produced black output' } else { 'failed to open' }
+            try { Write-Log ("GpuEncoder probe failed for {0} ({1}), trying next" -f $c.Name, $reasonText) -Level DEBUG } catch {}
         }
     }
     # Should never reach here (the software encoder is in the list and returned unconditionally above).

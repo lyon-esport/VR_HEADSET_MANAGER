@@ -29,7 +29,13 @@ function Read-TestMenuChoice {
     #>
     param(
         [Parameter(Mandatory = $true)][string]$Prompt,
-        [Parameter(Mandatory = $true)][string[]]$Accept,
+        # AllowEmptyString is required: callers legitimately pass '' as one of
+        # the accepted tokens (Enter = accept default, e.g. Wait-OperatorAction's
+        # @('', 'S')). Without it, PowerShell's mandatory-parameter validation
+        # rejects the whole array the moment any element is an empty string
+        # ("Cannot bind argument to parameter 'Accept' because it is an empty
+        # string"), aborting the caller before Read-Host is even reached.
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string[]]$Accept,
         [string]$Default = ''
     )
 

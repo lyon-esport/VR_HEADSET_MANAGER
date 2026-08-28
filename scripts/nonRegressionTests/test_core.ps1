@@ -57,6 +57,10 @@ function Initialize-TestRun {
         CurrentSection   = $null
         AllowDestructive = $false
         HeadsetName      = ''
+        # Sections 50/60 read these. Declared here because $global:TestRun is a
+        # PSCustomObject - assigning an undeclared property to one throws.
+        Unattended       = $false
+        DevRoot          = ''
     }
     return $global:TestRun
 }

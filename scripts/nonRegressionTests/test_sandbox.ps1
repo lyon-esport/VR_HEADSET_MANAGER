@@ -779,3 +779,124 @@ function Remove-SandboxArtifacts {
 
     $global:SandboxMainProcess = $null
 }
+
+function Test-SandboxIsReleaseFolder {
+    <#
+    .SYNOPSIS
+        Safety gate for Reset-SandboxTarget. Returns $true only when TargetRoot is
+        an extracted RELEASE folder that is safe to wipe back to pristine.
+
+    .DESCRIPTION
+        Two independent guards, both must hold:
+          - the target is not the dev folder (compared as resolved full paths)
+          - the target has no scripts\ folder - releases never ship one
+            (Create-ZipRelease.ps1 hard-excludes it, and section 10 asserts it),
+            so its presence means we are looking at a dev tree
+        This exists because -Force lets TargetRoot point at the dev folder, and
+        wiping data\ + logs\ there would destroy the operator's real registry.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$TargetRoot,
+        [string]$DevRoot = ''
+    )
+
+    if ($DevRoot) {
+        $t = [System.IO.Path]::GetFullPath($TargetRoot).TrimEnd('\')
+        $d = [System.IO.Path]::GetFullPath($DevRoot).TrimEnd('\')
+        if ($t -eq $d) { return $false }
+    }
+
+    if (Test-Path -LiteralPath (Join-Path $TargetRoot 'scripts')) { return $false }
+
+    return $true
+}
+
+function Reset-SandboxTarget {
+    <#
+    .SYNOPSIS
+        Restores an extracted release folder to its pristine, just-unzipped state
+        by deleting everything the harness seeded and the app generated.
+
+    .DESCRIPTION
+        Without this, a target can only be tested ONCE: Initialize-SandboxConfig
+        seeds config\config.json and data\, and section 10's packaging assertions
+        ("No personal data shipped in the release") then fail on every re-run
+        against that same folder - they are only meaningful on a clean extraction.
+
+        Removes: config\config.json, config\mediamtx_headsets.yml, data\, logs\,
+        and the contents of website\generated\. All of these are created at
+        runtime; a release ships none of them.
+
+        Deliberately does NOT remove sources\ffmpeg\ffmpeg.exe. The sandbox copies
+        it in (a real first run downloads it), it is ~102 MB, and section 10's
+        ffmpeg assertion passes whether or not it is present - so re-copying it on
+        every run would be pure cost.
+
+        No-ops with a warning when Test-SandboxIsReleaseFolder rejects the target.
+
+    .EXAMPLE
+        Reset-SandboxTarget -TargetRoot $target -DevRoot $devRoot
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$TargetRoot,
+        [string]$DevRoot = '',
+        [switch]$Quiet
+    )
+
+    if (-not (Test-SandboxIsReleaseFolder -TargetRoot $TargetRoot -DevRoot $DevRoot)) {
+        if (-not $Quiet) {
+            Write-Host '  Sandbox reset SKIPPED - target is not an extracted release folder.' -ForegroundColor Yellow
+        }
+        return $false
+    }
+
+    $paths = Get-SandboxPaths -TargetRoot $TargetRoot
+
+    $files = @(
+        $paths.ConfigFile
+        (Join-Path $TargetRoot 'config\mediamtx_headsets.yml')
+    )
+    foreach ($f in $files) {
+        if (Test-Path -LiteralPath $f) {
+            Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    # data\fw_state.json survives the reset on purpose. It is the app's record of
+    # the firewall rules / URL ACL / Defender exclusion it already applied for
+    # THIS folder. Deleting it makes Initialize-ComputerSetup see drift on the
+    # next run and raise a UAC prompt plus an interactive elevated console every
+    # single time - which is exactly what an unattended harness must not do.
+    # Section 10 only asserts that data\*.csv are absent, so keeping this one
+    # JSON does not weaken the packaging check.
+    $keep = $null
+    $fwState = Join-Path $paths.DataFolder 'fw_state.json'
+    if (Test-Path -LiteralPath $fwState) {
+        try { $keep = Get-Content -LiteralPath $fwState -Raw -Encoding UTF8 } catch { }
+    }
+
+    foreach ($folder in @($paths.DataFolder, $paths.LogsFolder)) {
+        if (Test-Path -LiteralPath $folder) {
+            Remove-Item -LiteralPath $folder -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    if ($null -ne $keep) {
+        try {
+            New-Item -ItemType Directory -Path $paths.DataFolder -Force | Out-Null
+            [System.IO.File]::WriteAllText($fwState, $keep, [System.Text.UTF8Encoding]::new($false))
+        }
+        catch { }
+    }
+
+    # Keep website\generated\ itself - only its runtime contents are ours.
+    if (Test-Path -LiteralPath $paths.GeneratedFolder) {
+        Get-ChildItem -LiteralPath $paths.GeneratedFolder -Force -ErrorAction SilentlyContinue |
+            ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+
+    if (-not $Quiet) {
+        Write-Host '  Sandbox reset - target restored to its just-extracted state.' -ForegroundColor DarkGray
+    }
+    return $true
+}

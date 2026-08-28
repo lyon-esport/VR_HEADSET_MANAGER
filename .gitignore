@@ -25,6 +25,7 @@ scrcpy_manualScripts/
 
 # ignore large sources
 /sources/ffmpeg-8.1-essentials_build.zip
+/sources/ffmpeg*
 /sources/Archives/
 
 #Web and app data

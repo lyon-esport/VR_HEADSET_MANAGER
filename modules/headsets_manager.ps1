@@ -535,8 +535,8 @@ function Remove-Headset {
         foreach ($f in @($timerTxt, $timerRun)) {
             if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
         }
-        # Delete generated monitoring and video HTML overlays
-        foreach ($kind in @('monitoring', 'video')) {
+        # Delete generated monitoring, video and timer HTML overlays
+        foreach ($kind in @('monitoring', 'video', 'timer')) {
             $htmlPath = Get-HeadsetSitePath -Name $headsetToRemove.Name -Kind $kind
             if (Test-Path -LiteralPath $htmlPath) { Remove-Item -LiteralPath $htmlPath -Force -ErrorAction SilentlyContinue }
         }

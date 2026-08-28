@@ -62,10 +62,15 @@ Invoke-RegressionTest -Name 'Root URL serves the video monitor' -Test {
     Add-TestEvidence ("root served {0} bytes" -f $page.Length)
 }
 
+# No GetNewClosure() here on purpose: it would rebind the scriptblock into a new
+# dynamic module scope, whose function lookup goes module -> global and skips the
+# script scope this harness is dot-sourced into, so Assert-VrmPageServed would not
+# resolve. Not needed either - Invoke-RegressionTest runs the block synchronously
+# within this same loop iteration, so $pageName still holds the current value.
 foreach ($pageName in $corePages) {
     Invoke-RegressionTest -Name ("Page is served: {0}" -f $pageName) -Test {
         Assert-VrmPageServed -Path ('/' + $pageName) -MustContain '<html' -MinLength 500 | Out-Null
-    }.GetNewClosure()
+    }
 }
 
 Invoke-RegressionTest -Name 'Any extra page on disk is also served' -Test {

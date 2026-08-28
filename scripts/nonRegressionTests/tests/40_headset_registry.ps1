@@ -35,6 +35,11 @@ function Get-NrtHeadsetRow {
 }
 
 function Get-NrtHeadsetRows {
+    # NOTE: the array is UNROLLED on the way out, so a single-row CSV arrives at the
+    # caller as a bare PSCustomObject whose .Count is $null (not 1). Every caller that
+    # ASSIGNS the result must wrap it in @() - see the call sites below. Do not "fix"
+    # that here with a leading comma: this function is also used in a pipeline, and
+    # ,@(...) would emit the inner array as a single object instead of enumerating it.
     return @(Import-Csv -LiteralPath $paths.KnownHeadsets -Encoding UTF8)
 }
 
@@ -85,7 +90,7 @@ Invoke-RegressionTest -Name 'CSV keeps its documented column set' -Test {
     # By NAME, not index: the on-disk column order follows the first object's
     # property order and differs from the empty-file header literal in
     # headsets_manager.ps1.
-    $rows = Get-NrtHeadsetRows
+    $rows = @(Get-NrtHeadsetRows)
     Assert-True ($rows.Count -gt 0) 'no rows to inspect'
     $columns = $rows[0].PSObject.Properties.Name
     Add-TestEvidence ("columns: {0}" -f ($columns -join ', '))
@@ -96,14 +101,14 @@ Invoke-RegressionTest -Name 'CSV keeps its documented column set' -Test {
 }
 
 Invoke-RegressionTest -Name 'Duplicate IP is rejected without corrupting the CSV' -Test {
-    $before = Get-NrtHeadsetRows
+    $before = @(Get-NrtHeadsetRows)
 
     $r = Invoke-VrmApi -Path '/api/addheadset' -Method POST -Body @{
         name = 'NRT_Duplicate'; ip = $nrtIp; model = 'Quest 3'; serialNumber = 'NRTSERIAL002'
     }
     Add-TestEvidence ("response: HTTP {0} {1}" -f $r.StatusCode, (Get-VrmApiExcerpt $r.Raw 120))
 
-    $after = Get-NrtHeadsetRows
+    $after = @(Get-NrtHeadsetRows)
     Add-TestEvidence ("rows before={0} after={1}" -f $before.Count, $after.Count)
 
     # Add-Headset early-returns on a duplicate IP, so the row count must not grow.

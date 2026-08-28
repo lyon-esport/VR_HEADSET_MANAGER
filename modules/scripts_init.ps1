@@ -593,8 +593,9 @@ if (-not $global:IsWebServerProcess -and -not $global:IsDashboardProcess -and -n
 
 # Auto-open the default browser to the dashboard on startup (operator-configurable via WebServer.openBrowserOnStartup)
 if (-not $global:IsVRMonitorJob -and -not $global:IsWebServerProcess -and -not $global:IsDashboardProcess) {
-    if ($global:WebServer_enabled -and $global:WebServer_openBrowserOnStartup) {
+    if ($global:WebServer_enabled -and $global:WebServer_openBrowserOnStartup -and -not $global:WebBrowserAutoOpened) {
         Start-WelcomeBrowserLauncher -Port $global:WebServer_port
+        $global:WebBrowserAutoOpened = $true
     }
 }
 

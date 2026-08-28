@@ -42,10 +42,24 @@
     what they break.
 
 .PARAMETER Unattended
-    Skip the launch menu and use the parameters as given.
+    Suppresses operator prompts for physical actions (e.g. "connect the
+    headset") - those SKIP immediately instead of asking and waiting. Use
+    this for CI / walk-away runs with no one at the keyboard.
+
+    The interactive launch menu is a separate concern: it is skipped
+    automatically whenever -Mode, -Depth, or -Sections is passed explicitly,
+    since there is nothing left to ask. -Unattended also skips the menu (it
+    implies "no prompts at all"), but you do not need it just to bypass the
+    menu - passing the run parameters is enough.
 
 .PARAMETER RestoreOnly
     Do not run any test. Just tear down a sandbox left behind by a crashed run.
+
+.PARAMETER KeepSandbox
+    Skip the end-of-run sandbox reset, leaving config\config.json, data\ and
+    logs\ in place for post-mortem inspection. Note that the NEXT run against
+    that same folder will then fail section 10's packaging assertions, which are
+    only meaningful on a pristine extraction.
 
 .PARAMETER Force
     Allow -TargetRoot to point at the dev folder. Dangerous: the run will
@@ -76,6 +90,7 @@ param(
     [switch]$AllowDestructive,
     [switch]$Unattended,
     [switch]$RestoreOnly,
+    [switch]$KeepSandbox,
     [switch]$Force
 )
 
@@ -87,7 +102,7 @@ $devRoot     = Split-Path -Parent $PSScriptRoot
 # ---------------------------------------------------------------------------
 # Bootstrap the harness modules
 # ---------------------------------------------------------------------------
-foreach ($piece in @('test_core.ps1', 'test_prompt.ps1', 'test_api.ps1', 'test_sandbox.ps1')) {
+foreach ($piece in @('test_core.ps1', 'test_prompt.ps1', 'test_api.ps1', 'test_sandbox.ps1', 'test_stream.ps1')) {
     $piecePath = Join-Path $harnessRoot $piece
     if (Test-Path -LiteralPath $piecePath) {
         . $piecePath
@@ -107,8 +122,8 @@ $sectionRegistry = @(
     [PSCustomObject]@{ Id = 20; Title = 'Web pages and API';     File = '20_webpages.ps1';         Light = 2; Standard = 3;  Full = 3;  Operator = $false }
     [PSCustomObject]@{ Id = 30; Title = 'USB onboarding';        File = '30_headset_usb.ps1';      Light = 0; Standard = 5;  Full = 5;  Operator = $true  }
     [PSCustomObject]@{ Id = 40; Title = 'Registry CRUD';         File = '40_headset_registry.ps1'; Light = 1; Standard = 3;  Full = 4;  Operator = $false }
-    [PSCustomObject]@{ Id = 50; Title = 'scrcpy lifecycle';      File = '50_scrcpy.ps1';           Light = 2; Standard = 8;  Full = 20; Operator = $false }
-    [PSCustomObject]@{ Id = 60; Title = 'Streaming matrix';      File = '60_streaming.ps1';        Light = 1; Standard = 10; Full = 35; Operator = $false }
+    [PSCustomObject]@{ Id = 50; Title = 'scrcpy lifecycle';      File = '50_scrcpy.ps1';           Light = 2; Standard = 8;  Full = 20; Operator = $true  }
+    [PSCustomObject]@{ Id = 60; Title = 'Streaming matrix';      File = '60_streaming.ps1';        Light = 1; Standard = 10; Full = 35; Operator = $true  }
     [PSCustomObject]@{ Id = 70; Title = 'Monitoring';            File = '70_monitoring.ps1';       Light = 1; Standard = 3;  Full = 5;  Operator = $false }
     [PSCustomObject]@{ Id = 80; Title = 'Apps manager';          File = '80_apps.ps1';             Light = 0; Standard = 4;  Full = 8;  Operator = $true  }
     [PSCustomObject]@{ Id = 90; Title = 'Shutdown and reaper';   File = '90_shutdown.ps1';         Light = 1; Standard = 2;  Full = 3;  Operator = $false }
@@ -313,6 +328,9 @@ if ($RestoreOnly) {
     Write-Host '=== Restore only - tearing down any leftover sandbox ===' -ForegroundColor Cyan
     if (Get-Command Remove-SandboxArtifacts -ErrorAction SilentlyContinue) {
         Remove-SandboxArtifacts -TargetRoot $target
+        if (-not $KeepSandbox) {
+            Reset-SandboxTarget -TargetRoot $target -DevRoot $devRoot | Out-Null
+        }
         Write-Host '  Done.' -ForegroundColor Green
         exit 0
     }
@@ -320,7 +338,13 @@ if ($RestoreOnly) {
     exit 2
 }
 
-if (-not $Unattended) {
+# The menu exists to ASK for what wasn't given on the command line. Once the
+# operator has already specified Mode, Depth, or Sections explicitly, asking
+# again is just re-prompting for an answer already provided. -Unattended
+# still skips it too (it means "no prompts at all"), but is not required
+# just to bypass the menu.
+$runParamsGiven = $PSBoundParameters.ContainsKey('Mode') -or $PSBoundParameters.ContainsKey('Depth') -or $PSBoundParameters.ContainsKey('Sections')
+if (-not $Unattended -and -not $runParamsGiven) {
     $menu = Show-LaunchMenu -TargetRoot $target -Version $Version -DefaultMode $Mode -DefaultDepth $Depth
     $Mode  = $menu.Mode
     $Depth = $menu.Depth
@@ -350,6 +374,9 @@ foreach ($s in $selected) { $plannedMinutes += (Get-SectionEstimate -Section $s 
 Initialize-TestRun -TargetRoot $target -Version $Version -Mode $Mode -Depth $Depth -ReportFolder (Join-Path $harnessRoot 'reports') | Out-Null
 $global:TestRun.AllowDestructive = [bool]$AllowDestructive
 $global:TestRun.HeadsetName = $HeadsetName
+# Sections 50/60 use this to decide whether prompting for a headset is allowed.
+$global:TestRun.Unattended = [bool]$Unattended
+$global:TestRun.DevRoot = $devRoot
 
 Write-Host ''
 Write-Host '=== Run plan ===' -ForegroundColor White
@@ -422,6 +449,13 @@ finally {
     # Teardown always runs, including on Ctrl+C.
     if (Get-Command Stop-SandboxApp -ErrorAction SilentlyContinue) {
         try { Stop-SandboxApp -TargetRoot $target | Out-Null } catch { }
+    }
+
+    # Restore the target to its just-extracted state so it can be tested again.
+    # Section 10's packaging assertions only hold on a pristine extraction, and
+    # the sandbox seed (config\config.json, data\) is what breaks them.
+    if ((-not $KeepSandbox) -and (Get-Command Reset-SandboxTarget -ErrorAction SilentlyContinue)) {
+        try { Reset-SandboxTarget -TargetRoot $target -DevRoot $devRoot | Out-Null } catch { }
     }
 
     if ($null -ne $global:TestRun) {
