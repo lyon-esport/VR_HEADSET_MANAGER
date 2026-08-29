@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en" translate="no">
+<head>
+  <meta charset="utf-8">
+  <!-- translate="no" above and "notranslate" below tell Chrome's built-in translate
+       feature to skip this page entirely, so it never offers to translate the framed
+       YouTube content - this is the documented way to suppress the translate prompt
+       per-page, without relying on the --disable-features Chrome launch flag alone. -->
+  <meta name="google" content="notranslate">
+  <title>VR Headsets - Kiosk YouTube Player</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+    #player { position: fixed; top: 0; left: 0; width: 100%; height: 100%; border: 0; }
+  </style>
+</head>
+<body>
+  <div id="player"></div>
+  <script src="https://www.youtube.com/iframe_api"></script>
+  <script>
+    // Kiosk screens are pushed straight to this page (via CDP Page.navigate, no
+    // referring page of their own), so the YouTube player below is what supplies a
+    // real HTTP Referer/origin to YouTube's embed player. Navigating a kiosk directly
+    // to a youtube-nocookie.com/embed/... URL with no parent page fails with
+    // "Video player configuration error" (YouTube error 153) because the player
+    // cannot validate an empty origin - it must be loaded inside an iframe on a
+    // real page, which is the only reason this wrapper exists.
+    //
+    // Captions are forced on/off via the official IFrame Player API (loadModule /
+    // unloadModule('captions')) rather than only the cc_load_policy URL parameter:
+    // some videos have YouTube's automatic-translated-captions feature, which ignores
+    // cc_load_policy and shows captions anyway. Since controls=0 also hides the CC
+    // button (no way for anyone to toggle it by hand), the API call is the only
+    // reliable way to honor the operator's subtitle choice for every video.
+    var qsParams = new URLSearchParams(window.location.search);
+    var videoId = qsParams.get('v');
+    var listId = qsParams.get('list');
+    var withSubtitles = qsParams.get('cc') === '1';
+
+    if (!videoId && !listId) {
+      document.body.textContent = 'No YouTube video or playlist specified.';
+      document.body.style.color = '#fff';
+      document.body.style.fontFamily = 'sans-serif';
+    } else {
+      window.onYouTubeIframeAPIReady = function() {
+        var playerVars = {
+          autoplay: 1,
+          controls: 0,
+          modestbranding: 1,
+          rel: 0,
+          iv_load_policy: 3,
+          disablekb: 1,
+          playsinline: 1,
+          fs: 0,
+          cc_load_policy: withSubtitles ? 1 : 0,
+          enablejsapi: 1,
+          origin: window.location.origin
+        };
+        if (listId) {
+          playerVars.listType = 'playlist';
+          playerVars.list = listId;
+          playerVars.loop = 1;
+        } else {
+          playerVars.playlist = videoId;
+          playerVars.loop = 1;
+        }
+
+        var applyCaptionPreference = function(event) {
+          if (withSubtitles) {
+            event.target.loadModule('captions');
+          } else {
+            event.target.unloadModule('captions');
+          }
+        };
+
+        new YT.Player('player', {
+          width: '100%',
+          height: '100%',
+          videoId: listId ? undefined : videoId,
+          host: 'https://www.youtube-nocookie.com',
+          playerVars: playerVars,
+          events: {
+            onReady: applyCaptionPreference,
+            // Some videos re-enable auto-translated captions right as playback
+            // starts, after onReady already ran - reapply on every PLAYING (1)
+            // state so the operator's choice always wins.
+            onStateChange: function(event) {
+              if (event.data === YT.PlayerState.PLAYING) {
+                applyCaptionPreference(event);
+              }
+            }
+          }
+        });
+      };
+    }
+  </script>
+</body>
+</html>

@@ -253,7 +253,7 @@
     "pauseWhenHiddenDelay_sec": 10
   },
   "ffmpeg": {
-    "folder": "ffmpeg"
+    "folder": "ffmpeg\\ffmpeg-9.0.1"
   },
   "WebServer": {
     "enabled": true,

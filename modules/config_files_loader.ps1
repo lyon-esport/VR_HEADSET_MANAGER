@@ -231,7 +231,8 @@ function Get-Config {
     $global:VideoMonitor_pauseWhenHiddenDelaySec = if ($null -ne $configContent.VideoMonitor.pauseWhenHiddenDelay_sec) { [int]$configContent.VideoMonitor.pauseWhenHiddenDelay_sec } else { 10 }
     # ffmpeg.exe
     $ffmpegFolder = if ($configContent.ffmpeg) { $configContent.ffmpeg.folder } else { "ffmpeg" }
-    $global:ffmpegFilePath = Join-Path -Path $sourcesPath -ChildPath "$ffmpegFolder\ffmpeg.exe"
+    $global:ffmpegFolder = Join-Path -Path $sourcesPath -ChildPath $ffmpegFolder
+    $global:ffmpegFilePath = Join-Path -Path $global:ffmpegFolder -ChildPath "ffmpeg.exe"
 
     # Web server
     $global:WebServer_enabled = if ($null -ne $configContent.WebServer.enabled) { [bool]$configContent.WebServer.enabled } else { $false }

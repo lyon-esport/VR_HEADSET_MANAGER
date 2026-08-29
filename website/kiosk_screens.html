@@ -447,6 +447,12 @@
         <input type="text" id="push-url-input" placeholder="Paste the link to the web page to cast here...">
       </div>
       <div class="form-row">
+        <label for="push-yt-subtitles" style="min-width:0;display:flex;align-items:center;gap:5px;cursor:pointer">
+          <input type="checkbox" id="push-yt-subtitles">
+          Subtitles (YouTube links only)
+        </label>
+      </div>
+      <div class="form-row">
         <button class="btn" id="push-new-link-btn" disabled>
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
           Push to selected screens
@@ -813,6 +819,42 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: id, url: url, confirmLocalhostReplacement: !!confirmReplace })
       }).then(function(r) { return r.json(); });
+    }
+
+    // Rewrites a pasted YouTube link (watch/youtu.be/shorts/playlist) into our own
+    // kiosk_youtube_embed.html wrapper page (served by this same web server), which
+    // then loads the actual looping YouTube iframe. A kiosk is pushed to straight via
+    // CDP Page.navigate with no referring page of its own, so navigating it directly
+    // to a youtube-nocookie.com/embed/... URL fails with YouTube error 153 ("Video
+    // player configuration error") - the embed player requires a real HTTP
+    // Referer/origin, which only exists once the video is loaded inside an iframe on
+    // an actual page. Returns the wrapper URL, or the original string unchanged if it
+    // isn't YouTube.
+    function toYoutubeLoopEmbedUrl(url, withSubtitles) {
+      var m;
+      var ccParam = withSubtitles ? '&cc=1' : '';
+
+      // Playlist (either a /playlist?list=... link, or a /watch?v=...&list=... link
+      // opened from within a playlist - both are treated as "play this whole playlist").
+      // Exception: a list id starting with "RD" is one of YouTube's auto-generated
+      // "Mix"/"Radio" playlists, not a real saved playlist - those are ephemeral and
+      // not reliably loadable via the embed API outside the browser session that
+      // generated them (the player area just stays blank), so fall through and treat
+      // the link as "play this one video" instead.
+      m = url.match(/^https?:\/\/(?:www\.)?youtube\.com\/(?:playlist|watch)\?.*[?&]list=([\w-]+)/i);
+      if (m && !/^RD/.test(m[1])) {
+        return window.location.origin + '/kiosk_youtube_embed.html?list=' + encodeURIComponent(m[1]) + ccParam;
+      }
+
+      // Single video: watch, youtu.be short link, or shorts.
+      m = url.match(/^https?:\/\/(?:www\.|m\.)?youtube\.com\/watch\?(?:.*&)?v=([\w-]+)/i)
+        || url.match(/^https?:\/\/(?:www\.)?youtu\.be\/([\w-]+)/i)
+        || url.match(/^https?:\/\/(?:www\.)?youtube\.com\/shorts\/([\w-]+)/i);
+      if (m) {
+        return window.location.origin + '/kiosk_youtube_embed.html?v=' + encodeURIComponent(m[1]) + ccParam;
+      }
+
+      return url;
     }
 
     function renderRow(k) {
@@ -1218,6 +1260,8 @@
       var ids = Object.keys(pushKioskSelected).filter(function(id) { return pushKioskSelected[id]; });
       if (!url) { statusEl.textContent = 'URL is required'; statusEl.style.color = '#ef4444'; return; }
       if (!ids.length) { statusEl.textContent = 'Select at least one screen'; statusEl.style.color = '#ef4444'; return; }
+
+      url = toYoutubeLoopEmbedUrl(url, document.getElementById('push-yt-subtitles').checked);
 
       btn.disabled = true;
       statusEl.textContent = 'Pushing...'; statusEl.style.color = '#888';

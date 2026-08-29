@@ -1427,21 +1427,32 @@ function Get-LatestFfmpegVersion {
     }
 }
 
-# Downloads and installs the latest ffmpeg build to "<SourcesFolder>\ffmpeg\ffmpeg.exe".
-# Single implementation shared by the first-run welcome wizard (Invoke-FfmpegDownload
-# in welcome.ps1) and the web UI update endpoint - same GitHub release, same
+# Downloads and installs the latest ffmpeg build to a NEW versioned folder
+# "<SourcesFolder>\ffmpeg\ffmpeg-<version>\ffmpeg.exe" - the previously installed version's
+# folder is left untouched on disk (no in-place upgrade; config.ffmpeg.folder is what selects
+# the active one), same convention as Update-MediaMtxBinary/Update-ScrcpyBinary.
+# No-ops (Success=true) if that version's folder already exists.
+# Shared implementation used by the first-run welcome wizard (Invoke-FfmpegDownload in
+# welcome.ps1) and the web UI update endpoint - same GitHub release, same
 # BITS-with-WebClient-fallback download, same zip extraction logic.
-# Returns @{Success; Version; Error}.
+# Returns @{Success; Version; Folder (relative to SourcesFolder); Error}.
 function Update-FfmpegBinary {
     param([string]$SourcesFolder = (Join-Path $global:ScriptPath "sources"))
     try {
         $latest = Get-LatestFfmpegVersion
         if (-not $latest) {
-            return @{ Success = $false; Version = $null; Error = "Could not query latest ffmpeg release from GitHub." }
+            return @{ Success = $false; Version = $null; Folder = $null; Error = "Could not query latest ffmpeg release from GitHub." }
         }
-        $zipPath = Join-Path $env:TEMP "vrm_ffmpeg_download.zip"
-        $destFolder = Join-Path $SourcesFolder "ffmpeg"
+        $parentFolder = Join-Path $SourcesFolder "ffmpeg"
+        $destFolder   = Join-Path $parentFolder ("ffmpeg-{0}" -f $latest.Version)
+        $relFolder    = Join-Path "ffmpeg" (Split-Path -Path $destFolder -Leaf)
+        $destExe      = Join-Path $destFolder "ffmpeg.exe"
 
+        if (Test-Path -LiteralPath $destExe) {
+            return @{ Success = $true; Version = $latest.Version; Folder = $relFolder; Error = $null }
+        }
+
+        $zipPath = Join-Path $env:TEMP "vrm_ffmpeg_download.zip"
         $bitsOk = $false
         try {
             $bits = Get-Service -Name BITS -ErrorAction Stop
@@ -1463,20 +1474,22 @@ function Update-FfmpegBinary {
         if (-not $entry) {
             $zip.Dispose()
             Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
-            return @{ Success = $false; Version = $null; Error = "Could not find bin\ffmpeg.exe in the downloaded archive." }
+            return @{ Success = $false; Version = $null; Folder = $null; Error = "Could not find bin\ffmpeg.exe in the downloaded archive." }
         }
         if (-not (Test-Path -LiteralPath $destFolder)) {
             New-Item -ItemType Directory -Path $destFolder | Out-Null
         }
-        $destExe = Join-Path $destFolder "ffmpeg.exe"
         [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $destExe, $true)
         $zip.Dispose()
         Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
 
+        if (-not (Test-Path -LiteralPath $destExe)) {
+            return @{ Success = $false; Version = $null; Folder = $null; Error = "Downloaded archive did not contain ffmpeg.exe." }
+        }
         $newVersion = Get-FfmpegVersion -FfmpegPath $destExe
-        return @{ Success = $true; Version = $newVersion; Error = $null }
+        return @{ Success = $true; Version = $newVersion; Folder = $relFolder; Error = $null }
     } catch {
-        return @{ Success = $false; Version = $null; Error = $_.Exception.Message }
+        return @{ Success = $false; Version = $null; Folder = $null; Error = $_.Exception.Message }
     }
 }
 
@@ -1565,43 +1578,133 @@ function Update-MediaMtxBinary {
     }
 }
 
-# Enumerates all installed mediamtx version folders under
-# "<SourcesFolder>\MediaMTX\" (Update-MediaMtxBinary never deletes an old
-# version folder on update, so multiple can coexist). Returns
-# [PSCustomObject[]] of @{Version; RelativeFolder; IsActive}, sorted by
-# version descending. Folders without a parsable version or without
-# mediamtx.exe are skipped.
-function Get-MediaMtxInstalledVersions {
-    param([string]$SourcesFolder = (Join-Path $global:ScriptPath "sources"))
-    $parentFolder = Join-Path $SourcesFolder "MediaMTX"
-    if (-not (Test-Path -LiteralPath $parentFolder)) { return @() }
+# Enumerates all installed version folders of a bundled binary under
+# "<SourcesFolder>\<ParentFolder>\" (Update-*Binary never deletes an old version folder on
+# update, so multiple can coexist). Shared body for Get-MediaMtxInstalledVersions,
+# Get-ScrcpyInstalledVersions and Get-FfmpegInstalledVersions - only the parent folder name,
+# exe file name, and version regex differ between binaries.
+# -VersionPattern must contain exactly one capture group for the version string (matched
+# against the folder name). Returns [PSCustomObject[]] of @{Version; RelativeFolder; IsActive},
+# sorted by version descending. Folders without a parsable version or without the expected exe
+# are skipped.
+function Get-InstalledBinaryVersions {
+    param(
+        [Parameter(Mandatory = $true)][string]$ParentFolder,
+        [Parameter(Mandatory = $true)][string]$ExeName,
+        [Parameter(Mandatory = $true)][string]$VersionPattern,
+        [string]$ActiveFolder,
+        [string]$SourcesFolder = (Join-Path $global:ScriptPath "sources")
+    )
+    $parentPath = Join-Path $SourcesFolder $ParentFolder
+    if (-not (Test-Path -LiteralPath $parentPath)) { return @() }
     $results = @()
-    Get-ChildItem -LiteralPath $parentFolder -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-        if (-not (Test-Path -LiteralPath (Join-Path $_.FullName "mediamtx.exe"))) { return }
-        if ($_.Name -notmatch 'v(\d+(?:\.\d+){1,2})') { return }
-        $relFolder = Join-Path "MediaMTX" $_.Name
-        $isActive = $global:mediamtxFolder -and ((Split-Path -Path $global:mediamtxFolder -Leaf) -eq $_.Name)
+    Get-ChildItem -LiteralPath $parentPath -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        if (-not (Test-Path -LiteralPath (Join-Path $_.FullName $ExeName))) { return }
+        if ($_.Name -notmatch $VersionPattern) { return }
+        $relFolder = Join-Path $ParentFolder $_.Name
+        $isActive = $ActiveFolder -and ((Split-Path -Path $ActiveFolder -Leaf) -eq $_.Name)
         $results += [PSCustomObject]@{ Version = $Matches[1]; RelativeFolder = $relFolder; IsActive = [bool]$isActive }
     }
     return @($results | Sort-Object -Property { [version]$_.Version } -Descending)
+}
+
+# Enumerates all installed mediamtx version folders under "<SourcesFolder>\MediaMTX\".
+# Thin wrapper over Get-InstalledBinaryVersions - see that function for details.
+function Get-MediaMtxInstalledVersions {
+    param([string]$SourcesFolder = (Join-Path $global:ScriptPath "sources"))
+    return Get-InstalledBinaryVersions -ParentFolder "MediaMTX" -ExeName "mediamtx.exe" `
+        -VersionPattern 'v(\d+(?:\.\d+){1,2})' -ActiveFolder $global:mediamtxFolder -SourcesFolder $SourcesFolder
+}
+
+# Reads templates\config\config.json and sets one or more dotted-path values (e.g.
+# @{ 'mediamtx.folder' = 'MediaMTX\mediamtx_v1.21.0_windows_amd64' }), writing back via
+# Write-FileWithoutBom. Used to keep the fresh-install template pointed at the latest bundled
+# binary version whenever a real update (not a rollback) is applied - see Set-BinaryFolderConfig.
+# Missing intermediate objects along a dotted path are created. Throws on read/parse/write
+# failure - callers should catch and log, since template sync is a nice-to-have and should never
+# fail the underlying config.json write it accompanies.
+function Set-ConfigTemplateFields {
+    param([Parameter(Mandatory = $true)][hashtable]$Fields)
+    $tplFile = Join-Path $global:ScriptPath "templates\config\config.json"
+    $raw = Get-Content -LiteralPath $tplFile -Raw -Encoding UTF8
+    $tpl = $raw | ConvertFrom-Json
+    foreach ($path in $Fields.Keys) {
+        $parts = $path -split '\.'
+        $node = $tpl
+        for ($i = 0; $i -lt $parts.Count - 1; $i++) {
+            if (-not $node.($parts[$i])) {
+                $node | Add-Member -NotePropertyName $parts[$i] -NotePropertyValue ([PSCustomObject]@{}) -Force
+            }
+            $node = $node.($parts[$i])
+        }
+        $leaf = $parts[-1]
+        if ($node.PSObject.Properties.Name -contains $leaf) {
+            $node.$leaf = $Fields[$path]
+        } else {
+            $node | Add-Member -NotePropertyName $leaf -NotePropertyValue $Fields[$path] -Force
+        }
+    }
+    ($tpl | ConvertTo-Json -Depth 20) | Write-FileWithoutBom -Path $tplFile
+}
+
+# Persists $RelativeFolder to every dotted config path in -ConfigPaths (e.g.
+# @('mediamtx.folder'), or @('scrcpy.folder','ADB.folder') for scrcpy's bundled adb.exe) inside
+# config.json, and re-runs Get-Config so the corresponding $global: binary path variables pick
+# up the new binary immediately - same refresh pattern used by /api/config/save. Shared body for
+# Set-MediaMtxFolderConfig, Set-ScrcpyAdbFolderConfig and Set-FfmpegFolderConfig.
+# When -UpdateTemplate is passed, also mirrors the same paths into
+# templates\config\config.json via Set-ConfigTemplateFields (used for real GitHub updates, so
+# fresh installs default to the latest known-good version) - failures there are logged as
+# WARNING and do not fail the call, since the live config.json write already succeeded.
+# -UpdateTemplate is intentionally omitted for version-switch/rollback callers: rolling back to
+# an older already-installed version is a per-instance choice, not a new baseline.
+function Set-BinaryFolderConfig {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$ConfigPaths,
+        [Parameter(Mandatory = $true)][string]$RelativeFolder,
+        [switch]$UpdateTemplate
+    )
+    $cfgFile = Join-Path $global:ScriptPath "config\config.json"
+    $raw = Get-Content -LiteralPath $cfgFile -Raw -Encoding UTF8
+    $cfg = $raw | ConvertFrom-Json
+    foreach ($path in $ConfigPaths) {
+        $parts = $path -split '\.'
+        $node = $cfg
+        for ($i = 0; $i -lt $parts.Count - 1; $i++) {
+            if (-not $node.($parts[$i])) {
+                $node | Add-Member -NotePropertyName $parts[$i] -NotePropertyValue ([PSCustomObject]@{}) -Force
+            }
+            $node = $node.($parts[$i])
+        }
+        $leaf = $parts[-1]
+        if ($node.PSObject.Properties.Name -contains $leaf) {
+            $node.$leaf = $RelativeFolder
+        } else {
+            $node | Add-Member -NotePropertyName $leaf -NotePropertyValue $RelativeFolder -Force
+        }
+    }
+    ($cfg | ConvertTo-Json -Depth 20) | Write-FileWithoutBom -Path $cfgFile
+    $null = Get-Config -ConfigFilePath $cfgFile
+
+    if ($UpdateTemplate) {
+        try {
+            $fields = @{}
+            foreach ($path in $ConfigPaths) { $fields[$path] = $RelativeFolder }
+            Set-ConfigTemplateFields -Fields $fields
+        } catch {
+            Write-Log ("Set-BinaryFolderConfig: failed to sync templates\config\config.json: " + $_.Exception.Message) -Level WARNING
+        }
+    }
 }
 
 # Persists a new mediamtx.folder value to config.json (path relative to
 # sources\, e.g. "MediaMTX\mediamtx_v1.18.0_windows_amd64") and re-runs
 # Get-Config so $global:mediamtxFolder / $global:mediamtxFilePath pick up the
 # new binary immediately - same refresh pattern used by /api/config/save.
+# Thin wrapper over Set-BinaryFolderConfig - see that function for -UpdateTemplate details.
 function Set-MediaMtxFolderConfig {
-    param([Parameter(Mandatory = $true)][string]$RelativeFolder)
-    $cfgFile = Join-Path $global:ScriptPath "config\config.json"
-    $raw = Get-Content -LiteralPath $cfgFile -Raw -Encoding UTF8
-    $cfg = $raw | ConvertFrom-Json
-    if (-not $cfg.mediamtx) {
-        $cfg | Add-Member -NotePropertyName mediamtx -NotePropertyValue ([PSCustomObject]@{ folder = $RelativeFolder }) -Force
-    } else {
-        $cfg.mediamtx.folder = $RelativeFolder
-    }
-    ($cfg | ConvertTo-Json -Depth 20) | Write-FileWithoutBom -Path $cfgFile
-    $null = Get-Config -ConfigFilePath $cfgFile
+    param([Parameter(Mandatory = $true)][string]$RelativeFolder, [switch]$UpdateTemplate)
+    Set-BinaryFolderConfig -ConfigPaths @('mediamtx.folder') -RelativeFolder $RelativeFolder -UpdateTemplate:$UpdateTemplate
 }
 
 # Returns the installed scrcpy version string (e.g. "3.3.4"), or $null if
@@ -1714,24 +1817,12 @@ function Update-ScrcpyBinary {
     }
 }
 
-# Enumerates all installed scrcpy version folders under "<SourcesFolder>\scrcpy\"
-# (Update-ScrcpyBinary never deletes an old version folder on update, so
-# multiple can coexist). Returns [PSCustomObject[]] of
-# @{Version; RelativeFolder; IsActive}, sorted by version descending.
-# Folders without a parsable version or without scrcpy.exe are skipped.
+# Enumerates all installed scrcpy version folders under "<SourcesFolder>\scrcpy\".
+# Thin wrapper over Get-InstalledBinaryVersions - see that function for details.
 function Get-ScrcpyInstalledVersions {
     param([string]$SourcesFolder = (Join-Path $global:ScriptPath "sources"))
-    $parentFolder = Join-Path $SourcesFolder "scrcpy"
-    if (-not (Test-Path -LiteralPath $parentFolder)) { return @() }
-    $results = @()
-    Get-ChildItem -LiteralPath $parentFolder -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-        if (-not (Test-Path -LiteralPath (Join-Path $_.FullName "scrcpy.exe"))) { return }
-        if ($_.Name -notmatch 'v(\d+(?:\.\d+){1,2})') { return }
-        $relFolder = Join-Path "scrcpy" $_.Name
-        $isActive = $global:scrcpyFolder -and ((Split-Path -Path $global:scrcpyFolder -Leaf) -eq $_.Name)
-        $results += [PSCustomObject]@{ Version = $Matches[1]; RelativeFolder = $relFolder; IsActive = [bool]$isActive }
-    }
-    return @($results | Sort-Object -Property { [version]$_.Version } -Descending)
+    return Get-InstalledBinaryVersions -ParentFolder "scrcpy" -ExeName "scrcpy.exe" `
+        -VersionPattern 'v(\d+(?:\.\d+){1,2})' -ActiveFolder $global:scrcpyFolder -SourcesFolder $SourcesFolder
 }
 
 # Persists a new folder value to BOTH config.scrcpy.folder and config.ADB.folder
@@ -1739,21 +1830,25 @@ function Get-ScrcpyInstalledVersions {
 # see templates\config\config.json where both keys already share one value) and
 # re-runs Get-Config so $global:scrcpyFolder/$global:scrcpyFilePath and
 # $global:adbFolder/$global:adbPath all pick up the new binaries immediately.
+# Thin wrapper over Set-BinaryFolderConfig - see that function for -UpdateTemplate details.
 function Set-ScrcpyAdbFolderConfig {
-    param([Parameter(Mandatory = $true)][string]$RelativeFolder)
-    $cfgFile = Join-Path $global:ScriptPath "config\config.json"
-    $raw = Get-Content -LiteralPath $cfgFile -Raw -Encoding UTF8
-    $cfg = $raw | ConvertFrom-Json
-    if (-not $cfg.scrcpy) {
-        $cfg | Add-Member -NotePropertyName scrcpy -NotePropertyValue ([PSCustomObject]@{ folder = $RelativeFolder }) -Force
-    } else {
-        $cfg.scrcpy.folder = $RelativeFolder
-    }
-    if (-not $cfg.ADB) {
-        $cfg | Add-Member -NotePropertyName ADB -NotePropertyValue ([PSCustomObject]@{ folder = $RelativeFolder }) -Force
-    } else {
-        $cfg.ADB.folder = $RelativeFolder
-    }
-    ($cfg | ConvertTo-Json -Depth 20) | Write-FileWithoutBom -Path $cfgFile
-    $null = Get-Config -ConfigFilePath $cfgFile
+    param([Parameter(Mandatory = $true)][string]$RelativeFolder, [switch]$UpdateTemplate)
+    Set-BinaryFolderConfig -ConfigPaths @('scrcpy.folder', 'ADB.folder') -RelativeFolder $RelativeFolder -UpdateTemplate:$UpdateTemplate
+}
+
+# Enumerates all installed ffmpeg version folders under "<SourcesFolder>\ffmpeg\".
+# Thin wrapper over Get-InstalledBinaryVersions - see that function for details.
+function Get-FfmpegInstalledVersions {
+    param([string]$SourcesFolder = (Join-Path $global:ScriptPath "sources"))
+    return Get-InstalledBinaryVersions -ParentFolder "ffmpeg" -ExeName "ffmpeg.exe" `
+        -VersionPattern 'ffmpeg-(\d+(?:\.\d+){1,2})' -ActiveFolder $global:ffmpegFolder -SourcesFolder $SourcesFolder
+}
+
+# Persists a new ffmpeg.folder value to config.json (path relative to sources\, e.g.
+# "ffmpeg\ffmpeg-9.0.1") and re-runs Get-Config so $global:ffmpegFilePath picks up the new
+# binary immediately. Thin wrapper over Set-BinaryFolderConfig - see that function for
+# -UpdateTemplate details.
+function Set-FfmpegFolderConfig {
+    param([Parameter(Mandatory = $true)][string]$RelativeFolder, [switch]$UpdateTemplate)
+    Set-BinaryFolderConfig -ConfigPaths @('ffmpeg.folder') -RelativeFolder $RelativeFolder -UpdateTemplate:$UpdateTemplate
 }

@@ -126,8 +126,8 @@ function Invoke-FfmpegDownload {
     Write-WizardAction "Downloading ffmpeg (this can take 1-2 minutes)..."
     $result = Update-FfmpegBinary -SourcesFolder $SourcesFolder
     if ($result.Success) {
-        Write-Host "  ffmpeg installed to: sources\ffmpeg" -ForegroundColor Green
-        return "ffmpeg"
+        Write-Host "  ffmpeg installed to: sources\$($result.Folder)" -ForegroundColor Green
+        return $result.Folder
     } else {
         Write-Host "  Download failed: $($result.Error)" -ForegroundColor Red
         Write-Host "  Skipping. You can install ffmpeg manually later." -ForegroundColor Yellow

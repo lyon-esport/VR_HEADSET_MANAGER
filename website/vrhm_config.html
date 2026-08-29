@@ -937,15 +937,15 @@
     // Renders a "<Label> / installed version / check-for-update / update" row,
     // same fld-row separators as the plain read-only ADV_FIELDS rows above it.
     // key is the id prefix ('ffmpeg', 'scrcpy' or 'mediamtx') used to build unique
-    // element ids. showSwitch adds a version-switch dropdown + button, only used
-    // for binaries that ship one folder per installed version (scrcpy, mediamtx) -
-    // ffmpeg is a single exe with no per-version folder, so it stays false there.
+    // element ids. showSwitch adds a version-switch dropdown + button - all three
+    // bundled binaries ship one folder per installed version, so this is true for all of them.
     function binVerRowHtml(key, label, showSwitch) {
       var h = '<div class="fld-row">';
       h += '<div class="fld-lbl-col"><span class="fld-lbl" style="color:var(--muted)">' + esc(label) + '</span></div>';
       h += '<div class="fld-ctl-col" style="flex-direction:column;align-items:flex-start;gap:8px">';
-      // Top row: installed version (plain, when no switch or only one version found)
-      // or the version-switch dropdown + Switch button (once 2+ versions are found).
+      // Top row: installed version (plain, when only one version found) or the
+      // version-switch dropdown + Switch button (once 2+ versions are found) - all three
+      // bundled binaries (scrcpy, mediamtx, ffmpeg) now install one folder per version.
       h += '<div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;width:100%">';
       h += '<span id="' + key + '-ver-installed" class="fld-ro">checking...</span>';
       if (showSwitch) {
@@ -984,7 +984,7 @@
           html += binVerRowHtml('scrcpy', 'Scrcpy Version', true);
         }
         if (f.path === 'ffmpeg.folder') {
-          html += binVerRowHtml('ffmpeg', 'FFmpeg Version', false);
+          html += binVerRowHtml('ffmpeg', 'FFmpeg Version', true);
         }
         if (f.path === 'mediamtx.folder') {
           html += binVerRowHtml('mediamtx', 'MediaMTX Version', true);
@@ -1064,9 +1064,9 @@
     // POST .../<key>-check-update, POST .../<key>-update.
     // Element ids are built by binVerRowHtml() above.
     var BIN_LABELS = { scrcpy: 'Scrcpy', ffmpeg: 'FFmpeg', mediamtx: 'MediaMTX' };
-    // Binaries that ship one folder per installed version, and so support the
-    // version-switch dropdown (ffmpeg is a single exe, no per-version folder).
-    var BIN_SWITCHABLE = { scrcpy: true, mediamtx: true };
+    // All three bundled binaries ship one folder per installed version, and so support the
+    // version-switch dropdown.
+    var BIN_SWITCHABLE = { scrcpy: true, mediamtx: true, ffmpeg: true };
 
     function loadBinVersion(key) {
       var verEl = document.getElementById(key + '-ver-installed');
@@ -1111,8 +1111,23 @@
     }
 
     function loadScrcpyVersion()   { loadBinVersion('scrcpy');   loadBinVersions('scrcpy'); }
-    function loadFfmpegVersion()   { loadBinVersion('ffmpeg'); }
+    function loadFfmpegVersion()   { loadBinVersion('ffmpeg');   loadBinVersions('ffmpeg'); }
     function loadMediaMtxVersion() { loadBinVersion('mediamtx'); loadBinVersions('mediamtx'); }
+
+    // A binary update/switch only writes config + installs files - it does not restart
+    // mediamtx/scrcpy in-process any more, so the change only takes effect on the next
+    // application restart. Offers to trigger that restart immediately via the same
+    // confirm+call pattern help.html uses for its "Restart Application" button.
+    function promptRestartIfNeeded(j) {
+      if (!j || !j.requiresRestart) return;
+      var confirmed = confirm(
+        'This change will apply on the next application restart.\n\n' +
+        'Restart the VR Headset Manager application now?\n\n' +
+        'All services will restart and this page will briefly go offline.'
+      );
+      if (!confirmed) return;
+      TopBar.apiPost('/api/app-restart', 'Restart Application', null);
+    }
 
     // Buttons live inside #acc-advanced-fields, which is re-rendered (innerHTML
     // replaced) by renderAdvanced() every time config reloads - delegate from
@@ -1160,15 +1175,15 @@
       var label     = BIN_LABELS[key];
       var latest    = updateBtn.dataset.latestVersion || 'the latest version';
       var confirmed = confirm(
-        'Updating ' + label + ' to v' + latest + ' will stop all live scrcpy/mediamtx streams while the download completes,\n' +
-        'then automatically restart mediamtx and any headset streams that were running.\n\n' +
-        'Continue?'
+        'Update ' + label + ' to v' + latest + '?\n\n' +
+        'This downloads the new version alongside the current one. The change takes effect on ' +
+        'the next application restart - you will be offered a restart once the download completes.'
       );
       if (!confirmed) return;
 
       checkBtn.disabled = true;
       updateBtn.disabled = true;
-      statusEl.textContent = 'Updating - stopping streams, downloading ' + label + ', restarting (this may take up to a minute)...';
+      statusEl.textContent = 'Downloading ' + label + ' (this may take up to a minute)...';
 
       fetch('/api/' + key + '-update', { method: 'POST' })
         .then(function(r) { return r.json(); })
@@ -1177,10 +1192,11 @@
           updateBtn.disabled = false;
           if (j.ok) {
             updateBtn.style.display = 'none';
-            var restartedCount = (j.restarted && j.restarted.scrcpy) ? j.restarted.scrcpy.length : 0;
-            statusEl.textContent = 'Updated to v' + j.newVersion + '. Restarted mediamtx' + (restartedCount ? (' + ' + restartedCount + ' headset stream(s).') : '.');
+            statusEl.textContent = 'Downloaded v' + j.newVersion + '. Applies on next application restart.';
             showToast(label + ' updated to v' + j.newVersion, 4000);
             loadBinVersion(key);
+            loadBinVersions(key);
+            promptRestartIfNeeded(j);
           } else {
             statusEl.textContent = 'Update failed: ' + (j.error || 'unknown error');
             showToast(label + ' update failed: ' + (j.error || 'unknown error'), 4000);
@@ -1204,9 +1220,9 @@
       if (!folder) return;
 
       var confirmed = confirm(
-        'Switching ' + label + ' will stop all live scrcpy/mediamtx streams while it repoints to the selected version,\n' +
-        'then automatically restart mediamtx and any headset streams that were running.\n\n' +
-        'Continue?'
+        'Switch ' + label + ' to this version?\n\n' +
+        'This only repoints the configuration - the change takes effect on the next application ' +
+        'restart, which you will be offered once the switch completes.'
       );
       if (!confirmed) return;
 
@@ -1214,7 +1230,7 @@
       updateBtn.disabled = true;
       switchBtn.disabled = true;
       selEl.disabled = true;
-      statusEl.textContent = 'Switching ' + label + ' - stopping streams, repointing, restarting...';
+      statusEl.textContent = 'Switching ' + label + '...';
 
       fetch('/api/' + key + '-switch-version', {
         method: 'POST',
@@ -1228,11 +1244,11 @@
           switchBtn.disabled = false;
           selEl.disabled = false;
           if (j.ok) {
-            var restartedCount = (j.restarted && j.restarted.scrcpy) ? j.restarted.scrcpy.length : 0;
-            statusEl.textContent = 'Switched to v' + j.newVersion + '. Restarted mediamtx' + (restartedCount ? (' + ' + restartedCount + ' headset stream(s).') : '.');
+            statusEl.textContent = 'Switched to v' + j.newVersion + '. Applies on next application restart.';
             showToast(label + ' switched to v' + j.newVersion, 4000);
             loadBinVersion(key);
             loadBinVersions(key);
+            promptRestartIfNeeded(j);
           } else {
             statusEl.textContent = 'Switch failed: ' + (j.error || 'unknown error');
             showToast(label + ' switch failed: ' + (j.error || 'unknown error'), 4000);
