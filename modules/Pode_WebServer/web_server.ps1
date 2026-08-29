@@ -1652,18 +1652,20 @@ try {
                     }
                 }
 
-                # Refresh known headsets config cache
+                # Refresh known headsets config cache.
+                # Kept as an ORDERED ARRAY (not a hashtable) so the CSV's own row order -
+                # which is the drag-and-drop display order set by Set-HeadsetsOrder - is
+                # preserved. ID is a stable identity now, not a position, so it must not
+                # be used to re-derive display order here.
                 $headsetsPath = $global:knownHeadsetsFilePath
                 $headsetsMtime = (Get-Item -LiteralPath $headsetsPath -ErrorAction SilentlyContinue).LastWriteTimeUtc
                 if (-not $script:knownHeadsetsCache -or $script:knownHeadsetsCacheMtime -ne $headsetsMtime) {
-                    $script:knownHeadsetsCache      = @{}
-                    foreach ($h in (Get-KnownHeadsets)) { $script:knownHeadsetsCache[$h.Name] = $h }
+                    $script:knownHeadsetsCache      = @(Get-KnownHeadsets)
                     $script:knownHeadsetsCacheMtime = $headsetsMtime
                 }
 
-                # Build response: one entry per known headset joined with live infos
-                $items = @($script:knownHeadsetsCache.Values |
-                    Sort-Object { [int]$_.ID } |
+                # Build response: one entry per known headset (in CSV order) joined with live infos
+                $items = @($script:knownHeadsetsCache |
                     ForEach-Object {
                         $h    = $_
                         $info = if ($script:headsetInfosCache) { $script:headsetInfosCache[$h.Name] } else { $null }

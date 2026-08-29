@@ -614,7 +614,7 @@ function Invoke-CompanionDiscovery {
                 $known    = $headsets | Where-Object { $_.SerialNumber -eq $companion.Serial } | Select-Object -First 1
                 if ($known -and $known.IPAddress -ne $companion.IP) {
                     Write-Log ("Invoke-CompanionDiscovery: updating IP for '{0}' {1} -> {2}" -f $known.Name, $known.IPAddress, $companion.IP) -Level INFO
-                    Update-HeadsetField -Id $known.Id -Field "IPAddress" -Value $companion.IP
+                    Update-HeadsetField -Id $known.Id -Field "IPAddress" -NewValue $companion.IP
                 }
             } catch [System.Net.Sockets.SocketException] {
                 break  # timeout

@@ -369,8 +369,14 @@ function Add-Headset {
     }
     
     # Add a new headset to the list
+    # ID is a permanent identity, never a position - assign the next unused value
+    # so it stays unique even after removals leave gaps.
+    $nextID = 1
+    if ($headsets.Count -gt 0) {
+        $nextID = (($headsets | ForEach-Object { [int]$_.ID } | Measure-Object -Maximum).Maximum) + 1
+    }
     $newHeadset = [PSCustomObject]@{
-        ID          = ($headsets | Measure-Object).Count + 1
+        ID          = $nextID
         Name         = $Name
         IPAddress    = $IPAddress
         scrcpy_AutoRestart = "True"
@@ -564,12 +570,21 @@ function Save-Headsets {
         [string]$FilePath = $global:knownHeadsetsFilePath 
     )
 
-    # Reassign IDs starting from 1
-    $newHeadsets = @($headsets | Sort-Object ID)
-    $newID = 1
+    # ID is a permanent identity, not a position: preserve the caller's array order
+    # (that order IS the display order, e.g. after a drag-and-drop reorder) and only
+    # assign an ID to rows that don't already have one (back-compat for legacy rows).
+    $newHeadsets = @($headsets)
+    $maxID = 0
     foreach ($headset in $newHeadsets) {
-        $headset.ID = $newID
-        $newID++
+        $idVal = 0
+        if ([int]::TryParse([string]$headset.ID, [ref]$idVal) -and $idVal -gt $maxID) { $maxID = $idVal }
+    }
+    foreach ($headset in $newHeadsets) {
+        $idVal = 0
+        if (-not [int]::TryParse([string]$headset.ID, [ref]$idVal) -or $idVal -le 0) {
+            $maxID++
+            $headset.ID = $maxID
+        }
     }
 
     # Save to the CSV file
@@ -620,10 +635,8 @@ function Set-HeadsetsOrder {
     }
     foreach ($remaining in $lookup.Values) { $ordered += $remaining }
 
-    # Pre-assign IDs in the desired order so Save-Headsets (Sort-Object ID) preserves it
-    $id = 1
-    foreach ($row in $ordered) { $row.ID = $id; $id++ }
-
+    # IDs are permanent identities and are left untouched here - Save-Headsets now
+    # persists rows in the exact array order given, which is this reordered sequence.
     Save-Headsets -headsets $ordered
     Write-Log ("Headsets reordered: " + ($OrderedDisplayNames -join ', ')) -Level INFO
 } #OK

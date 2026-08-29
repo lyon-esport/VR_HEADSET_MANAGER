@@ -529,7 +529,11 @@ function Start-VRMonitor {
 
                 # Model/Serial CSV updates must be serialized in the main thread
                 foreach ($headsetInfo in $knownHeadsetsInfo) {
-                    $headset = $knownHeadsets | Where-Object { $_.ID -eq $headsetInfo.ID } | Select-Object -First 1
+                    # Resolve by IP, not by ID: $headsetInfo.ID is a value the per-headset
+                    # runspace captured once at startup and never refreshes, while ID can be
+                    # reassigned on a reorder. IP is the loop's own stable join key (see
+                    # $sharedState[$h.IPAddress] above), so it is safe against ID recycling.
+                    $headset = $knownHeadsets | Where-Object { $_.IPAddress -eq $headsetInfo.IPAddress } | Select-Object -First 1
                     if (-not $headset) { continue }
                     $fetchedModel = $headsetInfo.Model
                     if ((ConvertTo-BoolField $headsetInfo.ADBWifi) `
