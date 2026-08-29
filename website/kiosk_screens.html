@@ -444,9 +444,18 @@
       <div class="launcher-modal-desc">Tick the screens in the table below, then push a link or kill their browser.</div>
       <div class="launcher-modal-desc">For twitch streams use <a href="https://pwn.sh/tools/getstream.html" target="_blank" rel="noopener">this link</a> to get a clean feed.</div>
       <div class="form-row">
-        <input type="text" id="push-url-input" placeholder="Paste the link to the web page to cast here...">
+        <select id="push-headset-select">
+          <option value="">Select headset to cast...</option>
+        </select>
+        <label for="push-headset-overlay" id="push-headset-overlay-row" style="display:none;min-width:0;align-items:center;gap:5px;cursor:pointer">
+          <input type="checkbox" id="push-headset-overlay" checked>
+          Display monitor + timer overlay
+        </label>
       </div>
       <div class="form-row">
+        <input type="text" id="push-url-input" placeholder="Paste the link to the web page to cast here...">
+      </div>
+      <div class="form-row" id="push-yt-subtitles-row" style="display:none">
         <label for="push-yt-subtitles" style="min-width:0;display:flex;align-items:center;gap:5px;cursor:pointer">
           <input type="checkbox" id="push-yt-subtitles">
           Subtitles (YouTube links only)
@@ -857,6 +866,67 @@
       return url;
     }
 
+    // Returns true when toYoutubeLoopEmbedUrl() recognizes the link as YouTube
+    // (playlist/watch/youtu.be/shorts) - reuses that function's regexes instead
+    // of duplicating them, so the subtitles row and the actual rewrite never drift.
+    function isYoutubeUrl(url) {
+      return !!url && toYoutubeLoopEmbedUrl(url, false) !== url;
+    }
+
+    // Mirrors PowerShell Convert-Displayname: replace spaces with underscores
+    function toDisplayName(name) {
+      return name.replace(/ /g, '_');
+    }
+
+    // Builds this page's own video URL for a headset (same technique as
+    // video_monitor.html's castUrlForHeadset()).
+    function castUrlForHeadset(dn) {
+      return window.location.protocol + '//' + window.location.host + '/' + dn + '[video].html';
+    }
+
+    // ── Headsets dropdown for the push panel ──────────────────────────────
+    function loadHeadsetsForCast() {
+      fetch('/api/headsets')
+        .then(function(r) { return r.json(); })
+        .then(function(headsets) {
+          var sel = document.getElementById('push-headset-select');
+          (headsets || []).forEach(function(h) {
+            if (!h.Name) return;
+            var opt = document.createElement('option');
+            opt.value = h.Name;
+            opt.textContent = h.Name;
+            sel.appendChild(opt);
+          });
+        })
+        .catch(function() {});
+    }
+
+    function updateYtSubtitlesRowVisibility() {
+      var headsetSelected = !!document.getElementById('push-headset-select').value;
+      var url = document.getElementById('push-url-input').value.trim();
+      document.getElementById('push-yt-subtitles-row').style.display =
+        (!headsetSelected && isYoutubeUrl(url)) ? '' : 'none';
+    }
+
+    document.getElementById('push-headset-select').addEventListener('change', function() {
+      var headsetSelected = !!this.value;
+      var urlInput = document.getElementById('push-url-input');
+      urlInput.disabled = headsetSelected;
+      document.getElementById('push-headset-overlay-row').style.display = headsetSelected ? 'flex' : 'none';
+      if (headsetSelected) { urlInput.value = ''; }
+      updateYtSubtitlesRowVisibility();
+    });
+
+    document.getElementById('push-url-input').addEventListener('input', function() {
+      if (this.value.trim()) {
+        var headsetSelect = document.getElementById('push-headset-select');
+        headsetSelect.value = '';
+        headsetSelect.dispatchEvent(new Event('change'));
+      } else {
+        updateYtSubtitlesRowVisibility();
+      }
+    });
+
     function renderRow(k) {
       var tr = document.createElement('tr');
       tr.dataset.id = k.ID;
@@ -1255,13 +1325,20 @@
 
     document.getElementById('push-new-link-btn').addEventListener('click', function() {
       var btn = this;
-      var url = document.getElementById('push-url-input').value.trim();
       var statusEl = document.getElementById('push-new-link-status');
       var ids = Object.keys(pushKioskSelected).filter(function(id) { return pushKioskSelected[id]; });
-      if (!url) { statusEl.textContent = 'URL is required'; statusEl.style.color = '#ef4444'; return; }
-      if (!ids.length) { statusEl.textContent = 'Select at least one screen'; statusEl.style.color = '#ef4444'; return; }
+      var headsetName = document.getElementById('push-headset-select').value;
+      var url;
 
-      url = toYoutubeLoopEmbedUrl(url, document.getElementById('push-yt-subtitles').checked);
+      if (headsetName) {
+        url = castUrlForHeadset(toDisplayName(headsetName));
+        if (!document.getElementById('push-headset-overlay').checked) { url += '?nooverlay=1'; }
+      } else {
+        url = document.getElementById('push-url-input').value.trim();
+        if (!url) { statusEl.textContent = 'URL is required'; statusEl.style.color = '#ef4444'; return; }
+        url = toYoutubeLoopEmbedUrl(url, document.getElementById('push-yt-subtitles').checked);
+      }
+      if (!ids.length) { statusEl.textContent = 'Select at least one screen'; statusEl.style.color = '#ef4444'; return; }
 
       btn.disabled = true;
       statusEl.textContent = 'Pushing...'; statusEl.style.color = '#888';
@@ -1381,6 +1458,7 @@
 
     pollKiosks();
     setInterval(pollKiosks, 4000);
+    loadHeadsetsForCast();
   </script>
 </body>
 </html>
