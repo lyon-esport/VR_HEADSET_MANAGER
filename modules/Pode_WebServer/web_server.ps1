@@ -3921,6 +3921,18 @@ try {
             continue
         }
 
+        # API: GET /api/gpu-list  - returns installed GPUs (index + model) via Get-GpuInfo,
+        # feeds the "Graphics Card" dropdown in vrhm_config.html (Performance.GPU_Index)
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/gpu-list') {
+            try {
+                $gpus = @(Get-GpuInfo) | ForEach-Object { @{ index = $_.Index; model = $_.Model } }
+                Send-JsonResponse -Response $response -Body @{ ok = $true; gpus = @($gpus) }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { $response.Close() }
+            continue
+        }
+
         # API: POST /api/config/save  - validates and writes the posted JSON as config.json
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/config/save') {
             try {

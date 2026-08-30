@@ -62,6 +62,32 @@
       white-space: nowrap;
     }
 
+    /* Wall view: hide the whole topbar. .grid { flex:1 } fills the freed space automatically. */
+    body.hidetopbar .topbar { display: none; }
+
+    /* Always-reachable restore control, shown only while the bar is hidden */
+    #hidetopbar-restore {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      z-index: 50;
+      width: 32px;
+      height: 20px;
+      padding: 0;
+      border: none;
+      border-radius: 0 0 6px 0;
+      background: rgba(255, 255, 255, 0.06);
+      color: #888;
+      cursor: pointer;
+      align-items: center;
+      justify-content: center;
+      opacity: 0.15;
+      transition: opacity 0.15s, background 0.15s;
+    }
+    #hidetopbar-restore:hover { opacity: 1; background: rgba(255, 255, 255, 0.18); color: #fff; }
+    body.hidetopbar #hidetopbar-restore { display: flex; }
+
     /* Video grid - flexbox so streaming and offline tiles can have different sizes */
     .grid {
       display: flex;
@@ -433,6 +459,16 @@
       background: rgba(59,130,246,0.22);
       border-color: rgba(59,130,246,0.6);
     }
+    /* Shown when headsets exist but none match the active filter (e.g. "Scrcpy" filter with
+       nothing currently streaming) - distinct from #empty-msg, which is for zero known headsets. */
+    #no-match-msg {
+      flex: 1 0 100%;
+      padding: 60px 40px;
+      text-align: center;
+      color: #555;
+      font-size: 13px;
+    }
+    #no-match-msg .empty-title { margin-bottom: 0; }
   </style>
 </head>
 <body>
@@ -468,6 +504,12 @@
         </svg>
         <span class="topbar-btn-label">Timer</span>
       </button>
+      <button class="actions-btn" id="hidetopbar-toggle" title="Hide status bar (wall view: live streams only, fills the window)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><line x1="3" y1="3" x2="21" y2="21"/>
+        </svg>
+        <span class="topbar-btn-label">Hide bar</span>
+      </button>
     </div>
 
     <!-- Right: shared Config dropdown -->
@@ -479,6 +521,12 @@
 
   </header>
 
+  <button type="button" id="hidetopbar-restore" title="Show status bar">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="18 15 12 9 6 15"/>
+    </svg>
+  </button>
+
   <div id="local-mode-banner" class="local-mode-banner" hidden>
     <div class="lmb-msg">
       Capture mode is set to <strong>Local only</strong> &mdash; no video stream is available here. Headsets are mirrored in local scrcpy windows.
@@ -487,6 +535,7 @@
   </div>
 
   <div class="grid" id="grid">
+  <div id="no-match-msg" hidden><div class="empty-title" id="no-match-msg-text"></div></div>
   <div class="stream-break"></div>
   </div>
 
@@ -543,8 +592,19 @@
 
     // ------ Per-headset visibility toggles ------------------------------------------------------------------------------------------------------------------------------
     var headsetVisible = {};
+    // Currently active preset filter ('all' | 'online' | 'scrcpy' | 'offline' | null for a
+    // manual per-headset selection). Re-applied on every status poll (see pollHeadsetsStatus)
+    // so cells appear/disappear automatically as headsets go live/offline, not just on click.
+    var currentPresetFilter = 'all';
 
-    TopBar.initFilters(function(f) {
+    // Signature of the /api/headsets rows the grid was last built from (order-sensitive, so a
+    // reorder is picked up too - see checkHeadsetListChanged). null until buildGrid() runs once.
+    var lastHeadsetsSignature = null;
+    function headsetsSignature(rows) {
+      return rows.map(function(r) { return r.ID + ':' + r.Name; }).join('|');
+    }
+
+    function applyPresetFilter(f) {
       Object.keys(headsetVisible).forEach(function(dn) {
         var stat = headsetStatus[dn] || { ping: false, scrcpy: false };
         var show = true;
@@ -553,6 +613,11 @@
         if (f === 'offline') show = !stat.ping;
         setHeadsetVisible(dn, show);
       });
+    }
+
+    TopBar.initFilters(function(f) {
+      currentPresetFilter = f;
+      applyPresetFilter(f);
     });
 
     var CHECK_SVG_HF =
@@ -597,8 +662,8 @@
           e.stopPropagation();
           setHeadsetVisible(dn, !headsetVisible[dn]);
           var allOn = Object.keys(headsetVisible).every(function(k) { return headsetVisible[k]; });
-          if (allOn) { TopBar.setActiveFilter('all'); }
-          else { TopBar.clearPresetFilters(); }
+          if (allOn) { currentPresetFilter = 'all'; TopBar.setActiveFilter('all'); }
+          else { currentPresetFilter = null; TopBar.clearPresetFilters(); }
         });
         panel.appendChild(item);
       });
@@ -628,8 +693,8 @@
         TopBar.addCompactItem(name, dn, true, function() {
           setHeadsetVisible(dn, !headsetVisible[dn]);
           var allOn = Object.keys(headsetVisible).every(function(k) { return headsetVisible[k]; });
-          if (allOn) { TopBar.setActiveFilter('all'); }
-          else { TopBar.clearPresetFilters(); }
+          if (allOn) { currentPresetFilter = 'all'; TopBar.setActiveFilter('all'); }
+          else { currentPresetFilter = null; TopBar.clearPresetFilters(); }
         });
       });
     }
@@ -647,7 +712,28 @@
       var allOn = Object.keys(headsetVisible).every(function(k) { return headsetVisible[k]; });
       var hfBtn = document.getElementById('headsets-filter-btn');
       if (hfBtn) hfBtn.classList.toggle('has-hidden', !allOn);
+      updateEmptyState();
       applyAll();
+    }
+
+    // Shown when headsets exist but the active filter matches none of them (e.g. "Scrcpy"
+    // filter with nothing currently streaming) - otherwise the grid was just silently blank.
+    var FILTER_LABELS = { online: 'Online', scrcpy: 'Scrcpy', offline: 'Offline' };
+    function updateEmptyState() {
+      var msg = document.getElementById('no-match-msg');
+      if (!msg) return;
+      var totalCells = document.querySelectorAll('#grid .cell').length;
+      if (totalCells === 0) { msg.hidden = true; return; } // #empty-msg already covers this case
+      var anyVisible = document.querySelector('#grid .cell:not(.hidden)') !== null;
+      if (anyVisible) { msg.hidden = true; return; }
+      var label = FILTER_LABELS[currentPresetFilter];
+      var textEl = document.getElementById('no-match-msg-text');
+      if (textEl) {
+        textEl.textContent = label
+          ? ('No ' + label + ' available headset to display')
+          : 'No available headset to display';
+      }
+      msg.hidden = false;
     }
 
     // ------ Helpers ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -861,19 +947,31 @@
           updateAutoRestartButtons();
           if (!initialFilterApplied) {
             initialFilterApplied = true;
-            var anyActive = Object.keys(headsetVisible).some(function(dn) {
-              return (headsetStatus[dn] || { scrcpy: false }).scrcpy;
-            });
-            if (anyActive) {
-              Object.keys(headsetVisible).forEach(function(dn) {
-                var stat = headsetStatus[dn] || { scrcpy: false };
-                setHeadsetVisible(dn, stat.scrcpy);
-              });
+            if (document.body.classList.contains('hidetopbar')) {
+              // Wall view (hidetopbar): always live-streams-only, regardless of what was
+              // streaming at page-load time.
+              currentPresetFilter = 'scrcpy';
+              applyPresetFilter('scrcpy');
               TopBar.setActiveFilter('scrcpy');
             } else {
-              Object.keys(headsetVisible).forEach(function(dn) { setHeadsetVisible(dn, true); });
-              TopBar.setActiveFilter('all');
+              var anyActive = Object.keys(headsetVisible).some(function(dn) {
+                return (headsetStatus[dn] || { scrcpy: false }).scrcpy;
+              });
+              if (anyActive) {
+                currentPresetFilter = 'scrcpy';
+                applyPresetFilter('scrcpy');
+                TopBar.setActiveFilter('scrcpy');
+              } else {
+                currentPresetFilter = 'all';
+                Object.keys(headsetVisible).forEach(function(dn) { setHeadsetVisible(dn, true); });
+                TopBar.setActiveFilter('all');
+              }
             }
+          } else if (currentPresetFilter === 'online' || currentPresetFilter === 'scrcpy' || currentPresetFilter === 'offline') {
+            // Keep the active preset filter live: a headset that starts/stops streaming (or
+            // goes on/offline) after the filter was applied must appear/disappear automatically
+            // on this poll, not only when the operator re-clicks the filter.
+            applyPresetFilter(currentPresetFilter);
           }
           applyOfflineState();
           updateLocalModeBanner();
@@ -1020,10 +1118,16 @@
       var N = streamCells.length;
       if (N === 0) return;
 
-      // Reserve vertical space for offline tiles row (below streaming cells via CSS order)
+      // Reserve vertical space for offline tiles row (below streaming cells via CSS order).
+      // .stream-break forces a line-break before that row - hide it when there is no offline
+      // row, otherwise its own (zero-height) flex line still consumes one `gap` of vertical
+      // space between the last streaming row and nothing, which was enough to trip the
+      // "no scrollbar" fit by a few px.
       var noStreamReserved = 0;
       (function() {
         var noStreamCells = Array.from(document.querySelectorAll('#grid .cell:not(.hidden).no-stream'));
+        var breakEl = document.querySelector('.stream-break');
+        if (breakEl) breakEl.style.display = noStreamCells.length ? '' : 'none';
         if (noStreamCells.length === 0) return;
         var nsW = Math.min(NO_STREAM_W, innerW);
         var maxNaturalH = NATURAL_H;
@@ -1037,35 +1141,77 @@
         noStreamReserved = Math.ceil(noStreamCells.length / tilesPerRow) * (nsH + gap);
       })();
       var effectiveInnerH = Math.max(innerH - noStreamReserved, 80);
-      // Use the most constraining (smallest) detected ratio so every cell fits vertically.
-      var worstRatio = 16 / 9;
-      streamCells.forEach(function(cell) {
+
+      // Per-cell aspect ratio (own detected ratio, default 16:9 until detected). A single
+      // shared "worst ratio" scalar applied uniformly to every row (the previous approach)
+      // under/overestimates real per-row height whenever cells have different ratios - e.g. a
+      // portrait cell alone in a row was assumed exactly as tall as it needed to be, but a
+      // landscape cell sharing a row with nothing tall was assumed just as tall too (or, with a
+      // stale/default ratio for a not-yet-detected cell, the opposite: assumed too short),
+      // letting cellW grow past what actually fits and producing a scrollbar. Simulate the real
+      // flex-wrap row grouping (DOM order, c cells per row) and size each row by its own
+      // tallest-per-width cell instead.
+      var ratios = streamCells.map(function(cell) {
         var dn = cell.dataset.display;
-        var detected = parseFloat(_detectedRatios[dn]);
-        if (detected > 0 && detected < worstRatio) worstRatio = detected;
+        var r = parseFloat(_detectedRatios[dn]);
+        return (r > 0) ? r : (16 / 9);
       });
-
-      var bestArea = 0;
-      var bestCellW = Math.min(innerW, effectiveInnerH * worstRatio);
-
+      // Pick the column count that gives the LARGEST cell width among every arrangement that
+      // still fits (candidateW already respects both the width and the exact per-row height
+      // constraint below, so this can never overflow). Maximizing width directly - rather than
+      // a packing/fill-ratio score - is what actually uses the most of the viewport: a
+      // perfectly-packed single row can still leave most of the window empty vertically if that
+      // makes every cell tiny, and that is a worse outcome than a slightly uneven last row of
+      // much bigger cells.
+      var bestW = 0;
       for (var c = 1; c <= N; c++) {
-        var r = Math.ceil(N / c);
-        var cellW = (innerW - gap * (c - 1)) / c;
-        var cellH = cellW / worstRatio;
-        if (cellH * r + gap * (r - 1) > effectiveInnerH) {
-          // Height-constrained: scale down to fit
-          cellH = (effectiveInnerH - gap * (r - 1)) / r;
-          cellW = cellH * worstRatio;
+        var widthLimit = (innerW - gap * (c - 1)) / c;
+        if (widthLimit <= 0) continue;
+        var rows = Math.ceil(N / c);
+        // Sum, over each row, of 1/(smallest ratio in that row) - i.e. height-per-unit-width
+        // needed by that row's tallest cell. Total required height = cellW * sumInvMinRatio +
+        // gaps, so solving for cellW at exactly effectiveInnerH gives the height-limited width.
+        var sumInvMinRatio = 0;
+        for (var row = 0; row < rows; row++) {
+          var rowMinRatio = Infinity;
+          for (var col = 0; col < c; col++) {
+            var idx = row * c + col;
+            if (idx >= N) break;
+            if (ratios[idx] < rowMinRatio) rowMinRatio = ratios[idx];
+          }
+          if (rowMinRatio !== Infinity) sumInvMinRatio += 1 / rowMinRatio;
         }
-        var area = cellW * cellH;
-        if (area > bestArea) {
-          bestArea = area;
-          bestCellW = cellW;
-        }
+        var availableH = effectiveInnerH - gap * (rows - 1);
+        if (availableH <= 0 || sumInvMinRatio <= 0) continue;
+        var heightLimit = availableH / sumInvMinRatio;
+        var candidateW = Math.min(widthLimit, heightLimit);
+        if (candidateW > bestW) bestW = candidateW;
       }
 
-      var w = Math.max(Math.floor(bestCellW), MIN_STREAM_CELL_W);
+      var w = Math.max(Math.floor(bestW), MIN_STREAM_CELL_W);
       streamCells.forEach(function(cell) { cell.style.width = w + 'px'; });
+      correctOverflow(streamCells, w);
+    }
+
+    // The predictive math above assumes each cell's aspect ratio (_detectedRatios) is already
+    // known, but right after a page load or a stream reconnect the underlying <video> hasn't
+    // decoded its first frame yet, so cells still carry the 16:9 default - which can be very
+    // wrong for a portrait/near-square capture and make the prediction pick a layout that looks
+    // fine on paper but overflows once the real aspect-ratio (and thus real height) lands. Treat
+    // the math as a first guess and verify it against the ACTUAL rendered height; if it still
+    // overflows, shrink and re-measure using the real browser layout as ground truth (works
+    // regardless of how flex-wrap regroups cells into rows as the width changes) rather than
+    // trying to out-predict every edge case up front.
+    function correctOverflow(streamCells, w) {
+      var grid = document.getElementById('grid');
+      if (!grid || !streamCells.length) return;
+      for (var i = 0; i < 5; i++) {
+        var overflow = grid.scrollHeight - grid.clientHeight;
+        if (overflow <= 1 || w <= MIN_STREAM_CELL_W) return;
+        var scale = grid.clientHeight / grid.scrollHeight;
+        w = Math.max(Math.floor(w * scale * 0.98), MIN_STREAM_CELL_W);
+        streamCells.forEach(function(cell) { cell.style.width = w + 'px'; });
+      }
     }
 
     // ------ Status overlay toggle ------------------------------------------------------------------------------------------------------------------------------------------------
@@ -1107,6 +1253,36 @@
         }
       });
     });
+
+    // ---- Wall view: hide status bar, live-streams-only ----
+    function setHideTopbar(hide) {
+      document.body.classList.toggle('hidetopbar', hide);
+      var url = new URL(window.location.href);
+      if (hide) { url.searchParams.set('hidetopbar', '1'); }
+      else { url.searchParams.delete('hidetopbar'); }
+      history.replaceState(null, '', url.pathname + url.search + url.hash);
+      if (hide) { TopBar.triggerFilter('scrcpy'); }
+      applyAll();
+    }
+    document.getElementById('hidetopbar-toggle').addEventListener('click', function() {
+      setHideTopbar(!document.body.classList.contains('hidetopbar'));
+    });
+    document.getElementById('hidetopbar-restore').addEventListener('click', function() {
+      setHideTopbar(false);
+    });
+    if (new URLSearchParams(window.location.search).get('hidetopbar') === '1') {
+      document.body.classList.add('hidetopbar');
+    }
+
+    // ---- Wall view: optionally suppress the monitor/timer overlays too ----
+    // (companion to hidetopbar - same query param name used by the per-headset
+    // [video].html?nooverlay=1 page, applied here to every cell in the grid).
+    if (new URLSearchParams(window.location.search).get('nooverlay') === '1') {
+      statusVisible = false;
+      timerGlobalVisible = false;
+      statusToggleBtn.style.color = '';
+      timerToggleBtn.style.color = '';
+    }
 
     function syncCellTimerBtn(tid) {
       fetch('/api/timer?id=' + tid + '&action=status')
@@ -1263,7 +1439,7 @@
     // ------ Build grid dynamically from known_headsets.csv -----------------------------------------------------------------------
     function buildCellHTML(name, dn, id) {
       var cell = document.createElement('div');
-      cell.className = 'cell';
+      cell.className = 'cell' + (statusVisible ? '' : ' status-hidden') + (timerGlobalVisible ? '' : ' timer-hidden');
       cell.dataset.name    = name;
       cell.dataset.display = dn;
       cell.innerHTML =
@@ -1320,6 +1496,7 @@
         .then(function(rows) {
           var grid = document.getElementById('grid');
           var breakEl = grid.querySelector('.stream-break');
+          lastHeadsetsSignature = headsetsSignature(rows);
           if (!rows.length) {
             var emptyDiv = document.createElement('div');
             emptyDiv.id = 'empty-msg';
@@ -1349,12 +1526,29 @@
         .catch(function() { if (callback) callback(); });
     }
 
+    // The grid is only ever built once (buildGrid, above). A headset added/removed/renamed/
+    // reordered afterward (e.g. via headsets_settings.html in another tab) has no cell/reflects
+    // no change until this notices the list itself differs from what was last built - then it
+    // just reloads, which is simple and safe since the page already restores wall mode
+    // (?hidetopbar=1) and the live-only filter from the URL/server on every load.
+    function checkHeadsetListChanged() {
+      if (lastHeadsetsSignature === null) return; // buildGrid() hasn't captured a baseline yet
+      fetch('/api/headsets')
+        .then(function(r) { return r.ok ? r.json() : null; })
+        .then(function(rows) {
+          if (!rows) return;
+          if (headsetsSignature(rows) !== lastHeadsetsSignature) location.reload();
+        })
+        .catch(function() {}); // transient network error - just try again next tick
+    }
+
     // ------ Boot ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     TopBar.initCompact();
     TopBar.initManageDevicesBtn();
 
     fetchKioskList();
     setInterval(fetchKioskList, 30000); // pick up newly added/removed kiosk screens without a page reload
+    setInterval(checkHeadsetListChanged, 30000); // pick up added/removed/renamed/reordered headsets without a manual refresh
 
     // Override compact detection: topbar-filters is flex:0 so scrollWidth check doesn't work.
     // Instead check if the overlay-toggles right edge overlaps the topbar-right left edge.

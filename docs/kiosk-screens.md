@@ -56,25 +56,33 @@ Each registered kiosk is stored in `data\known_kiosks.csv` (`ID, Name, IPAddress
 
 ![Kiosk Screens page](pics/web_kiosk_screens.png)
 
-On the **Kiosk Screens** page: tick one or more screens in the table, paste a URL into the box at the top, and click **Push to selected screens**. VRHM sends `Page.navigate` to each selected kiosk's active Chrome tab immediately — no reload delay, no interaction needed on the kiosk PC.
+On the **Kiosk Screens** page: tick one or more screens in the table, then either paste a URL into the box and click **Push to selected screens**, or use the **Select headset to cast...** dropdown above it to push a headset's own video feed (or the whole fleet) instead — see [Casting a headset's video feed to a kiosk](#casting-a-headsets-video-feed-to-a-kiosk) below. VRHM sends `Page.navigate` to each selected kiosk's active Chrome tab immediately — no reload delay, no interaction needed on the kiosk PC.
 
 - If the URL points at `localhost` / `127.0.0.1`, VRHM detects that it would resolve to the kiosk PC itself (not the VRHM server) and offers to replace it with the server's real LAN IP before pushing — confirm the suggestion to proceed.
 - **Kill kiosk browser** closes the whole Chrome/Chromium process on the selected kiosk(s) via CDP `Browser.close`. The launcher script does not auto-restart Chrome, so you'll need to relaunch it manually on that PC (or reboot it, if the launcher is wired into autostart).
 - For streaming a clean feed of the pushed page into Twitch or similar, the page links to [pwn.sh/tools/getstream.html](https://pwn.sh/tools/getstream.html) to strip page chrome from the capture.
+- Selecting a headset (or the wall option) from the dropdown greys out the manual URL box, and vice versa — typing in the URL box resets the dropdown. The **Subtitles (YouTube links only)** row only appears once the pasted URL is recognized as a YouTube link (watch/playlist/shorts/`youtu.be`).
 
 The table shows, per kiosk: current reachability (ping + CDP open), latency, and the pushed URL / last-pushed timestamp. Name, IP address, and port are editable inline (pencil icon); the **×** button removes a kiosk from the registry.
 
 ## Casting a headset's video feed to a kiosk
 
-Any headset tile on the [Video Monitor](web-interface.md#video-monitor-home-page) page (and the standalone `[video].html` player) has a **cast** button that opens a **Cast to kiosk screen** popover, pre-filled with that headset's own live video URL — no need to copy/paste it manually:
+There are two equivalent ways to push a headset's live video feed to a kiosk screen:
+
+- **From Kiosk Screens** — pick the headset by name from the **Select headset to cast...** dropdown in the push panel (see [Push a URL](#3-push-a-url) above). This is the quickest path when you're already managing kiosks and want to send a specific headset's feed without leaving the page.
+- **From the Video Monitor** — any headset tile on the [Video Monitor](web-interface.md#video-monitor-home-page) page (and the standalone `[video].html` player) has a **cast** button that opens a **Cast to kiosk screen** popover, pre-filled with that headset's own live video URL:
 
 ![Cast to kiosk screen popover](pics/web_cast_to_kiosk.png)
 
-1. Tick one or more kiosk screens in the popover
+1. Tick one or more kiosk screens (or, on Kiosk Screens, select the headset from the dropdown and the screens in the table)
 2. Optionally untick **display monitor + timer overlay** (checked by default) to push a clean video feed without the battery/controller/timer HUD — this appends `?nooverlay=1` to the pushed URL, which the video player page reads to skip auto-showing those overlays (they remain toggleable by hand once pushed, via the same on-screen buttons)
-3. Click **Push to kiosk screens**
+3. Click **Push to kiosk screens** (or **Push to selected screens** on Kiosk Screens)
 
 This is the fastest way to put a specific headset's feed on a lobby TV or showroom display: the kiosk shows exactly what the operator sees in that tile, live.
+
+### Casting the whole fleet as a wall
+
+Instead of picking one headset, the Kiosk Screens dropdown also offers **All headsets in a wall**, which pushes the [Video Monitor](web-interface.md#video-monitor-home-page) page itself in [wall view](web-interface.md#video-monitor-home-page) (`http://<pc-ip>:8080/?hidetopbar=1`) — a full-window grid of every headset's live feed, with the top bar hidden. The same **display monitor + timer overlay** checkbox applies here too: unticking it appends `&nooverlay=1`, which suppresses every tile's status/timer HUD from the start instead of just hiding the top bar.
 
 ## Console equivalent
 

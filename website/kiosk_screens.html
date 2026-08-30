@@ -446,6 +446,7 @@
       <div class="form-row">
         <select id="push-headset-select">
           <option value="">Select headset to cast...</option>
+          <option value="__wall__">All headsets in a wall</option>
         </select>
         <label for="push-headset-overlay" id="push-headset-overlay-row" style="display:none;min-width:0;align-items:center;gap:5px;cursor:pointer">
           <input type="checkbox" id="push-headset-overlay" checked>
@@ -1330,7 +1331,10 @@
       var headsetName = document.getElementById('push-headset-select').value;
       var url;
 
-      if (headsetName) {
+      if (headsetName === '__wall__') {
+        url = window.location.protocol + '//' + window.location.host + '/?hidetopbar=1';
+        if (!document.getElementById('push-headset-overlay').checked) { url += '&nooverlay=1'; }
+      } else if (headsetName) {
         url = castUrlForHeadset(toDisplayName(headsetName));
         if (!document.getElementById('push-headset-overlay').checked) { url += '?nooverlay=1'; }
       } else {

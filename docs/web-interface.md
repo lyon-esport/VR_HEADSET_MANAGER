@@ -22,6 +22,7 @@ Top-bar controls:
 - **Filters** — choose which headsets are displayed
 - **Status** — toggle status overlays (battery, controllers, temperature)
 - **Timer** — show/hide and control per-headset session timers
+- **Wall view** (eye-slash icon) — hides the whole top bar and switches to a live-streams-only filter, so the page fills the window edge-to-edge for a lobby TV / showroom wall. A small restore control stays in the corner to bring the bar back. The state is reflected in the URL as `?hidetopbar=1`, so it can be bookmarked or pushed straight to a [kiosk screen](kiosk-screens.md#casting-a-headsets-video-feed-to-a-kiosk). Add `&nooverlay=1` to also suppress the status/timer overlays on every tile from the start (skips starting the per-headset timer polling too, for a lighter wall view) — e.g. `http://<pc-ip>:8080/?hidetopbar=1&nooverlay=1`.
 - Per-tile **launch app** button (▶) — start an installed application inside the headset without touching it
 
 Tiles of offline headsets show their last known status; the video reconnects automatically when the stream comes back.

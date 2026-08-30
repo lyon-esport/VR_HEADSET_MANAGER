@@ -845,8 +845,8 @@
         { type: 'subgroup', label: 'Performance' },
         { path: 'Performance.GPU_Acceleration', label: 'GPU Acceleration', type: 'boolean',
           desc: 'Use GPU hardware acceleration where available.' },
-        { path: 'Performance.GPU_Index', label: 'GPU Index', type: 'number', min: 0, max: 8,
-          desc: 'Index of the GPU to use when GPU acceleration is enabled. 0 = primary GPU.' }
+        { path: 'Performance.GPU_Index', label: 'Graphics Card', type: 'select', options: [],
+          desc: 'GPU used when GPU acceleration is enabled.' }
       ],
       'acc-monitoring-body': [
         { type: 'subgroup', label: 'Headset Monitoring' },
@@ -1053,9 +1053,31 @@
         _isLocal = !!(serverInfo.localIPs && serverInfo.localIPs.indexOf(host) !== -1);
         renderAllSections();
         initAccordionHeights();
+        loadGpuList();
       }).catch(function() {
         showToast('Failed to load configuration', 3000);
       });
+    }
+
+    // Populates the "Graphics Card" select with real GPU names via Get-GpuInfo,
+    // so the operator can pick a card by name instead of guessing an index
+    // against Task Manager's GPU order.
+    function loadGpuList() {
+      var selEl = document.querySelector('select[data-path="Performance.GPU_Index"]');
+      if (!selEl) return;
+      var current = String(cfgGet(_cfg, 'Performance.GPU_Index'));
+      fetch('/api/gpu-list')
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          var gpus = (j.ok && j.gpus) ? j.gpus : [];
+          if (!gpus.length) return;
+          selEl.innerHTML = gpus.map(function(g) {
+            var v = String(g.index);
+            return '<option value="' + esc(v) + '"' + (v === current ? ' selected' : '') + '>'
+              + esc(v) + ' - ' + esc(g.model) + '</option>';
+          }).join('');
+        })
+        .catch(function() {});
     }
 
     // ── Scrcpy / FFmpeg / MediaMTX version check / update ───────────────────
