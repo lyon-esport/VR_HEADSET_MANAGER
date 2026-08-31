@@ -20,42 +20,6 @@ param (
 
 
 
-<#
-
-Improvement areas:
-
-- Manual editing of the config file
-    > Re-verify at each refresh that the file is correctly formatted
-    > Simplify the config file: Name;IP
-- Refresh optimization: only read info from the config file, do not ping + test port on every refresh; let the background job handle it
-    - Perform a more efficient ping test (not at headset selection time)
-    --> Create a second HeadsetFollowup file auto-populated by the script below
-    - Launch a background window that pings, checks the port, auto-restarts the stream, and updates the HeadsetFollowup file
-    - During scan, check whether a stream with the same name is already running
-
-- From the main menu, type the headset number directly to stream it
-    - Enter key to display HeadsetFollowup info
-    - Add the StreamAutoRestart flag to the followup file
-    - If the same number is entered again, kill the running stream and stop auto-reopening it
-- From main menu > a key to enable ADB Wireless for a USB-connected device (e.g. the + key)
-- Customize scrcpy parameters in the JSON config file rather than directly in the script
-- When installing the ADB Wireless APK or activating a stream, automatically add the headset if its serial number is not already known
-    > Enter 0 for the headset name if you don't want to add it
-- "+" key to enable WiFi ADB on a USB-connected headset.
-- Add an input-parameter refresh function (R key?) to reload updated module files and the JSON config file.
-
-- Check headset state on attempt: wifi unauthorized, ADB not enabled, developer mode not enabled...
-- Allow adb.exe through the Windows Firewall on application startup (firewall prompt)
-
-- Force the ADB daemon to start when the script launches if it is stopped
-
-#>
-
-# Fallback if $PSScriptRoot is not available (e.g. command-line execution)
-#$global:ScriptPath = if ($PSScriptRoot) {$PSScriptRoot} else {"L:\Drive partagés\04 Equipe Technique\20 VR\VR_HEADSET_MANAGER"}
-
-
-
 #Check on startup the main script if it can identify where it is, and make sure it finds the path of $PSScriptRoot. Otherwise, check if the current execution is in a folder whose name contains "VR_HEADSET_MANAGER".
 #Load the path into the global variable $global:ScriptPath
 
@@ -101,16 +65,18 @@ if ($otherInstances) {
 # Get the current script path
 $global:ScriptPath = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 
+if ((Split-Path $global:ScriptPath -Leaf) -notmatch "VR_HEADSET_MANAGER") {
+    Write-Host "Error: Please run this script from a folder named 'VR_HEADSET_MANAGER'." -ForegroundColor Red
+    Read-Host "Press enter for exit"
+    exit
+}
 # check if the current folder name is "modules", if yes, move up one level
 if ((Split-Path $global:ScriptPath -Leaf) -eq "modules") {
     $global:ScriptPath = Split-Path $global:ScriptPath -Parent
 }
 
-if ((Split-Path $global:ScriptPath -Leaf) -notmatch "VR_HEADSET_MANAGER") {
-    Write-Host "Error: Please run this script from a folder containing 'VR_HEADSET_MANAGER'." -ForegroundColor Red
-    Read-Host "Press enter for exit"
-    exit
-}
+#Unblock all scripts in the module folder (in case they were blocked by Windows)
+Get-ChildItem -Path $global:ScriptPath -Include "*.ps1","*.psd1" -Recurse -File | Unblock-File
 
 
 ########################## INITIALISATION ##########################
@@ -196,15 +162,12 @@ if (-not (Test-Path -LiteralPath $_kioskCsvPath)) {
 }
 Remove-Variable _kioskCsvPath
 
+
+# If custom config file is set as an argument, use it otherwise user the default config.json file
 $custom_config = $args[0]
 if ($custom_config) {
-    Write-Host "Custom config file passed as argument: $custom_config" -ForegroundColor Green
-} else {
-    Write-Host "No custom config file passed as argument. Starting process with default config file path." -ForegroundColor Yellow
-}
-# Check if config file exists, if not create it from template file and open it for edit
-if ($custom_config) {
     $global:configFilePath = $custom_config
+    Write-Host "Custom config file passed as argument: $custom_config" -ForegroundColor Green
 } else {
     $global:configFilePath = Join-Path -Path $global:ScriptPath -ChildPath "config\config.json"
 }
@@ -222,10 +185,6 @@ if (-not (Test-Path -LiteralPath $global:configFilePath)) {
 } else {
     Write-Host "Config file found at: $global:configFilePath" -ForegroundColor Green
 }
-
-
-#Unblock all scripts in the module folder (in case they were blocked by Windows)
-Get-ChildItem -Path $global:ScriptPath -Include "*.ps1","*.psd1" -Recurse -File | Unblock-File
 
 # Import modules files (must be executed at global level, and cannot start in a function !)
 $scripts_init = Join-Path -Path $global:ScriptPath -ChildPath "\modules\scripts_init.ps1"
