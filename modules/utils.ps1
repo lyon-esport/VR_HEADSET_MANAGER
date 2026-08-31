@@ -164,6 +164,30 @@ function Write-FileWithoutBom {
 }
 
 
+# Formats a duration in seconds as a short human-readable string ("3d 4h",
+# "2h 15m", "45m", "30s"). Returns "-" for $null/negative input, so callers can
+# print it directly without a null guard.
+# Example: Get-FormattedUptime -Seconds 93784   ->  "1d 2h"
+function Get-FormattedUptime {
+    param(
+        $Seconds
+    )
+    if ($null -eq $Seconds) { return "-" }
+    $s = 0
+    if (-not [int64]::TryParse([string]$Seconds, [ref]$s)) { return "-" }
+    if ($s -lt 0) { return "-" }
+
+    $days  = [math]::Floor($s / 86400)
+    $hours = [math]::Floor(($s % 86400) / 3600)
+    $mins  = [math]::Floor(($s % 3600) / 60)
+
+    if ($days  -gt 0) { return "${days}d ${hours}h" }
+    if ($hours -gt 0) { return "${hours}h ${mins}m" }
+    if ($mins  -gt 0) { return "${mins}m" }
+    return "${s}s"
+}
+
+
 # Print "<prefix> N..." on a single line, counting down once per second.
 # Used by headsets_dashboard.ps1 and any "wait then refresh" loop.
 function Wait-WithCountdown {

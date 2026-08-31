@@ -169,14 +169,32 @@
       padding-top: 8px;
     }
     .scan-item {
-      display: flex; align-items: center; gap: 8px;
+      /* align-items:flex-start (not center) so the checkbox stays level with the
+         first line when an advanced kiosk adds a second one. */
+      display: flex; align-items: flex-start; gap: 8px;
       padding: 5px 2px;
       font-size: 12px;
     }
-    .scan-item input[type=checkbox] { accent-color: #3b82f6; }
+    .scan-item input[type=checkbox] { accent-color: #3b82f6; margin-top: 2px; flex-shrink: 0; }
+    /* Everything right of the checkbox stacks: identity line, then device line. */
+    .scan-item .scan-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+    .scan-item .scan-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
     .scan-item .ip { font-family: monospace; color: var(--text); }
     .scan-item .browser { color: #888; font-size: 11px; }
     .scan-item .known { color: #22c55e; font-size: 10px; font-weight: 700; text-transform: uppercase; }
+    /* Advanced-kiosk detail (hostname / link / OS) - absent for basic kiosks.
+       Wraps rather than truncating: the OS string alone is longer than the panel. */
+    .scan-item .scan-device {
+      color: #9ad; font-size: 10px; line-height: 1.35;
+      white-space: normal; overflow-wrap: anywhere;
+    }
+    .scan-item .scan-device .sd-sep  { color: #555; margin: 0 4px; }
+    /* The computer name is what an operator actually scans the list for. */
+    .scan-item .scan-device .sd-host { color: #cfe6ff; font-weight: 600; }
+    /* #9ad is a dark-theme accent - too washed out on the light background. */
+    [data-theme="light"] .scan-item .scan-device        { color: #2a5d8f; }
+    [data-theme="light"] .scan-item .scan-device .sd-sep { color: #aaa; }
+    [data-theme="light"] .scan-item .scan-device .sd-host { color: #1f3f63; }
     .scan-empty { color: #555; font-size: 12px; padding: 6px 0; }
 
     /* ── Push new link panel ── */
@@ -289,6 +307,66 @@
       white-space: nowrap; pointer-events: none; z-index: 10;
     }
     .ip-error.warn { background: #1a1500; border-color: #5a4a00; color: var(--charging); }
+
+    /* Ready-to-paste launcher command, with this server's address filled in. */
+    .cmd-box {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 6px 0;
+      padding: 8px 10px;
+      background: #0d0d0d;
+      border: 1px solid #2a2a2a;
+      border-radius: 4px;
+    }
+    .cmd-box code {
+      flex: 1;
+      min-width: 0;
+      font-size: 11px;
+      color: #9ad;
+      overflow-x: auto;
+      white-space: nowrap;
+    }
+    [data-theme="light"] .cmd-box { background: #f4f4f4; border-color: #ddd; }
+    [data-theme="light"] .cmd-box code { color: #225; }
+
+    /* Power control row - separated from the casting buttons above it by a rule,
+       so a reboot is never one mis-click away from pushing a link. */
+    .power-row {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #2a2a2a;
+    }
+    .power-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin-right: 4px;
+    }
+    [data-theme="light"] .power-row { border-top-color: #ddd; }
+
+    /* Device cell - populated only for advanced kiosks (Start-KioskAgent.*),
+       which report their computer name, OS and link type to this server. */
+    .device-wrap {
+      display: inline-flex;
+      flex-direction: column;
+      line-height: 1.25;
+      min-width: 0;
+      max-width: 100%;
+    }
+    .device-name {
+      font-size: 12px;
+      font-weight: 600;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .device-link { font-size: 10px; color: var(--muted); letter-spacing: 0.02em; }
+    .device-basic { color: var(--muted); }
+    .device-wrap.device-stale .device-name { color: var(--charging); font-weight: 500; }
 
     .pushed-wrap {
       display: inline-flex;
@@ -411,12 +489,78 @@
         </div>
         <div class="modal-body">
           <div class="panel">
-            <div class="panel-title">Setup Scripts</div>
+            <div class="panel-title">Windows - ready-to-use package (easiest)</div>
             <p class="launcher-modal-desc">
-              Copy the script matching the kiosk PC's OS and run it there. It opens the
-              firewall for Chrome's remote debugging port and launches Chrome in kiosk
-              mode. See the README for full setup steps (autostart on boot) and
-              troubleshooting.
+              One zip with everything already set up for <strong>this</strong> server.
+              Unzip it on the kiosk PC and double-click
+              <code>Start-Kiosk-ADVANCED.cmd</code> - it asks for administrator rights,
+              then starts the kiosk browser and the reporting agent. Nothing to type:
+              this server's address is baked in, and the package is rebuilt on every
+              application start so it stays correct if the server's IP changes.
+            </p>
+            <div class="form-row">
+              <a class="btn" href="kiosk-launcher/VRHM-Kiosk-Setup.zip" download="VRHM-Kiosk-Setup.zip">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Download setup package (.zip)
+              </a>
+              <span class="launcher-modal-desc" style="margin:0">
+                Server: <code id="pkg-server-url"></code>
+              </span>
+            </div>
+            <p class="launcher-modal-desc">
+              The zip also contains <code>Start-Kiosk-BASIC.cmd</code>, which runs the
+              original casting-only launcher - a fallback if the advanced one ever
+              gives trouble on a particular PC.
+            </p>
+          </div>
+
+          <div class="panel">
+            <div class="panel-title">Setup Scripts - Advanced (manual)</div>
+            <p class="launcher-modal-desc">
+              The individual scripts, if you would rather not use the package (or need
+              the Linux one). On top of opening the firewall and launching Chrome in
+              kiosk mode, the advanced launcher reports the PC's computer name, OS and
+              network link type back here, lets you reboot or shut the PC down
+              remotely, and restarts the browser by itself if it crashes. It stays
+              running - keep its window open.
+            </p>
+            <div class="form-row">
+              <a class="btn" href="kiosk-launcher/Start-KioskAgent.ps1" download="Start-KioskAgent.ps1">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Windows (.ps1)
+              </a>
+              <a class="btn" href="kiosk-launcher/Start-KioskAgent-Linux.sh" download="Start-KioskAgent-Linux.sh">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Debian / Raspberry Pi (.sh)
+              </a>
+            </div>
+
+            <!-- The server address is what lets the kiosk report back, and this page
+                 already knows it - hand the operator a ready-to-paste command line
+                 rather than making them work it out. -->
+            <p class="launcher-modal-desc" style="margin-bottom:4px">
+              Run it on the kiosk PC with this server's address:
+            </p>
+            <div class="cmd-box">
+              <code id="agent-cmd-win"></code>
+              <button class="copy-btn" id="agent-cmd-win-copy" title="Copy command">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              </button>
+            </div>
+            <div class="cmd-box">
+              <code id="agent-cmd-linux"></code>
+              <button class="copy-btn" id="agent-cmd-linux-copy" title="Copy command">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-title">Setup Scripts - Basic</div>
+            <p class="launcher-modal-desc">
+              The original launcher: opens the firewall for Chrome's remote debugging
+              port and launches Chrome in kiosk mode, nothing more. Casting works
+              exactly the same; remote power control and device reporting do not.
             </p>
             <div class="form-row">
               <a class="btn" href="kiosk-launcher/Start-KioskChrome.ps1" download="Start-KioskChrome.ps1">
@@ -476,6 +620,26 @@
           Kill kiosk browser
         </button>
         <span id="push-new-link-status" style="font-size:11px;color:#888"></span>
+      </div>
+
+      <!-- Power control is deliberately in its own row, away from the casting
+           buttons: rebooting or shutting down a showroom PC is not something an
+           operator should be able to reach with a mis-click while pushing a link.
+           Only advanced kiosks (Start-KioskAgent.*) can be powered off - a basic
+           v1 kiosk has no agent to receive the order. -->
+      <!-- Hidden entirely until at least one known kiosk runs the advanced
+           launcher - with only basic kiosks around, nothing here could ever act. -->
+      <div class="power-row" id="power-row" style="display:none">
+        <span class="power-label">Power control kiosk PC</span>
+        <button class="btn btn-danger" id="power-reboot-btn" disabled>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          Reboot PC
+        </button>
+        <button class="btn btn-danger" id="power-shutdown-btn" disabled>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
+          Shut down PC
+        </button>
+        <span id="power-status" style="font-size:11px;color:#888"></span>
       </div>
     </div>
 
@@ -544,6 +708,7 @@
           <col style="width:170px">
           <col style="width:130px">
           <col style="width:72px">
+          <col style="width:170px">
           <col>
           <col style="width:36px">
         </colgroup>
@@ -555,12 +720,13 @@
             <th class="left">IP Address</th>
             <th>Port</th>
             <th>Latency</th>
+            <th class="left">Device</th>
             <th class="left">Pushed URL</th>
             <th></th>
           </tr>
         </thead>
         <tbody id="table-body">
-          <tr><td colspan="8" id="empty-msg">Loading...</td></tr>
+          <tr><td colspan="9" id="empty-msg">Loading...</td></tr>
         </tbody>
       </table>
     </div>
@@ -695,11 +861,32 @@
       listEl.innerHTML = items.map(function(it, idx) {
         var checked = it.AlreadyKnown ? '' : 'checked';
         var disabled = it.AlreadyKnown ? 'disabled' : '';
+        // Hostname/OS/link type are only known for kiosks running the advanced
+        // launcher, which have already reported themselves to this server. They go
+        // on their own second line - a basic kiosk contributes nothing here and
+        // stays a single line, so the list does not grow for no reason.
+        var detail = '';
+        if (it.Advanced) {
+          var bits = [];
+          if (it.Hostname)      bits.push('<span class="sd-host">' + esc(it.Hostname) + '</span>');
+          if (it.InterfaceType) bits.push(esc(it.InterfaceType));
+          if (it.OSVersion)     bits.push(esc(it.OSVersion));
+          if (bits.length) {
+            detail = '<span class="scan-device">' +
+                       bits.join('<span class="sd-sep">|</span>') +
+                     '</span>';
+          }
+        }
         return '<label class="scan-item">' +
           '<input type="checkbox" data-idx="' + idx + '" ' + checked + ' ' + disabled + '>' +
-          '<span class="ip">' + esc(it.IPAddress) + '</span>' +
-          '<span class="browser">' + esc(it.Browser || '') + '</span>' +
-          (it.AlreadyKnown ? '<span class="known">already added</span>' : '') +
+          '<span class="scan-main">' +
+            '<span class="scan-line">' +
+              '<span class="ip">' + esc(it.IPAddress) + '</span>' +
+              '<span class="browser">' + esc(it.Browser || '') + '</span>' +
+              (it.AlreadyKnown ? '<span class="known">already added</span>' : '') +
+            '</span>' +
+            detail +
+          '</span>' +
           '</label>';
       }).join('');
       addRow.style.display = 'flex';
@@ -813,6 +1000,81 @@
         return { text: 'Available to cast', title: '', isLink: false };
       }
       return { text: k.CurrentUrl, title: k.CurrentUrl, isLink: true };
+    }
+
+    // ── Advanced kiosk (agent) helpers ────────────────────────────────────
+    // A kiosk running Start-KioskAgent.ps1 / Start-KioskAgent-Linux.sh reports
+    // itself to this server every few seconds, so the fields below are populated.
+    // A kiosk running the basic v1 launcher never reports and leaves them null.
+    function isAdvancedKiosk(k) {
+      return !!(k && k.Advanced && !k.AgentStale);
+    }
+
+    function fmtUptime(sec) {
+      if (sec === null || sec === undefined) return '';
+      var s = Number(sec);
+      if (isNaN(s) || s < 0) return '';
+      var d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+      if (d > 0) return d + 'd ' + h + 'h';
+      if (h > 0) return h + 'h ' + m + 'm';
+      return m + 'm';
+    }
+
+    // Builds the two-line Device cell: computer name on top, link type below.
+    // Returns {name, link, title, known}.
+    function deviceDisplay(k) {
+      if (!k.Advanced) {
+        return {
+          name: '-', link: '', known: false,
+          title: 'Basic kiosk (v1 launcher) - it does not report its computer name, OS or link type.\n' +
+                 'Run Start-KioskAgent instead to enable this (Add kiosk device -> Setup Scripts).'
+        };
+      }
+
+      var link = k.InterfaceType || '';
+      if (link && k.LinkSpeedMbps) { link += ' ' + k.LinkSpeedMbps + ' Mbps'; }
+
+      var titleParts = [];
+      if (k.Hostname)     titleParts.push('Computer: ' + k.Hostname);
+      if (k.OSVersion)    titleParts.push('OS: ' + k.OSVersion);
+      if (k.InterfaceType) {
+        titleParts.push('Link: ' + k.InterfaceType + (k.InterfaceName ? ' (' + k.InterfaceName + ')' : '') +
+                        (k.LinkSpeedMbps ? ' - ' + k.LinkSpeedMbps + ' Mbps' : ''));
+      }
+      if (k.BrowserInfo)  titleParts.push('Browser: ' + k.BrowserInfo);
+      if (k.UptimeSec !== null && k.UptimeSec !== undefined) {
+        titleParts.push('Agent uptime: ' + fmtUptime(k.UptimeSec));
+      }
+      if (k.AgentVersion) titleParts.push('Agent version: ' + k.AgentVersion);
+      if (k.LastReportAt) titleParts.push('Last report: ' + k.LastReportAt);
+      if (k.AgentStale)   titleParts.push('WARNING: this kiosk stopped reporting - the values above may be out of date.');
+
+      return {
+        name: k.Hostname || '?',
+        link: link,
+        known: true,
+        stale: !!k.AgentStale,
+        title: titleParts.join('\n')
+      };
+    }
+
+    function deviceCellHtml(k) {
+      var d = deviceDisplay(k);
+      if (!d.known) {
+        return '<span class="device-basic" title="' + esc(d.title) + '">-</span>';
+      }
+      return '<span class="device-wrap' + (d.stale ? ' device-stale' : '') + '" title="' + esc(d.title) + '">' +
+               '<span class="device-name">' + esc(d.name) + (d.stale ? ' (stale)' : '') + '</span>' +
+               (d.link ? '<span class="device-link">' + esc(d.link) + '</span>' : '') +
+             '</span>';
+    }
+
+    function powerKiosk(id, action) {
+      return fetch('/api/kiosks/power', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: id, action: action })
+      }).then(function(r) { return r.json(); }).catch(function() { return { ok: false }; });
     }
 
     function updateEditableField(id, field, value) {
@@ -1145,6 +1407,11 @@
       tdLat.textContent = fmtLatency(k.LatencyMs);
       tr.appendChild(tdLat);
 
+      var tdDevice = document.createElement('td');
+      tdDevice.className = 'left device-cell';
+      tdDevice.innerHTML = deviceCellHtml(k);
+      tr.appendChild(tdDevice);
+
       var tdPushed = document.createElement('td');
       tdPushed.className = 'left pushed-cell';
       var pushedWrap = document.createElement('span');
@@ -1211,7 +1478,7 @@
     function renderTable(kiosksUnsorted) {
       var body = document.getElementById('table-body');
       if (!kiosksUnsorted.length) {
-        body.innerHTML = '<tr><td colspan="8" id="empty-msg">No kiosk screens registered yet. Use "Add kiosk device" above.</td></tr>';
+        body.innerHTML = '<tr><td colspan="9" id="empty-msg">No kiosk screens registered yet. Use "Add kiosk device" above.</td></tr>';
         return;
       }
 
@@ -1280,6 +1547,9 @@
         var latCell = existingRow.querySelector('.latency-cell');
         if (latCell) latCell.textContent = fmtLatency(k.LatencyMs);
 
+        var deviceCell = existingRow.querySelector('.device-cell');
+        if (deviceCell) deviceCell.innerHTML = deviceCellHtml(k);
+
         var pushedCell = existingRow.querySelector('.pushed-cell .pushed-url');
         if (pushedCell) {
           var pd = pushedUrlDisplay(k);
@@ -1310,12 +1580,108 @@
       });
     }
 
+    // Ids currently ticked in the table, in table order.
+    function selectedKioskIds() {
+      return Object.keys(pushKioskSelected).filter(function(id) { return pushKioskSelected[id]; });
+    }
+
+    // Only the ticked kiosks that actually run the agent - the ones a power
+    // order can reach.
+    function selectedAdvancedKiosks() {
+      return selectedKioskIds()
+        .map(function(id) { return lastKiosks.find(function(x) { return String(x.ID) === id; }); })
+        .filter(function(k) { return isAdvancedKiosk(k); });
+    }
+
+    function kioskLabel(k) {
+      return k ? (k.Name || k.IPAddress) : '?';
+    }
+
     function updatePushBtnState() {
       var anySelected = Object.keys(pushKioskSelected).some(function(id) { return pushKioskSelected[id]; });
       document.getElementById('push-new-link-btn').disabled = !anySelected;
       document.getElementById('push-waiting-screen-btn').disabled = !anySelected;
       document.getElementById('kill-browser-btn').disabled = !anySelected;
+
+      // The whole power row only exists once an advanced kiosk does. With only
+      // basic kiosks registered there is nothing it could ever act on, so showing
+      // permanently-disabled power buttons would just be noise.
+      var anyAdvancedKnown = lastKiosks.some(isAdvancedKiosk);
+      var powerRow = document.getElementById('power-row');
+      if (powerRow) powerRow.style.display = anyAdvancedKnown ? '' : 'none';
+
+      var advanced = selectedAdvancedKiosks();
+      var powerBtns = [document.getElementById('power-reboot-btn'), document.getElementById('power-shutdown-btn')];
+      powerBtns.forEach(function(btn) {
+        if (!btn) return;
+        btn.disabled = advanced.length === 0;
+        btn.title = advanced.length === 0
+          ? 'Select at least one advanced kiosk (one running Start-KioskAgent, shown with a computer name in the Device column)'
+          : 'Applies to ' + advanced.length + ' advanced kiosk(s)';
+      });
     }
+
+    // Shared handler for the two power buttons. Basic (v1) kiosks in the
+    // selection are reported as skipped rather than silently ignored.
+    function runPowerAction(action, verb) {
+      var statusEl = document.getElementById('power-status');
+      var selected = selectedKioskIds();
+      var advanced = selectedAdvancedKiosks();
+
+      if (!advanced.length) {
+        statusEl.textContent = 'No advanced kiosk selected';
+        statusEl.style.color = '#ef4444';
+        return;
+      }
+
+      var skipped = selected.length - advanced.length;
+      var names = advanced.map(kioskLabel).join(', ');
+      var msg = verb.toUpperCase() + ' ' + advanced.length + ' kiosk PC(s): ' + names + '.\n\n';
+      if (action === 'shutdown') {
+        msg += 'These PCs will power off and can only be turned back on physically, ' +
+               'at the device itself.\n\n';
+      } else {
+        msg += 'These PCs will restart. The kiosk browser comes back automatically ' +
+               'once the agent starts again at boot (see the README for autostart).\n\n';
+      }
+      if (skipped > 0) {
+        msg += skipped + ' selected screen(s) run the basic launcher and will be skipped.\n\n';
+      }
+      msg += 'Continue?';
+      if (!confirm(msg)) return;
+
+      var btns = [document.getElementById('power-reboot-btn'), document.getElementById('power-shutdown-btn')];
+      btns.forEach(function(b) { if (b) b.disabled = true; });
+      statusEl.textContent = 'Sending ' + verb + ' order...';
+      statusEl.style.color = '#888';
+
+      Promise.all(advanced.map(function(k) { return powerKiosk(k.ID, action); }))
+        .then(function(results) {
+          var okCount = results.filter(function(r) { return r && r.ok; }).length;
+          if (okCount === results.length) {
+            statusEl.textContent = verb + ' ordered on ' + okCount + ' screen(s).';
+            statusEl.style.color = '#22c55e';
+          } else {
+            var firstErr = (results.find(function(r) { return r && !r.ok && r.error; }) || {}).error;
+            statusEl.textContent = okCount + '/' + results.length + ' succeeded' + (firstErr ? ' - ' + firstErr : '');
+            statusEl.style.color = '#eab308';
+          }
+          updatePushBtnState();
+          pollKiosks();
+        })
+        .catch(function() {
+          updatePushBtnState();
+          statusEl.textContent = 'Server unreachable';
+          statusEl.style.color = '#ef4444';
+        });
+    }
+
+    document.getElementById('power-reboot-btn').addEventListener('click', function() {
+      runPowerAction('reboot', 'Reboot');
+    });
+    document.getElementById('power-shutdown-btn').addEventListener('click', function() {
+      runPowerAction('shutdown', 'Shut down');
+    });
 
     document.getElementById('table-body').addEventListener('change', function(e) {
       var cb = e.target.closest('input[type=checkbox][data-select-kiosk]');
@@ -1415,9 +1781,24 @@
         var k = lastKiosks.find(function(x) { return String(x.ID) === id; });
         return k ? (k.Name || k.IPAddress) : id;
       }).join(', ');
-      var msg = 'This will close the browser on ' + ids.length + ' kiosk screen(s): ' + names + '.\n\n' +
-                'The kiosk web page will be closed on the remote kiosk device(s), and will need to be ' +
-                'restarted manually there afterwards. Continue?';
+      // Advanced kiosks run a watchdog that brings the browser straight back, so
+      // for those the server turns this into a deliberate restart rather than a
+      // kill. Say which behaviour the operator is actually about to get.
+      var advCount = ids.filter(function(id) {
+        return isAdvancedKiosk(lastKiosks.find(function(x) { return String(x.ID) === id; }));
+      }).length;
+      var basicCount = ids.length - advCount;
+
+      var msg = 'This will close the browser on ' + ids.length + ' kiosk screen(s): ' + names + '.\n\n';
+      if (advCount > 0) {
+        msg += advCount + ' advanced screen(s) will RESTART the browser automatically ' +
+               'and come back on their own.\n';
+      }
+      if (basicCount > 0) {
+        msg += basicCount + ' basic screen(s) will stay closed and must be restarted ' +
+               'manually on the device itself.\n';
+      }
+      msg += '\nContinue?';
       if (!confirm(msg)) return;
 
       btn.disabled = true;
@@ -1459,6 +1840,33 @@
         })
         .catch(function() {});
     }
+
+    // Fill the launcher command lines with this server's own address, so the
+    // operator never has to work out what to pass to -ServerUrl / --server-url.
+    (function initLauncherCommands() {
+      var origin = window.location.origin;
+      var pairs = [
+        { el: 'agent-cmd-win',   copy: 'agent-cmd-win-copy',
+          text: '.\\Start-KioskAgent.ps1 -ServerUrl ' + origin },
+        { el: 'agent-cmd-linux', copy: 'agent-cmd-linux-copy',
+          text: './Start-KioskAgent-Linux.sh --server-url ' + origin }
+      ];
+      var pkgUrlEl = document.getElementById('pkg-server-url');
+      if (pkgUrlEl) pkgUrlEl.textContent = origin;
+
+      pairs.forEach(function(p) {
+        var codeEl = document.getElementById(p.el);
+        var btnEl  = document.getElementById(p.copy);
+        if (!codeEl || !btnEl) return;
+        codeEl.textContent = p.text;
+        btnEl.addEventListener('click', function() {
+          copyTextToClipboard(p.text).then(function() {
+            btnEl.classList.add('copied');
+            setTimeout(function() { btnEl.classList.remove('copied'); }, 1200);
+          });
+        });
+      });
+    })();
 
     pollKiosks();
     setInterval(pollKiosks, 4000);

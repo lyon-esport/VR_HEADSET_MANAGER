@@ -1716,8 +1716,24 @@ function Show-SubMenu-KioskScreens {
                     $statusColor = 'Red'
                     $statusLabel = $msg.Kiosk.StatusUnreachable
                 }
+
+                # Advanced kiosks (Start-KioskAgent.*) report their computer name
+                # and link type; a basic kiosk shows nothing extra.
+                $agent = Get-KioskAgentInfo -IPAddress $k.IPAddress
+                $deviceLabel = ""
+                if ($agent) {
+                    $deviceLabel = "  $($msg.Kiosk.AgentBadge) $($agent.Hostname)"
+                    if ($agent.InterfaceType) { $deviceLabel += " / $($agent.InterfaceType)" }
+                    if ($agent.IsStale)       { $deviceLabel += " (stale)" }
+                }
+
                 Write-Host ("  {0}. {1,-20} {2,-15} {3,-6} " -f $i, $k.Name, $k.IPAddress, $k.Port) -NoNewline
-                Write-Host $statusLabel -ForegroundColor $statusColor
+                Write-Host $statusLabel -ForegroundColor $statusColor -NoNewline
+                if ($deviceLabel) {
+                    $deviceColor = if ($agent.IsStale) { 'DarkYellow' } else { 'Cyan' }
+                    Write-Host $deviceLabel -ForegroundColor $deviceColor -NoNewline
+                }
+                Write-Host ""
                 $i++
             }
         }
@@ -1770,6 +1786,9 @@ function Show-SubMenu-KioskScreens {
                 Write-Host ("  {0}: {1} [{2}:{3}]" -f $msg.Kiosk.Selected, $target.Name, $target.IPAddress, $target.Port)
                 Write-Host $msg.Kiosk.ActionPush
                 Write-Host $msg.Kiosk.ActionEdit
+                Write-Host $msg.Kiosk.ActionInfo
+                Write-Host $msg.Kiosk.ActionReboot
+                Write-Host $msg.Kiosk.ActionShutdown
                 Write-Host $msg.Kiosk.ActionDelete
                 Write-Host $msg.Kiosk.ActionCancel
                 $action = (Read-Host $msg.EnterChoice).Trim().ToUpper()
@@ -1832,6 +1851,65 @@ function Show-SubMenu-KioskScreens {
                         Write-Log ($msg.Kiosk.EditSuccess -f $target.Name) -Level SUCCESS
                     }
                     Start-Sleep -Seconds 1
+                }
+                elseif ($action -eq 'I') {
+                    Write-Host ""
+                    $agentInfo = Get-KioskAgentInfo -IPAddress $target.IPAddress
+                    if (-not $agentInfo) {
+                        Write-Host ($msg.Kiosk.AgentNone) -ForegroundColor Yellow
+                        Write-Host ($msg.Kiosk.AgentNoneHint) -ForegroundColor DarkGray
+                    } else {
+                        Write-Host ($msg.Kiosk.InfoTitle -f $target.Name) -ForegroundColor Cyan
+                        if ($agentInfo.IsStale) {
+                            Write-Host ($msg.Kiosk.AgentStale) -ForegroundColor Yellow
+                        }
+                        $linkText = $agentInfo.InterfaceType
+                        if ($agentInfo.InterfaceName)  { $linkText += " ($($agentInfo.InterfaceName))" }
+                        if ($agentInfo.LinkSpeedMbps)  { $linkText += " - $($agentInfo.LinkSpeedMbps) Mbps" }
+
+                        Write-Host ($msg.Kiosk.InfoComputer   -f $agentInfo.Hostname)
+                        Write-Host ($msg.Kiosk.InfoOS         -f $agentInfo.OS)
+                        Write-Host ($msg.Kiosk.InfoLink       -f $linkText)
+                        Write-Host ($msg.Kiosk.InfoBrowser    -f $agentInfo.Browser)
+                        Write-Host ($msg.Kiosk.InfoAgent      -f $agentInfo.AgentVersion)
+                        Write-Host ($msg.Kiosk.InfoUptime     -f (Get-FormattedUptime -Seconds $agentInfo.UptimeSec))
+                        Write-Host ($msg.Kiosk.InfoLastReport -f $agentInfo.LastReportAt)
+                        Write-Host ($msg.Kiosk.InfoCurrentUrl -f $agentInfo.CurrentUrl)
+                    }
+                    Write-Host ""
+                    [void](Read-Host $msg.PressEnterToContinue)
+                }
+                elseif ($action -eq 'R' -or $action -eq 'H') {
+                    $powerAction  = if ($action -eq 'R') { 'reboot' } else { 'shutdown' }
+                    $confirmMsg   = if ($action -eq 'R') { $msg.Kiosk.PowerRebootConfirm } else { $msg.Kiosk.PowerShutdownConfirm }
+
+                    # Only an advanced kiosk has an agent able to receive the order.
+                    $agentInfo = Get-KioskAgentInfo -IPAddress $target.IPAddress
+                    if (-not $agentInfo) {
+                        Write-Host ""
+                        Write-Host ($msg.Kiosk.PowerNotAdvanced -f $target.Name) -ForegroundColor Yellow
+                        Write-Host ($msg.Kiosk.AgentNoneHint) -ForegroundColor DarkGray
+                        Start-Sleep -Seconds 3
+                        continue
+                    }
+
+                    Write-Host ""
+                    $confirm = (Read-Host ($confirmMsg -f $target.Name)).Trim().ToUpper()
+                    if ($confirm -ne 'Y' -and $confirm -ne 'O') {
+                        Write-Host $msg.Kiosk.PowerCancelled -ForegroundColor DarkGray
+                        Start-Sleep -Seconds 1
+                        continue
+                    }
+
+                    $powerResult = Invoke-KioskPowerAction -IPAddress $target.IPAddress -Port ([int]$target.Port) -Action $powerAction
+                    if ($powerResult.Success) {
+                        Write-Log ($msg.Kiosk.PowerSent -f $powerAction, $target.Name) -Level SUCCESS
+                        Write-Host ($msg.Kiosk.PowerSent -f $powerAction, $target.Name) -ForegroundColor Green
+                    } else {
+                        Write-Log ($msg.Kiosk.PowerFailed -f $powerAction, $target.Name, $powerResult.Error) -Level ERROR
+                        Write-Host ($msg.Kiosk.PowerFailed -f $powerAction, $target.Name, $powerResult.Error) -ForegroundColor Red
+                    }
+                    Start-Sleep -Seconds 2
                 }
                 elseif ($action -eq 'D') {
                     $confirm = (Read-Host ($msg.Kiosk.DeleteConfirm -f $target.Name)).Trim().ToUpper()

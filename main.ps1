@@ -135,7 +135,7 @@ if (-not $rootDiag.Writable) {
 }
 
 # Check if folders exists in the same folder as the script, otherwise create them
-$requiredFolders = @("config","data","logs","website","website\generated")
+$requiredFolders = @("config","data","data\kiosk_commands","logs","website","website\generated")
 foreach ($folder in $requiredFolders) {
     $folderPath = Join-Path -Path $global:ScriptPath -ChildPath $folder
     if (-not (Test-Path -Path $folderPath)) {

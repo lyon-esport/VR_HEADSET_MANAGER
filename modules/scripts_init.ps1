@@ -192,6 +192,17 @@ if ($global:VQA_Enabled -and -not $global:IsVRMonitorJob -and -not $global:IsDas
     }
 }
 
+# Rebuild the ready-to-use kiosk setup zip. Done on every startup on purpose: the
+# advanced .cmd inside it has this server's LAN URL baked in, so a DHCP lease
+# change would otherwise leave the download pointing at an address no kiosk can
+# reach. Main process only - the child processes would just duplicate the work.
+if (-not $global:IsVRMonitorJob -and -not $global:IsDashboardProcess -and -not $global:IsWebServerProcess) {
+    if (Get-Command New-KioskLauncherPackage -ErrorAction SilentlyContinue) {
+        try { New-KioskLauncherPackage | Out-Null }
+        catch { Write-Log ("Kiosk launcher package build failed: " + $_.Exception.Message) -Level WARNING }
+    }
+}
+
 
 # Returns the path of the web server PID lock file.
 function Get-WebServerPidPath {

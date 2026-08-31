@@ -179,6 +179,7 @@ $mimeTypes = @{
     '.woff2'= 'font/woff2'
     '.ttf'  = 'font/ttf'
     '.txt'  = 'text/plain; charset=utf-8'
+    '.zip'  = 'application/zip'
 }
 
 
@@ -1121,20 +1122,37 @@ try {
                         $statusList = @()
                     }
                 }
+                # Read the agent cache ONCE, not once per kiosk: this endpoint is
+                # polled every 4s by the browser.
+                $agentList = @(Get-KioskAgentReports)
+
                 $merged = $kiosks | ForEach-Object {
                     $k = $_
                     $st = $statusList | Where-Object { $_.IPAddress -eq $k.IPAddress } | Select-Object -First 1
+                    # Agent fields stay $null for basic (v1) kiosks, which never report.
+                    $ag = $agentList | Where-Object { $_.IPAddress -eq $k.IPAddress } | Select-Object -First 1
                     [PSCustomObject]@{
-                        ID           = $k.ID
-                        Name         = $k.Name
-                        IPAddress    = $k.IPAddress
-                        Port         = $k.Port
-                        PushedURL    = $k.PushedURL
-                        LastPushedAt = $k.LastPushedAt
-                        Reachable    = if ($st) { $st.Reachable } else { $null }
-                        LatencyMs    = if ($st) { $st.LatencyMs } else { $null }
-                        CdpOpen      = if ($st) { $st.CdpOpen } else { $null }
-                        CurrentUrl   = if ($st) { $st.CurrentUrl } else { $null }
+                        ID            = $k.ID
+                        Name          = $k.Name
+                        IPAddress     = $k.IPAddress
+                        Port          = $k.Port
+                        PushedURL     = $k.PushedURL
+                        LastPushedAt  = $k.LastPushedAt
+                        Reachable     = if ($st) { $st.Reachable } else { $null }
+                        LatencyMs     = if ($st) { $st.LatencyMs } else { $null }
+                        CdpOpen       = if ($st) { $st.CdpOpen } else { $null }
+                        CurrentUrl    = if ($st) { $st.CurrentUrl } else { $null }
+                        Advanced      = ($null -ne $ag)
+                        AgentStale    = if ($ag) { [bool]$ag.IsStale }        else { $null }
+                        Hostname      = if ($ag) { $ag.Hostname }             else { $null }
+                        OSVersion     = if ($ag) { $ag.OS }                   else { $null }
+                        InterfaceType = if ($ag) { $ag.InterfaceType }        else { $null }
+                        InterfaceName = if ($ag) { $ag.InterfaceName }        else { $null }
+                        LinkSpeedMbps = if ($ag) { $ag.LinkSpeedMbps }        else { $null }
+                        BrowserInfo   = if ($ag) { $ag.Browser }              else { $null }
+                        UptimeSec     = if ($ag) { $ag.UptimeSec }            else { $null }
+                        AgentVersion  = if ($ag) { $ag.AgentVersion }         else { $null }
+                        LastReportAt  = if ($ag) { $ag.LastReportAt }         else { $null }
                     }
                 }
                 Send-JsonResponse -Response $response -Body @{ ok = $true; kiosks = @($merged) }
@@ -1291,11 +1309,25 @@ try {
                 if (-not $kiosk) {
                     Send-JsonResponse -Response $response -StatusCode 404 -Body @{ ok = $false; error = "Kiosk not found" }
                 } else {
-                    $result = Close-KioskBrowser -IP $kiosk.IPAddress -Port ([int]$kiosk.Port)
-                    if ($result.Success) {
-                        Send-JsonResponse -Response $response -Body @{ ok = $true }
+                    # An advanced kiosk auto-restarts its browser, so a raw CDP Browser.close
+                    # would just be undone by its watchdog a few seconds later. Route it through
+                    # the agent as a deliberate restart instead; basic (v1) kiosks keep the
+                    # original kill-only behaviour.
+                    $agent = Get-KioskAgentInfo -IPAddress $kiosk.IPAddress
+                    if ($agent -and -not $agent.IsStale) {
+                        $result = Invoke-KioskPowerAction -IPAddress $kiosk.IPAddress -Port ([int]$kiosk.Port) -Action 'browser-restart'
+                        if ($result.Success) {
+                            Send-JsonResponse -Response $response -Body @{ ok = $true; restarted = $true; method = $result.Method }
+                        } else {
+                            Send-JsonResponse -Response $response -Body @{ ok = $false; error = $result.Error }
+                        }
                     } else {
-                        Send-JsonResponse -Response $response -Body @{ ok = $false; error = $result.Error }
+                        $result = Close-KioskBrowser -IP $kiosk.IPAddress -Port ([int]$kiosk.Port)
+                        if ($result.Success) {
+                            Send-JsonResponse -Response $response -Body @{ ok = $true; restarted = $false }
+                        } else {
+                            Send-JsonResponse -Response $response -Body @{ ok = $false; error = $result.Error }
+                        }
                     }
                 }
             } catch {
@@ -1321,6 +1353,73 @@ try {
                         Send-JsonResponse -Response $response -Body @{ ok = $true; cdp = $info }
                     } else {
                         Send-JsonResponse -Response $response -Body @{ ok = $false; error = "Unreachable or CDP not open" }
+                    }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/kiosks/agent-report  - heartbeat from an advanced kiosk (Start-KioskAgent.*)
+        #
+        # This is the only endpoint in the project that accepts a POST from a remote
+        # device rather than from the operator's browser. Security boundary:
+        #   - the record is keyed on the request's REMOTE ENDPOINT address; any "ip"
+        #     in the body is ignored, so a kiosk cannot impersonate another one or
+        #     collect another kiosk's queued command
+        #   - the body is size-capped here and every string field is length-capped in
+        #     Save-KioskAgentReport
+        #   - it only ever updates the agent cache; it never creates a known_kiosks.csv
+        #     row, so an unknown LAN device cannot register itself as a kiosk
+        # The response carries any pending operator command (deliver-once).
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/kiosks/agent-report') {
+            try {
+                if ($request.ContentLength64 -gt 8192) { throw "Report body too large" }
+                $reader = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $bodyRaw = $reader.ReadToEnd(); $reader.Close()
+                $json = $bodyRaw | ConvertFrom-Json
+
+                $remoteIp = $request.RemoteEndPoint.Address.ToString()
+                # An IPv4 client reaching an IPv6-capable listener shows up as ::ffff:a.b.c.d
+                if ($remoteIp -match '^::ffff:(\d+\.\d+\.\d+\.\d+)$') { $remoteIp = $Matches[1] }
+
+                Save-KioskAgentReport -IPAddress $remoteIp -Report $json | Out-Null
+
+                $pending = Get-PendingKioskCommand -IPAddress $remoteIp
+                Send-JsonResponse -Response $response -Body @{ ok = $true; command = $pending }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/kiosks/power  body: {id, action}  action = reboot|shutdown|browser-restart
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/kiosks/power') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $bodyRaw = $reader.ReadToEnd(); $reader.Close()
+                $json = $bodyRaw | ConvertFrom-Json
+                if ($null -eq $json.id) { throw "id is required" }
+                $action = ([string]$json.action).Trim().ToLower()
+                if ($action -notin @('reboot', 'shutdown', 'browser-restart')) {
+                    throw "action must be one of: reboot, shutdown, browser-restart"
+                }
+
+                $kiosk = Get-KnownKiosks | Where-Object { $_.ID -eq [int]$json.id } | Select-Object -First 1
+                if (-not $kiosk) {
+                    Send-JsonResponse -Response $response -StatusCode 404 -Body @{ ok = $false; error = "Kiosk not found" }
+                } else {
+                    $result = Invoke-KioskPowerAction -IPAddress $kiosk.IPAddress -Port ([int]$kiosk.Port) -Action $action
+                    if ($result.Success) {
+                        Write-Log "Kiosk power action '$action' sent to $($kiosk.Name) ($($kiosk.IPAddress)) via $($result.Method)." -Level SUCCESS
+                        Send-JsonResponse -Response $response -Body @{ ok = $true; method = $result.Method; nonce = $result.Nonce }
+                    } else {
+                        Send-JsonResponse -Response $response -Body @{ ok = $false; error = $result.Error; method = $result.Method }
                     }
                 }
             } catch {

@@ -1,0 +1,739 @@
+#!/usr/bin/env bash
+#
+# Start-KioskAgent-Linux.sh
+#
+# Advanced kiosk launcher + agent for Debian / Raspberry Pi OS. This is the
+# "v2" companion to Start-KioskChrome-Linux.sh.
+#
+# It does everything the basic launcher does:
+#   1. Detects Chromium/Chrome and locates the binary automatically.
+#   2. Opens the firewall for the Chrome remote debugging port (ufw,
+#      firewalld, or plain iptables - whichever is present).
+#   3. Launches Chromium in kiosk mode with remote debugging enabled.
+#   4. Works around recent Chromium builds hard-locking the debug listener to
+#      127.0.0.1 by adding an iptables DNAT rule.
+#
+# ...and then keeps running as an agent that adds:
+#   5. Reporting - every few seconds it tells the VR HEADSET MANAGER server
+#      this PC's hostname, OS version, Chromium version, and whether the
+#      connection to the server runs over Ethernet or WiFi.
+#   6. Remote power control - reboot / shutdown / browser restart ordered from
+#      VR HEADSET MANAGER.
+#   7. Browser watchdog - Chromium is relaunched automatically if it dies.
+#
+# IMPORTANT - this script never opens a listening port of its own. It only
+# makes OUTBOUND calls: to its own loopback Chromium debug port, and to the
+# VR HEADSET MANAGER server. Commands travel back inside the reply to its own
+# report.
+#
+# Unlike the basic launcher, this script STAYS IN THE FOREGROUND - closing the
+# terminal stops the agent. See README-KioskChrome.md for the systemd unit that
+# runs it at boot.
+#
+# Usage:
+#   ./Start-KioskAgent-Linux.sh [--server-url URL] [--url URL] [--port PORT]
+#                               [--report-interval SECONDS] [--no-auto-restart]
+#
+#   Positional "URL PORT" is also accepted, matching the basic launcher.
+#
+# Examples:
+#   ./Start-KioskAgent-Linux.sh --server-url http://192.168.1.37:8080
+#   ./Start-KioskAgent-Linux.sh --server-url http://192.168.1.37:8080 --port 9222
+#
+# Reboot and shutdown need root. Either run this script with sudo, or grant the
+# desktop user passwordless rights to just those two commands - see the README.
+#
+# Safe to re-run any time. Any previous kiosk Chromium and any previous
+# port-redirect rule for the same port are stopped/removed first.
+
+set -u
+
+AGENT_VERSION="1.0"
+
+DEFAULT_URL="data:text/html,%3Chtml%3E%3Chead%3E%3Cmeta%20charset%3D'utf-8'%3E%3Ctitle%3EKiosk%3C%2Ftitle%3E%3Cstyle%3Ehtml%2Cbody%7Bmargin%3A0%3Bheight%3A100%25%3Bbackground%3A%23000%3Bcolor%3A%23fff%3Bdisplay%3Aflex%3Balign-items%3Acenter%3Bjustify-content%3Acenter%3Bfont-family%3Asystem-ui%2Csans-serif%3Bflex-direction%3Acolumn%7Dh1%7Bfont-size%3A3vw%3Bletter-spacing%3A.08em%3Btext-transform%3Auppercase%3Bcolor%3A%23888%3Bmargin%3A0%7Dh2%7Bfont-size%3A5vw%3Bfont-weight%3A700%3Bmargin%3A12px%200%200%7D%3C%2Fstyle%3E%3C%2Fhead%3E%3Cbody%3E%3Ch1%3EKiosk%20Mode%3C%2Fh1%3E%3Ch2%3EReady%20to%20stream%3C%2Fh2%3E%3C%2Fbody%3E%3C%2Fhtml%3E"
+
+# ---------------------------------------------------------------------------
+# 0. Arguments
+# ---------------------------------------------------------------------------
+URL="$DEFAULT_URL"
+PORT="9222"
+SERVER_URL=""
+REPORT_INTERVAL="5"
+AUTO_RESTART="1"
+POSITIONAL=()
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --server-url)      SERVER_URL="${2:-}"; shift 2 ;;
+        --url)             URL="${2:-}"; shift 2 ;;
+        --port)            PORT="${2:-}"; shift 2 ;;
+        --report-interval) REPORT_INTERVAL="${2:-}"; shift 2 ;;
+        --no-auto-restart) AUTO_RESTART="0"; shift ;;
+        -h|--help)
+            sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'
+            exit 0
+            ;;
+        *) POSITIONAL+=("$1"); shift ;;
+    esac
+done
+
+# Positional compatibility with Start-KioskChrome-Linux.sh: [URL] [PORT]
+if [ "${#POSITIONAL[@]}" -ge 1 ]; then URL="${POSITIONAL[0]}"; fi
+if [ "${#POSITIONAL[@]}" -ge 2 ]; then PORT="${POSITIONAL[1]}"; fi
+
+case "$REPORT_INTERVAL" in
+    ''|*[!0-9]*) REPORT_INTERVAL=5 ;;
+esac
+[ "$REPORT_INTERVAL" -lt 1 ] && REPORT_INTERVAL=1
+
+echo "=== VRHM Kiosk Agent setup (Linux) ==="
+echo "URL:    $URL"
+echo "Port:   $PORT"
+if [ -n "$SERVER_URL" ]; then
+    echo "Server: $SERVER_URL (reporting every ${REPORT_INTERVAL}s)"
+else
+    echo "Server: not set - will try to learn it from the first pushed URL."
+    echo "        Pass --server-url for immediate reporting."
+fi
+echo ""
+
+# ---------------------------------------------------------------------------
+# 1. Identify the real desktop user and DISPLAY, in case this script was itself
+#    launched via sudo (we never want to run the browser as root - Chromium
+#    refuses to start as root unless --no-sandbox is passed, which weakens the
+#    sandbox, and root usually cannot attach to the desktop user's session).
+# ---------------------------------------------------------------------------
+if [ "$(id -u)" -eq 0 ]; then
+    TARGET_USER="${SUDO_USER:-}"
+    if [ -z "$TARGET_USER" ] || [ "$TARGET_USER" = "root" ]; then
+        echo "This script was started as root and no other desktop user could be" >&2
+        echo "identified. Please run it as your normal desktop user instead, or via" >&2
+        echo "sudo from that user's session." >&2
+        exit 1
+    fi
+    RUN_AS_USER="sudo -u $TARGET_USER"
+else
+    TARGET_USER="$(id -un)"
+    RUN_AS_USER=""
+fi
+
+if [ -z "${DISPLAY:-}" ]; then
+    DISPLAY=":0"
+fi
+if [ -z "${XAUTHORITY:-}" ]; then
+    XAUTHORITY="$(eval echo "~$TARGET_USER")/.Xauthority"
+fi
+
+# ---------------------------------------------------------------------------
+# 2. curl is the agent's only hard dependency beyond the browser itself: it
+#    carries both the loopback CDP reads and the outbound report.
+# ---------------------------------------------------------------------------
+if ! command -v curl >/dev/null 2>&1; then
+    echo "curl is required by the kiosk agent but was not found."
+    read -p "Install curl now with apt-get? [Y/n]: " CURL_CHOICE
+    case "$CURL_CHOICE" in
+        [Nn]*)
+            echo "Install it manually with: sudo apt-get install -y curl" >&2
+            exit 1
+            ;;
+        *)
+            sudo apt-get update -y && sudo apt-get install -y curl
+            if ! command -v curl >/dev/null 2>&1; then
+                echo "curl still not available - aborting." >&2
+                exit 1
+            fi
+            ;;
+    esac
+fi
+
+# ---------------------------------------------------------------------------
+# 3. Locate Chromium / Chrome
+# ---------------------------------------------------------------------------
+CHROME_BIN=""
+for candidate in chromium-browser chromium google-chrome-stable google-chrome; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+        CHROME_BIN="$(command -v "$candidate")"
+        break
+    fi
+done
+
+if [ -z "$CHROME_BIN" ]; then
+    echo "Could not find chromium-browser, chromium, google-chrome-stable, or google-chrome." >&2
+    echo ""
+    read -p "Install Chromium now? [A] Auto-install (recommended) / [M] I'll install it manually: " CHROME_INSTALL_CHOICE
+
+    case "$CHROME_INSTALL_CHOICE" in
+        [Aa]*)
+            echo "Installing chromium via apt-get (requires sudo)..."
+            if sudo apt-get update -y && sudo apt-get install -y chromium; then
+                :
+            else
+                echo "Package 'chromium' failed - trying 'chromium-browser' (older Raspberry Pi OS releases)..." >&2
+                sudo apt-get install -y chromium-browser
+            fi
+
+            for candidate in chromium-browser chromium google-chrome-stable google-chrome; do
+                if command -v "$candidate" >/dev/null 2>&1; then
+                    CHROME_BIN="$(command -v "$candidate")"
+                    break
+                fi
+            done
+
+            if [ -z "$CHROME_BIN" ]; then
+                echo "Automatic install did not succeed." >&2
+                echo "Install one manually, for example:" >&2
+                echo "  sudo apt-get update && sudo apt-get install -y chromium" >&2
+                exit 1
+            fi
+            ;;
+        *)
+            echo "Install one first, for example on Debian/Raspberry Pi OS:" >&2
+            echo "  sudo apt-get update && sudo apt-get install -y chromium" >&2
+            exit 1
+            ;;
+    esac
+fi
+
+echo "Chromium found at: $CHROME_BIN"
+
+# ---------------------------------------------------------------------------
+# 4. Open the firewall for the debug port
+# ---------------------------------------------------------------------------
+echo ""
+echo "Configuring firewall for TCP port $PORT..."
+
+if command -v ufw >/dev/null 2>&1 && sudo ufw status 2>/dev/null | grep -qi "^Status: active"; then
+    sudo ufw allow "${PORT}/tcp" comment "VRHM Kiosk Chrome Debug" >/dev/null
+    echo "ufw rule ensured for port $PORT."
+elif command -v firewall-cmd >/dev/null 2>&1 && sudo firewall-cmd --state >/dev/null 2>&1; then
+    sudo firewall-cmd --permanent --add-port="${PORT}/tcp" >/dev/null
+    sudo firewall-cmd --reload >/dev/null
+    echo "firewalld rule ensured for port $PORT."
+elif command -v iptables >/dev/null 2>&1; then
+    if ! sudo iptables -C INPUT -p tcp --dport "$PORT" -j ACCEPT 2>/dev/null; then
+        sudo iptables -I INPUT -p tcp --dport "$PORT" -j ACCEPT
+        echo "iptables rule added for port $PORT."
+        echo "Note: this iptables rule is not persisted across reboots unless you"
+        echo "have iptables-persistent (or similar) installed and configured."
+    else
+        echo "iptables rule for port $PORT already present."
+    fi
+else
+    echo "No supported firewall tool found (ufw/firewalld/iptables). Skipping firewall step -" >&2
+    echo "make sure port $PORT is reachable by whatever means you use to manage this PC's firewall." >&2
+fi
+
+USER_DATA_DIR="$(eval echo "~$TARGET_USER")/.config/vrhm-kiosk-chrome"
+
+# ---------------------------------------------------------------------------
+# 5. Browser lifecycle helpers. Factored into functions because - unlike the
+#    basic launcher - this script relaunches Chromium on its own.
+# ---------------------------------------------------------------------------
+stop_existing_browser() {
+    pkill -f "remote-debugging-port=$PORT" 2>/dev/null || true
+    pkill -f "socat.*:$PORT," 2>/dev/null || true
+    sleep 1
+}
+
+clean_browser_profile() {
+    mkdir -p "$USER_DATA_DIR" 2>/dev/null || true
+
+    # When Chromium is closed via CDP "Browser.close" instead of this script's
+    # own pkill, it can leave Singleton* lock files behind. A later launch then
+    # silently hands off to (or is blocked by) that stale lock instead of
+    # starting a genuinely fresh, debug-enabled process - Chromium opens and the
+    # kiosk display looks fine, but the new debug listener never comes up, so the
+    # server can no longer reach it. This matters far more here than in the basic
+    # launcher, because the watchdog relaunches often.
+    for lockFile in SingletonLock SingletonSocket SingletonCookie; do
+        rm -f "$USER_DATA_DIR/$lockFile" 2>/dev/null || true
+    done
+
+    # A hard power loss leaves Preferences with exit_type=Crashed, and recent
+    # Chromium builds show the "Restore pages?" popup based on that stored value
+    # regardless of --disable-session-crashed-bubble.
+    PREFS_FILE="$USER_DATA_DIR/Default/Preferences"
+    if [ -f "$PREFS_FILE" ]; then
+        if command -v python3 >/dev/null 2>&1; then
+            python3 - "$PREFS_FILE" <<'PYEOF' 2>/dev/null || true
+import json
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+except Exception:
+    sys.exit(0)
+
+profile = data.get("profile")
+if isinstance(profile, dict):
+    profile["exit_type"] = "Normal"
+    profile["exited_cleanly"] = True
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+PYEOF
+        else
+            sed -i \
+                -e 's/"exit_type":"[^"]*"/"exit_type":"Normal"/' \
+                -e 's/"exited_cleanly":false/"exited_cleanly":true/' \
+                "$PREFS_FILE" 2>/dev/null || true
+        fi
+    fi
+}
+
+CHROME_PID=""
+
+start_kiosk_browser() {
+    clean_browser_profile
+
+    echo "Starting Chromium in kiosk mode..."
+
+    $RUN_AS_USER env DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" "$CHROME_BIN" \
+        --remote-debugging-port="$PORT" \
+        --remote-debugging-address=0.0.0.0 \
+        --remote-allow-origins=* \
+        --user-data-dir="$USER_DATA_DIR" \
+        --kiosk \
+        --noerrdialogs \
+        --disable-infobars \
+        --no-first-run \
+        --deny-permission-prompts \
+        --disable-notifications \
+        --disable-features=Translate,TranslateUI,PrivacySandboxSettings4,AutofillServerCommunication \
+        --disable-session-crashed-bubble \
+        --no-default-browser-check \
+        --autoplay-policy=no-user-gesture-required \
+        "$URL" >/dev/null 2>&1 &
+
+    CHROME_PID=$!
+    disown 2>/dev/null || true
+}
+
+remove_port_redirect() {
+    sudo iptables -t nat -D PREROUTING -p tcp --dport "$PORT" -j DNAT \
+        --to-destination "127.0.0.1:$PORT" -m comment --comment "VRHM_KIOSK_DEBUGPORT" 2>/dev/null || true
+}
+
+update_port_redirect() {
+    echo "Verifying the debug port is reachable from the network..."
+
+    # Chromium can take longer than a few seconds to bind the debug port on
+    # slower hardware (e.g. Raspberry Pi), so poll instead of checking once.
+    LISTEN_LINE=""
+    for attempt in $(seq 1 15); do
+        if command -v ss >/dev/null 2>&1; then
+            LISTEN_LINE="$(ss -ltn 2>/dev/null | grep ":$PORT[[:space:]]" | head -n1)"
+        elif command -v netstat >/dev/null 2>&1; then
+            LISTEN_LINE="$(netstat -ltn 2>/dev/null | grep ":$PORT[[:space:]]" | head -n1)"
+        fi
+        [ -n "$LISTEN_LINE" ] && break
+        sleep 1
+    done
+
+    # Always remove any previous redirect for this port before deciding whether a
+    # new one is needed, so repeated relaunches stay idempotent.
+    remove_port_redirect
+    pkill -f "socat.*:$PORT," 2>/dev/null || true
+
+    if [ -n "$LISTEN_LINE" ] && echo "$LISTEN_LINE" | grep -q "127.0.0.1:$PORT"; then
+        echo "Chromium is only listening on 127.0.0.1:$PORT (LAN binding was ignored by this build)."
+        echo "Redirecting LAN connections on port $PORT to the loopback listener (iptables DNAT)..."
+
+        # The kernel treats a packet whose destination becomes 127.0.0.1 as
+        # "martian" and drops it unless route_localnet is enabled - and it must be
+        # set per already-up interface, not just "all", to take effect.
+        sudo sysctl -w net.ipv4.conf.all.route_localnet=1 >/dev/null
+        for iface in $(ip -o link show up 2>/dev/null | awk -F': ' '{print $2}' | grep -v '^lo$'); do
+            sudo sysctl -w "net.ipv4.conf.${iface}.route_localnet=1" >/dev/null 2>&1 || true
+        done
+
+        if sudo iptables -t nat -A PREROUTING -p tcp --dport "$PORT" -j DNAT \
+                --to-destination "127.0.0.1:$PORT" -m comment --comment "VRHM_KIOSK_DEBUGPORT"; then
+            echo "Port redirect active: LAN:$PORT -> 127.0.0.1:$PORT (iptables DNAT)"
+        else
+            echo "Could not add the iptables DNAT rule for port $PORT." >&2
+        fi
+    elif [ -n "$LISTEN_LINE" ]; then
+        echo "Chromium is listening on a LAN-reachable address - already reachable from the network."
+    else
+        echo "Could not confirm Chromium is listening on port $PORT yet." >&2
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# 6. Agent helpers - local machine facts
+# ---------------------------------------------------------------------------
+
+# Machine identity and OS description never change while the script runs, so
+# they are resolved once at startup rather than on every report.
+MACHINE_ID="$(cat /etc/machine-id 2>/dev/null || true)"
+[ -z "$MACHINE_ID" ] && MACHINE_ID="$(hostname)"
+
+OS_DESCRIPTION="$( (grep -m1 '^PRETTY_NAME=' /etc/os-release 2>/dev/null || true) | cut -d'"' -f2 )"
+[ -z "$OS_DESCRIPTION" ] && OS_DESCRIPTION="$(uname -s)"
+OS_DESCRIPTION="$OS_DESCRIPTION (kernel $(uname -r))"
+
+HOST_NAME="$(hostname 2>/dev/null || echo unknown)"
+STARTED_AT="$(date +%s)"
+
+json_escape() {
+    # Minimal JSON string escaping: backslash, double quote, and control chars.
+    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/\\t/g' | tr -d '\000-\010\013\014\016-\037'
+}
+
+url_host() {
+    # http://1.2.3.4:8080/path -> 1.2.3.4
+    printf '%s' "$1" | sed -e 's|^[a-zA-Z]*://||' -e 's|/.*$||' -e 's|:.*$||'
+}
+
+IFACE_TYPE="Unknown"
+IFACE_NAME=""
+IFACE_SPEED=""
+
+detect_session_interface() {
+    # Reports the interface that actually carries the session with the server,
+    # rather than guessing at "the primary adapter": ask the routing table which
+    # device it would use to reach the server address.
+    local server_host="$1"
+    IFACE_TYPE="Unknown"; IFACE_NAME=""; IFACE_SPEED=""
+    [ -z "$server_host" ] && return 0
+
+    local target_ip route_line
+    target_ip="$server_host"
+    case "$server_host" in
+        *[!0-9.]*)
+            target_ip="$(getent hosts "$server_host" 2>/dev/null | awk '{print $1; exit}')"
+            ;;
+    esac
+    [ -z "$target_ip" ] && return 0
+
+    route_line="$(ip route get "$target_ip" 2>/dev/null | head -n1)"
+    [ -z "$route_line" ] && return 0
+
+    IFACE_NAME="$(printf '%s' "$route_line" | sed -n 's/.*[[:space:]]dev[[:space:]]\+\([^[:space:]]\+\).*/\1/p')"
+    [ -z "$IFACE_NAME" ] && return 0
+
+    # The presence of a "wireless" (or "phy80211") node under the interface is
+    # the kernel's own answer to "is this WiFi", and needs no extra tooling.
+    if [ -d "/sys/class/net/$IFACE_NAME/wireless" ] || [ -e "/sys/class/net/$IFACE_NAME/phy80211" ]; then
+        IFACE_TYPE="WiFi"
+    else
+        IFACE_TYPE="Ethernet"
+    fi
+
+    # /sys .../speed is Mbps for wired links; it is absent or -1 on wireless.
+    if [ -r "/sys/class/net/$IFACE_NAME/speed" ]; then
+        local spd
+        spd="$(cat "/sys/class/net/$IFACE_NAME/speed" 2>/dev/null || true)"
+        case "$spd" in
+            ''|*[!0-9]*) IFACE_SPEED="" ;;
+            *) IFACE_SPEED="$spd" ;;
+        esac
+    fi
+}
+
+cdp_browser_version() {
+    curl -s -m 2 "http://127.0.0.1:$PORT/json/version" 2>/dev/null |
+        grep -oE '"Browser"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 |
+        sed -e 's/.*:[[:space:]]*"//' -e 's/"$//'
+}
+
+cdp_current_url() {
+    # In kiosk mode there is a single page target, but /json/list can also carry
+    # service-worker and devtools targets, so skip any URL scheme that cannot be
+    # what is on screen.
+    curl -s -m 2 "http://127.0.0.1:$PORT/json/list" 2>/dev/null |
+        grep -oE '"url"[[:space:]]*:[[:space:]]*"[^"]*"' |
+        sed -e 's/.*:[[:space:]]*"//' -e 's/"$//' |
+        grep -vE '^(devtools|chrome-extension|chrome-untrusted)://' |
+        head -n1
+}
+
+browser_alive() {
+    if [ -n "$CHROME_PID" ] && kill -0 "$CHROME_PID" 2>/dev/null; then
+        return 0
+    fi
+    # Chromium can hand a launch off to an existing process, retiring the PID we
+    # hold while the browser itself is perfectly alive. Only a dead debug endpoint
+    # proves the browser is really gone.
+    if [ -n "$(cdp_browser_version)" ]; then
+        return 0
+    fi
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# 7. Agent helpers - talking to the server
+# ---------------------------------------------------------------------------
+
+build_report() {
+    # $1 = server base url, $2 = browserRunning (true/false), $3 = current url,
+    # $4/$5/$6 = optional ack cmd / nonce / result
+    local base="$1" running="$2" cur="$3" ack_cmd="${4:-}" ack_nonce="${5:-}" ack_result="${6:-}"
+
+    detect_session_interface "$(url_host "$base")"
+
+    local browser uptime speed_json ack_json
+    browser="$(cdp_browser_version)"
+    if [ -z "$browser" ]; then
+        browser="$("$CHROME_BIN" --version 2>/dev/null | head -n1)"
+    fi
+    uptime=$(( $(date +%s) - STARTED_AT ))
+
+    if [ -n "$IFACE_SPEED" ]; then speed_json="$IFACE_SPEED"; else speed_json="null"; fi
+
+    ack_json=""
+    if [ -n "$ack_cmd" ]; then
+        ack_json=",\"ack\":{\"cmd\":\"$(json_escape "$ack_cmd")\",\"nonce\":\"$(json_escape "$ack_nonce")\",\"result\":\"$(json_escape "$ack_result")\"}"
+    fi
+
+    printf '{"type":"VRHM_KIOSK_AGENT","version":"%s","machineId":"%s","hostname":"%s","os":"%s","osFamily":"Linux","interfaceType":"%s","interfaceName":"%s","linkSpeedMbps":%s,"browser":"%s","browserRunning":%s,"cdpPort":%s,"currentUrl":"%s","uptimeSec":%s,"autoRestartBrowser":%s%s}' \
+        "$AGENT_VERSION" \
+        "$(json_escape "$MACHINE_ID")" \
+        "$(json_escape "$HOST_NAME")" \
+        "$(json_escape "$OS_DESCRIPTION")" \
+        "$(json_escape "$IFACE_TYPE")" \
+        "$(json_escape "$IFACE_NAME")" \
+        "$speed_json" \
+        "$(json_escape "$browser")" \
+        "$running" \
+        "$PORT" \
+        "$(json_escape "$cur")" \
+        "$uptime" \
+        "$( [ "$AUTO_RESTART" = "1" ] && echo true || echo false )" \
+        "$ack_json"
+}
+
+send_report() {
+    # $1 = server base url, $2 = report json. Echoes the reply body, empty on
+    # failure. The server's request loop is single-threaded and a few of its
+    # endpoints block for a long time (a network scan, for example), so a timeout
+    # here is expected occasionally and must not be treated as fatal.
+    local base="${1%/}" body="$2"
+    [ -z "$base" ] && return 1
+    curl -s -m 5 -X POST -H "Content-Type: application/json" -d "$body" \
+        "$base/api/kiosks/agent-report" 2>/dev/null
+}
+
+json_field_string() {
+    printf '%s' "$1" | grep -oE "\"$2\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" | head -n1 |
+        sed -e 's/.*:[[:space:]]*"//' -e 's/"$//'
+}
+
+json_field_number() {
+    printf '%s' "$1" | grep -oE "\"$2\"[[:space:]]*:[[:space:]]*[0-9]+" | head -n1 |
+        grep -oE '[0-9]+$'
+}
+
+run_privileged() {
+    # Reboot/shutdown need root. Prefer an already-root shell, then a
+    # passwordless sudo rule (see the README for the sudoers line).
+    if [ "$(id -u)" -eq 0 ]; then
+        "$@"
+        return $?
+    fi
+    sudo -n "$@" 2>/dev/null
+}
+
+BROWSER_RESTART_REQUESTED="0"
+
+invoke_kiosk_command() {
+    # The caller has already acknowledged the command to the server -
+    # deliberately, because a reboot leaves no opportunity to do so afterwards.
+    local cmd="$1" delay="${2:-5}"
+
+    case "$cmd" in
+        reboot)
+            echo ""
+            echo "REBOOT ordered by VR HEADSET MANAGER - restarting in ${delay}s."
+            remove_port_redirect
+            sleep "$delay"
+            if command -v systemctl >/dev/null 2>&1; then
+                run_privileged systemctl reboot || run_privileged shutdown -r now || {
+                    echo "Reboot failed - this user cannot run it without a password." >&2
+                    echo "See README-KioskChrome.md for the sudoers line to add." >&2
+                }
+            else
+                run_privileged shutdown -r now
+            fi
+            ;;
+        shutdown)
+            echo ""
+            echo "SHUTDOWN ordered by VR HEADSET MANAGER - powering off in ${delay}s."
+            remove_port_redirect
+            sleep "$delay"
+            if command -v systemctl >/dev/null 2>&1; then
+                run_privileged systemctl poweroff || run_privileged shutdown -h now || {
+                    echo "Shutdown failed - this user cannot run it without a password." >&2
+                    echo "See README-KioskChrome.md for the sudoers line to add." >&2
+                }
+            else
+                run_privileged shutdown -h now
+            fi
+            ;;
+        browser-restart)
+            echo ""
+            echo "BROWSER RESTART ordered by VR HEADSET MANAGER."
+            BROWSER_RESTART_REQUESTED="1"
+            ;;
+        *)
+            echo "Ignoring unknown command '$cmd' from the server." >&2
+            ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# 8. Start the browser
+# ---------------------------------------------------------------------------
+echo ""
+echo "Stopping any previous kiosk Chromium / port relay on port $PORT..."
+stop_existing_browser
+
+echo ""
+start_kiosk_browser
+echo ""
+update_port_redirect
+
+echo ""
+echo "Kiosk Chromium started. This PC can be discovered and controlled from"
+echo "VR HEADSET MANAGER's Kiosk Screens feature on port $PORT."
+echo ""
+echo "Hostname : $HOST_NAME"
+echo "OS       : $OS_DESCRIPTION"
+if [ "$AUTO_RESTART" = "1" ]; then
+    echo "Browser  : auto-restart enabled"
+else
+    echo "Browser  : auto-restart DISABLED"
+fi
+echo ""
+echo "Agent running in the foreground. Closing this terminal stops the reporting"
+echo "and the browser watchdog - see the README for the systemd unit. Ctrl+C to stop."
+echo ""
+
+cleanup() {
+    echo ""
+    echo "Kiosk agent stopping - cleaning up the port redirect."
+    remove_port_redirect
+}
+trap cleanup EXIT INT TERM
+
+# ---------------------------------------------------------------------------
+# 9. Agent loop. One tick per second: browser watchdog every tick, report to the
+#    server every $REPORT_INTERVAL.
+# ---------------------------------------------------------------------------
+CURRENT_SERVER_URL="$SERVER_URL"
+TICKS_UNTIL_REPORT=0
+LAST_COMMAND_NONCE=""
+LAST_REPORT_OK="1"
+BROWSER_DEAD_SINCE=""
+
+while true; do
+
+    # ---- Browser watchdog ----
+    if browser_alive; then BROWSER_IS_ALIVE="true"; else BROWSER_IS_ALIVE="false"; fi
+
+    if [ "$BROWSER_RESTART_REQUESTED" = "1" ]; then
+        BROWSER_RESTART_REQUESTED="0"
+        echo "Restarting the kiosk browser..."
+        stop_existing_browser
+        start_kiosk_browser
+        update_port_redirect
+        BROWSER_DEAD_SINCE=""
+    elif [ "$BROWSER_IS_ALIVE" = "false" ]; then
+        if [ "$AUTO_RESTART" = "0" ]; then
+            echo ""
+            echo "Kiosk Chromium has exited and auto-restart is disabled - cleaning up."
+            break
+        fi
+        # Short grace period: a browser-initiated restart, or a slow shutdown,
+        # should not race the watchdog into launching a second instance.
+        if [ -z "$BROWSER_DEAD_SINCE" ]; then
+            BROWSER_DEAD_SINCE="$(date +%s)"
+            echo "Kiosk Chromium is not running - relaunching shortly..."
+        elif [ $(( $(date +%s) - BROWSER_DEAD_SINCE )) -ge 3 ]; then
+            stop_existing_browser
+            start_kiosk_browser
+            update_port_redirect
+            BROWSER_DEAD_SINCE=""
+            echo "Kiosk Chromium relaunched by the watchdog."
+        fi
+    else
+        BROWSER_DEAD_SINCE=""
+    fi
+
+    # ---- Report + command collection ----
+    TICKS_UNTIL_REPORT=$(( TICKS_UNTIL_REPORT - 1 ))
+    if [ "$TICKS_UNTIL_REPORT" -le 0 ]; then
+        TICKS_UNTIL_REPORT="$REPORT_INTERVAL"
+
+        CURRENT_URL="$(cdp_current_url)"
+
+        # Learn the server address from any VRHM URL pushed to this screen.
+        if [ -z "$CURRENT_SERVER_URL" ] && [ -n "$CURRENT_URL" ]; then
+            case "$CURRENT_URL" in
+                http://*|https://*)
+                    CANDIDATE="$(printf '%s' "$CURRENT_URL" | sed -e 's|\(^[a-zA-Z]*://[^/]*\).*|\1|')"
+                    PROBE="$(send_report "$CANDIDATE" "$(build_report "$CANDIDATE" "$BROWSER_IS_ALIVE" "$CURRENT_URL")")"
+                    if printf '%s' "$PROBE" | grep -q '"ok"'; then
+                        CURRENT_SERVER_URL="$CANDIDATE"
+                        echo "Learned the VR HEADSET MANAGER server address: $CURRENT_SERVER_URL"
+                    fi
+                    ;;
+            esac
+        fi
+
+        if [ -n "$CURRENT_SERVER_URL" ]; then
+            REPLY_BODY="$(send_report "$CURRENT_SERVER_URL" "$(build_report "$CURRENT_SERVER_URL" "$BROWSER_IS_ALIVE" "$CURRENT_URL")")"
+
+            if printf '%s' "$REPLY_BODY" | grep -q '"ok"'; then
+                if [ "$LAST_REPORT_OK" = "0" ]; then
+                    echo "Reporting to $CURRENT_SERVER_URL restored."
+                fi
+                LAST_REPORT_OK="1"
+
+                CMD="$(json_field_string "$REPLY_BODY" "cmd")"
+                if [ -n "$CMD" ]; then
+                    NONCE="$(json_field_number "$REPLY_BODY" "nonce")"
+                    DELAY="$(json_field_number "$REPLY_BODY" "delaySec")"
+                    [ -z "$DELAY" ] && DELAY=5
+
+                    if [ "$NONCE" != "$LAST_COMMAND_NONCE" ]; then
+                        LAST_COMMAND_NONCE="$NONCE"
+                        # Acknowledge BEFORE acting: a reboot gives no second chance.
+                        send_report "$CURRENT_SERVER_URL" \
+                            "$(build_report "$CURRENT_SERVER_URL" "$BROWSER_IS_ALIVE" "$CURRENT_URL" "$CMD" "$NONCE" "ok")" >/dev/null
+                        invoke_kiosk_command "$CMD" "$DELAY"
+                    fi
+                fi
+            else
+                if [ "$LAST_REPORT_OK" = "1" ]; then
+                    echo "Cannot reach the VR HEADSET MANAGER server at $CURRENT_SERVER_URL - will keep retrying." >&2
+                    LAST_REPORT_OK="0"
+                fi
+            fi
+        fi
+
+        # ---- Sentinel fallback ----
+        # A kiosk started without --server-url has no heartbeat for the server to
+        # answer, so commands arrive as a pushed page instead. Matching it here
+        # also teaches us the server address, after which the normal channel is used.
+        case "$CURRENT_URL" in
+            *kiosk_command.html\?*)
+                S_CMD="$(printf '%s' "$CURRENT_URL" | sed -n 's/.*[?&]cmd=\([a-zA-Z-]*\).*/\1/p')"
+                S_NONCE="$(printf '%s' "$CURRENT_URL" | sed -n 's/.*[?&]nonce=\([0-9]*\).*/\1/p')"
+                if [ -n "$S_CMD" ] && [ "$S_NONCE" != "$LAST_COMMAND_NONCE" ]; then
+                    LAST_COMMAND_NONCE="$S_NONCE"
+                    if [ -z "$CURRENT_SERVER_URL" ]; then
+                        CURRENT_SERVER_URL="$(printf '%s' "$CURRENT_URL" | sed -e 's|\(^[a-zA-Z]*://[^/]*\).*|\1|')"
+                        echo "Learned the VR HEADSET MANAGER server address: $CURRENT_SERVER_URL"
+                    fi
+                    echo "Command '$S_CMD' received on the fallback channel."
+                    invoke_kiosk_command "$S_CMD" 5
+                fi
+                ;;
+        esac
+    fi
+
+    sleep 1
+done

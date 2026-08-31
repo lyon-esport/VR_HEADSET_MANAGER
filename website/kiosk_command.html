@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kiosk Command</title>
+<!--
+  Sentinel page for the kiosk command fallback channel.
+
+  The advanced kiosk launcher (website/kiosk-launcher/Start-KioskAgent.ps1 and
+  Start-KioskAgent-Linux.sh) normally collects operator commands from the reply
+  to its own outbound heartbeat (POST /api/kiosks/agent-report). When a kiosk was
+  started WITHOUT -ServerUrl it does not know where this server is yet, so it has
+  no heartbeat to answer. In that case Invoke-KioskPowerAction (modules/kiosk_functions.ps1)
+  falls back to pushing THIS page over CDP: the launcher watches its own loopback
+  127.0.0.1:<cdpPort>/json/list, sees the URL, and acts on ?cmd= / ?nonce=.
+
+  Being navigated here also teaches the launcher this server's address (it takes
+  the host:port of the URL it was sent), so subsequent commands travel over the
+  normal heartbeat channel instead.
+
+  This page is purely a visible confirmation for whoever is standing in front of
+  the screen - the command lives in the URL, not in this markup. Keep it dependency
+  free: a kiosk on the fallback path may not be able to reach anything else.
+-->
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #000;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    font-family: system-ui, sans-serif;
+  }
+  h1 {
+    font-size: 3vw;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: #888;
+    margin: 0;
+  }
+  h2 {
+    font-size: 5vw;
+    font-weight: 700;
+    margin: 12px 0 0;
+  }
+  p {
+    font-size: 1.6vw;
+    color: #666;
+    margin: 24px 0 0;
+    letter-spacing: .04em;
+  }
+  .countdown { color: #d33; font-weight: 700; }
+</style>
+</head>
+<body>
+  <h1>VR Headset Manager</h1>
+  <h2 id="action">Command received</h2>
+  <p id="detail"></p>
+
+<script>
+(function () {
+  var params = new URLSearchParams(window.location.search);
+  var cmd    = (params.get('cmd') || '').toLowerCase();
+  var delay  = parseInt(params.get('delay'), 10);
+  if (isNaN(delay) || delay < 0) { delay = 5; }
+
+  var LABELS = {
+    'reboot':          'Restarting this PC',
+    'shutdown':        'Shutting down this PC',
+    'browser-restart': 'Restarting the kiosk browser'
+  };
+
+  var actionEl = document.getElementById('action');
+  var detailEl = document.getElementById('detail');
+
+  if (!LABELS[cmd]) {
+    actionEl.textContent = 'Unknown command';
+    detailEl.textContent = 'This screen was sent a command it does not recognise.';
+    return;
+  }
+
+  actionEl.textContent = LABELS[cmd];
+
+  // The kiosk launcher polls its own loopback CDP endpoint, so it may take a
+  // moment longer than this countdown to notice the URL and act. The countdown
+  // is an indication for the operator, not a real timer for the action.
+  var remaining = delay;
+  function tick() {
+    detailEl.innerHTML = 'Ordered by VR Headset Manager - in about ' +
+                         '<span class="countdown">' + remaining + 's</span>';
+    if (remaining <= 0) {
+      detailEl.textContent = 'Ordered by VR Headset Manager - proceeding...';
+      return;
+    }
+    remaining--;
+    setTimeout(tick, 1000);
+  }
+  tick();
+})();
+</script>
+</body>
+</html>

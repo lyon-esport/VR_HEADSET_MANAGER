@@ -18,10 +18,11 @@
 #      Recent Chromium builds silently ignore --remote-debugging-address
 #      and hard-lock the debug listener to 127.0.0.1 for security
 #      (see https://issues.chromium.org/issues/40242234). When that
-#      happens, this script falls back to a "socat" TCP relay so the
-#      kiosk's real IP:Port still forwards through to the loopback
-#      listener - the same trick used by the Windows counterpart script
-#      (Start-KioskChrome.ps1, which uses "netsh interface portproxy").
+#      happens, this script redirects LAN connections to the loopback
+#      listener with an iptables DNAT rule (nothing to install - the same
+#      "iptables" already used for the firewall step above) - the same
+#      goal as the Windows counterpart script (Start-KioskChrome.ps1,
+#      which uses "netsh interface portproxy").
 #
 # Usage:
 #   ./Start-KioskChrome-Linux.sh [URL] [PORT]
@@ -31,8 +32,8 @@
 #   ./Start-KioskChrome-Linux.sh "https://example.com" 9222
 #
 # Safe to re-run any time (after a reboot, to change the URL, etc). Any
-# previous kiosk Chromium and any previous socat relay on the same port are
-# stopped first.
+# previous kiosk Chromium and any previous port-redirect rule for the same
+# port are stopped/removed first.
 
 set -u
 
@@ -189,6 +190,41 @@ for lockFile in SingletonLock SingletonSocket SingletonCookie; do
     rm -f "$USER_DATA_DIR/$lockFile" 2>/dev/null || true
 done
 
+# A hard power loss (unplugging the kiosk instead of a clean shutdown) leaves
+# this profile's Preferences file with exit_type=Crashed. Recent Chromium
+# builds ignore --disable-session-crashed-bubble and always show the
+# "Restore pages?" popup based on that stored exit_type, regardless of CLI
+# flags. Rewrite it to a clean state before every launch so the popup never
+# appears, no matter how the previous run ended.
+PREFS_FILE="$USER_DATA_DIR/Default/Preferences"
+if [ -f "$PREFS_FILE" ]; then
+    if command -v python3 >/dev/null 2>&1; then
+        python3 - "$PREFS_FILE" <<'PYEOF' 2>/dev/null || true
+import json
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+except Exception:
+    sys.exit(0)
+
+profile = data.get("profile")
+if isinstance(profile, dict):
+    profile["exit_type"] = "Normal"
+    profile["exited_cleanly"] = True
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+PYEOF
+    else
+        sed -i \
+            -e 's/"exit_type":"[^"]*"/"exit_type":"Normal"/' \
+            -e 's/"exited_cleanly":false/"exited_cleanly":true/' \
+            "$PREFS_FILE" 2>/dev/null || true
+    fi
+fi
+
 echo ""
 echo "Starting Chromium in kiosk mode..."
 
@@ -215,46 +251,58 @@ disown
 # ---------------------------------------------------------------------------
 # 6. Verify the debug port is reachable from the LAN, not just loopback.
 #    Recent Chromium silently ignores --remote-debugging-address and stays
-#    on 127.0.0.1 regardless (see script header). If that happens, relay
-#    the port with socat.
+#    on 127.0.0.1 regardless (see script header). If that happens, redirect
+#    incoming LAN connections to the loopback listener with an iptables DNAT
+#    rule - built into every Linux distro's netfilter stack already used
+#    elsewhere in this script (the firewall step above), so nothing needs
+#    to be installed from the internet to make this work.
 # ---------------------------------------------------------------------------
 echo ""
 echo "Verifying the debug port is reachable from the network..."
-sleep 3
 
+# Chromium can take longer than a few seconds to bind the debug port on
+# slower hardware (e.g. Raspberry Pi), so poll instead of checking once.
 LISTEN_LINE=""
-if command -v ss >/dev/null 2>&1; then
-    LISTEN_LINE="$(ss -ltn 2>/dev/null | grep ":$PORT[[:space:]]" | head -n1)"
-elif command -v netstat >/dev/null 2>&1; then
-    LISTEN_LINE="$(netstat -ltn 2>/dev/null | grep ":$PORT[[:space:]]" | head -n1)"
-fi
+for attempt in $(seq 1 15); do
+    if command -v ss >/dev/null 2>&1; then
+        LISTEN_LINE="$(ss -ltn 2>/dev/null | grep ":$PORT[[:space:]]" | head -n1)"
+    elif command -v netstat >/dev/null 2>&1; then
+        LISTEN_LINE="$(netstat -ltn 2>/dev/null | grep ":$PORT[[:space:]]" | head -n1)"
+    fi
+    [ -n "$LISTEN_LINE" ] && break
+    sleep 1
+done
 
-# Always stop any previous relay for this port before deciding whether a
-# new one is needed, so re-running this script stays idempotent.
+# Always remove any previous redirect for this port before deciding whether
+# a new one is needed, so re-running this script stays idempotent. The
+# "-m comment" tag is added both here and when the rule is created below,
+# so this exact-match delete is reliable. Also clean up a socat relay left
+# running by an older version of this script.
+sudo iptables -t nat -D PREROUTING -p tcp --dport "$PORT" -j DNAT --to-destination "127.0.0.1:$PORT" -m comment --comment "VRHM_KIOSK_DEBUGPORT" 2>/dev/null || true
 pkill -f "socat.*:$PORT," 2>/dev/null || true
-sleep 1
 
 if [ -n "$LISTEN_LINE" ] && echo "$LISTEN_LINE" | grep -q "127.0.0.1:$PORT"; then
     echo "Chromium is only listening on 127.0.0.1:$PORT (LAN binding was ignored by this Chromium build)."
-    echo "Setting up a port relay so the LAN can still reach the debug port..."
+    echo "Redirecting LAN connections on port $PORT to the loopback listener (iptables DNAT)..."
 
-    if ! command -v socat >/dev/null 2>&1; then
-        echo "socat is not installed - installing it now (requires sudo)..."
-        sudo apt-get update -y && sudo apt-get install -y socat
-    fi
+    # The kernel treats a packet whose destination becomes 127.0.0.1 as
+    # "martian" and drops it unless route_localnet is enabled - and it must
+    # be set per already-up interface, not just "all", to take effect.
+    sudo sysctl -w net.ipv4.conf.all.route_localnet=1 >/dev/null
+    for iface in $(ip -o link show up 2>/dev/null | awk -F': ' '{print $2}' | grep -v '^lo$'); do
+        sudo sysctl -w "net.ipv4.conf.${iface}.route_localnet=1" >/dev/null 2>&1 || true
+    done
 
-    if command -v socat >/dev/null 2>&1; then
-        nohup socat TCP-LISTEN:"$PORT",bind=0.0.0.0,fork,reuseaddr TCP:127.0.0.1:"$PORT" >/dev/null 2>&1 &
-        disown
+    if sudo iptables -t nat -A PREROUTING -p tcp --dport "$PORT" -j DNAT --to-destination "127.0.0.1:$PORT" -m comment --comment "VRHM_KIOSK_DEBUGPORT"; then
         sleep 1
-        if ss -ltn 2>/dev/null | grep -q "0.0.0.0:$PORT" || netstat -ltn 2>/dev/null | grep -q "0.0.0.0:$PORT"; then
-            echo "Port relay active: 0.0.0.0:$PORT -> 127.0.0.1:$PORT"
+        if command -v nc >/dev/null 2>&1 && nc -z -w2 127.0.0.1 "$PORT" 2>/dev/null; then
+            echo "Port redirect active: LAN:$PORT -> 127.0.0.1:$PORT (iptables DNAT)"
         else
-            echo "Could not confirm the port relay started. Check 'ss -ltn | grep $PORT' manually." >&2
+            echo "iptables DNAT rule added for port $PORT. Could not double-confirm reachability locally - test from another LAN device."
         fi
     else
-        echo "socat could not be installed. The debug port will remain LAN-unreachable." >&2
-        echo "Install socat manually and re-run this script." >&2
+        echo "Could not add the iptables DNAT rule for port $PORT." >&2
+        echo "Check 'sudo iptables -t nat -L PREROUTING -n' manually, and that this Pi's kernel has NAT support." >&2
     fi
 elif [ -n "$LISTEN_LINE" ]; then
     echo "Chromium is listening on a LAN-reachable address - already reachable from the network."
@@ -270,17 +318,19 @@ echo ""
 
 # ---------------------------------------------------------------------------
 # 7. Watch the kiosk Chromium process in the background and tear down the
-#    socat relay when it exits, instead of leaving a dangling relay pointed
+#    DNAT redirect when it exits, instead of leaving a dangling rule pointed
 #    at a dead listener until the operator manually re-runs the script (for
-#    example after remotely killing the browser via CDP Browser.close).
+#    example after remotely killing the browser via CDP Browser.close). This
+#    is best-effort: if a background sudo call fails here (no cached
+#    credential), the next script run's own cleanup step removes it anyway.
 # ---------------------------------------------------------------------------
 (
     while kill -0 "$CHROME_PID" 2>/dev/null; do
         sleep 1
     done
-    pkill -f "socat.*:$PORT," 2>/dev/null || true
+    sudo iptables -t nat -D PREROUTING -p tcp --dport "$PORT" -j DNAT --to-destination "127.0.0.1:$PORT" -m comment --comment "VRHM_KIOSK_DEBUGPORT" 2>/dev/null || true
 ) >/dev/null 2>&1 &
 disown
 
 echo "This terminal can be closed now - a background watcher will clean up"
-echo "the port relay automatically once Chromium exits."
+echo "the port redirect automatically once Chromium exits."
