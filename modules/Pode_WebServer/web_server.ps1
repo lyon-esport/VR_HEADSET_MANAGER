@@ -1175,8 +1175,10 @@ try {
                 $name = ([string]$json.name).Trim()
                 $port = if ($json.port) { [int]$json.port } else { 9222 }
                 Add-Kiosk -IPAddress $ip -Name $name -Port $port
+                Write-KioskLog "api add-manual ip=$ip name=$name port=$port result=success" -Level SUCCESS
                 Send-JsonResponse -Response $response -Body @{ ok = $true }
             } catch {
+                Write-KioskLog "api add-manual result=failed error=$($_.Exception.Message)" -Level ERROR
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
                 $response.Close()
@@ -1194,8 +1196,10 @@ try {
                 if (-not $cidr) { throw "CIDR is required" }
                 $port = if ($json.port) { [int]$json.port } else { 9222 }
                 $result = @(Invoke-KioskScan -CIDR $cidr -Port $port)
+                Write-KioskLog "api scan cidr=$cidr port=$port discovered=$($result.Count) result=success" -Level SUCCESS
                 Send-JsonResponse -Response $response -Body @{ ok = $true; discovered = $result }
             } catch {
+                Write-KioskLog "api scan result=failed error=$($_.Exception.Message)" -Level ERROR
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
                 $response.Close()
@@ -1225,8 +1229,10 @@ try {
                 if ($null -eq $json.id) { throw "id is required" }
                 if (-not $json.field) { throw "field is required" }
                 Update-KioskField -ID ([int]$json.id) -Field ([string]$json.field) -NewValue ([string]$json.value)
+                Write-KioskLog "api update id=$($json.id) field=$($json.field) result=success" -Level SUCCESS
                 Send-JsonResponse -Response $response -Body @{ ok = $true }
             } catch {
+                Write-KioskLog "api update result=failed error=$($_.Exception.Message)" -Level ERROR
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
                 $response.Close()
@@ -1242,8 +1248,10 @@ try {
                 $json = $bodyRaw | ConvertFrom-Json
                 if ($null -eq $json.id) { throw "id is required" }
                 Remove-Kiosk -ID ([int]$json.id)
+                Write-KioskLog "api remove id=$($json.id) result=success" -Level SUCCESS
                 Send-JsonResponse -Response $response -Body @{ ok = $true }
             } catch {
+                Write-KioskLog "api remove result=failed error=$($_.Exception.Message)" -Level ERROR
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
                 $response.Close()
@@ -1269,6 +1277,7 @@ try {
                     $replacement = Resolve-LocalhostReplacement -Url $url
 
                     if ($replacement.NeedsReplacement -and -not $confirmReplace) {
+                        Write-KioskLog "api push id=$($kiosk.ID) name=$($kiosk.Name) ip=$($kiosk.IPAddress) needsLocalhostReplacement suggested=$($replacement.SuggestedUrl)" -Level WARNING
                         Send-JsonResponse -Response $response -Body @{
                             ok                = $false
                             needsConfirmation = $true
@@ -1283,13 +1292,16 @@ try {
                         if ($navResult.Success) {
                             Update-KioskField -ID $kiosk.ID -Field 'PushedURL' -NewValue $finalUrl
                             Update-KioskField -ID $kiosk.ID -Field 'LastPushedAt' -NewValue (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+                            Write-KioskLog "api push id=$($kiosk.ID) name=$($kiosk.Name) ip=$($kiosk.IPAddress) result=success url=$finalUrl" -Level SUCCESS
                             Send-JsonResponse -Response $response -Body @{ ok = $true }
                         } else {
+                            Write-KioskLog "api push id=$($kiosk.ID) name=$($kiosk.Name) ip=$($kiosk.IPAddress) result=failed error=$($navResult.Error)" -Level ERROR
                             Send-JsonResponse -Response $response -Body @{ ok = $false; error = $navResult.Error }
                         }
                     }
                 }
             } catch {
+                Write-KioskLog "api push result=failed error=$($_.Exception.Message)" -Level ERROR
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
                 $response.Close()
@@ -1297,7 +1309,7 @@ try {
             continue
         }
 
-        # API: POST /api/kiosks/kill-browser  body: {id}  - closes Chrome on the kiosk via CDP Browser.close
+        # API: POST /api/kiosks/kill-browser  body: {id}  - stops the kiosk browser/session
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/kiosks/kill-browser') {
             try {
                 $reader = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
@@ -1310,22 +1322,25 @@ try {
                     Send-JsonResponse -Response $response -StatusCode 404 -Body @{ ok = $false; error = "Kiosk not found" }
                 } else {
                     # An advanced kiosk auto-restarts its browser, so a raw CDP Browser.close
-                    # would just be undone by its watchdog a few seconds later. Route it through
-                    # the agent as a deliberate restart instead; basic (v1) kiosks keep the
-                    # original kill-only behaviour.
+                    # would just be undone by its watchdog. Stop the advanced session through
+                    # the agent; basic (v1) kiosks keep the original kill-only behaviour.
                     $agent = Get-KioskAgentInfo -IPAddress $kiosk.IPAddress
                     if ($agent -and -not $agent.IsStale) {
-                        $result = Invoke-KioskPowerAction -IPAddress $kiosk.IPAddress -Port ([int]$kiosk.Port) -Action 'browser-restart'
+                        $result = Invoke-KioskPowerAction -IPAddress $kiosk.IPAddress -Port ([int]$kiosk.Port) -Action 'agent-stop'
                         if ($result.Success) {
-                            Send-JsonResponse -Response $response -Body @{ ok = $true; restarted = $true; method = $result.Method }
+                            Write-KioskLog "kill-browser advanced id=$($kiosk.ID) name=$($kiosk.Name) ip=$($kiosk.IPAddress) result=queued method=$($result.Method) nonce=$($result.Nonce)" -Level SUCCESS
+                            Send-JsonResponse -Response $response -Body @{ ok = $true; restarted = $false; stopped = $true; method = $result.Method }
                         } else {
+                            Write-KioskLog "kill-browser advanced id=$($kiosk.ID) name=$($kiosk.Name) ip=$($kiosk.IPAddress) result=failed method=$($result.Method) error=$($result.Error)" -Level ERROR
                             Send-JsonResponse -Response $response -Body @{ ok = $false; error = $result.Error }
                         }
                     } else {
                         $result = Close-KioskBrowser -IP $kiosk.IPAddress -Port ([int]$kiosk.Port)
                         if ($result.Success) {
+                            Write-KioskLog "kill-browser basic id=$($kiosk.ID) name=$($kiosk.Name) ip=$($kiosk.IPAddress) result=success method=cdp" -Level SUCCESS
                             Send-JsonResponse -Response $response -Body @{ ok = $true; restarted = $false }
                         } else {
+                            Write-KioskLog "kill-browser basic id=$($kiosk.ID) name=$($kiosk.Name) ip=$($kiosk.IPAddress) result=failed method=cdp error=$($result.Error)" -Level ERROR
                             Send-JsonResponse -Response $response -Body @{ ok = $false; error = $result.Error }
                         }
                     }
@@ -1417,12 +1432,15 @@ try {
                     $result = Invoke-KioskPowerAction -IPAddress $kiosk.IPAddress -Port ([int]$kiosk.Port) -Action $action
                     if ($result.Success) {
                         Write-Log "Kiosk power action '$action' sent to $($kiosk.Name) ($($kiosk.IPAddress)) via $($result.Method)." -Level SUCCESS
+                        Write-KioskLog "api power id=$($kiosk.ID) name=$($kiosk.Name) ip=$($kiosk.IPAddress) action=$action result=success method=$($result.Method) nonce=$($result.Nonce)" -Level SUCCESS
                         Send-JsonResponse -Response $response -Body @{ ok = $true; method = $result.Method; nonce = $result.Nonce }
                     } else {
+                        Write-KioskLog "api power id=$($kiosk.ID) name=$($kiosk.Name) ip=$($kiosk.IPAddress) action=$action result=failed method=$($result.Method) error=$($result.Error)" -Level ERROR
                         Send-JsonResponse -Response $response -Body @{ ok = $false; error = $result.Error; method = $result.Method }
                     }
                 }
             } catch {
+                Write-KioskLog "api power result=failed error=$($_.Exception.Message)" -Level ERROR
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
                 $response.Close()

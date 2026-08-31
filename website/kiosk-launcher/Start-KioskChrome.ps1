@@ -298,7 +298,7 @@ if (-not (Test-Path -LiteralPath $userDataDir)) {
 }
 
 # When Chrome is closed via the CDP "Browser.close" call (the Kiosk Screens
-# "Kill kiosk browser" button) instead of Stop-Process, it can leave this
+# "Stop kiosk session" button on a basic kiosk) instead of Stop-Process, it can leave this
 # profile's Singleton* lock files behind. A later launch then silently hands
 # off to (or is blocked by) that stale lock instead of starting a genuinely
 # fresh, debug-enabled process - Chrome opens and the kiosk display looks
@@ -381,7 +381,10 @@ if ($listener -and $listener.LocalAddress -eq "127.0.0.1") {
 
     netsh interface portproxy add v4tov4 listenaddress=0.0.0.0 listenport=$Port connectaddress=127.0.0.1 connectport=$Port | Out-Null
 
-    $forwardCheck = netsh interface portproxy show v4tov4 | Select-String ":$Port\b"
+    $portProxyRows = @(netsh interface portproxy show v4tov4 2>$null)
+    $forwardCheck = $portProxyRows | Where-Object {
+        $_ -match '^\s*0\.0\.0\.0\s+' + [regex]::Escape([string]$Port) + '\s+127\.0\.0\.1\s+' + [regex]::Escape([string]$Port) + '\s*$'
+    } | Select-Object -First 1
     if ($forwardCheck) {
         Write-Host "Port forward active: 0.0.0.0:$Port -> 127.0.0.1:$Port" -ForegroundColor Green
     } else {
@@ -399,7 +402,7 @@ Write-Host "Kiosk Chrome started. This PC can now be discovered and controlled f
 Write-Host "VR HEADSET MANAGER's Kiosk Screens feature on port $Port." -ForegroundColor Green
 Write-Host ""
 Write-Host "Watching the kiosk Chrome process - this window will close automatically" -ForegroundColor DarkGray
-Write-Host "once Chrome exits (whether closed locally or via 'Kill kiosk browser')." -ForegroundColor DarkGray
+Write-Host "once Chrome exits (whether closed locally or via 'Stop kiosk session')." -ForegroundColor DarkGray
 
 # ---------------------------------------------------------------------------
 # 7. Watch the kiosk Chrome process and clean up when it exits, instead of

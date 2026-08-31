@@ -61,7 +61,7 @@ if [ "$(id -u)" -eq 0 ]; then
         echo "This script was started as root and no other desktop user could be" >&2
         echo "identified. Please run it as your normal desktop user instead (the" >&2
         echo "script will ask for your sudo password only for the steps that need" >&2
-        echo "it - firewall rules and the socat fallback, if required)." >&2
+        echo "it - firewall rules and the port relay, if required)." >&2
         exit 1
     fi
     RUN_AS_USER="sudo -u $TARGET_USER"
@@ -162,7 +162,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 4. Stop any previous kiosk Chromium and socat relay on this port
+# 4. Stop any previous kiosk Chromium and port relay on this port
 # ---------------------------------------------------------------------------
 echo ""
 echo "Stopping any previous kiosk Chromium / port relay on port $PORT..."
@@ -178,7 +178,7 @@ USER_DATA_DIR="$(eval echo "~$TARGET_USER")/.config/vrhm-kiosk-chrome"
 mkdir -p "$USER_DATA_DIR" 2>/dev/null || true
 
 # When Chromium is closed via the CDP "Browser.close" call (the Kiosk
-# Screens "Kill kiosk browser" button) instead of this script's own pkill,
+# Screens "Stop kiosk session" button on a basic kiosk) instead of this script's own pkill,
 # it can leave this profile's SingletonLock/SingletonSocket/SingletonCookie
 # files behind. A later launch then silently hands off to (or is blocked
 # by) that stale lock instead of starting a genuinely fresh, debug-enabled

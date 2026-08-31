@@ -135,11 +135,17 @@ function Save-Kiosks {
         $newID++
     }
 
-    # Save to the CSV file
+    # Save to the CSV file as UTF-8 without BOM.
     if ($newKiosks.Count -eq 0) {
-        Set-Content -LiteralPath $FilePath -Value '"ID","Name","IPAddress","Port","PushedURL","LastPushedAt"' -Encoding UTF8
+        $csvContent = '"ID","Name","IPAddress","Port","PushedURL","LastPushedAt"'
     } else {
-        $newKiosks | Export-Csv -LiteralPath $FilePath -NoTypeInformation -Encoding UTF8
+        $csvContent = ($newKiosks | Select-Object ID, Name, IPAddress, Port, PushedURL, LastPushedAt | ConvertTo-Csv -NoTypeInformation) -join [Environment]::NewLine
+    }
+    if (Get-Command Write-FileWithoutBom -ErrorAction SilentlyContinue) {
+        Write-FileWithoutBom -Path $FilePath -Content ($csvContent + [Environment]::NewLine)
+    } else {
+        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+        [System.IO.File]::WriteAllText($FilePath, ($csvContent + [Environment]::NewLine), $utf8NoBom)
     }
     Write-Log "Save-Kiosks: kiosk list saved to $FilePath." -Level "INFO"
 } #OK

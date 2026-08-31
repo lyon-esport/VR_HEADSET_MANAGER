@@ -2,6 +2,48 @@
 # KIOSK SCREENS - CHROME DEVTOOLS PROTOCOL (CDP) FUNCTIONS
 #################
 
+function Write-KioskLog {
+    <#
+    .SYNOPSIS
+    Writes one kiosk-specific server-side log line to logs\<COMPUTERNAME>\kiosk_<date>.log.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$Message,
+        [ValidateSet('DEBUG', 'INFO', 'SUCCESS', 'WARNING', 'ERROR')]
+        [string]$Level = 'INFO'
+    )
+
+    try {
+        $folder = $global:logFolder
+        if (-not $folder) {
+            $computer = if ($env:COMPUTERNAME) { $env:COMPUTERNAME } else { 'UNKNOWN' }
+            $folder = Join-Path $global:ScriptPath (Join-Path 'logs' $computer)
+        }
+        if (-not (Test-Path -LiteralPath $folder)) {
+            [System.IO.Directory]::CreateDirectory($folder) | Out-Null
+        }
+
+        $path = Join-Path $folder ("kiosk_{0}.log" -f (Get-Date -Format 'yyyy-MM-dd'))
+        $line = "{0} [{1}] {2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Level, $Message
+        $content = $line + [Environment]::NewLine
+
+        if (-not (Test-Path -LiteralPath $path)) {
+            if (Get-Command Write-FileWithoutBom -ErrorAction SilentlyContinue) {
+                Write-FileWithoutBom -Path $path -Content $content
+            } else {
+                $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+                [System.IO.File]::WriteAllText($path, $content, $utf8NoBom)
+            }
+        } else {
+            $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+            [System.IO.File]::AppendAllText($path, $content, $utf8NoBom)
+        }
+    } catch {
+        try { Write-Log "Write-KioskLog failed: $($_.Exception.Message)" -Level DEBUG } catch { }
+    }
+}
+
 function Get-CdpInfo {
     <#
     .SYNOPSIS
@@ -102,17 +144,52 @@ function Invoke-CdpNavigate {
             $bytes   = [System.Text.Encoding]::UTF8.GetBytes($payload)
             $ws.SendAsync([System.ArraySegment[byte]]::new($bytes), [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $cts.Token).GetAwaiter().GetResult() | Out-Null
 
-            # Best-effort read of one response frame - not strictly validated
+            # Read and validate the matching CDP response. Page.navigate can fail
+            # while the WebSocket send still succeeds, so check the JSON error node.
             try {
                 $buffer = New-Object byte[] 8192
-                $segment = [System.ArraySegment[byte]]::new($buffer)
-                $ws.ReceiveAsync($segment, $cts.Token).GetAwaiter().GetResult() | Out-Null
+                $cdpResponse = $null
+                while (-not $cdpResponse) {
+                    $builder = [System.Text.StringBuilder]::new()
+                    do {
+                        $segment = [System.ArraySegment[byte]]::new($buffer)
+                        $receive = $ws.ReceiveAsync($segment, $cts.Token).GetAwaiter().GetResult()
+                        if ($receive.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) {
+                            return @{ Success = $false; Error = "Chrome closed the WebSocket before confirming navigation" }
+                        }
+                        if ($receive.Count -gt 0) {
+                            [void]$builder.Append([System.Text.Encoding]::UTF8.GetString($buffer, 0, $receive.Count))
+                        }
+                    } until ($receive.EndOfMessage)
+
+                    $responseText = $builder.ToString()
+                    if (-not $responseText) {
+                        continue
+                    }
+
+                    try {
+                        $candidateResponse = $responseText | ConvertFrom-Json
+                    } catch {
+                        return @{ Success = $false; Error = "Chrome returned an invalid CDP response: $responseText" }
+                    }
+
+                    if ($candidateResponse.id -eq 1) {
+                        $cdpResponse = $candidateResponse
+                    }
+                }
+                if ($cdpResponse.error) {
+                    $code = $cdpResponse.error.code
+                    $message = $cdpResponse.error.message
+                    return @{ Success = $false; Error = "Chrome rejected navigation ($code): $message" }
+                }
             } catch {
-                Write-Log "Invoke-CdpNavigate: response read failed (non-fatal) - $($_.Exception.Message)" -Level DEBUG
+                return @{ Success = $false; Error = "CDP response read failed: $($_.Exception.Message)" }
             }
 
+            Write-KioskLog "navigate ip=$IP port=$Port result=success url=$Url" -Level SUCCESS
             return @{ Success = $true }
         } catch {
+            Write-KioskLog "navigate ip=$IP port=$Port result=failed error=$($_.Exception.Message)" -Level ERROR
             return @{ Success = $false; Error = "Navigate send failed: $($_.Exception.Message)" }
         }
     } catch {
@@ -668,13 +745,20 @@ function Save-KioskAgentReport {
         }
     }
 
+    $previous = $all | Where-Object { $_ -and $_.IPAddress -eq $IPAddress } | Select-Object -First 1
     $all = @($all | Where-Object { $_ -and $_.IPAddress -ne $IPAddress })
     $all += $entry
 
     try {
         Write-FileWithoutBom -Path $path -Content ($all | ConvertTo-Json -Depth 5)
+        if (-not $previous) {
+            Write-KioskLog "agent report new ip=$IPAddress host=$($entry.Hostname) browserRunning=$($entry.BrowserRunning) url=$($entry.CurrentUrl)" -Level INFO
+        } elseif ($previous.CurrentUrl -ne $entry.CurrentUrl -or $previous.BrowserRunning -ne $entry.BrowserRunning -or $previous.AgentVersion -ne $entry.AgentVersion) {
+            Write-KioskLog "agent report changed ip=$IPAddress host=$($entry.Hostname) browserRunning=$($entry.BrowserRunning) url=$($entry.CurrentUrl)" -Level INFO
+        }
     } catch {
         Write-Log "Save-KioskAgentReport: failed to write $path - $($_.Exception.Message)" -Level WARNING
+        Write-KioskLog "agent report write failed ip=$IPAddress error=$($_.Exception.Message)" -Level WARNING
         return $false
     }
     return $true
@@ -760,7 +844,7 @@ function Add-KioskCommand {
     Queues one command for an advanced kiosk. The kiosk picks it up on its next
     report. Returns the nonce, or $null on failure.
     .PARAMETER Cmd
-    reboot | shutdown | browser-restart
+    reboot | shutdown | browser-restart | agent-stop
     .EXAMPLE
     Add-KioskCommand -IPAddress "192.168.1.93" -Cmd "reboot"
     #>
@@ -768,7 +852,7 @@ function Add-KioskCommand {
         [Parameter(Mandatory)]
         [string]$IPAddress,
         [Parameter(Mandatory)]
-        [ValidateSet('reboot', 'shutdown', 'browser-restart')]
+        [ValidateSet('reboot', 'shutdown', 'browser-restart', 'agent-stop')]
         [string]$Cmd,
         [int]$DelaySec = 5
     )
@@ -789,9 +873,11 @@ function Add-KioskCommand {
     try {
         Write-FileWithoutBom -Path $file -Content ($payload | ConvertTo-Json -Compress)
         Write-Log "Add-KioskCommand: queued '$Cmd' for kiosk $IPAddress (nonce $nonce)." -Level INFO
+        Write-KioskLog "command queued ip=$IPAddress cmd=$Cmd nonce=$nonce delaySec=$DelaySec" -Level INFO
         return $nonce
     } catch {
         Write-Log "Add-KioskCommand: failed to queue '$Cmd' for $IPAddress - $($_.Exception.Message)" -Level ERROR
+        Write-KioskLog "command queue failed ip=$IPAddress cmd=$Cmd error=$($_.Exception.Message)" -Level ERROR
         return $null
     }
 }
@@ -839,6 +925,7 @@ function Get-PendingKioskCommand {
         }
 
         Write-Log "Get-PendingKioskCommand: delivering '$($cmdObj.cmd)' to kiosk $IPAddress (nonce $($cmdObj.nonce))." -Level INFO
+        Write-KioskLog "command delivered ip=$IPAddress cmd=$($cmdObj.cmd) nonce=$($cmdObj.nonce)" -Level INFO
         return $cmdObj
     }
 
@@ -856,7 +943,7 @@ function Invoke-KioskPowerAction {
     that URL, and picking it up also teaches it this server's address.
     Returns @{Success; Method; Error; Nonce}.
     .PARAMETER Action
-    reboot | shutdown | browser-restart
+    reboot | shutdown | browser-restart | agent-stop
     .EXAMPLE
     Invoke-KioskPowerAction -IPAddress "192.168.1.93" -Port 9222 -Action reboot
     #>
@@ -865,7 +952,7 @@ function Invoke-KioskPowerAction {
         [string]$IPAddress,
         [int]$Port = 9222,
         [Parameter(Mandatory)]
-        [ValidateSet('reboot', 'shutdown', 'browser-restart')]
+        [ValidateSet('reboot', 'shutdown', 'browser-restart', 'agent-stop')]
         [string]$Action,
         [int]$DelaySec = 5
     )

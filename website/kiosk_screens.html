@@ -585,7 +585,7 @@
 
     <div class="panel push-panel">
       <div class="panel-title">Push New Link to Kiosk Screens</div>
-      <div class="launcher-modal-desc">Tick the screens in the table below, then push a link or kill their browser.</div>
+      <div class="launcher-modal-desc">Tick the screens in the table below, then push a link or stop their kiosk session.</div>
       <div class="launcher-modal-desc">For twitch streams use <a href="https://pwn.sh/tools/getstream.html" target="_blank" rel="noopener">this link</a> to get a clean feed.</div>
       <div class="form-row">
         <select id="push-headset-select">
@@ -617,7 +617,7 @@
         </button>
         <button class="btn btn-danger" id="kill-browser-btn" disabled>
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          Kill kiosk browser
+          Stop kiosk session
         </button>
         <span id="push-new-link-status" style="font-size:11px;color:#888"></span>
       </div>
@@ -1782,17 +1782,17 @@
         return k ? (k.Name || k.IPAddress) : id;
       }).join(', ');
       // Advanced kiosks run a watchdog that brings the browser straight back, so
-      // for those the server turns this into a deliberate restart rather than a
-      // kill. Say which behaviour the operator is actually about to get.
+      // for those the server stops the whole kiosk session through the agent.
+      // Basic kiosks still get a direct Chrome close over CDP.
       var advCount = ids.filter(function(id) {
         return isAdvancedKiosk(lastKiosks.find(function(x) { return String(x.ID) === id; }));
       }).length;
       var basicCount = ids.length - advCount;
 
-      var msg = 'This will close the browser on ' + ids.length + ' kiosk screen(s): ' + names + '.\n\n';
+      var msg = 'This will stop ' + ids.length + ' kiosk screen(s): ' + names + '.\n\n';
       if (advCount > 0) {
-        msg += advCount + ' advanced screen(s) will RESTART the browser automatically ' +
-               'and come back on their own.\n';
+        msg += advCount + ' advanced screen(s) will close Chrome and stop the agent. ' +
+               'They must be started again on the device or by its autostart task.\n';
       }
       if (basicCount > 0) {
         msg += basicCount + ' basic screen(s) will stay closed and must be restarted ' +
@@ -1802,7 +1802,7 @@
       if (!confirm(msg)) return;
 
       btn.disabled = true;
-      statusEl.textContent = 'Closing browser...'; statusEl.style.color = '#888';
+      statusEl.textContent = 'Stopping kiosk session...'; statusEl.style.color = '#888';
 
       Promise.all(ids.map(function(id) {
         return fetch('/api/kiosks/kill-browser', {
@@ -1815,7 +1815,7 @@
           updatePushBtnState();
           var okCount = results.filter(function(r) { return r && r.ok; }).length;
           if (okCount === results.length) {
-            statusEl.textContent = 'Closed browser on ' + okCount + ' screen(s).'; statusEl.style.color = '#22c55e';
+            statusEl.textContent = 'Stopped ' + okCount + ' kiosk session(s).'; statusEl.style.color = '#22c55e';
           } else {
             statusEl.textContent = okCount + '/' + results.length + ' succeeded'; statusEl.style.color = '#eab308';
           }

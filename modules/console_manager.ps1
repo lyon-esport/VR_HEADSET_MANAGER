@@ -1769,6 +1769,7 @@ function Show-SubMenu-KioskScreens {
             }
             Add-Kiosk -IPAddress $ip -Name $name -Port $port
             Write-Log ($msg.Kiosk.AddSuccess -f (if ($name) { $name } else { $ip })) -Level SUCCESS
+            Write-KioskLog "console add ip=$ip name=$name port=$port result=success" -Level SUCCESS
             Start-Sleep -Seconds 1
             continue
         }
@@ -1819,10 +1820,12 @@ function Show-SubMenu-KioskScreens {
                         Update-KioskField -ID ([int]$target.ID) -Field 'PushedURL' -NewValue $finalUrl
                         Update-KioskField -ID ([int]$target.ID) -Field 'LastPushedAt' -NewValue (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
                         Write-Log ($msg.Kiosk.PushSuccess -f $target.Name) -Level SUCCESS
+                        Write-KioskLog "console push id=$($target.ID) name=$($target.Name) ip=$($target.IPAddress) result=success url=$finalUrl" -Level SUCCESS
                         Write-Host ($msg.Kiosk.PushSuccess -f $target.Name) -ForegroundColor Green
                     } else {
                         $errText = if ($navResult) { $navResult.Error } else { '' }
                         Write-Log ($msg.Kiosk.PushFailed -f $target.Name, $errText) -Level ERROR
+                        Write-KioskLog "console push id=$($target.ID) name=$($target.Name) ip=$($target.IPAddress) result=failed error=$errText" -Level ERROR
                         Write-Host ($msg.Kiosk.PushFailed -f $target.Name, $errText) -ForegroundColor Red
                     }
                     Start-Sleep -Seconds 2
@@ -1849,6 +1852,7 @@ function Show-SubMenu-KioskScreens {
                     if ($newValue) {
                         Update-KioskField -ID ([int]$target.ID) -Field $field -NewValue $newValue
                         Write-Log ($msg.Kiosk.EditSuccess -f $target.Name) -Level SUCCESS
+                        Write-KioskLog "console update id=$($target.ID) name=$($target.Name) ip=$($target.IPAddress) field=$field result=success" -Level SUCCESS
                     }
                     Start-Sleep -Seconds 1
                 }
@@ -1904,9 +1908,11 @@ function Show-SubMenu-KioskScreens {
                     $powerResult = Invoke-KioskPowerAction -IPAddress $target.IPAddress -Port ([int]$target.Port) -Action $powerAction
                     if ($powerResult.Success) {
                         Write-Log ($msg.Kiosk.PowerSent -f $powerAction, $target.Name) -Level SUCCESS
+                        Write-KioskLog "console power id=$($target.ID) name=$($target.Name) ip=$($target.IPAddress) action=$powerAction result=success method=$($powerResult.Method) nonce=$($powerResult.Nonce)" -Level SUCCESS
                         Write-Host ($msg.Kiosk.PowerSent -f $powerAction, $target.Name) -ForegroundColor Green
                     } else {
                         Write-Log ($msg.Kiosk.PowerFailed -f $powerAction, $target.Name, $powerResult.Error) -Level ERROR
+                        Write-KioskLog "console power id=$($target.ID) name=$($target.Name) ip=$($target.IPAddress) action=$powerAction result=failed method=$($powerResult.Method) error=$($powerResult.Error)" -Level ERROR
                         Write-Host ($msg.Kiosk.PowerFailed -f $powerAction, $target.Name, $powerResult.Error) -ForegroundColor Red
                     }
                     Start-Sleep -Seconds 2
@@ -1916,6 +1922,7 @@ function Show-SubMenu-KioskScreens {
                     if ($confirm -eq 'Y' -or $confirm -eq 'O') {
                         Remove-Kiosk -ID ([int]$target.ID)
                         Write-Log ($msg.Kiosk.DeleteSuccess -f $target.Name) -Level SUCCESS
+                        Write-KioskLog "console remove id=$($target.ID) name=$($target.Name) ip=$($target.IPAddress) result=success" -Level SUCCESS
                         Write-Host ($msg.Kiosk.DeleteSuccess -f $target.Name) -ForegroundColor Green
                     } else {
                         Write-Host $msg.Kiosk.DeleteCancelled -ForegroundColor DarkGray

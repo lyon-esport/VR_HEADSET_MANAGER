@@ -411,7 +411,10 @@ function Update-DebugPortForward {
 
         netsh interface portproxy add v4tov4 listenaddress=0.0.0.0 listenport=$Port connectaddress=127.0.0.1 connectport=$Port | Out-Null
 
-        $forwardCheck = netsh interface portproxy show v4tov4 | Select-String ":$Port\b"
+        $portProxyRows = @(netsh interface portproxy show v4tov4 2>$null)
+        $forwardCheck = $portProxyRows | Where-Object {
+            $_ -match '^\s*0\.0\.0\.0\s+' + [regex]::Escape([string]$Port) + '\s+127\.0\.0\.1\s+' + [regex]::Escape([string]$Port) + '\s*$'
+        } | Select-Object -First 1
         if ($forwardCheck) {
             Write-Host "Port forward active: 0.0.0.0:$Port -> 127.0.0.1:$Port" -ForegroundColor Green
         } else {
@@ -422,6 +425,27 @@ function Update-DebugPortForward {
     } else {
         Write-Host "Could not confirm Chrome is listening on port $Port yet." -ForegroundColor Yellow
     }
+}
+
+function Restart-KioskBrowser {
+    param([string]$Reason = "operator request")
+
+    Write-Host "Restarting the kiosk browser ($Reason)..." -ForegroundColor Yellow
+    Remove-DebugPortForward
+    Stop-ExistingKioskChrome
+    $script:ChromeProcess = Start-KioskBrowser -StartUrl $Url
+    Update-DebugPortForward
+
+    $deadline = (Get-Date).AddSeconds(10)
+    while ((Get-Date) -lt $deadline) {
+        if (Get-LocalCdpVersion) {
+            Write-Host "Chrome debug endpoint is online after restart." -ForegroundColor Green
+            return $true
+        }
+        Start-Sleep -Seconds 1
+    }
+    Write-Host "Chrome restarted, but the local debug endpoint did not answer yet." -ForegroundColor Yellow
+    return $false
 }
 
 function Remove-DebugPortForward {
@@ -677,6 +701,12 @@ function Invoke-KioskCommand {
             $script:BrowserRestartRequested = $true
             return $true
         }
+        'agent-stop' {
+            Write-Host ""
+            Write-Host "STOP ordered by VR HEADSET MANAGER - closing Chrome and stopping the agent." -ForegroundColor Yellow
+            $script:AgentStopRequested = $true
+            return $true
+        }
         default {
             Write-Host "Ignoring unknown command '$Cmd' from the server." -ForegroundColor Yellow
             return $false
@@ -688,13 +718,14 @@ function Invoke-KioskCommand {
 # 7. Start the browser
 # ---------------------------------------------------------------------------
 Stop-ExistingKioskChrome
-$chromeProcess = Start-KioskBrowser -StartUrl $Url
+$script:ChromeProcess = Start-KioskBrowser -StartUrl $Url
 Update-DebugPortForward
 
 $script:StartedAt               = Get-Date
 $script:MachineId               = Get-MachineIdentifier
 $script:OsDescription           = Get-OsDescription
 $script:BrowserRestartRequested = $false
+$script:AgentStopRequested      = $false
 $script:LastCommandNonce        = $null
 
 Write-Host ""
@@ -728,6 +759,7 @@ $ticksUntilReport   = 0
 $reportFailures     = 0
 $lastReportOk       = $true
 $browserDeadSince   = $null
+$maxReportBackoff   = 60
 
 # Sentinel fallback: a kiosk started without -ServerUrl has no heartbeat for the
 # server to answer, so commands arrive as a pushed page instead. Matching the URL
@@ -736,9 +768,14 @@ $sentinelPattern = '(?i)^(https?://[^/]+)/kiosk_command\.html\?.*\bcmd=([a-z\-]+
 
 try {
     while ($true) {
+        if ($script:AgentStopRequested) {
+            Stop-ExistingKioskChrome
+            Remove-DebugPortForward
+            break
+        }
 
         # ---- Browser watchdog ----
-        $processAlive = ($chromeProcess -and -not $chromeProcess.HasExited)
+        $processAlive = ($script:ChromeProcess -and -not $script:ChromeProcess.HasExited)
         $cdpAlive     = $false
         if (-not $processAlive) {
             # Chrome can hand a launch off to an existing process, which retires
@@ -750,10 +787,7 @@ try {
 
         if ($script:BrowserRestartRequested) {
             $script:BrowserRestartRequested = $false
-            Write-Host "Restarting the kiosk browser..." -ForegroundColor Yellow
-            Stop-ExistingKioskChrome
-            $chromeProcess = Start-KioskBrowser -StartUrl $Url
-            Update-DebugPortForward
+            Restart-KioskBrowser -Reason "operator request" | Out-Null
             $browserDeadSince = $null
         }
         elseif (-not $browserAlive) {
@@ -769,9 +803,7 @@ try {
                 $browserDeadSince = Get-Date
                 Write-Host "Kiosk Chrome is not running - relaunching shortly..." -ForegroundColor Yellow
             } elseif (((Get-Date) - $browserDeadSince).TotalSeconds -ge 3) {
-                Stop-ExistingKioskChrome
-                $chromeProcess = Start-KioskBrowser -StartUrl $Url
-                Update-DebugPortForward
+                Restart-KioskBrowser -Reason "watchdog" | Out-Null
                 $browserDeadSince = $null
                 Write-Host "Kiosk Chrome relaunched by the watchdog." -ForegroundColor Green
             }
@@ -782,7 +814,9 @@ try {
         # ---- Report + command collection ----
         $ticksUntilReport--
         if ($ticksUntilReport -le 0) {
-            $ticksUntilReport = [Math]::Max(1, $ReportIntervalSec)
+            $backoff = [Math]::Min($maxReportBackoff, [Math]::Max(1, $ReportIntervalSec) * [Math]::Pow(2, [Math]::Min($reportFailures, 4)))
+            $jitter = if ($reportFailures -gt 0) { Get-Random -Minimum 0 -Maximum 4 } else { 0 }
+            $ticksUntilReport = [int]([Math]::Min($maxReportBackoff, $backoff + $jitter))
 
             $currentUrl = Get-LocalCdpCurrentUrl
 
@@ -807,6 +841,7 @@ try {
                     }
                     $lastReportOk   = $true
                     $reportFailures = 0
+                    $ticksUntilReport = [Math]::Max(1, $ReportIntervalSec)
 
                     if ($reply.command -and $reply.command.cmd) {
                         $cmd   = [string]$reply.command.cmd

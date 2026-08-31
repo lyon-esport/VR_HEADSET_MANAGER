@@ -315,6 +315,25 @@ remove_port_redirect() {
         --to-destination "127.0.0.1:$PORT" -m comment --comment "VRHM_KIOSK_DEBUGPORT" 2>/dev/null || true
 }
 
+restart_kiosk_browser() {
+    reason="${1:-operator request}"
+    echo "Restarting the kiosk browser ($reason)..."
+    remove_port_redirect
+    stop_existing_browser
+    start_kiosk_browser
+    update_port_redirect
+
+    for attempt in $(seq 1 10); do
+        if cdp_version >/dev/null 2>&1; then
+            echo "Chromium debug endpoint is online after restart."
+            return 0
+        fi
+        sleep 1
+    done
+    echo "Chromium restarted, but the local debug endpoint did not answer yet." >&2
+    return 1
+}
+
 update_port_redirect() {
     echo "Verifying the debug port is reachable from the network..."
 
@@ -537,6 +556,7 @@ run_privileged() {
 }
 
 BROWSER_RESTART_REQUESTED="0"
+AGENT_STOP_REQUESTED="0"
 
 invoke_kiosk_command() {
     # The caller has already acknowledged the command to the server -
@@ -576,6 +596,11 @@ invoke_kiosk_command() {
             echo ""
             echo "BROWSER RESTART ordered by VR HEADSET MANAGER."
             BROWSER_RESTART_REQUESTED="1"
+            ;;
+        agent-stop)
+            echo ""
+            echo "STOP ordered by VR HEADSET MANAGER - closing Chromium and stopping the agent."
+            AGENT_STOP_REQUESTED="1"
             ;;
         *)
             echo "Ignoring unknown command '$cmd' from the server." >&2
@@ -626,19 +651,24 @@ CURRENT_SERVER_URL="$SERVER_URL"
 TICKS_UNTIL_REPORT=0
 LAST_COMMAND_NONCE=""
 LAST_REPORT_OK="1"
+REPORT_FAILURES=0
+MAX_REPORT_BACKOFF=60
 BROWSER_DEAD_SINCE=""
 
 while true; do
+
+    if [ "$AGENT_STOP_REQUESTED" = "1" ]; then
+        stop_existing_browser
+        remove_port_redirect
+        break
+    fi
 
     # ---- Browser watchdog ----
     if browser_alive; then BROWSER_IS_ALIVE="true"; else BROWSER_IS_ALIVE="false"; fi
 
     if [ "$BROWSER_RESTART_REQUESTED" = "1" ]; then
         BROWSER_RESTART_REQUESTED="0"
-        echo "Restarting the kiosk browser..."
-        stop_existing_browser
-        start_kiosk_browser
-        update_port_redirect
+        restart_kiosk_browser "operator request" || true
         BROWSER_DEAD_SINCE=""
     elif [ "$BROWSER_IS_ALIVE" = "false" ]; then
         if [ "$AUTO_RESTART" = "0" ]; then
@@ -652,9 +682,7 @@ while true; do
             BROWSER_DEAD_SINCE="$(date +%s)"
             echo "Kiosk Chromium is not running - relaunching shortly..."
         elif [ $(( $(date +%s) - BROWSER_DEAD_SINCE )) -ge 3 ]; then
-            stop_existing_browser
-            start_kiosk_browser
-            update_port_redirect
+            restart_kiosk_browser "watchdog" || true
             BROWSER_DEAD_SINCE=""
             echo "Kiosk Chromium relaunched by the watchdog."
         fi
@@ -665,7 +693,22 @@ while true; do
     # ---- Report + command collection ----
     TICKS_UNTIL_REPORT=$(( TICKS_UNTIL_REPORT - 1 ))
     if [ "$TICKS_UNTIL_REPORT" -le 0 ]; then
-        TICKS_UNTIL_REPORT="$REPORT_INTERVAL"
+        BACKOFF_MULTIPLIER=1
+        BACKOFF_STEPS="$REPORT_FAILURES"
+        [ "$BACKOFF_STEPS" -gt 4 ] && BACKOFF_STEPS=4
+        while [ "$BACKOFF_STEPS" -gt 0 ]; do
+            BACKOFF_MULTIPLIER=$(( BACKOFF_MULTIPLIER * 2 ))
+            BACKOFF_STEPS=$(( BACKOFF_STEPS - 1 ))
+        done
+        BACKOFF=$(( REPORT_INTERVAL * BACKOFF_MULTIPLIER ))
+        [ "$BACKOFF" -gt "$MAX_REPORT_BACKOFF" ] && BACKOFF="$MAX_REPORT_BACKOFF"
+        if [ "$REPORT_FAILURES" -gt 0 ]; then
+            JITTER=$(( RANDOM % 4 ))
+        else
+            JITTER=0
+        fi
+        TICKS_UNTIL_REPORT=$(( BACKOFF + JITTER ))
+        [ "$TICKS_UNTIL_REPORT" -gt "$MAX_REPORT_BACKOFF" ] && TICKS_UNTIL_REPORT="$MAX_REPORT_BACKOFF"
 
         CURRENT_URL="$(cdp_current_url)"
 
@@ -691,6 +734,8 @@ while true; do
                     echo "Reporting to $CURRENT_SERVER_URL restored."
                 fi
                 LAST_REPORT_OK="1"
+                REPORT_FAILURES=0
+                TICKS_UNTIL_REPORT="$REPORT_INTERVAL"
 
                 CMD="$(json_field_string "$REPLY_BODY" "cmd")"
                 if [ -n "$CMD" ]; then
@@ -707,6 +752,7 @@ while true; do
                     fi
                 fi
             else
+                REPORT_FAILURES=$(( REPORT_FAILURES + 1 ))
                 if [ "$LAST_REPORT_OK" = "1" ]; then
                     echo "Cannot reach the VR HEADSET MANAGER server at $CURRENT_SERVER_URL - will keep retrying." >&2
                     LAST_REPORT_OK="0"
