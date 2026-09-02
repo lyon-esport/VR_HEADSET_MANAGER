@@ -197,6 +197,39 @@ fi
 echo "Chromium found at: $CHROME_BIN"
 
 # ---------------------------------------------------------------------------
+# 3b. Hardware H264 decode check (Raspberry Pi VideoCore). Informational only -
+#     never blocks startup, just logs whether the GPU path is available so a
+#     silent fallback to software decoding shows up in the console/journal
+#     instead of only as unexplained CPU load and dropped frames.
+# ---------------------------------------------------------------------------
+HW_H264_DECODE="unknown"
+
+check_h264_hardware_decode() {
+    if ! command -v vcgencmd >/dev/null 2>&1; then
+        echo "vcgencmd not found - not a Raspberry Pi, or firmware tools not installed. Skipping H264 hardware check."
+        return
+    fi
+
+    CODEC_STATUS="$(vcgencmd codec_enabled H264 2>/dev/null)"
+    if [ "$CODEC_STATUS" = "H264=enabled" ]; then
+        HW_H264_DECODE="1"
+        echo "GPU H264 decode: enabled ($CODEC_STATUS)"
+    else
+        HW_H264_DECODE="0"
+        echo "GPU H264 decode: NOT enabled ($CODEC_STATUS) - video will fall back to software decoding." >&2
+    fi
+
+    if dpkg -l 2>/dev/null | grep -q "rpi-chromium-mods"; then
+        echo "rpi-chromium-mods: installed (Chromium hardware-decode patches present)."
+    else
+        echo "rpi-chromium-mods: NOT installed - this Chromium build likely has no hardware-decode patches." >&2
+        echo "  Install with: sudo apt-get install -y rpi-chromium-mods" >&2
+    fi
+}
+
+check_h264_hardware_decode
+
+# ---------------------------------------------------------------------------
 # 4. Open the firewall for the debug port
 # ---------------------------------------------------------------------------
 echo ""
@@ -289,6 +322,17 @@ start_kiosk_browser() {
 
     echo "Starting Chromium in kiosk mode..."
 
+    # Hardware-decode flags are a safety net only: on Raspberry Pi OS builds
+    # with rpi-chromium-mods, hardware H264 decode is already patched in and
+    # these flags are redundant; on a plain Debian/Chromium build (no RPi
+    # patches, e.g. HW_H264_DECODE=0 above) they give VA-API/V4L2 a chance to
+    # kick in instead of silently falling back to full-software decode.
+    HW_DECODE_FLAGS=(
+        --enable-features=VaapiVideoDecoder
+        --enable-accelerated-video-decode
+        --ignore-gpu-blocklist
+    )
+
     $RUN_AS_USER env DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" "$CHROME_BIN" \
         --remote-debugging-port="$PORT" \
         --remote-debugging-address=0.0.0.0 \
@@ -304,6 +348,7 @@ start_kiosk_browser() {
         --disable-session-crashed-bubble \
         --no-default-browser-check \
         --autoplay-policy=no-user-gesture-required \
+        "${HW_DECODE_FLAGS[@]}" \
         "$URL" >/dev/null 2>&1 &
 
     CHROME_PID=$!
@@ -637,9 +682,24 @@ echo "and the browser watchdog - see the README for the systemd unit. Ctrl+C to 
 echo ""
 
 cleanup() {
+    # Single cleanup path for every exit - Ctrl+C/TERM, remote agent-stop, and the
+    # browser-watchdog give-up all reach here. Same end state as the operator
+    # sending "Stop kiosk" from the server: browser closed, port redirect and
+    # firewall rule removed. stop_existing_browser/remove_port_redirect are
+    # idempotent, so it is harmless that EXIT can fire this a second time after
+    # INT/TERM already ran it once.
     echo ""
-    echo "Kiosk agent stopping - cleaning up the port redirect."
+    echo "Kiosk agent stopping - cleaning up."
+    stop_existing_browser
     remove_port_redirect
+    if command -v ufw >/dev/null 2>&1 && sudo ufw status 2>/dev/null | grep -qi "^Status: active"; then
+        sudo ufw delete allow "${PORT}/tcp" >/dev/null 2>&1 || true
+    elif command -v firewall-cmd >/dev/null 2>&1 && sudo firewall-cmd --state >/dev/null 2>&1; then
+        sudo firewall-cmd --permanent --remove-port="${PORT}/tcp" >/dev/null 2>&1 || true
+        sudo firewall-cmd --reload >/dev/null 2>&1 || true
+    elif command -v iptables >/dev/null 2>&1; then
+        sudo iptables -D INPUT -p tcp --dport "$PORT" -j ACCEPT 2>/dev/null || true
+    fi
 }
 trap cleanup EXIT INT TERM
 
@@ -658,8 +718,6 @@ BROWSER_DEAD_SINCE=""
 while true; do
 
     if [ "$AGENT_STOP_REQUESTED" = "1" ]; then
-        stop_existing_browser
-        remove_port_redirect
         break
     fi
 

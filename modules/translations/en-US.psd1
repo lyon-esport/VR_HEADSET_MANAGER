@@ -319,10 +319,14 @@
     FirewallRuleExists = "Firewall rule already exists and is correctly configured"
     FirewallRuleFailed = "Failed to manage firewall rule: {0}"
     FirewallConfigSkipped = "Firewall configuration for ADB failed or skipped"
+    FirewallSetupIncomplete = "One or more approved setup tasks could not be confirmed afterward ({0}). Windows may still block these features - re-run the app as administrator, or apply the rule(s) manually."
     AwakeModeActivated = "Awake mode activated: screen lock and sleep are disabled."
     AwakeModeDeactivated = "Awake mode deactivated: normal sleep/lock behaviour restored."
     DefenderExclusionSkipped    = "Windows Defender exclusion: real-time protection not active or folder already excluded"
     DefenderExclusionPending    = "Windows Defender exclusion: scheduling setup task for {0}"
+    CriticalBinariesMissingTitle = "CRITICAL: required program files are missing - the application cannot start"
+    CriticalBinariesMissingHint  = "Check that the 'sources' folder is complete and that config.json paths are correct, then restart."
+    PressEnterToExit             = "Press Enter to exit"
 
     # ==========================================
     # headsets_manager.ps1

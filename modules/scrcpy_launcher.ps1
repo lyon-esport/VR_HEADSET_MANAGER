@@ -321,29 +321,12 @@ function Start-FfmpegStreamPush {
         # ffmpeg then interprets it as bits/sec, which is too low for the encoder to open at all.
         if ($bw -match '^\d+$') { $bw = "${bw}M" }
         $fps = $global:mediamtxFramerate
-        # -bf 0 and -g $fps are required on EVERY arm: mediamtx WebRTC/WHEP rejects
-        # H.264 streams containing B-frames ("WebRTC doesn't support H264 streams
-        # with B-frames" closes the session). qsv/amf/mf emit B-frames by default;
-        # nvenc and libx264 already disable them via tune presets but explicit is
-        # safer. Short GOP (= framerate) ensures new WHEP subscribers receive a
-        # keyframe within ~1s of joining.
+        # Short GOP (= framerate) so new WHEP subscribers receive a keyframe within
+        # ~1s of joining. The per-encoder argument list itself lives in
+        # Get-StreamEncoderArgs (modules\utils.ps1) so that Test-FfmpegEncoder probes
+        # the exact same configuration this stream runs with - see the comments there.
         $gop = [string]$fps
-        # Per-encoder low-latency tails: disable async pipelining / lookahead so
-        # frames flow through with minimal in-encoder queuing. qsv defaults to
-        # async_depth=4 (~130 ms at 30 fps); nvenc has an implicit -delay; the
-        # libx264 fallback uses sliced threading to avoid frame-level latency.
-        $encParams = switch ($enc.Name) {
-            'h264_nvenc' { @('-c:v','h264_nvenc','-preset','p1','-tune','ll','-rc','cbr','-b:v',$bw,'-maxrate',$bw,'-bufsize',$bw,'-bf','0','-g',$gop,'-delay','0','-rc-lookahead','0') }
-            'h264_qsv'   { @('-c:v','h264_qsv','-preset','veryfast','-b:v',$bw,'-maxrate',$bw,'-bufsize',$bw,'-bf','0','-g',$gop,'-async_depth','1','-look_ahead','0') }
-            'h264_amf'   { @('-c:v','h264_amf','-usage','ultralowlatency','-b:v',$bw,'-maxrate',$bw,'-bufsize',$bw,'-bf','0','-g',$gop,'-quality','speed','-rc','cbr','-async_depth','1') }
-            'h264_mf'    { @('-c:v','h264_mf','-b:v',$bw,'-bf','0','-g',$gop,'-rc_mode','CBR') }
-            'hevc_nvenc' { @('-c:v','hevc_nvenc','-preset','p1','-tune','ll','-rc','cbr','-b:v',$bw,'-maxrate',$bw,'-bufsize',$bw,'-bf','0','-g',$gop,'-delay','0','-rc-lookahead','0','-tag:v','hvc1') }
-            'hevc_qsv'   { @('-c:v','hevc_qsv','-preset','veryfast','-b:v',$bw,'-maxrate',$bw,'-bufsize',$bw,'-bf','0','-g',$gop,'-async_depth','1','-look_ahead','0','-tag:v','hvc1') }
-            'hevc_amf'   { @('-c:v','hevc_amf','-usage','ultralowlatency','-b:v',$bw,'-maxrate',$bw,'-bufsize',$bw,'-bf','0','-g',$gop,'-quality','speed','-rc','cbr','-async_depth','1','-tag:v','hvc1') }
-            'hevc_mf'    { @('-c:v','hevc_mf','-b:v',$bw,'-bf','0','-g',$gop,'-rc_mode','CBR','-tag:v','hvc1') }
-            'libx265'    { @('-c:v','libx265','-preset','ultrafast','-tune','zerolatency','-b:v',$bw,'-maxrate',$bw,'-bufsize',$bw,'-bf','0','-g',$gop,'-x265-params','force-cfr=1','-tag:v','hvc1','-threads','4') }
-            default      { @('-c:v','libx264','-preset','ultrafast','-tune','zerolatency','-b:v',$bw,'-maxrate',$bw,'-bufsize',$bw,'-bf','0','-g',$gop,'-x264-params','nal-hrd=cbr:force-cfr=1:sliced-threads=1','-threads','4') }
-        }
+        $encParams = Get-StreamEncoderArgs -EncoderName $enc.Name -Bitrate $bw -Gop $gop
         $rtspOut = [System.Collections.Generic.List[string]]::new()
         $rtspOut.AddRange([string[]]@('-map','0:v:0'))
         $rtspOut.AddRange([string[]]$encParams)

@@ -182,6 +182,12 @@
     .scan-item .ip { font-family: monospace; color: var(--text); }
     .scan-item .browser { color: #888; font-size: 11px; }
     .scan-item .known { color: #22c55e; font-size: 10px; font-weight: 700; text-transform: uppercase; }
+    .scan-section-title {
+      font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+      color: #888; padding: 8px 2px 4px;
+    }
+    .scan-section-title:first-child { padding-top: 2px; }
+    .scan-section-title.managed { color: #22c55e; }
     /* Advanced-kiosk detail (hostname / link / OS) - absent for basic kiosks.
        Wraps rather than truncating: the OS string alone is longer than the panel. */
     .scan-item .scan-device {
@@ -850,6 +856,36 @@
         });
     });
 
+    function scanItemHtml(it, idx) {
+      var checked = it.AlreadyKnown ? '' : 'checked';
+      var disabled = it.AlreadyKnown ? 'disabled' : '';
+      // Hostname/link type are only known for kiosks running the advanced
+      // launcher, which have already reported themselves to this server - fold
+      // them into the identity line ("Name (IP Ethernet/WiFi)"). OS stays on its
+      // own second line - a basic kiosk contributes nothing here and stays a
+      // single line, so the list does not grow for no reason.
+      var identity = '<span class="ip">' + esc(it.IPAddress) + '</span>';
+      if (it.Advanced && it.Hostname) {
+        var ipLabel = it.IPAddress + (it.InterfaceType ? ' ' + it.InterfaceType : '');
+        identity = '<span class="sd-host">' + esc(it.Hostname) + '</span> ' +
+                   '<span class="ip">(' + esc(ipLabel) + ')</span>';
+      }
+      var detail = '';
+      if (it.Advanced && it.OSVersion) {
+        detail = '<span class="scan-device">' + esc(it.OSVersion) + '</span>';
+      }
+      return '<label class="scan-item">' +
+        '<input type="checkbox" data-idx="' + idx + '" ' + checked + ' ' + disabled + '>' +
+        '<span class="scan-main">' +
+          '<span class="scan-line">' +
+            identity +
+            '<span class="browser">' + esc(it.Browser || '') + '</span>' +
+          '</span>' +
+          detail +
+        '</span>' +
+        '</label>';
+    }
+
     function renderScanList(items) {
       var listEl = document.getElementById('scan-list');
       var addRow = document.getElementById('scan-add-row');
@@ -858,37 +894,24 @@
         addRow.style.display = 'none';
         return;
       }
-      listEl.innerHTML = items.map(function(it, idx) {
-        var checked = it.AlreadyKnown ? '' : 'checked';
-        var disabled = it.AlreadyKnown ? 'disabled' : '';
-        // Hostname/OS/link type are only known for kiosks running the advanced
-        // launcher, which have already reported themselves to this server. They go
-        // on their own second line - a basic kiosk contributes nothing here and
-        // stays a single line, so the list does not grow for no reason.
-        var detail = '';
-        if (it.Advanced) {
-          var bits = [];
-          if (it.Hostname)      bits.push('<span class="sd-host">' + esc(it.Hostname) + '</span>');
-          if (it.InterfaceType) bits.push(esc(it.InterfaceType));
-          if (it.OSVersion)     bits.push(esc(it.OSVersion));
-          if (bits.length) {
-            detail = '<span class="scan-device">' +
-                       bits.join('<span class="sd-sep">|</span>') +
-                     '</span>';
-          }
-        }
-        return '<label class="scan-item">' +
-          '<input type="checkbox" data-idx="' + idx + '" ' + checked + ' ' + disabled + '>' +
-          '<span class="scan-main">' +
-            '<span class="scan-line">' +
-              '<span class="ip">' + esc(it.IPAddress) + '</span>' +
-              '<span class="browser">' + esc(it.Browser || '') + '</span>' +
-              (it.AlreadyKnown ? '<span class="known">already added</span>' : '') +
-            '</span>' +
-            detail +
-          '</span>' +
-          '</label>';
-      }).join('');
+      // idx always refers back into the original items array (== lastDiscovered),
+      // so the "Add selected" handler's data-idx lookup keeps working unchanged
+      // regardless of which section a row ends up in.
+      var html = '';
+      var newItems = [];
+      var knownItems = [];
+      items.forEach(function(it, idx) {
+        (it.AlreadyKnown ? knownItems : newItems).push(idx);
+      });
+      if (newItems.length) {
+        html += '<div class="scan-section-title">New kiosk screens available</div>';
+        html += newItems.map(function(idx) { return scanItemHtml(items[idx], idx); }).join('');
+      }
+      if (knownItems.length) {
+        html += '<div class="scan-section-title managed">Already managed</div>';
+        html += knownItems.map(function(idx) { return scanItemHtml(items[idx], idx); }).join('');
+      }
+      listEl.innerHTML = html;
       addRow.style.display = 'flex';
     }
 
@@ -903,7 +926,7 @@
         return fetch('/api/kiosks/add-manual', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ip: it.IPAddress, name: '', port: 9222 })
+          body: JSON.stringify({ ip: it.IPAddress, name: it.Hostname || '', port: 9222 })
         }).catch(function() {});
       });
       Promise.all(promises).then(function() {

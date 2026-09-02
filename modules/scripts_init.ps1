@@ -499,6 +499,27 @@ function Confirm-AppPortsAvailable {
 
 # Run all computer-level setup tasks (firewall rules, service auto-starts, etc.)
 if (-not $global:IsWebServerProcess -and -not $global:IsDashboardProcess -and -not $global:IsVRMonitorJob) {
+    # Fail fast if a required binary (adb/scrcpy always, mediamtx/ffmpeg only when
+    # restreaming is enabled) is missing - continuing would just fail later with a
+    # confusing error deep inside firewall setup, ADB, or scrcpy launch.
+    $binaryCheck = Test-RequiredBinaries
+    if (-not $binaryCheck.Ok) {
+        Write-Host ""
+        Write-Host "=================================================================" -ForegroundColor Red
+        Write-Host " $($msg.CriticalBinariesMissingTitle)" -ForegroundColor Red
+        Write-Host "=================================================================" -ForegroundColor Red
+        foreach ($item in $binaryCheck.Missing) {
+            $line = $msg.($item.MessageKey) -f $item.Path
+            Write-Host " - $line" -ForegroundColor Red
+            Write-Log $line -Level ERROR
+        }
+        Write-Host ""
+        Write-Host " $($msg.CriticalBinariesMissingHint)" -ForegroundColor Yellow
+        Write-Host "=================================================================" -ForegroundColor Red
+        Read-Host " $($msg.PressEnterToExit)"
+        exit 1
+    }
+
     Confirm-AppPortsAvailable
     Initialize-ComputerSetup
 }

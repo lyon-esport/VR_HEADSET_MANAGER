@@ -769,8 +769,6 @@ $sentinelPattern = '(?i)^(https?://[^/]+)/kiosk_command\.html\?.*\bcmd=([a-z\-]+
 try {
     while ($true) {
         if ($script:AgentStopRequested) {
-            Stop-ExistingKioskChrome
-            Remove-DebugPortForward
             break
         }
 
@@ -890,9 +888,16 @@ try {
         Start-Sleep -Seconds 1
     }
 } finally {
+    # Single cleanup path for every exit - Ctrl+C, remote agent-stop, and the
+    # browser-watchdog give-up all reach here. Same end state as the operator
+    # sending "Stop kiosk" from the server: browser closed, port forward and
+    # firewall rules removed, window closes.
     Write-Host ""
-    Write-Host "Kiosk agent stopping - cleaning up the port forward." -ForegroundColor Yellow
+    Write-Host "Kiosk agent stopping - cleaning up." -ForegroundColor Yellow
+    Stop-ExistingKioskChrome
     Remove-DebugPortForward
+    Get-NetFirewallRule -DisplayName $ruleNameTcp  -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+    Get-NetFirewallRule -DisplayName $ruleNameIcmp -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
     Write-Host "Done. Re-run this script to start the kiosk again." -ForegroundColor DarkGray
     Start-Sleep -Seconds 2
 }

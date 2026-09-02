@@ -14,10 +14,15 @@
     Create-ZipRelease.ps1, and section 10 asserts that the extracted release
     contains no scripts\ folder at all.
 
-.PARAMETER TargetRoot
-    The extracted release folder to test. When omitted, the newest
-    VR_HEADSET_MANAGER.v* sibling folder is auto-detected. The harness refuses
-    to target the dev folder itself unless -Force is passed.
+.PARAMETER VRHMFolder
+    The VR HEADSET MANAGER folder to test (must contain main.ps1) - an
+    extracted release, or this same source checkout when there is nothing else
+    to test against. When omitted, the newest VR_HEADSET_MANAGER.v* sibling
+    folder is auto-detected; if none exists and the run is interactive, you
+    are offered a choice: test the current folder, or browse for one. The
+    harness refuses to auto-detect the dev folder itself unless -Force is
+    passed (this guard does not apply when you explicitly choose to test the
+    current folder from that prompt - that choice is itself informed consent).
 
 .PARAMETER Version
     Version label for the report. Read from the target's version.txt when omitted.
@@ -71,13 +76,13 @@
     Exit code 0 = all passed, 1 = at least one FAIL, 2 = prerequisite failure.
 
 .EXAMPLE
-    .\scripts\Invoke-NonRegressionTests.ps1 -TargetRoot "..\VR_HEADSET_MANAGER.v1.2.3"
+    .\scripts\Invoke-NonRegressionTests.ps1 -VRHMFolder "..\VR_HEADSET_MANAGER.v1.2.3"
 
 .EXAMPLE
     .\scripts\Invoke-NonRegressionTests.ps1 -Depth Light -Sections 10,20 -Mode Auto -Unattended
 #>
 param(
-    [string]$TargetRoot = '',
+    [string]$VRHMFolder = '',
     [string]$Version = '',
     [ValidateSet('Auto', 'Manual')][string]$Mode = 'Auto',
     [ValidateSet('Light', 'Standard', 'Full')][string]$Depth = 'Standard',
@@ -175,16 +180,17 @@ function Get-DepthTotalMinutes {
 function Resolve-TargetRoot {
     <#
     .SYNOPSIS
-        Resolves and validates the release folder under test. Exits 2 rather
-        than guessing when nothing suitable is found.
+        Resolves and validates the folder under test. Exits 2 rather than
+        guessing when nothing suitable is found and nothing can be asked.
     #>
-    param([string]$Requested, [string]$DevRoot, [bool]$AllowDevRoot)
+    param([string]$Requested, [string]$DevRoot, [bool]$AllowDevRoot, [bool]$Unattended)
 
     $resolved = ''
+    $selfTestChosen = $false
 
     if ($Requested) {
         if (-not (Test-Path -LiteralPath $Requested)) {
-            Write-Host "ERROR: -TargetRoot does not exist: $Requested" -ForegroundColor Red
+            Write-Host "ERROR: -VRHMFolder does not exist: $Requested" -ForegroundColor Red
             exit 2
         }
         $resolved = (Resolve-Path -LiteralPath $Requested).Path
@@ -196,15 +202,46 @@ function Resolve-TargetRoot {
             Where-Object { $_.Name -like "$leaf.v*" } |
             Sort-Object LastWriteTime -Descending)
 
-        if ($candidates.Count -eq 0) {
-            Write-Host "ERROR: no extracted release folder found next to the dev folder." -ForegroundColor Red
+        if ($candidates.Count -gt 0) {
+            $resolved = $candidates[0].FullName
+            Write-Host ("  Auto-detected target: {0}" -f $resolved) -ForegroundColor DarkGray
+        }
+        elseif ($Unattended) {
+            Write-Host "ERROR: no extracted release folder found next to this folder." -ForegroundColor Red
             Write-Host "       Expected something like: $parent\$leaf.v<version>" -ForegroundColor DarkGray
             Write-Host "       Build one with: .\scripts\Create-ZipRelease.ps1 -Version <v> -Unzip" -ForegroundColor DarkGray
-            Write-Host "       Or pass -TargetRoot explicitly." -ForegroundColor DarkGray
+            Write-Host "       Or pass -VRHMFolder explicitly." -ForegroundColor DarkGray
             exit 2
         }
-        $resolved = $candidates[0].FullName
-        Write-Host ("  Auto-detected target: {0}" -f $resolved) -ForegroundColor DarkGray
+        else {
+            # Nothing to auto-detect: this copy of the harness may be sitting
+            # somewhere with no separate release to test (a plain clone, or
+            # this same folder deployed on another machine). Ask rather than
+            # fail outright - this is how the harness tests itself.
+            Write-Host ''
+            Write-Host '  No extracted release folder was found next to this folder, and no' -ForegroundColor Yellow
+            Write-Host '  -VRHMFolder was given.' -ForegroundColor Yellow
+            Write-Host ''
+            Write-Host ("    [1] Test the current folder ({0})" -f $DevRoot)
+            Write-Host '    [2] Browse for a folder...'
+            Write-Host ''
+            $choice = Read-TestMenuChoice -Prompt '  Select' -Accept @('1', '2') -Default '1'
+
+            if ($choice -eq '2') {
+                Add-Type -AssemblyName System.Windows.Forms
+                $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+                $dialog.Description = 'Select the VR HEADSET MANAGER folder to test (must contain main.ps1)'
+                if ($dialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK -or -not $dialog.SelectedPath) {
+                    Write-Host "ERROR: no folder selected." -ForegroundColor Red
+                    exit 2
+                }
+                $resolved = $dialog.SelectedPath
+            }
+            else {
+                $resolved = $DevRoot
+                $selfTestChosen = $true
+            }
+        }
     }
 
     # The release zip nests everything under a <folderName>\ entry, so an
@@ -220,11 +257,15 @@ function Resolve-TargetRoot {
         }
     }
 
+    # Picking "[1] Test the current folder" from the prompt above IS informed
+    # consent - it does not need -Force on top of itself. This guard only
+    # protects against -VRHMFolder / auto-detection accidentally landing on
+    # the dev folder by coincidence.
     $devResolved = (Resolve-Path -LiteralPath $DevRoot).Path
-    if ($resolved -eq $devResolved -and -not $AllowDevRoot) {
+    if ($resolved -eq $devResolved -and -not $AllowDevRoot -and -not $selfTestChosen) {
         Write-Host "ERROR: refusing to run against the dev folder." -ForegroundColor Red
         Write-Host "       This would overwrite your live config\config.json and data\*.csv." -ForegroundColor DarkGray
-        Write-Host "       Point -TargetRoot at an extracted release, or pass -Force to override." -ForegroundColor DarkGray
+        Write-Host "       Point -VRHMFolder at an extracted release, or pass -Force to override." -ForegroundColor DarkGray
         exit 2
     }
 
@@ -319,7 +360,7 @@ function Show-LaunchMenu {
 # ---------------------------------------------------------------------------
 $sectionIds = ConvertTo-SectionIdList -Raw $Sections
 
-$target = Resolve-TargetRoot -Requested $TargetRoot -DevRoot $devRoot -AllowDevRoot ([bool]$Force)
+$target = Resolve-TargetRoot -Requested $VRHMFolder -DevRoot $devRoot -AllowDevRoot ([bool]$Force) -Unattended ([bool]$Unattended)
 if (-not $Version) { $Version = Get-TargetVersion -Root $target }
 
 # -RestoreOnly: clean up a crashed run and stop.
@@ -449,6 +490,12 @@ finally {
     # Teardown always runs, including on Ctrl+C.
     if (Get-Command Stop-SandboxApp -ErrorAction SilentlyContinue) {
         try { Stop-SandboxApp -TargetRoot $target | Out-Null } catch { }
+    }
+
+    # Preserve the app's log file as run evidence before Reset-SandboxTarget
+    # deletes logs\ entirely below.
+    if (Get-Command Save-SandboxLogs -ErrorAction SilentlyContinue) {
+        try { Save-SandboxLogs -TargetRoot $target } catch { }
     }
 
     # Restore the target to its just-extracted state so it can be tested again.

@@ -297,6 +297,7 @@
     FirewallRuleExists = "La regle de pare-feu existe deja et est correctement configuree"
     FirewallRuleFailed = "Impossible de gerer la regle de pare-feu : {0}"
     FirewallConfigSkipped = "Configuration du pare-feu pour ADB echouee ou ignoree"
+    FirewallSetupIncomplete = "Une ou plusieurs taches de configuration approuvees n'ont pas pu etre confirmees ensuite ({0}). Windows peut encore bloquer ces fonctionnalites - relancez l'application en tant qu'administrateur, ou appliquez la ou les regles manuellement."
     WebServerAlreadyRunning = "Serveur web deja en cours d'execution sur le port {0} (PID {1})"
     WebServerStale = "Le serveur web PID {0} ne repond plus sur le port {1} - redemarrage"
     WebServerLinksHeader = "Moniteur web accessible :"
@@ -321,6 +322,9 @@
     AwakeModeDeactivated = "Mode eveil desactive : comportement de veille/verrouillage normal restaure."
     DefenderExclusionSkipped    = "Exclusion Windows Defender : protection temps reel inactive ou dossier deja exclu"
     DefenderExclusionPending    = "Exclusion Windows Defender : planification de la tache pour {0}"
+    CriticalBinariesMissingTitle = "CRITIQUE : des fichiers programme requis sont introuvables - l'application ne peut pas demarrer"
+    CriticalBinariesMissingHint  = "Verifiez que le dossier 'sources' est complet et que les chemins de config.json sont corrects, puis redemarrez."
+    PressEnterToExit             = "Appuyez sur Entree pour quitter"
 
     # ==========================================
     # headsets_manager.ps1

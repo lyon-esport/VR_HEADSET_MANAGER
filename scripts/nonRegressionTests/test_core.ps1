@@ -23,16 +23,37 @@
 # ---------------------------------------------------------------------------
 # Per-test scratch state, reset by Invoke-RegressionTest
 # ---------------------------------------------------------------------------
-$script:CurrentEvidence = New-Object System.Collections.Generic.List[string]
-$script:CurrentWarnings = New-Object System.Collections.Generic.List[string]
+$script:CurrentEvidence  = New-Object System.Collections.Generic.List[string]
+$script:CurrentWarnings  = New-Object System.Collections.Generic.List[string]
+$script:CurrentArtifacts = New-Object System.Collections.Generic.List[string]
 
 # ---------------------------------------------------------------------------
 # Run lifecycle
 # ---------------------------------------------------------------------------
+function Get-TestArtifactFolderName {
+    <#
+    .SYNOPSIS
+        Builds the per-run artifact folder name: date, computer, depth, version -
+        so a run's full evidence trail is self-identifying once copied off the
+        machine that produced it (e.g. to compare an AMD vs an NVIDIA machine).
+    #>
+    param(
+        [Parameter(Mandatory = $true)][datetime]$StartedAt,
+        [Parameter(Mandatory = $true)][string]$Depth,
+        [Parameter(Mandatory = $true)][string]$Version
+    )
+    $stamp       = $StartedAt.ToString('yyyy-MM-dd_HHmmss')
+    $safeVersion = ($Version -replace '[^\w\.\-]', '_')
+    $computer    = ($env:COMPUTERNAME -replace '[^\w\.\-]', '_')
+    return ("{0}_{1}_{2}_v{3}" -f $stamp, $computer, $Depth, $safeVersion)
+}
+
 function Initialize-TestRun {
     <#
     .SYNOPSIS
         Creates $global:TestRun, the single state object for one harness run.
+        Also creates the per-run artifact folder (report + logs + screenshots +
+        stream probes), named after the date, computer, depth and version.
     .EXAMPLE
         Initialize-TestRun -TargetRoot 'D:\rel' -Version '1.2.3' -Mode Auto -Depth Standard
     #>
@@ -44,13 +65,24 @@ function Initialize-TestRun {
         [string]$ReportFolder = (Join-Path $PSScriptRoot 'reports')
     )
 
+    $startedAt      = Get-Date
+    $artifactFolder = Join-Path $ReportFolder (Get-TestArtifactFolderName -StartedAt $startedAt -Depth $Depth -Version $Version)
+    foreach ($sub in @('', 'screenshots', 'stream_probe', 'app_logs', 'data')) {
+        $folder = $artifactFolder
+        if ($sub) { $folder = Join-Path $artifactFolder $sub }
+        if (-not (Test-Path -LiteralPath $folder)) {
+            New-Item -ItemType Directory -Path $folder -Force | Out-Null
+        }
+    }
+
     $global:TestRun = [PSCustomObject]@{
         TargetRoot       = $TargetRoot
         Version          = $Version
         Mode             = $Mode
         Depth            = $Depth
         ReportFolder     = $ReportFolder
-        StartedAt        = Get-Date
+        ArtifactFolder   = $artifactFolder
+        StartedAt        = $startedAt
         FinishedAt       = $null
         Results          = (New-Object System.Collections.Generic.List[object])
         Sections         = (New-Object System.Collections.Generic.List[object])
@@ -118,6 +150,61 @@ function Add-TestEvidence {
     #>
     param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Line)
     $script:CurrentEvidence.Add($Line) | Out-Null
+}
+
+function Add-TestArtifact {
+    <#
+    .SYNOPSIS
+        Copies a file into the current run's artifact folder and records it as
+        evidence. Use for screenshots, ffprobe JSON dumps, log copies, or any
+        other proof a test wants preserved for later review.
+
+    .DESCRIPTION
+        Files land under $global:TestRun.ArtifactFolder\<Category>\, keeping
+        their original name unless -Rename is given. The relative path is
+        appended to the current test's Artifacts list (rendered by the HTML
+        report - inline for images, a link otherwise) and a human-readable
+        line is also added via Add-TestEvidence so it shows in the plain-text
+        report and on-screen (FAIL / Manual mode) too.
+
+        Silently no-ops when $SourcePath does not exist or the copy fails -
+        losing a screenshot must never turn a otherwise-passing test into a
+        FAIL. Callers that need the copy to succeed should assert separately.
+
+    .EXAMPLE
+        Add-TestArtifact -SourcePath $jpgPath -Category screenshots
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$SourcePath,
+        [Parameter(Mandatory = $true)][ValidateSet('screenshots', 'stream_probe', 'app_logs', 'data')][string]$Category,
+        [string]$Rename = ''
+    )
+
+    if (-not (Test-Path -LiteralPath $SourcePath)) { return }
+    if (-not $global:TestRun -or -not $global:TestRun.ArtifactFolder) { return }
+
+    $name = $Rename
+    if (-not $name) { $name = Split-Path -Leaf $SourcePath }
+
+    $destFolder = Join-Path $global:TestRun.ArtifactFolder $Category
+    if (-not (Test-Path -LiteralPath $destFolder)) {
+        try { New-Item -ItemType Directory -Path $destFolder -Force | Out-Null } catch { return }
+    }
+    $destPath = Join-Path $destFolder $name
+
+    try {
+        Copy-Item -LiteralPath $SourcePath -Destination $destPath -Force
+    }
+    catch {
+        return
+    }
+
+    $relative = Join-Path $Category $name
+    $script:CurrentArtifacts.Add($relative) | Out-Null
+
+    $size = 0
+    try { $size = (Get-Item -LiteralPath $destPath).Length } catch { }
+    Add-TestEvidence ("{0} saved ({1} bytes)" -f $relative, $size)
 }
 
 function Write-TestWarning {
@@ -299,8 +386,9 @@ function Invoke-RegressionTest {
         [string]$KnownDefect = ''
     )
 
-    $script:CurrentEvidence = New-Object System.Collections.Generic.List[string]
-    $script:CurrentWarnings = New-Object System.Collections.Generic.List[string]
+    $script:CurrentEvidence  = New-Object System.Collections.Generic.List[string]
+    $script:CurrentWarnings  = New-Object System.Collections.Generic.List[string]
+    $script:CurrentArtifacts = New-Object System.Collections.Generic.List[string]
 
     $sectionId = '--'
     if ($global:TestRun.CurrentSection) { $sectionId = $global:TestRun.CurrentSection.Id }
@@ -341,8 +429,9 @@ function Invoke-RegressionTest {
         Name     = $Name
         Status   = $status
         Detail   = $detail
-        Evidence = @($script:CurrentEvidence)
-        Warnings = @($script:CurrentWarnings)
+        Evidence  = @($script:CurrentEvidence)
+        Warnings  = @($script:CurrentWarnings)
+        Artifacts = @($script:CurrentArtifacts)
         Duration = $sw.Elapsed
         Override = $false
         At       = Get-Date
@@ -410,6 +499,7 @@ function Write-TestSummary {
     Write-Host ("  Target  : {0}" -f $global:TestRun.TargetRoot) -ForegroundColor DarkGray
     Write-Host ("  Version : {0}   Mode: {1}   Depth: {2}" -f $global:TestRun.Version, $global:TestRun.Mode, $global:TestRun.Depth) -ForegroundColor DarkGray
     Write-Host ("  Duration: {0}" -f (Format-TestDuration $s.Elapsed)) -ForegroundColor DarkGray
+    Write-Host ("  Evidence: {0}" -f $global:TestRun.ArtifactFolder) -ForegroundColor DarkGray
     Write-Host ''
     Write-Host ("  PASS {0}" -f $s.Pass) -ForegroundColor Green
     Write-Host ("  WARN {0}" -f $s.Warn) -ForegroundColor Yellow
@@ -448,9 +538,12 @@ function ConvertTo-HtmlText {
 }
 
 function Get-TestReportBaseName {
-    $stamp = $global:TestRun.StartedAt.ToString('yyyy-MM-dd_HHmmss')
-    $safeVersion = ($global:TestRun.Version -replace '[^\w\.\-]', '_')
-    return ("NonRegressionTests_v{0}_{1}" -f $safeVersion, $stamp)
+    <#
+    .SYNOPSIS
+        Base report filename, kept fixed ('report') now that the date/computer/
+        depth/version identity lives in the per-run ArtifactFolder name instead.
+    #>
+    return 'report'
 }
 
 function Write-TestReportText {
@@ -458,7 +551,7 @@ function Write-TestReportText {
     .SYNOPSIS
         Writes the full plain-text transcript report. Returns its path.
     #>
-    param([string]$ReportFolder = $global:TestRun.ReportFolder)
+    param([string]$ReportFolder = $global:TestRun.ArtifactFolder)
 
     if (-not (Test-Path -LiteralPath $ReportFolder)) {
         New-Item -ItemType Directory -Path $ReportFolder -Force | Out-Null
@@ -500,12 +593,45 @@ function Write-TestReportText {
     return $path
 }
 
+function Get-TestArtifactHtml {
+    <#
+    .SYNOPSIS
+        Renders one result's Artifacts list as HTML: an inline thumbnail for
+        image files (relative src - the report lives inside the same folder
+        as the artifact subfolders it references), a plain link otherwise.
+    #>
+    param([string[]]$Artifacts)
+
+    if (-not $Artifacts -or $Artifacts.Count -eq 0) { return '' }
+
+    $imageExt = @('.jpg', '.jpeg', '.png', '.gif', '.bmp')
+    $pieces = New-Object System.Collections.Generic.List[string]
+    foreach ($a in $Artifacts) {
+        $href = ($a -replace '\\', '/')
+        $ext = [System.IO.Path]::GetExtension($a).ToLowerInvariant()
+        if ($imageExt -contains $ext) {
+            $pieces.Add(("<a href='{0}' target='_blank'><img class='thumb' src='{0}' alt='{1}'></a>" -f $href, (ConvertTo-HtmlText $a))) | Out-Null
+        }
+        else {
+            $pieces.Add(("<a href='{0}' target='_blank'>{1}</a>" -f $href, (ConvertTo-HtmlText $a))) | Out-Null
+        }
+    }
+    return ("<div class='art'>" + ($pieces -join ' ') + "</div>")
+}
+
 function Write-TestReportHtml {
     <#
     .SYNOPSIS
-        Writes a compact self-contained HTML summary. Returns its path.
+        Writes an HTML summary alongside the run's artifact folder. Returns
+        its path.
+
+    .DESCRIPTION
+        No longer fully self-contained: artifact links/thumbnails are relative
+        paths into the sibling screenshots\/stream_probe\/app_logs\ folders
+        that live next to this report inside the same per-run ArtifactFolder,
+        which is fine since these reports never leave the local reports\ tree.
     #>
-    param([string]$ReportFolder = $global:TestRun.ReportFolder)
+    param([string]$ReportFolder = $global:TestRun.ArtifactFolder)
 
     if (-not (Test-Path -LiteralPath $ReportFolder)) {
         New-Item -ItemType Directory -Path $ReportFolder -Force | Out-Null
@@ -529,7 +655,8 @@ function Write-TestReportHtml {
         if ($r.Evidence.Count -gt 0) {
             $evidence = "<div class='ev'>" + (($r.Evidence | ForEach-Object { ConvertTo-HtmlText $_ }) -join '<br>') + "</div>"
         }
-        $rowHtml = "<tr><td class='st {0}'>{0}</td><td>{1}</td><td>{2}{3}</td><td class='dur'>{4}</td></tr>" -f $r.Status, (ConvertTo-HtmlText $r.Name), $detail, $evidence, (Format-TestDuration $r.Duration)
+        $artifacts = Get-TestArtifactHtml -Artifacts $r.Artifacts
+        $rowHtml = "<tr><td class='st {0}'>{0}</td><td>{1}</td><td>{2}{3}{4}</td><td class='dur'>{5}</td></tr>" -f $r.Status, (ConvertTo-HtmlText $r.Name), $detail, $evidence, $artifacts, (Format-TestDuration $r.Duration)
         [void]$rows.AppendLine($rowHtml)
     }
 
@@ -549,6 +676,9 @@ td.st{width:56px;font-weight:700}
 td.st.PASS{color:#4ec94e}td.st.WARN{color:#e0c040}td.st.SKIP{color:#888}td.st.FAIL{color:#e05555}
 td.dur{width:70px;color:#777;text-align:right}
 .ev{color:#888;font-family:Consolas,monospace;font-size:12px;margin-top:4px}
+.art{margin-top:6px}
+.art a{color:#6cf;font-size:12px;margin-right:8px}
+.art img.thumb{max-width:160px;max-height:120px;border:1px solid #444;border-radius:3px;vertical-align:top}
 </style></head><body>
 <h1>VR HEADSET MANAGER - Non-Regression Tests</h1>
 '@

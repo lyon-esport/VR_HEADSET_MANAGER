@@ -218,10 +218,20 @@ if ($TestApp) {
     Write-Host "[ Running non-regression tests against the extracted release ]" -ForegroundColor Yellow
     Write-Host ""
 
-    # Child process, not dot-sourced: the harness sets its own strict-mode and
-    # error preferences, and its exit code must survive back to the caller.
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $harness -TargetRoot $extractDir -Version $Version
-    $testExit = $LASTEXITCODE
+    if ($Host.Name -eq 'Windows PowerShell ISE') {
+        # ISE's console pane is not a real Win32 console; a child process spawned via the call
+        # operator inherits no usable console handle, so Read-Host in the harness would hang with
+        # no way to type. Start-Process (without -NoNewWindow) always opens a real console window.
+        Write-Host "  (Detected ISE - opening a separate console window so interactive prompts work.)" -ForegroundColor DarkGray
+        $harnessArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$harness`" -TargetRoot `"$extractDir`" -Version `"$Version`""
+        $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList $harnessArgs -Wait -PassThru
+        $testExit = $proc.ExitCode
+    } else {
+        # Child process, not dot-sourced: the harness sets its own strict-mode and
+        # error preferences, and its exit code must survive back to the caller.
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $harness -TargetRoot $extractDir -Version $Version
+        $testExit = $LASTEXITCODE
+    }
 
     Write-Host ""
     if ($testExit -eq 0) {

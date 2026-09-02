@@ -48,6 +48,12 @@ if ($nrtHeadset) {
     $nrtSafeName = ConvertTo-NrtSafeName   -Name $nrtHeadset.Name
 }
 
+# Content-proof plumbing (Part B): ffprobe for real codec/resolution, plus a
+# saved frame grab so a human has an actual picture to look at, not just
+# mediamtx's byte counters. ffprobe.exe may be absent on an older ffmpeg
+# install - Test-NrtStreamContent SKIPs cleanly in that case.
+$nrtFfmpeg = Get-NrtFfmpegPaths -TargetRoot $target
+
 # The operator's original mediamtx settings, restored in the teardown test.
 $originalReEncode = $ports.ReEncode
 $originalCodec    = $ports.Codec
@@ -94,15 +100,18 @@ function Set-NrtMediaMtxSetting {
 function Invoke-NrtStreamCase {
     <#
     .SYNOPSIS
-        Runs one streaming case: make sure the stream is up, then demand
-        -Seconds of stable flow. Adds all the numbers as evidence.
+        Runs one streaming case: make sure the stream is up, demand -Seconds of
+        stable flow, then verify and capture the ACTUAL picture - real codec,
+        resolution and a saved frame grab, not just mediamtx's byte counters.
 
     .EXAMPLE
-        Invoke-NrtStreamCase -Label 're-encode ON'
+        Invoke-NrtStreamCase -Label 're-encode ON' -ExpectedCodec 'h264'
     #>
     param(
         [string]$Label = '',
-        [int]$Seconds = 15
+        [int]$Seconds = 15,
+        # Empty when the case is passthrough (native codec varies by headset).
+        [string]$ExpectedCodec = ''
     )
 
     $up = Start-NrtHeadsetStream -TargetRoot $target -Headset $nrtHeadset
@@ -117,6 +126,34 @@ function Invoke-NrtStreamCase {
     Add-TestEvidence ("bytes {0} -> {1}, avg {2} kbps, {3} stall(s) over {4} samples" -f `
         $s.FirstBytes, $s.LastBytes, $s.AvgKbps, $s.Stalls, $s.Samples)
     Assert-True $s.Stable $s.Reason
+
+    $rtspUrl = "rtsp://127.0.0.1:{0}/{1}" -f $ports.Rtsp, $streamPath
+
+    $content = Test-NrtStreamContent -FfprobePath $nrtFfmpeg.FfprobePath -StreamUrl $rtspUrl -ExpectedCodec $ExpectedCodec
+    Add-TestEvidence ("ffprobe: {0}" -f $content.Reason)
+    if (-not $nrtFfmpeg.FfprobePath) {
+        Write-TestWarning $content.Reason
+    }
+    else {
+        Assert-True $content.Ok $content.Reason
+    }
+
+    if ($nrtFfmpeg.FfmpegPath) {
+        $shotName = "{0}_{1}.jpg" -f $nrtSafeName, ((($Label -replace '[^\w]+', '_')).Trim('_'))
+        $shotPath = Join-Path $env:TEMP ("vrm_nrt_" + [guid]::NewGuid().ToString('N') + '.jpg')
+        $shot = Save-NrtStreamFrame -FfmpegPath $nrtFfmpeg.FfmpegPath -StreamUrl $rtspUrl -OutPath $shotPath
+        if ($shot.Ok) {
+            Add-TestArtifact -SourcePath $shotPath -Category screenshots -Rename $shotName
+            if (-not (Test-NrtFrameNotBlack -FfmpegPath $nrtFfmpeg.FfmpegPath -JpgPath $shotPath)) {
+                Write-TestWarning ("captured frame '{0}' looks all-black - loading screen, sleeping headset, or a broken encoder" -f $shotName)
+            }
+            Remove-Item -LiteralPath $shotPath -Force -ErrorAction SilentlyContinue
+        }
+        else {
+            Add-TestEvidence ("frame grab failed: {0}" -f $shot.Reason)
+        }
+    }
+
     return $s
 }
 
@@ -158,8 +195,10 @@ Invoke-RegressionTest -Name 'mediamtx API is answering' -Test {
 
 Invoke-RegressionTest -Name "Stream is stable for $stableSeconds seconds" -Test {
     Assert-NrtStreamHeadsetAvailable
+    $expectedCodec = ''
+    if ($originalReEncode) { $expectedCodec = $originalCodec }
     Invoke-NrtStreamCase -Label ("configured settings (re-encode {0}, codec {1})" -f $originalReEncode, $originalCodec) `
-                         -Seconds $stableSeconds | Out-Null
+                         -Seconds $stableSeconds -ExpectedCodec $expectedCodec | Out-Null
 }
 
 Invoke-RegressionTest -Name 'Stream carries at least one video track' -Test {
@@ -231,7 +270,9 @@ if ($depth -ne 'Light') {
             }
         }
 
-        Invoke-NrtStreamCase -Label ("re-encode {0}" -f $flipped) -Seconds $stableSeconds | Out-Null
+        $expectedCodec = ''
+        if ($flipped) { $expectedCodec = $originalCodec }
+        Invoke-NrtStreamCase -Label ("re-encode {0}" -f $flipped) -Seconds $stableSeconds -ExpectedCodec $expectedCodec | Out-Null
     }
 
     Invoke-RegressionTest -Name 'Recording produces a growing file while streaming' -Test {
@@ -307,7 +348,7 @@ if ($depth -eq 'Full') {
             Skip-Test 'config save could not take the VQA lock - restart pending, cannot measure'
         }
 
-        Invoke-NrtStreamCase -Label ("codec {0}" -f $altCodec) -Seconds $stableSeconds | Out-Null
+        Invoke-NrtStreamCase -Label ("codec {0}" -f $altCodec) -Seconds $stableSeconds -ExpectedCodec $altCodec | Out-Null
     }
 }
 

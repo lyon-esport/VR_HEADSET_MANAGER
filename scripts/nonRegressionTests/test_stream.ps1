@@ -663,6 +663,247 @@ function Test-NrtStreamStable {
     return $result
 }
 
+function Get-NrtFfmpegPaths {
+    <#
+    .SYNOPSIS
+        Resolves the sandbox's ffmpeg.exe and, if present, ffprobe.exe - the
+        same folder Initialize-SandboxConfig seeds ffmpeg.exe into.
+
+    .DESCRIPTION
+        ffprobe.exe is not guaranteed to exist: only Update-FfmpegBinary
+        extracts it (best-effort, since not every build variant ships it), so
+        an ffmpeg folder copied in from an older download may not have it yet.
+        Returns FfprobePath = $null in that case so callers can SKIP the
+        content-verification check rather than fail.
+
+    .EXAMPLE
+        $ff = Get-NrtFfmpegPaths -TargetRoot $target
+        if ($ff.FfprobePath) { & $ff.FfprobePath -version }
+    #>
+    param([Parameter(Mandatory = $true)][string]$TargetRoot)
+
+    $paths  = Get-SandboxPaths -TargetRoot $TargetRoot
+    $config = Read-JsonFileUtf8 -Path $paths.ConfigFile
+
+    $ffmpegFolder = 'ffmpeg'
+    if ($config -and $config.ffmpeg -and $config.ffmpeg.folder) { $ffmpegFolder = $config.ffmpeg.folder }
+
+    $out = @{ FfmpegPath = $null; FfprobePath = $null }
+    $ffmpegExe  = Join-Path (Join-Path $paths.SourcesFolder $ffmpegFolder) 'ffmpeg.exe'
+    $ffprobeExe = Join-Path (Join-Path $paths.SourcesFolder $ffmpegFolder) 'ffprobe.exe'
+    if (Test-Path -LiteralPath $ffmpegExe)  { $out.FfmpegPath  = $ffmpegExe }
+    if (Test-Path -LiteralPath $ffprobeExe) { $out.FfprobePath = $ffprobeExe }
+    return $out
+}
+
+function Test-NrtStreamContent {
+    <#
+    .SYNOPSIS
+        Verifies the ACTUAL negotiated codec/resolution/fps of a live stream
+        via ffprobe, rather than trusting mediamtx's byte counters alone.
+
+    .DESCRIPTION
+        Test-NrtStreamStable proves bytes are flowing; it cannot tell a valid
+        H.264/HEVC bitstream from throughput-floor-clearing garbage pushed
+        through the pipe at a steady rate. This runs ffprobe against the live
+        RTSP url and parses the first video stream's codec/width/height/fps.
+
+        Returns @{ Ok; Reason; Codec; Width; Height; Fps; RawJson } rather than
+        throwing. Ok=$false with an informative Reason when ffprobe.exe is not
+        available (see Get-NrtFfmpegPaths) - callers SKIP rather than fail.
+
+    .EXAMPLE
+        $c = Test-NrtStreamContent -FfprobePath $ff.FfprobePath -StreamUrl $rtspUrl -ExpectedCodec 'h264' -TargetFps 60
+        Assert-True $c.Ok $c.Reason
+    #>
+    param(
+        [string]$FfprobePath,
+        [Parameter(Mandatory = $true)][string]$StreamUrl,
+        # Empty when the caller cannot know the codec in advance (passthrough
+        # mode ships the headset's own native codec, which varies by device) -
+        # resolution/fps are still checked, just not codec equality.
+        [string]$ExpectedCodec = '',
+        [int]$TargetFps = 0
+    )
+
+    $result = [PSCustomObject]@{ Ok = $false; Reason = ''; Codec = ''; Width = 0; Height = 0; Fps = 0.0; RawJson = '' }
+
+    if (-not $FfprobePath) {
+        $result.Reason = 'ffprobe.exe not bundled next to ffmpeg.exe - re-run the ffmpeg update to pick it up, or copy it manually'
+        return $result
+    }
+
+    $ffArgs = @('-v', 'quiet', '-print_format', 'json', '-show_streams', '-rtsp_transport', 'tcp', $StreamUrl)
+    $output = ''
+    try {
+        $output = (& $FfprobePath @ffArgs 2>$null) -join "`n"
+    }
+    catch {
+        $result.Reason = ("ffprobe failed to run: {0}" -f $_.Exception.Message)
+        return $result
+    }
+    $result.RawJson = $output
+
+    $parsed = $null
+    try { $parsed = $output | ConvertFrom-Json } catch { }
+    if (-not $parsed -or -not $parsed.streams) {
+        $result.Reason = 'ffprobe returned no parseable stream information'
+        return $result
+    }
+
+    $video = @($parsed.streams | Where-Object { $_.codec_type -eq 'video' } | Select-Object -First 1)
+    if ($video.Count -eq 0) {
+        $result.Reason = 'ffprobe reported no video stream'
+        return $result
+    }
+    $v = $video[0]
+
+    $result.Codec  = [string]$v.codec_name
+    $result.Width  = [int]$v.width
+    $result.Height = [int]$v.height
+    $fpsVal = 0.0
+    if ($v.r_frame_rate -and $v.r_frame_rate -match '^(\d+)/(\d+)$' -and [int]$Matches[2] -ne 0) {
+        $fpsVal = [double]$Matches[1] / [double]$Matches[2]
+    }
+    $result.Fps = $fpsVal
+
+    if ($ExpectedCodec) {
+        # h265/hevc naming differs between the app's config value and ffprobe's codec_name.
+        $codecMap = @{ h264 = 'h264'; h265 = 'hevc'; hevc = 'hevc' }
+        $expected = $ExpectedCodec
+        if ($codecMap.ContainsKey($ExpectedCodec)) { $expected = $codecMap[$ExpectedCodec] }
+
+        if ($result.Codec -ne $expected) {
+            $result.Reason = ("ffprobe reports codec '{0}', expected '{1}'" -f $result.Codec, $expected)
+            return $result
+        }
+    }
+    if ($result.Width -le 0 -or $result.Height -le 0) {
+        $result.Reason = ("ffprobe reports implausible resolution {0}x{1}" -f $result.Width, $result.Height)
+        return $result
+    }
+    if ($TargetFps -gt 0) {
+        $tolerance = [math]::Max(3, $TargetFps * 0.2)
+        if ([math]::Abs($result.Fps - $TargetFps) -gt $tolerance) {
+            $result.Reason = ("ffprobe reports {0:N1} fps, expected close to {1}" -f $result.Fps, $TargetFps)
+            return $result
+        }
+    }
+
+    $result.Ok = $true
+    $result.Reason = ("{0} {1}x{2} @ {3:N1}fps" -f $result.Codec, $result.Width, $result.Height, $result.Fps)
+    return $result
+}
+
+function Save-NrtStreamFrame {
+    <#
+    .SYNOPSIS
+        Grabs one JPEG frame from a live stream via the bundled ffmpeg - the
+        visual proof a byte counter or ffprobe metadata check cannot provide.
+
+    .DESCRIPTION
+        Returns @{ Ok; Reason; Path; SizeBytes }. Never throws; a failed grab
+        is reported through Ok=$false so the caller decides severity.
+
+    .EXAMPLE
+        $shot = Save-NrtStreamFrame -FfmpegPath $ff.FfmpegPath -StreamUrl $rtspUrl -OutPath $jpg
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$FfmpegPath,
+        [Parameter(Mandatory = $true)][string]$StreamUrl,
+        [Parameter(Mandatory = $true)][string]$OutPath,
+        [int]$TimeoutSec = 20
+    )
+
+    $result = [PSCustomObject]@{ Ok = $false; Reason = ''; Path = $OutPath; SizeBytes = 0 }
+
+    if (Test-Path -LiteralPath $OutPath) { Remove-Item -LiteralPath $OutPath -Force -ErrorAction SilentlyContinue }
+    $destFolder = Split-Path -Parent $OutPath
+    if (-not (Test-Path -LiteralPath $destFolder)) { New-Item -ItemType Directory -Path $destFolder -Force | Out-Null }
+
+    $errFile = [System.IO.Path]::GetTempFileName()
+    try {
+        $ffArgs = @('-y', '-rtsp_transport', 'tcp', '-i', $StreamUrl, '-frames:v', '1', '-q:v', '2', $OutPath)
+        $proc = Start-Process -FilePath $FfmpegPath -ArgumentList $ffArgs -NoNewWindow -PassThru -RedirectStandardError $errFile
+        if (-not $proc.WaitForExit($TimeoutSec * 1000)) {
+            try { $proc.Kill() } catch { }
+            $result.Reason = ("ffmpeg frame grab timed out after {0}s" -f $TimeoutSec)
+            return $result
+        }
+    }
+    catch {
+        $result.Reason = ("ffmpeg frame grab failed to start: {0}" -f $_.Exception.Message)
+        return $result
+    }
+    finally {
+        Remove-Item -LiteralPath $errFile -Force -ErrorAction SilentlyContinue
+    }
+
+    if (-not (Test-Path -LiteralPath $OutPath)) {
+        $result.Reason = 'ffmpeg produced no output file'
+        return $result
+    }
+
+    $size = (Get-Item -LiteralPath $OutPath).Length
+    $result.SizeBytes = $size
+    if ($size -le 0) {
+        $result.Reason = 'ffmpeg produced an empty file'
+        return $result
+    }
+
+    $result.Ok = $true
+    $result.Reason = ("{0} bytes" -f $size)
+    return $result
+}
+
+function Test-NrtFrameNotBlack {
+    <#
+    .SYNOPSIS
+        Reuses the app's own blackframe-filter pattern (Test-FfmpegEncoder in
+        utils.ps1) to flag a captured frame that is suspiciously all-black.
+
+    .DESCRIPTION
+        A loading screen, a sleeping headset, or a broken encoder can all
+        produce a technically-valid, steadily-flowing stream that both
+        Test-NrtStreamStable and Test-NrtStreamContent would pass while the
+        picture itself is blank. Returns $true when the frame is NOT flagged
+        black. A dark-but-legitimate scene can occasionally trip this, so
+        callers should Write-TestWarning rather than hard-fail on $false.
+
+    .EXAMPLE
+        if (-not (Test-NrtFrameNotBlack -FfmpegPath $ff.FfmpegPath -JpgPath $jpg)) {
+            Write-TestWarning 'captured frame looks black'
+        }
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$FfmpegPath,
+        [Parameter(Mandatory = $true)][string]$JpgPath,
+        [int]$TimeoutSec = 15
+    )
+
+    if (-not (Test-Path -LiteralPath $JpgPath)) { return $true }
+
+    $errFile = [System.IO.Path]::GetTempFileName()
+    try {
+        $ffArgs = @('-y', '-i', $JpgPath, '-vf', 'blackframe=98:32', '-f', 'null', '-')
+        $proc = Start-Process -FilePath $FfmpegPath -ArgumentList $ffArgs -NoNewWindow -PassThru -RedirectStandardError $errFile
+        if (-not $proc.WaitForExit($TimeoutSec * 1000)) {
+            try { $proc.Kill() } catch { }
+            return $true
+        }
+        $stderr = ''
+        try { $stderr = Get-Content -LiteralPath $errFile -Raw -ErrorAction SilentlyContinue } catch { }
+        if (-not $stderr) { return $true }
+        return ($stderr -notmatch 'blackframe.*pblack:')
+    }
+    catch {
+        return $true
+    }
+    finally {
+        Remove-Item -LiteralPath $errFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Get-NrtSandboxPorts {
     <#
     .SYNOPSIS

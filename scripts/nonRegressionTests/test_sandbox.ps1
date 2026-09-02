@@ -367,7 +367,10 @@ function Initialize-SandboxConfig {
         Write-TextFileNoBom -Path $paths.KnownHeadsets -Content ($header + "`r`n")
     }
 
-    # WiFi credentials: DPAPI store, same user, so a straight copy works.
+    # WiFi credentials: DPAPI store, same user, so a straight copy works. Safe
+    # even in self-test mode (DevRoot equal to TargetRoot): the destination-
+    # missing check below is then checking the SAME path as the source, so the
+    # branch is never entered when the file already exists there.
     if ($DevRoot) {
         $devWifi = Join-Path $DevRoot 'data\wifi_networks.dat'
         if ((Test-Path -LiteralPath $devWifi) -and (-not (Test-Path -LiteralPath $paths.WifiStore))) {
@@ -379,7 +382,9 @@ function Initialize-SandboxConfig {
     # downloads it via the welcome wizard. The sandbox does the offline
     # equivalent by copying the dev folder's copy, so the streaming sections
     # have something to run. Section 10 separately asserts that the download
-    # path itself ships.
+    # path itself ships. Safe in self-test mode (DevRoot equal to TargetRoot):
+    # $targetFfmpeg and $devFfmpeg are then the identical path, so the
+    # destination-missing check never opens the branch when it already exists.
     $ffmpegFolder = 'ffmpeg'
     if ($config.ffmpeg -and $config.ffmpeg.folder) { $ffmpegFolder = $config.ffmpeg.folder }
     $targetFfmpeg = Join-Path (Join-Path $paths.SourcesFolder $ffmpegFolder) 'ffmpeg.exe'
@@ -778,6 +783,40 @@ function Remove-SandboxArtifacts {
     }
 
     $global:SandboxMainProcess = $null
+}
+
+function Save-SandboxLogs {
+    <#
+    .SYNOPSIS
+        Copies the tested app's latest log file into the current run's
+        ArtifactFolder before Reset-SandboxTarget deletes logs\ entirely.
+
+    .DESCRIPTION
+        Section 10 already reads this same file to assert on its content, but
+        never preserves a copy anywhere. Called once from the harness's
+        finally block, after Stop-SandboxApp and before Reset-SandboxTarget.
+        Best-effort: never throws, since teardown must complete even when
+        nothing was ever logged (e.g. the app never got past provisioning).
+
+    .EXAMPLE
+        Save-SandboxLogs -TargetRoot $target
+    #>
+    param([Parameter(Mandatory = $true)][string]$TargetRoot)
+
+    if (-not (Get-Command Add-TestArtifact -ErrorAction SilentlyContinue)) { return }
+
+    $paths   = Get-SandboxPaths -TargetRoot $TargetRoot
+    $logRoot = Join-Path $paths.LogsFolder $env:COMPUTERNAME
+    if (-not (Test-Path -LiteralPath $logRoot)) { return }
+
+    try {
+        $logFile = Get-ChildItem -LiteralPath $logRoot -Filter 'log_*.txt' -File -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if ($logFile) {
+            Add-TestArtifact -SourcePath $logFile.FullName -Category app_logs
+        }
+    }
+    catch { }
 }
 
 function Test-SandboxIsReleaseFolder {

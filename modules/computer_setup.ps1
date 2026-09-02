@@ -69,30 +69,46 @@ function Invoke-BatchAsAdmin {
     .SYNOPSIS
     Runs multiple firewall/setup tasks in a single elevated console.
     Each task is shown individually so the user can confirm or skip it.
-    Tasks are passed as @{Title; Details; ActionLabel; Script} hashtables.
+    Tasks are passed as @{Title; Details; ActionLabel; Script; VerifyScript} hashtables.
+    Returns an array of @{Title; Approved; Error; Verified} - one per task - so the
+    caller can log a WARNING for anything approved but not actually confirmed.
     #>
     param([array]$Tasks)
-    if (-not $Tasks -or $Tasks.Count -eq 0) { return }
+    if (-not $Tasks -or $Tasks.Count -eq 0) { return @() }
 
     $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 
     # Serialize tasks to a temp JSON file to avoid Base64/quoting limits
-    $tasksFile = Join-Path $env:TEMP ("vrm_fw_tasks_" + [System.Guid]::NewGuid().ToString("N") + ".json")
+    $tasksFile   = Join-Path $env:TEMP ("vrm_fw_tasks_"   + [System.Guid]::NewGuid().ToString("N") + ".json")
+    $resultsFile = Join-Path $env:TEMP ("vrm_fw_results_" + [System.Guid]::NewGuid().ToString("N") + ".json")
     $json = $Tasks | ConvertTo-Json -Depth 3
     [System.IO.File]::WriteAllText($tasksFile, $json, [System.Text.UTF8Encoding]::new($false))
 
     if ($isAdmin) {
-        & $script:fwBatchBlock -TasksFile $tasksFile
+        & $script:fwBatchBlock -TasksFile $tasksFile -ResultsFile $resultsFile
     } else {
         $scriptBlockString = $script:fwBatchBlock.ToString()
-        $tasksFileEsc = $tasksFile -replace "'", "''"
-        $command = "& { $scriptBlockString } -TasksFile '$tasksFileEsc'"
+        $tasksFileEsc   = $tasksFile -replace "'", "''"
+        $resultsFileEsc = $resultsFile -replace "'", "''"
+        $command = "& { $scriptBlockString } -TasksFile '$tasksFileEsc' -ResultsFile '$resultsFileEsc'"
         $encodedCommand = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($command))
         Start-Process -FilePath "powershell.exe" `
                       -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $encodedCommand `
                       -Verb RunAs `
                       -Wait
     }
+
+    $results = @()
+    if (Test-Path -LiteralPath $resultsFile) {
+        try {
+            $raw = [System.IO.File]::ReadAllText($resultsFile, [System.Text.UTF8Encoding]::new($false))
+            $results = @($raw | ConvertFrom-Json -ErrorAction Stop)
+        } catch {
+            Write-Log ("Invoke-BatchAsAdmin: failed to read setup results: " + $_.Exception.Message) -Level WARNING
+        }
+        Remove-Item -LiteralPath $resultsFile -Force -ErrorAction SilentlyContinue
+    }
+    return $results
 }
 
 
@@ -121,20 +137,50 @@ function Show-SetupBox {
 
 # Elevated scriptblock used by Invoke-BatchAsAdmin.
 # Reads a JSON task file, prompts for each task, runs approved ones in sequence.
+# Each task may carry a VerifyScript (a self-contained expression string, no module
+# functions available here) - if present, it is evaluated right after Script runs so
+# the operator sees whether the rule actually took effect BEFORE the next box shows,
+# instead of a blanket "success" regardless of what New-NetFirewallRule/netsh/etc. did.
+# Per-task outcomes are written to ResultsFile so the non-elevated caller can log a
+# real WARNING for anything approved but not confirmed (a stray keypress, a GPO
+# blocking local firewall rules, etc. would otherwise be silently invisible).
 $script:fwBatchBlock = [scriptblock]::Create(@'
-param($TasksFile)
+param($TasksFile, $ResultsFile)
 '@ + $script:SetupPromptFn + @'
 $utf8 = [System.Text.UTF8Encoding]::new($false)
 $json = [System.IO.File]::ReadAllText($TasksFile, $utf8)
 $tasks = $json | ConvertFrom-Json
+$results = @()
 foreach ($task in $tasks) {
     if (Show-SetupBox -Title $task.Title -Details $task.Details -ActionLabel $task.ActionLabel) {
-        Invoke-Expression $task.Script
-        Write-Host "  Rules created successfully." -ForegroundColor Green
-        Start-Sleep -Seconds 1
+        $taskErr = $null
+        try { Invoke-Expression $task.Script } catch { $taskErr = $_ }
+        $verified = $null
+        if ($task.VerifyScript) {
+            try { $verified = [bool](Invoke-Expression $task.VerifyScript) } catch { $verified = $false }
+        }
+        if ($taskErr) {
+            Write-Host ("  FAILED: " + $taskErr.Exception.Message) -ForegroundColor Red
+        } elseif ($verified -eq $false) {
+            Write-Host "  WARNING: could not confirm this rule was actually applied." -ForegroundColor Red
+        } else {
+            Write-Host "  Rule confirmed." -ForegroundColor Green
+        }
+        $results += [PSCustomObject]@{
+            Title    = $task.Title
+            Approved = $true
+            Error    = $(if ($taskErr) { $taskErr.Exception.Message } else { $null })
+            Verified = $verified
+        }
+        Start-Sleep -Milliseconds 800
+    } else {
+        $results += [PSCustomObject]@{ Title = $task.Title; Approved = $false; Error = $null; Verified = $null }
     }
 }
 Remove-Item -LiteralPath $TasksFile -Force -ErrorAction SilentlyContinue
+if ($ResultsFile) {
+    [System.IO.File]::WriteAllText($ResultsFile, ($results | ConvertTo-Json -Depth 3), $utf8)
+}
 '@)
 
 # Generic elevated scriptblock: creates inbound firewall port rules.
@@ -319,6 +365,11 @@ Get-NetFirewallRule | Where-Object DisplayName -ilike '*VR_HEADSET_MANAGER*ADB*'
 New-NetFirewallRule -DisplayName '_[VR_HEADSET_MANAGER]ADB_Allowed [OUT]' -Direction Outbound -Program '$adbEsc' -Action Allow -Profile Any -Description 'Allow VR Headset Manager ADB connections' -ErrorAction Continue | Out-Null
 New-NetFirewallRule -DisplayName '_[VR_HEADSET_MANAGER]ADB_Allowed [IN]'  -Direction Inbound  -Program '$adbEsc' -Action Allow -Profile Any -Description 'Allow VR Headset Manager ADB connections' -ErrorAction Continue | Out-Null
 "@
+                    VerifyScript = @"
+`$r = @(Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { `$_.DisplayName -ilike '*VR_HEADSET_MANAGER*ADB*' -and `$_.Enabled -eq 'True' })
+`$paths = (`$r | Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue).Program
+(`$r.Count -ge 2) -and (`$paths -contains '$adbEsc')
+"@
                 }
             } else {
                 Invoke-AsAdmin -ScriptBlock $script:fwProgramRuleBlock -RuleName $ruleName -Program $adbResolved -Title $title -Details $details
@@ -489,6 +540,11 @@ foreach (`$spec in @('RTSP-TCP [IN]|TCP|$rtspPort','RTSP-UDP [IN]|UDP|$rtspPort'
 New-NetFirewallRule -DisplayName (`$rn + ' [PROG-OUT]') -Direction Outbound -Program '$progEsc' -Action Allow -Profile Any -Description 'Allow MediaMTX outbound' -ErrorAction Continue | Out-Null
 New-NetFirewallRule -DisplayName (`$rn + ' [PROG-IN]')  -Direction Inbound  -Program '$progEsc' -Action Allow -Profile Any -Description 'Allow MediaMTX inbound'  -ErrorAction Continue | Out-Null
 "@
+                VerifyScript = @"
+`$r = @(Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { `$_.DisplayName -ilike '*VR_HEADSET_MANAGER*MediaMtx*' -and `$_.Enabled -eq 'True' })
+`$progPaths = (`$r | Where-Object { `$_.DisplayName -ilike '*PROG*' } | Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue).Program
+(`$r.Count -ge 8) -and (`$progPaths -contains '$progEsc')
+"@
             }
         }
 
@@ -542,6 +598,9 @@ function Unblock-WebServerFirewallRule {
 Get-NetFirewallRule | Where-Object { `$_.DisplayName -ilike '*VR_HEADSET_MANAGER*WebServer*' } | Remove-NetFirewallRule -ErrorAction Continue
 New-NetFirewallRule -DisplayName '_[VR_HEADSET_MANAGER]WebServer_Allowed TCP [IN]' -Direction Inbound -Protocol TCP -LocalPort $port -Action Allow -Profile Any -ErrorAction Continue | Out-Null
 "@
+                VerifyScript = @"
+[bool](Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { `$_.DisplayName -ilike '*VR_HEADSET_MANAGER*WebServer*' -and `$_.Enabled -eq 'True' } | Get-NetFirewallPortFilter -ErrorAction SilentlyContinue | Where-Object { [string]`$_.LocalPort -eq '$port' })
+"@
             }
         } else {
             # Standalone (non-batch) path: drop stale rules first, then create the new one.
@@ -575,6 +634,9 @@ function Unblock-MdnsFirewallRule {
                 Script      = @"
 Get-NetFirewallRule | Where-Object { `$_.DisplayName -ilike '*VR_HEADSET_MANAGER*mDNS*' } | Remove-NetFirewallRule -ErrorAction Continue
 New-NetFirewallRule -DisplayName '_[VR_HEADSET_MANAGER]mDNS_Responder UDP [IN]' -Direction Inbound -Protocol UDP -LocalPort 5353 -Action Allow -Profile Any -ErrorAction Continue | Out-Null
+"@
+                VerifyScript = @"
+[bool](Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { `$_.DisplayName -ilike '*VR_HEADSET_MANAGER*mDNS*' -and `$_.Enabled -eq 'True' } | Get-NetFirewallPortFilter -ErrorAction SilentlyContinue | Where-Object { `$_.Protocol -ieq 'UDP' -and [string]`$_.LocalPort -eq '5353' })
 "@
             }
         } else {
@@ -626,6 +688,7 @@ function Enable-WindowsMdnsClient {
 Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters' -Name 'EnableMDNS' -Value 1 -Type DWord -Force
 Write-Host 'mDNS enabled in registry. A reboot is required for vrhm.local resolution to work.' -ForegroundColor Yellow
 "@
+                VerifyScript = "[bool]((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters' -Name 'EnableMDNS' -ErrorAction SilentlyContinue).EnableMDNS -eq 1)"
             }
         } else {
             Invoke-AsAdmin -ScriptBlock {
@@ -670,10 +733,11 @@ function Register-WebServerUrlAcl {
                 $details    += "`n(The previous reservation on port $priorPort will be removed first.)"
             }
             return @{
-                Title       = "HTTP URL RESERVATION REQUIRED"
-                Details     = $details
-                ActionLabel = "Register"
-                Script      = $cleanupLine + "netsh http add urlacl url=$url sddl=`"D:(A;;GX;;;S-1-1-0)`" | Out-Null"
+                Title        = "HTTP URL RESERVATION REQUIRED"
+                Details      = $details
+                ActionLabel  = "Register"
+                Script       = $cleanupLine + "netsh http add urlacl url=$url sddl=`"D:(A;;GX;;;S-1-1-0)`" | Out-Null"
+                VerifyScript = "[bool](netsh http show urlacl url=$url 2>&1 | Select-String -SimpleMatch '$url')"
             }
         } else {
             if ($priorPort) {
@@ -772,10 +836,11 @@ function Register-WindowsDefenderExclusion {
         $pathEsc     = $ExclusionPath -replace "'", "''"
         if ($ReturnTask) {
             return @{
-                Title       = $title
-                Details     = $details
-                ActionLabel = $actionLabel
-                Script      = "Add-MpPreference -ExclusionPath '$pathEsc' -ErrorAction SilentlyContinue"
+                Title        = $title
+                Details      = $details
+                ActionLabel  = $actionLabel
+                Script       = "Add-MpPreference -ExclusionPath '$pathEsc' -ErrorAction SilentlyContinue"
+                VerifyScript = "[bool]((Get-MpPreference -ErrorAction SilentlyContinue).ExclusionPath | Where-Object { `$_.TrimEnd('\') -ieq '$pathEsc'.TrimEnd('\') })"
             }
         } else {
             Invoke-AsAdmin -ScriptBlock { param($P) Add-MpPreference -ExclusionPath $P -ErrorAction SilentlyContinue } -P $ExclusionPath
@@ -854,7 +919,11 @@ function Initialize-ComputerSetup {
 
     # Open one admin console for all pending tasks (zero UAC prompts if nothing to do)
     if ($pendingTasks.Count -gt 0) {
-        Invoke-BatchAsAdmin -Tasks $pendingTasks
+        $setupResults = Invoke-BatchAsAdmin -Tasks $pendingTasks
+        $unconfirmed  = @($setupResults | Where-Object { $_.Approved -and $_.Verified -eq $false })
+        if ($unconfirmed.Count -gt 0) {
+            Write-Log ($msg.FirewallSetupIncomplete -f (($unconfirmed | ForEach-Object { $_.Title }) -join ', ')) -Level WARNING
+        }
     }
 
     # Persist Defender exclusion state. We record the path the moment the task was

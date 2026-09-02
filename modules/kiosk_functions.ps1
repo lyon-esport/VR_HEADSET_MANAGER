@@ -344,7 +344,8 @@ function Resolve-LocalhostReplacement {
         return @{ NeedsReplacement = $false }
     }
 
-    $chosen = $networks | Where-Object { $_.InterfaceAlias -match '(?i)ethernet' } | Select-Object -First 1
+    $chosen = $networks | Where-Object { $_.HasDefaultGateway } | Select-Object -First 1
+    if (-not $chosen) { $chosen = $networks | Where-Object { $_.InterfaceAlias -match '(?i)ethernet' } | Select-Object -First 1 }
     if (-not $chosen) { $chosen = $networks | Select-Object -First 1 }
     $chosenIP = $chosen.IPAddress
 
@@ -538,7 +539,12 @@ function New-KioskLauncherPackage {
             ')'
             ''
             'echo Starting the kiosk agent against %SERVER_URL% ...'
-            'powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Start-KioskAgent.ps1" -ServerUrl "%SERVER_URL%"'
+            'REM Launched detached, in its own console, so this .cmd (and the cmd.exe'
+            'REM batch job it runs) exits immediately instead of staying the parent for'
+            'REM the agent''s whole lifetime - otherwise Ctrl+C in the agent window would'
+            'REM hit cmd.exe''s own "Terminate batch job (Y/N)?" prompt instead of the'
+            'REM agent''s own clean-stop handling.'
+            'start "VR Headset Manager - Kiosk Agent" powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Start-KioskAgent.ps1" -ServerUrl "%SERVER_URL%"'
             'exit /b'
             ''
             ':nourl'
@@ -571,7 +577,11 @@ function New-KioskLauncherPackage {
             ')'
             ''
             'echo Starting the kiosk browser (basic mode) ...'
-            'powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Start-KioskChrome.ps1"'
+            'REM Launched detached, in its own console, so this .cmd exits immediately'
+            'REM instead of staying the parent for the browser''s whole lifetime - see the'
+            'REM ADVANCED script for why (cmd.exe''s own "Terminate batch job" prompt).'
+            'start "VR Headset Manager - Kiosk Browser" powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Start-KioskChrome.ps1"'
+            'exit /b'
         )
 
         $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
@@ -607,8 +617,11 @@ function Get-ServerLanUrl {
     <#
     .SYNOPSIS
     Returns this server's LAN base URL ("http://192.168.1.37:8080") - the address a
-    kiosk on the same network must use to reach us. Prefers an Ethernet interface,
-    mirroring Resolve-LocalhostReplacement. Returns $null when no private network
+    kiosk on the same network must use to reach us. Prefers the interface holding the
+    default route, then an Ethernet-named interface, mirroring Resolve-LocalhostReplacement.
+    Get-PrivateNetworks already excludes virtual/hypervisor adapters (Hyper-V, WSL, VMware,
+    VPN), so a private-range IP on one of those (e.g. a Hyper-V "vEthernet (...)" switch)
+    is never picked in place of the real LAN adapter. Returns $null when no private network
     is available.
     .EXAMPLE
     $url = Get-ServerLanUrl        # -> http://192.168.1.37:8080
@@ -620,7 +633,8 @@ function Get-ServerLanUrl {
     $networks = @(Get-PrivateNetworks)
     if (-not $networks -or $networks.Count -eq 0) { return $null }
 
-    $chosen = $networks | Where-Object { $_.InterfaceAlias -match '(?i)ethernet' } | Select-Object -First 1
+    $chosen = $networks | Where-Object { $_.HasDefaultGateway } | Select-Object -First 1
+    if (-not $chosen) { $chosen = $networks | Where-Object { $_.InterfaceAlias -match '(?i)ethernet' } | Select-Object -First 1 }
     if (-not $chosen) { $chosen = $networks | Select-Object -First 1 }
     if (-not $chosen -or -not $chosen.IPAddress) { return $null }
 

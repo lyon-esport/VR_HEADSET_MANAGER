@@ -411,12 +411,17 @@ Write-Host "once Chrome exits (whether closed locally or via 'Stop kiosk session
 #    the port-forward rule from step 6 dangling and pointed at a now-dead
 #    listener until the operator manually re-runs the script.
 # ---------------------------------------------------------------------------
-while ($chromeProcess -and -not $chromeProcess.HasExited) {
-    Start-Sleep -Seconds 1
+try {
+    while ($chromeProcess -and -not $chromeProcess.HasExited) {
+        Start-Sleep -Seconds 1
+    }
+} finally {
+    # try/finally so Ctrl+C reaches this cleanup too, not just a normal Chrome exit.
+    Write-Host ""
+    Write-Host "Kiosk Chrome has exited - cleaning up." -ForegroundColor Yellow
+    netsh interface portproxy delete v4tov4 listenaddress=0.0.0.0 listenport=$Port 2>&1 | Out-Null
+    Get-NetFirewallRule -DisplayName $ruleNameTcp  -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+    Get-NetFirewallRule -DisplayName $ruleNameIcmp -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+    Write-Host "Done. Re-run this script to start the kiosk again." -ForegroundColor DarkGray
+    Start-Sleep -Seconds 2
 }
-
-Write-Host ""
-Write-Host "Kiosk Chrome has exited - cleaning up the port forward." -ForegroundColor Yellow
-netsh interface portproxy delete v4tov4 listenaddress=0.0.0.0 listenport=$Port 2>&1 | Out-Null
-Write-Host "Done. Re-run this script to start the kiosk again." -ForegroundColor DarkGray
-Start-Sleep -Seconds 2

@@ -88,6 +88,31 @@ function Test-FolderWriteAccess {
 }
 
 
+# Checks that every executable this app depends on actually exists at its
+# configured $global: path (set by Get-Config). adb.exe and scrcpy.exe are
+# always required; mediamtx.exe/ffmpeg.exe are only required when restreaming
+# is enabled ($global:mediamtxEnabled), since an operator with restreaming off
+# never needs them. Returns @{ Ok; Missing } - Missing entries carry the exact
+# resolved path plus the existing translation key that names that exe, so the
+# caller can report precisely which file is missing and where it was expected.
+function Test-RequiredBinaries {
+    $candidates = @(
+        [PSCustomObject]@{ ExeName = 'adb.exe';    Path = $global:adbPath;        MessageKey = 'ADBExecutableNotFound' }
+        [PSCustomObject]@{ ExeName = 'scrcpy.exe'; Path = $global:scrcpyFilePath; MessageKey = 'ScrcpyNotFound' }
+    )
+    if ($global:mediamtxEnabled) {
+        $candidates += [PSCustomObject]@{ ExeName = 'mediamtx.exe'; Path = $global:mediamtxFilePath; MessageKey = 'MediaMtxNotFound' }
+        $candidates += [PSCustomObject]@{ ExeName = 'ffmpeg.exe';   Path = $global:ffmpegFilePath;   MessageKey = 'MediaMtxFfmpegNotFound' }
+    }
+
+    $missing = @($candidates | Where-Object { -not $_.Path -or -not (Test-Path -LiteralPath $_.Path) })
+    return @{
+        Ok      = ($missing.Count -eq 0)
+        Missing = $missing
+    }
+}
+
+
 # Parse a CSV/JSON field that may be the string "True"/"False" or a real
 # boolean and return a real [bool]. Empty/null returns $false.
 # Use this everywhere instead of comparing $row.Field -eq $True/$False.
@@ -697,6 +722,22 @@ function Get-GpuInfo {
     }
     if ($controllers.Count -eq 0) { return @() }
 
+    # Drop virtual / software display adapters before indexing. Virtual Desktop,
+    # Meta Quest Link, Parsec, Sunshine, IddSampleDriver and the RDP display driver
+    # all register a Win32_VideoController on ROOT\DISPLAY or a non-PCI bus. They
+    # enumerate FIRST (ahead of the real card), which pushed the physical GPU to
+    # index 1: with the default Performance.GPU_Index = 0 the app then "selected"
+    # e.g. "Virtual Desktop Monitor", Get-GpuVendor returned 'Unknown', and the
+    # AMD/NVIDIA/Intel-first encoder ordering in Get-GpuEncoderCandidates never
+    # applied. They also have no perf counters and no LUID, so they only ever show
+    # as empty rows in the monitoring page and the config GPU dropdown.
+    # Real GPUs (integrated and discrete alike) are always on the PCI bus; the
+    # unfiltered list is kept as a fallback so a VM with only a synthetic adapter
+    # (Hyper-V VMBUS, VMware SVGA) still reports something.
+    $allControllers = $controllers
+    $physical = @($controllers | Where-Object { $_.PNPDeviceID -like 'PCI\*' })
+    if ($physical.Count -gt 0) { $controllers = $physical }
+
     # Collect perf counter maps keyed by LUID string
     $map3D     = _SumCounterByLuid '\GPU Engine(*engtype_3D*)\Utilization Percentage'
     $mapEnc    = _SumCounterByLuid '\GPU Engine(*engtype_VideoEncode*)\Utilization Percentage'
@@ -752,7 +793,7 @@ function Get-GpuInfo {
         }
     }
     # Release CIM handles on Win32_VideoController instances
-    foreach ($c in $controllers) { if ($c) { $c.Dispose() } }
+    foreach ($c in $allControllers) { if ($c) { $c.Dispose() } }
     return $results
 }
 
@@ -1155,18 +1196,77 @@ function Find-NextFreePortInPool {
 # Used by the ffmpeg restream path and the VRMonitor slow path.
 # -------------------------------------------------------------------
 
+# Builds the per-encoder low-latency argument list used for the mediamtx RTSP push.
+# Lives here (not in scrcpy_launcher.ps1) so Test-FfmpegEncoder probes the EXACT
+# configuration the stream will run with. Keeping them in two places is what let the
+# h264_amf keyframe bug ship: the probe only ever tried a bare "-c:v h264_amf", which
+# works fine, while the stream added "-usage ultralowlatency", which does not.
+#
+# -bf 0 and -g $Gop are required on EVERY arm: mediamtx WebRTC/WHEP rejects H.264
+# streams containing B-frames ("WebRTC doesn't support H264 streams with B-frames"
+# closes the session). qsv/amf/mf emit B-frames by default; nvenc and libx264 already
+# disable them via tune presets but explicit is safer. A short GOP (= framerate)
+# ensures new WHEP subscribers receive a keyframe within ~1s of joining.
+#
+# Per-encoder low-latency tails disable async pipelining / lookahead so frames flow
+# through with minimal in-encoder queuing. qsv defaults to async_depth=4 (~130 ms at
+# 30 fps); nvenc has an implicit -delay; the libx264 fallback uses sliced threading to
+# avoid frame-level latency.
+function Get-StreamEncoderArgs {
+    param(
+        [Parameter(Mandatory)][string]$EncoderName,
+        [Parameter(Mandatory)][string]$Bitrate,
+        [Parameter(Mandatory)][string]$Gop
+    )
+    $bw  = $Bitrate
+    $gop = $Gop
+    switch ($EncoderName) {
+        'h264_nvenc' { @('-c:v','h264_nvenc','-preset','p1','-tune','ll','-rc','cbr','-b:v',$bw,'-maxrate',$bw,'-bufsize',$bw,'-bf','0','-g',$gop,'-delay','0','-rc-lookahead','0') }
+        'h264_qsv'   { @('-c:v','h264_qsv','-preset','veryfast','-b:v',$bw,'-maxrate',$bw,'-bufsize',$bw,'-bf','0','-g',$gop,'-async_depth','1','-look_ahead','0') }
+        # h264_amf must NOT use -usage ultralowlatency: on AMF the usage preset is
+        # applied inside AMFComponent::Init and overwrites IDR_PERIOD, so -g (and
+        # -header_spacing / -forced_idr / -force_key_frames) are all silently ignored -
+        # the encoder then emits exactly ONE IDR + one SPS/PPS at startup and nothing
+        # but P-frames afterwards. Any WHEP viewer that opens the page after that first
+        # frame never receives a keyframe and shows a permanent black screen (verified
+        # on Radeon 780M / driver 32.0.21020.1007: 90 frames -> 1 IDR with
+        # ultralowlatency, 3 IDR + 3 SPS/PPS with the args below). hevc_amf on the same
+        # hardware honours -g even with ultralowlatency, which is why h265 looked fine
+        # while h264 was black.
+        # "-usage transcoding -latency 1" keeps AMF's low-latency mode (no B-frames, no
+        # lookahead - measured identical throughput) while leaving IDR_PERIOD under our
+        # control. -header_spacing repeats SPS/PPS on every keyframe.
+        'h264_amf'   { @('-c:v','h264_amf','-usage','transcoding','-latency','1','-b:v',$bw,'-maxrate',$bw,'-bufsize',$bw,'-bf','0','-g',$gop,'-header_spacing',$gop,'-forced_idr','1','-quality','speed','-rc','cbr','-async_depth','1') }
+        'h264_mf'    { @('-c:v','h264_mf','-b:v',$bw,'-bf','0','-g',$gop,'-rc_mode','CBR') }
+        'hevc_nvenc' { @('-c:v','hevc_nvenc','-preset','p1','-tune','ll','-rc','cbr','-b:v',$bw,'-maxrate',$bw,'-bufsize',$bw,'-bf','0','-g',$gop,'-delay','0','-rc-lookahead','0','-tag:v','hvc1') }
+        'hevc_qsv'   { @('-c:v','hevc_qsv','-preset','veryfast','-b:v',$bw,'-maxrate',$bw,'-bufsize',$bw,'-bf','0','-g',$gop,'-async_depth','1','-look_ahead','0','-tag:v','hvc1') }
+        # hevc_amf honours -g under ultralowlatency on every driver tested here, but it
+        # gets the same explicit keyframe/header args as h264_amf so a future driver
+        # cannot reintroduce the same silent black-screen failure on this arm.
+        'hevc_amf'   { @('-c:v','hevc_amf','-usage','transcoding','-latency','1','-b:v',$bw,'-maxrate',$bw,'-bufsize',$bw,'-bf','0','-g',$gop,'-header_spacing',$gop,'-forced_idr','1','-quality','speed','-rc','cbr','-async_depth','1','-tag:v','hvc1') }
+        'hevc_mf'    { @('-c:v','hevc_mf','-b:v',$bw,'-bf','0','-g',$gop,'-rc_mode','CBR','-tag:v','hvc1') }
+        'libx265'    { @('-c:v','libx265','-preset','ultrafast','-tune','zerolatency','-b:v',$bw,'-maxrate',$bw,'-bufsize',$bw,'-bf','0','-g',$gop,'-x265-params','force-cfr=1','-tag:v','hvc1','-threads','4') }
+        default      { @('-c:v','libx264','-preset','ultrafast','-tune','zerolatency','-b:v',$bw,'-maxrate',$bw,'-bufsize',$bw,'-bf','0','-g',$gop,'-x264-params','nal-hrd=cbr:force-cfr=1:sliced-threads=1','-threads','4') }
+    }
+}
+
 # Probe a single ffmpeg encoder in two stages:
 #  Stage 1 - open check: does the encoder session even open and accept a frame?
 #            (1-frame smoke test against a black source, discarded to -f null -)
-#  Stage 2 - output check: some GPU/driver stacks accept the session and exit 0
-#            but silently emit black/corrupt frames (seen with h264_amf on some
-#            AMD Z1 Extreme / Radeon 780M driver builds, while hevc_amf on the
-#            SAME hardware works fine). Stage 1 alone cannot catch this since its
-#            source is already black. Stage 2 encodes a few frames of a non-black
-#            synthetic pattern to a temp file, decodes it back, and uses ffmpeg's
-#            `blackframe` filter to check the frames did not come back black.
-# Returns @{Ok; Reason} - Reason is 'open-failed' or 'black-output' when Ok=$false,
-# $null when Ok=$true.
+#  Stage 2 - output check: run the REAL streaming configuration (via
+#            Get-StreamEncoderArgs) over a few GOPs of a non-black synthetic pattern,
+#            decode the result back, and verify two things:
+#              a) the frames did not come back black - some GPU/driver stacks accept
+#                 the session and exit 0 but silently emit black/corrupt frames (seen
+#                 with h264_amf on some AMD Z1 Extreme / Radeon 780M driver builds,
+#                 while hevc_amf on the SAME hardware works fine). Stage 1 alone
+#                 cannot catch this since its source is already black.
+#              b) the encoder actually honours -g and emits periodic keyframes. An
+#                 encoder that emits a single IDR at startup looks perfectly healthy
+#                 on disk but leaves every WHEP viewer that joins later on a black
+#                 page forever, because WebRTC cannot start decoding without one.
+# Returns @{Ok; Reason} - Reason is 'open-failed', 'black-output' or 'no-keyframes'
+# when Ok=$false, $null when Ok=$true.
 function Test-FfmpegEncoder {
     param(
         [Parameter(Mandatory)] [string] $Encoder,
@@ -1184,22 +1284,34 @@ function Test-FfmpegEncoder {
         return @{ Ok = $false; Reason = 'open-failed' }
     }
 
-    $tmpFile = Join-Path $env:TEMP ("vrhm_encprobe_{0}.mkv" -f ([guid]::NewGuid().ToString('N')))
+    # 3 s at 10 fps with -g 10 -> 30 frames, 3 expected keyframes. Deliberately short:
+    # this runs on every scrcpy (re)start before the stream can come up.
+    $probeGop = 10
+    $probeSrc = 'testsrc2=size=320x240:rate={0}:duration=3' -f $probeGop
+    $tmpFile  = Join-Path $env:TEMP ("vrhm_encprobe_{0}.mkv" -f ([guid]::NewGuid().ToString('N')))
     try {
-        $encArgs = @('-hide_banner','-loglevel','error','-f','lavfi','-i','testsrc2=size=320x240:rate=10:duration=0.5')
+        $encArgs = @('-hide_banner','-loglevel','error','-f','lavfi','-i',$probeSrc)
         $encArgs += $ExtraArgs
-        $encArgs += @('-c:v',$Encoder,'-y',$tmpFile)
+        $encArgs += (Get-StreamEncoderArgs -EncoderName $Encoder -Bitrate '2M' -Gop ([string]$probeGop))
+        $encArgs += @('-y',$tmpFile)
         $null = & $global:ffmpegFilePath @encArgs 2>&1
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $tmpFile)) { return @{ Ok = $false; Reason = 'open-failed' } }
 
-        $checkArgs = @('-hide_banner','-loglevel','info','-i',$tmpFile,'-vf','blackframe=98:32','-f','null','-')
+        # One decode pass yields both checks: blackframe reports black frames, showinfo
+        # reports the picture type of every frame.
+        $checkArgs = @('-hide_banner','-loglevel','info','-i',$tmpFile,'-vf','blackframe=98:32,showinfo','-f','null','-')
         $checkOut = & $global:ffmpegFilePath @checkArgs 2>&1
         $blackFrames = 0
+        $keyFrames   = 0
         foreach ($line in $checkOut) {
             if ($line -match 'blackframe.*pblack:') { $blackFrames++ }
+            if ($line -match 'showinfo.*type:I')    { $keyFrames++ }
         }
-        # duration=0.5 @ rate=10 -> ~5 encoded frames; treat as broken when nearly all come back black.
-        if ($blackFrames -ge 4) { return @{ Ok = $false; Reason = 'black-output' } }
+        # ~30 encoded frames; treat as broken when nearly all come back black.
+        if ($blackFrames -ge 24) { return @{ Ok = $false; Reason = 'black-output' } }
+        # 3 keyframes expected; require at least 2 so a one-IDR-only encoder is rejected
+        # while slightly different GOP placement still passes.
+        if ($keyFrames -lt 2) { return @{ Ok = $false; Reason = 'no-keyframes' } }
         return @{ Ok = $true; Reason = $null }
     } catch {
         return @{ Ok = $false; Reason = 'black-output' }
@@ -1316,7 +1428,11 @@ function Get-GpuEncoder {
             try { Write-Log ("GpuEncoder resolved: {0} (vendor {1}) GpuIndex={2}" -f $c.Name, $c.Vendor, $global:GPU_Index) -Level SUCCESS } catch {}
             return $c
         } else {
-            $reasonText = if ($probe.Reason -eq 'black-output') { 'produced black output' } else { 'failed to open' }
+            $reasonText = switch ($probe.Reason) {
+                'black-output' { 'produced black output' }
+                'no-keyframes' { 'ignored -g and emitted no periodic keyframes (WHEP viewers would see a black page)' }
+                default         { 'failed to open' }
+            }
             try { Write-Log ("GpuEncoder probe failed for {0} ({1}), trying next" -f $c.Name, $reasonText) -Level DEBUG } catch {}
         }
     }
@@ -1504,6 +1620,19 @@ function Update-FfmpegBinary {
             New-Item -ItemType Directory -Path $destFolder | Out-Null
         }
         [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $destExe, $true)
+
+        # Best-effort: the same gyan.dev zip normally also ships bin/ffprobe.exe.
+        # Not every build variant includes it, so a miss here must not fail the
+        # ffmpeg update itself - callers that need ffprobe (e.g. the non-regression
+        # harness) tolerate its absence.
+        try {
+            $probeEntry = $zip.Entries | Where-Object { $_.FullName -like "*/bin/ffprobe.exe" } | Select-Object -First 1
+            if ($probeEntry) {
+                $destProbe = Join-Path $destFolder "ffprobe.exe"
+                [System.IO.Compression.ZipFileExtensions]::ExtractToFile($probeEntry, $destProbe, $true)
+            }
+        } catch { }
+
         $zip.Dispose()
         Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
 

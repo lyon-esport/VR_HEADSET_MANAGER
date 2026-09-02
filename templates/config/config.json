@@ -1,278 +1,278 @@
 {
-  "language": "en-US",
-  "Paths": {
-    "knownHeadsetsFile": "known_headsets.csv",
-    "AppCacheFileName": "known_apps.csv"
-  },
-  "apk":{
-	"adbWirelessActivatorFolder": "ADB Wireless activator",
-	"adbWirelessActivatorApk": "tdg.oculuswirelessadb-1.3.apk",
-	"adbWirelessActivatorPackageName": "tdg.oculuswirelessadb"
-	},
-  "Logging": {
-	"Comment-possibleValues": "DEBUG,INFO,SUCCESS,WARNING,ERROR,NONE",
-    "debugLevelToFile": "SUCCESS",
-    "debugLevelToConsole": "ERROR",
-	"logFile": "logfile.txt",
-	"logRetentionDays": 30
-  },
-  "VRMonitor": {
-    "refresh_timer": 5,
-    "showConsole": false
-  },
-  "ComputerMonitoring": {
-    "refresh_timer_sec": 60,
-    "file_name": "computer_monitoring.json"
-  },
-  "VideoQualityAutomation": {
-    "enabled": true,
-    "auto_apply_profiles": false,
-    "auto_apply_headsets": false,
-    "auto_apply_mediamtx": false,
-    "cooldown_cycles": 5,
-    "cpu_max_threshold_percent": 80,
-    "gpu_max_threshold_percent": 80,
-    "cpu_mitigation_threshold_percent": 60,
-    "gpu_mitigation_threshold_percent": 60,
-    "downscale_step_percent": 20,
-    "fps_round_step": 5,
-    "min_max_size_px": 480,
-    "min_fps": 15,
-    "min_bitrate_mbps": 3,
-    "default_uncapped_max_size_px": 1800,
-    "vqo_consecutive_count": 5,
-    "history_file_name": "vqa_history.csv",
-    "recommendation_file_name": "vqa_recommendation.json",
-    "originals_file_name": "vqa_originals.json",
-    "applied_file_name": "vqa_applied.json"
-  },
-  "ADB":{
-	"folder":"scrcpy\\scrcpy-win64-v4.1",
-    "adbPort_default": 5555
-  },
-  "scrcpy":{
-	  "folder":"scrcpy\\scrcpy-win64-v4.1",
-	  "recordFolder":"C:\\DATA\\MEDIA\\VR_Records",
-	  "recordMinFreeSpaceGB": 5,
-	  "parameters": {
-      "Quest 3": {
-        "views": {
-          "max": {
-            "left_eye": {
-              "crop": "1664:1304:200:450",
-              "angle": 22
+    "language":  "en-US",
+    "Paths":  {
+                  "knownHeadsetsFile":  "known_headsets.csv",
+                  "AppCacheFileName":  "known_apps.csv"
+              },
+    "apk":  {
+                "adbWirelessActivatorFolder":  "ADB Wireless activator",
+                "adbWirelessActivatorApk":  "tdg.oculuswirelessadb-1.3.apk",
+                "adbWirelessActivatorPackageName":  "tdg.oculuswirelessadb"
             },
-            "right_eye": {
-              "crop": "1664:1304:2260:450",
-              "angle": -21
-            }
-          },
-		  "square": {
-            "left_eye": {
-              "crop": "1580:1580:240:250",
-              "angle": 22
+    "Logging":  {
+                    "Comment-possibleValues":  "DEBUG,INFO,SUCCESS,WARNING,ERROR,NONE",
+                    "debugLevelToFile":  "SUCCESS",
+                    "debugLevelToConsole":  "ERROR",
+                    "logFile":  "logfile.txt",
+                    "logRetentionDays":  30
+                },
+    "VRMonitor":  {
+                      "refresh_timer":  5,
+                      "showConsole":  false
+                  },
+    "ComputerMonitoring":  {
+                               "refresh_timer_sec":  60,
+                               "file_name":  "computer_monitoring.json"
+                           },
+    "VideoQualityAutomation":  {
+                                   "enabled":  true,
+                                   "auto_apply_profiles":  false,
+                                   "auto_apply_headsets":  false,
+                                   "auto_apply_mediamtx":  false,
+                                   "cooldown_cycles":  5,
+                                   "cpu_max_threshold_percent":  80,
+                                   "gpu_max_threshold_percent":  80,
+                                   "cpu_mitigation_threshold_percent":  60,
+                                   "gpu_mitigation_threshold_percent":  60,
+                                   "downscale_step_percent":  20,
+                                   "fps_round_step":  5,
+                                   "min_max_size_px":  480,
+                                   "min_fps":  15,
+                                   "min_bitrate_mbps":  3,
+                                   "default_uncapped_max_size_px":  1800,
+                                   "vqo_consecutive_count":  5,
+                                   "history_file_name":  "vqa_history.csv",
+                                   "recommendation_file_name":  "vqa_recommendation.json",
+                                   "originals_file_name":  "vqa_originals.json",
+                                   "applied_file_name":  "vqa_applied.json"
+                               },
+    "ADB":  {
+                "folder":  "scrcpy\\scrcpy-win64-v4.1",
+                "adbPort_default":  5555
             },
-            "right_eye": {
-              "crop": "1580:1580:2300:250",
-              "angle": -21
-            }
-          },
-          "portrait": {
-            "left_eye": {
-              "crop": "1400:1800:350:200",
-              "angle": 22
-            },
-            "right_eye": {
-              "crop": "1400:1800:2350:200",
-              "angle": -21
-            }
-          },
-          "wide": {
-            "left_eye": {
-              "crop": "1700:1300:190:500",
-              "angle": 22
-            },
-            "right_eye": {
-              "crop": "1700:1300:2240:290",
-              "angle": -21
-            }
-          },
-          "fullscreen": {
-            "left_eye": {
-              "crop": "0:0:0:0",
-              "angle": 0
-            },
-            "right_eye": {
-              "crop": "0:0:0:0",
-              "angle": 0
-            }
-          }
-        },
-        "max_size": 0,
-        "video_codec": "h264",
-        "video_encoder": "",
-        "video_buffer": 50,
-        "stay_awake": true
-      },
-      "Quest 2": {
-        "views": {
-          "square": {
-            "left_eye": {
-              "crop": "1475:1475:172:190",
-              "angle": 0
-            },
-            "right_eye": {
-              "crop": "1475:1475:2028:190",
-              "angle": 0
-            }
-          },
-          "portrait": {
-            "left_eye": {
-              "crop": "1200:1660:335:118",
-              "angle": 0
-            },
-            "right_eye": {
-              "crop": "1200:1660:2148:118",
-              "angle": 0
-            }
-          },
-          "wide": {
-            "left_eye": {
-              "crop": "1630:1150:90:350",
-              "angle": 0
-            },
-            "right_eye": {
-              "crop": "1630:1150:1955:350",
-              "angle": 0
-            }
-          },
-          "fullscreen": {
-            "left_eye": {
-              "crop": "0:0:0:0",
-              "angle": 0
-            },
-            "right_eye": {
-              "crop": "0:0:0:0",
-              "angle": 0
-            }
-          }
-        },
-        "max_size": 0,
-        "video_codec": "h264",
-        "video_encoder": "",
-        "video_buffer": 50,
-        "stay_awake": true
-      },
-      "PICO 4 Ultra": {
-        "views": {
-          "max": {
-            "left_eye": {
-              "crop": "1750:1550:212:316",
-              "angle": 0
-            },
-            "right_eye": {
-              "crop": "1750:1550:2360:316",
-              "angle": 0
-            }
-          },
-          "square": {
-            "left_eye": {
-              "crop": "1680:1680:246:240",
-              "angle": 0
-            },
-            "right_eye": {
-              "crop": "1680:1680:2400:240",
-              "angle": 0
-            }
-          },
-          "portrait": {
-            "left_eye": {
-              "crop": "1500:1750:330:200",
-              "angle": 0
-            },
-            "right_eye": {
-              "crop": "1500:1750:2480:200",
-              "angle": 0
-            }
-          },
-          "wide": {
-            "left_eye": {
-              "crop": "1800:1440:186:370",
-              "angle": 0
-            },
-            "right_eye": {
-              "crop": "1800:1440:2325:390",
-              "angle": 0
-            }
-          },
-          "fullscreen": {
-            "left_eye": {
-              "crop": "0:0:0:0",
-              "angle": 0
-            },
-            "right_eye": {
-              "crop": "0:0:0:0",
-              "angle": 0
-            }
-          }
-        },
-        "max_size": 0,
-        "video_codec": "h264",
-        "video_encoder": "",
-        "video_buffer": 50,
-        "stay_awake": true
-      }
-    }
-  },
-  "Monitoring": {
-	 "HeadsetTemplate": "headset_status.pshtml",
-	 "VideoTemplate": "headset_scrcpy.pshtml",
-	 "thresholds": {
-		"headset_battery_warningLevel": 40,
-		"headset_battery_criticalLevel": 30,
-		"controllers_battery_warningLevel": 30,
-		"controllers_battery_criticalLevel": 15,
-		"temperature_highLevel": 50
-	 }
-  },
-  "mediamtx": {
-    "enabled": true,
-    "folder": "MediaMTX\\mediamtx_v1.20.0_windows_amd64",
-    "log_level": "error",
-    "rtsp_port": 8554,
-    "hls_port": 8888,
-    "webrtc_port": 8889,
-    "api_port": 9997,
-    "stream_framerate": 30,
-    "stream_bitrate": "6M",
-    "reencode_in_ffmpeg": true,
-    "codec": "h264"
-  },
-  "VideoMonitor": {
-    "pauseWhenHidden": true,
-    "pauseWhenHiddenDelay_sec": 10
-  },
-  "ffmpeg": {
-    "folder": "ffmpeg\\ffmpeg-9.0.1"
-  },
-  "WebServer": {
-    "enabled": true,
-    "port": 8080,
-    "openBrowserOnStartup": true
-  },
-  "MdnsResponder": {
-    "enabled": false,
-    "hostname": "vrhm"
-  },
-  "Battery": {
-    "headset_charging_power_W": 13
-  },
-  "Performance": {
-    "GPU_Acceleration": true,
-    "GPU_Index": 0,
-    "Capture_Mode": "StreamOnly",
-    "Adaptive_Monitoring": {
-      "enabled": true
-    }
-  }
+    "scrcpy":  {
+                   "folder":  "scrcpy\\scrcpy-win64-v4.1",
+                   "recordFolder":  "C:\\DATA\\MEDIA\\VR_Records",
+                   "recordMinFreeSpaceGB":  5,
+                   "parameters":  {
+                                      "Quest 3":  {
+                                                      "views":  {
+                                                                    "max":  {
+                                                                                "left_eye":  {
+                                                                                                 "crop":  "1664:1304:200:450",
+                                                                                                 "angle":  22
+                                                                                             },
+                                                                                "right_eye":  {
+                                                                                                  "crop":  "1664:1304:2260:450",
+                                                                                                  "angle":  -21
+                                                                                              }
+                                                                            },
+                                                                    "square":  {
+                                                                                   "left_eye":  {
+                                                                                                    "crop":  "1580:1580:240:250",
+                                                                                                    "angle":  22
+                                                                                                },
+                                                                                   "right_eye":  {
+                                                                                                     "crop":  "1580:1580:2300:250",
+                                                                                                     "angle":  -21
+                                                                                                 }
+                                                                               },
+                                                                    "portrait":  {
+                                                                                     "left_eye":  {
+                                                                                                      "crop":  "1400:1800:350:200",
+                                                                                                      "angle":  22
+                                                                                                  },
+                                                                                     "right_eye":  {
+                                                                                                       "crop":  "1400:1800:2350:200",
+                                                                                                       "angle":  -21
+                                                                                                   }
+                                                                                 },
+                                                                    "wide":  {
+                                                                                 "left_eye":  {
+                                                                                                  "crop":  "1700:1300:190:500",
+                                                                                                  "angle":  22
+                                                                                              },
+                                                                                 "right_eye":  {
+                                                                                                   "crop":  "1700:1300:2240:290",
+                                                                                                   "angle":  -21
+                                                                                               }
+                                                                             },
+                                                                    "fullscreen":  {
+                                                                                       "left_eye":  {
+                                                                                                        "crop":  "0:0:0:0",
+                                                                                                        "angle":  0
+                                                                                                    },
+                                                                                       "right_eye":  {
+                                                                                                         "crop":  "0:0:0:0",
+                                                                                                         "angle":  0
+                                                                                                     }
+                                                                                   }
+                                                                },
+                                                      "max_size":  0,
+                                                      "video_codec":  "h264",
+                                                      "video_encoder":  "",
+                                                      "video_buffer":  50,
+                                                      "stay_awake":  true
+                                                  },
+                                      "Quest 2":  {
+                                                      "views":  {
+                                                                    "square":  {
+                                                                                   "left_eye":  {
+                                                                                                    "crop":  "1475:1475:172:190",
+                                                                                                    "angle":  0
+                                                                                                },
+                                                                                   "right_eye":  {
+                                                                                                     "crop":  "1475:1475:2028:190",
+                                                                                                     "angle":  0
+                                                                                                 }
+                                                                               },
+                                                                    "portrait":  {
+                                                                                     "left_eye":  {
+                                                                                                      "crop":  "1200:1660:335:118",
+                                                                                                      "angle":  0
+                                                                                                  },
+                                                                                     "right_eye":  {
+                                                                                                       "crop":  "1200:1660:2148:118",
+                                                                                                       "angle":  0
+                                                                                                   }
+                                                                                 },
+                                                                    "wide":  {
+                                                                                 "left_eye":  {
+                                                                                                  "crop":  "1630:1150:90:350",
+                                                                                                  "angle":  0
+                                                                                              },
+                                                                                 "right_eye":  {
+                                                                                                   "crop":  "1630:1150:1955:350",
+                                                                                                   "angle":  0
+                                                                                               }
+                                                                             },
+                                                                    "fullscreen":  {
+                                                                                       "left_eye":  {
+                                                                                                        "crop":  "0:0:0:0",
+                                                                                                        "angle":  0
+                                                                                                    },
+                                                                                       "right_eye":  {
+                                                                                                         "crop":  "0:0:0:0",
+                                                                                                         "angle":  0
+                                                                                                     }
+                                                                                   }
+                                                                },
+                                                      "max_size":  0,
+                                                      "video_codec":  "h264",
+                                                      "video_encoder":  "",
+                                                      "video_buffer":  50,
+                                                      "stay_awake":  true
+                                                  },
+                                      "PICO 4 Ultra":  {
+                                                           "views":  {
+                                                                         "max":  {
+                                                                                     "left_eye":  {
+                                                                                                      "crop":  "1750:1550:212:316",
+                                                                                                      "angle":  0
+                                                                                                  },
+                                                                                     "right_eye":  {
+                                                                                                       "crop":  "1750:1550:2360:316",
+                                                                                                       "angle":  0
+                                                                                                   }
+                                                                                 },
+                                                                         "square":  {
+                                                                                        "left_eye":  {
+                                                                                                         "crop":  "1680:1680:246:240",
+                                                                                                         "angle":  0
+                                                                                                     },
+                                                                                        "right_eye":  {
+                                                                                                          "crop":  "1680:1680:2400:240",
+                                                                                                          "angle":  0
+                                                                                                      }
+                                                                                    },
+                                                                         "portrait":  {
+                                                                                          "left_eye":  {
+                                                                                                           "crop":  "1500:1750:330:200",
+                                                                                                           "angle":  0
+                                                                                                       },
+                                                                                          "right_eye":  {
+                                                                                                            "crop":  "1500:1750:2480:200",
+                                                                                                            "angle":  0
+                                                                                                        }
+                                                                                      },
+                                                                         "wide":  {
+                                                                                      "left_eye":  {
+                                                                                                       "crop":  "1800:1440:186:370",
+                                                                                                       "angle":  0
+                                                                                                   },
+                                                                                      "right_eye":  {
+                                                                                                        "crop":  "1800:1440:2325:390",
+                                                                                                        "angle":  0
+                                                                                                    }
+                                                                                  },
+                                                                         "fullscreen":  {
+                                                                                            "left_eye":  {
+                                                                                                             "crop":  "0:0:0:0",
+                                                                                                             "angle":  0
+                                                                                                         },
+                                                                                            "right_eye":  {
+                                                                                                              "crop":  "0:0:0:0",
+                                                                                                              "angle":  0
+                                                                                                          }
+                                                                                        }
+                                                                     },
+                                                           "max_size":  0,
+                                                           "video_codec":  "h264",
+                                                           "video_encoder":  "",
+                                                           "video_buffer":  50,
+                                                           "stay_awake":  true
+                                                       }
+                                  }
+               },
+    "Monitoring":  {
+                       "HeadsetTemplate":  "headset_status.pshtml",
+                       "VideoTemplate":  "headset_scrcpy.pshtml",
+                       "thresholds":  {
+                                          "headset_battery_warningLevel":  40,
+                                          "headset_battery_criticalLevel":  30,
+                                          "controllers_battery_warningLevel":  30,
+                                          "controllers_battery_criticalLevel":  15,
+                                          "temperature_highLevel":  50
+                                      }
+                   },
+    "mediamtx":  {
+                     "enabled":  true,
+                     "folder":  "MediaMTX\\mediamtx_v1.20.1_windows_amd64",
+                     "log_level":  "error",
+                     "rtsp_port":  8554,
+                     "hls_port":  8888,
+                     "webrtc_port":  8889,
+                     "api_port":  9997,
+                     "stream_framerate":  30,
+                     "stream_bitrate":  "6M",
+                     "reencode_in_ffmpeg":  true,
+                     "codec":  "h264"
+                 },
+    "VideoMonitor":  {
+                         "pauseWhenHidden":  true,
+                         "pauseWhenHiddenDelay_sec":  10
+                     },
+    "ffmpeg":  {
+                   "folder":  "ffmpeg\\ffmpeg-9.0.1"
+               },
+    "WebServer":  {
+                      "enabled":  true,
+                      "port":  8080,
+                      "openBrowserOnStartup":  true
+                  },
+    "MdnsResponder":  {
+                          "enabled":  false,
+                          "hostname":  "vrhm"
+                      },
+    "Battery":  {
+                    "headset_charging_power_W":  13
+                },
+    "Performance":  {
+                        "GPU_Acceleration":  true,
+                        "GPU_Index":  0,
+                        "Capture_Mode":  "StreamOnly",
+                        "Adaptive_Monitoring":  {
+                                                    "enabled":  true
+                                                }
+                    }
 }

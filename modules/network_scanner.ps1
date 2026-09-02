@@ -480,8 +480,21 @@ function Get-PrivateNetworks {
         and filters only those belonging to RFC 1918 private classes A, B, or C. It returns
         the calculated network in CIDR format with the prefix.
 
+        Virtual/hypervisor adapters (Hyper-V, WSL, VMware, VirtualBox, VPN TAP adapters, etc.)
+        are excluded, mirroring the same exclusion used by the mDNS responder
+        (mdns_responder.ps1) - otherwise a Hyper-V "vEthernet (...)" adapter with a private IP
+        but no real gateway can get picked instead of the real LAN adapter (e.g. by
+        Get-ServerLanUrl / Resolve-LocalhostReplacement in kiosk_functions.ps1), sending
+        kiosks and network scans to an address nothing outside this PC can reach. The
+        interface currently holding the default route is always kept even if it would
+        otherwise match the exclusion list, to cover legitimate Hyper-V "external
+        switch"/bridge setups that do carry real LAN traffic.
+
     .OUTPUTS
-        Returns an array containing network interfaces, IP addresses, prefixes, and CIDR networks.
+        Returns an array of PSCustomObjects: InterfaceAlias, IPAddress, PrefixLength,
+        NetworkCIDR, and HasDefaultGateway (true for the interface currently holding the
+        0.0.0.0/0 route - the one this PC actually uses to reach the LAN/internet, and the
+        strongest available signal for "this is the real adapter").
 
     .EXAMPLE
         $networks = Get-PrivateNetworks
@@ -491,7 +504,27 @@ function Get-PrivateNetworks {
         Compatible with PowerShell 5.x.
     #>
 
+    # Interface currently used for outbound traffic - never excluded below, and exposed to
+    # callers as HasDefaultGateway so they can prefer it deterministically.
+    $defaultRouteIfIndex = $null
+    try {
+        $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction Stop |
+            Where-Object { $_.NextHop -ne '0.0.0.0' } |
+            Sort-Object RouteMetric | Select-Object -First 1
+        if ($route) { $defaultRouteIfIndex = $route.InterfaceIndex }
+    } catch { }
 
+    # Map InterfaceIndex -> adapter, to identify virtual/hypervisor adapters. Get-NetAdapter
+    # can fail on some systems (driver quirks, permissions); on failure, skip the exclusion
+    # rather than losing every interface.
+    $adapterByIndex = @{}
+    try {
+        Get-NetAdapter -ErrorAction Stop | ForEach-Object {
+            $adapterByIndex[$_.InterfaceIndex] = $_
+        }
+    } catch { }
+
+    $virtualPattern = 'Hyper-V|VMware|VirtualBox|WSL|vEthernet|Pseudo|TAP|WAN Miniport'
 
     # Retrieve active network interfaces with their IPs
     $networkInterfaces = Get-NetIPAddress | Where-Object {
@@ -506,13 +539,28 @@ function Get-PrivateNetworks {
         ($_).IPAddress -match '^192\.168\.'        # Classe C
     }
 
+    # Drop virtual/hypervisor adapters, unless this is the interface actually carrying the
+    # default route (a real bridged Hyper-V setup would be wrongly excluded otherwise).
+    $privateIPs = $privateIPs | Where-Object {
+        if ($defaultRouteIfIndex -and $_.InterfaceIndex -eq $defaultRouteIfIndex) {
+            return $true
+        }
+        $adapter     = $adapterByIndex[$_.InterfaceIndex]
+        $description = if ($adapter) { $adapter.InterfaceDescription } else { $null }
+        $isVirtual   = ($adapter -and $adapter.Virtual) -or
+                       ($description -and $description -match $virtualPattern) -or
+                       ($_.InterfaceAlias -match $virtualPattern)
+        -not $isVirtual
+    }
+
     # Add the CIDR network to each result
     $privateIPs | ForEach-Object {
         [PSCustomObject]@{
-            InterfaceAlias = $_.InterfaceAlias
-            IPAddress      = $_.IPAddress
-            PrefixLength   = $_.PrefixLength
-            NetworkCIDR    = ConvertTo-CIDR -IPAddress $_.IPAddress -PrefixLength $_.PrefixLength
+            InterfaceAlias    = $_.InterfaceAlias
+            IPAddress         = $_.IPAddress
+            PrefixLength      = $_.PrefixLength
+            NetworkCIDR       = ConvertTo-CIDR -IPAddress $_.IPAddress -PrefixLength $_.PrefixLength
+            HasDefaultGateway = [bool]($defaultRouteIfIndex -and $_.InterfaceIndex -eq $defaultRouteIfIndex)
         }
     }
 }

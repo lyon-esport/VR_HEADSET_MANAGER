@@ -214,6 +214,30 @@ function Get-Config {
         $global:mediamtxLogLevel     = if ($configContent.mediamtx.log_level) { $configContent.mediamtx.log_level } else { 'info' }
         $global:mediamtxFolder       = Join-Path -Path $sourcesPath -ChildPath $configContent.mediamtx.folder
         $global:mediamtxFilePath     = Join-Path -Path $global:mediamtxFolder -ChildPath "mediamtx.exe"
+        # Resilience: the configured version folder can go stale (package shipped a
+        # different mediamtx build than the config references, or the operator moved
+        # /renamed a version folder). Without this, Start-MediaMtx just logs
+        # "mediamtx.exe not found" every cycle and every stream silently stays black
+        # because nothing ever publishes RTSP. Fall back to any other installed
+        # version under sources\MediaMTX so streaming still comes up.
+        if (-not (Test-Path -LiteralPath $global:mediamtxFilePath)) {
+            $mtxParent = Join-Path -Path $sourcesPath -ChildPath "MediaMTX"
+            $fallback  = $null
+            if (Test-Path -LiteralPath $mtxParent) {
+                $fallback = Get-ChildItem -LiteralPath $mtxParent -Directory -ErrorAction SilentlyContinue |
+                    Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName "mediamtx.exe") } |
+                    Sort-Object Name -Descending | Select-Object -First 1
+            }
+            if ($fallback) {
+                Write-Log ("mediamtx.exe missing at '{0}' (config mediamtx.folder = '{1}') - falling back to installed version '{2}'" -f `
+                    $global:mediamtxFilePath, $configContent.mediamtx.folder, $fallback.Name) -Level WARNING
+                $global:mediamtxFolder   = $fallback.FullName
+                $global:mediamtxFilePath = Join-Path -Path $global:mediamtxFolder -ChildPath "mediamtx.exe"
+            } else {
+                Write-Log ("mediamtx.exe missing at '{0}' and no other version found under '{1}' - restreaming will not start" -f `
+                    $global:mediamtxFilePath, $mtxParent) -Level ERROR
+            }
+        }
         $global:mediamtxYmlPath      = Join-Path -Path $global:ScriptPath -ChildPath "config\mediamtx_headsets.yml"
         $global:mediamtxRtspPort     = $configContent.mediamtx.rtsp_port
         $global:mediamtxHlsPort      = $configContent.mediamtx.hls_port

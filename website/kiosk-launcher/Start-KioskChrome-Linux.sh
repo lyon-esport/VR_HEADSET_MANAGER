@@ -329,6 +329,16 @@ echo ""
         sleep 1
     done
     sudo iptables -t nat -D PREROUTING -p tcp --dport "$PORT" -j DNAT --to-destination "127.0.0.1:$PORT" -m comment --comment "VRHM_KIOSK_DEBUGPORT" 2>/dev/null || true
+    # Also remove the inbound port rule opened for the debug port at startup -
+    # no point leaving it reachable once Chromium (and its debug listener) is gone.
+    if command -v ufw >/dev/null 2>&1 && sudo ufw status 2>/dev/null | grep -qi "^Status: active"; then
+        sudo ufw delete allow "${PORT}/tcp" >/dev/null 2>&1 || true
+    elif command -v firewall-cmd >/dev/null 2>&1 && sudo firewall-cmd --state >/dev/null 2>&1; then
+        sudo firewall-cmd --permanent --remove-port="${PORT}/tcp" >/dev/null 2>&1 || true
+        sudo firewall-cmd --reload >/dev/null 2>&1 || true
+    elif command -v iptables >/dev/null 2>&1; then
+        sudo iptables -D INPUT -p tcp --dport "$PORT" -j ACCEPT 2>/dev/null || true
+    fi
 ) >/dev/null 2>&1 &
 disown
 
