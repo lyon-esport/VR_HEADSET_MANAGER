@@ -626,15 +626,21 @@
       // GPU cards
       if (d.GPU && d.GPU.length) {
         d.GPU.forEach(function(g) {
-          var load3d   = (g.Load3DPercent   != null) ? g.Load3DPercent   : null;
-          var decode   = (g.DecodePercent   != null) ? g.DecodePercent   : null;
-          var vramUsed = (g.VramUsedPercent != null) ? g.VramUsedPercent : null;
+          var load3d   = (g.Load3DPercent     != null) ? g.Load3DPercent     : null;
+          var video    = (g.VideoPercent      != null) ? g.VideoPercent      : null;
+          var util     = (g.UtilizationPercent!= null) ? g.UtilizationPercent: null;
+          var vramUsed = (g.VramUsedPercent   != null) ? g.VramUsedPercent   : null;
+          // Overall utilization (busiest engine, same as Task Manager's headline) is the
+          // metric VQA judges, so it carries the VQA-threshold-coloured bar. Older
+          // snapshots have no UtilizationPercent: fall back to 3D keeping that bar.
+          var haveUtil = (util != null);
           html += '<div class="comp-card">' +
             '<div class="comp-card-title">GPU ' + (d.GPU.length > 1 ? esc(g.Index) + ' ' : '') + '</div>' +
             (g.Model ? '<div class="comp-row"><span class="lbl">Model</span><span class="val" style="font-size:11px;max-width:130px;overflow:hidden;text-overflow:ellipsis" title="' + esc(g.Model) + '">' + esc(g.Model) + '</span></div>' : '') +
             '<div class="comp-row"><span class="lbl">VRAM</span><span class="val">' + esc(g.DedicatedVramGB) + ' GB</span></div>' +
-            (load3d != null ? '<div class="comp-row"><span class="lbl">3D Load</span><span class="val">' + esc(load3d) + ' %</span></div>' + compBarVqa(load3d, 'gpu') : '') +
-            (decode != null ? '<div class="comp-row" style="margin-top:4px"><span class="lbl">Video Decode</span><span class="val">' + esc(decode) + ' %</span></div>' + compBar(decode) : '') +
+            (haveUtil ? '<div class="comp-row"><span class="lbl">GPU Load</span><span class="val">' + esc(util) + ' %</span></div>' + compBarVqa(util, 'gpu') : '') +
+            (load3d != null ? '<div class="comp-row" style="margin-top:4px"><span class="lbl">3D Load</span><span class="val">' + esc(load3d) + ' %</span></div>' + (haveUtil ? compBar(load3d) : compBarVqa(load3d, 'gpu')) : '') +
+            (video != null ? '<div class="comp-row" style="margin-top:4px"><span class="lbl">Video</span><span class="val">' + esc(video) + ' %</span></div>' + compBar(video) : '') +
             (vramUsed != null ? '<div class="comp-row" style="margin-top:4px"><span class="lbl">VRAM used</span><span class="val">' + esc(g.VramUsedGB) + ' GB (' + esc(vramUsed) + '%)</span></div>' + compBar(vramUsed) : '') +
             '</div>';
         });

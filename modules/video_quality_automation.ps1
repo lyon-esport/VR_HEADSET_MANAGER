@@ -323,12 +323,20 @@ function Invoke-VideoQualityRecommendation {
     # while the cooldown is active.
     $cooldownRemaining = Step-VqaCooldown
 
-    # CPU = LoadPercent. GPU = max Load3DPercent across adapters (worst case).
+    # CPU = LoadPercent. GPU = max overall utilization across adapters (worst case).
+    # UtilizationPercent is the busiest engine, not just 3D: on AMD the restream
+    # encode runs on the unified "video codec" engine, so a 3D-only reading missed it
+    # entirely (measured 11% 3D while the GPU was really at 35%) and VQA under-reacted.
+    # Falls back to Load3DPercent for a computer_monitoring.json written before the
+    # field existed - VQA reads that file, which can outlive an upgrade.
     $cpu = if ($inputs.Snapshot.CPU -and $null -ne $inputs.Snapshot.CPU.LoadPercent) { [int]$inputs.Snapshot.CPU.LoadPercent } else { 0 }
     $gpu = 0
     if ($inputs.Snapshot.GPU) {
         foreach ($g in @($inputs.Snapshot.GPU)) {
-            if ($null -ne $g.Load3DPercent -and [int]$g.Load3DPercent -gt $gpu) { $gpu = [int]$g.Load3DPercent }
+            $gVal = if ($null -ne $g.UtilizationPercent) { [int]$g.UtilizationPercent }
+                    elseif ($null -ne $g.Load3DPercent)  { [int]$g.Load3DPercent }
+                    else { $null }
+            if ($null -ne $gVal -and $gVal -gt $gpu) { $gpu = $gVal }
         }
     }
 

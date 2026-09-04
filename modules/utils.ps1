@@ -143,6 +143,34 @@ function ConvertTo-ThirdPartyBool {
 }
 
 
+# Repairs a string that was UTF-8 text mis-decoded as Windows-1252 (mojibake), e.g. "VidÃ©os"
+# instead of "Videos". Re-encodes as Windows-1252 bytes, then strictly re-decodes those bytes as
+# UTF-8; if that succeeds and differs from the input, the fix is accepted and the loop repeats
+# (capped at 3 passes) so a double mis-decode ("VidÃƒÂ©os") also unwinds in one call. A string that
+# is not mojibake fails the strict UTF-8 decode and is returned unchanged - this cannot corrupt an
+# already-correct accented string.
+function Repair-MojibakeUtf8String {
+    param([Parameter(Mandatory=$true)] [AllowEmptyString()] [string]$Value)
+
+    $cp1252 = [System.Text.Encoding]::GetEncoding(1252)
+    $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
+    $current = $Value
+
+    for ($i = 0; $i -lt 3; $i++) {
+        try {
+            $bytes = $cp1252.GetBytes($current)
+            $candidate = $strictUtf8.GetString($bytes)
+        } catch {
+            break
+        }
+        if ($candidate -eq $current) { break }
+        $current = $candidate
+    }
+
+    return $current
+}
+
+
 # Build the path of a per-headset data CSV (data/<safe>_<suffix>.csv).
 # Suffix examples: 'favorite_apps', 'installed_apps'.
 function Get-HeadsetDataPath {
@@ -665,29 +693,69 @@ public static class _VRM_DxgiLuid {
 }
 
 # Returns an array of GPU info objects (one per adapter).
-# Per-GPU: model, dedicated VRAM (GB), 3D/encode/decode utilization (%),
-# VRAM used/free (GB and %). Utilization fields are $null when perf counters
-# are unavailable (old Windows, Hyper-V, missing provider).
+# Per-GPU: model, dedicated VRAM (GB), 3D/encode/decode/video utilization (%),
+# overall utilization (%), VRAM used/free (GB and %). Utilization fields are $null
+# when perf counters are unavailable (old Windows, Hyper-V, missing provider).
+# VideoPercent covers every video engine whatever the vendor calls it, because AMD
+# exposes one unified "video codec" engine instead of videoencode/videodecode -
+# on AMD it is the ONLY field carrying transcode load. UtilizationPercent is the
+# busiest engine (what Task Manager shows as the headline GPU figure).
 # Returns @() if no GPU is found; never returns $null.
 function Get-GpuInfo {
     # Counter instance names embed the adapter LUID:
     #   GPU Engine:         pid_NNNN_luid_0xHH_0xLL_phys_0_eng_N_engtype_3D
     #   GPU Adapter Memory: luid_0xHH_0xLL_phys_0
     # phys_N is always 0 per-adapter (not a global GPU index), so we key maps by LUID string.
-    function _SumCounterByLuid {
-        param([string]$CounterPath)
+    #
+    # One pass over every GPU Engine instance, bucketed as [luid][engine type] = summed %
+    # across all processes. A single Get-Counter call covers every engine type, which is
+    # both cheaper than one call per type and required because the interesting engine
+    # names differ per vendor (see _GetEngineStats).
+    function _GetEngineMap {
         $map = @{}
         try {
-            $samples = (Get-Counter -Counter $CounterPath -ErrorAction Stop).CounterSamples
+            $samples = (Get-Counter -Counter '\GPU Engine(*)\Utilization Percentage' -ErrorAction Stop).CounterSamples
             foreach ($s in $samples) {
-                if ($s.InstanceName -match 'luid_(0x[0-9a-f]+_0x[0-9a-f]+)') {
+                if ($s.InstanceName -match 'luid_(0x[0-9a-f]+_0x[0-9a-f]+).*engtype_(.+)$') {
                     $luid = $Matches[1]
-                    if (-not $map.ContainsKey($luid)) { $map[$luid] = 0.0 }
-                    $map[$luid] += $s.CookedValue
+                    $eng  = $Matches[2].Trim().ToLower()
+                    if (-not $map.ContainsKey($luid))       { $map[$luid] = @{} }
+                    if (-not $map[$luid].ContainsKey($eng)) { $map[$luid][$eng] = 0.0 }
+                    $map[$luid][$eng] += $s.CookedValue
                 }
             }
         } catch { }
         return $map
+    }
+
+    # Reduce one adapter's engine hashtable to the figures we report.
+    # Engine type names are vendor specific - measured on real hardware:
+    #   AMD 780M : 3d, copy, compute 0/1, timer 0, security 1, high priority 3d/compute,
+    #              video jpeg 0, "video codec 0"  <- ONE unified VCN engine, encode AND decode
+    #   NVIDIA   : 3d, copy, videodecode, videoencode, jpeg_decode_0, ofa_0, security, vr
+    #   Intel    : 3d, copy, legacyoverlay, videodecode, videoprocessing
+    # AMD exposes no videoencode/videodecode at all, so Encode/Decode stay 0 there and
+    # Video is the only field carrying the real (often dominant) transcode load.
+    function _GetEngineStats {
+        param($Engines)
+        $r = @{ Load3D = 0.0; Encode = 0.0; Decode = 0.0; Video = 0.0; Utilization = 0.0 }
+        if (-not $Engines) { return $r }
+        foreach ($kv in $Engines.GetEnumerator()) {
+            $name = [string]$kv.Key
+            $val  = [double]$kv.Value
+            # Task Manager's headline GPU figure is the busiest engine, not the sum
+            if ($val -gt $r.Utilization) { $r.Utilization = $val }
+            # Exact match: excludes "high priority 3d", matching Task Manager's 3D graph
+            if ($name -eq '3d')              { $r.Load3D += $val }
+            if ($name -like '*videodecode*') { $r.Decode += $val }
+            if ($name -like '*videoencode*') { $r.Encode += $val }
+            # JPEG engines are excluded so the same work is counted on every vendor
+            # (AMD "video jpeg 0" would match *video*, NVIDIA "jpeg_decode_0" would not).
+            if (($name -like '*video*' -or $name -like '*codec*') -and $name -notlike '*jpeg*') {
+                $r.Video += $val
+            }
+        }
+        return $r
     }
 
     # Build a lookup: GPU DriverDesc -> real VRAM bytes (64-bit QWORD from registry).
@@ -718,9 +786,15 @@ function Get-GpuInfo {
     try {
         $controllers = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop)
     } catch {
+        # Logged because a silent @() here renders no GPU card at all in the web UI,
+        # which is indistinguishable from "feature not working" during remote support.
+        try { Write-Log ("Get-GpuInfo: Win32_VideoController query failed: " + $_.Exception.Message) -Level WARNING } catch {}
         return @()
     }
-    if ($controllers.Count -eq 0) { return @() }
+    if ($controllers.Count -eq 0) {
+        try { Write-Log "Get-GpuInfo: Win32_VideoController returned no adapter." -Level WARNING } catch {}
+        return @()
+    }
 
     # Drop virtual / software display adapters before indexing. Virtual Desktop,
     # Meta Quest Link, Parsec, Sunshine, IddSampleDriver and the RDP display driver
@@ -738,10 +812,14 @@ function Get-GpuInfo {
     $physical = @($controllers | Where-Object { $_.PNPDeviceID -like 'PCI\*' })
     if ($physical.Count -gt 0) { $controllers = $physical }
 
+    try {
+        Write-Log ("Get-GpuInfo: {0} adapter(s) found, {1} on PCI: {2} | DXGI LUIDs: {3}" -f `
+            $allControllers.Count, $physical.Count, (($controllers | ForEach-Object { $_.Name }) -join ', '), `
+            (($gpuLuidMap.Keys | ForEach-Object { "$_=$($gpuLuidMap[$_])" }) -join ', ')) -Level DEBUG
+    } catch {}
+
     # Collect perf counter maps keyed by LUID string
-    $map3D     = _SumCounterByLuid '\GPU Engine(*engtype_3D*)\Utilization Percentage'
-    $mapEnc    = _SumCounterByLuid '\GPU Engine(*engtype_VideoEncode*)\Utilization Percentage'
-    $mapDec    = _SumCounterByLuid '\GPU Engine(*engtype_VideoDecode*)\Utilization Percentage'
+    $engineMap = _GetEngineMap
     $mapMemUse = @{}
     try {
         $memUseSamples = (Get-Counter -Counter '\GPU Adapter Memory(*)\Dedicated Usage' -ErrorAction Stop).CounterSamples
@@ -749,6 +827,30 @@ function Get-GpuInfo {
             if ($s.InstanceName -match 'luid_(0x[0-9a-f]+_0x[0-9a-f]+)') { $mapMemUse[$Matches[1]] = $s.CookedValue }
         }
     } catch { }
+
+    # On some machines (observed: AMD iGPU queried through a Remote Desktop session)
+    # the LUID CreateDXGIFactory reports for the real GPU does not match the LUID
+    # dxgkrnl assigns for the same adapter's GPU Engine / GPU Adapter Memory perf
+    # counters, even though the adapter name matches and the software "Microsoft
+    # Basic Render Driver" adapter's LUID matches fine between the two APIs. When
+    # there is exactly one physical GPU there is no ambiguity to resolve via LUID at
+    # all, so sum every counter instance directly (excluding the Basic Render Driver,
+    # whose LUID can still be identified reliably) instead of depending on the join.
+    $singleGpuMode = ($controllers.Count -eq 1)
+    if ($singleGpuMode) {
+        $excludeLuid    = $gpuLuidMap['Microsoft Basic Render Driver']
+        $aggEngines     = @{}
+        $aggMemUse      = 0.0
+        $haveAggMemUse  = $false
+        foreach ($luidKv in $engineMap.GetEnumerator()) {
+            if ($luidKv.Key -eq $excludeLuid) { continue }
+            foreach ($e in $luidKv.Value.GetEnumerator()) {
+                if (-not $aggEngines.ContainsKey($e.Key)) { $aggEngines[$e.Key] = 0.0 }
+                $aggEngines[$e.Key] += $e.Value
+            }
+        }
+        foreach ($kv in $mapMemUse.GetEnumerator()) { if ($kv.Key -ne $excludeLuid) { $aggMemUse += $kv.Value; $haveAggMemUse = $true } }
+    }
 
     $results = @()
     for ($i = 0; $i -lt $controllers.Count; $i++) {
@@ -758,38 +860,62 @@ function Get-GpuInfo {
         $vramBytes = if ($regVramMap.ContainsKey($gpuName)) { $regVramMap[$gpuName] } else { [double]$ctrl.AdapterRAM }
         $vramGB    = [Math]::Round($vramBytes / 1GB, 2)
 
-        $load3D = $null; $loadEnc = $null; $loadDec = $null
+        $load3D = $null; $loadEnc = $null; $loadDec = $null; $loadVideo = $null; $loadUtil = $null
         $vramUsedGB = $null; $vramFreeGB = $null; $vramUsedPct = $null; $vramFreePct = $null
 
-        # Resolve this GPU's LUID via DXGI, then look up its counter data
-        $luid = $gpuLuidMap[$gpuName]
-        if ($luid) {
-            $load3D  = [int][Math]::Min(100, [Math]::Round($map3D[$luid]))
-            $loadEnc = [int][Math]::Min(100, [Math]::Round($mapEnc[$luid]))
-            $loadDec = [int][Math]::Min(100, [Math]::Round($mapDec[$luid]))
+        if ($singleGpuMode) {
+            # Only one real adapter exists, so the aggregated (LUID-independent) engine
+            # buckets computed above are unambiguously this GPU's data.
+            $st = _GetEngineStats $aggEngines
+            $load3D    = [int][Math]::Min(100, [Math]::Round($st.Load3D))
+            $loadEnc   = [int][Math]::Min(100, [Math]::Round($st.Encode))
+            $loadDec   = [int][Math]::Min(100, [Math]::Round($st.Decode))
+            $loadVideo = [int][Math]::Min(100, [Math]::Round($st.Video))
+            $loadUtil  = [int][Math]::Min(100, [Math]::Round($st.Utilization))
 
-            if ($mapMemUse.ContainsKey($luid)) {
-                $usedBytes   = $mapMemUse[$luid]
+            if ($haveAggMemUse) {
+                $usedBytes   = $aggMemUse
                 $vramUsedGB  = [Math]::Round($usedBytes / 1GB, 2)
-                # Always use physical VRAM capacity for percentage — Total Committed is virtual
-                # committed memory (much smaller than card capacity) and gives wrong results.
                 $vramFreeGB  = if ($vramBytes -gt 0) { [Math]::Round(($vramBytes - $usedBytes) / 1GB, 2) } else { $null }
                 $vramUsedPct = if ($vramBytes -gt 0) { [int][Math]::Round($usedBytes / $vramBytes * 100) } else { $null }
                 $vramFreePct = if ($null -ne $vramUsedPct) { 100 - $vramUsedPct } else { $null }
             }
+        } else {
+            # Resolve this GPU's LUID via DXGI, then look up its counter data
+            $luid = $gpuLuidMap[$gpuName]
+            if ($luid) {
+                $st = _GetEngineStats $engineMap[$luid]
+                $load3D    = [int][Math]::Min(100, [Math]::Round($st.Load3D))
+                $loadEnc   = [int][Math]::Min(100, [Math]::Round($st.Encode))
+                $loadDec   = [int][Math]::Min(100, [Math]::Round($st.Decode))
+                $loadVideo = [int][Math]::Min(100, [Math]::Round($st.Video))
+                $loadUtil  = [int][Math]::Min(100, [Math]::Round($st.Utilization))
+
+                if ($mapMemUse.ContainsKey($luid)) {
+                    $usedBytes   = $mapMemUse[$luid]
+                    $vramUsedGB  = [Math]::Round($usedBytes / 1GB, 2)
+                    # Always use physical VRAM capacity for percentage — Total Committed is virtual
+                    # committed memory (much smaller than card capacity) and gives wrong results.
+                    $vramFreeGB  = if ($vramBytes -gt 0) { [Math]::Round(($vramBytes - $usedBytes) / 1GB, 2) } else { $null }
+                    $vramUsedPct = if ($vramBytes -gt 0) { [int][Math]::Round($usedBytes / $vramBytes * 100) } else { $null }
+                    $vramFreePct = if ($null -ne $vramUsedPct) { 100 - $vramUsedPct } else { $null }
+                }
+            }
         }
 
         $results += [PSCustomObject]@{
-            Index           = $i
-            Model           = $gpuName
-            DedicatedVramGB = $vramGB
-            Load3DPercent   = $load3D
-            EncodePercent   = $loadEnc
-            DecodePercent   = $loadDec
-            VramUsedGB      = $vramUsedGB
-            VramFreeGB      = $vramFreeGB
-            VramUsedPercent = $vramUsedPct
-            VramFreePercent = $vramFreePct
+            Index             = $i
+            Model             = $gpuName
+            DedicatedVramGB   = $vramGB
+            Load3DPercent     = $load3D
+            EncodePercent     = $loadEnc
+            DecodePercent     = $loadDec
+            VideoPercent      = $loadVideo
+            UtilizationPercent = $loadUtil
+            VramUsedGB        = $vramUsedGB
+            VramFreeGB        = $vramFreeGB
+            VramUsedPercent   = $vramUsedPct
+            VramFreePercent   = $vramFreePct
         }
     }
     # Release CIM handles on Win32_VideoController instances
@@ -987,8 +1113,12 @@ function Update-ComputerMonitoring {
 
     $cpu       = Get-CpuInfo
     $ram       = Get-RamInfo
-    $gpu       = Get-GpuInfo
-    $workload  = Get-AppWorkload -ProcessNames @("scrcpy", "ffmpeg", "powershell")
+    # @() is mandatory: PowerShell unrolls a single-element array on return, and
+    # ConvertTo-Json then writes "GPU": {...} instead of "GPU": [{...}]. The web UI
+    # tests d.GPU.length, which is undefined on an object, so a machine with exactly
+    # one GPU rendered no GPU card at all until the array was forced here.
+    $gpu       = @(Get-GpuInfo)
+    $workload  = @(Get-AppWorkload -ProcessNames @("scrcpy", "ffmpeg", "powershell"))
     $scrcpyRow = $workload | Where-Object { $_.ProcessName -eq "scrcpy" }
     $recDrive  = Get-RecordingDriveInfo
 

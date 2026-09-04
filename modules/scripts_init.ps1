@@ -478,7 +478,7 @@ function Confirm-AppPortsAvailable {
     # YAML, web server bind) sees the final ports.
     if ($changes.Count -gt 0) {
         try {
-            $cfg = Read-ConfigJson
+            $cfg = Read-ConfigJson -ConfigFilePath $global:configFilePath -NonInteractive
             if ($null -eq $cfg) {
                 Write-Log "Confirm-AppPortsAvailable: cannot reload config.json - changes not persisted." -Level ERROR
                 return

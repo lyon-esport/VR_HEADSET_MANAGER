@@ -132,6 +132,14 @@ function Get-Config {
     $global:scrcpyFolder = Join-Path -Path $sourcesPath -ChildPath $configContent.scrcpy.folder
     $global:scrcpyFilePath = Join-Path -Path $global:scrcpyFolder -ChildPath "scrcpy.exe" 
     [PSCustomObject]$global:scrcpyParameters = @($configContent.scrcpy.parameters)
+    if ($configContent.scrcpy.recordFolder) {
+        $repairedRecordFolder = Repair-MojibakeUtf8String -Value $configContent.scrcpy.recordFolder
+        if ($repairedRecordFolder -ne $configContent.scrcpy.recordFolder) {
+            Write-Log ("Repaired mojibake in scrcpy.recordFolder: '{0}' -> '{1}'" -f $configContent.scrcpy.recordFolder, $repairedRecordFolder) -Level WARNING
+            $configContent.scrcpy.recordFolder = $repairedRecordFolder
+            try { $configContent | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $ConfigFilePath -Encoding UTF8 } catch {}
+        }
+    }
     if ($configContent.scrcpy.recordFolder -contains "\" -or "/" ) {
         $global:scrcpyRecordFolder = $configContent.scrcpy.recordFolder
     } else {
