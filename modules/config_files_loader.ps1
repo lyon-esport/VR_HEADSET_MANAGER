@@ -268,6 +268,10 @@ function Get-Config {
     $global:MdnsResponder_enabled  = ConvertTo-BoolField $mdnsEnabledRaw
     $global:MdnsResponder_hostname = if ($configContent.MdnsResponder.hostname) { $configContent.MdnsResponder.hostname } else { "vrhm" }
 
+    # Network readiness gate (pauses startup until a valid, non-APIPA IP is assigned)
+    $global:Network_WaitForValidNetwork  = if ($null -ne $configContent.Network.waitForValidNetwork) { [bool]$configContent.Network.waitForValidNetwork } else { $true }
+    $global:Network_CheckIntervalSeconds = if ($configContent.Network.checkIntervalSeconds)          { [int]$configContent.Network.checkIntervalSeconds } else { 5 }
+
     # Port pools used by Resolve-PortConflict (console_manager.ps1) and the
     # startup orchestrator Confirm-AppPortsAvailable. Each pool is the range
     # the "[1] Increment" option walks when the default port is taken.

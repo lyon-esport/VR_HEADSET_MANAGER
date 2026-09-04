@@ -112,6 +112,17 @@ function Remove-Kiosk {
     if ($kioskToRemove) {
         $kiosks = @($kiosks | Where-Object { $_.ID -ne $ID })
         Write-Log "Remove-Kiosk: removed kiosk ID $ID ($($kioskToRemove.Name))." -Level "INFO"
+
+        # If this kiosk has ever sent an advanced-agent report, denylist its IP so a
+        # still-running agent does not silently re-add it on its next heartbeat
+        # (see Register-KioskFromAgentReport / Add-KioskAutoAddIgnore in kiosk_functions.ps1).
+        # Kiosks that were only ever added manually have no agent history and need no entry.
+        if ((Get-Command Get-KioskAgentInfo -ErrorAction SilentlyContinue) -and (Get-Command Add-KioskAutoAddIgnore -ErrorAction SilentlyContinue)) {
+            $agent = Get-KioskAgentInfo -IPAddress $kioskToRemove.IPAddress
+            if ($agent) {
+                Add-KioskAutoAddIgnore -IPAddress $kioskToRemove.IPAddress
+            }
+        }
     } else {
         Write-Log "Remove-Kiosk: kiosk ID $ID not found." -Level "ERROR"
     }

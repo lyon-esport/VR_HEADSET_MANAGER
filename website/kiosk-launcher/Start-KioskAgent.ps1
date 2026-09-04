@@ -14,21 +14,29 @@
          loopback only.
 
     ...and then keeps running as an agent that adds:
-      5. Reporting - every few seconds it tells the VR HEADSET MANAGER server
+      5. Server discovery - unless -ServerUrl or -ServerIp is given, the script
+         finds the VR HEADSET MANAGER server on its own by scanning the local
+         network, the same way scripts/Tools/Find-VRHM-Server.ps1 does. A
+         successful match is cached next to this script, so later reboots
+         resolve instantly. If nothing is found, it offers to retry the scan,
+         accept a manually typed IP, or be cancelled with Ctrl+C - see
+         -ServerIp below for the routed-network case (scanning does not cross
+         subnets).
+      6. Reporting - every few seconds it tells the VR HEADSET MANAGER server
          this PC's computer name, OS version, Chrome version, and whether the
          connection to the server runs over Ethernet or WiFi. That information
          shows up in the server's Kiosk Screens page and network scan.
-      6. Remote power control - the operator can order a reboot, a shutdown, or
+      7. Remote power control - the operator can order a reboot, a shutdown, or
          a browser restart from VR HEADSET MANAGER.
-      7. Browser watchdog - if Chrome dies or is closed, it is relaunched
+      8. Browser watchdog - if Chrome dies or is closed, it is relaunched
          automatically (disable with -NoAutoRestartBrowser).
 
     IMPORTANT - this script never opens a listening port of its own. It only
     makes OUTBOUND calls: to its own loopback Chrome debug port, and to the
     VR HEADSET MANAGER server. Commands travel back inside the reply to its own
     report, so no inbound firewall rule beyond the existing Chrome debug port is
-    needed. (A second, fallback command path exists for a kiosk started without
-    -ServerUrl: see the notes on kiosk_command.html below.)
+    needed. (A second, fallback command path also exists, used only if server
+    discovery is somehow bypassed: see the notes on kiosk_command.html below.)
 
     This script does not depend on any other file from the VR HEADSET MANAGER
     project - it is meant to be copied and run standalone on a separate PC.
@@ -44,13 +52,18 @@
 
 .PARAMETER ServerUrl
     Base URL of the VR HEADSET MANAGER web server, for example
-    "http://192.168.1.37:8080". Strongly recommended: without it this PC cannot
-    report itself, so the server will treat it as a basic kiosk until it learns
-    the address. The Kiosk Screens page shows a ready-to-paste command line with
-    this already filled in (Add kiosk -> Setup Scripts).
+    "http://192.168.1.37:8080". Optional - if omitted (and -ServerIp is not
+    given either) the script finds the server itself; see -ServerIp and the
+    server discovery notes above.
 
-    If omitted, the script tries to learn the server address from the first
-    VR HEADSET MANAGER URL that gets pushed to this screen.
+.PARAMETER ServerIp
+    Forces the server address to this IP (combined with -ServerPort), skipping
+    network discovery entirely. Use this on a routed network, where the server
+    is not on the same local subnet and a scan would never reach it.
+
+.PARAMETER ServerPort
+    Port to use with -ServerIp, and the port scanned during automatic server
+    discovery (default 8080 - the VR HEADSET MANAGER web server's default).
 
 .PARAMETER ReportIntervalSec
     How often to report to the server, in seconds (default 5). This also bounds
@@ -65,10 +78,13 @@
     automatically.
 
 .EXAMPLE
-    .\Start-KioskAgent.ps1 -ServerUrl "http://192.168.1.37:8080"
+    .\Start-KioskAgent.ps1
 
 .EXAMPLE
     .\Start-KioskAgent.ps1 -ServerUrl "http://192.168.1.37:8080" -Port 9222 -ReportIntervalSec 10
+
+.EXAMPLE
+    .\Start-KioskAgent.ps1 -ServerIp 10.0.5.12 -ServerPort 8080
 
 .NOTES
     Re-run this script any time (for example after a reboot) - it is safe to run
@@ -83,6 +99,8 @@ param (
     [string]$Url = "data:text/html,%3Chtml%3E%3Chead%3E%3Cmeta%20charset%3D'utf-8'%3E%3Ctitle%3EKiosk%3C%2Ftitle%3E%3Cstyle%3Ehtml%2Cbody%7Bmargin%3A0%3Bheight%3A100%25%3Bbackground%3A%23000%3Bcolor%3A%23fff%3Bdisplay%3Aflex%3Balign-items%3Acenter%3Bjustify-content%3Acenter%3Bfont-family%3Asystem-ui%2Csans-serif%3Bflex-direction%3Acolumn%7Dh1%7Bfont-size%3A3vw%3Bletter-spacing%3A.08em%3Btext-transform%3Auppercase%3Bcolor%3A%23888%3Bmargin%3A0%7Dh2%7Bfont-size%3A5vw%3Bfont-weight%3A700%3Bmargin%3A12px%200%200%7D%3C%2Fstyle%3E%3C%2Fhead%3E%3Cbody%3E%3Ch1%3EKiosk%20Mode%3C%2Fh1%3E%3Ch2%3EReady%20to%20stream%3C%2Fh2%3E%3C%2Fbody%3E%3C%2Fhtml%3E",
     [int]$Port = 9222,
     [string]$ServerUrl = "",
+    [string]$ServerIp = "",
+    [int]$ServerPort = 8080,
     [int]$ReportIntervalSec = 5,
     [switch]$NoAutoRestartBrowser,
     [string]$ChromePath = ""
@@ -113,6 +131,10 @@ if (-not (Test-IsAdmin)) {
     if ($ServerUrl) {
         $argList += "-ServerUrl"; $argList += "`"$ServerUrl`""
     }
+    if ($ServerIp) {
+        $argList += "-ServerIp"; $argList += "`"$ServerIp`""
+    }
+    $argList += "-ServerPort"; $argList += "$ServerPort"
     if ($NoAutoRestartBrowser) {
         $argList += "-NoAutoRestartBrowser"
     }
@@ -741,6 +763,296 @@ function Invoke-KioskCommand {
 }
 
 # ---------------------------------------------------------------------------
+# 6b. Server discovery - find the VR HEADSET MANAGER server on the LAN when
+#     neither -ServerUrl nor -ServerIp was given, so a kiosk works out of the
+#     box after a DHCP change on either side. This logic is ported from (and
+#     should be kept in sync with) scripts/Tools/Find-VRHM-Server.ps1 -
+#     duplicated here rather than shared via a module, matching this script's
+#     own "no dependency on any other project file" design.
+# ---------------------------------------------------------------------------
+
+function Get-VrhmServerCachePath {
+    $scriptDir = $null
+    if ($PSCommandPath) { $scriptDir = Split-Path -Parent $PSCommandPath }
+    if (-not $scriptDir) { $scriptDir = $PSScriptRoot }
+    if (-not $scriptDir) { $scriptDir = (Get-Location).Path }
+    return (Join-Path $scriptDir "vrhm_server_cache.json")
+}
+
+function Read-VrhmServerCache {
+    $path = Get-VrhmServerCachePath
+    if (-not (Test-Path -LiteralPath $path)) { return $null }
+    try {
+        $data = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+        if ($data.IPAddress -and $data.Port) {
+            return @{ IPAddress = [string]$data.IPAddress; Port = [int]$data.Port }
+        }
+    } catch { }
+    return $null
+}
+
+function Write-VrhmServerCache {
+    param([string]$IPAddress, [int]$Port)
+    try {
+        $path = Get-VrhmServerCachePath
+        (@{ IPAddress = $IPAddress; Port = $Port } | ConvertTo-Json -Compress) |
+            Set-Content -LiteralPath $path -Encoding UTF8 -NoNewline
+    } catch { }
+}
+
+function Test-VrhmServerAt {
+    param([string]$IPAddress, [int]$Port, [int]$TimeoutSec = 2)
+    try {
+        $uri = "http://${IPAddress}:${Port}/api/version"
+        $response = Invoke-RestMethod -Uri $uri -TimeoutSec $TimeoutSec -ErrorAction Stop
+        return [bool]($response -and $response.version)
+    } catch {
+        return $false
+    }
+}
+
+function Get-IpRangeLocal {
+    param([string]$CIDR)
+
+    if ($CIDR -notmatch '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d{1,2}$') { return @() }
+
+    $ip = ($CIDR -split '/')[0]
+    [int]$prefixLength = ($CIDR -split '/')[1]
+    if ($prefixLength -lt 7 -or $prefixLength -gt 30) { return @() }
+
+    $octets = $ip -split '\.'
+    $ipBinary = ''
+    foreach ($octet in $octets) {
+        $ipBinary += [convert]::ToString([int]$octet, 2).PadLeft(8, '0')
+    }
+
+    $hostBits = 32 - $prefixLength
+    $networkBinary = $ipBinary.Substring(0, $prefixLength)
+    $maxHostValue = [convert]::ToInt32(('1' * $hostBits), 2) - 1
+
+    $ips = @()
+    for ($i = 1; $i -le $maxHostValue; $i++) {
+        $hostBinary = [convert]::ToString($i, 2).PadLeft($hostBits, '0')
+        $fullBinary = $networkBinary + $hostBinary
+        $ipParts = @()
+        for ($x = 0; $x -lt 4; $x++) {
+            $octetBinary = $fullBinary.Substring($x * 8, 8)
+            $ipParts += [convert]::ToInt32($octetBinary, 2)
+        }
+        $ips += ($ipParts -join '.')
+    }
+    return $ips
+}
+
+function ConvertTo-CIDRLocal {
+    param([string]$IPAddress, [int]$PrefixLength)
+
+    $binaryMask = ('1' * $PrefixLength).PadRight(32, '0')
+    $maskBytes = $binaryMask -split '(.{8})' | Where-Object { $_ -ne '' } | ForEach-Object { [Convert]::ToInt32($_, 2) }
+    $ipBytes = $IPAddress.Split('.') | ForEach-Object { [int]$_ }
+
+    $networkBytes = for ($i = 0; $i -lt 4; $i++) {
+        $ipBytes[$i] -band $maskBytes[$i]
+    }
+
+    return "$($networkBytes -join '.')/$PrefixLength"
+}
+
+function Get-PrivateNetworksLocal {
+    $defaultRouteIfIndex = $null
+    try {
+        $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction Stop |
+            Where-Object { $_.NextHop -ne '0.0.0.0' } |
+            Sort-Object RouteMetric | Select-Object -First 1
+        if ($route) { $defaultRouteIfIndex = $route.InterfaceIndex }
+    } catch { }
+
+    $adapterByIndex = @{}
+    try {
+        Get-NetAdapter -ErrorAction Stop | ForEach-Object {
+            $adapterByIndex[$_.InterfaceIndex] = $_
+        }
+    } catch { }
+
+    $virtualPattern = 'Hyper-V|VMware|VirtualBox|WSL|vEthernet|Pseudo|TAP|WAN Miniport'
+
+    $networkInterfaces = Get-NetIPAddress | Where-Object {
+        $_.AddressFamily -eq 'IPv4' -and $_.IPAddress -match '\d+\.\d+\.\d+\.\d+' -and
+        $_.IPAddress -notlike '169.254.*'
+    }
+
+    $privateIPs = $networkInterfaces | Where-Object {
+        ($_).IPAddress -match '^10\.' -or
+        ($_).IPAddress -match '^172\.(1[6-9]|2[0-9]|3[0-1])\.' -or
+        ($_).IPAddress -match '^192\.168\.'
+    }
+
+    $privateIPs = $privateIPs | Where-Object {
+        if ($defaultRouteIfIndex -and $_.InterfaceIndex -eq $defaultRouteIfIndex) {
+            return $true
+        }
+        $adapter     = $adapterByIndex[$_.InterfaceIndex]
+        $description = if ($adapter) { $adapter.InterfaceDescription } else { $null }
+        $isVirtual   = ($adapter -and $adapter.Virtual) -or
+                       ($description -and $description -match $virtualPattern) -or
+                       ($_.InterfaceAlias -match $virtualPattern)
+        -not $isVirtual
+    }
+
+    $privateIPs | ForEach-Object {
+        [PSCustomObject]@{
+            InterfaceAlias = $_.InterfaceAlias
+            IPAddress      = $_.IPAddress
+            PrefixLength   = $_.PrefixLength
+            NetworkCIDR    = ConvertTo-CIDRLocal -IPAddress $_.IPAddress -PrefixLength $_.PrefixLength
+        }
+    }
+}
+
+function Test-PortForCidrLocal {
+    param(
+        [string[]]$IpRange,
+        [int]$Port,
+        [int]$Timeout,
+        [int]$MaxThreads
+    )
+
+    if (-not $IpRange -or $IpRange.Count -eq 0) {
+        return @()
+    }
+
+    $runspacePool = [runspacefactory]::CreateRunspacePool(1, $MaxThreads)
+    $runspacePool.Open()
+    $jobs = @()
+
+    $testPortScript = {
+        param($ip, $port, $timeout)
+
+        $result = [PSCustomObject]@{
+            IPAddress = $ip
+            Port      = $port
+            Open      = $false
+        }
+
+        try {
+            $tcpClient = New-Object System.Net.Sockets.TcpClient
+            $asyncResult = $tcpClient.BeginConnect($ip, $port, $null, $null)
+            $connected = $asyncResult.AsyncWaitHandle.WaitOne($timeout, $false)
+
+            if ($connected -and $tcpClient.Connected) {
+                $result.Open = $true
+                $tcpClient.EndConnect($asyncResult)
+            }
+        } catch {
+        } finally {
+            if ($tcpClient) { $tcpClient.Dispose() }
+        }
+        return $result
+    }
+
+    foreach ($ip in $IpRange) {
+        $powershell = [powershell]::Create().AddScript($testPortScript).AddArgument($ip).AddArgument($Port).AddArgument($Timeout)
+        $powershell.RunspacePool = $runspacePool
+        $jobs += [PSCustomObject]@{
+            PowerShell  = $powershell
+            AsyncResult = $powershell.BeginInvoke()
+        }
+    }
+
+    Start-Sleep -Milliseconds ([Math]::Min(20 * $Timeout, 10000))
+
+    $results = do {
+        foreach ($job in $jobs) {
+            if ($job.AsyncResult.IsCompleted) {
+                $job.PowerShell.EndInvoke($job.AsyncResult)
+                $job.PowerShell.Dispose()
+            }
+        }
+        $jobs = $jobs | Where-Object { -not $_.AsyncResult.IsCompleted }
+    } while ($jobs.Count -gt 0)
+
+    $runspacePool.Close()
+    $runspacePool.Dispose()
+
+    return $results | Where-Object Open
+}
+
+function Find-VrhmServerOnLan {
+    param([int]$Port, [int]$TimeoutMs = 300, [int]$MaxThreads = 50)
+
+    $networks = Get-PrivateNetworksLocal
+    if (-not $networks -or $networks.Count -eq 0) { return $null }
+
+    $allIps = @()
+    foreach ($net in $networks) { $allIps += Get-IpRangeLocal -CIDR $net.NetworkCIDR }
+    $allIps = $allIps | Select-Object -Unique
+    if ($allIps.Count -eq 0) { return $null }
+
+    Write-Host "Scanning $($allIps.Count) address(es) on port $Port for a VR HEADSET MANAGER server..." -ForegroundColor Cyan
+    $openHosts = Test-PortForCidrLocal -IpRange $allIps -Port $Port -Timeout $TimeoutMs -MaxThreads $MaxThreads
+    if (-not $openHosts -or $openHosts.Count -eq 0) { return $null }
+
+    $found = @()
+    foreach ($candidate in $openHosts) {
+        if (Test-VrhmServerAt -IPAddress $candidate.IPAddress -Port $Port) {
+            $found += $candidate.IPAddress
+        }
+    }
+
+    if ($found.Count -eq 0) { return $null }
+    if ($found.Count -gt 1) {
+        Write-Host "Found multiple VR HEADSET MANAGER servers on the network: $($found -join ', ') - using $($found[0])." -ForegroundColor Yellow
+    }
+    return @{ IPAddress = $found[0]; Port = $Port }
+}
+
+function Resolve-VrhmServerUrl {
+    <#
+        Cascade: explicit -ServerUrl > explicit -ServerIp > cached last-known
+        server > LAN scan > a blocking console menu (retry the scan, type an
+        IP manually, or Ctrl+C to give up). Always returns a URL or never
+        returns at all (the operator closed the script) - callers downstream
+        never need to handle a $null server address.
+    #>
+    param([string]$ServerUrl, [string]$ServerIp, [int]$ServerPort)
+
+    if ($ServerUrl) { return $ServerUrl }
+    if ($ServerIp)  { return "http://${ServerIp}:${ServerPort}" }
+
+    $cached = Read-VrhmServerCache
+    if ($cached -and (Test-VrhmServerAt -IPAddress $cached.IPAddress -Port $cached.Port)) {
+        Write-Host "Using the last known VR HEADSET MANAGER server at $($cached.IPAddress):$($cached.Port)." -ForegroundColor Green
+        return "http://$($cached.IPAddress):$($cached.Port)"
+    }
+
+    while ($true) {
+        $found = Find-VrhmServerOnLan -Port $ServerPort
+        if ($found) {
+            Write-Host "Found VR HEADSET MANAGER server at $($found.IPAddress):$($found.Port)." -ForegroundColor Green
+            Write-VrhmServerCache -IPAddress $found.IPAddress -Port $found.Port
+            return "http://$($found.IPAddress):$($found.Port)"
+        }
+
+        Write-Host ""
+        Write-Host "No VR HEADSET MANAGER server was found on the network." -ForegroundColor Yellow
+        Write-Host "  [R] Restart the search"
+        Write-Host "  [I] Enter the server IP manually"
+        Write-Host "  Ctrl+C to stop this script"
+        $choice = Read-Host "Choice"
+
+        if ($choice -match '^(?i)i') {
+            $manualIp = Read-Host "Server IP address"
+            if ($manualIp -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') {
+                Write-VrhmServerCache -IPAddress $manualIp -Port $ServerPort
+                return "http://${manualIp}:${ServerPort}"
+            }
+            Write-Host "'$manualIp' is not a valid IPv4 address." -ForegroundColor Red
+        }
+        # [R], or any other input, or empty input -> restart the search
+    }
+}
+
+# ---------------------------------------------------------------------------
 # 7. Start the browser
 # ---------------------------------------------------------------------------
 Stop-ExistingKioskChrome
@@ -760,12 +1072,10 @@ Write-Host "VR HEADSET MANAGER's Kiosk Screens feature on port $Port." -Foregrou
 Write-Host ""
 Write-Host "Computer name : $env:COMPUTERNAME" -ForegroundColor DarkGray
 Write-Host "OS            : $script:OsDescription" -ForegroundColor DarkGray
-if ($ServerUrl) {
-    Write-Host "Server        : $ServerUrl (reporting every ${ReportIntervalSec}s)" -ForegroundColor DarkGray
-} else {
-    Write-Host "Server        : not set - will try to learn it from the first pushed URL." -ForegroundColor Yellow
-    Write-Host "                Pass -ServerUrl for immediate reporting." -ForegroundColor Yellow
-}
+
+$currentServerUrl = Resolve-VrhmServerUrl -ServerUrl $ServerUrl -ServerIp $ServerIp -ServerPort $ServerPort
+Write-Host "Server        : $currentServerUrl (reporting every ${ReportIntervalSec}s)" -ForegroundColor DarkGray
+
 if ($NoAutoRestartBrowser) {
     Write-Host "Browser watch : auto-restart DISABLED" -ForegroundColor DarkGray
 } else {
@@ -780,16 +1090,16 @@ Write-Host ""
 # 8. Agent loop. One tick per second: browser watchdog every tick, report to
 #    the server every -ReportIntervalSec.
 # ---------------------------------------------------------------------------
-$currentServerUrl   = $ServerUrl
 $ticksUntilReport   = 0
 $reportFailures     = 0
 $lastReportOk       = $true
 $browserDeadSince   = $null
 $maxReportBackoff   = 60
 
-# Sentinel fallback: a kiosk started without -ServerUrl has no heartbeat for the
-# server to answer, so commands arrive as a pushed page instead. Matching the URL
-# here also teaches us the server address, after which the normal channel is used.
+# Sentinel fallback: kept as defense-in-depth for the case reporting to
+# $currentServerUrl is failing (e.g. it went stale after this ran) - a page
+# pushed to this screen over CDP still carries a command, and matching its URL
+# re-teaches us the server address too.
 $sentinelPattern = '(?i)^(https?://[^/]+)/kiosk_command\.html\?.*\bcmd=([a-z\-]+).*\bnonce=(\d+)'
 
 try {
@@ -843,17 +1153,6 @@ try {
             $ticksUntilReport = [int]([Math]::Min($maxReportBackoff, $backoff + $jitter))
 
             $currentUrl = Get-LocalCdpCurrentUrl
-
-            # Learn the server address from any VRHM URL pushed to this screen.
-            if (-not $currentServerUrl -and $currentUrl -match '(?i)^(https?://[^/]+)/') {
-                $candidate = $Matches[1]
-                $probe = Send-AgentReport -BaseUrl $candidate `
-                            -Report (New-AgentReport -BaseUrl $candidate -BrowserRunning $browserAlive -CurrentUrl $currentUrl -Ack $null)
-                if ($probe -and $probe.ok) {
-                    $currentServerUrl = $candidate
-                    Write-Host "Learned the VR HEADSET MANAGER server address: $currentServerUrl" -ForegroundColor Green
-                }
-            }
 
             if ($currentServerUrl) {
                 $reply = Send-AgentReport -BaseUrl $currentServerUrl `

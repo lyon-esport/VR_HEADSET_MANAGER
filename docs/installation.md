@@ -41,7 +41,7 @@ The more headsets you capture — and the more viewers watch the restreams — t
 
 1. **Download** the [latest release](https://github.com/lyon-esport/VR_HEADSET_MANAGER/releases) and **unzip** it anywhere on your machine (keep `VR_HEADSET_MANAGER` in the folder name).
 
-2. **Run `START_VR_HEADSET_MANAGER.cmd`** (double-click). It starts PowerShell with the correct execution policy and launches the manager. On first start, the **Setup Wizard** welcomes you:
+2. **Run `START_VR_HEADSET_MANAGER.exe`** (double-click). It starts PowerShell with the correct execution policy and launches the manager. On first start, the **Setup Wizard** welcomes you:
 
    ![First-time Setup Wizard](pics/newInstall_startWizard.png)
 

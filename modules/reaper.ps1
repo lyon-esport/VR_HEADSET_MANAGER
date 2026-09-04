@@ -35,10 +35,11 @@ function Stop-ByPidFile {
     Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
 }
 
-function Stop-OrphanScrcpy {
+function Stop-OrphanBySourcesPrefix {
+    param([string]$Name)
     try {
         $prefix = $sourcesFolder.TrimEnd('\') + '\'
-        Get-Process -Name "scrcpy" -ErrorAction SilentlyContinue | ForEach-Object {
+        Get-Process -Name $Name -ErrorAction SilentlyContinue | ForEach-Object {
             try {
                 if ($_.Path -and $_.Path.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
                     Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
@@ -58,7 +59,14 @@ while ($true) {
     if (-not (Get-Process -Id $MainPid -ErrorAction SilentlyContinue)) {
         # Main died ungracefully. Reap and exit.
         foreach ($f in $pidFiles) { Stop-ByPidFile -Path $f }
-        Stop-OrphanScrcpy
+        # scrcpy, ffmpeg and adb have no PID file (Stop-Scrcpy / Stop-AdbServer tear
+        # these down on a graceful exit); on a crash, reap them the same way, by exe
+        # path under this install's sources\ folder, so nothing is left holding a
+        # stream open or locking this folder on disk (adb.exe's server process
+        # otherwise outlives the app indefinitely by design - see Stop-AdbServer).
+        Stop-OrphanBySourcesPrefix -Name "scrcpy"
+        Stop-OrphanBySourcesPrefix -Name "ffmpeg"
+        Stop-OrphanBySourcesPrefix -Name "adb"
         break
     }
 

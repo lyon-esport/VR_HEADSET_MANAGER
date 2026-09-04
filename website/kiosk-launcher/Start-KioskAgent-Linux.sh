@@ -14,12 +14,19 @@
 #      127.0.0.1 by adding an iptables DNAT rule.
 #
 # ...and then keeps running as an agent that adds:
-#   5. Reporting - every few seconds it tells the VR HEADSET MANAGER server
+#   5. Server discovery - unless --server-url or --server-ip is given, the
+#      script finds the VR HEADSET MANAGER server on its own by scanning the
+#      local network (same approach as scripts/Tools/Find-VRHM-Server.ps1). A
+#      successful match is cached next to this script, so later reboots
+#      resolve instantly. If nothing is found, it offers to retry the scan,
+#      accept a manually typed IP, or be cancelled with Ctrl+C - use
+#      --server-ip for a routed network (scanning does not cross subnets).
+#   6. Reporting - every few seconds it tells the VR HEADSET MANAGER server
 #      this PC's hostname, OS version, Chromium version, and whether the
 #      connection to the server runs over Ethernet or WiFi.
-#   6. Remote power control - reboot / shutdown / browser restart ordered from
+#   7. Remote power control - reboot / shutdown / browser restart ordered from
 #      VR HEADSET MANAGER.
-#   7. Browser watchdog - Chromium is relaunched automatically if it dies.
+#   8. Browser watchdog - Chromium is relaunched automatically if it dies.
 #
 # IMPORTANT - this script never opens a listening port of its own. It only
 # makes OUTBOUND calls: to its own loopback Chromium debug port, and to the
@@ -31,14 +38,16 @@
 # runs it at boot.
 #
 # Usage:
-#   ./Start-KioskAgent-Linux.sh [--server-url URL] [--url URL] [--port PORT]
+#   ./Start-KioskAgent-Linux.sh [--server-url URL] [--server-ip IP] [--server-port PORT]
+#                               [--url URL] [--port PORT]
 #                               [--report-interval SECONDS] [--no-auto-restart]
 #
 #   Positional "URL PORT" is also accepted, matching the basic launcher.
 #
 # Examples:
-#   ./Start-KioskAgent-Linux.sh --server-url http://192.168.1.37:8080
+#   ./Start-KioskAgent-Linux.sh
 #   ./Start-KioskAgent-Linux.sh --server-url http://192.168.1.37:8080 --port 9222
+#   ./Start-KioskAgent-Linux.sh --server-ip 10.0.5.12 --server-port 8080
 #
 # Reboot and shutdown need root. Either run this script with sudo, or grant the
 # desktop user passwordless rights to just those two commands - see the README.
@@ -50,6 +59,9 @@ set -u
 
 AGENT_VERSION="1.0"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+VRHM_SERVER_CACHE_FILE="$SCRIPT_DIR/vrhm_server_cache.conf"
+
 DEFAULT_URL="data:text/html,%3Chtml%3E%3Chead%3E%3Cmeta%20charset%3D'utf-8'%3E%3Ctitle%3EKiosk%3C%2Ftitle%3E%3Cstyle%3Ehtml%2Cbody%7Bmargin%3A0%3Bheight%3A100%25%3Bbackground%3A%23000%3Bcolor%3A%23fff%3Bdisplay%3Aflex%3Balign-items%3Acenter%3Bjustify-content%3Acenter%3Bfont-family%3Asystem-ui%2Csans-serif%3Bflex-direction%3Acolumn%7Dh1%7Bfont-size%3A3vw%3Bletter-spacing%3A.08em%3Btext-transform%3Auppercase%3Bcolor%3A%23888%3Bmargin%3A0%7Dh2%7Bfont-size%3A5vw%3Bfont-weight%3A700%3Bmargin%3A12px%200%200%7D%3C%2Fstyle%3E%3C%2Fhead%3E%3Cbody%3E%3Ch1%3EKiosk%20Mode%3C%2Fh1%3E%3Ch2%3EReady%20to%20stream%3C%2Fh2%3E%3C%2Fbody%3E%3C%2Fhtml%3E"
 
 # ---------------------------------------------------------------------------
@@ -58,6 +70,8 @@ DEFAULT_URL="data:text/html,%3Chtml%3E%3Chead%3E%3Cmeta%20charset%3D'utf-8'%3E%3
 URL="$DEFAULT_URL"
 PORT="9222"
 SERVER_URL=""
+SERVER_IP=""
+SERVER_PORT="8080"
 REPORT_INTERVAL="5"
 AUTO_RESTART="1"
 POSITIONAL=()
@@ -65,6 +79,8 @@ POSITIONAL=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --server-url)      SERVER_URL="${2:-}"; shift 2 ;;
+        --server-ip)       SERVER_IP="${2:-}"; shift 2 ;;
+        --server-port)     SERVER_PORT="${2:-}"; shift 2 ;;
         --url)             URL="${2:-}"; shift 2 ;;
         --port)            PORT="${2:-}"; shift 2 ;;
         --report-interval) REPORT_INTERVAL="${2:-}"; shift 2 ;;
@@ -86,14 +102,19 @@ case "$REPORT_INTERVAL" in
 esac
 [ "$REPORT_INTERVAL" -lt 1 ] && REPORT_INTERVAL=1
 
+case "$SERVER_PORT" in
+    ''|*[!0-9]*) SERVER_PORT=8080 ;;
+esac
+
 echo "=== VRHM Kiosk Agent setup (Linux) ==="
 echo "URL:    $URL"
 echo "Port:   $PORT"
 if [ -n "$SERVER_URL" ]; then
     echo "Server: $SERVER_URL (reporting every ${REPORT_INTERVAL}s)"
+elif [ -n "$SERVER_IP" ]; then
+    echo "Server: http://$SERVER_IP:$SERVER_PORT (reporting every ${REPORT_INTERVAL}s)"
 else
-    echo "Server: not set - will try to learn it from the first pushed URL."
-    echo "        Pass --server-url for immediate reporting."
+    echo "Server: will be found automatically on the local network."
 fi
 echo ""
 
@@ -654,6 +675,183 @@ invoke_kiosk_command() {
 }
 
 # ---------------------------------------------------------------------------
+# 7b. Server discovery - find the VR HEADSET MANAGER server on the LAN when
+#     neither --server-url nor --server-ip was given, so a kiosk works out of
+#     the box after a DHCP change on either side. This logic is ported from
+#     (and should be kept in sync with) scripts/Tools/Find-VRHM-Server.ps1 -
+#     duplicated here rather than shared with anything else, matching this
+#     script's own "no dependency on any other project file" design. Uses
+#     only curl (already this script's one hard dependency) plus coreutils/
+#     awk/bash's own /dev/tcp - no jq, no python, no nmap/nc.
+# ---------------------------------------------------------------------------
+
+read_vrhm_server_cache() {
+    # Prints "IP PORT" on stdout if a cache file exists and looks valid.
+    [ -f "$VRHM_SERVER_CACHE_FILE" ] || return 1
+    local ip port
+    ip="$(sed -n '1p' "$VRHM_SERVER_CACHE_FILE" 2>/dev/null)"
+    port="$(sed -n '2p' "$VRHM_SERVER_CACHE_FILE" 2>/dev/null)"
+    [ -n "$ip" ] && [ -n "$port" ] || return 1
+    printf '%s %s\n' "$ip" "$port"
+}
+
+write_vrhm_server_cache() {
+    local ip="$1" port="$2"
+    { printf '%s\n%s\n' "$ip" "$port" > "$VRHM_SERVER_CACHE_FILE"; } 2>/dev/null || true
+}
+
+test_vrhm_server_at() {
+    # $1 = ip, $2 = port. Succeeds (exit 0) if a VRHM /api/version answers.
+    curl -s -m 2 "http://$1:$2/api/version" 2>/dev/null | grep -q '"version"'
+}
+
+probe_host_port() {
+    # $1 = ip, $2 = port. Prints the ip on stdout if the TCP port is open.
+    # Exported so xargs -P can call it in parallel child shells.
+    if timeout 0.3 bash -c ": >/dev/tcp/${1}/${2}" 2>/dev/null; then
+        printf '%s\n' "$1"
+    fi
+}
+export -f probe_host_port
+
+expand_cidr_hosts() {
+    # $1 = a.b.c.d/prefix -> one usable host IP per line. Pure arithmetic (no
+    # gawk-only bitwise extensions), so it works with mawk/gawk/busybox awk.
+    local cidr="$1" ip prefix
+    ip="${cidr%/*}"
+    prefix="${cidr#*/}"
+    case "$prefix" in ''|*[!0-9]*) return 0 ;; esac
+    [ "$prefix" -lt 7 ] && return 0
+    [ "$prefix" -gt 30 ] && return 0
+
+    awk -v ip="$ip" -v prefix="$prefix" 'BEGIN {
+        split(ip, o, ".")
+        ipnum = o[1]*16777216 + o[2]*65536 + o[3]*256 + o[4]
+        hostbits = 32 - prefix
+        blocksize = 1
+        for (k = 0; k < hostbits; k++) blocksize = blocksize * 2
+        network = int(ipnum / blocksize) * blocksize
+        maxhost = blocksize - 1
+        for (i = 1; i < maxhost; i++) {
+            n = network + i
+            a = int(n / 16777216) % 256
+            b = int(n / 65536) % 256
+            c = int(n / 256) % 256
+            d = n % 256
+            printf "%d.%d.%d.%d\n", a, b, c, d
+        }
+    }'
+}
+
+find_vrhm_server_on_lan() {
+    # $1 = port to scan. Prints "IP PORT" on stdout if a server is found.
+    local port="$1"
+
+    local cidrs
+    cidrs="$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | \
+        grep -E '^(10\.[0-9]+\.[0-9]+\.[0-9]+|172\.(1[6-9]|2[0-9]|3[0-1])\.[0-9]+\.[0-9]+|192\.168\.[0-9]+\.[0-9]+)/[0-9]+$')"
+    if [ -z "$cidrs" ]; then
+        echo "No private network interface found on this PC." >&2
+        return 1
+    fi
+
+    local all_ips="" cidr
+    while IFS= read -r cidr; do
+        [ -z "$cidr" ] && continue
+        all_ips="$all_ips
+$(expand_cidr_hosts "$cidr")"
+    done <<CIDRS
+$cidrs
+CIDRS
+    all_ips="$(printf '%s\n' "$all_ips" | sed '/^$/d' | sort -u)"
+    [ -z "$all_ips" ] && return 1
+
+    local ip_count
+    ip_count="$(printf '%s\n' "$all_ips" | grep -c .)"
+    echo "Scanning $ip_count address(es) on port $port for a VR HEADSET MANAGER server..." >&2
+
+    local open_hosts
+    open_hosts="$(printf '%s\n' "$all_ips" | xargs -P 50 -I{} bash -c 'probe_host_port "$0" "$1"' {} "$port" 2>/dev/null)"
+    [ -z "$open_hosts" ] && return 1
+
+    local candidate
+    while IFS= read -r candidate; do
+        [ -z "$candidate" ] && continue
+        if test_vrhm_server_at "$candidate" "$port"; then
+            printf '%s %s\n' "$candidate" "$port"
+            return 0
+        fi
+    done <<HOSTS
+$open_hosts
+HOSTS
+
+    return 1
+}
+
+resolve_vrhm_server_url() {
+    # Cascade: --server-url > --server-ip > cached last-known server > LAN
+    # scan > a blocking console menu (retry the scan, type an IP manually, or
+    # Ctrl+C to give up). Prints the resolved URL on stdout; all status/prompt
+    # text goes to stderr so command substitution only captures the URL.
+    if [ -n "$SERVER_URL" ]; then
+        printf '%s\n' "$SERVER_URL"
+        return 0
+    fi
+    if [ -n "$SERVER_IP" ]; then
+        printf 'http://%s:%s\n' "$SERVER_IP" "$SERVER_PORT"
+        return 0
+    fi
+
+    local cached cip cport
+    cached="$(read_vrhm_server_cache)"
+    if [ -n "$cached" ]; then
+        cip="$(printf '%s' "$cached" | awk '{print $1}')"
+        cport="$(printf '%s' "$cached" | awk '{print $2}')"
+        if test_vrhm_server_at "$cip" "$cport"; then
+            echo "Using the last known VR HEADSET MANAGER server at $cip:$cport." >&2
+            printf 'http://%s:%s\n' "$cip" "$cport"
+            return 0
+        fi
+    fi
+
+    while true; do
+        local found fip fport
+        found="$(find_vrhm_server_on_lan "$SERVER_PORT")"
+        if [ -n "$found" ]; then
+            fip="$(printf '%s' "$found" | awk '{print $1}')"
+            fport="$(printf '%s' "$found" | awk '{print $2}')"
+            echo "Found VR HEADSET MANAGER server at $fip:$fport." >&2
+            write_vrhm_server_cache "$fip" "$fport"
+            printf 'http://%s:%s\n' "$fip" "$fport"
+            return 0
+        fi
+
+        echo "" >&2
+        echo "No VR HEADSET MANAGER server was found on the network." >&2
+        echo "  [R] Restart the search" >&2
+        echo "  [I] Enter the server IP manually" >&2
+        echo "  Ctrl+C to stop this script" >&2
+        local choice manual_ip
+        read -r -p "Choice: " choice </dev/tty
+
+        case "$choice" in
+            [Ii]*)
+                read -r -p "Server IP address: " manual_ip </dev/tty
+                if [[ "$manual_ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+                    write_vrhm_server_cache "$manual_ip" "$SERVER_PORT"
+                    printf 'http://%s:%s\n' "$manual_ip" "$SERVER_PORT"
+                    return 0
+                fi
+                echo "'$manual_ip' is not a valid IPv4 address." >&2
+                ;;
+            *)
+                # [R], or anything else, or empty input -> restart the search
+                ;;
+        esac
+    done
+}
+
+# ---------------------------------------------------------------------------
 # 8. Start the browser
 # ---------------------------------------------------------------------------
 echo ""
@@ -671,6 +869,10 @@ echo "VR HEADSET MANAGER's Kiosk Screens feature on port $PORT."
 echo ""
 echo "Hostname : $HOST_NAME"
 echo "OS       : $OS_DESCRIPTION"
+
+CURRENT_SERVER_URL="$(resolve_vrhm_server_url)"
+echo "Server   : $CURRENT_SERVER_URL (reporting every ${REPORT_INTERVAL}s)"
+
 if [ "$AUTO_RESTART" = "1" ]; then
     echo "Browser  : auto-restart enabled"
 else
@@ -707,7 +909,6 @@ trap cleanup EXIT INT TERM
 # 9. Agent loop. One tick per second: browser watchdog every tick, report to the
 #    server every $REPORT_INTERVAL.
 # ---------------------------------------------------------------------------
-CURRENT_SERVER_URL="$SERVER_URL"
 TICKS_UNTIL_REPORT=0
 LAST_COMMAND_NONCE=""
 LAST_REPORT_OK="1"
@@ -770,20 +971,6 @@ while true; do
 
         CURRENT_URL="$(cdp_current_url)"
 
-        # Learn the server address from any VRHM URL pushed to this screen.
-        if [ -z "$CURRENT_SERVER_URL" ] && [ -n "$CURRENT_URL" ]; then
-            case "$CURRENT_URL" in
-                http://*|https://*)
-                    CANDIDATE="$(printf '%s' "$CURRENT_URL" | sed -e 's|\(^[a-zA-Z]*://[^/]*\).*|\1|')"
-                    PROBE="$(send_report "$CANDIDATE" "$(build_report "$CANDIDATE" "$BROWSER_IS_ALIVE" "$CURRENT_URL")")"
-                    if printf '%s' "$PROBE" | grep -q '"ok"'; then
-                        CURRENT_SERVER_URL="$CANDIDATE"
-                        echo "Learned the VR HEADSET MANAGER server address: $CURRENT_SERVER_URL"
-                    fi
-                    ;;
-            esac
-        fi
-
         if [ -n "$CURRENT_SERVER_URL" ]; then
             REPLY_BODY="$(send_report "$CURRENT_SERVER_URL" "$(build_report "$CURRENT_SERVER_URL" "$BROWSER_IS_ALIVE" "$CURRENT_URL")")"
 
@@ -819,9 +1006,10 @@ while true; do
         fi
 
         # ---- Sentinel fallback ----
-        # A kiosk started without --server-url has no heartbeat for the server to
-        # answer, so commands arrive as a pushed page instead. Matching it here
-        # also teaches us the server address, after which the normal channel is used.
+        # Kept as defense-in-depth for the case reporting to $CURRENT_SERVER_URL
+        # is failing (e.g. it went stale after this ran) - a page pushed to this
+        # screen over CDP still carries a command, and matching its URL re-teaches
+        # us the server address too.
         case "$CURRENT_URL" in
             *kiosk_command.html\?*)
                 S_CMD="$(printf '%s' "$CURRENT_URL" | sed -n 's/.*[?&]cmd=\([a-zA-Z-]*\).*/\1/p')"

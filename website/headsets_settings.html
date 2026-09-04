@@ -878,6 +878,12 @@
         <input type="checkbox" id="shutdownAllAppChk">
         <span id="shutdownAllAppChkLabel">Also shutdown VRHM application</span>
       </label>
+      <div class="shutdown-all-modal__app-row-note" id="shutdownAllAppNote" style="display:none">Included automatically - host shutdown closes the application too.</div>
+      <label class="shutdown-all-modal__host-row" id="shutdownAllHostRow" style="display:none">
+        <input type="checkbox" id="shutdownAllHostChk">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
+        <span>Shutdown the VRHM Host server</span>
+      </label>
       <div class="shutdown-all-modal__confirm-row" id="shutdownAllConfirmRow" style="display:none">
         Type <strong>YES</strong> to confirm:
         <input id="shutdownAllInput" class="shutdown-all-modal__input" type="text" placeholder="YES" autocomplete="off" spellcheck="false">
@@ -887,6 +893,22 @@
         <button id="shutdownAllConfirmBtn" class="vrhm-sd-btn danger" disabled>Shutdown All</button>
       </div>
       <div class="shutdown-all-modal__status" id="shutdownAllStatus" style="display:none"></div>
+    </div>
+  </div>
+
+  <!-- Dedicated host-shutdown warning modal (nested on top of the shutdown-all modal) -->
+  <div class="host-warn-modal" id="hostWarnModal" style="display:none">
+    <div class="host-warn-modal__box">
+      <svg class="host-warn-modal__icon" width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+        <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+      </svg>
+      <div class="host-warn-modal__title">Shutdown the physical host computer?</div>
+      <div class="host-warn-modal__text">This powers off the <strong>Windows PC running VR HEADSET MANAGER</strong> itself, not just the application. Streaming, OBS capture and this web dashboard all go down with it, and the PC must be turned back on manually.</div>
+      <div class="host-warn-modal__actions">
+        <button class="vrhm-sd-btn danger" id="hostWarnConfirm">Yes, shutdown the host computer</button>
+        <button class="vrhm-sd-btn" id="hostWarnCancel">Cancel</button>
+      </div>
     </div>
   </div>
 
@@ -2192,10 +2214,45 @@
     function updateShutdownConfirmBtn() {
       var anyHeadset = !!document.querySelector('.shutdown-headset-chk:checked');
       var appChk     = document.getElementById('shutdownAllAppChk').checked;
+      var hostChk    = document.getElementById('shutdownAllHostChk').checked;
       var inputOk    = document.getElementById('shutdownAllInput').value === 'YES';
       document.getElementById('shutdownAllConfirmBtn').disabled =
-        (!anyHeadset && !appChk) || !inputOk;
+        (!anyHeadset && !appChk && !hostChk) || !inputOk;
     }
+
+    // Shutting down the host powers off the app too - auto-check and lock that row.
+    function setHostShutdownChecked(val) {
+      var hostChk = document.getElementById('shutdownAllHostChk');
+      var appChk  = document.getElementById('shutdownAllAppChk');
+      var appRow  = document.getElementById('shutdownAllAppRow');
+      var appNote = document.getElementById('shutdownAllAppNote');
+      hostChk.checked = val;
+      appChk.disabled = val;
+      if (val) appChk.checked = true;
+      appRow.classList.toggle('is-disabled', val);
+      appNote.style.display = val ? 'block' : 'none';
+      updateShutdownConfirmBtn();
+    }
+
+    document.getElementById('shutdownAllHostRow').addEventListener('click', function(e) {
+      e.preventDefault();
+      if (document.getElementById('shutdownAllHostChk').checked) {
+        setHostShutdownChecked(false);
+      } else {
+        document.getElementById('hostWarnModal').style.display = 'flex';
+      }
+    });
+
+    document.getElementById('hostWarnCancel').addEventListener('click', function() {
+      document.getElementById('hostWarnModal').style.display = 'none';
+    });
+    document.getElementById('hostWarnModal').addEventListener('click', function(e) {
+      if (e.target === this) this.style.display = 'none';
+    });
+    document.getElementById('hostWarnConfirm').addEventListener('click', function() {
+      document.getElementById('hostWarnModal').style.display = 'none';
+      setHostShutdownChecked(true);
+    });
 
     function openShutdownAllModal() {
       var connected = Object.keys(headsetStatus).filter(function(dn) {
@@ -2205,9 +2262,12 @@
       var listEl     = document.getElementById('shutdownAllList');
       var confirmRow = document.getElementById('shutdownAllConfirmRow');
       var appRow     = document.getElementById('shutdownAllAppRow');
+      var hostRow    = document.getElementById('shutdownAllHostRow');
 
-      appRow.style.display = 'flex';
+      appRow.style.display  = 'flex';
+      hostRow.style.display = 'flex';
       confirmRow.style.display = 'block';
+      setHostShutdownChecked(false);
       if (connected.length === 0) {
         listEl.innerHTML = '<div class="shutdown-all-modal__empty">No connected headset to shutdown.</div>';
       } else {
@@ -2262,6 +2322,7 @@
     document.getElementById('shutdownAllConfirmBtn').addEventListener('click', function() {
       var statusEl        = document.getElementById('shutdownAllStatus');
       var alsoShutdownApp = document.getElementById('shutdownAllAppChk').checked;
+      var hostShutdown     = document.getElementById('shutdownAllHostChk').checked;
       var selected = Array.from(document.querySelectorAll('.shutdown-headset-chk:checked'))
                          .map(function(c) { return c.dataset.dn; });
 
@@ -2270,21 +2331,27 @@
       document.getElementById('shutdownAllCancelBtn').disabled  = true;
 
       if (selected.length === 0) {
-        statusEl.textContent = alsoShutdownApp ? 'Shutting down application...' : 'Nothing to do.';
-        if (alsoShutdownApp) {
+        if (hostShutdown) {
+          statusEl.textContent = 'Shutting down host computer...';
+          fetch('/api/host-shutdown', { method: 'POST' }).catch(function() {});
+        } else if (alsoShutdownApp) {
+          statusEl.textContent = 'Shutting down application...';
           fetch('/api/app-shutdown', { method: 'POST' }).catch(function() {});
+        } else {
+          statusEl.textContent = 'Nothing to do.';
         }
         setTimeout(function() { document.getElementById('shutdownAllModal').style.display = 'none'; }, 1500);
         return;
       }
 
-      statusEl.textContent = 'Shutting down selected headsets...';
+      statusEl.textContent = hostShutdown ? 'Shutting down selected headsets, then the host computer...' : 'Shutting down selected headsets...';
       fetch('/api/shutdown-all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ headsets: selected, alsoShutdownApp: alsoShutdownApp })
+        body: JSON.stringify({ headsets: selected, alsoShutdownApp: hostShutdown ? false : alsoShutdownApp })
       }).then(function(r) { return r.json(); }).then(function(data) {
         statusEl.textContent = data.ok ? 'Done. Selected headsets shutting down.' : ('Error: ' + (data.error || 'unknown'));
+        if (hostShutdown) fetch('/api/host-shutdown', { method: 'POST' }).catch(function() {});
         document.getElementById('shutdownAllCancelBtn').disabled = false;
         setTimeout(function() { document.getElementById('shutdownAllModal').style.display = 'none'; }, 2000);
       }).catch(function() {
@@ -2958,6 +3025,15 @@
                     '<div>No USB headset detected.' +
                       '<div style="font-size:11px;color:#555;margin-top:4px">Make sure the headset is plugged in via USB, USB Debugging is enabled, and you accepted the ADB authorization prompt.</div>' +
                     '</div>' +
+                  '</div>';
+
+          html += '<div class="ndm-section">' +
+                    '<div class="ndm-section-label">Remote Headset</div>' +
+                    '<div style="font-size:11px;color:#888;margin-bottom:6px">Headset plugged into a different computer on the network? Download the toolbox and run it there.</div>' +
+                    '<a class="ndm-action-btn" href="headset-toolbox/VRHM-Headset-Toolbox.zip" download="VRHM-Headset-Toolbox.zip" style="text-decoration:none;display:flex">' +
+                      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>' +
+                      'Download Remote Headset Toolbox (.zip)' +
+                    '</a>' +
                   '</div>';
         }
 

@@ -337,8 +337,51 @@ function Start-AdbServer {
     }
 }
 
+function Stop-AdbServer {
+    <#
+    .SYNOPSIS
+    Stops this install's own local ADB server process, if one is running.
+
+    .DESCRIPTION
+    "adb start-server" forks a background server process that outlives the app by
+    design - Start-AdbServer / Confirm-AppPortsAvailable deliberately reuse it
+    across restarts to skip re-authorizing headsets. That also means it outlives
+    the app when the goal is to delete the whole install folder (e.g. a release
+    candidate extracted for testing): the running adb.exe keeps a file lock on
+    itself under sources\, and nothing else in this app ever stops it.
+
+    Only kills adb.exe processes whose path is under THIS install's sources\
+    folder, so an unrelated adb server (Android Studio, a different VRHM install)
+    is never touched. Called from Invoke-AppShutdown on every shutdown/restart.
+    reaper.ps1 carries its own copy of this same path-matching logic for the
+    crash path, since it intentionally does not dot-source modules.
+
+    .EXAMPLE
+    Stop-AdbServer
+    #>
+    param (
+        [string]$SourcesFolder = (Join-Path $global:ScriptPath "sources")
+    )
+
+    try {
+        $prefix = $SourcesFolder.TrimEnd('\') + '\'
+        $killed = $false
+        Get-Process -Name "adb" -ErrorAction SilentlyContinue | ForEach-Object {
+            try {
+                if ($_.Path -and $_.Path.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+                    $killed = $true
+                }
+            } catch { }
+        }
+        if ($killed) { Write-Log $msg.ADBServerStopped -Level DEBUG }
+    } catch {
+        Write-Log ($msg.ADBServerStopFailed -f $_) -Level WARNING
+    }
+}
+
 # Example usage:
-# 
+#
 
 function Install-OculusWirelessAdbApk {
     <#

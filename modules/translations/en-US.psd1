@@ -8,6 +8,8 @@
     ADBServerStarted = "ADB server started successfully"
     ADBServerAlreadyRunning = "ADB server is already running (PID: {0})"
     FailedStartADBServer = "Failed to start ADB server: {0}"
+    ADBServerStopped = "ADB server stopped"
+    ADBServerStopFailed = "Failed to stop ADB server: {0}"
     ADBNotFound = "ADB not found at {0}"
     ApkNotFound = "APK not found: {0}"
     NoHeadsetDetected = "No headset detected"
@@ -125,6 +127,7 @@
     MenuWebServerDisabled = "Web server is disabled in config.json. Enable it under Configuration to use this option."
     Quit = " 0. Quit "
     RestartApp = " 00. Restart application "
+    HostShutdown = " 000. Shutdown HOST computer "
     ServicesTitle = "== SERVICES MANAGEMENT =="
     ServicesWebServerStatus = "Web server  : {0}"
     ServicesMediaMtxStatus  = "MediaMtx    : {0}"
@@ -162,6 +165,9 @@
     WifiADBActivation = "== WIFI ADB ACTIVATION FROM USB =="
     Goodbye = "Goodbye ! Closing the application and related processes..."
     Restarting = "Restarting the application - closing current instance and relaunching..."
+    HostShutdownConfirm = "WARNING: this will power off the physical computer running VR HEADSET MANAGER. It will need to be turned back on manually."
+    HostShutdownConfirmPrompt = "Type YES to confirm host shutdown"
+    HostShutdownScheduled = "Host computer shutdown scheduled in {0}s"
     Refresh = "Refresh"
     # SubMenu Stream
     SelectHeadsetToStream = "=== [1] SELECT HEADSET TO STREAM ==="
@@ -382,6 +388,11 @@
     ScanConnectionFailed = "Connection failed to {0} -- Skipping."
     ScanAddingHeadset = "Adding headset: {0} ({1}) - Model: {2}, S/N: {3}"
     ScanStarting = "Scanning {0} IP addresses on port {1}"
+    NetworkWaitTitle = "No valid network IP address detected on any network interface."
+    NetworkWaitBypassHint = "Waiting for a valid IP address (DHCP)... Press any key to skip this check."
+    NetworkWaitWaiting = "Waiting for valid network IP"
+    NetworkWaitFound = "Valid network IP address detected: {0} ({1})"
+    NetworkWaitBypassed = "Network wait bypassed by user - continuing startup without a confirmed network IP."
 
     # ==========================================
     # scrcpy_launcher.ps1

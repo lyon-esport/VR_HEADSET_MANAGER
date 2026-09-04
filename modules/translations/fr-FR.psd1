@@ -8,6 +8,8 @@
     ADBServerStarted = "Serveur ADB demarre avec succes"
     ADBServerAlreadyRunning = "Le serveur ADB est deja en cours d'execution (PID : {0})"
     FailedStartADBServer = "Impossible de demarrer le serveur ADB : {0}"
+    ADBServerStopped = "Serveur ADB arrete"
+    ADBServerStopFailed = "Impossible d'arreter le serveur ADB : {0}"
     ADBNotFound = "ADB introuvable a {0}"
     ApkNotFound = "APK introuvable : {0}"
     NoHeadsetDetected = "Aucun casque detecte"
@@ -131,6 +133,7 @@
     MenuWebServerDisabled = "Le serveur web est desactive dans config.json. Activez-le dans Configuration pour utiliser cette option."
     Quit = " 0. Quitter "
     RestartApp = " 00. Redemarrer l'application "
+    HostShutdown = " 000. Eteindre l'ordinateur HOTE "
     ServicesTitle = "== GESTION DES SERVICES =="
     ServicesWebServerStatus = "Serveur web : {0}"
     ServicesMediaMtxStatus  = "MediaMtx    : {0}"
@@ -178,6 +181,9 @@
     WifiADBActivation = "== ACTIVATION WIFI ADB DEPUIS L'USB =="
     Goodbye = "Au revoir ! Fermeture de l'application et des processus associes..."
     Restarting = "Redemarrage de l'application - fermeture de l'instance actuelle et relancement..."
+    HostShutdownConfirm = "ATTENTION : ceci va eteindre l'ordinateur physique qui execute VR HEADSET MANAGER. Il devra etre rallume manuellement."
+    HostShutdownConfirmPrompt = "Tapez YES pour confirmer l'extinction de l'ordinateur hote"
+    HostShutdownScheduled = "Extinction de l'ordinateur hote programmee dans {0}s"
     Refresh = "Refresh"
     # SubMenu Stream
     SelectHeadsetToStream = "=== [1] SELECTIONNER LE CASQUE A STREAMER ==="
@@ -380,6 +386,11 @@
     ScanConnectionFailed = "Echec de connexion a {0} -- Ignore."
     ScanAddingHeadset = "Ajout du casque : {0} ({1}) - Modele : {2}, N/S : {3}"
     ScanStarting = "Scan de {0} adresses IP sur le port {1}"
+    NetworkWaitTitle = "Aucune adresse IP reseau valide detectee sur les interfaces reseau."
+    NetworkWaitBypassHint = "En attente d'une adresse IP valide (DHCP)... Appuyez sur une touche pour ignorer cette verification."
+    NetworkWaitWaiting = "En attente d'une adresse IP reseau valide"
+    NetworkWaitFound = "Adresse IP reseau valide detectee : {0} ({1})"
+    NetworkWaitBypassed = "Attente reseau ignoree par l'utilisateur - poursuite du demarrage sans adresse IP confirmee."
 
     # ==========================================
     # scrcpy_launcher.ps1

@@ -6,7 +6,7 @@ This guide takes you from a freshly installed VR HEADSET MANAGER to a live heads
 
 ## 1. Open the web interface
 
-Start the application with `START_VR_HEADSET_MANAGER.cmd` if it is not already running. The console prints the web address — by default:
+Start the application with `START_VR_HEADSET_MANAGER.exe` if it is not already running. The console prints the web address — by default:
 
 ```
 http://<your-pc-ip>:8080

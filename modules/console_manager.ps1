@@ -318,6 +318,7 @@ function Show-MainMenu {
         Write-Host "C. Configuration" -BackgroundColor DarkBlue -ForegroundColor Cyan
         Write-Host $msg.Quit
         Write-Host $msg.RestartApp
+        Write-Host $msg.HostShutdown -ForegroundColor Red
         Write-Host $msg.AnyOtherKey
         Write-Host
         Write-Host $msg.KnownHeadsets
@@ -328,22 +329,15 @@ function Show-MainMenu {
         #Show-HeadsetsTableColored -FieldsToShow @("ID","Name", "IPAddress")
         #Write-Host "Name ; Status (OK/KO) ; Battery level ; current application"
 
-        # Show web server LAN URLs if enabled
+        # Show web server LAN URLs if enabled. Reuses Get-PrivateNetworks (network_scanner.ps1)
+        # so this list stays consistent with Wait-ForValidNetwork / Get-ServerLanUrl - it
+        # already excludes APIPA, virtual/hypervisor adapters, and (critically here) any
+        # adapter whose link is actually down, so a disconnected NIC's leftover static IP
+        # never shows up as a reachable web monitor URL.
         if ($global:WebServer_enabled) {
-            $lanEntries = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-                Where-Object {
-                    $_.IPAddress -match '^10\.' -or
-                    $_.IPAddress -match '^172\.(1[6-9]|2[0-9]|3[01])\.' -or
-                    $_.IPAddress -match '^192\.168\.'
-                } | ForEach-Object {
-                    $adapter = Get-NetAdapter -InterfaceIndex $_.InterfaceIndex -ErrorAction SilentlyContinue
-                    $isInternalVEthernet = $_.InterfaceAlias -match '^vEthernet\s*\((Default Switch|WSL|NAT)\)'
-                    if ($adapter -and -not $isInternalVEthernet) {
-                        $isWifi = $adapter.PhysicalMediaType -eq 'Native 802.11' -or $_.InterfaceAlias -match 'Wi-?Fi'
-                        $label = if ($isWifi) { '[WiFi]' } else { '[LAN]' }
-                        [PSCustomObject]@{ IPAddress = $_.IPAddress; Label = $label }
-                    }
-                } | Where-Object { $_ }
+            $lanEntries = Get-PrivateNetworks | ForEach-Object {
+                [PSCustomObject]@{ IPAddress = $_.IPAddress; Label = if ($_.IsWifi) { '[WiFi]' } else { '[LAN]' } }
+            }
             if ($lanEntries) {
                 Write-Host ""
                 Write-Host $msg.WebServerLinksHeader -ForegroundColor DarkCyan
@@ -438,6 +432,14 @@ function Show-MainMenu {
                     Invoke-AppShutdown
                     return
                 }
+                '000' {
+                    Write-Host $msg.HostShutdownConfirm -ForegroundColor Red
+                    if ((Read-Host $msg.HostShutdownConfirmPrompt).ToUpper() -eq 'YES') {
+                        Invoke-HostShutdown -DelaySec 30
+                        Invoke-AppShutdown
+                        return
+                    }
+                }
                 default {
                     Write-Host $msg.Refresh -ForegroundColor Red
                     # Reload all modules and config file
@@ -515,6 +517,7 @@ function Show-SubMenu-AddHeadset { #CHOICE 2
     Write-Host $msg.RemoveFromList
     Write-Host $msg.LaunchAppMenu
     Write-Host "`t 6. Enable Wifi ADB on a connected headset"
+    Write-Host "`t 7. Register/update headset by serial number (USB)"
     Write-Host $msg.ReturnPreviousMenu
 
     $userInput = Read-Host $msg.YourChoice
@@ -544,6 +547,33 @@ function Show-SubMenu-AddHeadset { #CHOICE 2
         '6' {
             Write-Host $msg.WifiADBActivation
             Enable-WiFiADB
+        }
+        '7' {
+            Write-Host "Detecting USB headset..."
+            $usbInfo = Get-AdbUsbDeviceDetails
+            if (-not $usbInfo) {
+                Write-Host "No USB headset detected." -ForegroundColor Yellow
+            } else {
+                if (-not $usbInfo.WifiAdbOpen) {
+                    Write-Host "Enabling WiFi ADB..."
+                    Enable-AdbTcpIp | Out-Null
+                    Start-Sleep -Seconds 1
+                    $usbInfo = Get-AdbUsbDeviceDetails
+                }
+                if (-not $usbInfo.SerialNumber -or -not $usbInfo.IP) {
+                    Write-Host "Could not resolve the serial number or WiFi IP for this headset." -ForegroundColor Red
+                } else {
+                    $defaultName = if ($usbInfo.Model) { $usbInfo.Model } else { "Headset $($usbInfo.SerialNumber)" }
+                    $nameInput = Read-Host "Headset name [$defaultName]"
+                    if (-not $nameInput) { $nameInput = $defaultName }
+                    $result = Set-HeadsetBySerial -SerialNumber $usbInfo.SerialNumber -IPAddress $usbInfo.IP -Name $nameInput -Model $usbInfo.Model
+                    if ($result.Ok) {
+                        Write-Host "Headset '$($result.Name)' $($result.Action) (ID $($result.ID))." -ForegroundColor Green
+                    } else {
+                        Write-Host "Failed: $($result.Error)" -ForegroundColor Red
+                    }
+                }
+            }
         }
         '0' {
             Write-Log -Message $msg.ReturnPrevious -Level "INFO"

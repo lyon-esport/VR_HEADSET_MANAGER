@@ -260,6 +260,10 @@
                       "port":  8080,
                       "openBrowserOnStartup":  true
                   },
+    "Network":  {
+                    "waitForValidNetwork":  true,
+                    "checkIntervalSeconds":  5
+                },
     "MdnsResponder":  {
                           "enabled":  false,
                           "hostname":  "vrhm"

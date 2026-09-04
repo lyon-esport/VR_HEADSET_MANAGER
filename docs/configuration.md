@@ -126,6 +126,10 @@ Browser-side behavior of the video wall: pause hidden streams after `pauseWhenHi
 
 `enabled` (default `true`), `port` (default `8080`), and `openBrowserOnStartup` (default `true`) - automatically opens the default web browser to the dashboard when the app starts.
 
+### `Network`
+
+`waitForValidNetwork` (default `true`) - pauses startup if no network interface has a valid (non-APIPA) IP yet, re-checking every `checkIntervalSeconds` (default 5) until DHCP assigns one. Press any key during the wait to skip it and continue startup anyway.
+
 ### `MdnsResponder`
 
 Optional mDNS responder so the web UI is reachable at `http://vrhm.local` instead of an IP. Disabled by default (mDNS resolution works from computers, but most mobile devices ignore it).

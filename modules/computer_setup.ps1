@@ -781,6 +781,15 @@ function Reset-AwakeMode {
     Write-Log $msg.AwakeModeDeactivated -Level DEBUG
 }
 
+function Invoke-HostShutdown {
+    # Schedules an OS-level shutdown of the physical PC running VR HEADSET MANAGER.
+    # Non-blocking: only queues shutdown.exe's own countdown. Callers should also run
+    # Invoke-AppShutdown so the app tears down its services well before the delay elapses.
+    param([int]$DelaySec = 30)
+    Write-Log ($msg.HostShutdownScheduled -f $DelaySec) -Level WARNING
+    & shutdown.exe /s /t $DelaySec /c "VR HEADSET MANAGER: host shutdown requested by operator"
+}
+
 
 function Register-WindowsDefenderExclusion {
     param(

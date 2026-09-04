@@ -214,22 +214,22 @@ function Send-JsonResponse {
 }
 
 
-# Show LAN URLs - RFC 1918 private ranges only
-$lanIPs = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-    Where-Object {
-        $_.IPAddress -match '^10\.' -or
-        $_.IPAddress -match '^172\.(1[6-9]|2[0-9]|3[01])\.' -or
-        $_.IPAddress -match '^192\.168\.'
-    }).IPAddress
+# Show LAN URLs. Reuses Get-PrivateNetworks (network_scanner.ps1, already dot-sourced via
+# scripts_init.ps1 above) so this startup log stays consistent with the console menu and
+# Wait-ForValidNetwork - excludes APIPA, virtual/hypervisor adapters, and (critically) any
+# adapter whose link is actually down, so a disconnected NIC's leftover static IP is never
+# logged as a reachable URL.
+$lanNetworks = @(Get-PrivateNetworks)
 
 Write-Log ($msg.WebServerStartingOnPort -f $port) -Level INFO
 Write-Log ($msg.WebServerServingFrom -f $websitePath) -Level DEBUG
-if ($lanIPs) {
+if ($lanNetworks.Count -gt 0) {
     if ($global:MdnsResponder_enabled -and $global:MdnsResponder_hostname) {
         Write-Log ("  http://" + $global:MdnsResponder_hostname + ".local:" + $port + "/ [mDNS]") -Level INFO
     }
-    foreach ($ip in $lanIPs) {
-        Write-Log ($msg.WebServerLinkLine -f $ip, $port, "") -Level INFO
+    foreach ($net in $lanNetworks) {
+        $label = if ($net.IsWifi) { "[WiFi]" } else { "[LAN]" }
+        Write-Log ($msg.WebServerLinkLine -f $net.IPAddress, $port, $label) -Level INFO
     }
 } else {
     Write-Log $msg.WebServerNoLanAddress -Level WARNING
@@ -1387,8 +1387,11 @@ try {
         #     collect another kiosk's queued command
         #   - the body is size-capped here and every string field is length-capped in
         #     Save-KioskAgentReport
-        #   - it only ever updates the agent cache; it never creates a known_kiosks.csv
-        #     row, so an unknown LAN device cannot register itself as a kiosk
+        #   - a first-time report from an unknown IP DOES auto-add a known_kiosks.csv
+        #     row (Register-KioskFromAgentReport), matching the same LAN-trust posture
+        #     already applied to headsets via /api/headsets/register-by-serial. A kiosk
+        #     the operator explicitly removed stays removed (Add-KioskAutoAddIgnore
+        #     denylist written by Remove-Kiosk) unless manually re-added.
         # The response carries any pending operator command (deliver-once).
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/kiosks/agent-report') {
             try {
@@ -1402,6 +1405,9 @@ try {
                 if ($remoteIp -match '^::ffff:(\d+\.\d+\.\d+\.\d+)$') { $remoteIp = $Matches[1] }
 
                 Save-KioskAgentReport -IPAddress $remoteIp -Report $json | Out-Null
+
+                $reportedPort = if ($json.cdpPort) { [int]$json.cdpPort } else { 9222 }
+                Register-KioskFromAgentReport -IPAddress $remoteIp -Hostname (Get-TruncatedText $json.hostname 100) -Port $reportedPort | Out-Null
 
                 $pending = Get-PendingKioskCommand -IPAddress $remoteIp
                 Send-JsonResponse -Response $response -Body @{ ok = $true; command = $pending }
@@ -2970,6 +2976,56 @@ try {
             continue
         }
 
+        # API: POST /api/headsets/register-by-serial  body: {"serialNumber":"...","ip":"...","name":"...","model":"..."}
+        #
+        # Adds a new headset, or updates an existing one's IP address, keyed by
+        # SerialNumber. Called by the remote Headset Toolbox (a standalone script a
+        # technician runs on a DIFFERENT PC than this server, website\headset-toolbox\
+        # Enable-HeadsetWifiAdb.ps1) after it enables WiFi ADB on a USB-connected
+        # headset, and by the console's equivalent "register by serial" option.
+        # Unlike /api/kiosks/agent-report, this DOES persist new inventory rows -
+        # that is the intended behavior here, matching this app's existing LAN-trust
+        # posture (no endpoint in this project requires authentication).
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/headsets/register-by-serial') {
+            try {
+                if ($request.ContentLength64 -gt 4096) { throw "Request body too large" }
+                $reader = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body   = $reader.ReadToEnd(); $reader.Close()
+                $json   = $body | ConvertFrom-Json
+
+                $safeSerial = ([string]$json.serialNumber).Trim()
+                if (-not $safeSerial -or $safeSerial.Length -gt 60) { throw "INVALID_SERIAL" }
+
+                $parsedIp = $null
+                if (-not [System.Net.IPAddress]::TryParse([string]$json.ip, [ref]$parsedIp) -or
+                    $parsedIp.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) {
+                    throw "INVALID_IP"
+                }
+                $safeIp = $parsedIp.ToString()
+
+                $safeName  = if ($json.name)  { ([string]$json.name).Trim().Substring(0, [Math]::Min(([string]$json.name).Trim().Length, 40)) } else { '' }
+                $safeModel = if ($json.model) { ([string]$json.model).Trim().Substring(0, [Math]::Min(([string]$json.model).Trim().Length, 60)) } else { '' }
+
+                $result = Set-HeadsetBySerial -SerialNumber $safeSerial -IPAddress $safeIp -Name $safeName -Model $safeModel
+
+                if ($result.Ok) {
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; action = $result.Action; id = $result.ID; name = $result.Name }
+                } else {
+                    Send-JsonResponse -Response $response -Body @{ ok = $false; error = $result.Error }
+                }
+            } catch {
+                $errMsg = switch -Regex ($_.Exception.Message) {
+                    'INVALID_SERIAL' { 'Invalid or missing serial number.' }
+                    'INVALID_IP'     { 'Invalid IP address.' }
+                    default          { $_.Exception.Message }
+                }
+                Send-JsonResponse -Response $response -Body @{ ok = $false; error = $errMsg }
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
         # API: POST /api/restartmediamtx
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/restartmediamtx') {
             try {
@@ -3020,6 +3076,29 @@ try {
                 if ($mainProcs.Count -gt 1) { Write-Log "app-restart: multiple main.ps1 processes found ($($mainProcs.Count)), using first" -Level WARNING }
                 $mainPid = [uint32]$mainProcs[0].ProcessId
                 [void][VrmConsoleInput]::InjectKeys($mainPid, '00', $true)
+                Send-JsonResponse -Response $response -Raw '{"ok":true}'
+            } catch {
+                try { Send-JsonResponse -Response $response -Raw '{"ok":false,"error":"server error"}' -StatusCode 500 } catch {}
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: POST /api/host-shutdown
+        # Injects '000' + Enter into the main process console input so Show-MainMenu triggers the
+        # '000' case (schedule shutdown.exe on the host PC, then Invoke-AppShutdown), followed by
+        # 'YES' + Enter for that case's own confirmation prompt. The browser-side modal already
+        # collected an explicit, dedicated confirmation before calling this endpoint, so the console
+        # prompt here is only a safety net for someone at the physical keyboard - not a second gate
+        # for the web operator.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/host-shutdown') {
+            try {
+                $mainProcs = @(Get-WmiObject Win32_Process | Where-Object { $_.CommandLine -match 'main\.ps1' })
+                if ($mainProcs.Count -eq 0) { throw 'Main process not found' }
+                if ($mainProcs.Count -gt 1) { Write-Log "host-shutdown: multiple main.ps1 processes found ($($mainProcs.Count)), using first" -Level WARNING }
+                $mainPid = [uint32]$mainProcs[0].ProcessId
+                [void][VrmConsoleInput]::InjectKeys($mainPid, '000', $true)
+                [void][VrmConsoleInput]::InjectKeys($mainPid, 'YES', $true)
+                Write-Log "host-shutdown: requested via web API" -Level WARNING
                 Send-JsonResponse -Response $response -Raw '{"ok":true}'
             } catch {
                 try { Send-JsonResponse -Response $response -Raw '{"ok":false,"error":"server error"}' -StatusCode 500 } catch {}

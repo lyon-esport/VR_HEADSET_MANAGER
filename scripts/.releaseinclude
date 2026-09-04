@@ -18,7 +18,7 @@
 
 # --- Root files ---
 /main.ps1
-/START_VR_HEADSET_MANAGER.cmd
+/START_VR_HEADSET_MANAGER.exe
 /README.md
 /LICENSE.md
 

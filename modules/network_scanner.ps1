@@ -490,11 +490,19 @@ function Get-PrivateNetworks {
         otherwise match the exclusion list, to cover legitimate Hyper-V "external
         switch"/bridge setups that do carry real LAN traffic.
 
+        Adapters whose link is down (unplugged cable, disabled WiFi, etc.) are also
+        excluded, even if Windows still shows a leftover/static IP on them - a
+        disconnected adapter's configured IP is not reachable from anything else on
+        the network and must not be reported as valid (e.g. by Wait-ForValidNetwork).
+        Skipped only when Get-NetAdapter itself fails, to avoid losing every interface
+        on systems where adapter status cannot be queried.
+
     .OUTPUTS
         Returns an array of PSCustomObjects: InterfaceAlias, IPAddress, PrefixLength,
-        NetworkCIDR, and HasDefaultGateway (true for the interface currently holding the
+        NetworkCIDR, HasDefaultGateway (true for the interface currently holding the
         0.0.0.0/0 route - the one this PC actually uses to reach the LAN/internet, and the
-        strongest available signal for "this is the real adapter").
+        strongest available signal for "this is the real adapter"), and IsWifi (best-effort,
+        $false when the adapter type can't be determined).
 
     .EXAMPLE
         $networks = Get-PrivateNetworks
@@ -553,14 +561,29 @@ function Get-PrivateNetworks {
         -not $isVirtual
     }
 
-    # Add the CIDR network to each result
+    # Drop adapters whose link is down (unplugged / disabled) - a static or leftover IP
+    # on a disconnected adapter is not a usable network. Applied even to the default-route
+    # interface: a genuinely down adapter cannot legitimately be carrying live traffic.
+    # Skipped only when Get-NetAdapter itself failed above (adapterByIndex empty), to
+    # avoid losing every interface on systems where adapter status can't be queried.
+    if ($adapterByIndex.Count -gt 0) {
+        $privateIPs = $privateIPs | Where-Object {
+            $adapter = $adapterByIndex[$_.InterfaceIndex]
+            -not $adapter -or $adapter.Status -eq 'Up'
+        }
+    }
+
+    # Add the CIDR network (and a best-effort WiFi/wired label) to each result
     $privateIPs | ForEach-Object {
+        $adapter = $adapterByIndex[$_.InterfaceIndex]
+        $isWifi  = [bool](($adapter -and $adapter.PhysicalMediaType -eq 'Native 802.11') -or ($_.InterfaceAlias -match 'Wi-?Fi'))
         [PSCustomObject]@{
             InterfaceAlias    = $_.InterfaceAlias
             IPAddress         = $_.IPAddress
             PrefixLength      = $_.PrefixLength
             NetworkCIDR       = ConvertTo-CIDR -IPAddress $_.IPAddress -PrefixLength $_.PrefixLength
             HasDefaultGateway = [bool]($defaultRouteIfIndex -and $_.InterfaceIndex -eq $defaultRouteIfIndex)
+            IsWifi            = $isWifi
         }
     }
 }
@@ -589,6 +612,53 @@ function Test-ValidIPv4 {
     if ($octets[0] -eq '169' -and $octets[1] -eq '254') { return $false }
     
     return $true
+}
+
+
+# Pauses startup until at least one network interface has a valid (non-APIPA,
+# non-virtual) IP address, re-checking every $global:Network_CheckIntervalSeconds.
+# The operator can press any key to bypass the wait and continue startup anyway.
+function Wait-ForValidNetwork {
+    if (-not $global:Network_WaitForValidNetwork) { return }
+
+    if (Get-PrivateNetworks) { return }
+
+    $intervalSec = if ($global:Network_CheckIntervalSeconds -gt 0) { $global:Network_CheckIntervalSeconds } else { 5 }
+
+    Write-Log $msg.NetworkWaitTitle -Level WARNING
+    Write-Log $msg.NetworkWaitBypassHint -Level WARNING
+    $Host.UI.RawUI.FlushInputBuffer()
+
+    $elapsedSec = 0
+    $bypassed = $false
+
+    while (-not $bypassed) {
+        $ticks = [int]($intervalSec * 10)
+        for ($t = 0; $t -lt $ticks; $t++) {
+            if ([Console]::KeyAvailable) {
+                [Console]::ReadKey($true) | Out-Null
+                $bypassed = $true
+                break
+            }
+            Write-Host -NoNewline ("`r{0} ({1}s)... " -f $msg.NetworkWaitWaiting, $elapsedSec)
+            Start-Sleep -Milliseconds 100
+        }
+
+        if ($bypassed) { break }
+
+        $elapsedSec += $intervalSec
+        $validNetworks = Get-PrivateNetworks
+        if ($validNetworks) {
+            Write-Host -NoNewline ("`r" + (' ' * 60) + "`r")
+            Write-Log ($msg.NetworkWaitFound -f $validNetworks[0].IPAddress, $validNetworks[0].InterfaceAlias) -Level SUCCESS
+            $Host.UI.RawUI.FlushInputBuffer()
+            return
+        }
+    }
+
+    Write-Host -NoNewline ("`r" + (' ' * 60) + "`r")
+    Write-Log $msg.NetworkWaitBypassed -Level WARNING
+    $Host.UI.RawUI.FlushInputBuffer()
 }
 
 

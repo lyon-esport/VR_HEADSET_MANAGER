@@ -37,7 +37,7 @@ It is built for **VR labs, showrooms, gaming exhibitions, training centers, and 
 ## Quick start
 
 1. Download the [latest release](https://github.com/lyon-esport/VR_HEADSET_MANAGER/releases) and unzip it (keep `VR_HEADSET_MANAGER` in the folder name).
-2. Run **`START_VR_HEADSET_MANAGER.cmd`**. On first start it configures the Windows Firewall (asks for admin) and creates the config files.
+2. Run **`START_VR_HEADSET_MANAGER.exe`**. On first start it configures the Windows Firewall (asks for admin) and creates the config files.
 3. Open the web interface — the URL is printed in the console, by default **`http://<your-pc-ip>:8080`**.
 4. Put your headset in **Developer Mode**, plug it in over USB, and add it via **Headset Settings → Manage New Devices**.
 5. Start the stream from the **Video Monitor** page — done.

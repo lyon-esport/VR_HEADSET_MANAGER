@@ -192,14 +192,16 @@ if ($global:VQA_Enabled -and -not $global:IsVRMonitorJob -and -not $global:IsDas
     }
 }
 
-# Rebuild the ready-to-use kiosk setup zip. Done on every startup on purpose: the
-# advanced .cmd inside it has this server's LAN URL baked in, so a DHCP lease
-# change would otherwise leave the download pointing at an address no kiosk can
-# reach. Main process only - the child processes would just duplicate the work.
+# Rebuild the ready-to-use headset toolbox zip. Done on every startup on
+# purpose: the generated .cmd has this server's LAN URL baked in, so a DHCP
+# lease change would otherwise leave the download pointing at a stale address.
+# Main process only - the child processes would just duplicate the work.
+# (The kiosk-launcher zip used to be rebuilt the same way here; it was removed
+# in favor of Start-Kiosk-ADVANCED.exe, which discovers the server itself.)
 if (-not $global:IsVRMonitorJob -and -not $global:IsDashboardProcess -and -not $global:IsWebServerProcess) {
-    if (Get-Command New-KioskLauncherPackage -ErrorAction SilentlyContinue) {
-        try { New-KioskLauncherPackage | Out-Null }
-        catch { Write-Log ("Kiosk launcher package build failed: " + $_.Exception.Message) -Level WARNING }
+    if (Get-Command New-HeadsetToolboxPackage -ErrorAction SilentlyContinue) {
+        try { New-HeadsetToolboxPackage | Out-Null }
+        catch { Write-Log ("Headset toolbox package build failed: " + $_.Exception.Message) -Level WARNING }
     }
 }
 
@@ -331,7 +333,16 @@ function Invoke-AppShutdown {
       3. Stops scrcpy, web server, mediamtx, dashboard.
       4. Drops data\reaper_exit.flag so the standalone reaper exits without doing
          anything (services are already cleanly stopped).
+
+    Idempotent: safe to call more than once in the same process (e.g. the
+    normal '0' menu choice calls this directly, and main.ps1 also calls it
+    from a try/finally around the menu loop so Ctrl+C - which stops the
+    pipeline outside the menu's own switch statement - still shuts down
+    cleanly instead of leaving the reaper to kill orphaned services).
     #>
+    if ($global:AppShutdownInProgress) { return }
+    $global:AppShutdownInProgress = $true
+
     $shutdownFlagPath   = Join-Path $global:ScriptPath "data\shutdown.flag"
     $reaperExitFlagPath = Join-Path $global:ScriptPath "data\reaper_exit.flag"
 
@@ -357,6 +368,7 @@ function Invoke-AppShutdown {
     try { Stop-Scrcpy }               catch { }
     try { Reset-AwakeMode }           catch { }
     try { Disconnect-ADBConnections } catch { }
+    try { Stop-AdbServer }            catch { }
 
     # Kill the dashboard (if any) before stopping services so its self-exit
     # parent-PID check does not race against us.
@@ -499,6 +511,11 @@ function Confirm-AppPortsAvailable {
 
 # Run all computer-level setup tasks (firewall rules, service auto-starts, etc.)
 if (-not $global:IsWebServerProcess -and -not $global:IsDashboardProcess -and -not $global:IsVRMonitorJob) {
+    # Pause startup here if no network interface has a valid IP yet (e.g. DHCP
+    # not assigned on boot). Waits and re-checks periodically; the operator
+    # can press any key to bypass. No-op when already connected or disabled.
+    Wait-ForValidNetwork
+
     # Fail fast if a required binary (adb/scrcpy always, mediamtx/ffmpeg only when
     # restreaming is enabled) is missing - continuing would just fail later with a
     # confusing error deep inside firewall setup, ADB, or scrcpy launch.

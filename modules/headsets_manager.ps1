@@ -431,6 +431,57 @@ function Update-HeadsetField {
     #return $headsets
 } # OK
 
+# Set-HeadsetBySerial -SerialNumber "1WMHH812345678" -IPAddress "192.168.1.243" -Name "Q3 Blue" -Model "Quest 3"
+function Set-HeadsetBySerial {
+    <#
+    .SYNOPSIS
+    Adds a new headset, or updates an existing one's IP address, keyed by SerialNumber.
+    .DESCRIPTION
+    Shared by the web server's /api/headsets/register-by-serial route (used by the
+    remote Headset Toolbox, website\headset-toolbox\Enable-HeadsetWifiAdb.ps1) and
+    the console's equivalent "register by serial" option, so a headset plugged into
+    the server itself or into a technician's remote PC goes through the same
+    add-or-update logic.
+
+    - If a headset with this SerialNumber is already known, only its IPAddress is
+      updated (when it changed) - Name/Model are left untouched.
+    - If not known, a new headset is added via Add-Headset. Add-Headset silently
+      no-ops when the IP is already used by a different headset, so the new row
+      is confirmed by re-reading the registry before reporting success.
+
+    Returns @{ Ok; Action='added'|'updated'; ID; Name; Error }.
+    #>
+    param (
+        [Parameter(Mandatory = $true)][string]$SerialNumber,
+        [Parameter(Mandatory = $true)][string]$IPAddress,
+        [string]$Name  = "",
+        [string]$Model = ""
+    )
+
+    if (-not $SerialNumber) {
+        return @{ Ok = $false; Error = "SerialNumber is required" }
+    }
+
+    $headsets = @(Get-KnownHeadsets)
+    $match = $headsets | Where-Object { $_.SerialNumber -eq $SerialNumber } | Select-Object -First 1
+
+    if ($match) {
+        if ($match.IPAddress -ne $IPAddress) {
+            Update-HeadsetField -ID ([int]$match.ID) -Field 'IPAddress' -NewValue $IPAddress
+        }
+        return @{ Ok = $true; Action = 'updated'; ID = [int]$match.ID; Name = $match.Name }
+    }
+
+    $safeName = if ($Name) { $Name } elseif ($Model) { $Model } else { "Headset $SerialNumber" }
+    Add-Headset -headsets $headsets -IPAddress $IPAddress -Name $safeName -Model $Model -SerialNumber $SerialNumber
+
+    $added = @(Get-KnownHeadsets) | Where-Object { $_.SerialNumber -eq $SerialNumber } | Select-Object -First 1
+    if (-not $added) {
+        return @{ Ok = $false; Error = "IP address already used by a different headset" }
+    }
+    return @{ Ok = $true; Action = 'added'; ID = [int]$added.ID; Name = $added.Name }
+} # OK
+
 # Rename-Headset -OldName "Q3 BLUE" -NewName "Q3 Blue Lab"
 function Rename-Headset {
     param (

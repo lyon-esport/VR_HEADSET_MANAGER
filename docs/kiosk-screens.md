@@ -18,7 +18,7 @@ Under the hood it talks to Google Chrome / Chromium's **remote debugging protoco
 Quick start for a Windows kiosk:
 
 1. Open **Kiosk Screens -> Add kiosk device -> Setup Scripts**.
-2. Download `VRHM-Kiosk-Setup.zip`, unzip it on the kiosk PC, and run `Start-Kiosk-ADVANCED.cmd`.
+2. Download `Start-Kiosk-ADVANCED.exe` and run it on the kiosk PC - a single file, no unzip step. It finds the VRHM server on the network automatically.
 3. Back in VRHM, use **Add kiosk device -> Scan network** or add the kiosk IP manually, then push a headset or URL.
 
 Advanced is recommended for normal use. It reports the kiosk device information, restarts Chrome if it crashes, and receives reboot/shutdown/session-stop commands. Basic is the fallback when you only need URL casting.
@@ -27,6 +27,7 @@ Download the launcher for the kiosk's OS from the **Kiosk Screens** page (**Down
 
 | Script | Platform |
 |---|---|
+| `Start-Kiosk-ADVANCED.exe` | Windows advanced launcher, standalone single-file build of `Start-KioskAgent.ps1` below - the easiest way to set up a Windows kiosk |
 | `Start-KioskAgent.ps1` | Windows advanced launcher with reporting and power/session control |
 | `Start-KioskAgent-Linux.sh` | Debian / Raspberry Pi OS advanced launcher with reporting and power/session control |
 | `Start-KioskChrome.ps1` | Windows (any PC with Google Chrome installed) |

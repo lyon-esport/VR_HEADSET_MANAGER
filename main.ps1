@@ -268,7 +268,12 @@ Start-VRMonitor -VRMonitor_refresh_timer $global:VRMonitor_refresh_timer
 
 # Spawn the standalone reaper. Hidden background watchdog that kills orphan
 # services (mediamtx / web server / dashboard / scrcpy) if main dies without
-# running Invoke-AppShutdown (Ctrl+C, X button, crash).
+# running Invoke-AppShutdown (X button, crash, kill from Task Manager).
+# Ctrl+C is handled below by the try/finally around the menu loop instead -
+# PowerShell still runs a wrapping finally block when Ctrl+C stops the
+# pipeline, so that path now goes through the same graceful Invoke-AppShutdown
+# as the menu's own "0. Quit", and the reaper finds data\reaper_exit.flag
+# already set and exits without having to kill anything.
 $reaperScript = Join-Path -Path $scriptPath -ChildPath "modules\reaper.ps1"
 if (Test-Path -LiteralPath $reaperScript) {
     Start-Process powershell.exe -ArgumentList @(
@@ -312,10 +317,17 @@ Write-Host "`n"
 # so the first Read-Host in Show-MainMenu does not auto-fire the reload default case.
 $Host.UI.RawUI.FlushInputBuffer()
 $global:MenuReload = $false
-do {
-    $global:MenuReload = $false
-    Show-MainMenu
-} while ($global:MenuReload)
+try {
+    do {
+        $global:MenuReload = $false
+        Show-MainMenu
+    } while ($global:MenuReload)
+} finally {
+    # Runs on normal loop exit AND on Ctrl+C (PowerShell still executes a
+    # wrapping finally block when Ctrl+C stops the pipeline). Invoke-AppShutdown
+    # is idempotent, so this is a no-op if the menu's own "0. Quit" already ran it.
+    Invoke-AppShutdown
+}
 
 
 

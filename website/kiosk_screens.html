@@ -495,40 +495,38 @@
         </div>
         <div class="modal-body">
           <div class="panel">
-            <div class="panel-title">Windows - ready-to-use package (easiest)</div>
+            <div class="panel-title">Windows - standalone kiosk agent (easiest)</div>
             <p class="launcher-modal-desc">
-              One zip with everything already set up for <strong>this</strong> server.
-              Unzip it on the kiosk PC and double-click
-              <code>Start-Kiosk-ADVANCED.cmd</code> - it asks for administrator rights,
-              then starts the kiosk browser and the reporting agent. Nothing to type:
-              this server's address is baked in, and the package is rebuilt on every
-              application start so it stays correct if the server's IP changes.
+              A single, self-contained executable - nothing to unzip. Copy it to the
+              kiosk PC and double-click <code>Start-Kiosk-ADVANCED.exe</code> - it asks
+              for administrator rights, starts the kiosk browser, and finds this server
+              on the network automatically (nothing to type). The first run also
+              extracts its own <code>Start-KioskAgent.ps1</code> source next to itself,
+              so it stays inspectable and editable afterward.
             </p>
             <div class="form-row">
-              <a class="btn" href="kiosk-launcher/VRHM-Kiosk-Setup.zip" download="VRHM-Kiosk-Setup.zip">
+              <a class="btn" href="kiosk-launcher/Start-Kiosk-ADVANCED.exe" download="Start-Kiosk-ADVANCED.exe">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                Download setup package (.zip)
+                Download kiosk agent (.exe)
               </a>
-              <span class="launcher-modal-desc" style="margin:0">
-                Server: <code id="pkg-server-url"></code>
-              </span>
             </div>
             <p class="launcher-modal-desc">
-              The zip also contains <code>Start-Kiosk-BASIC.cmd</code>, which runs the
-              original casting-only launcher - a fallback if the advanced one ever
-              gives trouble on a particular PC.
+              On a routed network (server not on the kiosk's own subnet), pass the
+              address directly instead of relying on the scan:
+              <code>Start-Kiosk-ADVANCED.exe -ServerIp 10.0.5.12</code>. For the
+              original casting-only launcher, see Setup Scripts - Basic below.
             </p>
           </div>
 
           <div class="panel">
             <div class="panel-title">Setup Scripts - Advanced (manual)</div>
             <p class="launcher-modal-desc">
-              The individual scripts, if you would rather not use the package (or need
-              the Linux one). On top of opening the firewall and launching Chrome in
-              kiosk mode, the advanced launcher reports the PC's computer name, OS and
-              network link type back here, lets you reboot or shut the PC down
-              remotely, and restarts the browser by itself if it crashes. It stays
-              running - keep its window open.
+              The individual scripts, if you would rather not use the standalone .exe
+              (or need the Linux one). On top of opening the firewall and launching
+              Chrome in kiosk mode, the advanced launcher finds this server
+              automatically, reports the PC's computer name, OS and network link type
+              back here, lets you reboot or shut the PC down remotely, and restarts the
+              browser by itself if it crashes. It stays running - keep its window open.
             </p>
             <div class="form-row">
               <a class="btn" href="kiosk-launcher/Start-KioskAgent.ps1" download="Start-KioskAgent.ps1">
@@ -541,11 +539,11 @@
               </a>
             </div>
 
-            <!-- The server address is what lets the kiosk report back, and this page
-                 already knows it - hand the operator a ready-to-paste command line
-                 rather than making them work it out. -->
+            <!-- The server address is discovered automatically, but pinning it
+                 explicitly (this page already knows it) skips the scan and avoids
+                 the first-run prompt on a routed network. -->
             <p class="launcher-modal-desc" style="margin-bottom:4px">
-              Run it on the kiosk PC with this server's address:
+              Optional - run it on the kiosk PC pinned to this server's address:
             </p>
             <div class="cmd-box">
               <code id="agent-cmd-win"></code>
@@ -1874,8 +1872,6 @@
         { el: 'agent-cmd-linux', copy: 'agent-cmd-linux-copy',
           text: './Start-KioskAgent-Linux.sh --server-url ' + origin }
       ];
-      var pkgUrlEl = document.getElementById('pkg-server-url');
-      if (pkgUrlEl) pkgUrlEl.textContent = origin;
 
       pairs.forEach(function(p) {
         var codeEl = document.getElementById(p.el);

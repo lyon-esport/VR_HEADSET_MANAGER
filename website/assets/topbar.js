@@ -43,6 +43,21 @@
       '.vrhm-sd-btn.danger{border-color:rgba(239,68,68,.4);background:rgba(239,68,68,.15);color:#ef4444}',
       '.vrhm-sd-btn.danger:hover{background:rgba(239,68,68,.25)}',
       '.vrhm-sd-btn:disabled{opacity:.35;cursor:not-allowed;pointer-events:none}',
+      '.shutdown-all-modal__host-row{display:flex;align-items:center;gap:9px;padding:9px 11px;border-radius:7px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.35);cursor:pointer;user-select:none}',
+      '.shutdown-all-modal__host-row input[type=checkbox]{accent-color:#ef4444;width:14px;height:14px;cursor:pointer;flex-shrink:0}',
+      '.shutdown-all-modal__host-row svg{flex-shrink:0;color:#ef4444}',
+      '.shutdown-all-modal__host-row span{font-size:12px;color:#ef4444;font-weight:600}',
+      '.shutdown-all-modal__host-row.is-disabled{opacity:.5;pointer-events:none}',
+      '.shutdown-all-modal__app-row.is-disabled{opacity:.5;pointer-events:none}',
+      '.shutdown-all-modal__app-row-note{font-size:11px;color:#ef4444;margin-top:-6px}',
+      '.host-warn-modal{position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.8);display:flex;align-items:center;justify-content:center}',
+      '.host-warn-modal__box{background:#1a1a1a;border:1px solid rgba(239,68,68,.5);border-radius:10px;min-width:300px;max-width:420px;width:90%;padding:26px;display:flex;flex-direction:column;align-items:center;gap:12px;box-shadow:0 8px 40px rgba(0,0,0,.7)}',
+      '.host-warn-modal__icon{color:#ef4444}',
+      '.host-warn-modal__title{font-size:15px;font-weight:700;color:#ef4444;text-align:center}',
+      '.host-warn-modal__text{font-size:12.5px;color:#c7c7c7;line-height:1.6;text-align:center}',
+      '.host-warn-modal__text strong{color:#e5e7eb}',
+      '.host-warn-modal__actions{display:flex;flex-direction:column;gap:8px;width:100%;margin-top:6px}',
+      '.host-warn-modal__actions .vrhm-sd-btn{width:100%}',
       '[data-theme=light] .shutdown-all-modal__box{background:#fff;border-color:#e0e0e0;box-shadow:0 8px 32px rgba(0,0,0,.12)}',
       '[data-theme=light] .shutdown-all-modal__sub{color:#6b7280}',
       '[data-theme=light] .shutdown-all-modal__sub strong{color:#111}',
@@ -50,11 +65,15 @@
       '[data-theme=light] .shutdown-all-modal__list-item{color:#111}',
       '[data-theme=light] .shutdown-all-modal__app-row{background:#f9fafb;border-color:#e5e7eb}',
       '[data-theme=light] .shutdown-all-modal__app-row span{color:#374151}',
+      '[data-theme=light] .shutdown-all-modal__host-row{background:rgba(239,68,68,.07)}',
       '[data-theme=light] .shutdown-all-modal__confirm-row{color:#374151}',
       '[data-theme=light] .shutdown-all-modal__confirm-row strong{color:#111}',
       '[data-theme=light] .shutdown-all-modal__input{background:#f5f5f5;border-color:#ccc;color:#111}',
       '[data-theme=light] .vrhm-sd-btn{background:#e8e8e8;border-color:#ccc;color:#444}',
       '[data-theme=light] .vrhm-sd-btn:hover{background:#ddd;border-color:#aaa;color:#111}',
+      '[data-theme=light] .host-warn-modal__box{background:#fff;border-color:rgba(239,68,68,.4);box-shadow:0 8px 40px rgba(0,0,0,.18)}',
+      '[data-theme=light] .host-warn-modal__text{color:#374151}',
+      '[data-theme=light] .host-warn-modal__text strong{color:#111}',
     ].join('');
     document.head.appendChild(s);
   }());
@@ -646,6 +665,12 @@
           '<input type="checkbox" id="vrhm-sd-app-chk">' +
           '<span>Also shutdown VRHM application</span>' +
         '</label>' +
+        '<div class="shutdown-all-modal__app-row-note" id="vrhm-sd-app-note" style="display:none">Included automatically - host shutdown closes the application too.</div>' +
+        '<label class="shutdown-all-modal__host-row" id="vrhm-sd-host-row">' +
+          '<input type="checkbox" id="vrhm-sd-host-chk">' +
+          powerIcon +
+          '<span>Shutdown the VRHM Host server</span>' +
+        '</label>' +
         '<div class="shutdown-all-modal__confirm-row" id="vrhm-sd-confirm-row">' +
           'Type <strong>YES</strong> to confirm:' +
           '<input class="shutdown-all-modal__input" id="vrhm-sd-input" type="text" placeholder="YES" autocomplete="off" spellcheck="false">' +
@@ -662,15 +687,65 @@
     var listEl    = document.getElementById('vrhm-sd-list');
     var inputEl   = document.getElementById('vrhm-sd-input');
     var appChk    = document.getElementById('vrhm-sd-app-chk');
+    var appRow    = document.getElementById('vrhm-sd-app-row');
+    var appNote   = document.getElementById('vrhm-sd-app-note');
+    var hostChk   = document.getElementById('vrhm-sd-host-chk');
+    var hostRow   = document.getElementById('vrhm-sd-host-row');
     var confirmBtn= document.getElementById('vrhm-sd-confirm');
     var cancelBtn = document.getElementById('vrhm-sd-cancel');
     var statusEl  = document.getElementById('vrhm-sd-status');
 
     function updateBtn() {
       var anyHeadset = !!listEl.querySelector('.vrhm-sd-chk:checked');
-      var ok = inputEl.value === 'YES' && (anyHeadset || appChk.checked);
+      var ok = inputEl.value === 'YES' && (anyHeadset || appChk.checked || hostChk.checked);
       confirmBtn.disabled = !ok;
     }
+
+    // Shutting down the host powers off the app too - auto-check and lock that row.
+    function setHostChecked(val) {
+      hostChk.checked = val;
+      appChk.disabled = val;
+      if (val) appChk.checked = true;
+      appRow.classList.toggle('is-disabled', val);
+      appNote.style.display = val ? 'block' : 'none';
+      updateBtn();
+    }
+
+    // Dedicated second confirmation before arming the host-shutdown checkbox: this is the
+    // most destructive, least reversible action in the app (physically powers off the PC).
+    function showHostWarnModal() {
+      var existing = document.getElementById('vrhm-host-warn-modal');
+      if (existing) existing.remove();
+      var warnOverlay = document.createElement('div');
+      warnOverlay.id        = 'vrhm-host-warn-modal';
+      warnOverlay.className = 'host-warn-modal';
+      warnOverlay.innerHTML =
+        '<div class="host-warn-modal__box">' +
+          '<svg class="host-warn-modal__icon" width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' +
+            '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>' +
+            '<line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>' +
+          '</svg>' +
+          '<div class="host-warn-modal__title">Shutdown the physical host computer?</div>' +
+          '<div class="host-warn-modal__text">This powers off the <strong>Windows PC running VR HEADSET MANAGER</strong> itself, not just the application. Streaming, OBS capture and this web dashboard all go down with it, and the PC must be turned back on manually.</div>' +
+          '<div class="host-warn-modal__actions">' +
+            '<button class="vrhm-sd-btn danger" id="vrhm-host-warn-confirm">Yes, shutdown the host computer</button>' +
+            '<button class="vrhm-sd-btn" id="vrhm-host-warn-cancel">Cancel</button>' +
+          '</div>' +
+        '</div>';
+      document.body.appendChild(warnOverlay);
+      function closeWarn() { warnOverlay.remove(); }
+      document.getElementById('vrhm-host-warn-cancel').addEventListener('click', closeWarn);
+      warnOverlay.addEventListener('click', function(e) { if (e.target === warnOverlay) closeWarn(); });
+      document.getElementById('vrhm-host-warn-confirm').addEventListener('click', function() {
+        closeWarn();
+        setHostChecked(true);
+      });
+    }
+
+    hostRow.addEventListener('click', function(e) {
+      e.preventDefault();
+      if (hostChk.checked) { setHostChecked(false); } else { showHostWarnModal(); }
+    });
 
     function renderList(connected) {
       if (!connected || connected.length === 0) {
@@ -714,6 +789,7 @@
     });
 
     confirmBtn.addEventListener('click', function() {
+      var hostShutdown    = hostChk.checked;
       var alsoShutdownApp = appChk.checked;
       var selected = Array.from(listEl.querySelectorAll('.vrhm-sd-chk:checked')).map(function(c) { return c.dataset.dn; });
       statusEl.style.display = 'block';
@@ -721,19 +797,27 @@
       cancelBtn.disabled  = true;
 
       if (selected.length === 0) {
-        statusEl.textContent = alsoShutdownApp ? 'Shutting down application...' : 'Nothing to do.';
-        if (alsoShutdownApp) fetch('/api/app-shutdown', { method: 'POST' }).catch(function() {});
+        if (hostShutdown) {
+          statusEl.textContent = 'Shutting down host computer...';
+          fetch('/api/host-shutdown', { method: 'POST' }).catch(function() {});
+        } else if (alsoShutdownApp) {
+          statusEl.textContent = 'Shutting down application...';
+          fetch('/api/app-shutdown', { method: 'POST' }).catch(function() {});
+        } else {
+          statusEl.textContent = 'Nothing to do.';
+        }
         setTimeout(close, 1500);
         return;
       }
 
-      statusEl.textContent = 'Shutting down selected headsets...';
+      statusEl.textContent = hostShutdown ? 'Shutting down selected headsets, then the host computer...' : 'Shutting down selected headsets...';
       fetch('/api/shutdown-all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ headsets: selected, alsoShutdownApp: alsoShutdownApp })
+        body: JSON.stringify({ headsets: selected, alsoShutdownApp: hostShutdown ? false : alsoShutdownApp })
       }).then(function(r) { return r.json(); }).then(function(data) {
         statusEl.textContent = data.ok ? 'Done. Selected headsets shutting down.' : ('Error: ' + (data.error || 'unknown'));
+        if (hostShutdown) fetch('/api/host-shutdown', { method: 'POST' }).catch(function() {});
         cancelBtn.disabled = false;
         setTimeout(close, 2000);
       }).catch(function() {

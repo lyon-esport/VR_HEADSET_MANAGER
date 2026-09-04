@@ -31,7 +31,7 @@ $paths   = Get-SandboxPaths -TargetRoot $target
 
 Invoke-RegressionTest -Name 'Release contains main.ps1 and the launcher' -Test {
     Assert-FileExists $paths.MainPs1 'main.ps1'
-    Assert-FileExists (Join-Path $target 'START_VR_HEADSET_MANAGER.cmd') 'START_VR_HEADSET_MANAGER.cmd'
+    Assert-FileExists (Join-Path $target 'START_VR_HEADSET_MANAGER.exe') 'START_VR_HEADSET_MANAGER.exe'
     Assert-FileExists (Join-Path $target 'modules\scripts_init.ps1') 'modules\scripts_init.ps1'
 }
 
