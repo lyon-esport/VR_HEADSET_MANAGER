@@ -59,6 +59,7 @@ Full details: [Installation](installation.md) → [Getting started](getting-star
 | [Timer API](docs_timer_api.md) | REST API for per-headset session timers |
 | [Enable ADB over WiFi](docs_HowToEnableADBWifi.md) | How to enable wireless ADB on a Meta Quest |
 | [Troubleshooting](troubleshooting.md) | Common problems and how to fix them |
+| [Changelog](CHANGELOG/) | What changed in each release (one file per release) |
 
 ## Supported headsets
 
