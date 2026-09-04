@@ -136,7 +136,7 @@ $adbPort    = 5555
 $apkPath    = $null
 $apkPackage = 'tdg.oculuswirelessadb'
 try {
-    $cfg = Get-Content $ConfigFilePath -Raw -ErrorAction Stop | ConvertFrom-Json
+    $cfg = Get-Content $ConfigFilePath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json
     if ($null -ne $cfg.WebServer.port)        { $port    = [int]$cfg.WebServer.port }
     if ($null -ne $cfg.WebServer.enabled)     { $enabled = [bool]$cfg.WebServer.enabled }
     if ($cfg.ADB.folder) {
@@ -1587,7 +1587,7 @@ try {
                 $modelParam = $request.QueryString['model']
                 $views = @('portrait','square','wide')
                 try {
-                    $liveConfig = Get-Content -LiteralPath $global:configFilePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                    $liveConfig = Get-Content -LiteralPath $global:configFilePath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
                     if ($modelParam -and $liveConfig.scrcpy.parameters.$modelParam -and $liveConfig.scrcpy.parameters.$modelParam.views) {
                         $views = @($liveConfig.scrcpy.parameters.$modelParam.views.PSObject.Properties | Select-Object -ExpandProperty Name)
                     }
@@ -3223,7 +3223,7 @@ try {
             try {
                 $target = [System.Web.HttpUtility]::ParseQueryString($request.Url.Query)['target']
                 $recordsFolder = try {
-                    $c = Get-Content -LiteralPath $global:ConfigFilePath -Raw -ErrorAction Stop | ConvertFrom-Json
+                    $c = Get-Content -LiteralPath $global:ConfigFilePath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json
                     if ($c.scrcpy -and $c.scrcpy.recordFolder) { [string]$c.scrcpy.recordFolder } else { $null }
                 } catch { $null }
                 $folderMap = @{
@@ -3459,7 +3459,7 @@ try {
             try {
                 $target = [System.Web.HttpUtility]::ParseQueryString($request.Url.Query)['target']
                 $recordsFolder = try {
-                    $c = Get-Content -LiteralPath $global:ConfigFilePath -Raw -ErrorAction Stop | ConvertFrom-Json
+                    $c = Get-Content -LiteralPath $global:ConfigFilePath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json
                     if ($c.scrcpy -and $c.scrcpy.recordFolder) { [string]$c.scrcpy.recordFolder } else { $null }
                 } catch { $null }
                 $folderMap = @{
@@ -3967,7 +3967,7 @@ try {
             try {
                 $cfgFile = Join-Path $ScriptPath "config\config.json"
                 if (Test-Path -LiteralPath $cfgFile) {
-                    $raw = Get-Content -LiteralPath $cfgFile -Raw
+                    $raw = Get-Content -LiteralPath $cfgFile -Raw -Encoding UTF8
                     # Strip UTF-8 BOM if present so JSON.parse() succeeds in the browser
                     if ($raw -and $raw[0] -eq [char]0xFEFF) { $raw = $raw.Substring(1) }
                     $respBytes = [System.Text.Encoding]::UTF8.GetBytes($raw)

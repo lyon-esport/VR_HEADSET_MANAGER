@@ -24,7 +24,7 @@ function Read-ConfigJson {
     $jsonValid = $false
     while (-not $jsonValid) {
         try {
-            $jsonRaw = Get-Content -Path $ConfigFilePath -Raw -ErrorAction Stop
+            $jsonRaw = Get-Content -Path $ConfigFilePath -Raw -Encoding UTF8 -ErrorAction Stop
             $configContent = $jsonRaw | ConvertFrom-Json -ErrorAction Stop
             $jsonValid = $true
         }

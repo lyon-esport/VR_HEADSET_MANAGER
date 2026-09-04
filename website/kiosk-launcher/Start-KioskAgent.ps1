@@ -146,7 +146,12 @@ $ruleNameIcmp = "$ruleNameBase ICMPv4 [IN]"
 Get-NetFirewallRule -DisplayName "VRHM Kiosk Chrome Debug $Port" -ErrorAction SilentlyContinue |
     Remove-NetFirewallRule -ErrorAction SilentlyContinue
 
-if (-not (Get-NetFirewallRule -DisplayName $ruleNameTcp -ErrorAction SilentlyContinue)) {
+# -DisplayName on Get-NetFirewallRule treats its value as a wildcard pattern, and "[" / "]"
+# are wildcard character-class metacharacters - passing $ruleNameTcp/$ruleNameIcmp there
+# directly never matches their own literal brackets, so the exists-check always says "not
+# found" and the rule gets recreated (and never found again for removal) on every run.
+# Fetching all rules and filtering with -eq does a real literal comparison instead.
+if (-not (Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object DisplayName -eq $ruleNameTcp)) {
     Write-Host "Adding firewall rule '$ruleNameTcp' for TCP port $Port..." -ForegroundColor Cyan
     New-NetFirewallRule -DisplayName $ruleNameTcp `
         -Direction Inbound `
@@ -160,7 +165,7 @@ if (-not (Get-NetFirewallRule -DisplayName $ruleNameTcp -ErrorAction SilentlyCon
     Write-Host "Firewall rule '$ruleNameTcp' already exists - skipping." -ForegroundColor DarkGray
 }
 
-if (-not (Get-NetFirewallRule -DisplayName $ruleNameIcmp -ErrorAction SilentlyContinue)) {
+if (-not (Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object DisplayName -eq $ruleNameIcmp)) {
     Write-Host "Adding firewall rule '$ruleNameIcmp' for inbound ping..." -ForegroundColor Cyan
     New-NetFirewallRule -DisplayName $ruleNameIcmp `
         -Direction Inbound `
@@ -407,18 +412,39 @@ function Update-DebugPortForward {
 
     if ($listener -and $listener.LocalAddress -eq "127.0.0.1") {
         Write-Host "Chrome is only listening on 127.0.0.1:$Port (LAN binding was ignored by this Chrome build)." -ForegroundColor Yellow
-        Write-Host "Setting up a port forward so the LAN can still reach the debug port..." -ForegroundColor Yellow
 
+        # netsh portproxy is implemented by the "IP Helper" service (iphlpsvc) - if it is not
+        # running, "netsh ... add" and "show v4tov4" both succeed and report the mapping, but
+        # no listener is ever actually bound to the external interface, so the kiosk silently
+        # stays unreachable from the LAN. Seen on a fresh/locked-down Windows image where this
+        # service ships disabled.
+        $ipHelper = Get-Service -Name iphlpsvc -ErrorAction SilentlyContinue
+        if ($ipHelper -and $ipHelper.Status -ne 'Running') {
+            Write-Host "The 'IP Helper' service (iphlpsvc) is not running - it is required for the port forward to work. Starting it..." -ForegroundColor Yellow
+            try {
+                Set-Service -Name iphlpsvc -StartupType Automatic -ErrorAction Stop
+                Start-Service -Name iphlpsvc -ErrorAction Stop
+                Write-Host "IP Helper service started." -ForegroundColor Green
+            } catch {
+                Write-Host "Could not start the IP Helper service: $($_.Exception.Message)" -ForegroundColor Red
+                Write-Host "The port forward below will likely not be reachable from the LAN until this service can run." -ForegroundColor Red
+            }
+        }
+
+        Write-Host "Setting up a port forward so the LAN can still reach the debug port..." -ForegroundColor Yellow
         netsh interface portproxy add v4tov4 listenaddress=0.0.0.0 listenport=$Port connectaddress=127.0.0.1 connectport=$Port | Out-Null
 
-        $portProxyRows = @(netsh interface portproxy show v4tov4 2>$null)
-        $forwardCheck = $portProxyRows | Where-Object {
-            $_ -match '^\s*0\.0\.0\.0\s+' + [regex]::Escape([string]$Port) + '\s+127\.0\.0\.1\s+' + [regex]::Escape([string]$Port) + '\s*$'
-        } | Select-Object -First 1
-        if ($forwardCheck) {
-            Write-Host "Port forward active: 0.0.0.0:$Port -> 127.0.0.1:$Port" -ForegroundColor Green
+        Start-Sleep -Seconds 1
+        # Confirm an actual listening socket on the external interface rather than trusting the
+        # portproxy config table, which reports the mapping regardless of whether iphlpsvc could
+        # bind it (see above).
+        $externalListener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+            Where-Object { $_.LocalAddress -ne '127.0.0.1' } | Select-Object -First 1
+        if ($externalListener) {
+            Write-Host "Port forward active: $($externalListener.LocalAddress):$Port -> 127.0.0.1:$Port" -ForegroundColor Green
         } else {
-            Write-Host "Could not confirm the port forward was created. Run 'netsh interface portproxy show v4tov4' to check." -ForegroundColor Red
+            Write-Host "Port forward was configured but no external listener came up - the kiosk will NOT be reachable from the LAN." -ForegroundColor Red
+            Write-Host "Check 'Get-Service iphlpsvc' and 'Get-NetTCPConnection -LocalPort $Port' on this PC." -ForegroundColor Red
         }
     } elseif ($listener) {
         Write-Host "Chrome is listening on $($listener.LocalAddress):$Port - already reachable from the LAN." -ForegroundColor Green
@@ -896,8 +922,8 @@ try {
     Write-Host "Kiosk agent stopping - cleaning up." -ForegroundColor Yellow
     Stop-ExistingKioskChrome
     Remove-DebugPortForward
-    Get-NetFirewallRule -DisplayName $ruleNameTcp  -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
-    Get-NetFirewallRule -DisplayName $ruleNameIcmp -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+    Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object DisplayName -eq $ruleNameTcp  | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+    Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object DisplayName -eq $ruleNameIcmp | Remove-NetFirewallRule -ErrorAction SilentlyContinue
     Write-Host "Done. Re-run this script to start the kiosk again." -ForegroundColor DarkGray
     Start-Sleep -Seconds 2
 }
