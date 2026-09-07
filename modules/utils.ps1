@@ -2135,3 +2135,66 @@ function Set-FfmpegFolderConfig {
     param([Parameter(Mandatory = $true)][string]$RelativeFolder, [switch]$UpdateTemplate)
     Set-BinaryFolderConfig -ConfigPaths @('ffmpeg.folder') -RelativeFolder $RelativeFolder -UpdateTemplate:$UpdateTemplate
 }
+
+#################
+# UNKNOWN / PLACEHOLDER IP ADDRESSES
+# Lives here rather than in headsets_manager.ps1 because the per-headset VRMonitor
+# runspaces import utils.ps1 but not headsets_manager.ps1, and the reachability stage
+# must be able to skip a row whose address is unknown.
+#################
+# Test-UnknownIp -IPAddress "127.0.0.2"   -> $true
+function Test-UnknownIp {
+    <#
+    .SYNOPSIS
+    Returns $true when an IPAddress field does not point at a real, reachable headset.
+    .DESCRIPTION
+    A headset row whose address was taken over by another headset is not deleted - its
+    IPAddress is released to a loopback placeholder (127.0.0.x, see Get-NextUnknownIp).
+    Loopback stays a valid IPv4 so nothing that parses or joins on IP breaks, and it is
+    unique per row so the IP-duplicate guards keep working, but it never designates a
+    headset. Every poll/scrcpy/runspace path must skip such a row instead of generating
+    network traffic for it.
+
+    Empty / whitespace is also reported as unknown so legacy blank rows are handled
+    identically without a separate check at every call site.
+    .EXAMPLE
+    if (Test-UnknownIp $headset.IPAddress) { continue }
+    #>
+    param (
+        [string]$IPAddress
+    )
+
+    if ([string]::IsNullOrWhiteSpace($IPAddress)) { return $true }
+    return ($IPAddress.Trim() -match '^127\.')
+} # OK
+
+# Get-NextUnknownIp -Rows $headsets   -> "127.0.0.2"
+function Get-NextUnknownIp {
+    <#
+    .SYNOPSIS
+    Returns the lowest 127.0.0.N placeholder address (N in 2..254) not already used by
+    any row in -Rows.
+    .DESCRIPTION
+    127.0.0.1 is skipped - it is the real loopback and a local ADB server listens there.
+    Uniqueness matters because Add-Headset and the web routes reject duplicate IPs, so
+    two released rows must not collide.
+    .EXAMPLE
+    $row.IPAddress = Get-NextUnknownIp -Rows $rows
+    #>
+    param (
+        [array]$Rows = @()
+    )
+
+    $used = @{}
+    foreach ($row in $Rows) {
+        if ($row -and $row.IPAddress) { $used[[string]$row.IPAddress.Trim()] = $true }
+    }
+
+    for ($n = 2; $n -le 254; $n++) {
+        $candidate = "127.0.0.$n"
+        if (-not $used.ContainsKey($candidate)) { return $candidate }
+    }
+
+    Write-Log $msg.Discovery.UnknownIpPoolEmpty -Level ERROR
+    return "127.0.0.254"
+} # OK

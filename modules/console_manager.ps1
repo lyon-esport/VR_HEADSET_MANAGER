@@ -518,6 +518,14 @@ function Show-SubMenu-AddHeadset { #CHOICE 2
     Write-Host $msg.LaunchAppMenu
     Write-Host "`t 6. Enable Wifi ADB on a connected headset"
     Write-Host "`t 7. Register/update headset by serial number (USB)"
+    # Only advertise discovered devices when there are actually some waiting.
+    $pendingDiscovered = @()
+    if (Get-Command Get-PendingDiscoveredHeadsets -ErrorAction SilentlyContinue) {
+        try { $pendingDiscovered = @(Get-PendingDiscoveredHeadsets) } catch { $pendingDiscovered = @() }
+    }
+    if ($pendingDiscovered.Count -gt 0) {
+        Write-Host ("{0} ({1})" -f $msg.Discovery.MenuOption, $pendingDiscovered.Count) -ForegroundColor Cyan
+    }
     Write-Host $msg.ReturnPreviousMenu
 
     $userInput = Read-Host $msg.YourChoice
@@ -575,6 +583,9 @@ function Show-SubMenu-AddHeadset { #CHOICE 2
                 }
             }
         }
+        '8' {
+            Show-SubMenu-DiscoveredHeadsets
+        }
         '0' {
             Write-Log -Message $msg.ReturnPrevious -Level "INFO"
         }
@@ -585,6 +596,105 @@ function Show-SubMenu-AddHeadset { #CHOICE 2
         }
     }
 }  # PARTIAL
+
+function Show-SubMenu-DiscoveredHeadsets {
+    <#
+    .SYNOPSIS
+    Console equivalent of the web "Discovered devices" sub-page: lists headsets the
+    background LAN sweep found that are not in the registry, and lets the operator add or
+    permanently forget each one.
+    .DESCRIPTION
+    Add prompts for a name and registers by serial, so the headset lands under its
+    permanent identity. Forget is keyed on the serial and survives a DHCP change - the
+    device is never proposed again unless it is added by hand later.
+    .EXAMPLE
+    Show-SubMenu-DiscoveredHeadsets      # or option 8 of the Add/modify headset menu
+    #>
+    while ($true) {
+        Clear-Host
+        Start-Sleep -Milliseconds 150
+        Write-Host $msg.Discovery.MenuTitle -BackgroundColor DarkCyan -ForegroundColor White
+
+        if (-not $global:HeadsetDiscovery_enabled) {
+            Write-Host $msg.Discovery.Disabled -ForegroundColor Yellow
+        }
+
+        $devices = @()
+        try { $devices = @(Get-PendingDiscoveredHeadsets) } catch { $devices = @() }
+
+        if ($devices.Count -eq 0) {
+            Write-Host $msg.Discovery.NoPending -ForegroundColor Gray
+            Write-Host ""
+            Write-Host $msg.Discovery.MenuActions
+            $k = Read-Host $msg.YourChoice
+            if ($k -eq '0' -or -not $k) { return }
+            continue
+        }
+
+        Write-Host ""
+        Write-Host ("{0,-3} {1,-16} {2,-22} {3,-10} {4}" -f "#", "IP", "Device name", "Type", "Serial") -ForegroundColor Yellow
+        for ($i = 0; $i -lt $devices.Count; $i++) {
+            $d = $devices[$i]
+            # $( ) not ( ): a bare "(if ...)" parses but is treated as a command call at
+            # runtime and throws "The term 'if' is not recognized".
+            $dName = if ($d.Model) { $d.Model } else { "-" }
+            $dType = if ($d.Brand) { $d.Brand } else { "-" }
+            Write-Host ("{0,-3} {1,-16} {2,-22} {3,-10} {4}" -f ($i + 1), $d.IPAddress, $dName, $dType, $d.SerialNumber)
+        }
+        Write-Host ""
+        Write-Host $msg.Discovery.MenuActions
+
+        $choice = Read-Host $msg.YourChoice
+        if ($choice -eq '0' -or -not $choice) { return }
+        if ($choice -match '^(?i)r$') { continue }
+
+        $index = 0
+        if (-not [int]::TryParse($choice, [ref]$index) -or $index -lt 1 -or $index -gt $devices.Count) {
+            Write-Host $msg.InvalidOption -ForegroundColor Yellow
+            Start-Sleep -Seconds 1
+            continue
+        }
+
+        $device = $devices[$index - 1]
+        Write-Host ""
+        Write-Host ("{0}  |  {1}  |  {2}  |  {3}" -f $device.IPAddress, $device.Model, $device.Brand, $device.SerialNumber) -ForegroundColor Cyan
+        Write-Host $msg.Discovery.MenuDeviceActions
+        $action = Read-Host $msg.YourChoice
+
+        switch -Regex ($action) {
+            '^(?i)a$' {
+                $defaultName = if ($device.Model) { $device.Model } else { "Headset $($device.SerialNumber)" }
+                $name = Read-Host ("{0} [{1}]" -f $msg.Discovery.PromptName, $defaultName)
+                if (-not $name) { $name = $defaultName }
+                # Same name rule as the web UI and /api/addheadset.
+                if ($name -notmatch '^[\w\s\-]{1,40}$') {
+                    Write-Host $msg.InvalidOption -ForegroundColor Red
+                    Start-Sleep -Seconds 2
+                    break
+                }
+                $r = Set-HeadsetBySerial -SerialNumber $device.SerialNumber -IPAddress $device.IPAddress `
+                                         -Name $name -Model $device.Model -Brand $device.Brand -Source 'console-discovery'
+                if ($r.Ok) {
+                    Remove-PendingDiscoveredHeadset -SerialNumber $device.SerialNumber | Out-Null
+                    Write-Host ($msg.Discovery.AddedOk -f $r.Name) -ForegroundColor Green
+                } else {
+                    Write-Host ($msg.Discovery.AddFailed -f $r.Error) -ForegroundColor Red
+                }
+                Start-Sleep -Seconds 2
+            }
+            '^(?i)f$' {
+                # Irreversible from this menu, so confirm. Accepts Y and O (oui).
+                $confirm = Read-Host ($msg.Discovery.ForgetConfirm -f $device.SerialNumber)
+                if ($confirm -match '^(?i)(y|o)$') {
+                    Add-HeadsetDiscoveryIgnore -SerialNumber $device.SerialNumber | Out-Null
+                    Write-Host ($msg.Discovery.Forgotten -f $device.SerialNumber) -ForegroundColor Yellow
+                    Start-Sleep -Seconds 2
+                }
+            }
+            default { }
+        }
+    }
+} # OK
 
 function Show-SubMenu-EditHeadset { #CHOICE 3
     Clear-Host
@@ -658,6 +768,32 @@ function Show-SubMenu-EditHeadset { #CHOICE 3
     } elseif ($field -eq "ScrcpyProfile") {
         Show-SubMenu-ScrcpyOptions -HeadsetID ([int]$idInput)
         return
+    } elseif ($field -eq "IPAddress") {
+        # IP edits are validated and routed through the serial-keyed writer, so a manual
+        # correction cannot leave two rows on the same address (this path had no validation
+        # of any kind before).
+        $newValue = Read-Host ($msg.EnterNewValue -f $field)
+        if (-not (Test-ValidIPv4 -IPAddress $newValue)) {
+            Write-Host ($msg.Discovery.IpInvalid -f $newValue) -ForegroundColor Red
+            return
+        }
+        $row = $headsets | Where-Object { $_.ID -eq [int]$idInput } | Select-Object -First 1
+        if ($row -and $row.SerialNumber) {
+            $r = Set-HeadsetIdentity -SerialNumber $row.SerialNumber -IPAddress $newValue -Source 'console'
+            if (-not $r.Ok) { Write-Host $r.Error -ForegroundColor Red }
+            elseif ($r.Released.Count -gt 0) {
+                foreach ($rel in $r.Released) {
+                    Write-Host ($msg.Discovery.IdentityReleased -f $rel.Name, $rel.OldIP, $row.SerialNumber, 'console') -ForegroundColor Yellow
+                }
+            }
+            return
+        }
+        # No serial on this row yet (manual IP-only entry): plain field write, but still
+        # refuse an address another headset already holds.
+        if ($headsets | Where-Object { $_.IPAddress -eq $newValue -and $_.ID -ne [int]$idInput }) {
+            Write-Host ($msg.HeadsetIpExists -f $newValue) -ForegroundColor Red
+            return
+        }
     } else {
         # Ask for the new value for the selected field
         $newValue = Read-Host ($msg.EnterNewValue -f $field)
@@ -1798,7 +1934,10 @@ function Show-SubMenu-KioskScreens {
                 }
             }
             Add-Kiosk -IPAddress $ip -Name $name -Port $port
-            Write-Log ($msg.Kiosk.AddSuccess -f (if ($name) { $name } else { $ip })) -Level SUCCESS
+            # $( ) is required here: a bare "(if ...)" parses fine but is treated as a
+            # command call at runtime and throws "The term 'if' is not recognized".
+            $kioskLabel = if ($name) { $name } else { $ip }
+            Write-Log ($msg.Kiosk.AddSuccess -f $kioskLabel) -Level SUCCESS
             Write-KioskLog "console add ip=$ip name=$name port=$port result=success" -Level SUCCESS
             Start-Sleep -Seconds 1
             continue

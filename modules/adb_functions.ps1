@@ -636,9 +636,23 @@ function Enable-WiFiADB {
         if ($portTest) {
             Write-Log ($msg.PortOpened -f $AdbPort, $ipInfo) -Level SUCCESS
             
+            # Identify the headset by serial so it is registered (or healed) under its
+            # permanent identity. This path used to create rows with an empty serial and
+            # model, which left them unable to participate in identity healing at all.
+            $usbSerial = ((Invoke-AdbCmd -Device $usbDevice -Command "shell getprop ro.serialno" -adb $adb) -join '').Trim()
+
             $knownHeadsets = Get-KnownHeadsets
-            if ($knownHeadsets.IPAddress -contains $ipInfo){
+            $alreadyKnown  = $knownHeadsets | Where-Object {
+                ($usbSerial -and ([string]$_.SerialNumber).Trim() -eq $usbSerial) -or $_.IPAddress -eq $ipInfo
+            } | Select-Object -First 1
+
+            if ($alreadyKnown) {
                 Write-Log ($msg.IpAlreadyKnown) -Level INFO
+                if ($usbSerial) {
+                    # Known headset seen over USB: authoritative, so refresh its address.
+                    Set-HeadsetIdentity -SerialNumber $usbSerial -IPAddress $ipInfo -Model $headsetModel `
+                                        -Brand $headsetBrand -Source 'usb-local' | Out-Null
+                }
             }
             else {
                 $choice = (Read-Host $msg.AddToKnownPrompt).ToUpper()
@@ -646,7 +660,18 @@ function Enable-WiFiADB {
                 switch ($choice) {
                     'Y' {   Write-Log ($msg.AddingHeadsetToList) -Level INFO
                             $headsetName = Read-Host ($msg.HeadsetNamePrompt)
-                            Add-Headset -Name $headsetName -IPAddress $ipInfo
+                            if ($usbSerial) {
+                                Set-HeadsetIdentity -SerialNumber $usbSerial -IPAddress $ipInfo -Name $headsetName `
+                                                    -Model $headsetModel -Brand $headsetBrand -AllowAdd -Source 'usb-local' | Out-Null
+                                # An explicit operator add overrides an earlier "forget".
+                                if (Get-Command Remove-HeadsetDiscoveryIgnore -ErrorAction SilentlyContinue) {
+                                    Remove-HeadsetDiscoveryIgnore -SerialNumber $usbSerial | Out-Null
+                                }
+                            } else {
+                                # No serial readable - fall back to an IP-only row, which the
+                                # monitor will key on first successful contact.
+                                Add-Headset -Name $headsetName -IPAddress $ipInfo -Model $headsetModel
+                            }
                         }
                     default {
                         Write-Log ($msg.ReturnToMainMenu) -Level INFO
@@ -881,11 +906,12 @@ function Invoke-UsbHeadsetActions {
                 }
                 $wifiAdbEnabled = $true
 
-                # Update IP in CSV if it changed
-                if ($knownMatch.IPAddress -ne $ip) {
-                    Write-Log ($msg.UsbHeadsetIpUpdated -f $model, $knownMatch.IPAddress, $ip) -Level SUCCESS
-                    Update-HeadsetField -ID ([int]$knownMatch.ID) -Field 'IPAddress' -NewValue $ip
-                }
+                # Update the address through the serial-keyed writer rather than poking the
+                # field directly: a USB-connected headset is the most authoritative source
+                # there is, and if another row is squatting the new address it must be
+                # released instead of leaving two rows on the same IP.
+                Set-HeadsetIdentity -SerialNumber $serial -IPAddress $ip -Model $model `
+                                    -Brand $deviceInfo.Brand -Source 'usb-local' | Out-Null
             } else {
                 Write-Log ($msg.UsbHeadsetNoWifiIp -f $model) -Level DEBUG
             }

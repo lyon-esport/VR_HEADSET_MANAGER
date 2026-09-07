@@ -854,6 +854,13 @@
           desc: 'How often the monitor polls headset status.' },
         { path: 'VRMonitor.showConsole', label: 'Show Monitoring Console', type: 'boolean',
           desc: 'Display the VR Headset Monitoring console window on startup. Requires restart.' },
+        { path: 'VRMonitor.networkDiscovery.enabled', label: 'Background Network Discovery', type: 'boolean',
+          desc: 'Periodically scan the local network for headsets. A known headset that changed IP address is '
+              + 'corrected automatically; an unknown one is proposed under "Discovered devices" on the Headsets '
+              + 'page and is never added on its own. Takes effect without restarting.' },
+        { path: 'VRMonitor.networkDiscovery.interval_sec', label: 'Discovery Interval', type: 'number', min: 10, max: 3600, unit: 'seconds',
+          desc: 'Delay between two network scans. A new scan only starts once the previous one has finished, so a '
+              + 'sweep is never interrupted. Minimum 10 seconds.' },
         { type: 'subgroup', label: 'Battery Thresholds' },
         { path: 'Monitoring.thresholds.headset_battery_warningLevel', label: 'Headset Warning', type: 'number', min: 0, max: 100, unit: '%',
           desc: 'Headset battery % at which a warning colour is shown on the overlay.' },

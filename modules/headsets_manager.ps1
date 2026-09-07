@@ -313,6 +313,11 @@ function Show-HeadsetsTableColored {
                     if (-not $cr) { $cr = "-" }
                     $value = "$cl[$h]$cr"
                 }
+                # A released/never-set address is a placeholder, not a reachable host -
+                # show it as such rather than printing a bogus 127.0.0.x at the operator.
+                if ($field -eq "IPAddress" -and (Test-UnknownIp $value)) {
+                    $value = $msg.Discovery.IpUnknownLabel
+                }
                 # Add the field to the row
                 if ($null -eq $value) {
                     $value = "-"
@@ -351,6 +356,178 @@ function Show-HeadsetsTableColored {
 
 
 
+
+# Set-HeadsetIdentity -SerialNumber "1WMHH812345678" -IPAddress "192.168.1.243" -Source 'adb-poll'
+function Set-HeadsetIdentity {
+    <#
+    .SYNOPSIS
+    THE single serial-keyed writer for a headset's IP address. Every path that learns
+    "serial S is now at address X" must go through this function.
+    .DESCRIPTION
+    SerialNumber is the headset's permanent identity; IPAddress is a volatile DHCP lease.
+    Keying an update on the IP is what lets two headsets swap leases and silently inherit
+    each other's row (battery, model, scrcpy stream, recording all follow the wrong
+    headset). This function inverts that: it finds the row by serial, and if the target
+    address is currently held by a DIFFERENT row, that row's address is released to an
+    unknown-IP placeholder (Get-NextUnknownIp) instead of ending up duplicated.
+
+    All mutations are computed against a single Get-KnownHeadsets read and committed with
+    a single Save-Headsets, so the registry is never left half-updated. When nothing
+    actually changes the function returns 'unchanged' WITHOUT saving - important because
+    the VRMonitor fast path calls this on every poll and Save-Headsets regenerates every
+    HTML overlay.
+
+    Requires a serial, so it is NOT the entry point for an operator adding a headset by
+    hand from an IP alone - that path stays on Add-Headset and creates a row with an empty
+    serial, which is then adopted here (step 5) or by the VRMonitor learning branch.
+
+    Returns @{ Ok; Action='added'|'updated'|'unchanged'|'skipped'; ID; Name;
+               Released=@(@{ID;Name;OldIP;NewIP}); Error }.
+    .EXAMPLE
+    $r = Set-HeadsetIdentity -SerialNumber $serial -IPAddress $ip -Source 'usb-local'
+    if ($r.Ok -and $r.Action -ne 'unchanged') { Write-Log "Healed $($r.Name)" -Level INFO }
+    .EXAMPLE
+    # Discovery: never create rows, just report unknown serials back to the caller
+    $r = Set-HeadsetIdentity -SerialNumber $s -IPAddress $ip -Source 'lan-scan'
+    if ($r.Action -eq 'skipped') { Add-PendingDiscoveredHeadset ... }
+    #>
+    param (
+        [Parameter(Mandatory = $true)][string]$SerialNumber,
+        [Parameter(Mandatory = $true)][string]$IPAddress,
+        [string]$Name  = "",
+        [string]$Model = "",
+        [string]$Brand = "",
+        [switch]$AllowAdd,
+        [string]$Source = "unknown"
+    )
+
+    $result = @{ Ok = $false; Action = 'skipped'; ID = $null; Name = ""; Released = @(); Error = $null }
+
+    $serial = ([string]$SerialNumber).Trim()
+    if (-not $serial) {
+        $result.Error = "SerialNumber is required"
+        return $result
+    }
+
+    $ip = ([string]$IPAddress).Trim()
+    if (-not (Test-ValidIPv4 -IPAddress $ip)) {
+        $result.Error = "Invalid IP address '$ip'"
+        return $result
+    }
+    # A placeholder address is an output of this function, never a valid input - accepting
+    # one would let a caller "move" a headset onto loopback and lose it.
+    if (Test-UnknownIp $ip) {
+        $result.Error = "Refusing to assign the placeholder address '$ip'"
+        return $result
+    }
+
+    $rows  = @(Get-KnownHeadsets)
+    $owner = $rows | Where-Object { $_.SerialNumber -and ([string]$_.SerialNumber).Trim() -eq $serial } | Select-Object -First 1
+
+    # Rows sitting on the target address that are not the legitimate owner.
+    $squatters = @($rows | Where-Object {
+        $_.IPAddress -and ([string]$_.IPAddress).Trim() -eq $ip -and -not ($owner -and $_.ID -eq $owner.ID)
+    })
+
+    $changed   = $false
+    $released  = @()
+    $isNewRow  = $false
+
+    if (-not $owner) {
+        if (-not $AllowAdd) {
+            # Caller (typically LAN discovery) decides what to do with an unknown headset.
+            Write-Log ($msg.Discovery.IdentityUnknownSerial -f $serial, $ip, $Source) -Level DEBUG
+            return $result
+        }
+
+        # Adoption: a serial-less row already claims this address - almost always a row the
+        # operator created by hand from an IP alone. Stamp the serial onto it rather than
+        # creating a second row for the same physical headset.
+        $adoptable = $squatters | Where-Object { [string]::IsNullOrWhiteSpace([string]$_.SerialNumber) } | Select-Object -First 1
+        if ($adoptable) {
+            $owner = $adoptable
+            $squatters = @($squatters | Where-Object { $_.ID -ne $adoptable.ID })
+            $owner.SerialNumber = $serial
+            # Stamping the serial IS a change even when the address already matches -
+            # without this the function would report 'unchanged' and never save it.
+            $changed = $true
+            Write-Log ($msg.Discovery.IdentityAdopted -f $owner.Name, $serial, $ip, $Source) -Level SUCCESS
+        }
+        else {
+            $isNewRow = $true
+        }
+    }
+
+    # Free the address before assigning it, so the registry never holds a duplicate IP.
+    foreach ($squatter in $squatters) {
+        $oldIp = [string]$squatter.IPAddress
+        $newIp = Get-NextUnknownIp -Rows $rows
+        $squatter.IPAddress = $newIp
+        $released += @{ ID = $squatter.ID; Name = $squatter.Name; OldIP = $oldIp; NewIP = $newIp }
+        $changed = $true
+        Write-Log ($msg.Discovery.IdentityReleased -f $squatter.Name, $oldIp, $serial, $Source) -Level WARNING
+    }
+
+    if ($isNewRow) {
+        $safeName = if ($Name) { $Name } elseif ($Model) { $Model } else { "Headset $serial" }
+        Add-Headset -headsets $rows -IPAddress $ip -Name $safeName -Model $Model -SerialNumber $serial
+
+        # Add-Headset saves on its own; re-read to confirm the row exists and pick up its ID.
+        $added = @(Get-KnownHeadsets) | Where-Object { ([string]$_.SerialNumber).Trim() -eq $serial } | Select-Object -First 1
+        if (-not $added) {
+            $result.Error = "Failed to add headset for serial '$serial'"
+            return $result
+        }
+        if ($Brand) { Update-HeadsetField -Field 'Brand' -ID ([int]$added.ID) -NewValue $Brand }
+
+        $result.Ok       = $true
+        $result.Action   = 'added'
+        $result.ID       = [int]$added.ID
+        $result.Name     = $added.Name
+        $result.Released = $released
+        return $result
+    }
+
+    $oldOwnerIp = [string]$owner.IPAddress
+    if ($oldOwnerIp -ne $ip) {
+        $owner.IPAddress = $ip
+        $changed = $true
+        Write-Log ($msg.Discovery.IdentityMoved -f $owner.Name, $oldOwnerIp, $ip, $Source) -Level SUCCESS
+    }
+
+    # Model/Brand are merged opportunistically - only overwrite with a real value.
+    if ($Model -and $Model -ne "-" -and $Model -ne $owner.Model) {
+        $owner.Model = $Model
+        $changed = $true
+    }
+    if ($Brand) {
+        $currentBrand = if ($owner.PSObject.Properties['Brand']) { [string]$owner.Brand } else { "" }
+        if ($Brand -ne $currentBrand) {
+            if (-not $owner.PSObject.Properties['Brand']) {
+                $owner | Add-Member -MemberType NoteProperty -Name Brand -Value $Brand -Force
+            } else {
+                $owner.Brand = $Brand
+            }
+            $changed = $true
+        }
+    }
+
+    $result.Ok       = $true
+    $result.ID       = [int]$owner.ID
+    $result.Name     = $owner.Name
+    $result.Released = $released
+
+    if (-not $changed) {
+        # No write, no HTML regeneration - this is the common case on a steady-state poll.
+        $result.Action = 'unchanged'
+        return $result
+    }
+
+    Save-Headsets -headsets $rows
+    $result.Action = 'updated'
+    return $result
+} # OK
+
 #Add-Headset -IPAddress "192.168.1.223" -Name "Q3 Manu"
 function Add-Headset {
     param (
@@ -367,7 +544,18 @@ function Add-Headset {
         Write-Log ($msg.HeadsetIpExists -f $IPAddress) -Level WARNING
         return
     }
-    
+
+    # A serial is a permanent identity: never create a second row for a headset we already
+    # know. Callers that legitimately want "add or move" must use Set-HeadsetIdentity.
+    if ($SerialNumber) {
+        $serialTrim = ([string]$SerialNumber).Trim()
+        $existing = $headsets | Where-Object { ([string]$_.SerialNumber).Trim() -eq $serialTrim } | Select-Object -First 1
+        if ($existing) {
+            Write-Log ($msg.HeadsetSerialExists -f $serialTrim, $existing.Name) -Level WARNING
+            return
+        }
+    }
+
     # Add a new headset to the list
     # ID is a permanent identity, never a position - assign the next unused value
     # so it stays unique even after removals leave gaps.
@@ -416,17 +604,21 @@ function Update-HeadsetField {
 
     $headset = $headsets | Where-Object { $_.ID -eq $ID }
 
-    if ($headset) {
-        if ($headset.PSObject.Properties.Name -contains $Field) {
-            $headset.$Field = $NewValue
-            Write-Log ($msg.HeadsetFieldUpdated -f $Field, $ID, $NewValue) -Level INFO
-        } else {
-            Write-Log ($msg.HeadsetFieldNotExist -f $Field) -Level ERROR
-        }
-    } else {
+    if (-not $headset) {
         Write-Log ($msg.HeadsetIdNotFound -f $ID) -Level ERROR
+        return
     }
-    # Save changes to the CSV file
+    if ($headset.PSObject.Properties.Name -notcontains $Field) {
+        Write-Log ($msg.HeadsetFieldNotExist -f $Field) -Level ERROR
+        return
+    }
+
+    $headset.$Field = $NewValue
+    Write-Log ($msg.HeadsetFieldUpdated -f $Field, $ID, $NewValue) -Level INFO
+
+    # Save only on success. Save-Headsets rewrites the CSV and regenerates every HTML
+    # overlay, so a failed lookup must not pay that cost (nor risk rewriting the registry
+    # from a stale in-memory copy).
     Save-Headsets -headsets $headsets
     #return $headsets
 } # OK
@@ -445,9 +637,12 @@ function Set-HeadsetBySerial {
 
     - If a headset with this SerialNumber is already known, only its IPAddress is
       updated (when it changed) - Name/Model are left untouched.
-    - If not known, a new headset is added via Add-Headset. Add-Headset silently
-      no-ops when the IP is already used by a different headset, so the new row
-      is confirmed by re-reading the registry before reporting success.
+    - If not known, a new headset is added.
+
+    This is now a thin wrapper over Set-HeadsetIdentity -AllowAdd, so it inherits the
+    IP-conflict handling: when another row already holds the target address, that row's
+    address is released to an unknown-IP placeholder instead of the add silently failing.
+    The return shape is kept for its existing callers.
 
     Returns @{ Ok; Action='added'|'updated'; ID; Name; Error }.
     #>
@@ -455,31 +650,21 @@ function Set-HeadsetBySerial {
         [Parameter(Mandatory = $true)][string]$SerialNumber,
         [Parameter(Mandatory = $true)][string]$IPAddress,
         [string]$Name  = "",
-        [string]$Model = ""
+        [string]$Model = "",
+        [string]$Brand = "",
+        [string]$Source = "register-by-serial"
     )
 
-    if (-not $SerialNumber) {
-        return @{ Ok = $false; Error = "SerialNumber is required" }
+    $r = Set-HeadsetIdentity -SerialNumber $SerialNumber -IPAddress $IPAddress `
+                             -Name $Name -Model $Model -Brand $Brand -AllowAdd -Source $Source
+
+    if (-not $r.Ok) {
+        return @{ Ok = $false; Error = $r.Error }
     }
-
-    $headsets = @(Get-KnownHeadsets)
-    $match = $headsets | Where-Object { $_.SerialNumber -eq $SerialNumber } | Select-Object -First 1
-
-    if ($match) {
-        if ($match.IPAddress -ne $IPAddress) {
-            Update-HeadsetField -ID ([int]$match.ID) -Field 'IPAddress' -NewValue $IPAddress
-        }
-        return @{ Ok = $true; Action = 'updated'; ID = [int]$match.ID; Name = $match.Name }
-    }
-
-    $safeName = if ($Name) { $Name } elseif ($Model) { $Model } else { "Headset $SerialNumber" }
-    Add-Headset -headsets $headsets -IPAddress $IPAddress -Name $safeName -Model $Model -SerialNumber $SerialNumber
-
-    $added = @(Get-KnownHeadsets) | Where-Object { $_.SerialNumber -eq $SerialNumber } | Select-Object -First 1
-    if (-not $added) {
-        return @{ Ok = $false; Error = "IP address already used by a different headset" }
-    }
-    return @{ Ok = $true; Action = 'added'; ID = [int]$added.ID; Name = $added.Name }
+    # Callers only distinguish "created a row" from "kept the existing one"; a no-op
+    # update is reported as 'updated' so their messaging stays unchanged.
+    $action = if ($r.Action -eq 'added') { 'added' } else { 'updated' }
+    return @{ Ok = $true; Action = $action; ID = $r.ID; Name = $r.Name }
 } # OK
 
 # Rename-Headset -OldName "Q3 BLUE" -NewName "Q3 Blue Lab"

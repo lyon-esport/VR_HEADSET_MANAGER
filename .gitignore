@@ -35,10 +35,15 @@ scripts/nonRegressionTests/reports/
 #Web and app data
 /app_icons
 
-Exclude .md files bur include docs md files
+Exclude .md files but include docs md files
 *.md
 !/docs/*.md
 !/README.md
+
+# ignore Architecture Decision Records - local design history, deliberately
+# not versioned and not shipped (also excluded in scripts/.releaseinclude)
+/docs/adr/
+/docs/improvement_plan/
 
 #Other...
 desktop.ini

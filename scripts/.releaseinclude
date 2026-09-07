@@ -37,6 +37,8 @@
 
 # --- Documentation (exclude scratch/test files) ---
 /docs/
+!/docs/adr/
+!/docs/improvement_plan
 !/docs/test.ps1
 !/docs/test_invoke_usb.ps1
 !/docs/TODO_AI.txt

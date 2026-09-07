@@ -699,7 +699,11 @@ function Watch-ScrcpyProcesses {
 
     # Step 1: Retrieve scrcpy processes running on the machine
 
-    $knownHeadsets_with_autorestart = Get-KnownHeadsets | Where-Object { ConvertTo-BoolField $_.scrcpy_AutoRestart }
+    # Rows whose address is unknown (released by Set-HeadsetIdentity, or never filled in)
+    # are excluded: there is nothing to connect to, and probing them would only burn a
+    # Get-KnownHeadsetInfos round trip per watchdog pass.
+    $knownHeadsets_with_autorestart = Get-KnownHeadsets |
+        Where-Object { (ConvertTo-BoolField $_.scrcpy_AutoRestart) -and -not (Test-UnknownIp $_.IPAddress) }
 
     # For each headset with autorestart, ensure there's a scrcpy process started
 

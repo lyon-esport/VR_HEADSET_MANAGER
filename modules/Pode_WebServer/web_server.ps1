@@ -581,20 +581,31 @@ try {
                 }
                 $safeIp = $parsedIp.ToString()
 
-                $rows = Get-KnownHeadsets
-                $updated = $false
-                foreach ($row in $rows) {
-                    if (($row.Name -replace ' ', '_') -eq $safeName) {
-                        $row.IPAddress = $safeIp
-                        $updated = $true
-                        break
+                $rows   = Get-KnownHeadsets
+                $target = $rows | Where-Object { ($_.Name -replace ' ', '_') -eq $safeName } | Select-Object -First 1
+
+                if (-not $target) {
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"not found"}')
+                }
+                elseif ($target.SerialNumber) {
+                    # Route through the serial-keyed writer so a manual IP correction cannot
+                    # leave two rows on the same address - the previous holder is released.
+                    $r = Set-HeadsetIdentity -SerialNumber $target.SerialNumber -IPAddress $safeIp -Source 'web'
+                    if ($r.Ok) {
+                        $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                    } else {
+                        $errText = ($r.Error -replace '"', "'" -replace "[`r`n]", ' ')
+                        $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"' + $errText + '"}')
                     }
                 }
-                if ($updated) {
+                elseif ($rows | Where-Object { $_.IPAddress -eq $safeIp -and $_.ID -ne $target.ID }) {
+                    # Row has no serial yet (manual IP-only entry): still refuse a duplicate.
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"This IP address is already registered."}')
+                }
+                else {
+                    $target.IPAddress = $safeIp
                     Save-Headsets -headsets $rows
                     $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
-                } else {
-                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"not found"}')
                 }
                 $response.StatusCode      = 200
                 $response.ContentType     = 'application/json; charset=utf-8'
@@ -2946,7 +2957,18 @@ try {
 
                 $safeModel  = if ($json.model)        { ([string]$json.model).Trim().Substring(0, [Math]::Min(([string]$json.model).Trim().Length, 60)) } else { '' }
                 $safeSerial = if ($json.serialNumber) { ([string]$json.serialNumber).Trim().Substring(0, [Math]::Min(([string]$json.serialNumber).Trim().Length, 40)) } else { '' }
+
+                # A serial is a permanent identity - creating a second row for a headset we
+                # already know would split its history and break identity healing. Moving a
+                # known headset to a new address is register-by-serial's job, not this route's.
+                if ($safeSerial -and ($rows | Where-Object { ([string]$_.SerialNumber).Trim() -eq $safeSerial })) { throw "SERIAL_DUPLICATE" }
+
                 Add-Headset -headsets $rows -IPAddress $safeIp -Name $safeName -Model $safeModel -SerialNumber $safeSerial
+
+                # An explicit operator add overrides an earlier "forget" from discovery.
+                if ($safeSerial -and (Get-Command Remove-HeadsetDiscoveryIgnore -ErrorAction SilentlyContinue)) {
+                    Remove-HeadsetDiscoveryIgnore -SerialNumber $safeSerial | Out-Null
+                }
 
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
                 $response.StatusCode      = 200
@@ -2956,11 +2978,12 @@ try {
                 $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
             } catch {
                 $errMsg = switch -Regex ($_.Exception.Message) {
-                    'IP_DUPLICATE'   { '{"ok":false,"error":"This IP address is already registered."}' }
-                    'NAME_DUPLICATE' { '{"ok":false,"error":"A headset with this name already exists."}' }
-                    'INVALID_NAME'   { '{"ok":false,"error":"Invalid name. Use letters, numbers, spaces or hyphens."}' }
-                    'INVALID_IP'     { '{"ok":false,"error":"Invalid IP address."}' }
-                    default          { '{"ok":false,"error":"Server error."}' }
+                    'IP_DUPLICATE'     { '{"ok":false,"error":"This IP address is already registered."}' }
+                    'NAME_DUPLICATE'   { '{"ok":false,"error":"A headset with this name already exists."}' }
+                    'SERIAL_DUPLICATE' { '{"ok":false,"error":"This headset is already registered (same serial number)."}' }
+                    'INVALID_NAME'     { '{"ok":false,"error":"Invalid name. Use letters, numbers, spaces or hyphens."}' }
+                    'INVALID_IP'       { '{"ok":false,"error":"Invalid IP address."}' }
+                    default            { '{"ok":false,"error":"Server error."}' }
                 }
                 try {
                     $errBytes = [System.Text.Encoding]::UTF8.GetBytes($errMsg)
@@ -3018,6 +3041,72 @@ try {
                     'INVALID_SERIAL' { 'Invalid or missing serial number.' }
                     'INVALID_IP'     { 'Invalid IP address.' }
                     default          { $_.Exception.Message }
+                }
+                Send-JsonResponse -Response $response -Body @{ ok = $false; error = $errMsg }
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: GET /api/headsets/discovered
+        #
+        # Devices the background LAN sweep found whose serial is NOT in known_headsets.csv,
+        # waiting for an operator decision. Feeds the "Discovered devices" button and its
+        # sub-page in headsets_settings.html. Read-only - nothing here is ever auto-added.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/headsets/discovered') {
+            try {
+                $devices = @()
+                if (Get-Command Get-PendingDiscoveredHeadsets -ErrorAction SilentlyContinue) {
+                    $devices = @(Get-PendingDiscoveredHeadsets | ForEach-Object {
+                        @{
+                            serialNumber = [string]$_.SerialNumber
+                            ip           = [string]$_.IPAddress
+                            model        = [string]$_.Model
+                            brand        = [string]$_.Brand
+                            firstSeen    = [string]$_.FirstSeen
+                            lastSeen     = [string]$_.LastSeen
+                        }
+                    })
+                }
+                Send-JsonResponse -Response $response -Body @{
+                    ok      = $true
+                    enabled = [bool]$global:HeadsetDiscovery_enabled
+                    count   = $devices.Count
+                    devices = $devices
+                }
+            } catch {
+                Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'Server error.'; devices = @(); count = 0 }
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/headsets/discovered/forget  body: {"serialNumber":"..."}
+        #
+        # Permanently stops proposing a discovered device. Keyed on the SERIAL, never the
+        # IP, so it stays forgotten when DHCP moves it. A later manual add (USB, scan,
+        # /api/addheadset) still works and clears the denylist entry.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/headsets/discovered/forget') {
+            try {
+                if ($request.ContentLength64 -gt 4096) { throw "Request body too large" }
+                $reader = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body   = $reader.ReadToEnd(); $reader.Close()
+                $json   = $body | ConvertFrom-Json
+
+                $safeSerial = ([string]$json.serialNumber).Trim()
+                if (-not $safeSerial -or $safeSerial.Length -gt 60) { throw "INVALID_SERIAL" }
+
+                if (Add-HeadsetDiscoveryIgnore -SerialNumber $safeSerial) {
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; serialNumber = $safeSerial }
+                } else {
+                    Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'Could not update the ignore list.' }
+                }
+            } catch {
+                $errMsg = switch -Regex ($_.Exception.Message) {
+                    'INVALID_SERIAL' { 'Invalid or missing serial number.' }
+                    default          { 'Server error.' }
                 }
                 Send-JsonResponse -Response $response -Body @{ ok = $false; error = $errMsg }
             } finally {

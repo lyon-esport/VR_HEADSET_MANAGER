@@ -672,6 +672,36 @@
     @keyframes vrm-spin { to { transform: rotate(360deg); } }
     .spinning { animation: vrm-spin 0.8s linear infinite; display: inline-block; }
 
+    /* Discovered devices: centered call-to-action shown only when the background LAN
+       sweep found headsets that are not in the registry yet. Blinks to draw the eye. */
+    .discovered-bar { display: flex; justify-content: center; margin-bottom: 16px; }
+    @keyframes vrm-blink {
+      0%, 100% { opacity: 1;    box-shadow: 0 0 0 0 rgba(59,130,246,0.45); }
+      50%      { opacity: 0.72; box-shadow: 0 0 0 6px rgba(59,130,246,0); }
+    }
+    .disc-blink {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: rgba(59,130,246,0.15); color: #3b82f6; border-color: rgba(59,130,246,0.4);
+      animation: vrm-blink 1.6s ease-in-out infinite;
+    }
+    .disc-blink:hover { background: rgba(59,130,246,0.25); color: #3b82f6; }
+    /* Respect a reduced-motion preference: keep the highlight, drop the pulsing. */
+    @media (prefers-reduced-motion: reduce) { .disc-blink { animation: none; } }
+    .disc-badge {
+      display: inline-block; min-width: 18px; padding: 1px 6px; border-radius: 9px;
+      background: rgba(59,130,246,0.25); border: 1px solid rgba(59,130,246,0.5);
+      color: #3b82f6; font-size: 11px; font-weight: 700; line-height: 1.5; text-align: center;
+    }
+    .disc-row {
+      display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+      margin-bottom: 10px;
+    }
+    .disc-row-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+    .disc-row-actions { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+    .disc-meta { font-size: 11px; color: var(--muted); font-family: monospace; word-break: break-all; }
+    .disc-type { font-size: 11px; color: #888; }
+    [data-theme="light"] .disc-type { color: #666; }
+
     /* â"€â"€ New Devices modal sections â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€ */
     .ndm-section {
       margin-top: 12px; padding-top: 10px;
@@ -817,8 +847,28 @@
   </header>
 
   <div class="page">
+    <!-- Shown only when the background LAN sweep has unregistered headsets pending.
+         Must stay OUTSIDE .cards-grid - a child there would become a grid cell. -->
+    <div class="discovered-bar" id="discovered-bar" style="display:none">
+      <button class="pm-btn disc-blink" id="btn-discovered" onclick="openDiscoveredModal()">
+        Discovered devices <span class="disc-badge" id="disc-badge">0</span>
+      </button>
+    </div>
     <div class="cards-grid" id="cards-grid">
       <div id="empty-msg">Loading...</div>
+    </div>
+  </div>
+
+  <!-- Discovered devices sub-page. Deliberately its own overlay rather than a step of
+       #wifi-adb-modal, which has a sticky dismiss flag and a USB auto-open poller. -->
+  <div class="profile-modal" id="discovered-modal" style="display:none">
+    <div class="wifi-modal-box">
+      <div class="wifi-modal-header">
+        <div class="wifi-modal-label">Network</div>
+        <div class="wifi-modal-title" id="disc-modal-title">Discovered devices</div>
+      </div>
+      <div class="wifi-modal-body" id="disc-modal-body"></div>
+      <div class="wifi-modal-footer" id="disc-modal-footer"></div>
     </div>
   </div>
 
@@ -1196,6 +1246,16 @@
       return name.replace(/ /g, '_');
     }
 
+    // A headset whose address was taken over by another one keeps its row but its
+    // IPAddress is released to a 127.0.0.x placeholder. Never show that raw to the
+    // operator - it reads like a real address and it is not one.
+    function isUnknownIp(ip) {
+      return !ip || !String(ip).trim() || /^127\./.test(String(ip).trim());
+    }
+    function fmtIp(ip) {
+      return isUnknownIp(ip) ? 'IP unknown' : ip;
+    }
+
     function parseCsvText(text, delimiter) {
       text = text.replace(/^\uFEFF/, '');
       var lines = text.trim().split(/\r?\n/);
@@ -1329,7 +1389,7 @@
             '<div class="card-row">' +
               '<span class="card-row-label">IP Address</span>' +
               '<span class="card-row-ip-display" id="ip-display-' + dn + '">' +
-                '<span class="card-row-value" id="ip-val-' + dn + '">' + esc(cfg.IPAddress || '-') + '</span>' +
+                '<span class="card-row-value" id="ip-val-' + dn + '">' + esc(fmtIp(cfg.IPAddress)) + '</span>' +
                 '<button class="card-row-edit-btn" data-edit-ip="' + dn + '" title="Edit IP">' +
                   '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
                     '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>' +
@@ -1672,7 +1732,7 @@
           .then(function(r) { return r.json(); })
           .then(function(j) {
             if (j.ok) {
-              document.getElementById('ip-val-' + dn).textContent = ip;
+              document.getElementById('ip-val-' + dn).textContent = fmtIp(ip);
               document.getElementById('ip-display-' + dn).style.display = '';
               document.getElementById('ip-edit-' + dn).style.display = 'none';
               _editingField = false;
@@ -2790,6 +2850,157 @@
       .catch(function() {});
 
     // Merged poll: CSV + status + USB-headset detection + load-tier refresh, all in one
+    // ---- Discovered devices ----------------------------------------------------------
+    // Headsets the background LAN sweep found whose serial is not in the registry. They are
+    // never added automatically: the operator names and adds one, or forgets it for good.
+    var _discDevices = [];
+
+    function pollDiscoveredDevices() {
+      return fetch('/api/headsets/discovered?_=' + Date.now())
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          _discDevices = (d && d.ok && d.devices) ? d.devices : [];
+          var bar = document.getElementById('discovered-bar');
+          var badge = document.getElementById('disc-badge');
+          if (bar) { bar.style.display = _discDevices.length ? 'flex' : 'none'; }
+          if (badge) { badge.textContent = String(_discDevices.length); }
+          // Keep an open sub-page in sync (e.g. another operator just added one).
+          var modal = document.getElementById('discovered-modal');
+          if (modal && modal.style.display === 'flex') { renderDiscoveredList(); }
+        })
+        .catch(function() { /* server busy - leave the previous state alone */ });
+    }
+
+    function openDiscoveredModal() {
+      document.getElementById('discovered-modal').style.display = 'flex';
+      renderDiscoveredList();
+    }
+
+    function closeDiscoveredModal() {
+      document.getElementById('discovered-modal').style.display = 'none';
+    }
+
+    function renderDiscoveredList() {
+      var body = document.getElementById('disc-modal-body');
+      var foot = document.getElementById('disc-modal-footer');
+      document.getElementById('disc-modal-title').textContent = 'Discovered devices';
+
+      if (!_discDevices.length) {
+        body.innerHTML = '<div class="wifi-hint">No device pending. Headsets found on the network '
+                       + 'that are already registered are corrected automatically.</div>';
+        foot.innerHTML = '<button class="pm-btn" onclick="closeDiscoveredModal()">Close</button>';
+        return;
+      }
+
+      var h = '<div class="wifi-hint" style="margin-bottom:10px">These devices answer on the network '
+            + 'but are not in your headset list.</div>';
+      _discDevices.forEach(function(d, i) {
+        h += '<div class="wifi-info-box" style="margin-bottom:8px">'
+           +   '<div class="disc-row">'
+           +     '<div class="disc-row-info">'
+           +       '<div class="wifi-info-model">' + esc(d.model || 'Unknown device') + '</div>'
+           +       '<div class="wifi-info-ip">' + esc(d.ip || '-') + '</div>'
+           +       '<div class="disc-type">Type: ' + esc(d.brand || 'unknown') + '</div>'
+           +       '<div class="disc-meta">SN: ' + esc(d.serialNumber || '-') + '</div>'
+           +     '</div>'
+           +     '<div class="disc-row-actions">'
+           +       '<button class="pm-btn primary" onclick="discStartAdd(' + i + ')">Add</button>'
+           +       '<button class="pm-btn" onclick="discForget(' + i + ')">Forget</button>'
+           +     '</div>'
+           +   '</div>'
+           + '</div>';
+      });
+      body.innerHTML = h;
+      foot.innerHTML = '<button class="pm-btn" onclick="closeDiscoveredModal()">Close</button>';
+    }
+
+    // Add: ask for a name first, same rule as the USB add flow and /api/addheadset.
+    function discStartAdd(i) {
+      var d = _discDevices[i];
+      if (!d) { return; }
+      var body = document.getElementById('disc-modal-body');
+      var foot = document.getElementById('disc-modal-footer');
+      document.getElementById('disc-modal-title').textContent = 'Name this headset';
+      body.innerHTML =
+          '<div class="wifi-info-box" style="margin-bottom:10px">'
+        +   '<div class="wifi-info-model">' + esc(d.model || 'Unknown device') + '</div>'
+        +   '<div class="wifi-info-ip">' + esc(d.ip || '-') + '</div>'
+        +   '<div class="disc-meta">SN: ' + esc(d.serialNumber || '-') + '</div>'
+        + '</div>'
+        + '<div class="add-field">'
+        +   '<label for="disc-name-input">Headset name</label>'
+        +   '<input type="text" id="disc-name-input" maxlength="40" autocomplete="off" '
+        +     'value="' + esc(d.model || '') + '" placeholder="e.g. Q3 Blue">'
+        +   '<div class="add-field-error" id="disc-name-error"></div>'
+        + '</div>';
+      foot.innerHTML =
+          '<button class="pm-btn" onclick="renderDiscoveredList()">Back</button>'
+        + '<button class="pm-btn primary" id="disc-confirm-add">Add headset</button>';
+      document.getElementById('disc-confirm-add').onclick = function() { discSubmitAdd(i); };
+      var inp = document.getElementById('disc-name-input');
+      inp.focus();
+      inp.onkeydown = function(ev) { if (ev.key === 'Enter') { discSubmitAdd(i); } };
+    }
+
+    function discSubmitAdd(i) {
+      var d = _discDevices[i];
+      if (!d) { return; }
+      var name = (document.getElementById('disc-name-input').value || '').trim();
+      if (!/^[\w\s\-]{1,40}$/.test(name)) {
+        document.getElementById('disc-name-error').textContent = 'Use letters, numbers, spaces or hyphens (1-40 characters).';
+        return;
+      }
+      var btn = document.getElementById('disc-confirm-add');
+      btn.disabled = true;
+      btn.textContent = 'Adding...';
+      // register-by-serial, not addheadset: this is an add-or-move keyed on the identity.
+      fetch('/api/headsets/register-by-serial', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ serialNumber: d.serialNumber, ip: d.ip, name: name, model: d.model || '' })
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(j) {
+        if (j && j.ok) {
+          // Rebuild the card grid so the new headset appears without a manual reload.
+          cardsBuilt = false;
+          pollDiscoveredDevices().then(function() {
+            if (!_discDevices.length) { closeDiscoveredModal(); } else { renderDiscoveredList(); }
+          });
+        } else {
+          btn.disabled = false;
+          btn.textContent = 'Add headset';
+          var err = document.getElementById('disc-name-error');
+          err.textContent = (j && j.error) ? j.error : 'Failed to add headset.';
+
+        }
+      })
+      .catch(function() {
+        btn.disabled = false;
+        btn.textContent = 'Add headset';
+      });
+    }
+
+    // Forget: permanent and keyed on the serial, so it survives a DHCP change. Confirmed
+    // inline rather than in a second modal.
+    function discForget(i) {
+      var d = _discDevices[i];
+      if (!d) { return; }
+      if (!confirm('Forget ' + (d.model || d.serialNumber) + ' permanently?\n\n'
+                 + 'It will never be proposed again, even if its IP address changes.\n'
+                 + 'You can still add it by hand later.')) { return; }
+      fetch('/api/headsets/discovered/forget', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ serialNumber: d.serialNumber })
+      })
+      .then(function(r) { return r.json(); })
+      .then(function() {
+        pollDiscoveredDevices().then(function() {
+          if (!_discDevices.length) { closeDiscoveredModal(); } else { renderDiscoveredList(); }
+        });
+      })
+      .catch(function() {});
+    }
+
     // setTimeout chain. Single cadence indexed to VRMonitor.refresh_timer x multiplier so
     // the whole page slows down together under load (idle ~5 s, mitigation x2, max x5).
     function pollAll() {
@@ -2797,6 +3008,7 @@
         pollHeadsetsCsv(),
         pollHeadsetsStatus(),
         Promise.resolve(pollForNewUsbHeadset()),
+        pollDiscoveredDevices(),
         refreshLoadTier()
       ]).finally(function() { setTimeout(pollAll, nextStatusDelay()); });
     }

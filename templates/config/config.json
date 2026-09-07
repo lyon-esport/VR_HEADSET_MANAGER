@@ -18,7 +18,11 @@
                 },
     "VRMonitor":  {
                       "refresh_timer":  5,
-                      "showConsole":  false
+                      "showConsole":  false,
+                      "networkDiscovery":  {
+                                               "enabled":  false,
+                                               "interval_sec":  60
+                                           }
                   },
     "ComputerMonitoring":  {
                                "refresh_timer_sec":  60,

@@ -345,6 +345,42 @@
     NoHeadsetFoundInFile = "No headset found to display in {0}."
     NoHeadsetInInfosFile = "No VR headset found in file {0}."
     HeadsetIpExists = "A headset with IP {0} already exists in the list!"
+    HeadsetSerialExists = "A headset with serial number {0} already exists in the list ('{1}')."
+
+    # ==========================================
+    # Serial-keyed identity + background network discovery
+    # NOTE: nested under one top-level key on purpose, same reason as Kiosk below -
+    # Import-PowerShellDataFile enforces a hard 500 key/value-pair limit on a single
+    # hashtable literal and the top-level table is at that limit. Use $msg.Discovery.*
+    # ==========================================
+    Discovery = @{
+        # --- Set-HeadsetIdentity ---
+        IdentityMoved         = "Headset '{0}' moved: {1} -> {2} (source: {3})"
+        IdentityReleased      = "Headset '{0}' released address {1}: it is now used by serial {2} (source: {3}). Address set to unknown."
+        IdentityAdopted       = "Headset '{0}' adopted serial {1} at {2} (source: {3})"
+        IdentityUnknownSerial = "Unknown serial {0} seen at {1} (source: {2}) - not added."
+        UnknownIpPoolEmpty    = "No free placeholder address left in 127.0.0.2-254; reusing 127.0.0.254."
+        IpUnknownLabel        = "IP unknown"
+        IpInvalid             = "Invalid IP address: {0}"
+        # --- Background network discovery ---
+        SweepStart            = "Headset discovery: scanning {0}..."
+        SweepDone             = "Headset discovery: {0} device(s) found in {1}s."
+        SweepFailed           = "Headset discovery sweep failed: {0}"
+        Found                 = "Headset discovery: {0} ({1}) at {2}"
+        UnknownDevice         = "Headset discovery: unknown device {0} ({1}) at {2} - waiting for operator."
+        Forgotten             = "Headset discovery: serial {0} will never be proposed again."
+        Disabled              = "Headset discovery is disabled."
+        NoPending             = "No discovered device pending."
+        # --- Console sub-menu ---
+        MenuTitle             = "=== DISCOVERED DEVICES ==="
+        MenuOption            = "`t 8. Discovered devices on the network"
+        MenuActions           = "[number] select a device  |  [R] Refresh  |  [0] Back"
+        MenuDeviceActions     = "[A] Add to the list  |  [F] Forget permanently  |  [0] Back"
+        PromptName            = "Name for this headset (letters, digits, spaces, hyphens)"
+        AddedOk               = "Headset '{0}' added."
+        AddFailed             = "Failed to add headset: {0}"
+        ForgetConfirm         = "Forget device {0} permanently? It will never be proposed again. [Y/N]"
+    }
     HeadsetAdding = "Adding a new headset: {0} ({1})"
     HeadsetFieldUpdated = "Field '{0}' updated for ID {1} with value '{2}'"
     HeadsetFieldNotExist = "Error: Field '{0}' does not exist in the list."

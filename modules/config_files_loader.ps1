@@ -153,6 +153,15 @@ function Get-Config {
 
     $global:VRMonitor_refresh_timer = $configContent.VRMonitor.refresh_timer
 
+    # Background LAN discovery of headsets (VRMonitor.networkDiscovery).
+    # Optional section: absent on a config predating the feature, hence the null guards.
+    $global:HeadsetDiscovery_enabled = if ($null -ne $configContent.VRMonitor.networkDiscovery.enabled) { [bool]$configContent.VRMonitor.networkDiscovery.enabled } else { $false }
+    # Floor of 10s enforced here, not only in the UI: a shorter interval would keep an ADB
+    # scan of the whole subnet permanently in flight.
+    $discoveryInterval = if ($null -ne $configContent.VRMonitor.networkDiscovery.interval_sec) { [int]$configContent.VRMonitor.networkDiscovery.interval_sec } else { 60 }
+    if ($discoveryInterval -lt 10) { $discoveryInterval = 10 }
+    $global:HeadsetDiscovery_interval_sec = $discoveryInterval
+
     # ComputerMonitoring
     $global:ComputerMonitoring_refresh_timer_sec = if ($null -ne $configContent.ComputerMonitoring.refresh_timer_sec) { [int]$configContent.ComputerMonitoring.refresh_timer_sec } else { 60 }
     $computerMonitoringFileName = if ($configContent.ComputerMonitoring.file_name) { $configContent.ComputerMonitoring.file_name } else { "computer_monitoring.json" }

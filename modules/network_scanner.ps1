@@ -147,8 +147,24 @@ function Add-Headset-ScanNetwork {
             $name = "Headset_$($dev.hostname.Replace('.', '_'))"
         }
 
-        Write-Log ($msg.ScanAddingHeadset -f $name, $dev.hostname, $model, $serial) -Level INFO
-        Add-Headset -IPAddress $dev.hostname -Name $name
+        # Use THIS device's model/serial, not the loop-leaked $model/$serial from the
+        # identification pass above. The scan already read ro.serialno over ADB, so register
+        # the headset under its permanent identity instead of an IP-only row.
+        $devModel  = if ($dev.Model  -and $dev.Model  -ne "UNKNOWN") { $dev.Model }  else { "" }
+        $devSerial = if ($dev.Serial -and $dev.Serial -ne "UNKNOWN") { $dev.Serial } else { "" }
+
+        Write-Log ($msg.ScanAddingHeadset -f $name, $dev.hostname, $devModel, $devSerial) -Level INFO
+
+        if ($devSerial) {
+            Set-HeadsetIdentity -SerialNumber $devSerial -IPAddress $dev.hostname -Name $name `
+                                -Model $devModel -AllowAdd -Source 'lan-scan' | Out-Null
+            # An explicit operator add overrides an earlier "forget".
+            if (Get-Command Remove-HeadsetDiscoveryIgnore -ErrorAction SilentlyContinue) {
+                Remove-HeadsetDiscoveryIgnore -SerialNumber $devSerial | Out-Null
+            }
+        } else {
+            Add-Headset -IPAddress $dev.hostname -Name $name -Model $devModel
+        }
     }
 
     Write-Host "`nAll selected headsets have been added!" -ForegroundColor Green
@@ -513,12 +529,22 @@ function Get-PrivateNetworks {
     #>
 
     # Interface currently used for outbound traffic - never excluded below, and exposed to
-    # callers as HasDefaultGateway so they can prefer it deterministically.
+    # callers as HasDefaultGateway so they can prefer it deterministically. Picked by
+    # EFFECTIVE metric (RouteMetric + the interface's own InterfaceMetric), matching how
+    # Windows actually selects the active default route. Several routes commonly tie on
+    # RouteMetric alone (e.g. a real bridged Hyper-V adapter plus a disconnected legacy
+    # NIC), and a plain "Sort-Object RouteMetric | Select -First 1" then picks whichever
+    # route happened to enumerate first - not necessarily the real one.
     $defaultRouteIfIndex = $null
     try {
         $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction Stop |
             Where-Object { $_.NextHop -ne '0.0.0.0' } |
-            Sort-Object RouteMetric | Select-Object -First 1
+            ForEach-Object {
+                $ifMetric = (Get-NetIPInterface -InterfaceIndex $_.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue).InterfaceMetric
+                if ($null -eq $ifMetric) { $ifMetric = 0 }
+                $_ | Add-Member -NotePropertyName EffectiveMetric -NotePropertyValue ($_.RouteMetric + $ifMetric) -PassThru
+            } |
+            Sort-Object EffectiveMetric | Select-Object -First 1
         if ($route) { $defaultRouteIfIndex = $route.InterfaceIndex }
     } catch { }
 
@@ -727,13 +753,15 @@ function Invoke-CompanionDiscovery {
                 $discovered.Add($companion)
                 Write-Log "Invoke-CompanionDiscovery: found $($companion.Model) serial=$($companion.Serial) ip=$($companion.IP)" -Level DEBUG
 
-                # Heal IP drift: if serial matches a known headset and IP has changed, update CSV
-                $headsets = Get-KnownHeadsets
-                $known    = $headsets | Where-Object { $_.SerialNumber -eq $companion.Serial } | Select-Object -First 1
-                if ($known -and $known.IPAddress -ne $companion.IP) {
-                    Write-Log ("Invoke-CompanionDiscovery: updating IP for '{0}' {1} -> {2}" -f $known.Name, $known.IPAddress, $companion.IP) -Level INFO
-                    Update-HeadsetField -Id $known.Id -Field "IPAddress" -NewValue $companion.IP
-                }
+                # Heal IP drift through the shared serial-keyed writer. It no-ops (no CSV
+                # write, no HTML regeneration) when the address already matches, which is
+                # the normal case on every discovery round, and it releases any other row
+                # squatting the new address instead of creating a duplicate IP.
+                # Unknown serials are deliberately NOT added here - a companion app answering
+                # on the LAN is not by itself an instruction to take the headset into
+                # inventory; that is the operator's call.
+                Set-HeadsetIdentity -SerialNumber $companion.Serial -IPAddress $companion.IP `
+                                    -Model $companion.Model -Source 'companion' | Out-Null
             } catch [System.Net.Sockets.SocketException] {
                 break  # timeout
             } catch {

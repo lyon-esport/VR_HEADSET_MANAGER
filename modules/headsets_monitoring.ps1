@@ -194,21 +194,44 @@ function Sync-HeadsetRunspaces {
         [string]$configFilePath,
         [scriptblock]$pollBlock
     )
+    # A row whose address is unknown (released to a 127.0.0.x placeholder by
+    # Set-HeadsetIdentity, or never filled in) has nothing to poll. Filtering it out here
+    # means no runspace is spawned for it at all - no ping, no port test, no ADB.
+    $knownHeadsets = @($knownHeadsets | Where-Object { -not (Test-UnknownIp $_.IPAddress) })
     $currentIPs = @($knownHeadsets | ForEach-Object { $_.IPAddress })
 
+    # Which headset owns each address right now. The registry is keyed by IP, but a poll
+    # runspace captures its $headset ONCE at startup and never refreshes it - so when an
+    # address changes owner (Set-HeadsetIdentity healing a DHCP swap) the existing runspace
+    # keeps stamping the PREVIOUS headset's ID/Name into $sharedState[$ip]. That produced
+    # two info rows for the old headset and none for the new one, and the web UI - which
+    # joins status by display name - showed the healed headset as offline.
+    $ownerById = @{}
+    foreach ($h in $knownHeadsets) { $ownerById[[string]$h.IPAddress] = [string]$h.ID }
+
     foreach ($ip in @($runspaceRegistry.Value.Keys)) {
-        if ($ip -notin $currentIPs) {
+        $entry = $runspaceRegistry.Value[$ip]
+        $gone  = $ip -notin $currentIPs
+        # Identity drift: same address, different headset -> the runspace must be respawned
+        # so it captures the new owner (its name also drives Update-InstalledAppsCache).
+        $drifted = (-not $gone) -and $entry.OwnerID -and ($ownerById[[string]$ip] -ne $entry.OwnerID)
+
+        if ($gone -or $drifted) {
             $sharedState["_stop_$ip"] = $true
             $deadline = (Get-Date).AddSeconds(5)
-            while (-not $runspaceRegistry.Value[$ip].Handle.IsCompleted -and (Get-Date) -lt $deadline) {
+            while (-not $entry.Handle.IsCompleted -and (Get-Date) -lt $deadline) {
                 Start-Sleep -Milliseconds 200
             }
-            try { $runspaceRegistry.Value[$ip].PS.Dispose() }       catch {}
-            try { $runspaceRegistry.Value[$ip].Runspace.Dispose() } catch {}
+            try { $entry.PS.Dispose() }       catch {}
+            try { $entry.Runspace.Dispose() } catch {}
             $runspaceRegistry.Value.Remove($ip)
             $sharedState.Remove("_stop_$ip")
             $sharedState.Remove($ip)
-            Write-Log ("VRMonitor: stopped runspace for $ip") -Level INFO
+            if ($drifted) {
+                Write-Log ("VRMonitor: $ip changed owner, restarting its runspace") -Level INFO
+            } else {
+                Write-Log ("VRMonitor: stopped runspace for $ip") -Level INFO
+            }
         }
     }
 
@@ -226,9 +249,13 @@ function Sync-HeadsetRunspaces {
 
     foreach ($headset in $knownHeadsets) {
         if (-not $runspaceRegistry.Value.ContainsKey($headset.IPAddress)) {
-            $runspaceRegistry.Value[$headset.IPAddress] = Start-HeadsetRunspace `
+            $entry = Start-HeadsetRunspace `
                 -headset $headset -sharedState $sharedState `
                 -scriptPath $scriptPath -configFilePath $configFilePath -pollBlock $pollBlock
+            # Remember which headset this runspace captured, so the drift check above can
+            # tell "same address, same headset" from "same address, new owner".
+            $entry.OwnerID = [string]$headset.ID
+            $runspaceRegistry.Value[$headset.IPAddress] = $entry
             Write-Log ("VRMonitor: started runspace for " + $headset.Name + " (" + $headset.IPAddress + ")") -Level INFO
         }
     }
@@ -274,6 +301,8 @@ function Start-VRMonitor {
         $sharedState      = [hashtable]::Synchronized(@{})
         $runspaceRegistry = @{}
         $kioskRunspaceRegistry = @{}
+        # Single optional runspace (not a per-device registry): @{PS;Runspace;Handle} or $null
+        $discoveryRunspace = $null
         $sharedState["_refresh_timer"] = $global:VRMonitor_refresh_timer
 
         # Poll scriptblock executed inside each per-headset runspace.
@@ -438,6 +467,64 @@ function Start-VRMonitor {
             }
         }
 
+        # LAN discovery scriptblock. Runs in its own runspace because a full /24 ADB sweep
+        # takes seconds and must never stall the 500ms fast loop. It only PUBLISHES what it
+        # found - the registry is written by the main thread when it drains the results.
+        $discoveryPollBlock = {
+            param(
+                [string]$scriptPath,
+                [string]$configFilePath
+            )
+            # $sharedState available via InitialSessionState injection
+            $global:ScriptPath     = $scriptPath
+            $global:ConfigFilePath = $configFilePath
+            $modPath = Join-Path $scriptPath "modules"
+            foreach ($mod in @("logging.ps1","config_files_loader.ps1","utils.ps1","network_scanner.ps1","adb_functions.ps1","headsets_discovery.ps1")) {
+                $f = Join-Path $modPath $mod
+                if (Test-Path -LiteralPath $f) { . $f }
+            }
+            Get-Config -ConfigFilePath $configFilePath | Out-Null
+
+            # Load translations so $msg.* calls in functions do not throw
+            $transFolder = Join-Path $scriptPath "modules\translations"
+            $transFile   = Join-Path $transFolder "$($global:SelectedLanguage).psd1"
+            if (-not (Test-Path -LiteralPath $transFile)) { $transFile = Join-Path $transFolder "en-US.psd1" }
+            if (Test-Path -LiteralPath $transFile) { $global:msg = Import-PowerShellDataFile -Path $transFile }
+
+            while ($true) {
+                # Checked here only: a sweep already under way always runs to completion.
+                if ($sharedState["_stop_all"] -or $sharedState["_stop_discovery"]) { return }
+
+                $started = Get-Date
+                $sharedState["_discovery_status"] = @{ Running = $true; LastSweepAt = $started; LastDurationSec = 0; Found = 0 }
+                $found = @()
+                try {
+                    $found = @(Invoke-HeadsetNetworkSweep)
+                } catch {
+                    Write-Log ($msg.Discovery.SweepFailed -f $_.Exception.Message) -Level WARNING
+                }
+                $duration = [Math]::Round(((Get-Date) - $started).TotalSeconds, 1)
+
+                # Append rather than overwrite: the main loop may not have drained the
+                # previous batch yet, and losing a hit would delay healing by a full cycle.
+                $pendingResults = @()
+                if ($sharedState["_discovery_results"]) { $pendingResults = @($sharedState["_discovery_results"]) }
+                $sharedState["_discovery_results"] = @($pendingResults + $found)
+                $sharedState["_discovery_status"]  = @{ Running = $false; LastSweepAt = $started; LastDurationSec = $duration; Found = $found.Count }
+                Write-Log ($msg.Discovery.SweepDone -f $found.Count, $duration) -Level DEBUG
+
+                # Config is re-read every cycle so an interval change from the web config
+                # page applies on the next sweep without an application restart.
+                try { Get-Config -ConfigFilePath $configFilePath | Out-Null } catch {}
+                $interval = if ($global:HeadsetDiscovery_interval_sec) { [int]$global:HeadsetDiscovery_interval_sec } else { 60 }
+                if ($interval -lt 10) { $interval = 10 }
+                for ($s = 0; $s -lt $interval; $s++) {
+                    Start-Sleep -Seconds 1
+                    if ($sharedState["_stop_all"] -or $sharedState["_stop_discovery"]) { return }
+                }
+            }
+        }
+
         # Two-speed loop: 500ms fast tick for CSV/HTML, slow tick (refresh_timer) for heavy ops
         $slowEvery       = [Math]::Max(1, [int]($global:VRMonitor_refresh_timer / 0.5))
         $slowCounter     = $slowEvery  # trigger slow path immediately on first tick
@@ -504,6 +591,16 @@ function Start-VRMonitor {
                     try { $entry.PS.Dispose() }       catch {}
                     try { $entry.Runspace.Dispose() } catch {}
                 }
+                if ($discoveryRunspace) {
+                    # Longer grace than the others: a sweep in progress is allowed to finish
+                    # rather than be aborted mid-scan (it only checks the flag between sweeps).
+                    $discoveryDeadline = (Get-Date).AddSeconds(30)
+                    while (-not $discoveryRunspace.Handle.IsCompleted -and (Get-Date) -lt $discoveryDeadline) {
+                        Start-Sleep -Milliseconds 500
+                    }
+                    try { $discoveryRunspace.PS.Dispose() }       catch {}
+                    try { $discoveryRunspace.Runspace.Dispose() } catch {}
+                }
                 return
             }
 
@@ -527,6 +624,11 @@ function Start-VRMonitor {
             if ($fp -ne $lastFingerprint -and $knownHeadsets.Count -gt 0) {
                 $lastFingerprint = $fp
 
+                # Identity mismatches found this tick: the headset answering at a row's
+                # address reports a DIFFERENT serial than the row holds. Collected here and
+                # applied after the loop, because each fix rewrites the whole registry.
+                $identityFixes = @()
+
                 # Model/Serial CSV updates must be serialized in the main thread
                 foreach ($headsetInfo in $knownHeadsetsInfo) {
                     # Resolve by IP, not by ID: $headsetInfo.ID is a value the per-headset
@@ -535,6 +637,16 @@ function Start-VRMonitor {
                     # $sharedState[$h.IPAddress] above), so it is safe against ID recycling.
                     $headset = $knownHeadsets | Where-Object { $_.IPAddress -eq $headsetInfo.IPAddress } | Select-Object -First 1
                     if (-not $headset) { continue }
+
+                    # Re-stamp the authoritative identity onto the record. The runspace that
+                    # produced it captured its $headset at startup, so right after an address
+                    # changes owner it still carries the PREVIOUS headset's ID/Name. Exporting
+                    # that verbatim yields two rows for the old headset and none for the new
+                    # one, and the web UI (which joins status by display name) shows the
+                    # healed headset as offline. Sync-HeadsetRunspaces respawns the runspace
+                    # on the next slow tick; this keeps the UI correct until it does.
+                    if ($headsetInfo.ID -ne $headset.ID)     { $headsetInfo.ID   = $headset.ID }
+                    if ($headsetInfo.Name -ne $headset.Name) { $headsetInfo.Name = $headset.Name }
                     $fetchedModel = $headsetInfo.Model
                     if ((ConvertTo-BoolField $headsetInfo.ADBWifi) `
                         -and -not [string]::IsNullOrWhiteSpace($fetchedModel) `
@@ -550,21 +662,75 @@ function Start-VRMonitor {
                         Write-Log ("Updating brand for headset {0} ({1}): {2}" -f $headset.Name, $headset.IPAddress, $fetchedBrand) -Level INFO
                         Update-HeadsetField -ID $headset.ID -Field "Brand" -NewValue $fetchedBrand
                     }
+                    # SerialNumber is the headset's permanent identity, so it is NEVER
+                    # blindly overwritten with whatever answers at this address. Doing so
+                    # is what used to make a DHCP lease swap permanent: headset A's row
+                    # would silently inherit headset B's serial, destroying the only key
+                    # capable of healing it.
                     $fetchedSerial = $headsetInfo.SerialNumber
                     if ((ConvertTo-BoolField $headsetInfo.ADBWifi) `
                         -and -not [string]::IsNullOrWhiteSpace($fetchedSerial) `
-                        -and $fetchedSerial -ne "-" -and $fetchedSerial -ne $headset.SerialNumber) {
-                        Write-Log ($msg.UpdatingSerialNumber -f $headset.Name, $headset.IPAddress, $fetchedSerial) -Level INFO
-                        Update-HeadsetField -ID $headset.ID -Field "SerialNumber" -NewValue $fetchedSerial
+                        -and $fetchedSerial -ne "-") {
+
+                        if ([string]::IsNullOrWhiteSpace($headset.SerialNumber)) {
+                            # Learning: a row created from an IP alone (manual add) gets
+                            # keyed on first contact. Safe - there is nothing to contradict.
+                            Write-Log ($msg.UpdatingSerialNumber -f $headset.Name, $headset.IPAddress, $fetchedSerial) -Level INFO
+                            Update-HeadsetField -ID $headset.ID -Field "SerialNumber" -NewValue $fetchedSerial
+                        }
+                        elseif (([string]$headset.SerialNumber).Trim() -ne $fetchedSerial.Trim()) {
+                            # Mismatch: this address now belongs to a different headset.
+                            # Hand it to Set-HeadsetIdentity, which moves the address to its
+                            # rightful owner and releases this row.
+                            $identityFixes += @{
+                                Serial = $fetchedSerial.Trim()
+                                IP     = $headsetInfo.IPAddress
+                                Model  = $headsetInfo.Model
+                                Brand  = $headsetInfo.Brand
+                            }
+                        }
                     }
                 }
 
-                $knownHeadsetsInfo |
-                    Export-Csv -Path $global:knownHeadsetsInfosFilePath -Delimiter ";" -Encoding UTF8 -NoTypeInformation
+                # Apply identity fixes. Convergence for a crossed pair: row A=.10 / row B=.11
+                # with the real headsets swapped - polling .10 returns B's serial, so B takes
+                # .10 and A is released to an unknown address; the next tick polls .11,
+                # returns A's serial, and A takes .11. At most two ticks, no operator action.
+                $identityChanged = $false
+                foreach ($fix in $identityFixes) {
+                    try {
+                        $r = Set-HeadsetIdentity -SerialNumber $fix.Serial -IPAddress $fix.IP `
+                                                 -Model $fix.Model -Brand $fix.Brand -Source 'adb-poll'
+                        if ($r.Ok -and $r.Action -ne 'unchanged') {
+                            $identityChanged = $true
+                            # Drop cached poll results for every address that moved, so a
+                            # stale record is never joined onto the row that now owns it.
+                            $staleIps = @($fix.IP) + @($r.Released | ForEach-Object { $_.OldIP })
+                            foreach ($staleIp in ($staleIps | Select-Object -Unique)) {
+                                if ($staleIp -and $sharedState.ContainsKey($staleIp)) { $sharedState.Remove($staleIp) }
+                            }
+                        }
+                    } catch {
+                        Write-Log ("VRMonitor: identity fix failed for serial " + $fix.Serial + ": " + $_.Exception.Message) -Level WARNING
+                    }
+                }
 
-                Update-HeadsetMonitoringFile -knownHeadsetsInfo $knownHeadsetsInfo
+                if ($identityChanged) {
+                    # The registry moved under us. Re-read it and force a full recompute on
+                    # the next tick instead of exporting a snapshot built on stale rows.
+                    if (Test-Path -LiteralPath $global:knownHeadsetsFilePath) {
+                        $knownHeadsets = @(Import-Csv -LiteralPath $global:knownHeadsetsFilePath)
+                    }
+                    $lastFingerprint = ""
+                }
+                else {
+                    $knownHeadsetsInfo |
+                        Export-Csv -Path $global:knownHeadsetsInfosFilePath -Delimiter ";" -Encoding UTF8 -NoTypeInformation
 
-                Write-Log ($msg.JobInfoCollected -f $knownHeadsetsInfo.Count) -Level DEBUG
+                    Update-HeadsetMonitoringFile -knownHeadsetsInfo $knownHeadsetsInfo
+
+                    Write-Log ($msg.JobInfoCollected -f $knownHeadsetsInfo.Count) -Level DEBUG
+                }
             }
 
             # ---- FAST PATH: kiosk status snapshot (write-on-change, mirrors above) ----
@@ -611,6 +777,31 @@ function Start-VRMonitor {
                     }
                 } catch {
                     Write-Log ("VRMonitor: companion discovery failed: " + $_.Exception.Message) -Level DEBUG
+                }
+
+                # Background LAN discovery: start/stop to match the config toggle, then
+                # drain whatever the sweep runspace published. Applying the results here
+                # keeps every registry write in the main thread, like the fast path above.
+                try {
+                    Sync-HeadsetDiscoveryRunspace -registry ([ref]$discoveryRunspace) -sharedState $sharedState `
+                        -scriptPath $global:ScriptPath -configFilePath $global:ConfigFilePath `
+                        -pollBlock $discoveryPollBlock
+
+                    if ($sharedState["_discovery_results"]) {
+                        $discovered = @($sharedState["_discovery_results"])
+                        $sharedState["_discovery_results"] = $null
+                        if ($discovered.Count -gt 0) {
+                            if ((Update-HeadsetsFromDiscovery -Devices $discovered) -gt 0) {
+                                # Rows moved - reload and force a fast-path recompute.
+                                if (Test-Path -LiteralPath $global:knownHeadsetsFilePath) {
+                                    $knownHeadsets = @(Import-Csv -LiteralPath $global:knownHeadsetsFilePath)
+                                }
+                                $lastFingerprint = ""
+                            }
+                        }
+                    }
+                } catch {
+                    Write-Log ("VRMonitor: headset discovery failed: " + $_.Exception.Message) -Level WARNING
                 }
 
                 Sync-HeadsetRunspaces -knownHeadsets $knownHeadsets -runspaceRegistry ([ref]$runspaceRegistry) `
@@ -699,6 +890,11 @@ function Get-HeadsetInfoStage1Reachability {
     )
     $out = @{ Ping = $false; ADBWifi = $false; SCRCPY = "-" }
     $IPAddress = $knownHeadset.IPAddress
+
+    # Defensive: Sync-HeadsetRunspaces already skips rows with an unknown address, but a
+    # direct caller must never generate traffic for one. 127.0.0.x would answer a local
+    # ping instantly and report a headset as reachable when it is not.
+    if (Test-UnknownIp $IPAddress) { return $out }
 
     $ping = New-Object System.Net.NetworkInformation.Ping
     try {

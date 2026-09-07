@@ -343,6 +343,42 @@
     NoHeadsetFoundInFile = "Aucun casque trouve a afficher dans {0}."
     NoHeadsetInInfosFile = "Aucun casque VR trouve dans le fichier {0}."
     HeadsetIpExists = "Un casque avec l'IP {0} existe deja dans la liste !"
+    HeadsetSerialExists = "Un casque avec le numero de serie {0} existe deja dans la liste ('{1}')."
+
+    # ==========================================
+    # Identite basee sur le numero de serie + detection reseau
+    # NOTE : regroupe sous une seule cle de premier niveau, pour la meme raison que
+    # Kiosk plus bas - Import-PowerShellDataFile impose une limite stricte de 500
+    # paires cle/valeur par table de hachage. Utiliser $msg.Discovery.*
+    # ==========================================
+    Discovery = @{
+        # --- Set-HeadsetIdentity ---
+        IdentityMoved         = "Casque '{0}' deplace : {1} -> {2} (source : {3})"
+        IdentityReleased      = "Le casque '{0}' libere l'adresse {1} : elle est maintenant utilisee par le numero de serie {2} (source : {3}). Adresse passee a inconnue."
+        IdentityAdopted       = "Le casque '{0}' a adopte le numero de serie {1} sur {2} (source : {3})"
+        IdentityUnknownSerial = "Numero de serie inconnu {0} detecte sur {1} (source : {2}) - non ajoute."
+        UnknownIpPoolEmpty    = "Plus d'adresse de reserve disponible entre 127.0.0.2 et 127.0.0.254 ; reutilisation de 127.0.0.254."
+        IpUnknownLabel        = "IP inconnue"
+        IpInvalid             = "Adresse IP invalide : {0}"
+        # --- Detection automatique sur le reseau ---
+        SweepStart            = "Detection de casques : analyse de {0}..."
+        SweepDone             = "Detection de casques : {0} appareil(s) trouve(s) en {1}s."
+        SweepFailed           = "Echec de la detection de casques : {0}"
+        Found                 = "Detection de casques : {0} ({1}) sur {2}"
+        UnknownDevice         = "Detection de casques : appareil inconnu {0} ({1}) sur {2} - en attente de l'operateur."
+        Forgotten             = "Detection de casques : le numero de serie {0} ne sera plus jamais propose."
+        Disabled              = "La detection de casques sur le reseau est desactivee."
+        NoPending             = "Aucun appareil detecte en attente."
+        # --- Sous-menu console ---
+        MenuTitle             = "=== APPAREILS DETECTES ==="
+        MenuOption            = "`t 8. Appareils detectes sur le reseau"
+        MenuActions           = "[numero] selectionner un appareil  |  [R] Actualiser  |  [0] Retour"
+        MenuDeviceActions     = "[A] Ajouter a la liste  |  [F] Oublier definitivement  |  [0] Retour"
+        PromptName            = "Nom de ce casque (lettres, chiffres, espaces, tirets)"
+        AddedOk               = "Casque '{0}' ajoute."
+        AddFailed             = "Echec de l'ajout du casque : {0}"
+        ForgetConfirm         = "Oublier definitivement l'appareil {0} ? Il ne sera plus jamais propose. [O/N]"
+    }
     HeadsetAdding = "Ajout d'un nouveau casque : {0} ({1})"
     HeadsetFieldUpdated = "Champ '{0}' mis a jour pour l'ID {1} avec la valeur '{2}'"
     HeadsetFieldNotExist = "Erreur : Le champ '{0}' n'existe pas dans la liste."
