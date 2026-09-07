@@ -343,72 +343,104 @@ function Start-VRMonitor {
                 } catch {}
             }
 
-            # Progressive publishing only on the very first cycle (fast initial UX);
-            # subsequent cycles build the full record locally then publish atomically once
-            # so the dashboard never renders a half-filled row.
-            $firstCycle = $true
+            # Two-speed poll (ADR-0015). Stage 1 is cheap (ping + TCP probe + local process scan,
+            # no adb.exe spawn) and is the only thing the UI reacts to for "is it up / is it
+            # streaming", so it runs on its own fixed 1s tick. Stage 2/3 are ADB-bound - seconds
+            # per adb.exe round-trip, worse while scrcpy saturates the same transport - so they
+            # stay on the refresh_timer cadence and never gate a Stage 1 publish.
+            $statusTickSec = 1
+            # The record is built ONCE and merged into, never rebuilt per cycle: republishing a
+            # half-filled record every tick would flip the main loop's fingerprint on unchanged
+            # data and rewrite the CSV plus every HTML overlay continuously (ADR-0002).
+            $workingInfo = New-DefaultHeadsetInfo -knownHeadset $headset
             # Installed-apps cache is heavy (dumpsys package list + per-app sizes) and not
-            # latency-critical. Refresh on first cycle, then every N cycles afterward.
+            # latency-critical. Refresh on the first stats cycle, then every N stats cycles.
             $appsCacheEvery   = 100
             $appsCacheCounter = 0
+            $nextStatsAt      = [datetime]::MinValue   # first tick collects stats immediately
 
             while ($true) {
                 if ($sharedState["_stop_all"] -or $sharedState[$stopKey]) { return }
 
+                $sw = [System.Diagnostics.Stopwatch]::StartNew()
                 try {
-                    $headsetInfo = New-DefaultHeadsetInfo -knownHeadset $headset
-
-                    # --- Stage 1: reachability ---
+                    # --- Stage 1: reachability (every tick) ---
                     $s1 = Get-HeadsetInfoStage1Reachability -knownHeadset $headset
-                    foreach ($k in $s1.Keys) { $headsetInfo.$k = $s1[$k] }
-                    if ($firstCycle) { $sharedState[$ip] = $headsetInfo }
+                    foreach ($k in $s1.Keys) { $workingInfo.$k = $s1[$k] }
 
-                    if ($headsetInfo.ADBWifi) {
-                        $device = Get-AdbWifiDevice -headsetIP $ip
-                        if (-not $device) {
-                            $headsetInfo.ADBWifi = $false
-                        } else {
-                            # --- Stage 2: identity + battery ---
-                            $s2 = Get-HeadsetInfoStage2Identity -knownHeadset $headset -Device $device
-                            foreach ($k in $s2.Keys) { $headsetInfo.$k = $s2[$k] }
+                    # --- Stage 2/3: identity, battery, foreground app (every refresh_timer) ---
+                    $timer = if ($sharedState["_refresh_timer"]) { [int]$sharedState["_refresh_timer"] } else { 5 }
+                    if ([datetime]::Now -ge $nextStatsAt) {
+                        $nextStatsAt = [datetime]::Now.AddSeconds($timer)
 
-                            # Battery history + time estimate (local var persists across cycles)
-                            if ($headsetInfo.Battery -ne "-") {
-                                $currentLevel = [int]($headsetInfo.Battery -replace ' %','')
-                                $allEntries   = @($localBattHistory -split '\|' | Where-Object { $_ -match '=' })
-                                $lastLevel    = if ($allEntries.Count -gt 0) { [int](($allEntries[-1] -split '=')[1]) } else { -1 }
-                                if ($currentLevel -ne $lastLevel) { $allEntries += "$([datetime]::Now.ToString('yyyy-MM-ddTHH:mm:ss'))=$currentLevel" }
-                                $localBattHistory           = ($allEntries | Select-Object -Last 3) -join '|'
-                                $headsetInfo.BatteryHistory = $localBattHistory
-                                $estimate = Get-BatteryTimeEstimate -HistoryString $localBattHistory
-                                if ($null -ne $estimate.PowerState)       { $headsetInfo.PowerState = $estimate.PowerState }
-                                $headsetInfo.TimeRemainingMin = if ($null -ne $estimate.MinutesRemaining) { $estimate.MinutesRemaining } else { "-" }
+                        if ($workingInfo.ADBWifi) {
+                            $device = Get-AdbWifiDevice -headsetIP $ip
+                            if (-not $device) {
+                                $workingInfo.ADBWifi = $false
+                            } else {
+                                # --- Stage 2: identity + battery ---
+                                $s2 = Get-HeadsetInfoStage2Identity -knownHeadset $headset -Device $device
+                                foreach ($k in $s2.Keys) { $workingInfo.$k = $s2[$k] }
+
+                                # Battery history + time estimate (local var persists across cycles)
+                                if ($workingInfo.Battery -ne "-") {
+                                    $currentLevel = [int]($workingInfo.Battery -replace ' %','')
+                                    $allEntries   = @($localBattHistory -split '\|' | Where-Object { $_ -match '=' })
+                                    $lastLevel    = if ($allEntries.Count -gt 0) { [int](($allEntries[-1] -split '=')[1]) } else { -1 }
+                                    if ($currentLevel -ne $lastLevel) { $allEntries += "$([datetime]::Now.ToString('yyyy-MM-ddTHH:mm:ss'))=$currentLevel" }
+                                    $localBattHistory           = ($allEntries | Select-Object -Last 3) -join '|'
+                                    $workingInfo.BatteryHistory = $localBattHistory
+                                    $estimate = Get-BatteryTimeEstimate -HistoryString $localBattHistory
+                                    if ($null -ne $estimate.PowerState)       { $workingInfo.PowerState = $estimate.PowerState }
+                                    $workingInfo.TimeRemainingMin = if ($null -ne $estimate.MinutesRemaining) { $estimate.MinutesRemaining } else { "-" }
+                                }
+
+                                # --- Stage 3: foreground app + installed-apps cache ---
+                                $s3 = Get-HeadsetInfoStage3App -knownHeadset $headset -Device $device
+                                foreach ($k in $s3.Keys) { $workingInfo.$k = $s3[$k] }
+                                if ($appsCacheCounter % $appsCacheEvery -eq 0) {
+                                    Update-InstalledAppsCache -Device $device -headsetName $headset.Name
+                                }
+                                $appsCacheCounter++
                             }
-                            if ($firstCycle) { $sharedState[$ip] = $headsetInfo }
-
-                            # --- Stage 3: foreground app + installed-apps cache ---
-                            $s3 = Get-HeadsetInfoStage3App -knownHeadset $headset -Device $device
-                            foreach ($k in $s3.Keys) { $headsetInfo.$k = $s3[$k] }
-                            if ($firstCycle -or ($appsCacheCounter % $appsCacheEvery -eq 0)) {
-                                Update-InstalledAppsCache -Device $device -headsetName $headset.Name
-                            }
-                            $appsCacheCounter++
                         }
                     }
 
-                    # Final atomic publish (every cycle, including first)
-                    $sharedState[$ip] = $headsetInfo
-                    $firstCycle = $false
+                    # An unreachable headset must not keep republishing its last known identity.
+                    # The main loop treats a serial published alongside ADBWifi=$true as proof of
+                    # which device answers at this address; a stale one would queue a bogus
+                    # Set-HeadsetIdentity fix that rewrites the whole registry. Clearing here also
+                    # reproduces the old build-from-defaults-every-cycle semantics.
+                    if (-not $workingInfo.ADBWifi) {
+                        $workingInfo.Battery                = "-"
+                        $workingInfo.Charging               = "-"
+                        $workingInfo.ChargingWattage        = "-"
+                        $workingInfo.Temp                   = "-"
+                        $workingInfo.BatteryControllerLeft  = "-"
+                        $workingInfo.BatteryControllerRight = "-"
+                        $workingInfo.PowerState             = "-"
+                        $workingInfo.TimeRemainingMin       = "-"
+                        $workingInfo.Brand                  = ""
+                        $workingInfo.Model                  = "-"
+                        $workingInfo.SerialNumber           = "-"
+                        $workingInfo.RunningApp             = "-"
+                        $workingInfo.RunningAppIcon         = ""
+                    }
+
+                    # Publish a COPY: the main loop takes this object by reference and re-stamps
+                    # ID/Name onto it, so handing out the live object would let it read a record
+                    # this runspace is midway through merging.
+                    $sharedState[$ip] = $workingInfo.PSObject.Copy()
                 } catch {
                     Write-Log ("VRMonitor[" + $ip + "]: poll cycle failed: " + $_.Exception.Message) -Level WARNING
                 }
 
-                # Sleep refresh_timer seconds with per-second stop-flag checks
-                $timer = if ($sharedState["_refresh_timer"]) { [int]$sharedState["_refresh_timer"] } else { 5 }
-                for ($s = 0; $s -lt $timer; $s++) {
-                    Start-Sleep -Seconds 1
-                    if ($sharedState["_stop_all"] -or $sharedState[$stopKey]) { return }
-                }
+                # Sleep the remainder of the status tick. Stage 1 can burn most of it on an
+                # unreachable headset (1s ping timeout) and a stats cycle can overrun it
+                # entirely, so subtract the elapsed time instead of always sleeping a full tick.
+                $sw.Stop()
+                $remainMs = ($statusTickSec * 1000) - [int]$sw.Elapsed.TotalMilliseconds
+                if ($remainMs -gt 0) { Start-Sleep -Milliseconds $remainMs }
             }
         }
 

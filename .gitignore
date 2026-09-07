@@ -45,6 +45,10 @@ Exclude .md files but include docs md files
 /docs/adr/
 /docs/improvement_plan/
 
+# ignore devlog history - raw prompts/plans per feature, local dev-only
+# scratch archive, deliberately not versioned and not shipped
+/.dev/
+
 #Other...
 desktop.ini
 .vscode
