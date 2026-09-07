@@ -59,6 +59,37 @@ function Get-SandboxPaths {
     }
 }
 
+function Get-SandboxHeadsetInfoRow {
+    <#
+    .SYNOPSIS
+        Returns the live-status row of one headset from data\known_headsets_infos.csv,
+        located by display name. $null when not found.
+    .DESCRIPTION
+        known_headsets_infos.csv is keyed on ID and carries no identity columns (ADR-0016),
+        so the name is first resolved to an ID through data\known_headsets.csv, which is the
+        authority on names. Joining the infos file on Name directly is what this replaces -
+        it silently missed after any rename or DHCP address swap.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$TargetRoot,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    $paths = Get-SandboxPaths -TargetRoot $TargetRoot
+    if (-not (Test-Path -LiteralPath $paths.KnownHeadsets)) { return $null }
+    if (-not (Test-Path -LiteralPath $paths.HeadsetsInfos)) { return $null }
+
+    try {
+        $headset = @(Import-Csv -LiteralPath $paths.KnownHeadsets -Encoding UTF8) |
+                   Where-Object { $_.Name -eq $Name } | Select-Object -First 1
+        if (-not $headset) { return $null }
+
+        return (@(Import-Csv -LiteralPath $paths.HeadsetsInfos -Delimiter ';' -Encoding UTF8) |
+                Where-Object { [string]$_.ID -eq [string]$headset.ID } | Select-Object -First 1)
+    }
+    catch { return $null }
+}
+
 function Read-JsonFileUtf8 {
     <#
     .SYNOPSIS

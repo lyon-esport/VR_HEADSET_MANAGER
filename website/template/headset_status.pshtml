@@ -213,6 +213,7 @@
 
     <script>
       // Baked-in constants from template generation (static, never change at runtime)
+      var _ID    = '<%= $id %>';
       var _NAME  = '<%= $name -replace "'","\\'" %>';
       var _MODEL = '<%= $assetModelPath %>';
       var _CRIT      = <%= $headset_battery_criticalLevel %>;
@@ -337,7 +338,7 @@
       (function () {
         var INTERVAL_MS = 2000;
         function refresh() {
-          fetch('/api/headset-status?name=' + encodeURIComponent(_NAME), { cache: 'no-store' })
+          fetch('/api/headset-status?id=' + encodeURIComponent(_ID), { cache: 'no-store' })
             .then(function (r) { return r.json(); })
             .then(_updateFromJson)
             .catch(function () {});

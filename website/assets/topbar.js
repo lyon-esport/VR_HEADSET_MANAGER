@@ -544,8 +544,11 @@
 
     // Headset Settings dropdown quick-action buttons
     function _refreshHeadsetPage() {
-      if (typeof pollHeadsetsCsv === 'function') pollHeadsetsCsv();
-      if (typeof pollInfosCsv    === 'function') pollInfosCsv();
+      if (typeof pollHeadsetsCsv    === 'function') pollHeadsetsCsv();
+      if (typeof pollInfosCsv       === 'function') pollInfosCsv();
+      // Status dots come from a different poll than the two above, and the backend needs
+      // ~1-1.5s to rewrite the CSV that serves them.
+      if (typeof pollHeadsetsStatus === 'function') setTimeout(pollHeadsetsStatus, 1500);
     }
     var hsStartAll = document.getElementById('hs-start-all-btn');
     if (hsStartAll) {

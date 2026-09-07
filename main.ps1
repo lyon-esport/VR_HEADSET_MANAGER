@@ -215,34 +215,18 @@ if (Test-Path -Path $scripts_init) {
 # VRMonitor poll cycle (~10-20s with several headsets).
 $global:knownHeadsetsInfosFilePath = "$ScriptPath\data\known_headsets_infos.csv"
 $global:knownHeadsetsInfos = @()
+# The file is ID-keyed and carries live status only (ADR-0016). Both the seed rows and the
+# empty-registry header are derived from Get-HeadsetInfosCsvColumn / New-DefaultHeadsetInfo,
+# so this can never drift from the schema VRMonitor exports a few seconds later.
+$infosColumns = Get-HeadsetInfosCsvColumn
 $seedRows = @()
 foreach ($h in $global:knownHeadsets) {
-    $seedRows += [PSCustomObject]@{
-        ID                     = $h.ID
-        Name                   = $h.Name
-        IPAddress              = $h.IPAddress
-        Ping                   = $false
-        ADBWifi                = $false
-        Battery                = "-"
-        Charging               = "-"
-        ChargingWattage        = "-"
-        Temp                   = "-"
-        BatteryControllerLeft  = "-"
-        BatteryControllerRight = "-"
-        PowerState             = "-"
-        TimeRemainingMin       = "-"
-        BatteryHistory         = ""
-        SCRCPY                 = "-"
-        Model                  = "-"
-        SerialNumber           = if ($h.PSObject.Properties.Name -contains 'SerialNumber' -and $h.SerialNumber) { $h.SerialNumber } else { "-" }
-        RunningApp             = "-"
-        RunningAppIcon         = ""
-    }
+    $seedRows += (New-DefaultHeadsetInfo -knownHeadset $h | Select-Object -Property $infosColumns)
 }
 if ($seedRows.Count -gt 0) {
     $seedRows | Export-Csv -LiteralPath $global:knownHeadsetsInfosFilePath -Delimiter ";" -Encoding UTF8 -NoTypeInformation
 } else {
-    $headerLine = '"ID";"Name";"IPAddress";"Ping";"ADBWifi";"Battery";"Charging";"ChargingWattage";"Temp";"BatteryControllerLeft";"BatteryControllerRight";"PowerState";"TimeRemainingMin";"BatteryHistory";"SCRCPY";"Model";"SerialNumber";"RunningApp";"RunningAppIcon"'
+    $headerLine = ($infosColumns | ForEach-Object { '"' + $_ + '"' }) -join ";"
     $headerLine | Out-File -LiteralPath $global:knownHeadsetsInfosFilePath -Encoding UTF8
 }
 

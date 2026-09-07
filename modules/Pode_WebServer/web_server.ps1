@@ -278,6 +278,56 @@ $script:installJobs = @{}
 $script:knownHeadsetsCache      = $null
 $script:knownHeadsetsCacheMtime = $null
 
+# mtime-based cache for known_headsets_infos.csv, keyed by headset ID.
+$script:headsetInfosCache      = $null
+$script:headsetInfosCacheMtime = $null
+
+function Get-KnownHeadsetsCached {
+    # mtime-cached @(Get-KnownHeadsets). Kept as an ORDERED ARRAY (not a hashtable) so the
+    # CSV's own row order - the drag-and-drop display order set by Set-HeadsetsOrder - is
+    # preserved. ID is a stable identity, not a position, so it must not re-derive that order.
+    # Cached because the status endpoints resolve every request through the registry now that
+    # the live-status file carries no identity columns (ADR-0016), and each headset overlay
+    # polls continuously.
+    $headsetsPath = $global:knownHeadsetsFilePath
+    if (-not $headsetsPath -or -not (Test-Path -LiteralPath $headsetsPath)) { return @() }
+
+    $headsetsMtime = (Get-Item -LiteralPath $headsetsPath -ErrorAction SilentlyContinue).LastWriteTimeUtc
+    if (-not $script:knownHeadsetsCache -or $script:knownHeadsetsCacheMtime -ne $headsetsMtime) {
+        $script:knownHeadsetsCache      = @(Get-KnownHeadsets)
+        $script:knownHeadsetsCacheMtime = $headsetsMtime
+    }
+    return $script:knownHeadsetsCache
+}
+
+function Get-HeadsetInfosCache {
+    # Returns a hashtable of live-status rows from data\known_headsets_infos.csv, keyed by
+    # headset ID as a string ($null when the file does not exist yet).
+    #
+    # Keyed on ID, never on Name (ADR-0016): the infos file carries no identity columns, and
+    # a display name is a mutable label - joining on it made a rename or a DHCP address swap
+    # attach one headset's live status to another row until the next write cycle.
+    #
+    # The parse is cached per file-mtime so N concurrent pollers (every headset monitoring
+    # overlay polls at 1Hz) share a single disk read. Without it the single-threaded request
+    # loop spends most of its time re-parsing the same file.
+    $infosPath = $global:knownHeadsetsInfosFilePath
+    if (-not $infosPath -or -not (Test-Path -LiteralPath $infosPath)) { return $null }
+
+    $infosMtime = (Get-Item -LiteralPath $infosPath -ErrorAction SilentlyContinue).LastWriteTimeUtc
+    if (-not $script:headsetInfosCache -or $script:headsetInfosCacheMtime -ne $infosMtime) {
+        $rows  = @(Import-Csv -LiteralPath $infosPath -Delimiter ";" -Encoding UTF8)
+        $cache = @{}
+        foreach ($r in $rows) {
+            $key = [string]$r.ID
+            if (-not [string]::IsNullOrWhiteSpace($key)) { $cache[$key] = $r }
+        }
+        $script:headsetInfosCache      = $cache
+        $script:headsetInfosCacheMtime = $infosMtime
+    }
+    return $script:headsetInfosCache
+}
+
 # Background job script block for async app installs.
 # Runs in a NEW PowerShell process - no access to web server functions.
 # Calls adb.exe directly and writes progress JSON to a temp file.
@@ -944,34 +994,38 @@ try {
             continue
         }
 
-        # API: GET /api/headset-status?name=<DisplayName>
+        # API: GET /api/headset-status?id=<ID>   (legacy: ?name=<Name>)
         # Lightweight status endpoint: reads known_headsets_infos.csv (written by VRMonitor) and
         # returns the live data for one headset as JSON. No ADB call. Used by the monitoring overlay
         # JS to update the DOM every second without re-downloading the full HTML page.
+        # The infos file is ID-keyed (ADR-0016). ?name= is still accepted because overlay HTML
+        # already loaded in an operator's OBS Browser source keeps requesting it; it is resolved
+        # to an ID through the registry, which is the authority on names.
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/headset-status') {
             try {
+                $rawId   = $request.QueryString['id']
                 $rawName = $request.QueryString['name']
-                if (-not $rawName) { throw "Missing name parameter" }
+                if (-not $rawId -and -not $rawName) { throw "Missing id parameter" }
 
-                $infosPath = $global:knownHeadsetsInfosFilePath
-                if (-not (Test-Path -LiteralPath $infosPath)) {
-                    Send-JsonResponse -Response $response -StatusCode 404 -Body @{ error = 'No monitoring data yet' }
+                $headsetRow = $null
+                foreach ($h in @(Get-KnownHeadsetsCached)) {
+                    if ($rawId) {
+                        if ([string]$h.ID -eq [string]$rawId) { $headsetRow = $h; break }
+                    } elseif ($h.Name -eq $rawName) {
+                        $headsetRow = $h; break
+                    }
+                }
+                if (-not $headsetRow) {
+                    Send-JsonResponse -Response $response -StatusCode 404 -Body @{ error = 'Headset not found' }
                     continue
                 }
 
-                # Cache the parsed CSV per file-mtime so N concurrent pollers
-                # (each headset monitoring overlay polls 1Hz) share a single disk
-                # read. Otherwise the single-threaded request loop spends most of
-                # its time doing redundant Import-Csv calls on the same file.
-                $infosMtime = (Get-Item -LiteralPath $infosPath -ErrorAction SilentlyContinue).LastWriteTimeUtc
-                if (-not $script:headsetInfosCache -or
-                    $script:headsetInfosCacheMtime -ne $infosMtime) {
-                    $rows = Import-Csv -LiteralPath $infosPath -Delimiter ";"
-                    $script:headsetInfosCache       = @{}
-                    foreach ($r in $rows) { $script:headsetInfosCache[$r.Name] = $r }
-                    $script:headsetInfosCacheMtime  = $infosMtime
+                $infosCache = Get-HeadsetInfosCache
+                if (-not $infosCache) {
+                    Send-JsonResponse -Response $response -StatusCode 404 -Body @{ error = 'No monitoring data yet' }
+                    continue
                 }
-                $row = $script:headsetInfosCache[$rawName]
+                $row = $infosCache[[string]$headsetRow.ID]
 
                 if (-not $row) {
                     Send-JsonResponse -Response $response -StatusCode 404 -Body @{ error = 'Headset not found' }
@@ -986,6 +1040,8 @@ try {
                 $timeMin    = if ($row.TimeRemainingMin -and $row.TimeRemainingMin -ne '-' -and $row.TimeRemainingMin -ne '') { [int]$row.TimeRemainingMin } else { $null }
 
                 $result = @{
+                    id                   = [int]$headsetRow.ID
+                    name                 = $headsetRow.Name
                     ping                 = [bool]($row.Ping -eq 'True')
                     battery              = $battery
                     battery_ctrl_left    = $battLeft
@@ -1774,35 +1830,14 @@ try {
         # one CSV read per write cycle regardless of how many pages poll simultaneously.
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/headsets-status') {
             try {
-                # Refresh infos cache (reuse existing $script:headsetInfosCache pattern)
-                $infosPath = $global:knownHeadsetsInfosFilePath
-                if ($infosPath -and (Test-Path -LiteralPath $infosPath)) {
-                    $infosMtime = (Get-Item -LiteralPath $infosPath -ErrorAction SilentlyContinue).LastWriteTimeUtc
-                    if (-not $script:headsetInfosCache -or $script:headsetInfosCacheMtime -ne $infosMtime) {
-                        $rows = Import-Csv -LiteralPath $infosPath -Delimiter ";"
-                        $script:headsetInfosCache      = @{}
-                        foreach ($r in $rows) { $script:headsetInfosCache[$r.Name] = $r }
-                        $script:headsetInfosCacheMtime = $infosMtime
-                    }
-                }
-
-                # Refresh known headsets config cache.
-                # Kept as an ORDERED ARRAY (not a hashtable) so the CSV's own row order -
-                # which is the drag-and-drop display order set by Set-HeadsetsOrder - is
-                # preserved. ID is a stable identity now, not a position, so it must not
-                # be used to re-derive display order here.
-                $headsetsPath = $global:knownHeadsetsFilePath
-                $headsetsMtime = (Get-Item -LiteralPath $headsetsPath -ErrorAction SilentlyContinue).LastWriteTimeUtc
-                if (-not $script:knownHeadsetsCache -or $script:knownHeadsetsCacheMtime -ne $headsetsMtime) {
-                    $script:knownHeadsetsCache      = @(Get-KnownHeadsets)
-                    $script:knownHeadsetsCacheMtime = $headsetsMtime
-                }
+                # Live status, ID-keyed (ADR-0016). Shared mtime cache with /api/headset-status.
+                $infosCache = Get-HeadsetInfosCache
 
                 # Build response: one entry per known headset (in CSV order) joined with live infos
-                $items = @($script:knownHeadsetsCache |
+                $items = @(Get-KnownHeadsetsCached |
                     ForEach-Object {
                         $h    = $_
-                        $info = if ($script:headsetInfosCache) { $script:headsetInfosCache[$h.Name] } else { $null }
+                        $info = if ($infosCache) { $infosCache[[string]$h.ID] } else { $null }
                         @{
                             display_name          = Convert-Displayname $h.Name
                             name                  = $h.Name
@@ -1821,7 +1856,7 @@ try {
                             temp                  = if ($info.Temp -and $info.Temp -ne '-') { $info.Temp } else { '-' }
                             running_app           = if ($info.RunningApp)     { $info.RunningApp }     else { '' }
                             running_app_icon      = if ($info.RunningAppIcon) { $info.RunningAppIcon } else { '' }
-                            model                 = if ($info.Model -and $info.Model -ne '-') { $info.Model } elseif ($h.Model) { $h.Model } else { '' }
+                            model                 = if ($h.Model -and $h.Model -ne '-') { $h.Model } else { '' }
                             scrcpy_auto_restart   = [bool]($h.scrcpy_AutoRestart -eq 'True')
                         }
                     }

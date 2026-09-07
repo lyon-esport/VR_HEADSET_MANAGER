@@ -1653,12 +1653,13 @@
           .then(function(r) { return r.json(); })
           .then(function(j) {
             if (j.ok) {
-              document.getElementById('name-val-' + dn).textContent = j.newname;
-              document.getElementById('name-display-' + dn).style.display = '';
-              document.getElementById('name-edit-' + dn).style.display = 'none';
+              // Every DOM id and headsetStatus key on this card is derived from the OLD
+              // display name, while /api/headsets-status now reports the new one. Patching
+              // the label alone would leave the card permanently frozen on stale status,
+              // so rebuild the page from the renamed registry instead.
               _editingField = false;
-              var _card = document.getElementById('name-val-' + dn).closest('.headset-card');
-              if (_card) updateCardCompactness(_card);
+              location.reload();
+              return;
             } else {
               input.style.borderBottomColor = 'var(--ping-ko)';
               setTimeout(function() { input.style.borderBottomColor = ''; }, 1200);
@@ -1759,6 +1760,15 @@
             body: JSON.stringify({ name: dn })
           })
           .then(function(r) { return r.json(); })
+          .then(function(j) {
+            if (j && j.ok) {
+              // The endpoint is synchronous, so ok:true means scrcpy is already dead.
+              if (headsetStatus[dn]) { headsetStatus[dn].scrcpy = false; }
+              if (cardsBuilt) { updateStatusDots(); }
+              // Confirm against the CSV once the backend has re-polled and rewritten it.
+              setTimeout(pollHeadsetsStatus, 1500);
+            }
+          })
           .catch(function() { return {}; })
           .finally(function() { killBtn.disabled = false; });
           return;
@@ -2854,6 +2864,15 @@
     // Headsets the background LAN sweep found whose serial is not in the registry. They are
     // never added automatically: the operator names and adds one, or forgets it for good.
     var _discDevices = [];
+    // Which sub-page of the modal is showing: 'list' | 'name' | null (closed).
+    // The poll below may only redraw the LIST - redrawing while the operator is typing a
+    // name would wipe the input mid-edit (the poll runs every nextStatusDelay(), i.e. ~2s
+    // at refresh_timer=2), which is exactly what made the Add step impossible to complete.
+    var _discView = null;
+    // The device being named, captured by value. NOT an index into _discDevices: the poll
+    // replaces that array, so an index could point at a different device - or out of
+    // range - by the time the operator confirms, and would add the wrong headset.
+    var _discSelected = null;
 
     function pollDiscoveredDevices() {
       return fetch('/api/headsets/discovered?_=' + Date.now())
@@ -2864,9 +2883,9 @@
           var badge = document.getElementById('disc-badge');
           if (bar) { bar.style.display = _discDevices.length ? 'flex' : 'none'; }
           if (badge) { badge.textContent = String(_discDevices.length); }
-          // Keep an open sub-page in sync (e.g. another operator just added one).
-          var modal = document.getElementById('discovered-modal');
-          if (modal && modal.style.display === 'flex') { renderDiscoveredList(); }
+          // Keep an open sub-page in sync (e.g. another operator just added one), but only
+          // when the list itself is on screen - never on top of the name step.
+          if (_discView === 'list') { renderDiscoveredList(); }
         })
         .catch(function() { /* server busy - leave the previous state alone */ });
     }
@@ -2878,12 +2897,16 @@
 
     function closeDiscoveredModal() {
       document.getElementById('discovered-modal').style.display = 'none';
+      _discView = null;
+      _discSelected = null;
     }
 
     function renderDiscoveredList() {
       var body = document.getElementById('disc-modal-body');
       var foot = document.getElementById('disc-modal-footer');
       document.getElementById('disc-modal-title').textContent = 'Discovered devices';
+      _discView = 'list';
+      _discSelected = null;
 
       if (!_discDevices.length) {
         body.innerHTML = '<div class="wifi-hint">No device pending. Headsets found on the network '
@@ -2904,8 +2927,8 @@
            +       '<div class="disc-meta">SN: ' + esc(d.serialNumber || '-') + '</div>'
            +     '</div>'
            +     '<div class="disc-row-actions">'
-           +       '<button class="pm-btn primary" onclick="discStartAdd(' + i + ')">Add</button>'
-           +       '<button class="pm-btn" onclick="discForget(' + i + ')">Forget</button>'
+           +       '<button class="pm-btn primary" onclick="discStartAdd(\'' + escAttr(d.serialNumber) + '\')">Add</button>'
+           +       '<button class="pm-btn" onclick="discForget(\'' + escAttr(d.serialNumber) + '\')">Forget</button>'
            +     '</div>'
            +   '</div>'
            + '</div>';
@@ -2914,10 +2937,31 @@
       foot.innerHTML = '<button class="pm-btn" onclick="closeDiscoveredModal()">Close</button>';
     }
 
+    // esc() covers &, < and > - enough for text nodes, but a serial is also interpolated
+    // into a quoted onclick attribute below, and it arrives from a device over ADB. Escape
+    // the quotes too so a serial can never break out of the attribute.
+    function escAttr(s) {
+      return esc(s).replace(/'/g, '&#39;').replace(/"/g, '&quot;');
+    }
+
+    // Rows are addressed by serial, never by list position: the background poll replaces
+    // _discDevices wholesale, so an index captured at render time can point at a different
+    // device by the time the button is clicked.
+    function discFindDevice(serial) {
+      for (var i = 0; i < _discDevices.length; i++) {
+        if (_discDevices[i].serialNumber === serial) { return _discDevices[i]; }
+      }
+      return null;
+    }
+
     // Add: ask for a name first, same rule as the USB add flow and /api/addheadset.
-    function discStartAdd(i) {
-      var d = _discDevices[i];
+    function discStartAdd(serial) {
+      var d = discFindDevice(serial);
       if (!d) { return; }
+      // Pin the chosen device and switch the view, so the background poll stops redrawing
+      // over this step and a list refresh cannot swap what we are about to add.
+      _discSelected = d;
+      _discView = 'name';
       var body = document.getElementById('disc-modal-body');
       var foot = document.getElementById('disc-modal-footer');
       document.getElementById('disc-modal-title').textContent = 'Name this headset';
@@ -2936,14 +2980,16 @@
       foot.innerHTML =
           '<button class="pm-btn" onclick="renderDiscoveredList()">Back</button>'
         + '<button class="pm-btn primary" id="disc-confirm-add">Add headset</button>';
-      document.getElementById('disc-confirm-add').onclick = function() { discSubmitAdd(i); };
+      document.getElementById('disc-confirm-add').onclick = discSubmitAdd;
       var inp = document.getElementById('disc-name-input');
       inp.focus();
-      inp.onkeydown = function(ev) { if (ev.key === 'Enter') { discSubmitAdd(i); } };
+      inp.select();
+      inp.onkeydown = function(ev) { if (ev.key === 'Enter') { discSubmitAdd(); } };
     }
 
-    function discSubmitAdd(i) {
-      var d = _discDevices[i];
+    function discSubmitAdd() {
+      // Uses the pinned device, not a list index - the list may have been refreshed since.
+      var d = _discSelected;
       if (!d) { return; }
       var name = (document.getElementById('disc-name-input').value || '').trim();
       if (!/^[\w\s\-]{1,40}$/.test(name)) {
@@ -2982,8 +3028,8 @@
 
     // Forget: permanent and keyed on the serial, so it survives a DHCP change. Confirmed
     // inline rather than in a second modal.
-    function discForget(i) {
-      var d = _discDevices[i];
+    function discForget(serial) {
+      var d = discFindDevice(serial);
       if (!d) { return; }
       if (!confirm('Forget ' + (d.model || d.serialNumber) + ' permanently?\n\n'
                  + 'It will never be proposed again, even if its IP address changes.\n'

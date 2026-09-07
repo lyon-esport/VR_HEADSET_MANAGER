@@ -28,12 +28,7 @@ $nrtIp   = '192.0.2.20'
 
 function Get-Nrt70InfoRow {
     param([Parameter(Mandatory = $true)][string]$Name)
-    if (-not (Test-Path -LiteralPath $paths.HeadsetsInfos)) { return $null }
-    try {
-        return (@(Import-Csv -LiteralPath $paths.HeadsetsInfos -Delimiter ';' -Encoding UTF8) |
-            Where-Object { $_.Name -eq $Name } | Select-Object -First 1)
-    }
-    catch { return $null }
+    return (Get-SandboxHeadsetInfoRow -TargetRoot $target -Name $Name)
 }
 
 Invoke-RegressionTest -Name 'App is running' -Test {

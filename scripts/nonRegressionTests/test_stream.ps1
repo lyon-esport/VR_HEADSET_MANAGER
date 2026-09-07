@@ -384,14 +384,8 @@ function Wait-NrtHeadsetAdb {
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
 
     while ((Get-Date) -lt $deadline) {
-        if (Test-Path -LiteralPath $paths.HeadsetsInfos) {
-            try {
-                $rows = @(Import-Csv -LiteralPath $paths.HeadsetsInfos -Delimiter ';' -Encoding UTF8)
-                $row  = $rows | Where-Object { $_.Name -eq $Name } | Select-Object -First 1
-                if ($row -and ("$($row.ADBWifi)" -match '^(True|true|1)$')) { return $true }
-            }
-            catch { }
-        }
+        $row = Get-SandboxHeadsetInfoRow -TargetRoot $TargetRoot -Name $Name
+        if ($row -and ("$($row.ADBWifi)" -match '^(True|true|1)$')) { return $true }
         Start-Sleep -Milliseconds 1000
     }
     return $false

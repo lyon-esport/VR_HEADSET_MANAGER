@@ -41,16 +41,32 @@ function Update-HeadsetMonitoringFile {
     if ($null -eq $knownHeadsetsInfo) {
         $raw = @()
         if ($global:knownHeadsetsInfosFilePath -and (Test-Path -LiteralPath $global:knownHeadsetsInfosFilePath)) {
-            $raw = @(Import-Csv -LiteralPath $global:knownHeadsetsInfosFilePath -Delimiter ";")
+            $raw = @(Import-Csv -LiteralPath $global:knownHeadsetsInfosFilePath -Delimiter ";" -Encoding UTF8)
         }
         $knownHeadsetsInfo = [System.Collections.ArrayList]$raw
+    }
+
+    # Identity (Name for the output filename, Model for the icon) lives in known_headsets.csv,
+    # never in the info record (ADR-0016). Resolve it by ID, once, for both call paths - the
+    # fast path passes live records in memory, Save-Headsets passes $null and we re-read above.
+    $registryById = @{}
+    foreach ($h in @(Get-KnownHeadsets)) {
+        $rid = [string]$h.ID
+        if (-not [string]::IsNullOrWhiteSpace($rid)) { $registryById[$rid] = $h }
     }
 
     # Generate the dynamic content for headsets
     foreach ($headset in $knownHeadsetsInfo) {
 
+        # An info row whose ID is no longer in the registry belongs to a removed headset.
+        $owner = $registryById[[string]$headset.ID]
+        if (-not $owner) { continue }
+        $ownerName  = $owner.Name
+        $ownerModel = $owner.Model
+
         $deviceInfo = @{
-            name            = $headset.Name
+            id              = $owner.ID
+            name            = $ownerName
             ping            = [bool]$headset.Ping
             battery         = if ($headset.Battery -ne "-") { [convert]::ToInt32($($headset.Battery -replace ' %','') , 10) } else { $headset.Battery }
             battery_ctrl_left  = if ($headset.BatteryControllerLeft  -ne "-") { [convert]::ToInt32($($headset.BatteryControllerLeft  -replace ' %','') , 10) } else { $headset.BatteryControllerLeft }
@@ -58,8 +74,8 @@ function Update-HeadsetMonitoringFile {
             charging        = [bool]$headset.Charging
             temp            = if ($headset.Temp -ne "-"){ ([int]($headset.Temp -replace ',','.')) } else { $headset.Temp } # convert to int
             temperature_highLevel             = $global:Monitoring_temperature_highLevel
-            model                            = if ($headset.Model -and $headset.Model -ne "-") { $headset.Model } else { "" }
-            model_asset_folder               = Resolve-HeadsetIconAssetPath -Model $headset.Model
+            model                            = if ($ownerModel -and $ownerModel -ne "-") { $ownerModel } else { "" }
+            model_asset_folder               = Resolve-HeadsetIconAssetPath -Model $ownerModel
             headset_battery_warningLevel     = $global:Monitoring_headset_battery_warningLevel
             headset_battery_criticalLevel    = $global:Monitoring_headset_battery_criticalLevel
             controllers_battery_warningLevel  = $global:Monitoring_controllers_battery_warningLevel
@@ -71,7 +87,7 @@ function Update-HeadsetMonitoringFile {
         }
         $headsetsHtml = Invoke-EpsTemplate -Path $templatePath -Safe -binding $deviceInfo
 
-        $outputFile = Join-Path -Path $outputPath -ChildPath ((Convert-Displayname($headset.Name)) + "[monitoring].html")
+        $outputFile = Join-Path -Path $outputPath -ChildPath ((Convert-Displayname($ownerName)) + "[monitoring].html")
 
         # Skip write if content has not changed
         $hashBytes = [System.Security.Cryptography.MD5]::Create().ComputeHash([System.Text.Encoding]::UTF8.GetBytes($headsetsHtml))
@@ -84,15 +100,19 @@ function Update-HeadsetMonitoringFile {
 
     # Generate a placeholder ("-" for all values) for every known headset that has no live data
     # row yet and no existing file. Prevents 404 on first startup or before the first poll cycle.
-    $coveredNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    foreach ($h in $knownHeadsetsInfo) { [void]$coveredNames.Add($h.Name) }
+    # Covered set is keyed on ID, matching the loop above (ADR-0016).
+    $coveredIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($h in $knownHeadsetsInfo) {
+        if ($registryById.ContainsKey([string]$h.ID)) { [void]$coveredIds.Add([string]$h.ID) }
+    }
 
     foreach ($headset in @(Get-KnownHeadsets)) {
-        if ($coveredNames.Contains($headset.Name)) { continue }
+        if ($coveredIds.Contains([string]$headset.ID)) { continue }
         $placeholderFile = Join-Path -Path $outputPath -ChildPath ((Convert-Displayname($headset.Name)) + "[monitoring].html")
         if (Test-Path -LiteralPath $placeholderFile) { continue }
 
         $placeholderInfo = @{
+            id                 = $headset.ID
             name               = $headset.Name
             ping               = $false
             battery            = "-"

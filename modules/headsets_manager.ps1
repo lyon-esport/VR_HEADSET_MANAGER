@@ -54,14 +54,49 @@ function Get-KnownHeadsets {
 
 #Show-HeadsetsTable -FieldsToShow @("ID","Name","Model","IPAddress","Ping","ADBWifi")
 
+function Get-HeadsetInfosMerged {
+    # Reads the live-status file and grafts the identity columns back on from the registry,
+    # joined by ID. known_headsets_infos.csv carries ID + live status only (ADR-0016), so any
+    # display that wants Name / IPAddress / Brand / Model / SerialNumber has to come here.
+    # Rows whose ID is no longer in the registry (removed headset) are dropped.
+    param (
+        [string]$FilePath = $global:knownHeadsetsInfosFilePath
+    )
+
+    if (-not $FilePath -or -not (Test-Path -LiteralPath $FilePath)) { return @() }
+
+    $infos = @(Import-Csv -LiteralPath $FilePath -Delimiter ";" -Encoding UTF8)
+    if ($infos.Count -eq 0) { return @() }
+
+    $registryById = @{}
+    foreach ($h in @(Get-KnownHeadsets)) {
+        $rid = [string]$h.ID
+        if (-not [string]::IsNullOrWhiteSpace($rid)) { $registryById[$rid] = $h }
+    }
+
+    $merged = @()
+    foreach ($info in $infos) {
+        $owner = $registryById[[string]$info.ID]
+        if (-not $owner) { continue }
+        $row = $info.PSObject.Copy()
+        foreach ($field in @("Name","IPAddress","Brand","Model","SerialNumber")) {
+            $value = if ($owner.PSObject.Properties[$field]) { $owner.$field } else { "" }
+            if ($row.PSObject.Properties[$field]) { $row.$field = $value }
+            else { $row | Add-Member -MemberType NoteProperty -Name $field -Value $value }
+        }
+        $merged += $row
+    }
+    return $merged
+}
+
 function Show-HeadsetsTable {
     param (
         [string]$FilePath = $global:knownHeadsetsInfosFilePath,
         [string[]]$FieldsToShow = @("all")
     )
 
-    # Load headsets from the CSV file
-    $headsets = @(Import-Csv -LiteralPath $FilePath -Delimiter ";" )
+    # Live status joined to the registry by ID - the infos file has no identity columns.
+    $headsets = @(Get-HeadsetInfosMerged -FilePath $FilePath)
 
     if ($headsets.Count -eq 0) {
         Write-Log $msg.NoHeadsetToDisplay -Level "INFO"
@@ -183,7 +218,8 @@ function Show-HeadsetsTableColored {
         [bool]$UseColors = $true
     )
 
-    $knownHeadsetsInfo = @(Import-Csv -LiteralPath $knownHeadsetsInfosFilePath -Delimiter ";" )
+    # Live status joined to the registry by ID - the infos file has no identity columns.
+    $knownHeadsetsInfo = @(Get-HeadsetInfosMerged -FilePath $knownHeadsetsInfosFilePath)
     # Check whether data is present
     if (-not $knownHeadsetsInfo -or $knownHeadsetsInfo.Count -eq 0) {
         Write-Log ($msg.NoHeadsetInInfosFile -f $knownHeadsetsInfosFilePath) -Level DEBUG

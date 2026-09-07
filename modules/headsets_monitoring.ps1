@@ -333,12 +333,15 @@ function Start-VRMonitor {
             $ip      = $headset.IPAddress
             $stopKey = "_stop_$ip"
 
-            # Pre-load battery history from existing CSV so time-remaining estimates survive restarts
+            # Pre-load battery history from existing CSV so time-remaining estimates survive restarts.
+            # Matched on ID: the infos file is ID-keyed (ADR-0016) and the address is volatile,
+            # so a headset that moved would otherwise inherit the previous occupant's history.
             $localBattHistory = ""
             if (Test-Path -LiteralPath $global:knownHeadsetsInfosFilePath) {
                 try {
-                    $row = Import-Csv -LiteralPath $global:knownHeadsetsInfosFilePath -Delimiter ";" |
-                           Where-Object { $_.IPAddress -eq $ip } | Select-Object -First 1
+                    $ownId = [string]$headset.ID
+                    $row = Import-Csv -LiteralPath $global:knownHeadsetsInfosFilePath -Delimiter ";" -Encoding UTF8 |
+                           Where-Object { [string]$_.ID -eq $ownId } | Select-Object -First 1
                     if ($row -and $row.BatteryHistory) { $localBattHistory = $row.BatteryHistory }
                 } catch {}
             }
@@ -642,15 +645,29 @@ function Start-VRMonitor {
             foreach ($h in $knownHeadsets) {
                 $info = $sharedState[$h.IPAddress]
                 if ($info) {
+                    # Re-stamp the authoritative identity from the registry row onto the record,
+                    # on EVERY tick - not only when the fingerprint moved. The runspace that
+                    # produced this record captured its $headset once at startup, so right after
+                    # an address changes owner it still carries the PREVIOUS headset's identity.
+                    # ID is the exported key (ADR-0016), so a stale one would attach this
+                    # headset's live status to another row. Sync-HeadsetRunspaces respawns the
+                    # drifted runspace on the next slow tick; this keeps the export correct
+                    # until it does.
+                    if ($info.ID        -ne $h.ID)        { $info.ID        = $h.ID }
+                    if ($info.Name      -ne $h.Name)      { $info.Name      = $h.Name }
+                    if ($info.IPAddress -ne $h.IPAddress) { $info.IPAddress = $h.IPAddress }
                     [void]$knownHeadsetsInfo.Add($info)
                 } else {
                     [void]$knownHeadsetsInfo.Add((New-DefaultHeadsetInfo -knownHeadset $h))
                 }
             }
 
-            # Fingerprint of key display fields - triggers CSV/HTML write on any change
+            # Fingerprint of key display fields - triggers CSV/HTML write on any change.
+            # Keyed on ID (the exported key). Brand/Model/SerialNumber are NOT exported any
+            # more but stay in the fingerprint: they gate the Update-HeadsetField write-back
+            # and the Set-HeadsetIdentity queueing in the block below.
             $fp = ($knownHeadsetsInfo | ForEach-Object {
-                "$($_.IPAddress)|$($_.Ping)|$($_.ADBWifi)|$($_.Battery)|$($_.Charging)|$($_.ChargingWattage)|$($_.Temp)|$($_.BatteryControllerLeft)|$($_.BatteryControllerRight)|$($_.PowerState)|$($_.TimeRemainingMin)|$($_.SCRCPY)|$($_.Brand)|$($_.Model)|$($_.SerialNumber)|$($_.RunningApp)"
+                "$($_.ID)|$($_.Ping)|$($_.ADBWifi)|$($_.Battery)|$($_.Charging)|$($_.ChargingWattage)|$($_.Temp)|$($_.BatteryControllerLeft)|$($_.BatteryControllerRight)|$($_.PowerState)|$($_.TimeRemainingMin)|$($_.SCRCPY)|$($_.Brand)|$($_.Model)|$($_.SerialNumber)|$($_.RunningApp)"
             }) -join '~'
 
             if ($fp -ne $lastFingerprint -and $knownHeadsets.Count -gt 0) {
@@ -670,15 +687,6 @@ function Start-VRMonitor {
                     $headset = $knownHeadsets | Where-Object { $_.IPAddress -eq $headsetInfo.IPAddress } | Select-Object -First 1
                     if (-not $headset) { continue }
 
-                    # Re-stamp the authoritative identity onto the record. The runspace that
-                    # produced it captured its $headset at startup, so right after an address
-                    # changes owner it still carries the PREVIOUS headset's ID/Name. Exporting
-                    # that verbatim yields two rows for the old headset and none for the new
-                    # one, and the web UI (which joins status by display name) shows the
-                    # healed headset as offline. Sync-HeadsetRunspaces respawns the runspace
-                    # on the next slow tick; this keeps the UI correct until it does.
-                    if ($headsetInfo.ID -ne $headset.ID)     { $headsetInfo.ID   = $headset.ID }
-                    if ($headsetInfo.Name -ne $headset.Name) { $headsetInfo.Name = $headset.Name }
                     $fetchedModel = $headsetInfo.Model
                     if ((ConvertTo-BoolField $headsetInfo.ADBWifi) `
                         -and -not [string]::IsNullOrWhiteSpace($fetchedModel) `
@@ -756,8 +764,14 @@ function Start-VRMonitor {
                     $lastFingerprint = ""
                 }
                 else {
+                    # Export ID + live status only (ADR-0016). Name/IPAddress/Brand/Model/
+                    # SerialNumber are authoritative in known_headsets.csv and are deliberately
+                    # NOT duplicated here - a rename or an IP change must not require this file
+                    # to be rewritten. The explicit Select-Object also pins the column order
+                    # instead of inheriting it from whichever object happens to be first.
                     $knownHeadsetsInfo |
-                        Export-Csv -Path $global:knownHeadsetsInfosFilePath -Delimiter ";" -Encoding UTF8 -NoTypeInformation
+                        Select-Object -Property (Get-HeadsetInfosCsvColumn) |
+                        Export-Csv -LiteralPath $global:knownHeadsetsInfosFilePath -Delimiter ";" -Encoding UTF8 -NoTypeInformation
 
                     Update-HeadsetMonitoringFile -knownHeadsetsInfo $knownHeadsetsInfo
 
@@ -883,10 +897,36 @@ function Start-VRMonitor {
 }
 
 
+function Get-HeadsetInfosCsvColumn {
+    # Canonical column list of data\known_headsets_infos.csv, in export order (ADR-0016).
+    # ID is the ONLY key; Name / IPAddress / Brand / Model / SerialNumber are authoritative
+    # in known_headsets.csv and are deliberately not duplicated here, so a rename, a reorder
+    # or an IP change never requires this file to be rewritten.
+    # In-memory records (New-DefaultHeadsetInfo) still carry those fields - they hold the
+    # live ADB values that drive the registry write-back - they are just not exported.
+    return @(
+        "ID",
+        "Ping",
+        "ADBWifi",
+        "Battery",
+        "Charging",
+        "ChargingWattage",
+        "Temp",
+        "BatteryControllerLeft",
+        "BatteryControllerRight",
+        "PowerState",
+        "TimeRemainingMin",
+        "BatteryHistory",
+        "SCRCPY",
+        "RunningApp",
+        "RunningAppIcon"
+    )
+}
+
 function New-DefaultHeadsetInfo {
-    # Canonical schema for the per-headset info record stored in $sharedState and exported
-    # to known_headsets_infos.csv. Single source of truth - reused by Get-KnownHeadsetInfos
-    # and by the main-loop placeholder.
+    # Canonical schema for the per-headset info record stored in $sharedState. A superset of
+    # the exported CSV columns (see Get-HeadsetInfosCsvColumn) - single source of truth,
+    # reused by Get-KnownHeadsetInfos and by the main-loop placeholder.
     param([Parameter(Mandatory=$true)][PSCustomObject]$knownHeadset)
     return [PSCustomObject]@{
         ID              = $knownHeadset.ID

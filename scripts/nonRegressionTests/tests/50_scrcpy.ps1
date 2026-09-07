@@ -131,18 +131,12 @@ Invoke-RegressionTest -Name 'The headset reports SCRCPY running in its live stat
     $observed = ''
 
     while ((Get-Date) -lt $deadline -and -not $seen) {
-        if (Test-Path -LiteralPath $paths.HeadsetsInfos) {
-            try {
-                $row = @(Import-Csv -LiteralPath $paths.HeadsetsInfos -Delimiter ';' -Encoding UTF8) |
-                       Where-Object { $_.Name -eq $nrtHeadset.Name } | Select-Object -First 1
-                if ($row) {
-                    # Get-KnownHeadsetInfos writes the string "OK" or "-" here,
-                    # not a boolean - see headsets_monitoring.ps1.
-                    $observed = "$($row.SCRCPY)"
-                    if ($observed -eq 'OK') { $seen = $true }
-                }
-            }
-            catch { }
+        $row = Get-SandboxHeadsetInfoRow -TargetRoot $target -Name $nrtHeadset.Name
+        if ($row) {
+            # Get-KnownHeadsetInfos writes the string "OK" or "-" here,
+            # not a boolean - see headsets_monitoring.ps1.
+            $observed = "$($row.SCRCPY)"
+            if ($observed -eq 'OK') { $seen = $true }
         }
         if (-not $seen) { Start-Sleep -Milliseconds 1000 }
     }
