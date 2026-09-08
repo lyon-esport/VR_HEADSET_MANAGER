@@ -384,7 +384,10 @@ function Invoke-KioskScan {
 
     if (-not $openPorts) { return $results }
 
-    $knownIPs = @((Get-KnownKiosks).IPAddress)
+    # Project each row rather than enumerating the member off the array: with no
+    # kiosks registered, `(Get-KnownKiosks).IPAddress` throws under strict mode
+    # because no element carries the property.
+    $knownIPs = @(Get-KnownKiosks | ForEach-Object { $_.IPAddress })
 
     foreach ($device in $openPorts) {
         $ip      = $device.IPAddress
@@ -454,13 +457,21 @@ function Get-ServerLanUrl {
 }
 
 
+# ---------------------------------------------------------------------------
+# RETIRED PATH HELPERS
+#
+# The three helpers below name files the application no longer reads or writes:
+# agent reports, the command queue and the auto-add denylist are tables now.
+# They are kept because the legacy importer still has to find those files once,
+# on the first startup after the migration, and because a support request may
+# ask where the pre-migration data went. Do not use them in new code.
+# ---------------------------------------------------------------------------
+
 function Get-KioskAgentReportPath {
     <#
     .SYNOPSIS
-    Returns the path of data\kiosks_agent.json - the cache of the latest report
-    received from each advanced kiosk. Written only by the web server's
-    agent-report endpoint, so it never races the VRMonitor-owned
-    data\kiosks_status.json.
+    RETIRED - path of the pre-migration data\kiosks_agent.json. The agent cache
+    is the kiosk_agent_reports table now; this is only for the legacy importer.
     #>
     return (Join-Path $global:ScriptPath "data\kiosks_agent.json")
 }
@@ -469,26 +480,21 @@ function Get-KioskAgentReportPath {
 function Get-KioskCommandFolder {
     <#
     .SYNOPSIS
-    Returns the path of data\kiosk_commands\ - the pending-command queue drained
-    by advanced kiosks on their next report. Created on demand.
+    RETIRED - path of the pre-migration data\kiosk_commands\ queue, for the
+    legacy importer only. Unlike the original it no longer CREATES the folder:
+    the queue is the kiosk_commands table, and re-creating an empty folder on
+    every call would leave a confusing artefact behind after the migration.
     #>
-    $folder = Join-Path $global:ScriptPath "data\kiosk_commands"
-    if (-not (Test-Path -LiteralPath $folder)) {
-        try {
-            New-Item -ItemType Directory -Path $folder -Force -ErrorAction Stop | Out-Null
-        } catch {
-            Write-Log "Get-KioskCommandFolder: could not create $folder - $($_.Exception.Message)" -Level ERROR
-        }
-    }
-    return $folder
+    return (Join-Path $global:ScriptPath "data\kiosk_commands")
 }
 
 
 function ConvertTo-KioskIpToken {
     <#
     .SYNOPSIS
-    Sanitises an IP address into a filename-safe token for the command queue.
-    Guards against a malformed CSV value turning into a path traversal.
+    RETIRED - sanitised an IP into a filename-safe token for the one-file-per-
+    command queue, guarding against a malformed value becoming a path traversal.
+    A row keyed on the address needs no such guard; kept for the importer.
     #>
     param(
         [Parameter(Mandatory)]
@@ -552,38 +558,41 @@ function Save-KioskAgentReport {
         LastReportAt       = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
     }
 
-    $path = Get-KioskAgentReportPath
-    $all  = @()
-    if (Test-Path -LiteralPath $path) {
-        try {
-            $raw = Get-Content -LiteralPath $path -Raw -Encoding UTF8
-            if ($raw) {
-                # Assign, THEN wrap. ConvertFrom-Json emits a JSON array as a single
-                # non-enumerated pipeline item, so "@(ConvertFrom-Json ...)" collapses
-                # every entry into one object whose properties are arrays - which only
-                # shows up once a second kiosk reports.
-                $parsed = ConvertFrom-Json $raw
-                $all    = @($parsed)
-            }
-        } catch {
-            Write-Log "Save-KioskAgentReport: could not parse $path, starting fresh - $($_.Exception.Message)" -Level WARNING
-            $all = @()
-        }
-    }
-
-    $previous = $all | Where-Object { $_ -and $_.IPAddress -eq $IPAddress } | Select-Object -First 1
-    $all = @($all | Where-Object { $_ -and $_.IPAddress -ne $IPAddress })
-    $all += $entry
+    # Read the previous row BEFORE the upsert overwrites it: the change-detection
+    # log below is the only reason it is needed.
+    $previous = $null
+    try {
+        $previous = @(Invoke-DbQuery -Name 'agent.get' -Parameters @{ ip_address = $IPAddress }) | Select-Object -First 1
+    } catch { }
 
     try {
-        Write-FileWithoutBom -Path $path -Content ($all | ConvertTo-Json -Depth 5)
+        Invoke-DbNonQuery -Name 'agent.upsert' -Parameters @{
+            ip_address           = $entry.IPAddress
+            machine_id           = $entry.MachineId
+            hostname             = $entry.Hostname
+            os                   = $entry.OS
+            os_family            = $entry.OSFamily
+            interface_type       = $entry.InterfaceType
+            interface_name       = $entry.InterfaceName
+            link_speed_mbps      = $entry.LinkSpeedMbps
+            browser              = $entry.Browser
+            browser_running      = (ConvertTo-DbBool $entry.BrowserRunning)
+            cdp_port             = $entry.CdpPort
+            current_url          = $entry.CurrentUrl
+            uptime_sec           = $entry.UptimeSec
+            auto_restart_browser = (ConvertTo-DbBool $entry.AutoRestartBrowser)
+            agent_version        = $entry.AgentVersion
+            last_ack             = $entry.LastAck
+            last_report_at       = $entry.LastReportAt
+        } | Out-Null
+
         if (-not $previous) {
             Write-KioskLog "agent report new ip=$IPAddress host=$($entry.Hostname) browserRunning=$($entry.BrowserRunning) url=$($entry.CurrentUrl)" -Level INFO
-        } elseif ($previous.CurrentUrl -ne $entry.CurrentUrl -or $previous.BrowserRunning -ne $entry.BrowserRunning -or $previous.AgentVersion -ne $entry.AgentVersion) {
+        } elseif ($previous.CurrentUrl -ne $entry.CurrentUrl -or ((ConvertTo-DbBool $previous.BrowserRunning) -ne (ConvertTo-DbBool $entry.BrowserRunning)) -or $previous.AgentVersion -ne $entry.AgentVersion) {
             Write-KioskLog "agent report changed ip=$IPAddress host=$($entry.Hostname) browserRunning=$($entry.BrowserRunning) url=$($entry.CurrentUrl)" -Level INFO
         }
     } catch {
-        Write-Log "Save-KioskAgentReport: failed to write $path - $($_.Exception.Message)" -Level WARNING
+        Write-Log "Save-KioskAgentReport: failed to store the report for $IPAddress - $($_.Exception.Message)" -Level WARNING
         Write-KioskLog "agent report write failed ip=$IPAddress error=$($_.Exception.Message)" -Level WARNING
         return $false
     }
@@ -607,20 +616,15 @@ function Get-KioskAgentReports {
         [int]$StaleAfterSec = 30
     )
 
-    $path = Get-KioskAgentReportPath
-    if (-not (Test-Path -LiteralPath $path)) { return @() }
-
     try {
-        $raw = Get-Content -LiteralPath $path -Raw -Encoding UTF8
-        if (-not $raw) { return @() }
-        # Assign, THEN wrap - see the note in Save-KioskAgentReport.
-        $parsed = ConvertFrom-Json $raw
-        $all    = @($parsed)
+        $all = @(Invoke-DbQuery -Name 'agent.list')
     } catch {
-        Write-Log "Get-KioskAgentReports: could not parse $path - $($_.Exception.Message)" -Level DEBUG
+        Write-Log "Get-KioskAgentReports: could not read the agent cache - $($_.Exception.Message)" -Level DEBUG
         return @()
     }
 
+    # IsStale is computed here, not in SQL: the threshold is a parameter of the
+    # question being asked, not a property of the stored row.
     $now = Get-Date
     foreach ($entry in $all) {
         if (-not $entry) { continue }
@@ -634,6 +638,12 @@ function Get-KioskAgentReports {
             }
         }
         Add-Member -InputObject $entry -NotePropertyName 'IsStale' -NotePropertyValue $isStale -Force
+        # These two come back as INTEGER 0/1, but callers and the JSON the web
+        # UI receives expect real booleans. Note ConvertTo-BoolField is the
+        # WRONG tool here: it string-compares against "True", so an integer 1
+        # would read as false. ConvertTo-DbBool accepts every representation.
+        Add-Member -InputObject $entry -NotePropertyName 'BrowserRunning'     -NotePropertyValue ((ConvertTo-DbBool $entry.BrowserRunning) -eq 1)     -Force
+        Add-Member -InputObject $entry -NotePropertyName 'AutoRestartBrowser' -NotePropertyValue ((ConvertTo-DbBool $entry.AutoRestartBrowser) -eq 1) -Force
     }
 
     return $all
@@ -657,9 +667,31 @@ function Get-KioskAgentInfo {
         [int]$StaleAfterSec = 30
     )
 
-    $all   = @(Get-KioskAgentReports -StaleAfterSec $StaleAfterSec)
-    $entry = $all | Where-Object { $_ -and $_.IPAddress -eq $IPAddress } | Select-Object -First 1
+    # Queries one row rather than reading everything and filtering. As a file
+    # this had to parse the whole cache per call, which is why the console
+    # redraw cost one full parse per kiosk (Show-SubMenu-KioskScreens) and why
+    # /api/kiosks had to use the plural form. Both are now cheap either way.
+    $entry = $null
+    try {
+        $entry = @(Invoke-DbQuery -Name 'agent.get' -Parameters @{ ip_address = $IPAddress }) | Select-Object -First 1
+    } catch {
+        Write-Log "Get-KioskAgentInfo: could not read the agent cache - $($_.Exception.Message)" -Level DEBUG
+        return $null
+    }
     if (-not $entry) { return $null }
+
+    $isStale = $true
+    if ($entry.LastReportAt) {
+        try {
+            $last    = [datetime]::ParseExact([string]$entry.LastReportAt, 'yyyy-MM-dd HH:mm:ss', $null)
+            $isStale = ((Get-Date) - $last).TotalSeconds -gt $StaleAfterSec
+        } catch {
+            $isStale = $true
+        }
+    }
+    Add-Member -InputObject $entry -NotePropertyName 'IsStale' -NotePropertyValue $isStale -Force
+    Add-Member -InputObject $entry -NotePropertyName 'BrowserRunning'     -NotePropertyValue ((ConvertTo-DbBool $entry.BrowserRunning) -eq 1)     -Force
+    Add-Member -InputObject $entry -NotePropertyName 'AutoRestartBrowser' -NotePropertyValue ((ConvertTo-DbBool $entry.AutoRestartBrowser) -eq 1) -Force
     return $entry
 }
 
@@ -688,16 +720,13 @@ function Test-KioskAutoAddIgnored {
         [string]$IPAddress
     )
 
-    $path = Get-KioskAutoAddIgnorePath
-    if (-not (Test-Path -LiteralPath $path)) { return $false }
-
     try {
-        $raw = Get-Content -LiteralPath $path -Raw -Encoding UTF8
-        if (-not $raw) { return $false }
-        $list = @(ConvertFrom-Json $raw)
-        return ($list -contains $IPAddress)
+        return ([int](Invoke-DbScalar -Name 'kiosk_ignore.exists' -Parameters @{ ip_address = $IPAddress }) -gt 0)
     } catch {
-        Write-Log "Test-KioskAutoAddIgnored: could not parse $path - $($_.Exception.Message)" -Level DEBUG
+        # An unreadable denylist means nothing is ignored, same as a missing
+        # file did: failing open here only risks re-adding a kiosk, while
+        # failing closed would silently drop every auto-registration.
+        Write-Log "Test-KioskAutoAddIgnored: could not read the denylist - $($_.Exception.Message)" -Level DEBUG
         return $false
     }
 }
@@ -715,26 +744,14 @@ function Add-KioskAutoAddIgnore {
         [string]$IPAddress
     )
 
-    $path = Get-KioskAutoAddIgnorePath
-    $list = @()
-    if (Test-Path -LiteralPath $path) {
-        try {
-            $raw = Get-Content -LiteralPath $path -Raw -Encoding UTF8
-            if ($raw) { $list = @(ConvertFrom-Json $raw) }
-        } catch {
-            Write-Log "Add-KioskAutoAddIgnore: could not parse $path, starting fresh - $($_.Exception.Message)" -Level WARNING
-            $list = @()
-        }
-    }
-
-    if ($list -contains $IPAddress) { return }
-    $list += $IPAddress
-
     try {
-        Write-FileWithoutBom -Path $path -Content ($list | ConvertTo-Json)
-        Write-Log "Add-KioskAutoAddIgnore: $IPAddress will no longer be auto-registered from agent reports." -Level INFO
+        # INSERT OR IGNORE: the primary key does the dedup, so no read-then-write.
+        $added = [int](Invoke-DbNonQuery -Name 'kiosk_ignore.insert' -Parameters @{ ip_address = $IPAddress })
+        if ($added -gt 0) {
+            Write-Log "Add-KioskAutoAddIgnore: $IPAddress will no longer be auto-registered from agent reports." -Level INFO
+        }
     } catch {
-        Write-Log "Add-KioskAutoAddIgnore: failed to write $path - $($_.Exception.Message)" -Level WARNING
+        Write-Log "Add-KioskAutoAddIgnore: failed to denylist $IPAddress - $($_.Exception.Message)" -Level WARNING
     }
 }
 
@@ -757,12 +774,15 @@ function Register-KioskFromAgentReport {
     )
 
     try {
-        $known = @(Get-KnownKiosks)
-        if ($known.IPAddress -contains $IPAddress) { return $false }
+        # Ask the table, not a snapshot. Besides being current - the console and
+        # another agent's heartbeat can both add kiosks at any moment - this
+        # avoids `$known.IPAddress` on a possibly-empty array, which throws
+        # under Set-StrictMode because the property exists on no element.
+        if ([int](Invoke-DbScalar -Name 'kiosks.exists_ip' -Parameters @{ ip_address = $IPAddress }) -gt 0) { return $false }
         if (Test-KioskAutoAddIgnored -IPAddress $IPAddress) { return $false }
 
         $name = if ($Hostname) { $Hostname } else { $IPAddress }
-        Add-Kiosk -kiosks $known -IPAddress $IPAddress -Name $name -Port $Port
+        Add-Kiosk -IPAddress $IPAddress -Name $name -Port $Port
 
         Write-Log "Register-KioskFromAgentReport: auto-added kiosk '$name' ($IPAddress) from its first agent report." -Level SUCCESS
         Write-KioskLog "auto-register ip=$IPAddress host=$name port=$Port" -Level SUCCESS
@@ -793,21 +813,21 @@ function Add-KioskCommand {
         [int]$DelaySec = 5
     )
 
-    $folder = Get-KioskCommandFolder
-    $nonce  = [int64]([datetimeoffset]::UtcNow.ToUnixTimeMilliseconds())
-    $token  = ConvertTo-KioskIpToken -IPAddress $IPAddress
-    $file   = Join-Path $folder ("{0}_{1}.json" -f $token, $nonce)
-
-    $payload = [PSCustomObject]@{
-        cmd       = $Cmd
-        nonce     = $nonce
-        delaySec  = $DelaySec
-        ip        = $IPAddress
-        queuedAt  = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-    }
+    $now      = [datetimeoffset]::UtcNow
+    $nonce    = [int64]$now.ToUnixTimeMilliseconds()
+    $queuedAt = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
 
     try {
-        Write-FileWithoutBom -Path $file -Content ($payload | ConvertTo-Json -Compress)
+        Invoke-DbNonQuery -Name 'kiosk_commands.insert' -Parameters @{
+            ip_address  = $IPAddress
+            cmd         = $Cmd
+            nonce       = $nonce
+            delay_sec   = $DelaySec
+            queued_at   = $queuedAt
+            # Seconds, not milliseconds: the claim compares this against a
+            # wall-clock age in seconds.
+            queued_unix = [int64]$now.ToUnixTimeSeconds()
+        } | Out-Null
         Write-Log "Add-KioskCommand: queued '$Cmd' for kiosk $IPAddress (nonce $nonce)." -Level INFO
         Write-KioskLog "command queued ip=$IPAddress cmd=$Cmd nonce=$nonce delaySec=$DelaySec" -Level INFO
         return $nonce
@@ -833,39 +853,40 @@ function Get-PendingKioskCommand {
         [int]$MaxAgeSec = 300
     )
 
-    $folder = Get-KioskCommandFolder
-    if (-not (Test-Path -LiteralPath $folder)) { return $null }
+    # Each iteration claims the oldest queued command with a single
+    # DELETE ... RETURNING, so read-and-remove is one atomic step. Two agents
+    # reporting at the same instant can never both receive the same command,
+    # which is what the old one-file-per-command layout bought with an atomic
+    # file create; the database gives it directly.
+    $nowUnix = [int64]([datetimeoffset]::UtcNow.ToUnixTimeSeconds())
 
-    $token = ConvertTo-KioskIpToken -IPAddress $IPAddress
-    $files = @(Get-ChildItem -LiteralPath $folder -Filter ("{0}_*.json" -f $token) -File -ErrorAction SilentlyContinue |
-                Sort-Object Name)
-
-    foreach ($file in $files) {
+    while ($true) {
         $cmdObj = $null
         try {
-            $raw = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8
-            if ($raw) { $cmdObj = ConvertFrom-Json $raw }
+            $cmdObj = @(Invoke-DbQuery -Name 'kiosk_commands.claim' -Parameters @{ ip_address = $IPAddress }) | Select-Object -First 1
         } catch {
-            Write-Log "Get-PendingKioskCommand: unreadable command file $($file.Name), dropping it." -Level WARNING
+            Write-Log "Get-PendingKioskCommand: could not claim a command for $IPAddress - $($_.Exception.Message)" -Level WARNING
+            return $null
         }
+        if (-not $cmdObj) { return $null }
 
-        # Deliver-once: the file goes away whether or not it parsed.
-        try { Remove-Item -LiteralPath $file.FullName -Force -ErrorAction Stop } catch { }
-
-        if (-not $cmdObj) { continue }
-
-        $ageSec = ((Get-Date) - $file.LastWriteTime).TotalSeconds
+        $ageSec = $nowUnix - [int64]$cmdObj.queued_unix
         if ($ageSec -gt $MaxAgeSec) {
+            # Already deleted by the claim, so it is gone for good - which is
+            # the point: a reboot queued while a kiosk was powered off must not
+            # fire the moment it comes back an hour later.
             Write-Log "Get-PendingKioskCommand: discarded stale '$($cmdObj.cmd)' for $IPAddress (queued $([int]$ageSec)s ago)." -Level WARNING
             continue
         }
 
         Write-Log "Get-PendingKioskCommand: delivering '$($cmdObj.cmd)' to kiosk $IPAddress (nonce $($cmdObj.nonce))." -Level INFO
         Write-KioskLog "command delivered ip=$IPAddress cmd=$($cmdObj.cmd) nonce=$($cmdObj.nonce)" -Level INFO
-        return $cmdObj
-    }
 
-    return $null
+        # queued_unix is an internal ordering/TTL column. The rest of the object
+        # is serialised straight into the agent-report reply, and the kiosk
+        # agents parse exactly cmd/nonce/delaySec/ip/queuedAt.
+        return ($cmdObj | Select-Object -Property cmd, nonce, delaySec, ip, queuedAt)
+    }
 }
 
 

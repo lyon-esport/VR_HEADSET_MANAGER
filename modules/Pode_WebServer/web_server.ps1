@@ -1175,15 +1175,10 @@ try {
             try {
                 $kiosks = @(Get-KnownKiosks)
                 $statusList = @()
-                $statusPath = Join-Path $global:ScriptPath "data\kiosks_status.json"
-                if (Test-Path -LiteralPath $statusPath) {
-                    try {
-                        $raw = Get-Content -LiteralPath $statusPath -Raw -Encoding UTF8
-                        $parsedStatus = ConvertFrom-Json $raw
-                        $statusList = @($parsedStatus)
-                    } catch {
-                        $statusList = @()
-                    }
+                try {
+                    $statusList = @(Invoke-DbQuery -Name 'kiosk_status.list')
+                } catch {
+                    $statusList = @()
                 }
                 # Read the agent cache ONCE, not once per kiosk: this endpoint is
                 # polled every 4s by the browser.
@@ -1201,9 +1196,12 @@ try {
                         Port          = $k.Port
                         PushedURL     = $k.PushedURL
                         LastPushedAt  = $k.LastPushedAt
-                        Reachable     = if ($st) { $st.Reachable } else { $null }
+                        # Reachable/CdpOpen are INTEGER 0/1 in the table but were
+                        # real booleans in the JSON this replaced, and this is a
+                        # public API shape - convert rather than let 1/0 leak out.
+                        Reachable     = if ($st) { (ConvertTo-DbBool $st.Reachable) -eq 1 } else { $null }
                         LatencyMs     = if ($st) { $st.LatencyMs } else { $null }
-                        CdpOpen       = if ($st) { $st.CdpOpen } else { $null }
+                        CdpOpen       = if ($st) { (ConvertTo-DbBool $st.CdpOpen) -eq 1 }   else { $null }
                         CurrentUrl    = if ($st) { $st.CurrentUrl } else { $null }
                         Advanced      = ($null -ne $ag)
                         AgentStale    = if ($ag) { [bool]$ag.IsStale }        else { $null }

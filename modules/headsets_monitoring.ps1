@@ -841,11 +841,25 @@ function Start-VRMonitor {
                 if ($kioskFp -ne $lastKioskFingerprint) {
                     $lastKioskFingerprint = $kioskFp
                     try {
-                        $kiosksStatusPath = Join-Path $global:ScriptPath "data\kiosks_status.json"
-                        $json = $kioskStatuses | ConvertTo-Json -Depth 5
-                        Write-FileWithoutBom -Path $kiosksStatusPath -Content $json
+                        # One transaction for the whole snapshot, behind the same
+                        # fingerprint gate as before. LastChecked is gone: it used
+                        # to serialise as a culture-dependent DateTime blob that
+                        # nothing ever read, and the table's own updated_at says
+                        # the same thing.
+                        $kioskRows = @($kioskStatuses | ForEach-Object {
+                            @{
+                                ip_address  = [string]$_.IPAddress
+                                port        = [int]$_.Port
+                                reachable   = (ConvertTo-DbBool $_.Reachable)
+                                latency_ms  = $(if ($null -ne $_.LatencyMs) { [int]$_.LatencyMs } else { $null })
+                                cdp_open    = (ConvertTo-DbBool $_.CdpOpen)
+                                current_url = [string]$_.CurrentUrl
+                                extra_json  = '{}'
+                            }
+                        })
+                        Invoke-DbBatch -Name 'kiosk_status.upsert' -Rows $kioskRows | Out-Null
                     } catch {
-                        Write-Log ("VRMonitor: failed to write kiosks_status.json: " + $_.Exception.Message) -Level WARNING
+                        Write-Log ("VRMonitor: failed to store kiosk status: " + $_.Exception.Message) -Level WARNING
                     }
                 }
             }

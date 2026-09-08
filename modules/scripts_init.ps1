@@ -207,8 +207,14 @@ if (Get-Command Initialize-Database -ErrorAction SilentlyContinue) {
         # remaining areas still read their files and are migrated in later
         # steps, so importing them here would strand that code.
         if ($dbRole -eq 'Main') {
+            # Live kiosk reachability does not survive a restart, exactly as the
+            # JSON snapshot it replaces did not: the monitor refills it within a
+            # second, and stale rows would otherwise show dead kiosks as up.
+            try { Invoke-DbNonQuery -Name 'kiosk_status.truncate' | Out-Null }
+            catch { Write-Log ("Could not clear the kiosk status table: " + $_.Exception.Message) -Level WARNING }
+
             try {
-                $legacy = Import-LegacyDataFiles -Include snapshots, vqa
+                $legacy = Import-LegacyDataFiles -Include snapshots, vqa, kiosks
                 if ($legacy.Imported.Count -gt 0) {
                     Write-Log ("Legacy data imported: {0} file(s) moved to {1}" -f $legacy.Imported.Count, $legacy.LegacyFolder) -Level INFO
                 }

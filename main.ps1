@@ -104,7 +104,7 @@ if (-not $rootDiag.Writable) {
 }
 
 # Check if folders exists in the same folder as the script, otherwise create them
-$requiredFolders = @("config","data","data\kiosk_commands","logs","website","website\generated")
+$requiredFolders = @("config","data","logs","website","website\generated")
 foreach ($folder in $requiredFolders) {
     $folderPath = Join-Path -Path $global:ScriptPath -ChildPath $folder
     if (-not (Test-Path -Path $folderPath)) {
@@ -148,22 +148,10 @@ if (-not (Test-Path -LiteralPath $_csvPath)) {
 }
 Remove-Variable _csvPath
 
-# Pre-boot: ensure known_kiosks.csv exists before modules load
-$_kioskCsvPath = Join-Path $global:ScriptPath "data\known_kiosks.csv"
-if (-not (Test-Path -LiteralPath $_kioskCsvPath)) {
-    Write-Host "Initializing known_kiosks.csv..." -ForegroundColor Yellow
-    try {
-        Set-Content -LiteralPath $_kioskCsvPath -Value '"ID","Name","IPAddress","Port","PushedURL","LastPushedAt"' -Encoding UTF8 -ErrorAction Stop
-    } catch {
-        $diag = Test-FolderWriteAccess -Path $_kioskCsvPath
-        Write-Host "Error: Could not create '$_kioskCsvPath'." -ForegroundColor Red
-        Write-Host $diag.Reason -ForegroundColor Red
-        Write-Host "Fix: move the app folder to a location you can write to (e.g. Documents or a dedicated D:\Apps\... folder), or run this app as Administrator." -ForegroundColor Yellow
-        Read-Host "Press enter to exit"
-        exit 1
-    }
-}
-Remove-Variable _kioskCsvPath
+# The kiosk registry needs no pre-boot seeding any more: it is a table, created
+# with the rest of the schema by Initialize-Database. The same goes for the
+# data\kiosk_commands folder, which held one file per queued command only
+# because there was no cross-process lock to share a single queue file.
 
 
 # If custom config file is set as an argument, use it otherwise user the default config.json file
