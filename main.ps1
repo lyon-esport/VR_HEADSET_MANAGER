@@ -76,7 +76,10 @@ if ((Split-Path $global:ScriptPath -Leaf) -eq "modules") {
 }
 
 #Unblock all scripts in the module folder (in case they were blocked by Windows)
-Get-ChildItem -Path $global:ScriptPath -Include "*.ps1","*.psd1" -Recurse -File | Unblock-File
+# .dll is included for the bundled SQLite engine: a managed assembly still
+# carrying the Mark-Of-The-Web from a downloaded zip fails to load with an
+# opaque loadFromRemoteSources error that names nothing useful.
+Get-ChildItem -Path $global:ScriptPath -Include "*.ps1","*.psd1","*.dll" -Recurse -File | Unblock-File
 
 
 ########################## INITIALISATION ##########################

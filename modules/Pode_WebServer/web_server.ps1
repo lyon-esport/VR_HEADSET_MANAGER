@@ -4996,6 +4996,12 @@ try {
         Stop-Job  $script:usbInfoJob -ErrorAction SilentlyContinue
         Remove-Job $script:usbInfoJob -Force -ErrorAction SilentlyContinue
     }
+    # Release this process's database connection. Not checkpointed: the main
+    # process owns that on its way out, and a worker doing it too would just
+    # contend with the writers still running.
+    if (Get-Command Close-DbConnection -ErrorAction SilentlyContinue) {
+        try { Close-DbConnection } catch { }
+    }
     # Release the lock only if it still points at us (see the bind-failure branch).
     if ($PidFile -and (Test-Path -LiteralPath $PidFile)) {
         $ownedRaw = Get-Content -LiteralPath $PidFile -Raw -Encoding UTF8 -ErrorAction SilentlyContinue

@@ -50,6 +50,12 @@ while ($true) {
     Write-Host "`n"
 }
 
+# Release this process's database connection before exiting, so its file
+# handles do not keep the data folder locked.
+if (Get-Command Close-DbConnection -ErrorAction SilentlyContinue) {
+    try { Close-DbConnection } catch { }
+}
+
 # Best-effort cleanup of our PID file on self-exit; reaper will clean up
 # if we were killed without reaching this point.
 try {

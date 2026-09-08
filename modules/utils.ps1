@@ -95,10 +95,51 @@ function Test-FolderWriteAccess {
 # never needs them. Returns @{ Ok; Missing } - Missing entries carry the exact
 # resolved path plus the existing translation key that names that exe, so the
 # caller can report precisely which file is missing and where it was expected.
+# Resolves a translation key through $global:msg, following a dotted path so
+# nested groups work: 'Database.AssemblyNotFound' reads $msg.Database.AssemblyNotFound.
+# Nesting is not cosmetic - Import-PowerShellDataFile caps a single hashtable
+# literal at 500 pairs and both locales sit near that limit, so new features
+# group their strings under one top-level key (CLAUDE.md, translations).
+# Returns $Fallback (default: the key itself) when the key does not resolve, so
+# a missing translation degrades to something readable instead of an empty
+# string that would make Write-Log throw.
+# Example: Get-MessageString -Key 'Database.AssemblyNotFound'
+function Get-MessageString {
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [string]$Fallback = ''
+    )
+    if (-not $Fallback) { $Fallback = $Key }
+    if (-not $global:msg) { return $Fallback }
+
+    $node = $global:msg
+    foreach ($part in $Key.Split('.')) {
+        if ($null -eq $node) { return $Fallback }
+        if ($node -is [hashtable]) {
+            if (-not $node.ContainsKey($part)) { return $Fallback }
+            $node = $node[$part]
+        } else {
+            $prop = $node.PSObject.Properties[$part]
+            if (-not $prop) { return $Fallback }
+            $node = $prop.Value
+        }
+    }
+    if ($null -eq $node -or "$node" -eq '') { return $Fallback }
+    return [string]$node
+}
+
+
 function Test-RequiredBinaries {
     $candidates = @(
         [PSCustomObject]@{ ExeName = 'adb.exe';    Path = $global:adbPath;        MessageKey = 'ADBExecutableNotFound' }
         [PSCustomObject]@{ ExeName = 'scrcpy.exe'; Path = $global:scrcpyFilePath; MessageKey = 'ScrcpyNotFound' }
+        # The database engine. Both files are mandatory and must stay together:
+        # System.Data.SQLite.dll is the managed assembly, x64\SQLite.Interop.dll
+        # the native engine it P/Invokes. Missing either one means no persistence
+        # at all, so this is worth failing loudly at startup rather than at the
+        # first query.
+        [PSCustomObject]@{ ExeName = 'System.Data.SQLite.dll'; Path = $global:databaseAssemblyPath; MessageKey = 'Database.AssemblyNotFound' }
+        [PSCustomObject]@{ ExeName = 'SQLite.Interop.dll';     Path = $global:databaseInteropPath;  MessageKey = 'Database.InteropNotFound' }
     )
     if ($global:mediamtxEnabled) {
         $candidates += [PSCustomObject]@{ ExeName = 'mediamtx.exe'; Path = $global:mediamtxFilePath; MessageKey = 'MediaMtxNotFound' }

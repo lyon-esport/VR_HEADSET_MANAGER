@@ -36,7 +36,11 @@
 
 [CmdletBinding()]
 param(
-    [ValidateSet('Static', 'Unit', 'Stress', 'Failure', 'Perf', 'All')]
+    # Deliberately NOT [ValidateSet]: powershell.exe -File collapses
+    # "-Layer Static,Unit" into a single string, which a ValidateSet on a
+    # string[] rejects outright. Same trap the non-regression harness
+    # documents for -Sections. Validated by hand below instead, so both
+    # "-Layer Static,Unit" and "-Layer Static Unit" work.
     [string[]]$Layer = @('Static', 'Unit'),
     [switch]$KeepSandboxes
 )
@@ -44,6 +48,23 @@ param(
 $ErrorActionPreference = 'Stop'
 
 . (Join-Path -Path $PSScriptRoot -ChildPath 'db_test_core.ps1')
+
+$validLayers = @('Static', 'Unit', 'Stress', 'Failure', 'Perf', 'All')
+$requested = New-Object System.Collections.Generic.List[string]
+foreach ($item in $Layer) {
+    foreach ($part in ([string]$item -split '[,;]')) {
+        $name = $part.Trim()
+        if (-not $name) { continue }
+        $match = @($validLayers | Where-Object { $_ -eq $name })
+        if ($match.Count -eq 0) {
+            Write-Host ("Unknown layer '{0}'. Valid layers: {1}" -f $name, ($validLayers -join ', ')) -ForegroundColor Red
+            exit 2
+        }
+        $requested.Add($match[0]) | Out-Null
+    }
+}
+$Layer = @($requested | Sort-Object -Unique)
+if ($Layer.Count -eq 0) { $Layer = @('Static', 'Unit') }
 
 $repoRoot = Get-DbTestRepoRoot
 

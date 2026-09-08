@@ -318,7 +318,11 @@ function Start-VRMonitor {
             $global:ScriptPath     = $scriptPath
             $global:ConfigFilePath = $configFilePath
             $modPath = Join-Path $scriptPath "modules"
-            foreach ($mod in @("logging.ps1","config_files_loader.ps1","utils.ps1","network_scanner.ps1","adb_functions.ps1","headsets_monitoring.ps1")) {
+            # database.ps1 is in the list so this runspace can open a connection
+            # OF ITS OWN. A connection is never shared between runspaces - the
+            # module refuses that explicitly, because a native SQLite handle used
+            # from two threads corrupts memory silently.
+            foreach ($mod in @("logging.ps1","config_files_loader.ps1","utils.ps1","network_scanner.ps1","adb_functions.ps1","database.ps1","headsets_monitoring.ps1")) {
                 $f = Join-Path $modPath $mod
                 if (Test-Path -LiteralPath $f) { . $f }
             }
@@ -329,6 +333,12 @@ function Start-VRMonitor {
             $transFile   = Join-Path $transFolder "$($global:SelectedLanguage).psd1"
             if (-not (Test-Path -LiteralPath $transFile)) { $transFile = Join-Path $transFolder "en-US.psd1" }
             if (Test-Path -LiteralPath $transFile) { $global:msg = Import-PowerShellDataFile -Path $transFile }
+
+            # Worker role: open only, never migrate. Get-Config must have run
+            # first - it is what sets the database paths.
+            if (Get-Command Initialize-Database -ErrorAction SilentlyContinue) {
+                try { Initialize-Database -Role Worker | Out-Null } catch { }
+            }
 
             $ip      = $headset.IPAddress
             $stopKey = "_stop_$ip"
@@ -362,6 +372,10 @@ function Start-VRMonitor {
             $appsCacheCounter = 0
             $nextStatsAt      = [datetime]::MinValue   # first tick collects stats immediately
 
+            # try/finally around the whole loop: the stop flags exit via return,
+            # and this runspace owns a database connection that must be released
+            # or its file handles keep the data folder locked after shutdown.
+            try {
             while ($true) {
                 if ($sharedState["_stop_all"] -or $sharedState[$stopKey]) { return }
 
@@ -445,6 +459,11 @@ function Start-VRMonitor {
                 $remainMs = ($statusTickSec * 1000) - [int]$sw.Elapsed.TotalMilliseconds
                 if ($remainMs -gt 0) { Start-Sleep -Milliseconds $remainMs }
             }
+            } finally {
+                if (Get-Command Close-DbConnection -ErrorAction SilentlyContinue) {
+                    try { Close-DbConnection } catch { }
+                }
+            }
         }
 
         # Poll scriptblock executed inside each per-kiosk runspace. Kept lightweight and
@@ -461,7 +480,8 @@ function Start-VRMonitor {
             $global:ScriptPath     = $scriptPath
             $global:ConfigFilePath = $configFilePath
             $modPath = Join-Path $scriptPath "modules"
-            foreach ($mod in @("logging.ps1","config_files_loader.ps1","utils.ps1","network_scanner.ps1","kiosk_functions.ps1")) {
+            # database.ps1: this runspace opens a connection of its own (never shared).
+            foreach ($mod in @("logging.ps1","config_files_loader.ps1","utils.ps1","network_scanner.ps1","database.ps1","kiosk_functions.ps1")) {
                 $f = Join-Path $modPath $mod
                 if (Test-Path -LiteralPath $f) { . $f }
             }
@@ -473,8 +493,16 @@ function Start-VRMonitor {
             if (-not (Test-Path -LiteralPath $transFile)) { $transFile = Join-Path $transFolder "en-US.psd1" }
             if (Test-Path -LiteralPath $transFile) { $global:msg = Import-PowerShellDataFile -Path $transFile }
 
+            if (Get-Command Initialize-Database -ErrorAction SilentlyContinue) {
+                try { Initialize-Database -Role Worker | Out-Null } catch { }
+            }
+
             $stopKey = "_stop_kiosk_$ip"
 
+            # try/finally: the stop flags exit via return, and this runspace's
+            # database connection must be released or its handles keep the data
+            # folder locked after shutdown.
+            try {
             while ($true) {
                 if ($sharedState["_stop_all"] -or $sharedState[$stopKey]) { return }
 
@@ -500,6 +528,11 @@ function Start-VRMonitor {
                     if ($sharedState["_stop_all"] -or $sharedState[$stopKey]) { return }
                 }
             }
+            } finally {
+                if (Get-Command Close-DbConnection -ErrorAction SilentlyContinue) {
+                    try { Close-DbConnection } catch { }
+                }
+            }
         }
 
         # LAN discovery scriptblock. Runs in its own runspace because a full /24 ADB sweep
@@ -514,7 +547,8 @@ function Start-VRMonitor {
             $global:ScriptPath     = $scriptPath
             $global:ConfigFilePath = $configFilePath
             $modPath = Join-Path $scriptPath "modules"
-            foreach ($mod in @("logging.ps1","config_files_loader.ps1","utils.ps1","network_scanner.ps1","adb_functions.ps1","headsets_discovery.ps1")) {
+            # database.ps1: this runspace opens a connection of its own (never shared).
+            foreach ($mod in @("logging.ps1","config_files_loader.ps1","utils.ps1","network_scanner.ps1","adb_functions.ps1","database.ps1","headsets_discovery.ps1")) {
                 $f = Join-Path $modPath $mod
                 if (Test-Path -LiteralPath $f) { . $f }
             }
@@ -526,6 +560,14 @@ function Start-VRMonitor {
             if (-not (Test-Path -LiteralPath $transFile)) { $transFile = Join-Path $transFolder "en-US.psd1" }
             if (Test-Path -LiteralPath $transFile) { $global:msg = Import-PowerShellDataFile -Path $transFile }
 
+            if (Get-Command Initialize-Database -ErrorAction SilentlyContinue) {
+                try { Initialize-Database -Role Worker | Out-Null } catch { }
+            }
+
+            # try/finally: the stop flags exit via return, and this runspace's
+            # database connection must be released or its handles keep the data
+            # folder locked after shutdown.
+            try {
             while ($true) {
                 # Checked here only: a sweep already under way always runs to completion.
                 if ($sharedState["_stop_all"] -or $sharedState["_stop_discovery"]) { return }
@@ -556,6 +598,11 @@ function Start-VRMonitor {
                 for ($s = 0; $s -lt $interval; $s++) {
                     Start-Sleep -Seconds 1
                     if ($sharedState["_stop_all"] -or $sharedState["_stop_discovery"]) { return }
+                }
+            }
+            } finally {
+                if (Get-Command Close-DbConnection -ErrorAction SilentlyContinue) {
+                    try { Close-DbConnection } catch { }
                 }
             }
         }
@@ -635,6 +682,11 @@ function Start-VRMonitor {
                     }
                     try { $discoveryRunspace.PS.Dispose() }       catch {}
                     try { $discoveryRunspace.Runspace.Dispose() } catch {}
+                }
+                # Release the job's own connection last, after every runspace it
+                # supervises has released theirs.
+                if (Get-Command Close-DbConnection -ErrorAction SilentlyContinue) {
+                    try { Close-DbConnection } catch { }
                 }
                 return
             }

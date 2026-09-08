@@ -348,6 +348,24 @@
     HeadsetSerialExists = "A headset with serial number {0} already exists in the list ('{1}')."
 
     # ==========================================
+    # Embedded database (SQLite)
+    # NOTE: nested under one top-level key on purpose, same reason as Discovery
+    # and Kiosk below. Use $msg.Database.* (resolve with Get-MessageString when
+    # the key arrives as a dotted string).
+    # ==========================================
+    Database = @{
+        AssemblyNotFound   = "Database engine not found: System.Data.SQLite.dll is missing at '{0}'."
+        InteropNotFound    = "Database engine not found: SQLite.Interop.dll is missing at '{0}'. It must sit in the x64 subfolder next to System.Data.SQLite.dll."
+        InitFailed         = "The database could not be opened or created: {0}"
+        IntegrityFailed    = "Database integrity check failed: {0}"
+        RestoredFromBackup = "Database restored from backup '{0}'."
+        NoBackupAvailable  = "The database is damaged and no usable backup was found. Starting from an empty database."
+        SchemaMigrated     = "Database schema updated to version {0}."
+        SchemaMismatch     = "Database schema version mismatch: the file is at {0} but this version expects {1}. Restart the application."
+        Ready              = "Database ready (role {0}, schema version {1})."
+    }
+
+    # ==========================================
     # Serial-keyed identity + background network discovery
     # NOTE: nested under one top-level key on purpose, same reason as Kiosk below -
     # Import-PowerShellDataFile enforces a hard 500 key/value-pair limit on a single

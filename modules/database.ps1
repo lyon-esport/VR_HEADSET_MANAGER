@@ -912,6 +912,14 @@ function Initialize-Database {
                 $result.Backup = Backup-Database
             }
         } else {
+            # A worker must never CREATE the database: only the main process
+            # builds and migrates it. Opening a missing path would silently
+            # leave an empty, schema-less file behind that the next main start
+            # then has to migrate - and worse, hide the real problem (a worker
+            # launched without its parent).
+            if (-not (Test-Path -LiteralPath $DatabasePath)) {
+                throw ("Database file '{0}' does not exist. A worker process never creates it - start the application through main.ps1." -f $DatabasePath)
+            }
             Get-DbConnection -DatabasePath $DatabasePath | Out-Null
             $onDisk  = Get-DbSchemaVersionOnDisk
             $current = Get-DbUserVersion

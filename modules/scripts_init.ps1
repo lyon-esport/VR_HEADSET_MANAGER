@@ -176,6 +176,47 @@ $moduleFiles = Get-ChildItem -Path $ModulesPath -Filter "*.ps1" -File | Sort-Obj
     }
     Write-Log ($msg.TranslationsLoaded -f $global:SelectedLanguage) -Level DEBUG
 
+# ---------------------------------------------------------------------------
+# Embedded database
+#
+# Opened here, right after the config and translations and BEFORE anything
+# reads a registry. Two roles:
+#   Main   - the console process: creates or migrates the schema, verifies
+#            integrity (restoring the newest good backup if the file is
+#            damaged) and takes a startup backup.
+#   Worker - every other context (VRMonitor job, web server, dashboard, the
+#            poll runspaces, child jobs): opens a connection of its own and
+#            asserts the schema matches this module set. Never migrates, so a
+#            stale process cannot half-migrate a live database.
+#
+# Each process and each runspace owns its connection; they are never shared
+# (see the header of modules\database.ps1).
+# ---------------------------------------------------------------------------
+if (Get-Command Initialize-Database -ErrorAction SilentlyContinue) {
+    $dbRole = if ($global:IsVRMonitorJob -or $global:IsWebServerProcess -or $global:IsDashboardProcess) { 'Worker' } else { 'Main' }
+    try {
+        $dbInit = Initialize-Database -Role $dbRole
+        Write-Log ((Get-MessageString -Key 'Database.Ready') -f $dbRole, $dbInit.SchemaVersion) -Level DEBUG
+        if ($dbInit.Restored) {
+            Write-Log (Get-MessageString -Key 'Database.NoBackupAvailable') -Level WARNING
+        }
+    } catch {
+        $dbError = (Get-MessageString -Key 'Database.InitFailed') -f $_.Exception.Message
+        Write-Log $dbError -Level ERROR
+        # Without persistence nothing downstream can work, so fail loudly in the
+        # main process instead of letting every later call throw in turn. Child
+        # processes just exit; the main process supervises them.
+        if ($dbRole -eq 'Main') {
+            Write-Host ""
+            Write-Host "=================================================================" -ForegroundColor Red
+            Write-Host " $dbError" -ForegroundColor Red
+            Write-Host "=================================================================" -ForegroundColor Red
+            Read-Host " $($msg.PressEnterToExit)"
+        }
+        exit 1
+    }
+}
+
 # Initialize known_apps.csv from template on first startup
 if ($global:AppCacheFilePath -and -not (Test-Path -LiteralPath $global:AppCacheFilePath)) {
     if (Get-Command Initialize-AppNamesCache -ErrorAction SilentlyContinue) {
@@ -391,6 +432,14 @@ function Invoke-AppShutdown {
         try { Restore-VqaOriginals | Out-Null } catch { }
     }
 
+    # Close the database last, after every service that might still write to it.
+    # -Checkpoint folds the WAL back into the .db so the folder is left with a
+    # single clean file: an open handle here is what makes a release or test
+    # folder undeletable afterwards.
+    if (Get-Command Close-DbConnection -ErrorAction SilentlyContinue) {
+        try { Close-DbConnection -Checkpoint } catch { }
+    }
+
     # 4. Tell the reaper graceful shutdown is done so it exits without acting.
     try { New-Item -ItemType File -Path $reaperExitFlagPath -Force | Out-Null } catch { }
 
@@ -526,7 +575,9 @@ if (-not $global:IsWebServerProcess -and -not $global:IsDashboardProcess -and -n
         Write-Host " $($msg.CriticalBinariesMissingTitle)" -ForegroundColor Red
         Write-Host "=================================================================" -ForegroundColor Red
         foreach ($item in $binaryCheck.Missing) {
-            $line = $msg.($item.MessageKey) -f $item.Path
+            # Get-MessageString, not $msg.(...): MessageKey may be a dotted path
+            # into a nested translation group (e.g. Database.AssemblyNotFound).
+            $line = (Get-MessageString -Key $item.MessageKey) -f $item.Path
             Write-Host " - $line" -ForegroundColor Red
             Write-Log $line -Level ERROR
         }

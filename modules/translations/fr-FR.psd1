@@ -346,6 +346,24 @@
     HeadsetSerialExists = "Un casque avec le numero de serie {0} existe deja dans la liste ('{1}')."
 
     # ==========================================
+    # Base de donnees embarquee (SQLite)
+    # NOTE : regroupe sous une seule cle de premier niveau, pour la meme raison
+    # que Discovery et Kiosk. Utiliser $msg.Database.* (resolution via
+    # Get-MessageString quand la cle arrive sous forme de chaine pointee).
+    # ==========================================
+    Database = @{
+        AssemblyNotFound   = "Moteur de base de donnees introuvable : System.Data.SQLite.dll est absent de '{0}'."
+        InteropNotFound    = "Moteur de base de donnees introuvable : SQLite.Interop.dll est absent de '{0}'. Ce fichier doit se trouver dans le sous-dossier x64, a cote de System.Data.SQLite.dll."
+        InitFailed         = "La base de donnees n'a pas pu etre ouverte ou creee : {0}"
+        IntegrityFailed    = "Echec du controle d'integrite de la base de donnees : {0}"
+        RestoredFromBackup = "Base de donnees restauree depuis la sauvegarde '{0}'."
+        NoBackupAvailable  = "La base de donnees est endommagee et aucune sauvegarde utilisable n'a ete trouvee. Demarrage sur une base vide."
+        SchemaMigrated     = "Schema de la base de donnees mis a jour en version {0}."
+        SchemaMismatch     = "Version de schema incoherente : le fichier est en version {0} alors que cette version attend {1}. Redemarrez l'application."
+        Ready              = "Base de donnees prete (role {0}, schema version {1})."
+    }
+
+    # ==========================================
     # Identite basee sur le numero de serie + detection reseau
     # NOTE : regroupe sous une seule cle de premier niveau, pour la meme raison que
     # Kiosk plus bas - Import-PowerShellDataFile impose une limite stricte de 500
