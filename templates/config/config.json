@@ -259,6 +259,17 @@
     "ffmpeg":  {
                    "folder":  "ffmpeg\\ffmpeg-9.0.1"
                },
+    "database":  {
+                     "folder":  "sqlite\\System.Data.SQLite-1.0.119",
+                     "file":  "data\\vrhm.db",
+                     "busy_timeout_ms":  5000,
+                     "retry_max":  6,
+                     "integrity_check":  "quick",
+                     "backup":  {
+                                    "keep":  5,
+                                    "on_startup":  true
+                                }
+                 },
     "WebServer":  {
                       "enabled":  true,
                       "port":  8080,

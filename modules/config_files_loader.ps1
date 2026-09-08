@@ -275,6 +275,22 @@ function Get-Config {
     $global:ffmpegFolder = Join-Path -Path $sourcesPath -ChildPath $ffmpegFolder
     $global:ffmpegFilePath = Join-Path -Path $global:ffmpegFolder -ChildPath "ffmpeg.exe"
 
+    # Embedded SQLite database (System.Data.SQLite, x64). One folder per version under
+    # sources\sqlite\ (same rule as scrcpy/mediamtx/ffmpeg). Every value has a default so a
+    # config.json written before the "database" section existed still loads.
+    $dbCfg = $configContent.database
+    $dbFolderRel = if ($dbCfg -and $dbCfg.folder) { [string]$dbCfg.folder } else { "sqlite\System.Data.SQLite-1.0.119" }
+    $dbFileRel   = if ($dbCfg -and $dbCfg.file)   { [string]$dbCfg.file }   else { "data\vrhm.db" }
+    $global:databaseFolder        = Join-Path -Path $sourcesPath -ChildPath $dbFolderRel
+    $global:databaseAssemblyPath  = Join-Path -Path $global:databaseFolder -ChildPath "System.Data.SQLite.dll"
+    $global:databaseInteropPath   = Join-Path -Path (Join-Path -Path $global:databaseFolder -ChildPath "x64") -ChildPath "SQLite.Interop.dll"
+    $global:databaseFilePath      = Join-Path -Path $global:ScriptPath -ChildPath $dbFileRel
+    $global:databaseBusyTimeoutMs = if ($dbCfg -and $dbCfg.busy_timeout_ms) { [int]$dbCfg.busy_timeout_ms } else { 5000 }
+    $global:databaseRetryMax      = if ($dbCfg -and $null -ne $dbCfg.retry_max) { [int]$dbCfg.retry_max } else { 6 }
+    $global:databaseIntegrityCheck = if ($dbCfg -and $dbCfg.integrity_check) { [string]$dbCfg.integrity_check } else { "quick" }
+    $global:databaseBackupKeep    = if ($dbCfg -and $dbCfg.backup -and $null -ne $dbCfg.backup.keep) { [int]$dbCfg.backup.keep } else { 5 }
+    $global:databaseBackupOnStartup = if ($dbCfg -and $dbCfg.backup -and $null -ne $dbCfg.backup.on_startup) { [bool]$dbCfg.backup.on_startup } else { $true }
+
     # Web server
     $global:WebServer_enabled = if ($null -ne $configContent.WebServer.enabled) { [bool]$configContent.WebServer.enabled } else { $false }
     $global:WebServer_port    = if ($configContent.WebServer.port)               { [int]$configContent.WebServer.port }    else { 8080 }
