@@ -14,6 +14,8 @@
       Static   - source-tree checks: the SQLite access boundary, named-query
                  parity, migration numbering, ASCII, release packaging.
       Unit     - engine behaviour against a temp database.
+      Import   - legacy CSV/JSON import fidelity and the operator's headset
+                 CSV export/import round-trip.
       Stress   - multi-process and multi-runspace write contention.   (T10)
       Failure  - missing DLL, corrupt file, read-only folder, upgrades. (T10)
       Perf     - latency budgets.                                      (T10)
@@ -41,7 +43,7 @@ param(
     # string[] rejects outright. Same trap the non-regression harness
     # documents for -Sections. Validated by hand below instead, so both
     # "-Layer Static,Unit" and "-Layer Static Unit" work.
-    [string[]]$Layer = @('Static', 'Unit'),
+    [string[]]$Layer = @('Static', 'Unit', 'Import'),
     [switch]$KeepSandboxes
 )
 
@@ -49,7 +51,7 @@ $ErrorActionPreference = 'Stop'
 
 . (Join-Path -Path $PSScriptRoot -ChildPath 'db_test_core.ps1')
 
-$validLayers = @('Static', 'Unit', 'Stress', 'Failure', 'Perf', 'All')
+$validLayers = @('Static', 'Unit', 'Import', 'Stress', 'Failure', 'Perf', 'All')
 $requested = New-Object System.Collections.Generic.List[string]
 foreach ($item in $Layer) {
     foreach ($part in ([string]$item -split '[,;]')) {
@@ -74,12 +76,15 @@ $repoRoot = Get-DbTestRepoRoot
 $layers = @(
     [PSCustomObject]@{ Id = 'Static';  Title = 'Static source checks';        File = 'Test-DbStatic.ps1' }
     [PSCustomObject]@{ Id = 'Unit';    Title = 'Engine unit tests';           File = 'Test-DbUnit.ps1' }
+    [PSCustomObject]@{ Id = 'Import';  Title = 'Legacy import and CSV round-trip'; File = 'Test-DbImport.ps1' }
     [PSCustomObject]@{ Id = 'Stress';  Title = 'Concurrency stress';          File = 'Test-DbConcurrency.ps1' }
     [PSCustomObject]@{ Id = 'Failure'; Title = 'Failure injection';           File = 'Test-DbFailures.ps1' }
     [PSCustomObject]@{ Id = 'Perf';    Title = 'Performance budgets';         File = 'Test-DbPerf.ps1' }
 )
 
-$selected = if ($Layer -contains 'All') { $layers } else { @($layers | Where-Object { $Layer -contains $_.Id }) }
+# @() around the whole if-expression: selecting a single layer would otherwise
+# unroll to a scalar, which has no .Count under Set-StrictMode.
+$selected = @(if ($Layer -contains 'All') { $layers } else { $layers | Where-Object { $Layer -contains $_.Id } })
 if ($selected.Count -eq 0) {
     Write-Host 'No layer selected.' -ForegroundColor Red
     exit 2

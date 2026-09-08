@@ -989,3 +989,815 @@ function Restore-DatabaseFromBackup {
     }
     return $false
 }
+
+
+# ===================================================================
+# LEGACY IMPORT (one-way cut-over)
+#
+# The application used to persist ~20 CSV/JSON files under data\. On the
+# first startup after the migration these are read into the database and the
+# originals are MOVED to data\legacy_<timestamp>\ - never deleted, so an
+# operator can always go back and look.
+#
+# The importer is deliberately tolerant, because the files it meets in the
+# field are not the files the current code writes:
+#   * some carry a UTF-8 BOM, some do not
+#   * known_apps.csv predates the LatestVersion column
+#   * <name>_installed_apps.csv predates the SizeBytes column
+#   * known_headsets_infos.csv may still be the pre-ADR-0016 20-column shape
+#   * per-headset files exist whose headset was removed years ago (orphans)
+#   * several of the JSON files may simply not exist yet
+# A file it cannot map is left alone and reported, never silently dropped.
+#
+# It is also idempotent per file: a file that appears later (an operator
+# restoring one from a backup) is picked up on the next startup.
+# ===================================================================
+
+# Reads a UTF-8 (BOM or not) text file and strips a leading BOM character,
+# which Import-Csv would otherwise fold into the first column name.
+function Read-LegacyText {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $text = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+    if ($null -eq $text) { return '' }
+    if ($text.Length -gt 0 -and [int]$text[0] -eq 0xFEFF) { $text = $text.Substring(1) }
+    return $text
+}
+
+# Import-Csv over a legacy file, honouring the delimiter and tolerating a BOM.
+# Returns @() for a missing or empty file rather than throwing.
+function Import-LegacyCsv {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [string]$Delimiter = ','
+    )
+    if (-not (Test-Path -LiteralPath $Path)) { return @() }
+    $text = Read-LegacyText -Path $Path
+    if ([string]::IsNullOrWhiteSpace($text)) { return @() }
+    return @($text | ConvertFrom-Csv -Delimiter $Delimiter)
+}
+
+# Reads a legacy JSON file. Returns $null on missing/empty/unparsable.
+function Import-LegacyJson {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    $text = Read-LegacyText -Path $Path
+    if ([string]::IsNullOrWhiteSpace($text)) { return $null }
+    try { return ($text | ConvertFrom-Json) } catch { return $null }
+}
+
+# Reads a property from a legacy row that may not have the column at all
+# (older schema), returning $Default in that case.
+function Get-LegacyField {
+    param($Row, [string]$Name, $Default = '')
+    if ($null -eq $Row) { return $Default }
+    $prop = $Row.PSObject.Properties[$Name]
+    if (-not $prop) { return $Default }
+    if ($null -eq $prop.Value) { return $Default }
+    return $prop.Value
+}
+
+# Display name -> the filename stem the CSV era used for per-headset files.
+# Mirrors Convert-Displayname in scrcpy_launcher.ps1, reimplemented here so
+# the importer does not depend on a module the runspaces may not have loaded.
+function ConvertTo-LegacySafeName {
+    param([Parameter(Mandatory = $true)][string]$Name)
+    return ($Name -replace ' ', '_')
+}
+
+<#
+.SYNOPSIS
+    Imports the legacy data\ files into the database, then moves them aside.
+.DESCRIPTION
+    Each file is imported in its own transaction, so one malformed file cannot
+    take the others down with it. Successfully imported originals are moved to
+    data\legacy_<timestamp>\ (one folder per run that imported anything).
+    An outcome record is written to the app_kv key 'legacy_import_log'.
+
+    Order matters: headsets first, because the per-headset app, favourite and
+    timer files are matched to a headset id, and the id is what the new tables
+    are keyed on.
+.OUTPUTS
+    @{ Imported = @(@{File;Rows;Note}); Skipped = @(); Errors = @(); LegacyFolder }
+.EXAMPLE
+    Import-LegacyDataFiles -WhatIf
+    Import-LegacyDataFiles
+#>
+function Import-LegacyDataFiles {
+    param(
+        [string]$DataFolder = (Join-Path -Path $global:ScriptPath -ChildPath 'data'),
+        [switch]$WhatIf
+    )
+
+    $result = @{
+        Imported     = New-Object System.Collections.Generic.List[object]
+        Skipped      = New-Object System.Collections.Generic.List[object]
+        Errors       = New-Object System.Collections.Generic.List[object]
+        LegacyFolder = $null
+    }
+    if (-not (Test-Path -LiteralPath $DataFolder)) { return $result }
+
+    $moved      = New-Object System.Collections.Generic.List[string]
+    $stamp      = Get-Date -Format 'yyyyMMdd_HHmmss'
+    $legacyRoot = Join-Path -Path $DataFolder -ChildPath ("legacy_{0}" -f $stamp)
+
+    # --- helper: run one file's import, record the outcome ----------------
+    function Invoke-LegacyFile {
+        param(
+            [string]$RelativePath,
+            [scriptblock]$Import,
+            [switch]$KeepOriginal
+        )
+        $full = Join-Path -Path $DataFolder -ChildPath $RelativePath
+        if (-not (Test-Path -LiteralPath $full)) {
+            $result.Skipped.Add(@{ File = $RelativePath; Reason = 'not present' }) | Out-Null
+            return
+        }
+        try {
+            $rows = & $Import $full
+            if ($null -eq $rows) { $rows = 0 }
+            $result.Imported.Add(@{ File = $RelativePath; Rows = [int]$rows }) | Out-Null
+            if (-not $KeepOriginal) { $moved.Add($RelativePath) | Out-Null }
+        } catch {
+            $result.Errors.Add(@{ File = $RelativePath; Error = $_.Exception.Message }) | Out-Null
+            Write-DbLog ("Legacy import of '{0}' failed: {1}" -f $RelativePath, $_.Exception.Message) -Level WARNING
+        }
+    }
+
+    # --- 1. headset registry ---------------------------------------------
+    Invoke-LegacyFile -RelativePath 'known_headsets.csv' -Import {
+        param($path)
+        $rows = @(Import-LegacyCsv -Path $path)
+        if ($rows.Count -eq 0) { return 0 }
+        $batch = @()
+        $order = 0
+        foreach ($r in $rows) {
+            $id = 0
+            if (-not [int]::TryParse([string](Get-LegacyField $r 'ID' ''), [ref]$id) -or $id -le 0) { continue }
+            $batch += @{
+                id                  = $id
+                name                = [string](Get-LegacyField $r 'Name' ("Headset {0}" -f $id))
+                ip_address          = [string](Get-LegacyField $r 'IPAddress' '')
+                scrcpy_auto_restart = (ConvertTo-DbBool (Get-LegacyField $r 'scrcpy_AutoRestart' 'True') -Default $true)
+                record              = (ConvertTo-DbBool (Get-LegacyField $r 'Record' 'False'))
+                scrcpy_profile      = [string](Get-LegacyField $r 'ScrcpyProfile' '')
+                brand               = [string](Get-LegacyField $r 'Brand' '')
+                model               = [string](Get-LegacyField $r 'Model' '')
+                serial_number       = [string](Get-LegacyField $r 'SerialNumber' '')
+                sort_order          = $order
+            }
+            $order++
+        }
+        if ($batch.Count -eq 0) { return 0 }
+        return (Invoke-DbBatch -Name 'headsets.upsert' -Rows $batch)
+    }
+
+    # Registry now in place: build the name -> id map the per-headset files need.
+    $headsetIdByName = @{}
+    try {
+        foreach ($h in @(Invoke-DbQuery -Name 'headsets.list')) {
+            $headsetIdByName[(ConvertTo-LegacySafeName -Name ([string]$h.Name))] = [int]$h.ID
+        }
+    } catch { }
+
+    # --- 2. live status ----------------------------------------------------
+    # Only BatteryHistory is worth carrying over: everything else is live and
+    # is refreshed within a second of the monitor starting. Tolerates both the
+    # current 15-column shape and the pre-ADR-0016 one with identity columns.
+    Invoke-LegacyFile -RelativePath 'known_headsets_infos.csv' -Import {
+        param($path)
+        $rows = @(Import-LegacyCsv -Path $path -Delimiter ';')
+        if ($rows.Count -eq 0) { return 0 }
+        $known = @{}
+        foreach ($h in @(Invoke-DbQuery -Name 'headsets.list')) { $known[[string]$h.ID] = $true }
+        $batch = @()
+        foreach ($r in $rows) {
+            $id = [string](Get-LegacyField $r 'ID' '')
+            if (-not $id -or -not $known.ContainsKey($id)) { continue }
+            $batch += @{
+                ID                     = $id
+                Ping                   = (ConvertTo-DbBool (Get-LegacyField $r 'Ping' 'False'))
+                ADBWifi                = (ConvertTo-DbBool (Get-LegacyField $r 'ADBWifi' 'False'))
+                Battery                = [string](Get-LegacyField $r 'Battery' '-')
+                Charging               = [string](Get-LegacyField $r 'Charging' '-')
+                ChargingWattage        = [string](Get-LegacyField $r 'ChargingWattage' '-')
+                Temp                   = [string](Get-LegacyField $r 'Temp' '-')
+                BatteryControllerLeft  = [string](Get-LegacyField $r 'BatteryControllerLeft' '-')
+                BatteryControllerRight = [string](Get-LegacyField $r 'BatteryControllerRight' '-')
+                PowerState             = [string](Get-LegacyField $r 'PowerState' '-')
+                TimeRemainingMin       = [string](Get-LegacyField $r 'TimeRemainingMin' '-')
+                BatteryHistory         = [string](Get-LegacyField $r 'BatteryHistory' '')
+                SCRCPY                 = [string](Get-LegacyField $r 'SCRCPY' '-')
+                RunningApp             = [string](Get-LegacyField $r 'RunningApp' '-')
+                RunningAppIcon         = [string](Get-LegacyField $r 'RunningAppIcon' '')
+            }
+        }
+        if ($batch.Count -eq 0) { return 0 }
+        return (Invoke-DbBatch -Name 'status.upsert' -Rows $batch)
+    }
+
+    # --- 3. kiosk registry --------------------------------------------------
+    Invoke-LegacyFile -RelativePath 'known_kiosks.csv' -Import {
+        param($path)
+        $rows = @(Import-LegacyCsv -Path $path)
+        if ($rows.Count -eq 0) { return 0 }
+        $batch = @()
+        $order = 0
+        foreach ($r in $rows) {
+            $id = 0
+            if (-not [int]::TryParse([string](Get-LegacyField $r 'ID' ''), [ref]$id) -or $id -le 0) { continue }
+            $port = 9222
+            [void][int]::TryParse([string](Get-LegacyField $r 'Port' '9222'), [ref]$port)
+            $batch += @{
+                id             = $id
+                name           = [string](Get-LegacyField $r 'Name' ("Kiosk {0}" -f $id))
+                ip_address     = [string](Get-LegacyField $r 'IPAddress' '')
+                port           = $port
+                pushed_url     = [string](Get-LegacyField $r 'PushedURL' '')
+                last_pushed_at = [string](Get-LegacyField $r 'LastPushedAt' '')
+                sort_order     = $order
+            }
+            $order++
+        }
+        if ($batch.Count -eq 0) { return 0 }
+        return (Invoke-DbBatch -Name 'kiosks.upsert' -Rows $batch)
+    }
+
+    # --- 4. kiosk agent reports --------------------------------------------
+    Invoke-LegacyFile -RelativePath 'kiosks_agent.json' -Import {
+        param($path)
+        $data = Import-LegacyJson -Path $path
+        if ($null -eq $data) { return 0 }
+        $batch = @()
+        foreach ($r in @($data)) {
+            $ip = [string](Get-LegacyField $r 'IPAddress' '')
+            if (-not $ip) { continue }
+            $batch += @{
+                ip_address           = $ip
+                machine_id           = [string](Get-LegacyField $r 'MachineId' '')
+                hostname             = [string](Get-LegacyField $r 'Hostname' '')
+                os                   = [string](Get-LegacyField $r 'OS' '')
+                os_family            = [string](Get-LegacyField $r 'OSFamily' '')
+                interface_type       = [string](Get-LegacyField $r 'InterfaceType' '')
+                interface_name       = [string](Get-LegacyField $r 'InterfaceName' '')
+                link_speed_mbps      = [int](Get-LegacyField $r 'LinkSpeedMbps' 0)
+                browser              = [string](Get-LegacyField $r 'Browser' '')
+                browser_running      = (ConvertTo-DbBool (Get-LegacyField $r 'BrowserRunning' 'False'))
+                cdp_port             = [int](Get-LegacyField $r 'CdpPort' 9222)
+                current_url          = [string](Get-LegacyField $r 'CurrentUrl' '')
+                uptime_sec           = [int](Get-LegacyField $r 'UptimeSec' 0)
+                auto_restart_browser = (ConvertTo-DbBool (Get-LegacyField $r 'AutoRestartBrowser' 'False'))
+                agent_version        = [string](Get-LegacyField $r 'AgentVersion' '')
+                last_ack             = [string](Get-LegacyField $r 'LastAck' '')
+                last_report_at       = [string](Get-LegacyField $r 'LastReportAt' '')
+            }
+        }
+        if ($batch.Count -eq 0) { return 0 }
+        return (Invoke-DbBatch -Name 'agent.upsert' -Rows $batch)
+    }
+
+    # --- 5. kiosk auto-add denylist ----------------------------------------
+    Invoke-LegacyFile -RelativePath 'kiosk_autoadd_ignore.json' -Import {
+        param($path)
+        $data = Import-LegacyJson -Path $path
+        if ($null -eq $data) { return 0 }
+        $batch = @()
+        foreach ($ip in @($data)) {
+            if ([string]::IsNullOrWhiteSpace([string]$ip)) { continue }
+            $batch += @{ ip_address = [string]$ip }
+        }
+        if ($batch.Count -eq 0) { return 0 }
+        return (Invoke-DbBatch -Name 'kiosk_ignore.insert' -Rows $batch)
+    }
+
+    # --- 6. pending kiosk commands -----------------------------------------
+    # One file per command. Anything past its time-to-live is dropped rather
+    # than carried over: a reboot queued while a kiosk was off must not fire
+    # after a migration.
+    $cmdFolder = Join-Path -Path $DataFolder -ChildPath 'kiosk_commands'
+    if (Test-Path -LiteralPath $cmdFolder) {
+        $cmdFiles = @(Get-ChildItem -LiteralPath $cmdFolder -Filter '*.json' -ErrorAction SilentlyContinue)
+        if ($cmdFiles.Count -gt 0) {
+            $nowUnix = [int64]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
+            $batch = @()
+            $stale = 0
+            foreach ($cf in $cmdFiles) {
+                $c = Import-LegacyJson -Path $cf.FullName
+                if ($null -eq $c) { continue }
+                $queuedUnix = [int64](Get-LegacyField $c 'nonce' 0)
+                if ($queuedUnix -gt 0 -and (($nowUnix - $queuedUnix) / 1000) -gt 300) { $stale++; continue }
+                $batch += @{
+                    ip_address  = [string](Get-LegacyField $c 'ip' '')
+                    cmd         = [string](Get-LegacyField $c 'cmd' 'reboot')
+                    nonce       = $queuedUnix
+                    delay_sec   = [int](Get-LegacyField $c 'delaySec' 5)
+                    queued_at   = [string](Get-LegacyField $c 'queuedAt' '')
+                    queued_unix = [int64][Math]::Floor($queuedUnix / 1000)
+                }
+            }
+            try {
+                $n = 0
+                if ($batch.Count -gt 0) { $n = Invoke-DbBatch -Name 'kiosk_commands.insert' -Rows $batch }
+                $result.Imported.Add(@{ File = 'kiosk_commands\*.json'; Rows = [int]$n; Note = ("{0} stale command(s) dropped" -f $stale) }) | Out-Null
+                foreach ($cf in $cmdFiles) { $moved.Add((Join-Path 'kiosk_commands' $cf.Name)) | Out-Null }
+            } catch {
+                $result.Errors.Add(@{ File = 'kiosk_commands\*.json'; Error = $_.Exception.Message }) | Out-Null
+            }
+        }
+    }
+
+    # --- 7. discovery ------------------------------------------------------
+    Invoke-LegacyFile -RelativePath 'discovered_headsets.json' -Import {
+        param($path)
+        $data = Import-LegacyJson -Path $path
+        if ($null -eq $data) { return 0 }
+        $batch = @()
+        foreach ($r in @($data)) {
+            $serial = [string](Get-LegacyField $r 'SerialNumber' '')
+            if (-not $serial) { continue }
+            $batch += @{
+                serial_number = $serial
+                ip_address    = [string](Get-LegacyField $r 'IPAddress' '')
+                model         = [string](Get-LegacyField $r 'Model' '')
+                brand         = [string](Get-LegacyField $r 'Brand' '')
+                first_seen    = [string](Get-LegacyField $r 'FirstSeen' '')
+                last_seen     = [string](Get-LegacyField $r 'LastSeen' '')
+            }
+        }
+        if ($batch.Count -eq 0) { return 0 }
+        return (Invoke-DbBatch -Name 'discovery.upsert' -Rows $batch)
+    }
+
+    Invoke-LegacyFile -RelativePath 'headset_discovery_ignore.json' -Import {
+        param($path)
+        $data = Import-LegacyJson -Path $path
+        if ($null -eq $data) { return 0 }
+        $batch = @()
+        foreach ($s in @($data)) {
+            if ([string]::IsNullOrWhiteSpace([string]$s)) { continue }
+            $batch += @{ serial_number = [string]$s }
+        }
+        if ($batch.Count -eq 0) { return 0 }
+        return (Invoke-DbBatch -Name 'discovery_ignore.insert' -Rows $batch)
+    }
+
+    # --- 8. app catalogue ---------------------------------------------------
+    # Pre-dates both the LatestVersion column and the ThirdParty column (the
+    # oldest files carry Type = third-party/built-in instead).
+    Invoke-LegacyFile -RelativePath 'known_apps.csv' -Import {
+        param($path)
+        $rows = @(Import-LegacyCsv -Path $path)
+        if ($rows.Count -eq 0) { return 0 }
+        $batch = @()
+        foreach ($r in $rows) {
+            $pkg = [string](Get-LegacyField $r 'PackageName' '')
+            if (-not $pkg) { continue }
+            $thirdParty = 1
+            $tpField = Get-LegacyField $r 'ThirdParty' ''
+            $typeField = Get-LegacyField $r 'Type' ''
+            if ("$tpField" -ne '')        { $thirdParty = ConvertTo-DbBool $tpField }
+            elseif ("$typeField" -ne '')  { $thirdParty = if ("$typeField" -eq 'third-party') { 1 } else { 0 } }
+            $batch += @{
+                package_name    = $pkg
+                display_name    = [string](Get-LegacyField $r 'DisplayName' '')
+                icon_url        = [string](Get-LegacyField $r 'IconUrl' '')
+                local_icon_path = [string](Get-LegacyField $r 'LocalIconPath' '')
+                third_party     = $thirdParty
+                latest_version  = [string](Get-LegacyField $r 'LatestVersion' '')
+            }
+        }
+        if ($batch.Count -eq 0) { return 0 }
+        return (Invoke-DbBatch -Name 'catalog.upsert' -Rows $batch)
+    }
+
+    # --- 9. per-headset installed apps and favourites -----------------------
+    # Matched to a headset by the filename stem the CSV era used. A file whose
+    # headset no longer exists is an ORPHAN: it is reported and moved aside
+    # with the rest, but not imported - there is no row to attach it to.
+    foreach ($suffix in @('installed_apps', 'favorite_apps')) {
+        $pattern = "*_{0}.csv" -f $suffix
+        foreach ($file in @(Get-ChildItem -LiteralPath $DataFolder -Filter $pattern -ErrorAction SilentlyContinue)) {
+            $stem = $file.BaseName -replace ("_{0}$" -f $suffix), ''
+            $relative = $file.Name
+            if (-not $headsetIdByName.ContainsKey($stem)) {
+                $result.Skipped.Add(@{ File = $relative; Reason = ("orphan: no headset named '{0}'" -f ($stem -replace '_', ' ')) }) | Out-Null
+                $moved.Add($relative) | Out-Null
+                continue
+            }
+            $headsetId = $headsetIdByName[$stem]
+            $localSuffix = $suffix
+            Invoke-LegacyFile -RelativePath $relative -Import {
+                param($path)
+                $rows = @(Import-LegacyCsv -Path $path)
+                if ($rows.Count -eq 0) { return 0 }
+                $batch = @()
+                $order = 0
+                foreach ($r in $rows) {
+                    $pkg = [string](Get-LegacyField $r 'PackageName' '')
+                    if (-not $pkg) { continue }
+                    if ($localSuffix -eq 'installed_apps') {
+                        # [int64]0, not 0: a bare 0 is an Int32 and TryParse
+                        # binds its [ref] by exact type, failing otherwise.
+                        $size = [int64]0
+                        [void][int64]::TryParse([string](Get-LegacyField $r 'SizeBytes' '0'), [ref]$size)
+                        $batch += @{
+                            headset_id      = $headsetId
+                            package_name    = $pkg
+                            version         = [string](Get-LegacyField $r 'Version' '')
+                            pending_version = [string](Get-LegacyField $r 'PendingVersion' '')
+                            store_version   = [string](Get-LegacyField $r 'StoreVersion' '')
+                            size_bytes      = $size
+                        }
+                    } else {
+                        $batch += @{
+                            headset_id   = $headsetId
+                            package_name = $pkg
+                            display_name = [string](Get-LegacyField $r 'DisplayName' '')
+                            sort_order   = $order
+                        }
+                        $order++
+                    }
+                }
+                if ($batch.Count -eq 0) { return 0 }
+                $queryName = if ($localSuffix -eq 'installed_apps') { 'installed.insert' } else { 'favorites.insert' }
+                return (Invoke-DbBatch -Name $queryName -Rows $batch)
+            }
+        }
+    }
+
+    # --- 10. timers ---------------------------------------------------------
+    Invoke-LegacyFile -RelativePath 'timer.csv' -Import {
+        param($path)
+        $rows = @(Import-LegacyCsv -Path $path)
+        if ($rows.Count -eq 0) { return 0 }
+        $known = @{}
+        foreach ($h in @(Invoke-DbQuery -Name 'headsets.list')) { $known[[string]$h.ID] = $true }
+        $batch = @()
+        foreach ($r in $rows) {
+            $id = [string](Get-LegacyField $r 'HeadsetID' '')
+            if (-not $id -or -not $known.ContainsKey($id)) { continue }
+            $mode = [string](Get-LegacyField $r 'Mode' 'dec')
+            if ($mode -ne 'inc') { $mode = 'dec' }
+            $batch += @{
+                headset_id = [int]$id
+                minutes    = [int](Get-LegacyField $r 'Minutes' 0)
+                seconds    = [int](Get-LegacyField $r 'Seconds' 0)
+                mode       = $mode
+            }
+        }
+        if ($batch.Count -eq 0) { return 0 }
+        return (Invoke-DbBatch -Name 'timers.upsert' -Rows $batch)
+    }
+
+    # --- 11. VQA history ----------------------------------------------------
+    Invoke-LegacyFile -RelativePath 'vqa_history.csv' -Import {
+        param($path)
+        $rows = @(Import-LegacyCsv -Path $path -Delimiter ';')
+        if ($rows.Count -eq 0) { return 0 }
+        $batch = @()
+        foreach ($r in $rows) {
+            $ts = [string](Get-LegacyField $r 'Timestamp' '')
+            if (-not $ts) { continue }
+            $batch += @{
+                ts           = $ts
+                cpu_pct      = [int](Get-LegacyField $r 'CpuPct' 0)
+                gpu_pct      = [int](Get-LegacyField $r 'GpuPct' 0)
+                scrcpy_count = [int](Get-LegacyField $r 'ScrcpyCount' 0)
+                client_count = [int](Get-LegacyField $r 'ClientCount' 0)
+                direction    = [string](Get-LegacyField $r 'Direction' '')
+                reason       = [string](Get-LegacyField $r 'Reason' '')
+                json         = [string](Get-LegacyField $r 'Json' '')
+            }
+        }
+        if ($batch.Count -eq 0) { return 0 }
+        return (Invoke-DbBatch -Name 'vqa.history_insert' -Rows $batch)
+    }
+
+    # --- 12. snapshot-shaped state -> app_kv --------------------------------
+    # kiosks_status.json is deliberately NOT imported: it is live state that the
+    # monitor rewrites within a second, and it is truncated at every startup.
+    $kvFiles = @{
+        'fw_state.json'            = 'fw_state'
+        'computer_monitoring.json' = 'computer_monitoring'
+        'vqa_recommendation.json'  = 'vqa_recommendation'
+        'vqa_originals.json'       = 'vqa_originals'
+        'vqa_applied.json'         = 'vqa_applied'
+        'vqa_cooldown.json'        = 'vqa_cooldown'
+    }
+    foreach ($fileName in $kvFiles.Keys) {
+        $key = $kvFiles[$fileName]
+        Invoke-LegacyFile -RelativePath $fileName -Import {
+            param($path)
+            $text = Read-LegacyText -Path $path
+            if ([string]::IsNullOrWhiteSpace($text)) { return 0 }
+            # Validate before storing: an unparsable blob would poison every
+            # later Get-DbKeyValue for that key.
+            try { $text | ConvertFrom-Json | Out-Null } catch { throw ("not valid JSON: {0}" -f $_.Exception.Message) }
+            Set-DbKeyValue -Key $key -Value $text
+            return 1
+        }
+    }
+    if (Test-Path -LiteralPath (Join-Path -Path $DataFolder -ChildPath 'kiosks_status.json')) {
+        $result.Skipped.Add(@{ File = 'kiosks_status.json'; Reason = 'live state, rebuilt by the monitor' }) | Out-Null
+        $moved.Add('kiosks_status.json') | Out-Null
+    }
+
+    # --- move the originals aside ------------------------------------------
+    # NOTE: the outcome is returned as a NEW hashtable rather than by
+    # converting the List values in place. Assigning an array over a hashtable
+    # value that currently holds a typed List throws "argument types do not
+    # match" - PowerShell binds the assignment against the existing value's
+    # type instead of simply replacing the key.
+    if ($WhatIf) {
+        Write-DbLog ("Legacy import (WhatIf): {0} file(s) would be imported, {1} skipped, {2} error(s)." -f `
+                     $result.Imported.Count, $result.Skipped.Count, $result.Errors.Count) -Level INFO
+        return @{
+            Imported     = $result.Imported.ToArray()
+            Skipped      = $result.Skipped.ToArray()
+            Errors       = $result.Errors.ToArray()
+            LegacyFolder = $null
+        }
+    }
+
+    if ($moved.Count -gt 0) {
+        $result.LegacyFolder = $legacyRoot
+        foreach ($relative in $moved) {
+            $src = Join-Path -Path $DataFolder -ChildPath $relative
+            if (-not (Test-Path -LiteralPath $src)) { continue }
+            $dst = Join-Path -Path $legacyRoot -ChildPath $relative
+            $dstFolder = Split-Path -Parent $dst
+            try {
+                if (-not (Test-Path -LiteralPath $dstFolder)) { New-Item -ItemType Directory -Path $dstFolder -Force | Out-Null }
+                Move-Item -LiteralPath $src -Destination $dst -Force
+            } catch {
+                $result.Errors.Add(@{ File = $relative; Error = ("could not move aside: {0}" -f $_.Exception.Message) }) | Out-Null
+            }
+        }
+        Write-DbLog ("Legacy data imported: {0} file(s); originals moved to {1}" -f $moved.Count, $legacyRoot) -Level SUCCESS
+    }
+
+    # .ToArray(), not @(): under Set-StrictMode the array subexpression
+    # operator throws "argument types do not match" on a generic List whose
+    # elements are hashtables. ToArray is exact and cheaper anyway.
+    $final = @{
+        Imported     = $result.Imported.ToArray()
+        Skipped      = $result.Skipped.ToArray()
+        Errors       = $result.Errors.ToArray()
+        LegacyFolder = $result.LegacyFolder
+    }
+
+    # Record the outcome so an operator can see later what happened and when.
+    if ($final.Imported.Count -gt 0 -or $final.Errors.Count -gt 0) {
+        try {
+            $log = @(Get-DbKeyValue -Key 'legacy_import_log' -Default @())
+            $log += [PSCustomObject]@{
+                When         = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ssZ')
+                LegacyFolder = $final.LegacyFolder
+                Imported     = @($final.Imported | ForEach-Object { "{0}={1}" -f $_.File, $_.Rows })
+                Skipped      = @($final.Skipped  | ForEach-Object { "{0}: {1}" -f $_.File, $_.Reason })
+                Errors       = @($final.Errors   | ForEach-Object { "{0}: {1}" -f $_.File, $_.Error })
+            }
+            Set-DbKeyValue -Key 'legacy_import_log' -Value $log
+        } catch { }
+    }
+
+    return $final
+}
+
+
+# ===================================================================
+# OPERATOR CSV ROUND-TRIP
+#
+# ADR-0010 chose CSV partly so a technician could fix a row in Excel before a
+# demo. Moving to a database gives that up for live editing, so the capability
+# comes back as an explicit export/import of the headset registry - the one
+# table an operator actually hand-edits. It is a deliberate round-trip rather
+# than a live file, so the database stays the single source of truth.
+# ===================================================================
+
+# Converts the working outcome into the hashtable callers get back.
+# A NEW hashtable, not a converted one: assigning an array over a hashtable
+# value that currently holds a typed List throws "argument types do not
+# match", because PowerShell binds the assignment against the existing
+# value's type instead of simply replacing the key.
+function ConvertTo-HeadsetImportResult {
+    param([Parameter(Mandatory = $true)][hashtable]$Outcome)
+    return @{
+        Ok      = [bool]$Outcome.Ok
+        Added   = [int]$Outcome.Added
+        Updated = [int]$Outcome.Updated
+        Removed = [int]$Outcome.Removed
+        Skipped = [int]$Outcome.Skipped
+        Errors  = $Outcome.Errors.ToArray()
+    }
+}
+
+# The 9 legacy columns, in their original order. This IS the operator-facing
+# contract: a file exported by an older build must still import here.
+function Get-HeadsetCsvColumn {
+    return @('ID', 'Name', 'IPAddress', 'scrcpy_AutoRestart', 'Record',
+             'ScrcpyProfile', 'Brand', 'Model', 'SerialNumber')
+}
+
+<#
+.SYNOPSIS
+    Writes the headset registry to a CSV an operator can edit in Excel.
+.DESCRIPTION
+    Same 9 columns and the same display order as the CSV era, UTF-8 without a
+    BOM. Booleans are written as the strings True/False, as before.
+.EXAMPLE
+    Export-HeadsetsCsv -Path 'C:\temp\headsets.csv'
+#>
+function Export-HeadsetsCsv {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $rows = @(Invoke-DbQuery -Name 'headsets.list')
+    $columns = Get-HeadsetCsvColumn
+
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.AppendLine(($columns | ForEach-Object { '"' + $_ + '"' }) -join ',')
+    foreach ($r in $rows) {
+        $cells = foreach ($c in $columns) {
+            $v = [string]$r.$c
+            '"' + ($v -replace '"', '""') + '"'
+        }
+        [void]$sb.AppendLine($cells -join ',')
+    }
+
+    $folder = Split-Path -Parent $Path
+    if ($folder -and -not (Test-Path -LiteralPath $folder)) {
+        New-Item -ItemType Directory -Path $folder -Force | Out-Null
+    }
+    # UTF-8 without BOM, the project-wide convention for generated text.
+    [System.IO.File]::WriteAllText($Path, $sb.ToString(), (New-Object System.Text.UTF8Encoding($false)))
+    Write-DbLog ("Exported {0} headset(s) to {1}" -f $rows.Count, $Path) -Level INFO
+    return $Path
+}
+
+<#
+.SYNOPSIS
+    Imports an edited headset CSV back into the registry.
+.DESCRIPTION
+    Merge  (default) - rows are matched on SerialNumber first, then on ID, then
+                       on Name. Unmatched rows are added. Nothing is deleted.
+    Replace          - the file becomes the registry: rows not present in it
+                       are removed, and their status, apps and timers cascade.
+
+    A row is rejected rather than applied when it would break an invariant:
+    a duplicate IP address, a duplicate serial, or a missing name. Every
+    rejection is reported with its line number, so the operator can fix the
+    spreadsheet instead of guessing.
+
+    The whole import is ONE transaction: a file with a bad row leaves the
+    registry exactly as it was.
+.OUTPUTS
+    @{ Ok; Added; Updated; Removed; Skipped; Errors = @(@{Line;Reason}) }
+.EXAMPLE
+    Import-HeadsetsCsv -Path 'C:\temp\headsets.csv' -WhatIf
+    Import-HeadsetsCsv -Path 'C:\temp\headsets.csv' -Mode Merge
+#>
+function Import-HeadsetsCsv {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [ValidateSet('Merge', 'Replace')][string]$Mode = 'Merge',
+        [switch]$WhatIf
+    )
+
+    $outcome = @{ Ok = $false; Added = 0; Updated = 0; Removed = 0; Skipped = 0
+                  Errors = (New-Object System.Collections.Generic.List[object]) }
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        $outcome.Errors.Add(@{ Line = 0; Reason = ("file not found: {0}" -f $Path) }) | Out-Null
+        return (ConvertTo-HeadsetImportResult -Outcome $outcome)
+    }
+
+    $rows = @(Import-LegacyCsv -Path $Path)
+    if ($rows.Count -eq 0) {
+        $outcome.Errors.Add(@{ Line = 0; Reason = 'the file has no data rows' }) | Out-Null
+        return (ConvertTo-HeadsetImportResult -Outcome $outcome)
+    }
+
+    $existing   = @(Invoke-DbQuery -Name 'headsets.list')
+    $bySerial   = @{}; $byId = @{}; $byName = @{}
+    foreach ($h in $existing) {
+        if ([string]$h.SerialNumber -ne '') { $bySerial[[string]$h.SerialNumber] = $h }
+        $byId[[string]$h.ID]     = $h
+        $byName[[string]$h.Name] = $h
+    }
+    $maxId = 0
+    foreach ($h in $existing) { if ([int]$h.ID -gt $maxId) { $maxId = [int]$h.ID } }
+
+    # --- validate every row first, so nothing is applied from a bad file ----
+    $planned  = New-Object System.Collections.Generic.List[object]
+    $seenIp   = @{}
+    $seenSer  = @{}
+    $line     = 1   # header is line 1; first data row is line 2
+
+    foreach ($r in $rows) {
+        $line++
+        $name   = ([string](Get-LegacyField $r 'Name' '')).Trim()
+        $ip     = ([string](Get-LegacyField $r 'IPAddress' '')).Trim()
+        $serial = ([string](Get-LegacyField $r 'SerialNumber' '')).Trim()
+
+        if (-not $name) {
+            $outcome.Errors.Add(@{ Line = $line; Reason = 'Name is empty' }) | Out-Null
+            continue
+        }
+        if (-not $ip) {
+            $outcome.Errors.Add(@{ Line = $line; Reason = ("IPAddress is empty for '{0}'" -f $name) }) | Out-Null
+            continue
+        }
+        if ($seenIp.ContainsKey($ip)) {
+            $outcome.Errors.Add(@{ Line = $line; Reason = ("duplicate IPAddress '{0}' (also on line {1})" -f $ip, $seenIp[$ip]) }) | Out-Null
+            continue
+        }
+        if ($serial -and $seenSer.ContainsKey($serial)) {
+            $outcome.Errors.Add(@{ Line = $line; Reason = ("duplicate SerialNumber '{0}' (also on line {1})" -f $serial, $seenSer[$serial]) }) | Out-Null
+            continue
+        }
+        $seenIp[$ip] = $line
+        if ($serial) { $seenSer[$serial] = $line }
+
+        # Match an existing row: serial is the durable identity, then the id,
+        # then the display name.
+        $match = $null
+        if ($serial -and $bySerial.ContainsKey($serial)) { $match = $bySerial[$serial] }
+        if (-not $match) {
+            $idText = ([string](Get-LegacyField $r 'ID' '')).Trim()
+            if ($idText -and $byId.ContainsKey($idText)) { $match = $byId[$idText] }
+        }
+        if (-not $match -and $byName.ContainsKey($name)) { $match = $byName[$name] }
+
+        $planned.Add([PSCustomObject]@{
+            Line     = $line
+            IsNew    = ($null -eq $match)
+            Id       = if ($match) { [int]$match.ID } else { 0 }
+            Name     = $name
+            Ip       = $ip
+            Serial   = $serial
+            Auto     = (ConvertTo-DbBool (Get-LegacyField $r 'scrcpy_AutoRestart' 'True') -Default $true)
+            Record   = (ConvertTo-DbBool (Get-LegacyField $r 'Record' 'False'))
+            Profile  = [string](Get-LegacyField $r 'ScrcpyProfile' '')
+            Brand    = [string](Get-LegacyField $r 'Brand' '')
+            Model    = [string](Get-LegacyField $r 'Model' '')
+        }) | Out-Null
+    }
+
+    if ($outcome.Errors.Count -gt 0) {
+        # A file with any bad row is refused wholesale: half-applying an
+        # operator's spreadsheet is worse than applying none of it.
+        Write-DbLog ("Headset CSV import refused: {0} invalid row(s) in {1}" -f $outcome.Errors.Count, $Path) -Level WARNING
+        return (ConvertTo-HeadsetImportResult -Outcome $outcome)
+    }
+
+    $keptIds = @{}
+    foreach ($p in $planned) { if (-not $p.IsNew) { $keptIds[[string]$p.Id] = $true } }
+    $toRemove = @()
+    if ($Mode -eq 'Replace') {
+        $toRemove = @($existing | Where-Object { -not $keptIds.ContainsKey([string]$_.ID) })
+    }
+
+    $outcome.Added   = @($planned | Where-Object { $_.IsNew }).Count
+    $outcome.Updated = @($planned | Where-Object { -not $_.IsNew }).Count
+    $outcome.Removed = $toRemove.Count
+
+    if ($WhatIf) {
+        $outcome.Ok = $true
+        return (ConvertTo-HeadsetImportResult -Outcome $outcome)
+    }
+
+    # One transaction for the whole file.
+    try {
+        $plannedRows = $planned
+        $removeRows  = $toRemove
+        $nextId      = $maxId
+        Invoke-DbTransaction -Script {
+            foreach ($p in $plannedRows) {
+                $id = $p.Id
+                if ($p.IsNew) { $nextId++; $id = $nextId }
+                Invoke-DbNonQuery -Name 'headsets.upsert' -Parameters @{
+                    id                  = $id
+                    name                = $p.Name
+                    ip_address          = $p.Ip
+                    scrcpy_auto_restart = $p.Auto
+                    record              = $p.Record
+                    scrcpy_profile      = $p.Profile
+                    brand               = $p.Brand
+                    model               = $p.Model
+                    serial_number       = $p.Serial
+                    sort_order          = $p.Line
+                } | Out-Null
+            }
+            foreach ($rm in $removeRows) {
+                Invoke-DbNonQuery -Sql 'DELETE FROM headsets WHERE id = @id;' -Parameters @{ id = [int]$rm.ID } | Out-Null
+            }
+        } | Out-Null
+        $outcome.Ok = $true
+        Write-DbLog ("Headset CSV import ({0}): {1} added, {2} updated, {3} removed" -f `
+                     $Mode, $outcome.Added, $outcome.Updated, $outcome.Removed) -Level SUCCESS
+    } catch {
+        $outcome.Errors.Add(@{ Line = 0; Reason = $_.Exception.Message }) | Out-Null
+        Write-DbLog ("Headset CSV import failed: {0}" -f $_.Exception.Message) -Level ERROR
+    }
+
+    return (ConvertTo-HeadsetImportResult -Outcome $outcome)
+}
