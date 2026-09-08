@@ -620,9 +620,7 @@ function Start-VRMonitor {
 
         # Eager first load + immediate runspace start so the first real poll lands within
         # a few seconds of job start instead of waiting one full slow-tick.
-        if (Test-Path -LiteralPath $global:knownHeadsetsFilePath) {
-            $knownHeadsets = @(Import-Csv -LiteralPath $global:knownHeadsetsFilePath)
-        }
+        $knownHeadsets = @(Get-KnownHeadsets)
         if ($knownHeadsets.Count -gt 0) {
             Sync-HeadsetRunspaces -knownHeadsets $knownHeadsets -runspaceRegistry ([ref]$runspaceRegistry) `
                 -sharedState $sharedState -scriptPath $global:ScriptPath `
@@ -810,9 +808,7 @@ function Start-VRMonitor {
                 if ($identityChanged) {
                     # The registry moved under us. Re-read it and force a full recompute on
                     # the next tick instead of exporting a snapshot built on stale rows.
-                    if (Test-Path -LiteralPath $global:knownHeadsetsFilePath) {
-                        $knownHeadsets = @(Import-Csv -LiteralPath $global:knownHeadsetsFilePath)
-                    }
+                    $knownHeadsets = @(Get-KnownHeadsets)
                     $lastFingerprint = ""
                 }
                 else {
@@ -876,9 +872,7 @@ function Start-VRMonitor {
                 Write-Log ($msg.DebugConfigFilePath -f $global:ConfigFilePath) -Level DEBUG
                 Write-Log ($msg.DebugKnownHeadsetsPath -f $global:knownHeadsetsFilePath) -Level DEBUG
 
-                if (Test-Path -LiteralPath $global:knownHeadsetsFilePath) {
-                    $knownHeadsets = @(Import-Csv -LiteralPath $global:knownHeadsetsFilePath)
-                }
+                $knownHeadsets = @(Get-KnownHeadsets)
 
                 Invoke-UsbHeadsetActions | Out-Null
 
@@ -905,9 +899,7 @@ function Start-VRMonitor {
                         if ($discovered.Count -gt 0) {
                             if ((Update-HeadsetsFromDiscovery -Devices $discovered) -gt 0) {
                                 # Rows moved - reload and force a fast-path recompute.
-                                if (Test-Path -LiteralPath $global:knownHeadsetsFilePath) {
-                                    $knownHeadsets = @(Import-Csv -LiteralPath $global:knownHeadsetsFilePath)
-                                }
+                                $knownHeadsets = @(Get-KnownHeadsets)
                                 $lastFingerprint = ""
                             }
                         }

@@ -7,40 +7,24 @@
 # $headsets=Get-KnownHeadsets
 function Get-KnownHeadsets {
     param (
-        [string]$knownHeadsetsFilePath = $global:knownHeadsetsFilePath 
+        # Accepted and ignored: kept so existing callers keep compiling. The CSV
+        # is no longer the source of truth.
+        [string]$knownHeadsetsFilePath = $global:knownHeadsetsFilePath
     )
 
-    # Check whether the global variable $knownHeadsetsFilePath is defined
-    if (-not $knownHeadsetsFilePath) {
-        Write-Log -Message $msg.HeadsetCsvPathEmpty -Level "ERROR"
-        return
-    }
-
-    # Check whether the file exists
-    if (-not (Test-Path -LiteralPath $knownHeadsetsFilePath)) {
-        Write-Log -Message ($msg.HeadsetCsvNotFound -f $knownHeadsetsFilePath) -Level "ERROR"
-        return
-    }
-
-    # Read the CSV file and return data as PowerShell objects
+    # Rows come back in display order (sort_order, then id) with the legacy
+    # column names, ID as TEXT and the booleans as the strings "True"/"False",
+    # so every caller keeps the shape Import-Csv used to give it.
+    #
+    # The Brand back-fill the CSV version did is gone: the column always exists
+    # now, and the legacy importer applies the same Model-based guess once,
+    # during the migration, rather than on every read forever.
     try {
-        $headsets = @(Import-Csv -LiteralPath $knownHeadsetsFilePath -Encoding UTF8)
-        # Back-compat: ensure every row has a Brand property. Legacy CSVs (pre-Pico
-        # support) had no Brand column; populate with a best-effort guess from Model
-        # so brand-dispatch sites have something to work with on first read.
-        # Allowed values: "Meta", "Pico", or "" (empty = unknown).
-        foreach ($row in $headsets) {
-            if (-not $row.PSObject.Properties['Brand']) {
-                $guess = ""
-                if ($row.Model -match '(?i)quest') { $guess = "Meta" }
-                elseif ($row.Model -match '(?i)pico') { $guess = "Pico" }
-                $row | Add-Member -MemberType NoteProperty -Name Brand -Value $guess -Force
-            }
-        }
-        return $headsets
+        return @(Invoke-DbQuery -Name 'headsets.list')
     }
     catch {
         Write-Log -Message $msg.HeadsetCsvReadError -Level "ERROR"
+        return @()
     }
 } # OK
 
@@ -575,8 +559,11 @@ function Add-Headset {
         #[int]$AdbPort = 5555
     )
 
-    #Check if a headset with the same @IP does not already exist
-    if ( $headsets.IPAddress -contains $IPAddress){
+    # Both guards ask the table rather than the caller's snapshot. That snapshot
+    # can be stale - the monitor job, the web server and the console all add
+    # headsets - and `$headsets.IPAddress` throws under strict mode when the
+    # registry is empty, because the property exists on no element.
+    if ([int](Invoke-DbScalar -Name 'headsets.exists_ip' -Parameters @{ ip_address = $IPAddress }) -gt 0) {
         Write-Log ($msg.HeadsetIpExists -f $IPAddress) -Level WARNING
         return
     }
@@ -585,7 +572,7 @@ function Add-Headset {
     # know. Callers that legitimately want "add or move" must use Set-HeadsetIdentity.
     if ($SerialNumber) {
         $serialTrim = ([string]$SerialNumber).Trim()
-        $existing = $headsets | Where-Object { ([string]$_.SerialNumber).Trim() -eq $serialTrim } | Select-Object -First 1
+        $existing = @(Invoke-DbQuery -Name 'headsets.get_by_serial' -Parameters @{ serial_number = $serialTrim }) | Select-Object -First 1
         if ($existing) {
             Write-Log ($msg.HeadsetSerialExists -f $serialTrim, $existing.Name) -Level WARNING
             return
@@ -595,10 +582,8 @@ function Add-Headset {
     # Add a new headset to the list
     # ID is a permanent identity, never a position - assign the next unused value
     # so it stays unique even after removals leave gaps.
-    $nextID = 1
-    if ($headsets.Count -gt 0) {
-        $nextID = (($headsets | ForEach-Object { [int]$_.ID } | Measure-Object -Maximum).Maximum) + 1
-    }
+    $headsets = @(Get-KnownHeadsets)
+    $nextID   = [int](Invoke-DbScalar -Name 'headsets.next_id')
     $newHeadset = [PSCustomObject]@{
         ID          = $nextID
         Name         = $Name
@@ -818,16 +803,10 @@ function Remove-Headset {
             $htmlPath = Get-HeadsetSitePath -Name $headsetToRemove.Name -Kind $kind
             if (Test-Path -LiteralPath $htmlPath) { Remove-Item -LiteralPath $htmlPath -Force -ErrorAction SilentlyContinue }
         }
-        # Remove headset row from timer.csv
-        $timerCsv = Join-Path $global:ScriptPath "data\timer.csv"
-        if (Test-Path -LiteralPath $timerCsv) {
-            $rows = @(@(Import-Csv -LiteralPath $timerCsv) | Where-Object { [int]$_.HeadsetID -ne [int]$headsetToRemove.ID })
-            if ($rows.Count -gt 0) {
-                $rows | Export-Csv -LiteralPath $timerCsv -NoTypeInformation -Encoding UTF8 -Force
-            } else {
-                Set-Content -LiteralPath $timerCsv -Value '"HeadsetID","Minutes","Seconds","Mode"' -Encoding UTF8
-            }
-        }
+        # The timer row, the live status row and (once apps move) the per-headset
+        # app rows are removed by ON DELETE CASCADE when Save-Headsets drops the
+        # headset below. The CSV era had to delete each by hand, and a row was
+        # missed whenever a rename had moved its file first.
     } else {
         Write-Log ($msg.HeadsetIdNotFound -f $ID) -Level ERROR
     }
@@ -859,20 +838,60 @@ function Save-Headsets {
         }
     }
 
-    # Save to the CSV file
-    if ($newHeadsets.Count -eq 0) {
-        Set-Content -LiteralPath $FilePath -Value '"ID","Name","IPAddress","scrcpy_AutoRestart","Record","ScrcpyProfile","Brand","Model","SerialNumber"' -Encoding UTF8
-    } else {
-        # Ensure every row has a Brand column before export so the union of
-        # properties (used by Export-Csv) includes Brand.
-        foreach ($row in $newHeadsets) {
-            if (-not $row.PSObject.Properties['Brand']) {
-                $row | Add-Member -MemberType NoteProperty -Name Brand -Value "" -Force
+    # One transaction: upsert every row in the caller's order (that order IS the
+    # display order), then delete whatever the caller left out. Rewriting the
+    # whole CSV used to give those delete semantics for free.
+    try {
+        $rowsToSave = $newHeadsets
+        Invoke-DbTransaction -Script {
+            # Rows are written one at a time, so two headsets swapping addresses
+            # would trip the UNIQUE index on ip_address the moment the first is
+            # written while the second still holds the value - which is exactly
+            # what a DHCP lease swap looks like, and the case Set-HeadsetIdentity
+            # exists to heal. Park every CHANGING address first so write order
+            # stops mattering; a three-way rotation works for the same reason.
+            # The parked values never leave this transaction.
+            $currentIps = @{}
+            foreach ($e in @(Invoke-DbQuery -Name 'headsets.list')) { $currentIps[[string]$e.ID] = [string]$e.IPAddress }
+            foreach ($h in $rowsToSave) {
+                $hid = [string]$h.ID
+                if ($currentIps.ContainsKey($hid) -and $currentIps[$hid] -ne [string]$h.IPAddress) {
+                    Invoke-DbNonQuery -Name 'headsets.park_ip' -Parameters @{ id = [int]$h.ID } | Out-Null
+                }
             }
-        }
-        $newHeadsets | Export-Csv -LiteralPath $FilePath -NoTypeInformation -Encoding UTF8
+
+            $keptIds = @{}
+            $order   = 0
+            foreach ($h in $rowsToSave) {
+                $brand = ''
+                if ($h.PSObject.Properties['Brand']) { $brand = [string]$h.Brand }
+                Invoke-DbNonQuery -Name 'headsets.upsert' -Parameters @{
+                    id                  = [int]$h.ID
+                    name                = [string]$h.Name
+                    ip_address          = [string]$h.IPAddress
+                    scrcpy_auto_restart = (ConvertTo-DbBool $h.scrcpy_AutoRestart -Default $true)
+                    record              = (ConvertTo-DbBool $h.Record)
+                    scrcpy_profile      = [string]$h.ScrcpyProfile
+                    brand               = $brand
+                    model               = [string]$h.Model
+                    serial_number       = [string]$h.SerialNumber
+                    sort_order          = $order
+                } | Out-Null
+                $keptIds[[string]$h.ID] = $true
+                $order++
+            }
+            foreach ($existing in @(Invoke-DbQuery -Name 'headsets.list')) {
+                if (-not $keptIds.ContainsKey([string]$existing.ID)) {
+                    Invoke-DbNonQuery -Name 'headsets.delete' -Parameters @{ id = [int]$existing.ID } | Out-Null
+                }
+            }
+        } | Out-Null
+    } catch {
+        Write-Log ("Save-Headsets: failed to persist the registry - " + $_.Exception.Message) -Level ERROR
+        return
     }
-    Write-Log ($msg.HeadsetsSaved -f $FilePath) -Level INFO
+    # The existing message takes a location; give it the real one.
+    Write-Log ($msg.HeadsetsSaved -f $global:databaseFilePath) -Level INFO
     Write-htmlMonitor $newHeadsets
     Update-HeadsetMonitoringFile
     Update-HeadsetVideoFile

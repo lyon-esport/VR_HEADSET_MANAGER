@@ -214,7 +214,11 @@ if (Get-Command Initialize-Database -ErrorAction SilentlyContinue) {
             catch { Write-Log ("Could not clear the kiosk status table: " + $_.Exception.Message) -Level WARNING }
 
             try {
-                $legacy = Import-LegacyDataFiles -Include snapshots, vqa, kiosks
+                # 'status' and 'apps' are deliberately still excluded: the
+                # monitor keeps writing known_headsets_infos.csv and the
+                # per-headset app caches are still files, so moving either
+                # aside would strand the code that owns it.
+                $legacy = Import-LegacyDataFiles -Include snapshots, vqa, kiosks, headsets, timers, discovery
                 if ($legacy.Imported.Count -gt 0) {
                     Write-Log ("Legacy data imported: {0} file(s) moved to {1}" -f $legacy.Imported.Count, $legacy.LegacyFolder) -Level INFO
                 }

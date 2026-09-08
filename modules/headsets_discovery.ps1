@@ -86,7 +86,12 @@ function Test-HeadsetDiscoveryIgnored {
 
     $serial = ([string]$SerialNumber).Trim()
     if (-not $serial) { return $false }
-    return (@(Read-JsonArrayFile -Path (Get-HeadsetDiscoveryIgnorePath)) -contains $serial)
+    try {
+        return ([int](Invoke-DbScalar -Name 'discovery_ignore.exists' -Parameters @{ serial_number = $serial }) -gt 0)
+    } catch {
+        Write-Log ("Test-HeadsetDiscoveryIgnored: " + $_.Exception.Message) -Level DEBUG
+        return $false
+    }
 }
 
 
@@ -106,12 +111,11 @@ function Add-HeadsetDiscoveryIgnore {
     $serial = ([string]$SerialNumber).Trim()
     if (-not $serial) { return $false }
 
-    $path = Get-HeadsetDiscoveryIgnorePath
-    $list = @(Read-JsonArrayFile -Path $path)
-    if ($list -notcontains $serial) { $list += $serial }
-
     try {
-        Write-FileWithoutBom -Path $path -Content (ConvertTo-Json -InputObject @($list) -Depth 3)
+        # INSERT OR IGNORE dedups on the primary key, and a trigger drops any
+        # pending proposal for this serial the moment the row lands - so the
+        # explicit Remove- call the file version needed is no longer required.
+        Invoke-DbNonQuery -Name 'discovery_ignore.insert' -Parameters @{ serial_number = $serial } | Out-Null
         Remove-PendingDiscoveredHeadset -SerialNumber $serial | Out-Null
         Write-Log ($msg.Discovery.Forgotten -f $serial) -Level INFO
         return $true
@@ -135,13 +139,9 @@ function Remove-HeadsetDiscoveryIgnore {
     $serial = ([string]$SerialNumber).Trim()
     if (-not $serial) { return $false }
 
-    $path = Get-HeadsetDiscoveryIgnorePath
-    $list = @(Read-JsonArrayFile -Path $path)
-    if ($list -notcontains $serial) { return $false }
-
     try {
-        Write-FileWithoutBom -Path $path -Content (ConvertTo-Json -InputObject @($list | Where-Object { $_ -ne $serial }) -Depth 3)
-        return $true
+        $removed = [int](Invoke-DbNonQuery -Name 'discovery_ignore.delete' -Parameters @{ serial_number = $serial })
+        return ($removed -gt 0)
     } catch {
         Write-Log ("Remove-HeadsetDiscoveryIgnore: write failed - " + $_.Exception.Message) -Level WARNING
         return $false
@@ -163,22 +163,21 @@ function Get-PendingDiscoveredHeadsets {
         [switch]$SkipPrune
     )
 
-    $pending = @(Read-JsonArrayFile -Path (Get-DiscoveredHeadsetsPath))
-    if ($pending.Count -eq 0) { return @() }
-    if ($SkipPrune) { return $pending }
-
-    $knownSerials = @{}
-    foreach ($row in @(Get-KnownHeadsets)) {
-        if ($row.SerialNumber) { $knownSerials[([string]$row.SerialNumber).Trim()] = $true }
+    # The view already excludes serials that have become known or been
+    # forgotten, so the read is filtered by construction rather than by a
+    # prune-and-rewrite pass. -SkipPrune is honoured for callers that want the
+    # raw table, but the two answers now differ only for rows written before
+    # the pruning triggers existed.
+    try {
+        if ($SkipPrune) {
+            return @(Invoke-DbQuery -Name 'discovery.list_all')
+        }
+        Invoke-DbNonQuery -Name 'discovery.prune' | Out-Null
+        return @(Invoke-DbQuery -Name 'discovery.pending')
+    } catch {
+        Write-Log ("Get-PendingDiscoveredHeadsets: " + $_.Exception.Message) -Level WARNING
+        return @()
     }
-
-    $kept = @($pending | Where-Object {
-        $s = ([string]$_.SerialNumber).Trim()
-        $s -and -not $knownSerials.ContainsKey($s) -and -not (Test-HeadsetDiscoveryIgnored -SerialNumber $s)
-    })
-
-    if ($kept.Count -ne $pending.Count) { Save-PendingDiscoveredHeadsets -Devices $kept | Out-Null }
-    return $kept
 }
 
 
@@ -192,8 +191,25 @@ function Save-PendingDiscoveredHeadsets {
         [array]$Devices = @()
     )
 
+    # Replaces the whole pending set, which is what overwriting the JSON file
+    # did. Kept for compatibility; Add-/Remove- are the normal entry points.
     try {
-        Write-FileWithoutBom -Path (Get-DiscoveredHeadsetsPath) -Content (ConvertTo-Json -InputObject @($Devices) -Depth 4)
+        $rows = @($Devices)
+        Invoke-DbTransaction -Script {
+            Invoke-DbNonQuery -Name 'discovery.clear' | Out-Null
+            foreach ($d in $rows) {
+                $serial = ([string]$d.SerialNumber).Trim()
+                if (-not $serial) { continue }
+                Invoke-DbNonQuery -Name 'discovery.upsert' -Parameters @{
+                    serial_number = $serial
+                    ip_address    = [string]$d.IPAddress
+                    model         = [string]$d.Model
+                    brand         = [string]$d.Brand
+                    first_seen    = [string]$d.FirstSeen
+                    last_seen     = [string]$d.LastSeen
+                } | Out-Null
+            }
+        } | Out-Null
         return $true
     } catch {
         Write-Log ("Save-PendingDiscoveredHeadsets: write failed - " + $_.Exception.Message) -Level ERROR
@@ -221,28 +237,28 @@ function Add-PendingDiscoveredHeadset {
     if (-not $serial) { return $false }
     if (Test-HeadsetDiscoveryIgnored -SerialNumber $serial) { return $false }
 
-    $now     = (Get-Date).ToString("s")
-    $pending = @(Get-PendingDiscoveredHeadsets -SkipPrune)
-    $match   = $pending | Where-Object { ([string]$_.SerialNumber).Trim() -eq $serial } | Select-Object -First 1
-
-    if ($match) {
-        $match.IPAddress = $IPAddress
-        $match.LastSeen  = $now
-        if ($Model) { $match.Model = $Model }
-        if ($Brand) { $match.Brand = $Brand }
-    } else {
-        $pending += [PSCustomObject]@{
-            SerialNumber = $serial
-            IPAddress    = $IPAddress
-            Model        = $Model
-            Brand        = $Brand
-            FirstSeen    = $now
-            LastSeen     = $now
+    $now = (Get-Date).ToString("s")
+    try {
+        $alreadyKnown = ([int](Invoke-DbScalar -Name 'discovery.exists' -Parameters @{ serial_number = $serial }) -gt 0)
+        # ON CONFLICT keeps first_seen and refreshes the rest, so "when did we
+        # first see this device" survives every later sweep.
+        Invoke-DbNonQuery -Name 'discovery.upsert' -Parameters @{
+            serial_number = $serial
+            ip_address    = $IPAddress
+            model         = $Model
+            brand         = $Brand
+            first_seen    = $now
+            last_seen     = $now
+        } | Out-Null
+        # Log a genuinely new device once, not on every sweep that re-sees it.
+        if (-not $alreadyKnown) {
+            Write-Log ($msg.Discovery.UnknownDevice -f $serial, $Model, $IPAddress) -Level INFO
         }
-        Write-Log ($msg.Discovery.UnknownDevice -f $serial, $Model, $IPAddress) -Level INFO
+        return $true
+    } catch {
+        Write-Log ("Add-PendingDiscoveredHeadset: " + $_.Exception.Message) -Level ERROR
+        return $false
     }
-
-    return (Save-PendingDiscoveredHeadsets -Devices $pending)
 }
 
 
@@ -255,11 +271,15 @@ function Remove-PendingDiscoveredHeadset {
         [Parameter(Mandatory)][string]$SerialNumber
     )
 
-    $serial  = ([string]$SerialNumber).Trim()
-    $pending = @(Get-PendingDiscoveredHeadsets -SkipPrune)
-    $kept    = @($pending | Where-Object { ([string]$_.SerialNumber).Trim() -ne $serial })
-    if ($kept.Count -eq $pending.Count) { return $false }
-    return (Save-PendingDiscoveredHeadsets -Devices $kept)
+    $serial = ([string]$SerialNumber).Trim()
+    if (-not $serial) { return $false }
+    try {
+        $removed = [int](Invoke-DbNonQuery -Name 'discovery.delete' -Parameters @{ serial_number = $serial })
+        return ($removed -gt 0)
+    } catch {
+        Write-Log ("Remove-PendingDiscoveredHeadset: " + $_.Exception.Message) -Level WARNING
+        return $false
+    }
 }
 
 

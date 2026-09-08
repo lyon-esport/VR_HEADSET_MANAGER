@@ -425,47 +425,8 @@ function Get-Config {
     return $true
 } # OK
 
-# Verifies that the known headsets file is valid
-function Test-KnownHeadsetsFile {
-    [CmdletBinding()]
-    param (
-        [string]$FilePath = $global:knownHeadsetsFilePath
-    )
-
-    # Check if file exists
-    if (-not (Test-Path -Path $FilePath)) {
-        Write-Log -Message ($msg.CsvFileNotFound -f $FilePath) -Level WARNING
-        return $false
-    }
-
-    try {
-        # Attempt to import CSV
-        $content = Import-Csv -Path $FilePath
-        if (-not $content){
-            Write-Log -Message $msg.CsvFileEmpty -Level WARNING
-            return $false
-        }
-        # Check headers
-        $requiredHeaders = @("ID", "Name", "IPAddress","scrcpy_AutoRestart","Record","SerialNumber")
-        $actualHeaders = $content | Get-Member -MemberType NoteProperty | Select-Object -ExpandProperty Name
-
-        $headerMatch = Compare-Object -ReferenceObject $requiredHeaders -DifferenceObject $actualHeaders -PassThru
-        if ($headerMatch) {
-            Write-Log -Message $msg.CsvHeadersMismatch -Level WARNING
-            return $false
-        }
-
-        # Check at least one data row exists
-        if ($content.Count -eq 0) {
-            Write-Log -Message $msg.CsvNoDataRows -Level WARNING
-            return $false
-        }
-
-        Write-Log -Message $msg.CsvValidationPassed -Level INFO
-        return $true
-    }
-    catch {
-        Write-Log -Message ($msg.CsvValidationError -f $_) -Level ERROR
-        return $false
-    }
-}
+# RETIRED - the headset registry is a table now, validated by the schema and by
+# Test-DatabaseIntegrity rather than by re-parsing a CSV header on every start.
+# The function is gone rather than left as a stub because its only honest answer
+# would have been "yes", and a caller reading that as proof of anything would be
+# wrong. Removed callers: main.ps1's pre-boot check.

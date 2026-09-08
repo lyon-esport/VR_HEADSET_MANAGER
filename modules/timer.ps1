@@ -36,19 +36,14 @@ function Initialize-TimerFiles {
         Write-Log ($msg.TimerFolderCreated -f $timerFolder) -Level INFO
     }
 
-    $csvPath = Get-TimerCsvPath
     $utf8NoBom = New-Object System.Text.UTF8Encoding $false
-    if (-not (Test-Path -LiteralPath $csvPath)) {
-        [System.IO.File]::WriteAllText($csvPath, '"HeadsetID","Minutes","Seconds","Mode"' + "`n", $utf8NoBom)
-    }
 
-    # Load existing CSV rows once to avoid re-reading for each headset
-    $existingCsvIds = @{}
-    if (Test-Path -LiteralPath $csvPath) {
-        @(Import-Csv -LiteralPath $csvPath) | ForEach-Object { $existingCsvIds[[int]$_.HeadsetID] = $true }
-    }
+    # One statement gives every headset a default config row and leaves any
+    # existing one untouched, replacing the read-all-then-compare pass.
+    try { Invoke-DbNonQuery -Name 'timers.insert_missing' | Out-Null }
+    catch { Write-Log ("Initialize-TimerFiles: " + $_.Exception.Message) -Level WARNING }
 
-    $headsets = Get-KnownHeadsets
+    $headsets = @(Get-KnownHeadsets)
     $count = 0
     foreach ($h in $headsets) {
         $id = [int]$h.ID
@@ -61,10 +56,6 @@ function Initialize-TimerFiles {
         $runFilePath = Get-TimerRunFilePath -headsetId $id
         if (-not (Test-Path -LiteralPath $runFilePath)) {
             [System.IO.File]::WriteAllText($runFilePath, '', $utf8NoBom)
-        }
-        # Add default CSV config row only if this headset has no entry yet
-        if (-not $existingCsvIds.ContainsKey($id)) {
-            Set-TimerConfig -headsetId $id -minutes 5 -seconds 0 -mode 'dec'
         }
     }
     if ($count -gt 0) {
@@ -99,12 +90,13 @@ function Clear-TimerFile {
     [System.IO.File]::WriteAllText((Get-TimerRunFilePath -headsetId $headsetId), '', $utf8NoBom)
 }
 
+# Only the timer CONFIGURATION lives in the database. The live countdown stays
+# in website\timer\<id>[timer].txt: it is written every second by a job that
+# loads no modules, and served as a static file to remote OBS browser sources.
 function Get-TimerConfig {
     param([int]$headsetId)
-    $csvPath = Get-TimerCsvPath
-    if (Test-Path -LiteralPath $csvPath) {
-        $rows = @(Import-Csv -LiteralPath $csvPath)
-        $row = $rows | Where-Object { [int]$_.HeadsetID -eq $headsetId } | Select-Object -First 1
+    try {
+        $row = @(Invoke-DbQuery -Name 'timers.get' -Parameters @{ headset_id = $headsetId }) | Select-Object -First 1
         if ($row) {
             return @{
                 minutes = [int]$row.Minutes
@@ -112,6 +104,8 @@ function Get-TimerConfig {
                 mode    = [string]$row.Mode
             }
         }
+    } catch {
+        Write-Log ("Get-TimerConfig: " + $_.Exception.Message) -Level WARNING
     }
     return @{ minutes = 5; seconds = 0; mode = 'dec' }
 }
@@ -123,31 +117,17 @@ function Set-TimerConfig {
         [int]$seconds,
         [string]$mode
     )
-    $csvPath = Get-TimerCsvPath
-    $rows = @()
-    if (Test-Path -LiteralPath $csvPath) {
-        $rows = @(Import-Csv -LiteralPath $csvPath)
+    if ($mode -ne 'inc') { $mode = 'dec' }
+    try {
+        Invoke-DbNonQuery -Name 'timers.upsert' -Parameters @{
+            headset_id = $headsetId
+            minutes    = $minutes
+            seconds    = $seconds
+            mode       = $mode
+        } | Out-Null
+    } catch {
+        Write-Log ("Set-TimerConfig: " + $_.Exception.Message) -Level WARNING
     }
-
-    $found = $false
-    foreach ($row in $rows) {
-        if ([int]$row.HeadsetID -eq $headsetId) {
-            $row.Minutes = $minutes
-            $row.Seconds = $seconds
-            $row.Mode    = $mode
-            $found = $true
-            break
-        }
-    }
-    if (-not $found) {
-        $rows += [PSCustomObject]@{
-            HeadsetID = $headsetId
-            Minutes   = $minutes
-            Seconds   = $seconds
-            Mode      = $mode
-        }
-    }
-    $rows | Export-Csv -LiteralPath $csvPath -NoTypeInformation -Encoding UTF8 -Force
 }
 
 # Script block executed as a Start-Job child process.

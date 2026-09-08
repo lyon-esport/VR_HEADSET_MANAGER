@@ -1,0 +1,11 @@
+-- Move one headset's address out of the way to a value no real address can
+-- collide with.
+--
+-- Save-Headsets writes rows one at a time, in the caller's array order. When
+-- two headsets swap addresses - which is exactly what a DHCP lease swap looks
+-- like - writing the first of them would hit the UNIQUE index on ip_address
+-- while the second still holds the value. Parking every changing address
+-- first makes the order irrelevant, and handles a three-way rotation too.
+--
+-- The parked value is only ever visible inside the transaction that sets it.
+UPDATE headsets SET ip_address = 'park:' || id WHERE id = @id;

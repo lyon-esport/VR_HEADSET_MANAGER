@@ -264,8 +264,8 @@ function Sync-RestreamPaths {
     }
     catch { }
 
-    if (-not (Test-Path $global:knownHeadsetsFilePath)) { return }
-    $headsets = @(Import-Csv -Path $global:knownHeadsetsFilePath)
+    $headsets = @(Get-KnownHeadsets)
+    if ($headsets.Count -eq 0) { return }
 
     # Add a path for every headset not yet registered in mediamtx
     foreach ($headset in $headsets) {

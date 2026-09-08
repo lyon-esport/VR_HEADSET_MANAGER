@@ -188,16 +188,10 @@ if (Test-Path -Path $scripts_init) {
 }
 
 
-# File initialization of the known headsets list file
-    #$global:knownHeadsetsFilePath = "$ScriptPath\data\known_headsets.csv"
-    $global:knownHeadsets = @()
-    if ((Test-Path $global:knownHeadsetsFilePath) -or (Test-KnownHeadsetsFile($global:knownHeadsetsFilePath))) {
-        $global:knownHeadsets = @(Import-Csv -Path $global:knownHeadsetsFilePath)
-    } else {
-        Write-Log "The known headsets file does not exist or is not correct, initializing!" -Level WARNING
-        $headers = "ID","Name","IPAddress","scrcpy_AutoRestart","Record","SerialNumber"
-        $headers -join "," | Out-File -FilePath $global:knownHeadsetsFilePath -Encoding UTF8
-    }
+# The registry is a table, created with the rest of the schema by
+# Initialize-Database, so there is no file to seed or validate here any more.
+# An empty registry is a normal first-run state rather than a fault.
+    $global:knownHeadsets = @(Get-KnownHeadsets)
 
 # Data file initialization of the headsets infos file.
 # Seed one row per known headset using the same default shape that
