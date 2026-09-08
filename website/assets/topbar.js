@@ -456,7 +456,7 @@
         // Hidden when VQA is disabled OR when the derived VQO badge is ON (operator
         // chose auto-apply for at least one section, so a warning would just be noise).
         if (!s.enabled || s.enabled_vqo) { el.style.display = 'none'; return; }
-        return fetch('/data/vqa_recommendation.json?_=' + Date.now())
+        return fetch('/api/vqa/recommendation?_=' + Date.now())
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             if (!d || !d.Thresholds) { el.style.display = 'none'; return; }

@@ -59,9 +59,10 @@ function Get-ClampedValue {
 #                     @{Name; SerialOrIp; Model; Profile; ParsedProfile}
 #   MediaMtx      - @{Framerate; BitrateMbps} (Bitrate parsed from "6M" -> 6)
 function Get-VqaInputs {
-    if (-not (Test-Path -LiteralPath $global:computerMonitoringFilePath)) { return $null }
+    $snap = $null
     try {
-        $snap = Get-Content -LiteralPath $global:computerMonitoringFilePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $snap = Get-DbKeyValue -Key 'computer_monitoring'
+        if ($null -eq $snap) { return $null }
     } catch {
         return $null
     }
@@ -142,7 +143,7 @@ function Get-VqaDirection {
     }
     $cpuHeadroom = ($global:VQA_CpuMitigationThreshold - 10)
     $gpuHeadroom = ($global:VQA_GpuMitigationThreshold - 10)
-    if ($Cpu -lt $cpuHeadroom -and $Gpu -lt $gpuHeadroom -and (Test-Path -LiteralPath $global:VQA_OriginalsFilePath)) {
+    if ($Cpu -lt $cpuHeadroom -and $Gpu -lt $gpuHeadroom -and ($null -ne (Get-DbKeyValue -Key 'vqa_originals'))) {
         return 'up'
     }
     return 'none'
@@ -346,9 +347,7 @@ function Invoke-VideoQualityRecommendation {
 
     # Load originals (if a previous apply has happened) for upscale ceilings.
     $originals = $null
-    if (Test-Path -LiteralPath $global:VQA_OriginalsFilePath) {
-        try { $originals = Get-Content -LiteralPath $global:VQA_OriginalsFilePath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $originals = $null }
-    }
+    try { $originals = Get-DbKeyValue -Key 'vqa_originals' } catch { $originals = $null }
 
     # Profiles
     $profileRows = @()
@@ -404,7 +403,7 @@ function Invoke-VideoQualityRecommendation {
     }
 
     try {
-        Write-FileWithoutBom -Path $global:VQA_RecommendationFilePath -Content ($rec | ConvertTo-Json -Depth 6)
+        Set-DbKeyValue -Key 'vqa_recommendation' -Value $rec -Depth 6
         Add-VqaHistoryRow -Rec $rec
     } catch {
         Write-Log ("VQR: failed to write recommendation: " + $_.Exception.Message) -Level WARNING
@@ -415,22 +414,29 @@ function Invoke-VideoQualityRecommendation {
 }
 
 
-# Append one row to vqa_history.csv. Header is created on first write; the file
-# is truncated to a header-only state by Initialize-VideoQualityAutomation at
-# startup, so history is per-session.
+# Append one row to the vqa_history table. History is per-session: the table is
+# truncated by Initialize-VideoQualityAutomation at startup, and a trigger caps
+# it so a long-running session cannot grow it without bound.
+#
+# Was an append to vqa_history.csv, where the whole recommendation object had to
+# be embedded in the last column with its quotes doubled. It is stored as plain
+# JSON in its own column now, so nothing has to be escaped or re-parsed.
 function Add-VqaHistoryRow {
     param($Rec)
-    $header = "Timestamp;CpuPct;GpuPct;ScrcpyCount;ClientCount;Direction;Reason;Json"
-    if (-not (Test-Path -LiteralPath $global:VQA_HistoryFilePath)) {
-        Write-FileWithoutBom -Path $global:VQA_HistoryFilePath -Content ($header + "`r`n")
+    try {
+        Invoke-DbNonQuery -Name 'vqa.history_insert' -Parameters @{
+            ts           = [string]$Rec.Timestamp
+            cpu_pct      = [int]$Rec.Cpu
+            gpu_pct      = [int]$Rec.Gpu
+            scrcpy_count = [int]$Rec.ScrcpyCount
+            client_count = [int]$Rec.ClientCount
+            direction    = [string]$Rec.Direction
+            reason       = [string]$Rec.Reason
+            json         = ($Rec | ConvertTo-Json -Depth 6 -Compress)
+        } | Out-Null
+    } catch {
+        Write-Log ("VQA: failed to append a history row: " + $_.Exception.Message) -Level WARNING
     }
-    $json = ($Rec | ConvertTo-Json -Depth 6 -Compress) -replace '"', '""'
-    $line = "{0};{1};{2};{3};{4};{5};{6};""{7}""`r`n" -f `
-        $Rec.Timestamp, $Rec.Cpu, $Rec.Gpu, $Rec.ScrcpyCount, $Rec.ClientCount, $Rec.Direction, ($Rec.Reason -replace ';', ','), $json
-    # PS5 Add-Content -Encoding UTF8 prepends a BOM to every appended write,
-    # which would scatter BOM bytes across the CSV. Append via .NET directly
-    # with explicit no-BOM encoding.
-    [System.IO.File]::AppendAllText($global:VQA_HistoryFilePath, $line, [System.Text.UTF8Encoding]::new($false))
 }
 
 
@@ -439,21 +445,26 @@ function Add-VqaHistoryRow {
 ###############################################################
 
 
-# Read the last $count rows from vqa_history.csv. Returns @() if fewer rows
-# than requested exist (so VQO waits until the buffer is full).
+# Read the last $count rows from the vqa_history table, oldest first. Returns
+# @() when fewer rows than requested exist, so VQO waits until its buffer is
+# full before it can decide anything.
+#
+# Column names match the old CSV header exactly (Timestamp, CpuPct, ... Json),
+# because callers read those property names.
 function Get-LastVqaHistoryRows {
     param([int]$Count)
-    if (-not (Test-Path -LiteralPath $global:VQA_HistoryFilePath)) { return @() }
-    $expectedHeader = "Timestamp;CpuPct;GpuPct;ScrcpyCount;ClientCount;Direction;Reason;Json"
-    $all = @(Get-Content -LiteralPath $global:VQA_HistoryFilePath -Encoding UTF8)
-    if ($all.Count -eq 0 -or $all[0] -ne $expectedHeader) {
-        Write-Log "VQR: history file header missing or malformed, resetting." -Level WARNING
-        Write-FileWithoutBom -Path $global:VQA_HistoryFilePath -Content ($expectedHeader + "`r`n")
+    if ($Count -le 0) { return @() }
+    try {
+        # ORDER BY id DESC + LIMIT takes the newest N; reversing restores the
+        # chronological order the callers expect.
+        $rows = @(Invoke-DbQuery -Name 'vqa.history_last' -Parameters @{ n = $Count })
+        if ($rows.Count -lt $Count) { return @() }
+        [array]::Reverse($rows)
+        return $rows
+    } catch {
+        Write-Log ("VQR: failed to read history: " + $_.Exception.Message) -Level WARNING
         return @()
     }
-    $rows = @($all | Select-Object -Skip 1)
-    if ($rows.Count -lt $Count) { return @() }
-    return @($rows | Select-Object -Last $Count)
 }
 
 
@@ -470,12 +481,12 @@ function Get-LastVqaHistoryRows {
 function Start-VqaCooldown {
     $n = [int]$global:VQA_CooldownCycles
     if ($n -lt 1) {
-        # Cooldown disabled by config - remove any stale file so the UI/VQO see 0.
-        Remove-Item -LiteralPath $global:VQA_CooldownFilePath -Force -ErrorAction SilentlyContinue
+        # Cooldown disabled by config - clear any stale value so the UI/VQO see 0.
+        Remove-DbKeyValue -Key 'vqa_cooldown'
         return
     }
     $obj = [PSCustomObject]@{ RemainingCycles = $n; StartedAt = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss") }
-    Write-FileWithoutBom -Path $global:VQA_CooldownFilePath -Content ($obj | ConvertTo-Json -Compress)
+    Set-DbKeyValue -Key 'vqa_cooldown' -Value $obj
 }
 
 
@@ -485,11 +496,11 @@ function Start-VqaCooldown {
 # slow loop and can be tens of seconds to minutes away). No-op if the
 # recommendation file does not exist yet (e.g. very first apply of a session).
 function Set-VqaRecommendationCooldown {
-    if (-not (Test-Path -LiteralPath $global:VQA_RecommendationFilePath)) { return }
     try {
-        $rec = Get-Content -LiteralPath $global:VQA_RecommendationFilePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $rec = Get-DbKeyValue -Key 'vqa_recommendation'
+        if ($null -eq $rec) { return }
         $rec.CooldownRemaining = Get-VqaCooldownRemaining
-        Write-FileWithoutBom -Path $global:VQA_RecommendationFilePath -Content ($rec | ConvertTo-Json -Depth 6)
+        Set-DbKeyValue -Key 'vqa_recommendation' -Value $rec -Depth 6
     } catch {
         Write-Log ("VQA: failed to patch recommendation cooldown: " + $_.Exception.Message) -Level WARNING
     }
@@ -498,8 +509,11 @@ function Set-VqaRecommendationCooldown {
 
 # Read the remaining cooldown counter (0 when no cooldown is active).
 function Get-VqaCooldownRemaining {
-    if (-not (Test-Path -LiteralPath $global:VQA_CooldownFilePath)) { return 0 }
-    try { return [int](Get-Content -LiteralPath $global:VQA_CooldownFilePath -Raw -Encoding UTF8 | ConvertFrom-Json).RemainingCycles } catch { return 0 }
+    try {
+        $cd = Get-DbKeyValue -Key 'vqa_cooldown'
+        if ($null -eq $cd) { return 0 }
+        return [int]$cd.RemainingCycles
+    } catch { return 0 }
 }
 
 
@@ -516,11 +530,11 @@ function Step-VqaCooldown {
         if ($remaining -le 0) { return 0 }
         $remaining = $remaining - 1
         if ($remaining -le 0) {
-            Remove-Item -LiteralPath $global:VQA_CooldownFilePath -Force -ErrorAction SilentlyContinue
+            Remove-DbKeyValue -Key 'vqa_cooldown'
             return 0
         }
         $obj = [PSCustomObject]@{ RemainingCycles = $remaining; StartedAt = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss") }
-        Write-FileWithoutBom -Path $global:VQA_CooldownFilePath -Content ($obj | ConvertTo-Json -Compress)
+        Set-DbKeyValue -Key 'vqa_cooldown' -Value $obj
         return $remaining
     } finally {
         Exit-VqaLock -Stream $lock
@@ -598,12 +612,14 @@ function Invoke-VideoQualityOptimizer {
         }
         $n = 5
     }
-    $rows = Get-LastVqaHistoryRows -Count $n
+    $rows = @(Get-LastVqaHistoryRows -Count $n)
     if ($rows.Count -lt $n) { return }
 
-    # Column 6 (0-indexed 5) = Direction. Every row must be 'down'.
-    foreach ($d in ($rows | ForEach-Object { ($_ -split ';')[5] })) {
-        if ($d -ne 'down') { return }
+    # Every row must say 'down'. Read the column by name: this used to split
+    # the raw CSV line on ';' and take index 5, which is why the writer had to
+    # strip semicolons out of Reason first.
+    foreach ($row in $rows) {
+        if ([string]$row.Direction -ne 'down') { return }
     }
 
     Write-Log ("VQO: $n consecutive 'down' recommendations - auto-applying enabled sections.") -Level INFO
@@ -629,8 +645,7 @@ function Invoke-VideoQualityOptimizer {
 
 # Returns the latest recommendation object (parsed JSON) or $null.
 function Get-LatestVqaRecommendation {
-    if (-not (Test-Path -LiteralPath $global:VQA_RecommendationFilePath)) { return $null }
-    try { return Get-Content -LiteralPath $global:VQA_RecommendationFilePath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { return $null }
+    try { return (Get-DbKeyValue -Key 'vqa_recommendation') } catch { return $null }
 }
 
 
@@ -661,9 +676,7 @@ function Save-VqaBaseline {
 
     # Load existing baseline (if any) so we merge instead of overwriting captured fields.
     $existing = $null
-    if (Test-Path -LiteralPath $global:VQA_OriginalsFilePath) {
-        try { $existing = Get-Content -LiteralPath $global:VQA_OriginalsFilePath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $existing = $null }
-    }
+    try { $existing = Get-DbKeyValue -Key 'vqa_originals' } catch { $existing = $null }
     $mergedProfiles = @{}
     $mergedHeadsets = @{}
     $mergedMtx      = $null
@@ -717,7 +730,7 @@ function Save-VqaBaseline {
         Headsets  = @($mergedHeadsets.Values)
         MediaMtx  = $mergedMtx
     }
-    Write-FileWithoutBom -Path $global:VQA_OriginalsFilePath -Content ($snap | ConvertTo-Json -Depth 5)
+    Set-DbKeyValue -Key 'vqa_originals' -Value $snap -Depth 5
     Write-Log ("VQA: baseline merged. Captured: [" + ($captured -join ', ') + "].") -Level INFO
 }
 
@@ -850,7 +863,7 @@ function Invoke-VqaApply {
             Headsets  = @($applied.Headsets | ForEach-Object { [PSCustomObject]@{ Name = $_.Name; Profile = $_.Profile } })
             MediaMtx  = $applied.MediaMtx
         }
-        Write-FileWithoutBom -Path $global:VQA_AppliedFilePath -Content ($appliedToWrite | ConvertTo-Json -Depth 5)
+        Set-DbKeyValue -Key 'vqa_applied' -Value $appliedToWrite -Depth 5
 
         # mediamtx never reads stream_framerate/stream_bitrate - only
         # Start-FfmpegStreamPush does. So a mediamtx-only change does not need
@@ -901,7 +914,7 @@ function Invoke-VqaApply {
 # (recorded in vqa_applied.json), the operator did not touch it -> safe to
 # revert. Otherwise leave it alone.
 function Restore-VqaOriginals {
-    if (-not (Test-Path -LiteralPath $global:VQA_OriginalsFilePath)) { return $false }
+    if ($null -eq (Get-DbKeyValue -Key 'vqa_originals')) { return $false }
 
     $lock = Enter-VqaLock
     if (-not $lock) {
@@ -911,10 +924,8 @@ function Restore-VqaOriginals {
     try {
 
     $orig = $null; $applied = $null
-    try { $orig    = Get-Content -LiteralPath $global:VQA_OriginalsFilePath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { }
-    if (Test-Path -LiteralPath $global:VQA_AppliedFilePath) {
-        try { $applied = Get-Content -LiteralPath $global:VQA_AppliedFilePath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { }
-    }
+    try { $orig    = Get-DbKeyValue -Key 'vqa_originals' } catch { }
+    try { $applied = Get-DbKeyValue -Key 'vqa_applied' }   catch { }
     if (-not $orig) { return $false }
 
     $configPath = Join-Path $global:ScriptPath 'config\config.json'
@@ -1055,8 +1066,8 @@ function Restore-VqaOriginals {
         return $false
     }
 
-    Remove-Item -LiteralPath $global:VQA_OriginalsFilePath -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $global:VQA_AppliedFilePath   -Force -ErrorAction SilentlyContinue
+    Remove-DbKeyValue -Key 'vqa_originals'
+    Remove-DbKeyValue -Key 'vqa_applied'
     Write-Log $msg.VqaRestored -Level SUCCESS
     # Restore is also a "system mutated" event - arm the cooldown so VQR/VQO
     # let the workload re-stabilise before reacting.
@@ -1088,7 +1099,7 @@ function Reset-VqaToOriginals { return Restore-VqaOriginals }
 #      app exited without going through Restore-VqaOriginals - revert now.
 #   2. Reset per-session history (vqa_history.csv).
 function Initialize-VideoQualityAutomation {
-    if (Test-Path -LiteralPath $global:VQA_OriginalsFilePath) {
+    if ($null -ne (Get-DbKeyValue -Key 'vqa_originals')) {
         Write-Log "VQA: orphan baseline detected from previous run, restoring." -Level WARNING
         $restoreOk = $false
         try { $restoreOk = [bool](Restore-VqaOriginals) } catch {
@@ -1100,8 +1111,7 @@ function Initialize-VideoQualityAutomation {
         }
     }
     # Per-session history: header only - only when restore succeeded (or was unnecessary).
-    $header = "Timestamp;CpuPct;GpuPct;ScrcpyCount;ClientCount;Direction;Reason;Json"
-    Write-FileWithoutBom -Path $global:VQA_HistoryFilePath -Content ($header + "`r`n")
+    Invoke-DbNonQuery -Name 'vqa.history_clear' | Out-Null
     Write-Log $msg.VqaHistoryReset -Level DEBUG
 }
 

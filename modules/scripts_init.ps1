@@ -200,6 +200,27 @@ if (Get-Command Initialize-Database -ErrorAction SilentlyContinue) {
         if ($dbInit.Restored) {
             Write-Log (Get-MessageString -Key 'Database.NoBackupAvailable') -Level WARNING
         }
+
+        # One-way cut-over of the legacy data\ files, main process only.
+        # Deliberately area by area: a file is only imported and moved aside
+        # once the code that reads it has been switched to the database. The
+        # remaining areas still read their files and are migrated in later
+        # steps, so importing them here would strand that code.
+        if ($dbRole -eq 'Main') {
+            try {
+                $legacy = Import-LegacyDataFiles -Include snapshots, vqa
+                if ($legacy.Imported.Count -gt 0) {
+                    Write-Log ("Legacy data imported: {0} file(s) moved to {1}" -f $legacy.Imported.Count, $legacy.LegacyFolder) -Level INFO
+                }
+                foreach ($impErr in $legacy.Errors) {
+                    Write-Log ("Legacy import problem with {0}: {1}" -f $impErr.File, $impErr.Error) -Level WARNING
+                }
+            } catch {
+                # A failed import must not stop the app: the database is
+                # already usable and the originals are still on disk.
+                Write-Log ("Legacy import failed: " + $_.Exception.Message) -Level WARNING
+            }
+        }
     } catch {
         $dbError = (Get-MessageString -Key 'Database.InitFailed') -f $_.Exception.Message
         Write-Log $dbError -Level ERROR

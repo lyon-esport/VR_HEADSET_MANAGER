@@ -1056,6 +1056,28 @@ function Get-LegacyField {
     return $prop.Value
 }
 
+# Leaf name of a configured legacy path, falling back to the shipped default
+# when the path global is not set - which happens whenever VQA is disabled (its
+# paths never run through Get-Config) and in the test harness.
+#
+# Takes the VARIABLE NAME rather than the value: under Set-StrictMode, simply
+# mentioning an undefined global throws before the call is even made, so the
+# lookup has to go through Get-Variable.
+function Get-LegacyFileName {
+    param(
+        [Parameter(Mandatory = $true)][string]$GlobalName,
+        [Parameter(Mandatory = $true)][string]$Default
+    )
+    $configured = $null
+    try { $configured = Get-Variable -Name $GlobalName -Scope Global -ValueOnly -ErrorAction SilentlyContinue } catch { }
+    if ([string]::IsNullOrWhiteSpace([string]$configured)) { return $Default }
+    try {
+        $leaf = Split-Path -Leaf ([string]$configured)
+        if ([string]::IsNullOrWhiteSpace($leaf)) { return $Default }
+        return $leaf
+    } catch { return $Default }
+}
+
 # Display name -> the filename stem the CSV era used for per-headset files.
 # Mirrors Convert-Displayname in scrcpy_launcher.ps1, reimplemented here so
 # the importer does not depend on a module the runspaces may not have loaded.
@@ -1076,17 +1098,33 @@ function ConvertTo-LegacySafeName {
     Order matters: headsets first, because the per-headset app, favourite and
     timer files are matched to a headset id, and the id is what the new tables
     are keyed on.
+.PARAMETER Include
+    Restricts the run to named areas. The migration lands one area at a time,
+    and a file must NOT be moved aside until the code that reads it has been
+    switched to the database - otherwise that code would find nothing.
+    Areas: snapshots, vqa, headsets, status, kiosks, discovery, apps, timers.
+    Omit to process everything.
 .OUTPUTS
     @{ Imported = @(@{File;Rows;Note}); Skipped = @(); Errors = @(); LegacyFolder }
 .EXAMPLE
     Import-LegacyDataFiles -WhatIf
+    Import-LegacyDataFiles -Include snapshots,vqa
     Import-LegacyDataFiles
 #>
 function Import-LegacyDataFiles {
     param(
         [string]$DataFolder = (Join-Path -Path $global:ScriptPath -ChildPath 'data'),
+        [ValidateSet('snapshots', 'vqa', 'headsets', 'status', 'kiosks', 'discovery', 'apps', 'timers')]
+        [string[]]$Include,
         [switch]$WhatIf
     )
+
+    # No filter means every area.
+    $wantAll = ($null -eq $Include -or @($Include).Count -eq 0)
+    $areas   = @{}
+    foreach ($a in @('snapshots', 'vqa', 'headsets', 'status', 'kiosks', 'discovery', 'apps', 'timers')) {
+        $areas[$a] = ($wantAll -or ($Include -contains $a))
+    }
 
     $result = @{
         Imported     = New-Object System.Collections.Generic.List[object]
@@ -1124,6 +1162,7 @@ function Import-LegacyDataFiles {
     }
 
     # --- 1. headset registry ---------------------------------------------
+    if ($areas['headsets']) {
     Invoke-LegacyFile -RelativePath 'known_headsets.csv' -Import {
         param($path)
         $rows = @(Import-LegacyCsv -Path $path)
@@ -1150,6 +1189,7 @@ function Import-LegacyDataFiles {
         if ($batch.Count -eq 0) { return 0 }
         return (Invoke-DbBatch -Name 'headsets.upsert' -Rows $batch)
     }
+    }
 
     # Registry now in place: build the name -> id map the per-headset files need.
     $headsetIdByName = @{}
@@ -1163,6 +1203,7 @@ function Import-LegacyDataFiles {
     # Only BatteryHistory is worth carrying over: everything else is live and
     # is refreshed within a second of the monitor starting. Tolerates both the
     # current 15-column shape and the pre-ADR-0016 one with identity columns.
+    if ($areas['status']) {
     Invoke-LegacyFile -RelativePath 'known_headsets_infos.csv' -Import {
         param($path)
         $rows = @(Import-LegacyCsv -Path $path -Delimiter ';')
@@ -1194,8 +1235,10 @@ function Import-LegacyDataFiles {
         if ($batch.Count -eq 0) { return 0 }
         return (Invoke-DbBatch -Name 'status.upsert' -Rows $batch)
     }
+    }
 
     # --- 3. kiosk registry --------------------------------------------------
+    if ($areas['kiosks']) {
     Invoke-LegacyFile -RelativePath 'known_kiosks.csv' -Import {
         param($path)
         $rows = @(Import-LegacyCsv -Path $path)
@@ -1274,7 +1317,7 @@ function Import-LegacyDataFiles {
     # than carried over: a reboot queued while a kiosk was off must not fire
     # after a migration.
     $cmdFolder = Join-Path -Path $DataFolder -ChildPath 'kiosk_commands'
-    if (Test-Path -LiteralPath $cmdFolder) {
+    if ($areas['kiosks'] -and (Test-Path -LiteralPath $cmdFolder)) {
         $cmdFiles = @(Get-ChildItem -LiteralPath $cmdFolder -Filter '*.json' -ErrorAction SilentlyContinue)
         if ($cmdFiles.Count -gt 0) {
             $nowUnix = [int64]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
@@ -1305,7 +1348,10 @@ function Import-LegacyDataFiles {
         }
     }
 
+    }
+
     # --- 7. discovery ------------------------------------------------------
+    if ($areas['discovery']) {
     Invoke-LegacyFile -RelativePath 'discovered_headsets.json' -Import {
         param($path)
         $data = Import-LegacyJson -Path $path
@@ -1339,10 +1385,12 @@ function Import-LegacyDataFiles {
         if ($batch.Count -eq 0) { return 0 }
         return (Invoke-DbBatch -Name 'discovery_ignore.insert' -Rows $batch)
     }
+    }
 
     # --- 8. app catalogue ---------------------------------------------------
     # Pre-dates both the LatestVersion column and the ThirdParty column (the
     # oldest files carry Type = third-party/built-in instead).
+    if ($areas['apps']) {
     Invoke-LegacyFile -RelativePath 'known_apps.csv' -Import {
         param($path)
         $rows = @(Import-LegacyCsv -Path $path)
@@ -1373,7 +1421,7 @@ function Import-LegacyDataFiles {
     # Matched to a headset by the filename stem the CSV era used. A file whose
     # headset no longer exists is an ORPHAN: it is reported and moved aside
     # with the rest, but not imported - there is no row to attach it to.
-    foreach ($suffix in @('installed_apps', 'favorite_apps')) {
+    foreach ($suffix in @($(if ($areas['apps']) { 'installed_apps'; 'favorite_apps' }))) {
         $pattern = "*_{0}.csv" -f $suffix
         foreach ($file in @(Get-ChildItem -LiteralPath $DataFolder -Filter $pattern -ErrorAction SilentlyContinue)) {
             $stem = $file.BaseName -replace ("_{0}$" -f $suffix), ''
@@ -1424,7 +1472,10 @@ function Import-LegacyDataFiles {
         }
     }
 
+    }
+
     # --- 10. timers ---------------------------------------------------------
+    if ($areas['timers']) {
     Invoke-LegacyFile -RelativePath 'timer.csv' -Import {
         param($path)
         $rows = @(Import-LegacyCsv -Path $path)
@@ -1447,8 +1498,10 @@ function Import-LegacyDataFiles {
         if ($batch.Count -eq 0) { return 0 }
         return (Invoke-DbBatch -Name 'timers.upsert' -Rows $batch)
     }
+    }
 
     # --- 11. VQA history ----------------------------------------------------
+    if ($areas['vqa']) {
     Invoke-LegacyFile -RelativePath 'vqa_history.csv' -Import {
         param($path)
         $rows = @(Import-LegacyCsv -Path $path -Delimiter ';')
@@ -1471,17 +1524,25 @@ function Import-LegacyDataFiles {
         if ($batch.Count -eq 0) { return 0 }
         return (Invoke-DbBatch -Name 'vqa.history_insert' -Rows $batch)
     }
+    }
 
     # --- 12. snapshot-shaped state -> app_kv --------------------------------
     # kiosks_status.json is deliberately NOT imported: it is live state that the
     # monitor rewrites within a second, and it is truncated at every startup.
-    $kvFiles = @{
-        'fw_state.json'            = 'fw_state'
-        'computer_monitoring.json' = 'computer_monitoring'
-        'vqa_recommendation.json'  = 'vqa_recommendation'
-        'vqa_originals.json'       = 'vqa_originals'
-        'vqa_applied.json'         = 'vqa_applied'
-        'vqa_cooldown.json'        = 'vqa_cooldown'
+    # File names come from the configured paths where there are any: config.json
+    # lets an operator rename the monitoring and VQA files, and a renamed file
+    # would otherwise be reported as "not present" and silently left behind.
+    # The literal names are the shipped defaults, used as a fallback.
+    $kvFiles = @{}
+    if ($areas['snapshots']) {
+        $kvFiles['fw_state.json'] = 'fw_state'
+        $kvFiles[(Get-LegacyFileName -GlobalName 'computerMonitoringFilePath' -Default 'computer_monitoring.json')] = 'computer_monitoring'
+    }
+    if ($areas['vqa']) {
+        $kvFiles[(Get-LegacyFileName -GlobalName 'VQA_RecommendationFilePath' -Default 'vqa_recommendation.json')] = 'vqa_recommendation'
+        $kvFiles[(Get-LegacyFileName -GlobalName 'VQA_OriginalsFilePath'      -Default 'vqa_originals.json')]      = 'vqa_originals'
+        $kvFiles[(Get-LegacyFileName -GlobalName 'VQA_AppliedFilePath'        -Default 'vqa_applied.json')]        = 'vqa_applied'
+        $kvFiles[(Get-LegacyFileName -GlobalName 'VQA_CooldownFilePath'       -Default 'vqa_cooldown.json')]       = 'vqa_cooldown'
     }
     foreach ($fileName in $kvFiles.Keys) {
         $key = $kvFiles[$fileName]
@@ -1496,7 +1557,7 @@ function Import-LegacyDataFiles {
             return 1
         }
     }
-    if (Test-Path -LiteralPath (Join-Path -Path $DataFolder -ChildPath 'kiosks_status.json')) {
+    if ($areas['kiosks'] -and (Test-Path -LiteralPath (Join-Path -Path $DataFolder -ChildPath 'kiosks_status.json'))) {
         $result.Skipped.Add(@{ File = 'kiosks_status.json'; Reason = 'live state, rebuilt by the monitor' }) | Out-Null
         $moved.Add('kiosks_status.json') | Out-Null
     }

@@ -549,9 +549,11 @@
     }
 
     // ── Computer monitoring ──────────────────────────────────────────────────
-    var COMP_JSON_PATH  = '../data/computer_monitoring.json';
+    // Served by the API, not read off disk: the snapshot lives in the database
+    // now and the data folder is no longer web-readable.
+    var COMP_JSON_PATH  = '/api/computer-monitoring';
     var COMP_REFRESH_MS = 30000;
-    var vqaBarThresholds = null; // filled from vqa_recommendation.json when VQA is enabled
+    var vqaBarThresholds = null; // filled from the VQA recommendation when VQA is enabled
 
     function barColor(pct, maxT, mitT) {
       if (pct >= (maxT != null ? maxT : 85)) return '#ef4444';
@@ -730,7 +732,10 @@
     // ── /Computer monitoring ─────────────────────────────────────────────────
 
     // ── Video Quality Automation ────────────────────────────────────────────
-    var VQA_JSON_PATH = '../data/vqa_recommendation.json';
+    // Served by the API, not read off disk (see COMP_JSON_PATH above).
+    // Returns 404 until the first VQR cycle of a session, exactly as the file
+    // used to be absent.
+    var VQA_JSON_PATH = '/api/vqa/recommendation';
     var VQA_REFRESH_MS = 30000;
     var vqaEnabled = false;
     var vqaVqoEnabled = false;

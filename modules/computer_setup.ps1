@@ -391,33 +391,39 @@ function Get-FwReadyFlagPath {
 }
 
 # ---------------------------------------------------------------------------
-# Persistent firewall state (data\fw_state.json)
+# Persistent firewall state (app_kv key 'fw_state')
 # Records the values we last successfully applied so a future run can detect
 # drift (e.g. user changed WebServer.port) and clean up the previous entries.
+#
+# Was data\fw_state.json until the database migration. That file is the reason
+# ADR-0006 exists: read back without an explicit encoding, its accented
+# DefenderExclusionPath degraded a little further on every startup until it
+# never matched $global:ScriptPath again and the Defender prompt reappeared
+# every run. The database stores text as UTF-8 natively, so that whole class
+# of failure is gone.
 # ---------------------------------------------------------------------------
+
+# Kept only so the legacy importer and the test harness can still name the old
+# file. Nothing in the running app reads or writes it any more.
 function Get-FwStatePath {
     return Join-Path $global:ScriptPath "data\fw_state.json"
 }
 
 function Get-FwState {
-    $path = Get-FwStatePath
-    if (-not (Test-Path -LiteralPath $path)) { return $null }
     try {
-        $raw = Get-Content -LiteralPath $path -Raw -Encoding UTF8 -ErrorAction Stop
-        return ($raw | ConvertFrom-Json -ErrorAction Stop)
+        return (Get-DbKeyValue -Key 'fw_state')
     } catch {
+        try { Write-Log ("Get-FwState: " + $_.Exception.Message) -Level WARNING } catch {}
         return $null
     }
 }
 
 function Set-FwState {
     param([Parameter(Mandatory=$true)] $State)
-    $path = Get-FwStatePath
-    $json = $State | ConvertTo-Json -Depth 4
     try {
-        Write-FileWithoutBom -Path $path -Content $json
+        Set-DbKeyValue -Key 'fw_state' -Value $State -Depth 4
     } catch {
-        try { Write-Log ("Set-FwState: failed to write fw_state.json: " + $_.Exception.Message) -Level WARNING } catch {}
+        try { Write-Log ("Set-FwState: failed to store the firewall state: " + $_.Exception.Message) -Level WARNING } catch {}
     }
 }
 

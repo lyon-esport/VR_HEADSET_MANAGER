@@ -696,10 +696,8 @@ try {
                     if ($newVal -eq 'True') {
                         $rdInfo = $null
                         try {
-                            if (Test-Path -LiteralPath $global:computerMonitoringFilePath) {
-                                $monJson = Get-Content -LiteralPath $global:computerMonitoringFilePath -Raw -ErrorAction Stop | ConvertFrom-Json
-                                $rdInfo  = $monJson.RecordingDrive
-                            }
+                            $monJson = Get-DbKeyValue -Key 'computer_monitoring'
+                            if ($monJson) { $rdInfo = $monJson.RecordingDrive }
                         } catch {}
                         if (-not $rdInfo) {
                             try { $rdInfo = Get-RecordingDriveInfo } catch {}
@@ -746,10 +744,8 @@ try {
             try {
                 $rdInfo = $null
                 try {
-                    if (Test-Path -LiteralPath $global:computerMonitoringFilePath) {
-                        $monJson = Get-Content -LiteralPath $global:computerMonitoringFilePath -Raw -ErrorAction Stop | ConvertFrom-Json
-                        $rdInfo  = $monJson.RecordingDrive
-                    }
+                    $monJson = Get-DbKeyValue -Key 'computer_monitoring'
+                    if ($monJson) { $rdInfo = $monJson.RecordingDrive }
                 } catch {}
                 if (-not $rdInfo) {
                     try { $rdInfo = Get-RecordingDriveInfo } catch {}
@@ -3381,6 +3377,49 @@ try {
             continue
         }
 
+        # API: GET /api/computer-monitoring - the latest hardware snapshot.
+        # Replaces the pages reading data\computer_monitoring.json directly off
+        # disk; the body is the same object that file used to hold.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/computer-monitoring') {
+            try {
+                $snapshot = $null
+                try { $snapshot = Get-DbKeyValue -Key 'computer_monitoring' } catch { }
+                if ($snapshot) {
+                    Send-JsonResponse -Response $response -Body $snapshot
+                } else {
+                    # 404, not an empty object: the page must be able to tell
+                    # "no snapshot yet" from "a snapshot with no CPU in it".
+                    Send-JsonResponse -Response $response -StatusCode 404 -Body @{ ok = $false; error = 'no snapshot yet' }
+                }
+            } catch {
+                try { Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = 'server error' } } catch {}
+            } finally {
+                try { $response.Close() } catch {}
+            }
+            continue
+        }
+
+        # API: GET /api/vqa/recommendation - the latest VQR recommendation.
+        # Replaces the pages reading data\vqa_recommendation.json directly.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/vqa/recommendation') {
+            try {
+                $rec = $null
+                try { $rec = Get-DbKeyValue -Key 'vqa_recommendation' } catch { }
+                if ($rec) {
+                    Send-JsonResponse -Response $response -Body $rec
+                } else {
+                    # 404 mirrors the old behaviour of the file simply not
+                    # existing before the first VQR cycle of a session.
+                    Send-JsonResponse -Response $response -StatusCode 404 -Body @{ ok = $false; error = 'no recommendation yet' }
+                }
+            } catch {
+                try { Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = 'server error' } } catch {}
+            } finally {
+                try { $response.Close() } catch {}
+            }
+            continue
+        }
+
         # API: POST /api/computer-monitoring/force-refresh
         # Creates a flag file read by the VRMonitor loop (separate process) to trigger an immediate refresh.
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/computer-monitoring/force-refresh') {
@@ -4933,18 +4972,15 @@ try {
             $urlPath = [Uri]::UnescapeDataString($request.Url.LocalPath).TrimStart('/').Replace('/', [System.IO.Path]::DirectorySeparatorChar)
             if ([string]::IsNullOrEmpty($urlPath)) { $urlPath = 'video_monitor.html' }
 
-            $dataPath = Join-Path $ScriptPath "data"
             if ($urlPath.StartsWith("data" + [System.IO.Path]::DirectorySeparatorChar)) {
-                # Only allow .csv files from the data folder - no traversal
-                $fileRelative = $urlPath.Substring(5)  # strip "data\"
-                $resolvedFile    = [System.IO.Path]::GetFullPath((Join-Path $dataPath $fileRelative))
-                $resolvedBase    = [System.IO.Path]::GetFullPath($dataPath)
-                $allowedExt      = [System.IO.Path]::GetExtension($resolvedFile).ToLower()
-                if (-not $resolvedFile.StartsWith($resolvedBase) -or ($allowedExt -ne '.csv' -and $allowedExt -ne '.json')) {
-                    $response.StatusCode = 403
-                    $response.Close()
-                    continue
-                }
+                # The data folder is no longer web-readable. It used to serve
+                # .csv/.json straight off disk, which is how the monitoring and
+                # VQA pages read their state; both now go through an API that
+                # returns the same shape from the database. Refusing the whole
+                # prefix keeps a stale legacy_* copy from being served too.
+                $response.StatusCode = 403
+                $response.Close()
+                continue
             } else {
                 $resolvedFile    = [System.IO.Path]::GetFullPath((Join-Path $websitePath $urlPath))
                 $resolvedBase    = [System.IO.Path]::GetFullPath($websitePath)

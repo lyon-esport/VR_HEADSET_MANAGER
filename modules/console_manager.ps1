@@ -1845,10 +1845,11 @@ function Show-SubMenu-Monitoring {
             '4' { Invoke-VqaApply -Scope 'all' | Out-Null; Read-Host "Press Enter" }
             '5' { Restore-VqaOriginals | Out-Null; Read-Host "Press Enter" }
             '6' {
-                if (Test-Path -LiteralPath $global:VQA_RecommendationFilePath) {
-                    Get-Content -LiteralPath $global:VQA_RecommendationFilePath -Raw | Write-Host
+                $rec = Get-LatestVqaRecommendation
+                if ($rec) {
+                    ($rec | ConvertTo-Json -Depth 6) | Write-Host
                 } else {
-                    Write-Host "No recommendation file yet."
+                    Write-Host "No recommendation yet."
                 }
                 Read-Host "Press Enter"
             }

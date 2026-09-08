@@ -443,6 +443,151 @@ Invoke-RegressionTest -Name 'WhatIf reports the plan without touching anything' 
     }
 }
 
+Invoke-RegressionTest -Name 'the area filter imports only what has been migrated' -Test {
+    # The migration lands one area at a time. A file must not be moved aside
+    # until the code that reads it has been switched to the database, or that
+    # code would find nothing on the next start. This is what enforces it.
+    $sandbox = New-TempDatabaseRoot -Name 'areas'
+    try {
+        New-LegacyFixtureSet -Sandbox $sandbox | Out-Null
+        Initialize-Database -Role Main -SkipBackup | Out-Null
+
+        $r = Import-LegacyDataFiles -DataFolder $sandbox.DataFolder -Include snapshots, vqa
+        $importedFiles = @($r.Imported | ForEach-Object { $_.File })
+        Add-TestEvidence ("imported: {0}" -f ($importedFiles -join ', '))
+
+        # In scope for these two areas.
+        Assert-Contains $importedFiles 'fw_state.json'            'the firewall snapshot was imported'
+        Assert-Contains $importedFiles 'computer_monitoring.json' 'the hardware snapshot was imported'
+        Assert-Contains $importedFiles 'vqa_history.csv'          'the VQA history was imported'
+
+        # Out of scope: still on disk, still readable by the code that owns them.
+        foreach ($untouched in @('known_headsets.csv', 'known_kiosks.csv', 'known_apps.csv', 'timer.csv')) {
+            Assert-FileExists (Join-Path $sandbox.DataFolder $untouched) ("{0} is left in place" -f $untouched)
+            Assert-True ($importedFiles -notcontains $untouched) ("{0} was not imported" -f $untouched)
+        }
+        Assert-Equal 0 ([int](Invoke-DbScalar -Sql 'SELECT COUNT(*) FROM headsets;')) 'no headsets were imported'
+        Assert-Equal 0 ([int](Invoke-DbScalar -Sql 'SELECT COUNT(*) FROM app_catalog;')) 'no catalogue rows were imported'
+
+        # And the in-scope originals did move aside.
+        Assert-FileMissing (Join-Path $sandbox.DataFolder 'fw_state.json') 'the imported snapshot left data\'
+        Assert-FileExists  (Join-Path $r.LegacyFolder 'fw_state.json')     'and is preserved in the legacy folder'
+    } finally {
+        Remove-TempDatabaseRoot -Sandbox $sandbox | Out-Null
+    }
+}
+
+Invoke-RegressionTest -Name 'a later area import picks up the files left behind' -Test {
+    # Running one area now and another later must converge on the same state
+    # as importing everything at once.
+    $sandbox = New-TempDatabaseRoot -Name 'staged'
+    try {
+        New-LegacyFixtureSet -Sandbox $sandbox | Out-Null
+        Initialize-Database -Role Main -SkipBackup | Out-Null
+
+        Import-LegacyDataFiles -DataFolder $sandbox.DataFolder -Include snapshots, vqa | Out-Null
+        Assert-Equal 0 ([int](Invoke-DbScalar -Sql 'SELECT COUNT(*) FROM headsets;')) 'headsets not yet imported'
+
+        $second = Import-LegacyDataFiles -DataFolder $sandbox.DataFolder -Include headsets, status, apps, timers
+        Add-TestEvidence ("second pass imported {0} file(s)" -f $second.Imported.Count)
+        Assert-Equal 0 $second.Errors.Count 'the second pass reported no errors'
+        Assert-Equal 4 ([int](Invoke-DbScalar -Sql 'SELECT COUNT(*) FROM headsets;')) 'headsets imported on the second pass'
+        Assert-Equal 2 ([int](Invoke-DbScalar -Sql 'SELECT COUNT(*) FROM app_catalog;')) 'catalogue imported on the second pass'
+        Assert-Equal 2 ([int](Invoke-DbScalar -Sql 'SELECT COUNT(*) FROM headset_timers;')) 'timers imported on the second pass'
+
+        # Two legacy folders now exist, one per run - both preserved.
+        $legacyDirs = @(Get-ChildItem -LiteralPath $sandbox.DataFolder -Directory -Filter 'legacy_*')
+        Add-TestEvidence ("legacy folders: {0}" -f $legacyDirs.Count)
+        Assert-True ($legacyDirs.Count -ge 1) 'the originals are preserved across staged runs'
+    } finally {
+        Remove-TempDatabaseRoot -Sandbox $sandbox | Out-Null
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Snapshot accessors now backed by the key/value store
+# ---------------------------------------------------------------------------
+
+Invoke-RegressionTest -Name 'the VQA history table behaves like the old per-session CSV' -Test {
+    $sandbox = New-TempDatabaseRoot -Name 'vqahist'
+    try {
+        Initialize-Database -Role Main -SkipBackup | Out-Null
+
+        # Reason deliberately contains a semicolon: the CSV era had to strip
+        # those out because the reader split raw lines on ';' and took index 5.
+        $rows = @()
+        foreach ($i in 1..6) {
+            $rows += @{
+                ts = ("2026-09-08T10:0{0}:00" -f $i); cpu_pct = 80 + $i; gpu_pct = 70
+                scrcpy_count = 2; client_count = 1; direction = 'down'
+                reason = 'cpu above mitigation; gpu fine'; json = ('{"i":' + $i + '}')
+            }
+        }
+        Invoke-DbBatch -Name 'vqa.history_insert' -Rows $rows | Out-Null
+
+        $last = @(Invoke-DbQuery -Name 'vqa.history_last' -Parameters @{ n = 5 })
+        Assert-Equal 5 $last.Count 'the newest five rows come back'
+        Add-TestEvidence ("newest first: {0}" -f (($last | ForEach-Object { $_.Timestamp }) -join ', '))
+        Assert-Equal '2026-09-08T10:06:00' ([string]$last[0].Timestamp) 'ordered newest first'
+        Assert-Equal 'down' ([string]$last[0].Direction) 'the direction column reads by name'
+        Assert-Match ([string]$last[0].Reason) ';' 'a semicolon in the reason no longer has to be stripped'
+
+        Invoke-DbNonQuery -Name 'vqa.history_clear' | Out-Null
+        Assert-Equal 0 ([int](Invoke-DbScalar -Sql 'SELECT COUNT(*) FROM vqa_history;')) 'history is cleared per session'
+    } finally {
+        Remove-TempDatabaseRoot -Sandbox $sandbox | Out-Null
+    }
+}
+
+Invoke-RegressionTest -Name 'the firewall snapshot round-trips an accented path' -Test {
+    # This is the exact failure ADR-0006 was written for: the accented
+    # DefenderExclusionPath degraded on every read/write cycle until it never
+    # matched the real path again and the Defender prompt returned every run.
+    $sandbox = New-TempDatabaseRoot -Name 'fwstate'
+    try {
+        Initialize-Database -Role Main -SkipBackup | Out-Null
+        $accented = 'L:\Drive partag' + [char]0x00E9 + 's\VR_HEADSET_MANAGER'
+
+        $state = [PSCustomObject]@{
+            AdbPath               = 'C:\adb.exe'
+            WebServerPort         = 8080
+            DefenderExclusionPath = $accented
+        }
+        Set-DbKeyValue -Key 'fw_state' -Value $state -Depth 4
+
+        # Ten cycles: the old failure only became visible after compounding.
+        for ($i = 0; $i -lt 10; $i++) {
+            $read = Get-DbKeyValue -Key 'fw_state'
+            Set-DbKeyValue -Key 'fw_state' -Value $read -Depth 4
+        }
+        $final = Get-DbKeyValue -Key 'fw_state'
+        Add-TestEvidence ("after 10 read/write cycles: {0}" -f $final.DefenderExclusionPath)
+        Assert-Equal $accented ([string]$final.DefenderExclusionPath) 'the accented path never degrades'
+        Assert-Equal 8080 ([int]$final.WebServerPort) 'the numeric field survives too'
+    } finally {
+        Remove-TempDatabaseRoot -Sandbox $sandbox | Out-Null
+    }
+}
+
+Invoke-RegressionTest -Name 'the cooldown counter steps down and clears' -Test {
+    $sandbox = New-TempDatabaseRoot -Name 'cooldown'
+    try {
+        Initialize-Database -Role Main -SkipBackup | Out-Null
+
+        Assert-Equal 0 ([int](Get-DbKeyValue -Key 'vqa_cooldown' -Default 0)) 'no cooldown to begin with'
+        Set-DbKeyValue -Key 'vqa_cooldown' -Value ([PSCustomObject]@{ RemainingCycles = 3; StartedAt = '2026-09-08T10:00:00' })
+        Assert-Equal 3 ([int](Get-DbKeyValue -Key 'vqa_cooldown').RemainingCycles) 'the counter was armed'
+
+        Set-DbKeyValue -Key 'vqa_cooldown' -Value ([PSCustomObject]@{ RemainingCycles = 1; StartedAt = '2026-09-08T10:00:00' })
+        Assert-Equal 1 ([int](Get-DbKeyValue -Key 'vqa_cooldown').RemainingCycles) 'the counter stepped down'
+
+        Remove-DbKeyValue -Key 'vqa_cooldown'
+        Assert-True ($null -eq (Get-DbKeyValue -Key 'vqa_cooldown')) 'the counter clears to nothing, not to zero'
+    } finally {
+        Remove-TempDatabaseRoot -Sandbox $sandbox | Out-Null
+    }
+}
+
 # ---------------------------------------------------------------------------
 # Operator CSV round-trip
 # ---------------------------------------------------------------------------

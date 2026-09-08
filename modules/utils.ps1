@@ -1131,12 +1131,20 @@ function Update-ComputerMonitoring {
     $forceRefresh = Test-Path -LiteralPath $flagFile
     $needsRefresh = $forceRefresh
     if (-not $needsRefresh) {
-        if (-not (Test-Path -LiteralPath $global:computerMonitoringFilePath)) {
+        # Age comes from the snapshot's own Timestamp rather than a file
+        # mtime now that this lives in the database. An unreadable or
+        # unparsable timestamp means refresh, which is the safe direction.
+        $previous = $null
+        try { $previous = Get-DbKeyValue -Key 'computer_monitoring' } catch { }
+        if ($null -eq $previous -or -not $previous.Timestamp) {
             $needsRefresh = $true
         } else {
             $threshold = Get-AdaptiveMonitorInterval
-            $age = (Get-Date) - (Get-Item -LiteralPath $global:computerMonitoringFilePath).LastWriteTime
-            if ($age.TotalSeconds -ge $threshold) {
+            $lastWrite = [datetime]::MinValue
+            if ([datetime]::TryParse([string]$previous.Timestamp, [ref]$lastWrite)) {
+                $age = (Get-Date) - $lastWrite
+                if ($age.TotalSeconds -ge $threshold) { $needsRefresh = $true }
+            } else {
                 $needsRefresh = $true
             }
         }
@@ -1173,8 +1181,7 @@ function Update-ComputerMonitoring {
         RecordingDrive = $recDrive
     }
 
-    $json = $snapshot | ConvertTo-Json -Depth 5
-    Write-FileWithoutBom -Path $global:computerMonitoringFilePath -Content $json
+    Set-DbKeyValue -Key 'computer_monitoring' -Value $snapshot -Depth 5
 
     Write-Log $msg.ComputerMonitoringUpdated -Level DEBUG
 
@@ -1664,10 +1671,9 @@ function Exit-VqaLock {
 function Get-LoadTier {
     if (-not $global:AdaptiveMonitoring_Enabled) { return 'idle' }
     if (-not $global:VQA_Enabled)                { return 'idle' }
-    if (-not (Test-Path -LiteralPath $global:computerMonitoringFilePath)) { return 'idle' }
-    try {
-        $snap = Get-Content -LiteralPath $global:computerMonitoringFilePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-    } catch { return 'idle' }
+    $snap = $null
+    try { $snap = Get-DbKeyValue -Key 'computer_monitoring' } catch { return 'idle' }
+    if ($null -eq $snap) { return 'idle' }
     $cpu = $null
     if     ($null -ne $snap.CPU.LoadPercent) { $cpu = [int]$snap.CPU.LoadPercent }
     elseif ($null -ne $snap.Cpu.LoadPercent) { $cpu = [int]$snap.Cpu.LoadPercent }
