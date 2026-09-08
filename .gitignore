@@ -26,6 +26,7 @@ scrcpy_manualScripts/
 # ignore non-regression test reports and evidence (screenshots, logs, ffprobe
 # dumps saved per run) - local to the machine that ran the harness
 scripts/nonRegressionTests/reports/
+scripts/dbTests/reports/
 
 # ignore large sources
 /sources/ffmpeg-8.1-essentials_build.zip
