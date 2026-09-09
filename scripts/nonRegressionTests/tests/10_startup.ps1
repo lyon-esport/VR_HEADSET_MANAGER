@@ -182,7 +182,8 @@ Invoke-RegressionTest -Name 'Sandbox profile is provisioned' -Test {
     $cfg = Initialize-SandboxConfig -TargetRoot $target -DevRoot $devRoot
     Assert-NotNull $cfg 'seeded config'
     Assert-FileExists $paths.ConfigFile 'config\config.json'
-    Assert-FileExists $paths.KnownHeadsets 'data\known_headsets.csv'
+    # No known_headsets.csv to seed any more: the registry is a table the app
+    # creates for itself on first start.
 
     $written = Read-JsonFileUtf8 -Path $paths.ConfigFile
     Assert-NotNull $written 'seeded config re-parses'
@@ -232,7 +233,14 @@ Invoke-RegressionTest -Name 'Reaper watchdog is running' -Test {
 }
 
 Invoke-RegressionTest -Name 'VRMonitor is producing monitoring data' -Test {
-    Assert-FileExists $paths.HeadsetsInfos 'data\known_headsets_infos.csv'
+    # Live status is a table now (ADR-0016). The startup seed gives every
+    # registered headset a row before the first poll, so the check is that the
+    # database exists and the status view is queryable - not that a CSV appeared.
+    Assert-FileExists $paths.Database 'data\vrhm.db'
+    $statusRows = @(Get-SandboxDbRows -TargetRoot $target -Sql 'SELECT ID FROM v_headset_status;')
+    $registry   = @(Get-SandboxHeadsets -TargetRoot $target)
+    Add-TestEvidence ("registry rows={0}  status rows={1}" -f $registry.Count, $statusRows.Count)
+    Assert-Equal $registry.Count $statusRows.Count 'every registered headset has a live-status row'
 
     $deadline = (Get-Date).AddSeconds(60)
     while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $paths.ComputerMonJson)) {

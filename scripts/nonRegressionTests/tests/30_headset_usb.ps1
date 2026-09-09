@@ -145,7 +145,7 @@ Invoke-RegressionTest -Name 'A stale registered IP is healed by serial number ov
         $observedIp = $staleIp
         while ((Get-Date) -lt $deadline -and -not $healed) {
             try {
-                $row = @(Import-Csv -LiteralPath $paths.KnownHeadsets -Encoding UTF8) | Where-Object { $_.Name -eq $nrtName } | Select-Object -First 1
+                $row = @(Get-SandboxHeadsets -TargetRoot $target) | Where-Object { $_.Name -eq $nrtName } | Select-Object -First 1
                 if ($row) {
                     $observedIp = $row.IPAddress
                     if ($observedIp -ne $staleIp -and $observedIp -eq $nrtUsb.ip) { $healed = $true }

@@ -30,17 +30,20 @@ $nrtIp2   = '192.0.2.11'
 
 function Get-NrtHeadsetRow {
     param([Parameter(Mandatory = $true)][string]$Name)
-    $rows = @(Import-Csv -LiteralPath $paths.KnownHeadsets -Encoding UTF8)
+    $rows = @(Get-SandboxHeadsets -TargetRoot $target)
     return ($rows | Where-Object { $_.Name -eq $Name } | Select-Object -First 1)
 }
 
 function Get-NrtHeadsetRows {
-    # NOTE: the array is UNROLLED on the way out, so a single-row CSV arrives at the
+    # Registry rows straight from the database, in display order and with the
+    # legacy column names, so every assertion below reads unchanged.
+    #
+    # NOTE: the array is UNROLLED on the way out, so a single row arrives at the
     # caller as a bare PSCustomObject whose .Count is $null (not 1). Every caller that
     # ASSIGNS the result must wrap it in @() - see the call sites below. Do not "fix"
     # that here with a leading comma: this function is also used in a pipeline, and
     # ,@(...) would emit the inner array as a single object instead of enumerating it.
-    return @(Import-Csv -LiteralPath $paths.KnownHeadsets -Encoding UTF8)
+    return @(Get-SandboxHeadsets -TargetRoot $target)
 }
 
 Invoke-RegressionTest -Name 'App is running' -Test {
@@ -75,9 +78,15 @@ Invoke-RegressionTest -Name 'Add a headset by IP' -Test {
 Invoke-RegressionTest -Name 'New headset gets its default side files' -Test {
     $safe = ConvertTo-VrmSafeName $nrtName
 
-    $favorites = Join-Path $paths.DataFolder ($safe + '_favorite_apps.csv')
-    Add-TestEvidence ("favorites: {0}" -f $favorites)
-    Assert-FileExists $favorites 'default favorites CSV'
+    # Favourites are database rows now, seeded from
+    # templates\data\default_favorite_apps.csv rather than copied to a
+    # per-headset CSV. Asserted through the API that reads them, which is the
+    # contract the app_launcher UI actually depends on.
+    $fav = Invoke-VrmApi -Path ('/api/favoriteapps?name=' + $safe)
+    Assert-Equal 200 $fav.StatusCode 'GET /api/favoriteapps'
+    $favRows = @($fav.Json)
+    Add-TestEvidence ("seeded favourites: {0}" -f $favRows.Count)
+    Assert-True ($favRows.Count -gt 0) 'a new headset is seeded with the default favourites'
 
     foreach ($kind in @('monitoring', 'video', 'timer')) {
         $page = Join-Path $paths.GeneratedFolder ("{0}[{1}].html" -f $safe, $kind)
@@ -195,7 +204,7 @@ Invoke-RegressionTest -Name 'Legacy 4-part profile is normalised, not rejected' 
     Assert-Match $stored '^[\w]+-[LR]-[DN]-\d+-\d+$' 'normalised profile shape'
 }
 
-Invoke-RegressionTest -Name 'Rename moves the side files with the headset' -Test {
+Invoke-RegressionTest -Name 'Rename moves the generated pages, and apps follow without any file work' -Test {
     $oldSafe = ConvertTo-VrmSafeName $nrtName
     $newName = 'NRT_Renamed'
     $newSafe = ConvertTo-VrmSafeName $newName
@@ -214,10 +223,19 @@ Invoke-RegressionTest -Name 'Rename moves the side files with the headset' -Test
         Assert-FileExists  $newPage ("{0} page for the new name" -f $kind)
     }
 
-    $oldFav = Join-Path $paths.DataFolder ($oldSafe + '_favorite_apps.csv')
-    $newFav = Join-Path $paths.DataFolder ($newSafe + '_favorite_apps.csv')
-    Assert-FileMissing $oldFav 'stale favorites CSV'
-    Assert-FileExists  $newFav 'renamed favorites CSV'
+    # Favourites used to live in data\<Name>_favorite_apps.csv, so a rename had
+    # to rename the file. They hang off the permanent headset id now, so the
+    # rename is invisible to them and there is no file to move. What matters is
+    # that they are still reachable under the NEW name.
+    $fav = Invoke-VrmApi -Path ('/api/favoriteapps?name=' + $newSafe)
+    Assert-Equal 200 $fav.StatusCode 'GET /api/favoriteapps after rename'
+    $favRows = @($fav.Json)
+    Add-TestEvidence ("favourites under the new name: {0}" -f $favRows.Count)
+    Assert-True ($favRows.Count -gt 0) 'favourites followed the rename'
+
+    foreach ($stale in @(($oldSafe + '_favorite_apps.csv'), ($oldSafe + '_installed_apps.csv'))) {
+        Assert-FileMissing (Join-Path $paths.DataFolder $stale) ("no per-headset app CSV is written any more: {0}" -f $stale)
+    }
 
     # Rename back so the rest of the section uses one stable name.
     Invoke-VrmApi -Path '/api/renameheadset' -Method POST -Body @{ name = $newName; newname = $nrtName } | Out-Null
@@ -255,8 +273,17 @@ Invoke-RegressionTest -Name 'Remove cleans up every side file' -Test {
     foreach ($kind in @('monitoring', 'video', 'timer')) {
         Assert-FileMissing (Join-Path $paths.GeneratedFolder ("{0}[{1}].html" -f $safe, $kind)) ("generated {0} page" -f $kind)
     }
-    Assert-FileMissing (Join-Path $paths.DataFolder ($safe + '_favorite_apps.csv'))  'favorites CSV'
-    Assert-FileMissing (Join-Path $paths.DataFolder ($safe + '_installed_apps.csv')) 'installed apps CSV'
+    # These two files are never created any more, so their absence proves
+    # nothing about the removal. The real assertion is that the headset's app
+    # rows went with it, which ON DELETE CASCADE handles: ask the API for
+    # favourites under the deleted name and expect nothing back.
+    Assert-FileMissing (Join-Path $paths.DataFolder ($safe + '_favorite_apps.csv'))  'no favorites CSV is written any more'
+    Assert-FileMissing (Join-Path $paths.DataFolder ($safe + '_installed_apps.csv')) 'no installed apps CSV is written any more'
+
+    $fav = Invoke-VrmApi -Path ('/api/favoriteapps?name=' + $safe)
+    $favRows = @($fav.Json)
+    Add-TestEvidence ("favourites after removal: {0}" -f $favRows.Count)
+    Assert-Equal 0 $favRows.Count 'the removed headset''s favourites cascaded away'
 
     $ids = @(Get-NrtHeadsetRows | ForEach-Object { [int]$_.ID } | Sort-Object)
     Add-TestEvidence ("IDs after removal: {0}" -f ($ids -join ', '))

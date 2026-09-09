@@ -190,14 +190,14 @@ Invoke-RegressionTest -Name '/api/appinfo agrees with the pid files and config' 
     }
 }
 
-Invoke-RegressionTest -Name '/api/headsets matches known_headsets.csv' -Test {
+Invoke-RegressionTest -Name '/api/headsets matches the registry table' -Test {
     $r = Invoke-VrmApi -Path '/api/headsets'
     Assert-True $r.Ok 'GET /api/headsets'
 
     $api = @($r.Json)
-    $csv = @(Import-Csv -LiteralPath $paths.KnownHeadsets -Encoding UTF8)
-    Add-TestEvidence ("api rows={0}  csv rows={1}" -f $api.Count, $csv.Count)
-    Assert-Equal $csv.Count $api.Count 'headset row count'
+    $stored = @(Get-SandboxHeadsets -TargetRoot $target)
+    Add-TestEvidence ("api rows={0}  db rows={1}" -f $api.Count, $stored.Count)
+    Assert-Equal $stored.Count $api.Count 'headset row count'
 
     if ($api.Count -gt 0) {
         $required = @('ID', 'Name', 'IPAddress', 'Model', 'ScrcpyProfile', 'scrcpy_AutoRestart', 'Record')
@@ -213,8 +213,8 @@ Invoke-RegressionTest -Name '/api/headsets-status returns one entry per headset'
     Assert-True $r.Ok 'GET /api/headsets-status'
 
     $api = @($r.Json)
-    $csv = @(Import-Csv -LiteralPath $paths.KnownHeadsets -Encoding UTF8)
-    Assert-Equal $csv.Count $api.Count 'status row count'
+    $stored = @(Get-SandboxHeadsets -TargetRoot $target)
+    Assert-Equal $stored.Count $api.Count 'status row count'
 
     if ($api.Count -gt 0) {
         foreach ($field in @('display_name', 'ip_address', 'ping', 'adb', 'scrcpy', 'battery')) {

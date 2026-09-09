@@ -56,38 +56,127 @@ function Get-SandboxPaths {
         GeneratedFolder = Join-Path $TargetRoot 'website\generated'
         RecordFolder    = Join-Path $TargetRoot 'data\test_records'
         ScriptsFolder   = Join-Path $TargetRoot 'scripts'
+        Database        = Join-Path $TargetRoot 'data\vrhm.db'
     }
+}
+
+function Get-SandboxDbRows {
+    <#
+    .SYNOPSIS
+        Runs a read-only query against the target install's vrhm.db and returns
+        the rows as PSCustomObjects. @() on any failure.
+    .DESCRIPTION
+        The harness used to read data\*.csv directly. Those files are gone: the
+        registry, live status, kiosks, timers, apps and snapshots are all tables
+        now. This is the replacement, and it deliberately does NOT dot-source the
+        application's database.ps1 - the harness must observe the app from the
+        outside, exactly as it did when it parsed the app's CSV output.
+
+        Opened Read Only against a WAL database, so it never blocks the running
+        application and the application never blocks it. Pooling is off so the
+        file handle is released the moment the connection closes, which matters
+        because Reset-SandboxTarget deletes the whole data folder afterwards.
+    .EXAMPLE
+        Get-SandboxDbRows -TargetRoot $root -Sql 'SELECT * FROM v_headsets ORDER BY SortOrder;'
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$TargetRoot,
+        [Parameter(Mandatory = $true)][string]$Sql,
+        [hashtable]$Parameters
+    )
+
+    $paths = Get-SandboxPaths -TargetRoot $TargetRoot
+    if (-not (Test-Path -LiteralPath $paths.Database)) { return @() }
+
+    $dllFolder = Join-Path $paths.SourcesFolder 'sqlite\System.Data.SQLite-1.0.119'
+    $dll       = Join-Path $dllFolder 'System.Data.SQLite.dll'
+    if (-not (Test-Path -LiteralPath $dll)) { return @() }
+
+    $connection = $null
+    try {
+        # SQLite.Interop.dll is found through this, not through the PATH.
+        $env:PreLoadSQLite_BaseDirectory = $dllFolder
+        [void][Reflection.Assembly]::LoadFrom($dll)
+
+        $cs = "Data Source=`"{0}`";Version=3;Read Only=True;Pooling=False;" -f $paths.Database
+        $connection = New-Object System.Data.SQLite.SQLiteConnection $cs
+        $connection.Open()
+
+        $command = $connection.CreateCommand()
+        $command.CommandText = $Sql
+        if ($Parameters) {
+            foreach ($key in $Parameters.Keys) {
+                $name  = if ([string]$key -like '@*') { [string]$key } else { '@' + [string]$key }
+                $value = $Parameters[$key]
+                if ($null -eq $value) { $value = [DBNull]::Value }
+                [void]$command.Parameters.AddWithValue($name, $value)
+            }
+        }
+
+        $reader = $command.ExecuteReader()
+        $rows   = New-Object System.Collections.Generic.List[object]
+        while ($reader.Read()) {
+            $row = [ordered]@{}
+            for ($i = 0; $i -lt $reader.FieldCount; $i++) {
+                $value = $reader.GetValue($i)
+                if ($value -is [DBNull]) { $value = $null }
+                $row[$reader.GetName($i)] = $value
+            }
+            $rows.Add([PSCustomObject]$row) | Out-Null
+        }
+        $reader.Close()
+        $command.Dispose()
+        return $rows.ToArray()
+    }
+    catch { return @() }
+    finally {
+        if ($connection) {
+            try { $connection.Close() } catch { }
+            try { $connection.Dispose() } catch { }
+        }
+    }
+}
+
+function Get-SandboxHeadsets {
+    <#
+    .SYNOPSIS
+        Every registry row of the target install, in display order, with the
+        legacy CSV column names. The replacement for
+        Import-Csv data\known_headsets.csv.
+    .EXAMPLE
+        $rows = Get-SandboxHeadsets -TargetRoot $root
+    #>
+    param([Parameter(Mandatory = $true)][string]$TargetRoot)
+    return @(Get-SandboxDbRows -TargetRoot $TargetRoot -Sql @'
+SELECT ID, Name, IPAddress, scrcpy_AutoRestart, Record, ScrcpyProfile,
+       Brand, Model, SerialNumber
+FROM v_headsets
+ORDER BY SortOrder, CAST(ID AS INTEGER);
+'@)
 }
 
 function Get-SandboxHeadsetInfoRow {
     <#
     .SYNOPSIS
-        Returns the live-status row of one headset from data\known_headsets_infos.csv,
-        located by display name. $null when not found.
+        Returns the live-status row of one headset, located by display name.
+        $null when not found.
     .DESCRIPTION
-        known_headsets_infos.csv is keyed on ID and carries no identity columns (ADR-0016),
-        so the name is first resolved to an ID through data\known_headsets.csv, which is the
-        authority on names. Joining the infos file on Name directly is what this replaces -
-        it silently missed after any rename or DHCP address swap.
+        Live status is id-keyed and carries no identity columns (ADR-0016), so the
+        name has to be resolved through the registry. v_headset_full is exactly
+        that join, so the lookup is one query instead of two file reads.
+
+        Matching on Name here is the harness's own choice, not the application's:
+        a test knows the name it just created. The application itself never joins
+        status on a name - that is the defect ADR-0016 removes.
     #>
     param(
         [Parameter(Mandatory = $true)][string]$TargetRoot,
         [Parameter(Mandatory = $true)][string]$Name
     )
 
-    $paths = Get-SandboxPaths -TargetRoot $TargetRoot
-    if (-not (Test-Path -LiteralPath $paths.KnownHeadsets)) { return $null }
-    if (-not (Test-Path -LiteralPath $paths.HeadsetsInfos)) { return $null }
-
-    try {
-        $headset = @(Import-Csv -LiteralPath $paths.KnownHeadsets -Encoding UTF8) |
-                   Where-Object { $_.Name -eq $Name } | Select-Object -First 1
-        if (-not $headset) { return $null }
-
-        return (@(Import-Csv -LiteralPath $paths.HeadsetsInfos -Delimiter ';' -Encoding UTF8) |
-                Where-Object { [string]$_.ID -eq [string]$headset.ID } | Select-Object -First 1)
-    }
-    catch { return $null }
+    $rows = @(Get-SandboxDbRows -TargetRoot $TargetRoot -Sql 'SELECT * FROM v_headset_full WHERE Name = @name;' -Parameters @{ name = $Name })
+    if ($rows.Count -eq 0) { return $null }
+    return $rows[0]
 }
 
 function Read-JsonFileUtf8 {
@@ -393,10 +482,10 @@ function Initialize-SandboxConfig {
     Write-TextFileNoBom -Path $paths.ConfigFile -Content $json
 
     # --- Seed data\ ---------------------------------------------------------
-    if (-not (Test-Path -LiteralPath $paths.KnownHeadsets)) {
-        $header = '"ID","Name","IPAddress","scrcpy_AutoRestart","Record","ScrcpyProfile","Brand","Model","SerialNumber"'
-        Write-TextFileNoBom -Path $paths.KnownHeadsets -Content ($header + "`r`n")
-    }
+    # No known_headsets.csv is seeded any more. The registry is a table, and the
+    # app creates the database itself on first start. Writing an empty CSV here
+    # would be worse than useless: the legacy importer is no longer wired into
+    # startup, so the file would simply sit there unread.
 
     # WiFi credentials: DPAPI store, same user, so a straight copy works. Safe
     # even in self-test mode (DevRoot equal to TargetRoot): the destination-
@@ -556,7 +645,7 @@ function Wait-SandboxReady {
         if (-not (Test-Path -LiteralPath $paths.WebServerPid))            { $waitingFor = 'webserver.pid' }
         elseif (-not (Test-SandboxTcpPort -Port $webPort -TimeoutMs 500)) { $waitingFor = "web server port $webPort" }
         elseif ($wantMediaMtx -and -not (Test-Path -LiteralPath $paths.MediaMtxPid)) { $waitingFor = 'mediamtx.pid' }
-        elseif (-not (Test-Path -LiteralPath $paths.HeadsetsInfos))       { $waitingFor = 'known_headsets_infos.csv' }
+        elseif (-not (Test-Path -LiteralPath $paths.Database))            { $waitingFor = 'data\vrhm.db' }
 
         if (-not $waitingFor) {
             Write-Host ("  App is up (web server on port {0})." -f $webPort) -ForegroundColor DarkGray
