@@ -70,8 +70,7 @@ function Set-TestStatus {
         [int]$AdbWifi = 1,
         [string]$Battery = '80',
         [string]$Scrcpy = '-',
-        [string]$RunningApp = '-',
-        [string]$BatteryHistory = ''
+        [string]$RunningApp = '-'
     )
     Invoke-DbNonQuery -Name 'status.upsert' -Parameters @{
         ID                     = $HeadsetId
@@ -85,7 +84,6 @@ function Set-TestStatus {
         BatteryControllerRight = '-'
         PowerState             = '-'
         TimeRemainingMin       = '-'
-        BatteryHistory         = $BatteryHistory
         SCRCPY                 = $Scrcpy
         RunningApp             = $RunningApp
         RunningAppIcon         = ''
@@ -323,7 +321,7 @@ Invoke-RegressionTest -Name 'a battery burst does not abort the whole status bat
                 ID = $pair.Id; Ping = 1; ADBWifi = 1; Battery = $pair.Pct
                 Charging = '-'; ChargingWattage = '-'; Temp = '-'
                 BatteryControllerLeft = '-'; BatteryControllerRight = '-'
-                PowerState = '-'; TimeRemainingMin = '-'; BatteryHistory = ''
+                PowerState = '-'; TimeRemainingMin = '-'
                 SCRCPY = '-'; RunningApp = '-'; RunningAppIcon = ''
             }
         }
@@ -341,26 +339,107 @@ Invoke-RegressionTest -Name 'a battery burst does not abort the whole status bat
     }
 }
 
-Invoke-RegressionTest -Name 'the packed battery history survives for the poll runspace to preload' -Test {
+Invoke-RegressionTest -Name 'battery history is stored ONLY in its own table (migration 005)' -Test {
     $sandbox = New-StatusSandbox -Name 'stpack'
+    try {
+        Add-Headset -IPAddress '10.0.0.1' -Name 'A' -Model 'Quest 3' -SerialNumber 'SER-A'
+        $id = Resolve-HeadsetIdByName -Name 'A'
+
+        # The packed cell on headset_status is gone. Keeping the same data in two
+        # shapes with two retention policies, only one of which anything read, is
+        # what 005 removed - so assert the column really is absent rather than
+        # trusting the migration ran.
+        $cols = @(Invoke-DbQuery -Sql "PRAGMA table_info(headset_status);" | ForEach-Object { [string]$_.name })
+        Add-TestEvidence ("headset_status columns: {0}" -f ($cols -join ', '))
+        Assert-False ($cols -contains 'battery_history') 'the packed battery_history column is gone from headset_status'
+
+        # A row has to exist before the view can be inspected for its shape.
+        Set-TestStatus -HeadsetId $id
+        $viewCols = @(Invoke-DbQuery -Name 'status.list')[0].PSObject.Properties.Name
+        Assert-False ($viewCols -contains 'BatteryHistory') 'and it is gone from the status view'
+        Assert-False ((Get-HeadsetInfosCsvColumn) -contains 'BatteryHistory') 'and from the canonical column list'
+
+        # The table is still fed, by the trigger on the Battery column.
+        Set-TestStatus -HeadsetId $id -Battery '80'
+        Set-TestStatus -HeadsetId $id -Battery '79'
+        $rows = @(Invoke-DbQuery -Sql "SELECT pct FROM battery_history WHERE headset_id = $id;")
+        Assert-True ($rows.Count -gt 0) 'samples still land in the battery_history table'
+    } finally {
+        Remove-TempDatabaseRoot -Sandbox $sandbox | Out-Null
+    }
+}
+
+Invoke-RegressionTest -Name 'the poll runspace preloads its history from the table, per headset' -Test {
+    $sandbox = New-StatusSandbox -Name 'stpreload'
     try {
         Add-Headset -IPAddress '10.0.0.1' -Name 'A' -Model 'Quest 3' -SerialNumber 'SER-A'
         Add-Headset -IPAddress '10.0.0.2' -Name 'B' -Model 'Quest 3' -SerialNumber 'SER-B'
         $idA = Resolve-HeadsetIdByName -Name 'A'
         $idB = Resolve-HeadsetIdByName -Name 'B'
 
-        $packed = '2026-01-01T10:00:00=80|2026-01-01T10:05:00=79'
-        Set-TestStatus -HeadsetId $idA -BatteryHistory $packed
-        Set-TestStatus -HeadsetId $idB -BatteryHistory ''
+        foreach ($s in @(@{h=$idA;t='2026-01-01T10:00:00Z';p=80}, @{h=$idA;t='2026-01-01T10:05:00Z';p=79},
+                         @{h=$idA;t='2026-01-01T10:10:00Z';p=78}, @{h=$idA;t='2026-01-01T10:15:00Z';p=77},
+                         @{h=$idB;t='2026-01-01T10:00:00Z';p=50})) {
+            Invoke-DbNonQuery -Sql ("INSERT INTO battery_history(headset_id, ts, pct) VALUES ({0}, '{1}', {2});" -f $s.h, $s.t, $s.p) | Out-Null
+        }
 
-        # status.get is what the runspace calls; it must return THIS headset's
-        # history, never the previous occupant of an address.
-        $row = @(Invoke-DbQuery -Name 'status.get' -Parameters @{ headset_id = $idA }) | Select-Object -First 1
-        Assert-NotNull $row 'status.get found the row'
-        Assert-Equal $packed ([string]$row.BatteryHistory) 'the packed history came back intact'
+        # battery.recent is what the runspace calls. Newest N, returned OLDEST
+        # first, because Get-BatteryTimeEstimate reads the series as a slope and
+        # treats the final entry as the current level.
+        $recent = @(Invoke-DbQuery -Name 'battery.recent' -Parameters @{ headset_id = $idA; limit = 3 })
+        $levels = @($recent | ForEach-Object { [int]$_.pct })
+        Add-TestEvidence ("A preload: {0}" -f ($levels -join ' > '))
+        Assert-Equal 3 $recent.Count 'the limit is honoured'
+        Assert-Equal 79 $levels[0] 'oldest of the newest three comes first'
+        Assert-Equal 77 $levels[2] 'and the current level comes last'
 
-        $rowB = @(Invoke-DbQuery -Name 'status.get' -Parameters @{ headset_id = $idB }) | Select-Object -First 1
-        Assert-Equal '' ([string]$rowB.BatteryHistory) 'and B did not inherit A''s history'
+        # Per headset, never the previous occupant of an address.
+        $bRecent = @(Invoke-DbQuery -Name 'battery.recent' -Parameters @{ headset_id = $idB; limit = 3 })
+        Assert-Equal 1 $bRecent.Count 'B sees only its own sample'
+        Assert-Equal 50 ([int]$bRecent[0].pct) 'and it is B''s value'
+
+        # Unlike the packed cell, these rows survive the startup status reset -
+        # which is what makes the estimate genuinely restart-proof for the first
+        # time.
+        Invoke-DbNonQuery -Name 'status.truncate' | Out-Null
+        Assert-Equal 3 (@(Invoke-DbQuery -Name 'battery.recent' -Parameters @{ headset_id = $idA; limit = 3 })).Count 'history survives a status truncate'
+    } finally {
+        Remove-TempDatabaseRoot -Sandbox $sandbox | Out-Null
+    }
+}
+
+Invoke-RegressionTest -Name 'maintenance prunes battery history to the retention window' -Test {
+    $sandbox = New-StatusSandbox -Name 'stretain'
+    try {
+        Add-Headset -IPAddress '10.0.0.1' -Name 'A' -Model 'Quest 3' -SerialNumber 'SER-A'
+        $id = Resolve-HeadsetIdByName -Name 'A'
+
+        $now = [datetime]::UtcNow
+        $fresh = @(1, 5, 23)   # hours old - inside a 24h window
+        $stale = @(25, 48, 200)
+        foreach ($h in ($fresh + $stale)) {
+            $ts = $now.AddHours(-$h).ToString('yyyy-MM-ddTHH:mm:ssZ')
+            Invoke-DbNonQuery -Sql ("INSERT INTO battery_history(headset_id, ts, pct) VALUES ({0}, '{1}', 50);" -f $id, $ts) | Out-Null
+        }
+        Assert-Equal 6 (@(Invoke-DbQuery -Sql "SELECT ts FROM battery_history WHERE headset_id = $id;")).Count 'six samples seeded'
+
+        # Retention is enforced by the maintenance sweep, NOT by the sampling
+        # trigger: sampling fires on every battery change and sits inside the
+        # monitor's batched status write, where a DELETE has no business.
+        $global:databaseBatteryHistoryHours = 24
+        Invoke-DbMaintenance -Force | Out-Null
+
+        $left = @(Invoke-DbQuery -Sql "SELECT ts FROM battery_history WHERE headset_id = $id;")
+        Add-TestEvidence ("{0} of 6 samples left after a 24h prune" -f $left.Count)
+        Assert-Equal 3 $left.Count 'only the samples inside the window survived'
+
+        # And it self-throttles, so the slow loop can call it every tick.
+        Invoke-DbNonQuery -Sql ("INSERT INTO battery_history(headset_id, ts, pct) VALUES ({0}, '{1}', 50);" -f $id, $now.AddHours(-99).ToString('yyyy-MM-ddTHH:mm:ssZ')) | Out-Null
+        $global:databaseMaintenanceIntervalMin = 60
+        Assert-False ([bool](Invoke-DbMaintenance)) 'a second call inside the interval is skipped'
+        Assert-Equal 4 (@(Invoke-DbQuery -Sql "SELECT ts FROM battery_history WHERE headset_id = $id;")).Count 'so the stale sample is still there'
+        Assert-True ([bool](Invoke-DbMaintenance -Force)) '-Force overrides the throttle'
+        Assert-Equal 3 (@(Invoke-DbQuery -Sql "SELECT ts FROM battery_history WHERE headset_id = $id;")).Count 'and prunes it'
     } finally {
         Remove-TempDatabaseRoot -Sandbox $sandbox | Out-Null
     }
@@ -383,7 +462,7 @@ Invoke-RegressionTest -Name 'an offline headset writes a valid row through the b
             ID = $id; Ping = (ConvertTo-DbBool $false); ADBWifi = (ConvertTo-DbBool $false)
             Battery = '-'; Charging = '-'; ChargingWattage = '-'; Temp = '-'
             BatteryControllerLeft = '-'; BatteryControllerRight = '-'
-            PowerState = '-'; TimeRemainingMin = '-'; BatteryHistory = ''
+            PowerState = '-'; TimeRemainingMin = '-'
             SCRCPY = '-'; RunningApp = '-'; RunningAppIcon = ''
         }
         Invoke-DbBatch -Name 'status.upsert' -Rows @($row) | Out-Null

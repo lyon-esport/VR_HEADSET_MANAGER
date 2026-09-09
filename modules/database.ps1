@@ -678,6 +678,70 @@ function Invoke-DbBatch {
 
 
 # -------------------------------------------------------------------
+# Periodic maintenance
+#
+# Housekeeping that must happen regularly but must NOT sit on a write path.
+# Called from the monitor's slow loop, which is the project's existing "long,
+# low-priority loop"; it self-throttles so the caller can invoke it freely.
+# -------------------------------------------------------------------
+
+# Last run, per process. A worker and the main process each keep their own,
+# which is harmless: the work is idempotent and the throttle only exists to
+# stop it running every tick.
+$script:DbLastMaintenance = $null
+
+<#
+.SYNOPSIS
+    Runs periodic database housekeeping. Self-throttling and never throws.
+.DESCRIPTION
+    Currently one job: enforce the battery-history retention window
+    (database.battery_history_hours, default 24).
+
+    Retention is deliberately NOT enforced by the sampling trigger. A sample is
+    taken on every battery change for every headset, so pruning there would put
+    a DELETE and a correlated subquery on the monitor's hot write path - and
+    that path is one batched transaction covering every headset, so anything
+    that throws in it loses the whole tick's status.
+
+    -Force ignores the throttle. Failure is logged and swallowed: housekeeping
+    must never take the caller down.
+.EXAMPLE
+    Invoke-DbMaintenance
+.EXAMPLE
+    Invoke-DbMaintenance -Force
+#>
+function Invoke-DbMaintenance {
+    param(
+        [switch]$Force
+    )
+
+    $intervalMin = if ($global:databaseMaintenanceIntervalMin) { [int]$global:databaseMaintenanceIntervalMin } else { 60 }
+    if (-not $Force -and $null -ne $script:DbLastMaintenance) {
+        if (((Get-Date) - $script:DbLastMaintenance).TotalMinutes -lt $intervalMin) { return $false }
+    }
+    $script:DbLastMaintenance = Get-Date
+
+    $hours = if ($global:databaseBatteryHistoryHours) { [int]$global:databaseBatteryHistoryHours } else { 24 }
+    if ($hours -le 0) { return $false }
+
+    try {
+        # Same ISO-8601 UTC shape the sampling trigger writes, so the comparison
+        # is a plain string compare against an indexed column.
+        $cutoff  = [datetime]::UtcNow.AddHours(-$hours).ToString('yyyy-MM-ddTHH:mm:ssZ')
+        $removed = Invoke-DbNonQuery -Name 'battery.prune' -Parameters @{ cutoff = $cutoff }
+        if ($removed -gt 0) {
+            Write-Log ("Database maintenance: removed {0} battery sample(s) older than {1}h." -f $removed, $hours) -Level DEBUG
+        }
+        return $true
+    }
+    catch {
+        Write-Log ("Database maintenance failed: " + $_.Exception.Message) -Level WARNING
+        return $false
+    }
+}
+
+
+# -------------------------------------------------------------------
 # Change counters
 #
 # db_versions holds one counter per table, bumped by triggers on every
@@ -1277,9 +1341,12 @@ function Import-LegacyDataFiles {
     } catch { }
 
     # --- 2. live status ----------------------------------------------------
-    # Only BatteryHistory is worth carrying over: everything else is live and
-    # is refreshed within a second of the monitor starting. Tolerates both the
-    # current 15-column shape and the pre-ADR-0016 one with identity columns.
+    # Everything here is live and is refreshed within a second of the monitor
+    # starting, so this import exists only so a migrating install does not show
+    # an empty table for that second. The legacy BatteryHistory column is NOT
+    # carried over: those samples are rows in battery_history now (migration
+    # 005) and the packed string has no column to land in. Tolerates both the
+    # old 15-column shape and the pre-ADR-0016 one with identity columns.
     if ($areas['status']) {
     Invoke-LegacyFile -RelativePath 'known_headsets_infos.csv' -Import {
         param($path)
@@ -1303,7 +1370,6 @@ function Import-LegacyDataFiles {
                 BatteryControllerRight = [string](Get-LegacyField $r 'BatteryControllerRight' '-')
                 PowerState             = [string](Get-LegacyField $r 'PowerState' '-')
                 TimeRemainingMin       = [string](Get-LegacyField $r 'TimeRemainingMin' '-')
-                BatteryHistory         = [string](Get-LegacyField $r 'BatteryHistory' '')
                 SCRCPY                 = [string](Get-LegacyField $r 'SCRCPY' '-')
                 RunningApp             = [string](Get-LegacyField $r 'RunningApp' '-')
                 RunningAppIcon         = [string](Get-LegacyField $r 'RunningAppIcon' '')

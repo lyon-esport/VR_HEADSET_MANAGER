@@ -284,7 +284,7 @@ Invoke-RegressionTest -Name 'six runspaces each open their own connection and wr
                             Battery = [string](30 + ($i % 50))
                             Charging = '-'; ChargingWattage = '-'; Temp = '-'
                             BatteryControllerLeft = '-'; BatteryControllerRight = '-'
-                            PowerState = '-'; TimeRemainingMin = '-'; BatteryHistory = ''
+                            PowerState = '-'; TimeRemainingMin = '-'
                             SCRCPY = '-'; RunningApp = '-'; RunningAppIcon = ''
                         } | Out-Null
                         @(Invoke-DbQuery -Name 'status.get' -Parameters @{ headset_id = $HeadsetId }) | Out-Null
@@ -335,7 +335,7 @@ Invoke-RegressionTest -Name 'the write-ahead log is checkpointed back and does n
                     ID = $id; Ping = 1; ADBWifi = 1; Battery = [string](20 + ($round % 60))
                     Charging = '-'; ChargingWattage = '-'; Temp = '-'
                     BatteryControllerLeft = '-'; BatteryControllerRight = '-'
-                    PowerState = '-'; TimeRemainingMin = '-'; BatteryHistory = ''
+                    PowerState = '-'; TimeRemainingMin = '-'
                     SCRCPY = '-'; RunningApp = '-'; RunningAppIcon = ''
                 }
             }

@@ -85,7 +85,7 @@ try {
                             Battery = [string](20 + ($round % 60))
                             Charging = '-'; ChargingWattage = '-'; Temp = '-'
                             BatteryControllerLeft = '-'; BatteryControllerRight = '-'
-                            PowerState = '-'; TimeRemainingMin = '-'; BatteryHistory = ''
+                            PowerState = '-'; TimeRemainingMin = '-'
                             SCRCPY = '-'; RunningApp = '-'; RunningAppIcon = ''
                         }
                     }

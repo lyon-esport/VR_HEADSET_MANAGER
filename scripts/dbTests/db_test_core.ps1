@@ -109,6 +109,8 @@ function New-TempDatabaseRoot {
     $global:databaseIntegrityCheck  = 'quick'
     $global:databaseBackupKeep      = 3
     $global:databaseBackupOnStartup = $false
+    $global:databaseBatteryHistoryHours    = 24
+    $global:databaseMaintenanceIntervalMin = 60
     $global:debugLevelToConsole     = 'NONE'
     $global:debugLevelToFile        = 'NONE'
     $global:logFile                 = Join-Path -Path (Join-Path -Path $root -ChildPath 'logs') -ChildPath 'dbtest.log'

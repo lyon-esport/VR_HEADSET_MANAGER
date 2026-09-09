@@ -387,9 +387,15 @@ Invoke-RegressionTest -Name 'the pre-ADR-0016 20-column status file still import
 
         $row = @(Invoke-DbQuery -Sql 'SELECT * FROM v_headset_status WHERE ID = 3;')[0]
         Assert-NotNull $row 'a status row for headset 3'
-        Add-TestEvidence ("battery={0} history={1}" -f $row.Battery, $row.BatteryHistory)
+        Add-TestEvidence ("battery={0}" -f $row.Battery)
         Assert-Equal '65' ([string]$row.Battery) 'the live value was read from the old column set'
-        Assert-Match ([string]$row.BatteryHistory) '2026-09-08T08:00:00=70' 'the battery history carried over'
+
+        # The legacy file's BatteryHistory column is deliberately NOT carried
+        # over (migration 005): those samples are rows in battery_history now and
+        # the packed string has no column to land in. The fixture still contains
+        # it, so this proves an unknown legacy column is ignored rather than
+        # breaking the import.
+        Assert-False ($row.PSObject.Properties.Name -contains 'BatteryHistory') 'the retired packed column is not resurrected by an old file'
 
         # The identity columns of the old file are ignored, not written back.
         $reg = @(Invoke-DbQuery -Name 'headsets.list')

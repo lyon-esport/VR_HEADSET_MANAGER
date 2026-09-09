@@ -434,25 +434,32 @@ INSERT INTO headset_timers(headset_id,minutes,seconds,mode) VALUES (1,10,0,'dec'
     }
 }
 
-Invoke-RegressionTest -Name 'battery history trigger samples and prunes to 100 rows' -Test {
+Invoke-RegressionTest -Name 'the battery trigger samples only, and never prunes' -Test {
     $sandbox = New-TempDatabaseRoot -Name 'battery'
     try {
         Initialize-Database -Role Main -SkipBackup | Out-Null
         Invoke-DbNonQuery -Sql "INSERT INTO headsets(id,name,ip_address) VALUES (1,'A','10.0.0.1'); INSERT INTO headset_status(headset_id) VALUES (1);" | Out-Null
 
-        # The trigger stamps whole seconds, so drive the rows directly to test
-        # the pruning bound rather than racing the clock.
+        # Migration 005 moved retention off the trigger and onto the maintenance
+        # sweep. Sampling fires on every battery change, inside the monitor's
+        # batched status write, so a DELETE and a correlated subquery there were
+        # paid for by every sample - and anything that throws in that
+        # transaction loses the whole tick, for every headset.
         for ($i = 1; $i -le 130; $i++) {
             $ts = (Get-Date).AddSeconds(-$i).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
             Invoke-DbNonQuery -Sql ("INSERT OR REPLACE INTO battery_history(headset_id, ts, pct) VALUES (1, '{0}', {1});" -f $ts, ($i % 100)) | Out-Null
         }
-        # One real update fires the trigger, which prunes.
+        # Count what actually landed rather than assuming 130. Timestamps are
+        # whole seconds, so if the loop above straddles a second boundary two
+        # iterations can produce the same ts and INSERT OR REPLACE merges them.
+        $before = [int](Invoke-DbScalar -Sql 'SELECT COUNT(*) FROM battery_history WHERE headset_id = 1;')
+        Assert-True ($before -gt 100) 'well over the old 100-row cap was seeded'
+
         Invoke-DbNonQuery -Sql "UPDATE headset_status SET battery = '55' WHERE headset_id = 1;" | Out-Null
 
         $n = [int](Invoke-DbScalar -Sql 'SELECT COUNT(*) FROM battery_history WHERE headset_id = 1;')
-        Add-TestEvidence ("battery_history rows after prune: {0}" -f $n)
-        Assert-True ($n -le 100) 'history is capped at 100 samples per headset'
-        Assert-True ($n -gt 0)   'history is not wiped entirely'
+        Add-TestEvidence ("battery_history rows: {0} seeded -> {1} after one sample" -f $before, $n)
+        Assert-Equal ($before + 1) $n 'the trigger added its sample and removed nothing'
 
         # The placeholder '-' must never be sampled.
         Invoke-DbNonQuery -Sql "UPDATE headset_status SET battery = '-' WHERE headset_id = 1;" | Out-Null

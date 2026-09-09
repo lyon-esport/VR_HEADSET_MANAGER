@@ -344,13 +344,24 @@ function Start-VRMonitor {
             $stopKey = "_stop_$ip"
 
             # Pre-load battery history so time-remaining estimates survive a restart.
-            # Fetched by ID: status rows are id-keyed (ADR-0016) and the address is volatile,
-            # so a headset that moved would otherwise inherit the previous occupant's history.
-            # This used to scan the whole status CSV for one row; it is now one indexed read.
+            #
+            # From the battery_history TABLE now, not from a packed cell on the status
+            # row (migration 005). The cell was truncated at every startup along with
+            # the rest of the status row, so the estimate never actually survived a
+            # restart despite the comment here claiming it did. These rows do.
+            #
+            # Fetched by ID: the address is volatile, so a headset that moved would
+            # otherwise inherit the previous occupant's history.
+            #
+            # The working string stays the compact "ts=pct|ts=pct" form because that is
+            # what Get-BatteryTimeEstimate parses; only its storage changed. Three
+            # samples is all the estimate needs to compute a slope.
             $localBattHistory = ""
             try {
-                $row = @(Invoke-DbQuery -Name 'status.get' -Parameters @{ headset_id = [int]$headset.ID }) | Select-Object -First 1
-                if ($row -and $row.BatteryHistory) { $localBattHistory = [string]$row.BatteryHistory }
+                $samples = @(Invoke-DbQuery -Name 'battery.recent' -Parameters @{ headset_id = [int]$headset.ID; limit = 3 })
+                if ($samples.Count -gt 0) {
+                    $localBattHistory = ($samples | ForEach-Object { "{0}={1}" -f $_.ts, $_.pct }) -join '|'
+                }
             } catch {}
 
             # Two-speed poll (ADR-0015). Stage 1 is cheap (ping + TCP probe + local process scan,
@@ -838,7 +849,6 @@ function Start-VRMonitor {
                             BatteryControllerRight = [string](Get-StatusFieldOrDash $info.BatteryControllerRight)
                             PowerState             = [string](Get-StatusFieldOrDash $info.PowerState)
                             TimeRemainingMin       = [string](Get-StatusFieldOrDash $info.TimeRemainingMin)
-                            BatteryHistory         = [string]$(if ($null -eq $info.BatteryHistory) { '' } else { $info.BatteryHistory })
                             SCRCPY                 = [string](Get-StatusFieldOrDash $info.SCRCPY)
                             RunningApp             = [string](Get-StatusFieldOrDash $info.RunningApp)
                             RunningAppIcon         = [string]$(if ($null -eq $info.RunningAppIcon) { '' } else { $info.RunningAppIcon })
@@ -958,6 +968,18 @@ function Start-VRMonitor {
 
                 Update-ComputerMonitoring
 
+                # Database housekeeping - currently the battery-history retention
+                # window. Called on every slow tick but self-throttled to
+                # database.maintenance_interval_min, so this is a cheap comparison
+                # almost every time. It lives here, on the slow loop, precisely so
+                # it stays off the fast path's batched status write: anything that
+                # throws in that transaction loses every headset's status for the
+                # tick, not just one row's.
+                if (Get-Command Invoke-DbMaintenance -ErrorAction SilentlyContinue) {
+                    try { Invoke-DbMaintenance | Out-Null }
+                    catch { Write-Log ("VRMonitor: database maintenance failed: " + $_.Exception.Message) -Level WARNING }
+                }
+
                 if ($global:VQA_Enabled -and (Get-Command Invoke-VideoQualityRecommendation -ErrorAction SilentlyContinue)) {
                     # Tier-gated: idle=every tick (m=1), mitigation=every 2nd (m=2), max=every 5th (m=5).
                     # Increment first so the first tick always runs (counter % 1 == 0).
@@ -1023,7 +1045,8 @@ function Get-HeadsetInfosCsvColumn {
         "BatteryControllerRight",
         "PowerState",
         "TimeRemainingMin",
-        "BatteryHistory",
+        # No BatteryHistory: the samples are rows in battery_history now
+        # (migration 005), written by a trigger on the Battery column above.
         "SCRCPY",
         "RunningApp",
         "RunningAppIcon"

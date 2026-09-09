@@ -265,6 +265,8 @@
                      "busy_timeout_ms":  5000,
                      "retry_max":  6,
                      "integrity_check":  "quick",
+                     "battery_history_hours":  24,
+                     "maintenance_interval_min":  60,
                      "backup":  {
                                     "keep":  5,
                                     "on_startup":  true

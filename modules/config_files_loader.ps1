@@ -288,6 +288,12 @@ function Get-Config {
     $global:databaseBusyTimeoutMs = if ($dbCfg -and $dbCfg.busy_timeout_ms) { [int]$dbCfg.busy_timeout_ms } else { 5000 }
     $global:databaseRetryMax      = if ($dbCfg -and $null -ne $dbCfg.retry_max) { [int]$dbCfg.retry_max } else { 6 }
     $global:databaseIntegrityCheck = if ($dbCfg -and $dbCfg.integrity_check) { [string]$dbCfg.integrity_check } else { "quick" }
+    # Battery history retention, in hours, and how often the maintenance sweep
+    # that enforces it is allowed to run. The sweep is deliberately NOT on the
+    # insert path: sampling happens on every battery change, and making each
+    # sample pay for a prune would put a DELETE inside the monitor's hot write.
+    $global:databaseBatteryHistoryHours = if ($dbCfg -and $null -ne $dbCfg.battery_history_hours) { [int]$dbCfg.battery_history_hours } else { 24 }
+    $global:databaseMaintenanceIntervalMin = if ($dbCfg -and $null -ne $dbCfg.maintenance_interval_min) { [int]$dbCfg.maintenance_interval_min } else { 60 }
     $global:databaseBackupKeep    = if ($dbCfg -and $dbCfg.backup -and $null -ne $dbCfg.backup.keep) { [int]$dbCfg.backup.keep } else { 5 }
     $global:databaseBackupOnStartup = if ($dbCfg -and $dbCfg.backup -and $null -ne $dbCfg.backup.on_startup) { [bool]$dbCfg.backup.on_startup } else { $true }
 
