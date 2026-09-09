@@ -922,20 +922,25 @@
       ],
     };
 
+    // Read-only paths worth showing an operator. Only entries that still name a
+    // real file or folder on disk belong here.
+    //
+    // Removed with the database migration (ADR-0017), because the data moved
+    // into data\vrhm.db and the config keys no longer point at anything:
+    //   Paths.knownHeadsetsFile                     -> headsets table
+    //   Paths.AppCacheFileName                      -> app_catalog table
+    //   ComputerMonitoring.file_name                -> app_kv row
+    //   VideoQualityAutomation.history_file_name    -> vqa_history table
+    //   VideoQualityAutomation.recommendation_file_name |
+    //   VideoQualityAutomation.originals_file_name      | -> app_kv rows
+    //   VideoQualityAutomation.applied_file_name        |
     var ADV_FIELDS = [
       { path: 'ADB.folder',          label: 'ADB Binaries Folder' },
       { path: 'scrcpy.folder',       label: 'Scrcpy Binaries Folder' },
       { path: 'mediamtx.folder',     label: 'MediaMTX Folder' },
       { path: 'ffmpeg.folder',       label: 'FFmpeg Folder' },
-      { path: 'Paths.knownHeadsetsFile',  label: 'Known Headsets File' },
-      { path: 'Paths.AppCacheFileName',   label: 'App Cache File' },
-      { path: 'ComputerMonitoring.file_name', label: 'Computer Monitoring File' },
       { path: 'Monitoring.HeadsetTemplate',   label: 'Headset Status Template' },
       { path: 'Monitoring.VideoTemplate',     label: 'Video Template' },
-      { path: 'VideoQualityAutomation.history_file_name',        label: 'VQA History File' },
-      { path: 'VideoQualityAutomation.recommendation_file_name', label: 'VQA Recommendation File' },
-      { path: 'VideoQualityAutomation.originals_file_name',      label: 'VQA Originals File' },
-      { path: 'VideoQualityAutomation.applied_file_name',        label: 'VQA Applied File' },
       { path: 'apk.adbWirelessActivatorFolder',     label: 'APK Source Folder' },
       { path: 'apk.adbWirelessActivatorApk',        label: 'APK File Name' },
       { path: 'apk.adbWirelessActivatorPackageName', label: 'APK Package Name' }

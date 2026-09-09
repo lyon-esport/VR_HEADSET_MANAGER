@@ -371,6 +371,7 @@
     # ==========================================
     Headset = @{
         NameExists    = "Un casque nomme '{0}' existe deja (ID {1}). Le nom identifie un casque dans les fonctions applications, favoris et minuteur : il doit etre unique."
+        ExportedTo    = "Registre des casques exporte vers {0}"
         NameAmbiguous = "Plusieurs casques portent le nom '{0}'. Utilisation de l'ID {1}. Renommez-en un : les applications et les favoris sont resolus par nom et seront rattaches au mauvais casque."
     }
 

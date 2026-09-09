@@ -372,6 +372,7 @@
     # ==========================================
     Headset = @{
         NameExists    = "A headset named '{0}' already exists (ID {1}). Names identify a headset in the apps, favourites and timer features, so they must be unique."
+        ExportedTo    = "Headset registry exported to {0}"
         NameAmbiguous = "More than one headset is named '{0}'. Using ID {1}. Rename one of them: apps and favourites are resolved by name and will be attached to the wrong headset."
     }
 

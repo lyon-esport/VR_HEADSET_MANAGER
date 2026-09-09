@@ -285,19 +285,29 @@ $script:headsetInfosCache      = $null
 $script:headsetInfosCacheMtime = $null
 
 function Get-KnownHeadsetsCached {
-    # mtime-cached @(Get-KnownHeadsets). Kept as an ORDERED ARRAY (not a hashtable) so the
-    # CSV's own row order - the drag-and-drop display order set by Set-HeadsetsOrder - is
-    # preserved. ID is a stable identity, not a position, so it must not re-derive that order.
-    # Cached because the status endpoints resolve every request through the registry now that
-    # the live-status file carries no identity columns (ADR-0016), and each headset overlay
+    # Cached @(Get-KnownHeadsets). Kept as an ORDERED ARRAY (not a hashtable) so the
+    # registry's own row order - the drag-and-drop display order set by Set-HeadsetsOrder -
+    # is preserved. ID is a stable identity, not a position, so it must not re-derive that
+    # order. Cached because the status endpoints resolve every request through the registry
+    # now that live status carries no identity columns (ADR-0016), and each headset overlay
     # polls continuously.
-    $headsetsPath = $global:knownHeadsetsFilePath
-    if (-not $headsetsPath -or -not (Test-Path -LiteralPath $headsetsPath)) { return @() }
+    #
+    # Keyed on the headsets change counter, NOT on a file mtime. This used to stat
+    # data\known_headsets.csv, and after the registry moved into the database
+    # (ADR-0017) that was wrong twice over: the mtime never changed again because
+    # nothing writes the file, so the cache could never refresh - and once the file
+    # stopped being created at all, the existence guard returned an empty list on
+    # every call, so the web UI showed no headsets whatsoever.
+    try {
+        $version = Get-DbTableVersion -Name 'headsets'
+    }
+    catch {
+        return @()
+    }
 
-    $headsetsMtime = (Get-Item -LiteralPath $headsetsPath -ErrorAction SilentlyContinue).LastWriteTimeUtc
-    if (-not $script:knownHeadsetsCache -or $script:knownHeadsetsCacheMtime -ne $headsetsMtime) {
+    if (-not $script:knownHeadsetsCache -or $script:knownHeadsetsCacheMtime -ne $version) {
         $script:knownHeadsetsCache      = @(Get-KnownHeadsets)
-        $script:knownHeadsetsCacheMtime = $headsetsMtime
+        $script:knownHeadsetsCacheMtime = $version
     }
     return $script:knownHeadsetsCache
 }

@@ -1070,8 +1070,14 @@ function Show-SubMenu-RemoveHeadset {     # Check whether headsets exist in the 
         # Ask for confirmation before deleting all headsets
         $confirmation = $(Read-Host $msg.ConfirmDeleteAll).ToUpper()
         if ($confirmation -eq 'Y') {
-            # Delete all headsets by calling Remove-KnownHeadset without specifying criteria
-            Clear-Content -Path $global:knownHeadsetsFilePath -Force
+            # Save an empty list. This used to Clear-Content the registry CSV,
+            # which after the database migration truncated a file nothing reads:
+            # the operator confirmed the deletion, saw "all deleted", and every
+            # headset was still there. Save-Headsets deletes the rows the caller
+            # left out, so an empty array IS "remove everything", and it takes
+            # the per-headset status, timers, apps and favourites with it through
+            # ON DELETE CASCADE.
+            Save-Headsets -headsets @()
             Write-Log -Message $msg.AllDeleted -Level "INFO"
             Write-Host $msg.AllDeletedMsg -ForegroundColor green
         } else {
@@ -1811,8 +1817,20 @@ function Show-SubMenu-FilesAndFolders{
             Open-File -filePath $global:configFilePath
         }
         '5' {
+            # The registry is a table now (ADR-0017), so there is no file to
+            # open - this used to hand Open-File a path that does not exist.
+            # Export it instead, which is the operator's sanctioned way to see
+            # and edit the registry as a spreadsheet, and open the result.
             Write-Log -Message $msg.OpenKnownHeadsets -Level "INFO"
-            Open-File -filePath $global:knownHeadsetsFilePath
+            $exportPath = Join-Path $global:ScriptPath ("data\known_headsets_export_{0}.csv" -f (Get-Date -Format 'yyyy.MM.dd-HH.mm'))
+            try {
+                Export-HeadsetsCsv -Path $exportPath | Out-Null
+                Write-Host ((Get-MessageString -Key 'Headset.ExportedTo') -f $exportPath) -ForegroundColor Green
+                Open-File -filePath $exportPath
+            }
+            catch {
+                Write-Log ("Headset export failed: " + $_.Exception.Message) -Level ERROR
+            }
         }
         '0' {
             Write-Log -Message $msg.ReturnPreviousDots -Level "INFO"

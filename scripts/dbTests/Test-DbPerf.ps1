@@ -324,8 +324,11 @@ Invoke-RegressionTest -Name 'per-headset app reads scale to 300 apps and a 2000-
         Assert-True  ($planText -match 'SEARCH i USING PRIMARY KEY') 'installed apps are found by the composite primary key'
         Assert-True  ($planText -match 'SEARCH c USING INDEX')       'the catalogue is joined through its unique index'
 
+        # Median carries the assertion here too. The plan above already explains
+        # why: this figure is 300 rows of PowerShell object construction on top
+        # of a 0.4 ms query, so its tail moves with the runtime, not the schema.
         $m = Measure-DbOperation -Runs 100 -Operation { @(Invoke-DbQuery -Name 'installed.list_joined' -Parameters @{ headset_id = 1 }) }
-        Assert-Budget -Label 'installed.list_joined (300 apps x 2000 catalogue)' -Measurement $m -BudgetMs 120
+        Assert-Budget -Label 'installed.list_joined (300 apps x 2000 catalogue)' -Measurement $m -BudgetMs 250 -MedianBudgetMs 100
 
         # catalog.list is the one query that returns thousands of rows, and it
         # shows the split clearly: the statement itself is a couple of
