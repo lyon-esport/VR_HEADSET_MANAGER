@@ -625,6 +625,9 @@ function Start-VRMonitor {
         $lastFingerprint = ""
         $lastKioskFingerprint = ""
         $knownHeadsets   = @()
+        # Registry change counter last seen by the fast path. -1 rather than 0 so
+        # the very first tick always reloads, whatever the counter happens to be.
+        $lastRegistryVersion = -1
 
         # Eager first load + immediate runspace start so the first real poll lands within
         # a few seconds of job start instead of waiting one full slow-tick.
@@ -698,6 +701,29 @@ function Start-VRMonitor {
             }
 
             # ---- FAST PATH (every 500ms) ----
+            # Pick up registry changes immediately instead of waiting for the slow
+            # tick. The registry is reloaded below only when its change counter has
+            # actually moved, which is one indexed scalar read (~0.3 ms) on a tick
+            # that already does more than that.
+            #
+            # This is not an optimisation, it is a correctness fix. headset_status
+            # has a foreign key to headsets(id), and the fast path writes a row for
+            # every headset in the snapshot it holds. Remove a headset through the
+            # web UI or the console and, until the next slow tick, this loop was
+            # still writing a status row for an id that no longer exists - which
+            # SQLite rejects, and because every headset is written in ONE batch
+            # transaction, the whole tick was lost for everyone. Observed in
+            # production: adding a discovered headset (which removed and recreated
+            # a row) froze live status for all five headsets.
+            try {
+                $registryVersion = Get-DbTableVersion -Name 'headsets'
+                if ($registryVersion -ne $lastRegistryVersion) {
+                    $knownHeadsets       = @(Get-KnownHeadsets)
+                    $lastRegistryVersion = $registryVersion
+                    $lastFingerprint     = ""
+                }
+            } catch { }
+
             # Build knownHeadsetsInfo from sharedState; use a default placeholder until first poll
             $knownHeadsetsInfo = [System.Collections.ArrayList]@()
             foreach ($h in $knownHeadsets) {

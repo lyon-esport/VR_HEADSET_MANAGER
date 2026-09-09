@@ -413,10 +413,16 @@ Invoke-RegressionTest -Name 'a full installed-apps replace stays inside its budg
             }
         }
         # Median carries the assertion, p95 absorbs a GC pause - same reasoning as
-        # the fast reads above. The plan's figure was 40 ms; the operation
-        # measures ~17 ms and its tail wanders to about twice that on a busy
-        # machine, so a bare 40 ms p95 red-lined at random.
-        Assert-Budget -Label ("installed apps replace ({0} rows)" -f $script:PerfAppsPerHead) -Measurement $m -BudgetMs 60 -MedianBudgetMs 25
+        # the fast reads above.
+        #
+        # The median itself needs headroom, which took two attempts to get right.
+        # A 25 ms figure was set from a run of three that all landed 17.0-17.4 ms;
+        # later runs of the identical code measured 20, 23 and 33 ms. This is a
+        # 300-row PowerShell loop, so its cost tracks whatever else the machine is
+        # doing. 60 ms is roughly 3x the typical figure and still an order of
+        # magnitude below what a real regression here would look like - losing the
+        # prepared-statement reuse alone put this operation at 162 ms.
+        Assert-Budget -Label ("installed apps replace ({0} rows)" -f $script:PerfAppsPerHead) -Measurement $m -BudgetMs 150 -MedianBudgetMs 60
     } finally {
         Remove-TempDatabaseRoot -Sandbox $sandbox | Out-Null
     }

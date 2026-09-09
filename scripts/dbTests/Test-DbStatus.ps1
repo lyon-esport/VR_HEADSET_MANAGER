@@ -475,6 +475,50 @@ Invoke-RegressionTest -Name 'an offline headset writes a valid row through the b
     }
 }
 
+Invoke-RegressionTest -Name 'a failed statement does not poison the query for the whole process' -Test {
+    $sandbox = New-StatusSandbox -Name 'stpoison'
+    try {
+        Add-Headset -IPAddress '10.0.0.1' -Name 'A' -Model 'Quest 3' -SerialNumber 'SER-A'
+        $id = Resolve-HeadsetIdByName -Name 'A'
+        Set-TestStatus -HeadsetId $id -Battery '80'
+
+        # Exactly the production failure: the monitor holds a registry snapshot,
+        # a headset is removed through the web UI or the console, and the next
+        # fast tick still writes a status row for the id that just went away.
+        # headset_status has a foreign key to headsets(id), so SQLite rejects it.
+        $bogus = 999999
+        Assert-Throws -Script { Set-TestStatus -HeadsetId $bogus } -Match 'constraint' -Label 'a status row for a headset that does not exist'
+
+        # THIS is what turned a one-tick blip into a permanent freeze. The failed
+        # statement left its cached prepared command unusable, so every later call
+        # returned "bad parameter or other API misuse" - for the life of the
+        # process. Live status stopped updating for every headset until a restart.
+        Set-TestStatus -HeadsetId $id -Battery '77'
+        $row = @(Invoke-DbQuery -Name 'status.get' -Parameters @{ headset_id = $id }) | Select-Object -First 1
+        Assert-NotNull $row 'the query still works after a failure'
+        Assert-Equal '77' ([string]$row.Battery) 'and the write that followed the failure took effect'
+
+        # The same must hold for the batch path, which holds one command across
+        # every row and is what the monitor actually calls.
+        $good = @{
+            ID = $id; Ping = 1; ADBWifi = 1; Battery = '66'
+            Charging = '-'; ChargingWattage = '-'; Temp = '-'
+            BatteryControllerLeft = '-'; BatteryControllerRight = '-'
+            PowerState = '-'; TimeRemainingMin = '-'
+            SCRCPY = '-'; RunningApp = '-'; RunningAppIcon = ''
+        }
+        $bad = $good.Clone(); $bad.ID = $bogus
+        Assert-Throws -Script { Invoke-DbBatch -Name 'status.upsert' -Rows @($good, $bad) } -Match 'constraint' -Label 'a batch containing an orphan row'
+
+        Invoke-DbBatch -Name 'status.upsert' -Rows @($good) | Out-Null
+        $row = @(Invoke-DbQuery -Name 'status.get' -Parameters @{ headset_id = $id }) | Select-Object -First 1
+        Add-TestEvidence ("battery after the failed batch: {0}" -f $row.Battery)
+        Assert-Equal '66' ([string]$row.Battery) 'the batch path recovers too'
+    } finally {
+        Remove-TempDatabaseRoot -Sandbox $sandbox | Out-Null
+    }
+}
+
 Invoke-RegressionTest -Name 'the status change counter moves on every write, so caches invalidate' -Test {
     $sandbox = New-StatusSandbox -Name 'stver'
     try {

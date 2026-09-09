@@ -390,6 +390,35 @@ function Get-DbCommand {
 
 <#
 .SYNOPSIS
+    Drops one named query's cached prepared command, so the next call rebuilds it.
+.DESCRIPTION
+    Called whenever a statement THROWS. A prepared SQLiteCommand that failed is
+    not reusable: its parameter bindings are left in an indeterminate state, and
+    every later call on it returns "bad parameter or other API misuse" rather
+    than the real error - or rather than succeeding once the cause has passed.
+
+    That turned a transient, self-healing failure into a permanent one. A single
+    FOREIGN KEY violation on one status write (a headset removed while the
+    monitor still held the previous registry snapshot) poisoned the cached
+    status.upsert command, and every subsequent tick failed for the life of the
+    process. Live status stopped updating for EVERY headset until a restart.
+
+    Evicting here is what makes Invoke-DbWithRetry able to actually recover.
+.EXAMPLE
+    Remove-DbPreparedCommand -Name 'status.upsert'
+#>
+function Remove-DbPreparedCommand {
+    param([string]$Name)
+
+    if (-not $Name) { return }
+    if (-not $script:DbPrepared.ContainsKey($Name)) { return }
+    try { $script:DbPrepared[$Name].Dispose() } catch { }
+    $script:DbPrepared.Remove($Name) | Out-Null
+}
+
+
+<#
+.SYNOPSIS
     Normalises a batch row (hashtable or PSCustomObject) to a parameter hashtable.
 .EXAMPLE
     $params = ConvertTo-DbParameterMap -Row $row
@@ -481,8 +510,10 @@ function Invoke-DbQuery {
     return Invoke-DbWithRetry -Operation ("query {0}" -f $(if ($Name) { $Name } else { 'inline' })) -Action {
         $cmd = Get-DbCommand -Name $Name -Sql $Sql -Parameters $Parameters
         $rows = New-Object System.Collections.Generic.List[object]
-        $reader = $cmd.ExecuteReader()
+        $reader = $null
         try {
+            $reader = $cmd.ExecuteReader()
+
             # Column names and count are fixed for the whole result set, so
             # resolve them ONCE. Calling GetName() per column per row meant 2700
             # interop calls to list one headset's 300 apps, which was most of
@@ -500,9 +531,14 @@ function Invoke-DbQuery {
                 }
                 $rows.Add([PSCustomObject]$row) | Out-Null
             }
-        } finally {
-            $reader.Close()
-            $reader.Dispose()
+        }
+        catch {
+            # A failed statement leaves its cached prepared command unusable.
+            Remove-DbPreparedCommand -Name $Name
+            throw
+        }
+        finally {
+            if ($reader) { $reader.Close(); $reader.Dispose() }
             if (-not $Name) { $cmd.Dispose() }
         }
         return $rows.ToArray()
@@ -525,7 +561,13 @@ function Invoke-DbNonQuery {
         $cmd = Get-DbCommand -Name $Name -Sql $Sql -Parameters $Parameters
         try {
             return $cmd.ExecuteNonQuery()
-        } finally {
+        }
+        catch {
+            # A failed statement leaves its cached prepared command unusable.
+            Remove-DbPreparedCommand -Name $Name
+            throw
+        }
+        finally {
             if (-not $Name) { $cmd.Dispose() }
         }
     }
@@ -549,7 +591,13 @@ function Invoke-DbScalar {
             $value = $cmd.ExecuteScalar()
             if ($value -is [System.DBNull]) { return $null }
             return $value
-        } finally {
+        }
+        catch {
+            # A failed statement leaves its cached prepared command unusable.
+            Remove-DbPreparedCommand -Name $Name
+            throw
+        }
+        finally {
             if (-not $Name) { $cmd.Dispose() }
         }
     }
@@ -650,6 +698,7 @@ function Invoke-DbBatch {
         # it must, so a SQLITE_BUSY still replays the entire batch.
         $count = 0
         $cmd   = $null
+        try {
         foreach ($row in $batchRows) {
             $params = ConvertTo-DbParameterMap -Row $row
             if ($null -eq $cmd) {
@@ -671,6 +720,16 @@ function Invoke-DbBatch {
                 }
             }
             $count += $cmd.ExecuteNonQuery()
+        }
+        }
+        catch {
+            # A failed statement leaves its cached prepared command unusable, and
+            # this path holds that command across every row of the batch. Without
+            # eviction one bad row - a foreign key violation from a headset
+            # removed mid-tick, say - breaks every later call on this query for
+            # the life of the process.
+            Remove-DbPreparedCommand -Name $batchName
+            throw
         }
         return $count
     }
