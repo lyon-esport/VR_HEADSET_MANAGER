@@ -477,31 +477,22 @@ function Get-KioskAgentReportPath {
 }
 
 
-function Get-KioskCommandFolder {
-    <#
-    .SYNOPSIS
-    RETIRED - path of the pre-migration data\kiosk_commands\ queue, for the
-    legacy importer only. Unlike the original it no longer CREATES the folder:
-    the queue is the kiosk_commands table, and re-creating an empty folder on
-    every call would leave a confusing artefact behind after the migration.
-    #>
-    return (Join-Path $global:ScriptPath "data\kiosk_commands")
-}
-
-
-function ConvertTo-KioskIpToken {
-    <#
-    .SYNOPSIS
-    RETIRED - sanitised an IP into a filename-safe token for the one-file-per-
-    command queue, guarding against a malformed value becoming a path traversal.
-    A row keyed on the address needs no such guard; kept for the importer.
-    #>
-    param(
-        [Parameter(Mandatory)]
-        [string]$IPAddress
-    )
-    return ($IPAddress -replace '[^0-9A-Za-z\.]', '-')
-}
+# Get-KioskCommandFolder and ConvertTo-KioskIpToken were removed here.
+#
+# They served the pre-migration queue, which was one JSON file per command under
+# data\kiosk_commands\. That shape existed ONLY because there was no
+# cross-process lock: both the console and the web server queue commands, and an
+# atomic file create was the only way two writers could share a queue safely
+# (ADR-0013). ConvertTo-KioskIpToken existed for the same reason - the address
+# became part of a filename, so a malformed one was a path-traversal risk.
+#
+# The queue is the kiosk_commands table now (ADR-0017). Delivery is one
+# statement, kiosk_commands.claim, a DELETE ... RETURNING that reads and removes
+# the oldest row atomically - so deliver-once is enforced by the database rather
+# than by the filesystem, and an address is a column value that needs no
+# sanitising. Neither helper had a caller: the legacy importer builds the folder
+# path itself, because it must read the old layout regardless of what the app
+# now uses.
 
 
 function Get-TruncatedText {
