@@ -146,6 +146,99 @@ Invoke-RegressionTest -Name 'no named query file is orphaned' -Test {
     Assert-True $true 'orphan scan completed'
 }
 
+Invoke-RegressionTest -Name 'every db_versions counter has all three triggers' -Test {
+    <#
+        A counter that cannot report one of its own operations is worse than no
+        counter: a consumer caches on it and serves that stale copy forever,
+        with nothing logged. Migration 002 exists because 001 gave the two
+        per-headset app tables an INSERT and a DELETE trigger but no UPDATE, and
+        both of their write paths are upserts.
+
+        This check is what makes that class of defect impossible to reintroduce.
+        It reads the schema files rather than a live database on purpose - the
+        rule is about the source, and a broken migration should fail here before
+        it is ever applied to anything.
+    #>
+    $schemaFolder = Join-Path -Path (Join-Path $modules 'db') -ChildPath 'schema'
+    $sql = ''
+    foreach ($f in (Get-ChildItem -LiteralPath $schemaFolder -Filter '*.sql' | Sort-Object Name)) {
+        $sql += (Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8) + "`n"
+    }
+
+    # The counters the schema seeds into db_versions.
+    $seed = [regex]::Match($sql, "INSERT\s+OR\s+IGNORE\s+INTO\s+db_versions\s*\(name\)\s*VALUES(?<body>.*?);", 'Singleline')
+    Assert-True $seed.Success 'the db_versions seed statement was found'
+    $counters = @([regex]::Matches($seed.Groups['body'].Value, "'(?<n>[a-z0-9_]+)'") | ForEach-Object { $_.Groups['n'].Value })
+    Assert-True ($counters.Count -gt 0) 'at least one counter is seeded'
+    Add-TestEvidence ("counters: {0}" -f ($counters -join ', '))
+
+    # Map each counter to the operations that bump it. A trigger body names the
+    # counter; the trigger header names the operation. A later migration may
+    # DROP and recreate a trigger, so parse in file order and let the last
+    # definition win.
+    $seen = @{}
+    foreach ($counter in $counters) { $seen[$counter] = @{ INSERT = $false; UPDATE = $false; DELETE = $false } }
+
+    $pattern = "CREATE\s+TRIGGER(?:\s+IF\s+NOT\s+EXISTS)?\s+(?<name>\w+)\s+AFTER\s+(?<op>INSERT|UPDATE|DELETE)(?:\s+OF\s+[\w\s,]+?)?\s+ON\s+(?<table>\w+)(?<body>.*?)\bEND\s*;"
+    foreach ($m in [regex]::Matches($sql, $pattern, 'Singleline,IgnoreCase')) {
+        $op   = $m.Groups['op'].Value.ToUpper()
+        $body = $m.Groups['body'].Value
+        foreach ($counter in $counters) {
+            if ($body -match ("name\s*=\s*'{0}'" -f [regex]::Escape($counter))) {
+                $seen[$counter][$op] = $true
+            }
+        }
+    }
+
+    $missing = New-Object System.Collections.Generic.List[string]
+    foreach ($counter in $counters) {
+        foreach ($op in @('INSERT', 'UPDATE', 'DELETE')) {
+            if (-not $seen[$counter][$op]) { $missing.Add(("{0} has no AFTER {1} trigger" -f $counter, $op)) | Out-Null }
+        }
+    }
+    foreach ($gap in $missing) { Add-TestEvidence $gap }
+    Assert-Equal 0 $missing.Count 'every counter is bumped on insert, update and delete'
+}
+
+Invoke-RegressionTest -Name 'status.upsert parameters match Get-HeadsetInfosCsvColumn' -Test {
+    <#
+        Get-HeadsetInfosCsvColumn is the documented single source of truth for
+        the live-status shape (ADR-0016), and status.upsert is what actually
+        persists it. If a field is added to one and not the other, the monitor
+        silently stops writing it and every consumer reads a default forever.
+        Neither side would fail loudly, which is why this is a static check.
+    #>
+    $monitoring = Join-Path $modules 'headsets_monitoring.ps1'
+    Assert-FileExists $monitoring 'headsets_monitoring.ps1'
+
+    $text  = Get-Content -LiteralPath $monitoring -Raw -Encoding UTF8
+    $block = [regex]::Match($text, 'function\s+Get-HeadsetInfosCsvColumn\s*\{(?<body>.*?)\n\}', 'Singleline')
+    Assert-True $block.Success 'Get-HeadsetInfosCsvColumn was found'
+    $columns = @([regex]::Matches($block.Groups['body'].Value, '"(?<c>\w+)"') | ForEach-Object { $_.Groups['c'].Value })
+    Assert-True ($columns.Count -gt 0) 'the column list is not empty'
+
+    $queryPath = Join-Path -Path (Join-Path -Path (Join-Path $modules 'db') -ChildPath 'queries') -ChildPath 'status.upsert.sql'
+    Assert-FileExists $queryPath 'status.upsert.sql'
+    $querySql = Get-Content -LiteralPath $queryPath -Raw -Encoding UTF8
+
+    # Parameters of the INSERT ... VALUES list. The ON CONFLICT clause reuses
+    # them through excluded.*, so the VALUES list is the authoritative set.
+    $values = [regex]::Match($querySql, 'VALUES\s*\((?<body>.*?)\)\s*ON\s+CONFLICT', 'Singleline')
+    Assert-True $values.Success 'the VALUES list was found in status.upsert.sql'
+    $params = @([regex]::Matches($values.Groups['body'].Value, '@(?<p>\w+)') | ForEach-Object { $_.Groups['p'].Value })
+
+    Add-TestEvidence ("columns ({0}): {1}" -f $columns.Count, ($columns -join ', '))
+    Add-TestEvidence ("params  ({0}): {1}" -f $params.Count, ($params -join ', '))
+
+    $missingParam  = @($columns | Where-Object { $params -notcontains $_ })
+    $extraParam    = @($params  | Where-Object { $columns -notcontains $_ })
+    foreach ($m in $missingParam) { Add-TestEvidence ("column '{0}' has no @parameter in status.upsert" -f $m) }
+    foreach ($e in $extraParam)   { Add-TestEvidence ("parameter '@{0}' is not in Get-HeadsetInfosCsvColumn" -f $e) }
+
+    Assert-Equal 0 $missingParam.Count 'every live-status column is persisted by status.upsert'
+    Assert-Equal 0 $extraParam.Count   'status.upsert takes no parameter the column list does not declare'
+}
+
 Invoke-RegressionTest -Name 'schema migrations are numbered contiguously from 001' -Test {
     $schemaFolder = Join-Path -Path (Join-Path $modules 'db') -ChildPath 'schema'
     $files = @(Get-ChildItem -LiteralPath $schemaFolder -Filter '*.sql' | Sort-Object Name)

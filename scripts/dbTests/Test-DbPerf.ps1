@@ -369,7 +369,11 @@ Invoke-RegressionTest -Name 'a full installed-apps replace stays inside its budg
                 Invoke-DbBatch -Name 'installed.insert' -Rows $toWrite | Out-Null
             }
         }
-        Assert-Budget -Label ("installed apps replace ({0} rows)" -f $script:PerfAppsPerHead) -Measurement $m -BudgetMs 40
+        # Median carries the assertion, p95 absorbs a GC pause - same reasoning as
+        # the fast reads above. The plan's figure was 40 ms; the operation
+        # measures ~17 ms and its tail wanders to about twice that on a busy
+        # machine, so a bare 40 ms p95 red-lined at random.
+        Assert-Budget -Label ("installed apps replace ({0} rows)" -f $script:PerfAppsPerHead) -Measurement $m -BudgetMs 60 -MedianBudgetMs 25
     } finally {
         Remove-TempDatabaseRoot -Sandbox $sandbox | Out-Null
     }
