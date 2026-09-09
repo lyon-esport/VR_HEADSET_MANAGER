@@ -10,8 +10,16 @@ $script:activeTimers = @{}   # key: int headsetId, value: @{job; filePath; pause
 
 function Get-TimerSafeName {
     param([int]$headsetId)
-    $h = @(Get-KnownHeadsets) | Where-Object { [int]$_.ID -eq $headsetId } | Select-Object -First 1
-    if ($h -and $h.Name) { return Convert-Displayname $h.Name }
+    # One row by primary key. This used to read the entire registry and filter it
+    # in PowerShell, and it is called by both timer path helpers, so every timer
+    # file path cost a full table read.
+    try {
+        $h = @(Invoke-DbQuery -Name 'headsets.get_by_id' -Parameters @{ id = $headsetId }) | Select-Object -First 1
+        if ($h -and $h.Name) { return Convert-Displayname $h.Name }
+    }
+    catch {
+        Write-Log ("Get-TimerSafeName: could not resolve headset {0} - {1}" -f $headsetId, $_.Exception.Message) -Level DEBUG
+    }
     return [string]$headsetId
 }
 

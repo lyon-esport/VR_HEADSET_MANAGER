@@ -212,19 +212,9 @@ function Repair-MojibakeUtf8String {
 }
 
 
-# Build the path of a per-headset data CSV (data/<safe>_<suffix>.csv).
-# Suffix examples: 'favorite_apps', 'installed_apps'.
-function Get-HeadsetDataPath {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Name,
-        [Parameter(Mandatory = $true)]
-        [string]$Suffix
-    )
-    $safe = $Name -replace ' ', '_'
-    $file = "{0}_{1}.csv" -f $safe, $Suffix
-    return (Join-Path -Path $global:ScriptPath -ChildPath (Join-Path -Path 'data' -ChildPath $file))
-}
+# Get-HeadsetDataPath was removed here. It built data\<safe>_<suffix>.csv for the
+# per-headset app caches. Those are tables now (ADR-0017), and the helper had no
+# caller even before that.
 
 
 # Build the path of a per-headset website file (website/<safe>[<kind>].html).

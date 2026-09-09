@@ -152,6 +152,33 @@ Invoke-RegressionTest -Name 'catalogue upsert replaces in place and delete remov
 # Name resolution
 # ---------------------------------------------------------------------------
 
+Invoke-RegressionTest -Name 'a headset name cannot be duplicated, by adding or by renaming' -Test {
+    $sandbox = New-AppsSandbox -Name 'appdupname'
+    try {
+        Add-Headset -IPAddress '10.0.0.1' -Name 'Q3 RED' -Model 'Quest 3' -SerialNumber 'SER-A'
+        Add-Headset -IPAddress '10.0.0.2' -Name 'Q3 BLUE' -Model 'Quest 3' -SerialNumber 'SER-B'
+        Assert-Equal 2 (@(Get-KnownHeadsets)).Count 'two headsets registered'
+
+        # The name is a lookup key: Resolve-HeadsetIdByName returns ONE row, so a
+        # second headset with the same name would silently share the first one's
+        # installed apps and favourites.
+        Add-Headset -IPAddress '10.0.0.3' -Name 'Q3 RED' -Model 'Quest 3' -SerialNumber 'SER-C'
+        Add-TestEvidence ("names: {0}" -f ((@(Get-KnownHeadsets) | ForEach-Object { $_.Name }) -join ', '))
+        Assert-Equal 2 (@(Get-KnownHeadsets)).Count 'adding a duplicate name was refused'
+
+        # Renaming onto an existing name is the same hazard by another route.
+        $renamed = Rename-Headset -OldName 'Q3 BLUE' -NewName 'Q3 RED'
+        Assert-False ([bool]$renamed) 'renaming onto an existing name was refused'
+        Assert-NotNull (@(Get-KnownHeadsets) | Where-Object { $_.Name -eq 'Q3 BLUE' }) 'the headset kept its old name'
+
+        # A rename to a genuinely free name still works.
+        Assert-True ([bool](Rename-Headset -OldName 'Q3 BLUE' -NewName 'Q3 GREEN')) 'a rename to a free name still works'
+        Assert-Equal 2 (@(Get-KnownHeadsets)).Count 'still two headsets'
+    } finally {
+        Remove-TempDatabaseRoot -Sandbox $sandbox | Out-Null
+    }
+}
+
 Invoke-RegressionTest -Name 'Resolve-HeadsetIdByName accepts both spellings of a name' -Test {
     $sandbox = New-AppsSandbox -Name 'appresolve'
     try {

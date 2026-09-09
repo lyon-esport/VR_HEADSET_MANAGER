@@ -2368,13 +2368,10 @@ function Update-AppCacheOnline {
 }
 
 
-# RETIRED - the per-headset installed-app cache lives in headset_installed_apps,
-# keyed on the permanent headset id. Kept only so the legacy importer can name
-# the file it reads. Do not use it to locate live data.
-function Get-InstalledAppsCachePath {
-    param ([string]$headsetName)
-    return Join-Path $global:ScriptPath "data\$(Convert-Displayname $headsetName)_installed_apps.csv"
-}
+# Get-InstalledAppsCachePath was removed here. The per-headset installed-app
+# cache is the headset_installed_apps table, keyed on the permanent headset id,
+# and the legacy importer names the file it reads directly rather than through a
+# helper - so nothing called this.
 
 
 <#

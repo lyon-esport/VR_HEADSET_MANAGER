@@ -131,27 +131,21 @@ foreach ($folder in $requiredFolders) {
     }
 }
 
-# Pre-boot: ensure known_headsets.csv exists before modules load (Write-MediaMtxYml reads it)
-$_csvPath = Join-Path $global:ScriptPath "data\known_headsets.csv"
-if (-not (Test-Path -LiteralPath $_csvPath)) {
-    Write-Host "Initializing known_headsets.csv..." -ForegroundColor Yellow
-    try {
-        "ID,Name,IPAddress,scrcpy_AutoRestart,Record,SerialNumber" | Out-File -LiteralPath $_csvPath -Encoding UTF8 -ErrorAction Stop
-    } catch {
-        $diag = Test-FolderWriteAccess -Path $_csvPath
-        Write-Host "Error: Could not create '$_csvPath'." -ForegroundColor Red
-        Write-Host $diag.Reason -ForegroundColor Red
-        Write-Host "Fix: move the app folder to a location you can write to (e.g. Documents or a dedicated D:\Apps\... folder), or run this app as Administrator." -ForegroundColor Yellow
-        Read-Host "Press enter to exit"
-        exit 1
-    }
-}
-Remove-Variable _csvPath
-
-# The kiosk registry needs no pre-boot seeding any more: it is a table, created
-# with the rest of the schema by Initialize-Database. The same goes for the
-# data\kiosk_commands folder, which held one file per queued command only
-# because there was no cross-process lock to share a single queue file.
+# No registry file is pre-seeded here any more.
+#
+# This used to create data\known_headsets.csv with a header, claiming
+# Write-MediaMtxYml needed it before modules loaded. Nothing read it: the
+# registry is the headsets table, created with the rest of the schema by
+# Initialize-Database (ADR-0017), and the header it wrote had not matched the
+# real column set for a long time. All it produced was an empty, misleading CSV
+# in every install, pointing a future maintainer at the wrong place.
+#
+# The data\ folder itself is created and write-checked by the loop above, so
+# the failure diagnostic that used to live here is not lost.
+#
+# The kiosk registry needs no pre-boot seeding either, for the same reason. Nor
+# does the data\kiosk_commands folder, which held one file per queued command
+# only because there was no cross-process lock to share a single queue file.
 
 
 # If custom config file is set as an argument, use it otherwise user the default config.json file

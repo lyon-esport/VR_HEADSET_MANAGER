@@ -803,13 +803,9 @@ function Show-SubMenu-EditHeadset { #CHOICE 3
     Update-HeadsetField -ID ([int]$idInput) -Field $field -NewValue $newValue
 } # OK
 
-# RETIRED - the favourites live in headset_favorite_apps now, keyed on the
-# permanent headset id. Kept only so the legacy importer can still name the file
-# it is reading. Do not use it to locate live data.
-function Get-FavoriteAppsCachePath {
-    param ([string]$headsetName)
-    return Join-Path $global:ScriptPath "data\$(Convert-Displayname $headsetName)_favorite_apps.csv"
-}
+# Get-FavoriteAppsCachePath was removed here. Favourites are the
+# headset_favorite_apps table, keyed on the permanent headset id, and the legacy
+# importer names the file it reads directly - so nothing called this.
 
 <#
 .SYNOPSIS

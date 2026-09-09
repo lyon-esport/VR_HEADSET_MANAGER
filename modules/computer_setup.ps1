@@ -403,11 +403,9 @@ function Get-FwReadyFlagPath {
 # of failure is gone.
 # ---------------------------------------------------------------------------
 
-# Kept only so the legacy importer and the test harness can still name the old
-# file. Nothing in the running app reads or writes it any more.
-function Get-FwStatePath {
-    return Join-Path $global:ScriptPath "data\fw_state.json"
-}
+# Get-FwStatePath was removed here. The state is the app_kv row 'fw_state'; the
+# importer and the test harness both name the old file directly, so nothing
+# called this.
 
 function Get-FwState {
     try {

@@ -366,6 +366,16 @@
     }
 
     # ==========================================
+    # Headset registry messages
+    # NOTE: nested under one top-level key on purpose, same reason as Database
+    # above - the top-level table is at its 500-pair limit. Use $msg.Headset.*
+    # ==========================================
+    Headset = @{
+        NameExists    = "A headset named '{0}' already exists (ID {1}). Names identify a headset in the apps, favourites and timer features, so they must be unique."
+        NameAmbiguous = "More than one headset is named '{0}'. Using ID {1}. Rename one of them: apps and favourites are resolved by name and will be attached to the wrong headset."
+    }
+
+    # ==========================================
     # Serial-keyed identity + background network discovery
     # NOTE: nested under one top-level key on purpose, same reason as Kiosk below -
     # Import-PowerShellDataFile enforces a hard 500 key/value-pair limit on a single

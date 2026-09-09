@@ -71,7 +71,16 @@ function Resolve-HeadsetIdByName {
             $row = @(Invoke-DbQuery -Name 'headsets.get_by_name' -Parameters @{ name = [string]$candidate })
             if ($row.Count -gt 0) {
                 $id = 0
-                if ([int]::TryParse([string]$row[0].ID, [ref]$id) -and $id -gt 0) { return $id }
+                if ([int]::TryParse([string]$row[0].ID, [ref]$id) -and $id -gt 0) {
+                    # Add-Headset and Rename-Headset both refuse a duplicate name,
+                    # so this should be impossible. If it happens anyway - a
+                    # registry that predates those guards - say so loudly rather
+                    # than silently attaching this headset's apps to another row.
+                    if ($row.Count -gt 1) {
+                        Write-Log ((Get-MessageString -Key 'Headset.NameAmbiguous') -f $candidate, $id) -Level WARNING
+                    }
+                    return $id
+                }
             }
         }
         catch {
@@ -627,6 +636,23 @@ function Add-Headset {
         }
     }
 
+    # The name has to be unique, because it is a lookup key. Every apps,
+    # favourites and installed-apps call resolves a headset through
+    # Resolve-HeadsetIdByName, which can only return one row - so a second
+    # headset with the same name would silently share the first one's app data.
+    # The CSV era had the same defect for the same reason (both wrote
+    # data\<Name>_installed_apps.csv); it is guarded here rather than with a
+    # UNIQUE index so an existing registry that already holds duplicates still
+    # opens, and can be corrected by renaming.
+    $nameTrim = ([string]$Name).Trim()
+    if ($nameTrim) {
+        $sameName = @(Invoke-DbQuery -Name 'headsets.get_by_name' -Parameters @{ name = $nameTrim }) | Select-Object -First 1
+        if ($sameName) {
+            Write-Log ((Get-MessageString -Key 'Headset.NameExists') -f $nameTrim, $sameName.ID) -Level WARNING
+            return
+        }
+    }
+
     # Add a new headset to the list
     # ID is a permanent identity, never a position - assign the next unused value
     # so it stays unique even after removals leave gaps.
@@ -801,6 +827,19 @@ function Rename-Headset {
     if (-not $headset) {
         Write-Log ($msg.HeadsetIdNotFound -f $OldName) -Level ERROR
         return $false
+    }
+
+    # Renaming ONTO an existing name would create the duplicate Add-Headset
+    # refuses, with the same consequence: the two headsets would share one set of
+    # installed apps and favourites, because both resolve through
+    # Resolve-HeadsetIdByName and it can only return one row.
+    $newTrim = ([string]$NewName).Trim()
+    if ($newTrim -and $newTrim -ne ([string]$OldName).Trim()) {
+        $clash = @(Invoke-DbQuery -Name 'headsets.get_by_name' -Parameters @{ name = $newTrim }) | Select-Object -First 1
+        if ($clash) {
+            Write-Log ((Get-MessageString -Key 'Headset.NameExists') -f $newTrim, $clash.ID) -Level WARNING
+            return $false
+        }
     }
 
     $oldDisplayName = Convert-Displayname $OldName

@@ -364,6 +364,17 @@
     }
 
     # ==========================================
+    # Messages du registre des casques
+    # NOTE: regroupes sous une seule cle de premier niveau, meme raison que
+    # Database ci-dessus - la table de premier niveau est a sa limite de 500
+    # paires. Utiliser $msg.Headset.*
+    # ==========================================
+    Headset = @{
+        NameExists    = "Un casque nomme '{0}' existe deja (ID {1}). Le nom identifie un casque dans les fonctions applications, favoris et minuteur : il doit etre unique."
+        NameAmbiguous = "Plusieurs casques portent le nom '{0}'. Utilisation de l'ID {1}. Renommez-en un : les applications et les favoris sont resolus par nom et seront rattaches au mauvais casque."
+    }
+
+    # ==========================================
     # Identite basee sur le numero de serie + detection reseau
     # NOTE : regroupe sous une seule cle de premier niveau, pour la meme raison que
     # Kiosk plus bas - Import-PowerShellDataFile impose une limite stricte de 500
