@@ -132,15 +132,32 @@ function Measure-RawSql {
 function Assert-Budget {
     <#
     .SYNOPSIS
-        Records the measurement as evidence, then asserts p95 against a budget.
+        Records the measurement as evidence, then asserts it against a budget.
+    .DESCRIPTION
+        -MedianBudgetMs asserts the median as well, and is what the sub-5 ms
+        operations use.
+
+        Those are fast enough that a p95 budget tight enough to be meaningful is
+        also tight enough to catch a garbage collection and fail at random. A
+        flaky budget is worse than a loose one: it teaches everyone to ignore a
+        red line. So the median carries the real assertion - it is stable across
+        runs and moves immediately if a query regresses - while the p95 gets
+        enough headroom to absorb a GC pause and only catches something
+        pathological.
     #>
     param(
         [Parameter(Mandatory = $true)][string]$Label,
         [Parameter(Mandatory = $true)][hashtable]$Measurement,
-        [Parameter(Mandatory = $true)][double]$BudgetMs
+        [Parameter(Mandatory = $true)][double]$BudgetMs,
+        [double]$MedianBudgetMs = 0
     )
-    Add-TestEvidence ("{0}: p95 {1} ms (median {2}, min {3}, max {4}, n={5}) - budget {6} ms" -f `
-        $Label, $Measurement.P95, $Measurement.Median, $Measurement.Min, $Measurement.Max, $Measurement.Runs, $BudgetMs)
+    Add-TestEvidence ("{0}: median {1} ms, p95 {2} ms (min {3}, max {4}, n={5}) - budget {6} ms{7}" -f `
+        $Label, $Measurement.Median, $Measurement.P95, $Measurement.Min, $Measurement.Max, $Measurement.Runs, $BudgetMs, `
+        $(if ($MedianBudgetMs -gt 0) { " p95 / {0} ms median" -f $MedianBudgetMs } else { '' }))
+
+    if ($MedianBudgetMs -gt 0) {
+        Assert-True ($Measurement.Median -lt $MedianBudgetMs) ("{0} median {1} ms is within its {2} ms budget" -f $Label, $Measurement.Median, $MedianBudgetMs)
+    }
     Assert-True ($Measurement.P95 -lt $BudgetMs) ("{0} p95 {1} ms is within its {2} ms budget" -f $Label, $Measurement.P95, $BudgetMs)
 }
 
@@ -229,21 +246,21 @@ Invoke-RegressionTest -Name 'registry and merged-status reads are cheap enough t
         # Get-KnownHeadsets runs on nearly every console redraw and every web
         # request that resolves identity.
         $m = Measure-DbOperation -Runs 200 -Operation { @(Get-KnownHeadsets) }
-        Assert-Budget -Label 'Get-KnownHeadsets' -Measurement $m -BudgetMs 4
+        Assert-Budget -Label 'Get-KnownHeadsets' -Measurement $m -BudgetMs 10 -MedianBudgetMs 4
 
         # Get-HeadsetInfosMerged is the join that replaced a file read plus a
         # hand-built hashtable. It backs the console table and the dashboard.
         $m = Measure-DbOperation -Runs 200 -Operation { @(Get-HeadsetInfosMerged) }
-        Assert-Budget -Label 'Get-HeadsetInfosMerged' -Measurement $m -BudgetMs 6
+        Assert-Budget -Label 'Get-HeadsetInfosMerged' -Measurement $m -BudgetMs 12 -MedianBudgetMs 5
 
         # What the web server calls once per cache miss.
         $m = Measure-DbOperation -Runs 200 -Operation { @(Invoke-DbQuery -Name 'status.list') }
-        Assert-Budget -Label 'status.list' -Measurement $m -BudgetMs 6
+        Assert-Budget -Label 'status.list' -Measurement $m -BudgetMs 12 -MedianBudgetMs 5
 
         # And the counter it checks on EVERY request to decide whether to bother.
         # This one has to be nearly free or the cache is pointless.
         $m = Measure-DbOperation -Runs 200 -Operation { Get-DbTableVersion -Name 'headset_status' }
-        Assert-Budget -Label 'Get-DbTableVersion (cache check)' -Measurement $m -BudgetMs 2
+        Assert-Budget -Label 'Get-DbTableVersion (cache check)' -Measurement $m -BudgetMs 4 -MedianBudgetMs 1
     } finally {
         Remove-TempDatabaseRoot -Sandbox $sandbox | Out-Null
     }
