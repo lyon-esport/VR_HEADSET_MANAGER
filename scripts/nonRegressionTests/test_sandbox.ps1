@@ -137,6 +137,100 @@ function Get-SandboxDbRows {
     }
 }
 
+function Get-SandboxFwStateJson {
+    <#
+    .SYNOPSIS
+        The app's persisted firewall/URL-ACL/Defender state as raw JSON text,
+        or $null when it has never been written.
+    .DESCRIPTION
+        This used to be data\fw_state.json. It is the app_kv row 'fw_state' now
+        (ADR-0017), which matters to this harness for one reason: it is the
+        app's record that it has ALREADY registered the firewall rules, the URL
+        ACL and the Defender exclusion for this folder path. Without it,
+        Initialize-ComputerSetup raises a UAC prompt and an elevated console on
+        every boot, and an unattended run simply hangs there until it times out.
+    #>
+    param([Parameter(Mandatory = $true)][string]$TargetRoot)
+
+    $rows = @(Get-SandboxDbRows -TargetRoot $TargetRoot -Sql "SELECT value_json FROM app_kv WHERE key = 'fw_state';")
+    if ($rows.Count -eq 0) { return $null }
+    $value = [string]$rows[0].value_json
+    if ([string]::IsNullOrWhiteSpace($value)) { return $null }
+    return $value
+}
+
+function Restore-SandboxFwStateJson {
+    <#
+    .SYNOPSIS
+        Recreates the target's database and writes the fw_state row back into it.
+    .DESCRIPTION
+        Called by Reset-SandboxTarget after the data folder has been wiped, so
+        the next boot does not demand a fresh elevation. The row has to exist
+        BEFORE the app starts, because the app reads it during its own startup -
+        there is no window between the app creating the database and reading the
+        value in which the harness could inject it.
+
+        Runs in a short-lived process using the TARGET's own modules\database.ps1
+        and its public API, so the row is written exactly the way the app writes
+        it. The side effect is that the database and its schema exist before the
+        first boot; the app opening an existing database is the normal case
+        anyway, and the create-from-nothing path is covered by the Failure layer
+        of the database suite.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$TargetRoot,
+        [Parameter(Mandatory = $true)][string]$ValueJson
+    )
+
+    $paths = Get-SandboxPaths -TargetRoot $TargetRoot
+    $dbModule = Join-Path $TargetRoot 'modules\database.ps1'
+    if (-not (Test-Path -LiteralPath $dbModule)) { return $false }
+
+    $valueFile  = Join-Path ([System.IO.Path]::GetTempPath()) ("vrhm_fwstate_{0}.json" -f ([guid]::NewGuid().ToString('N')))
+    $scriptFile = Join-Path ([System.IO.Path]::GetTempPath()) ("vrhm_fwrestore_{0}.ps1" -f ([guid]::NewGuid().ToString('N')))
+
+    $bootstrap = @'
+param([string]$Root, [string]$ValueFile)
+$ErrorActionPreference = 'Stop'
+$global:ScriptPath              = $Root
+$global:databaseFolder          = Join-Path $Root 'sources\sqlite\System.Data.SQLite-1.0.119'
+$global:databaseAssemblyPath    = Join-Path $global:databaseFolder 'System.Data.SQLite.dll'
+$global:databaseInteropPath     = Join-Path (Join-Path $global:databaseFolder 'x64') 'SQLite.Interop.dll'
+$global:databaseFilePath        = Join-Path (Join-Path $Root 'data') 'vrhm.db'
+$global:databaseBusyTimeoutMs   = 5000
+$global:databaseRetryMax        = 6
+$global:databaseIntegrityCheck  = 'quick'
+$global:databaseBackupKeep      = 3
+$global:databaseBackupOnStartup = $false
+$global:debugLevelToConsole     = 'NONE'
+$global:debugLevelToFile        = 'NONE'
+$global:logFile                 = Join-Path (Join-Path $Root 'logs') 'fwrestore.log'
+. (Join-Path $Root 'modules\logging.ps1')
+. (Join-Path $Root 'modules\database.ps1')
+Initialize-Database -Role Main -SkipBackup | Out-Null
+$json = [System.IO.File]::ReadAllText($ValueFile, [System.Text.Encoding]::UTF8)
+Set-DbKeyValue -Key 'fw_state' -Value $json
+Close-DbConnection -Checkpoint
+'@
+
+    try {
+        [System.IO.File]::WriteAllText($valueFile, $ValueJson, (New-Object System.Text.UTF8Encoding $false))
+        [System.IO.File]::WriteAllText($scriptFile, $bootstrap, (New-Object System.Text.UTF8Encoding $false))
+
+        $bootstrapArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f $scriptFile),
+                           '-Root', ('"{0}"' -f $TargetRoot), '-ValueFile', ('"{0}"' -f $valueFile))
+        $p = Start-Process -FilePath 'powershell.exe' -ArgumentList $bootstrapArgs -WindowStyle Hidden -PassThru -Wait
+        if ($p.ExitCode -ne 0) { return $false }
+        return (Test-Path -LiteralPath $paths.Database)
+    }
+    catch { return $false }
+    finally {
+        foreach ($f in @($valueFile, $scriptFile)) {
+            if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
+        }
+    }
+}
+
 function Get-SandboxHeadsets {
     <#
     .SYNOPSIS
@@ -585,10 +679,13 @@ function Start-SandboxApp {
 
     # First boot of a NEW release folder needs one elevation: firewall rules,
     # the URL ACL and the Defender exclusion are all keyed on the program path.
-    # fw_state.json is written once that has succeeded, so its absence is a
-    # reliable "expect UAC" signal.
-    $fwState = Join-Path $paths.DataFolder 'fw_state.json'
-    if (-not (Test-Path -LiteralPath $fwState)) {
+    # The app records that it has done so in the app_kv row 'fw_state'
+    # (ADR-0017; it was data\fw_state.json before), so the absence of that row
+    # is a reliable "expect UAC" signal. Reset-SandboxTarget carries the row
+    # across a reset, so this should fire once per release folder, not per run.
+    $fwStateJson = $null
+    try { $fwStateJson = Get-SandboxFwStateJson -TargetRoot $TargetRoot } catch { }
+    if ($null -eq $fwStateJson) {
         Write-Host ''
         Write-Host '  +-------------------------------------------------------------+' -ForegroundColor Yellow
         Write-Host '  | FIRST BOOT OF THIS RELEASE FOLDER - UAC PROMPT INCOMING      |' -ForegroundColor Yellow
@@ -661,8 +758,9 @@ function Wait-SandboxReady {
         # A first boot that has not moved in 40s is almost always sitting on an
         # unanswered UAC dialog. Say so instead of silently burning the timeout.
         if ($null -ne $stalledSince -and ((Get-Date) - $stalledSince).TotalSeconds -gt 40 -and -not $uacHintShown) {
-            $fwState = Join-Path $paths.DataFolder 'fw_state.json'
-            if (-not (Test-Path -LiteralPath $fwState)) {
+            $pending = $null
+            try { $pending = Get-SandboxFwStateJson -TargetRoot $TargetRoot } catch { }
+            if ($null -eq $pending) {
                 Write-Host '    Still waiting. Check for a pending Windows UAC prompt and approve it.' -ForegroundColor Yellow
                 $uacHintShown = $true
             }
@@ -672,8 +770,10 @@ function Wait-SandboxReady {
     }
 
     Write-Host ("  [FAIL] Timed out after {0}s waiting for {1}." -f $TimeoutSeconds, $lastWaitingFor) -ForegroundColor Red
-    if (-not (Test-Path -LiteralPath (Join-Path $paths.DataFolder 'fw_state.json'))) {
-        Write-Host '         data\fw_state.json was never written, so Initialize-ComputerSetup did not' -ForegroundColor DarkGray
+    $finalFwState = $null
+    try { $finalFwState = Get-SandboxFwStateJson -TargetRoot $TargetRoot } catch { }
+    if ($null -eq $finalFwState) {
+        Write-Host '         The fw_state row was never written, so Initialize-ComputerSetup did not' -ForegroundColor DarkGray
         Write-Host '         complete - the elevation prompt was most likely declined or missed.' -ForegroundColor DarkGray
     }
     return $false
@@ -1021,18 +1121,18 @@ function Reset-SandboxTarget {
         }
     }
 
-    # data\fw_state.json survives the reset on purpose. It is the app's record of
-    # the firewall rules / URL ACL / Defender exclusion it already applied for
-    # THIS folder. Deleting it makes Initialize-ComputerSetup see drift on the
-    # next run and raise a UAC prompt plus an interactive elevated console every
-    # single time - which is exactly what an unattended harness must not do.
-    # Section 10 only asserts that data\*.csv are absent, so keeping this one
-    # JSON does not weaken the packaging check.
+    # The app's firewall / URL-ACL / Defender record survives the reset on
+    # purpose. It is the app's proof that it has ALREADY registered all three
+    # for THIS folder path; without it Initialize-ComputerSetup sees drift,
+    # raises a UAC prompt and an interactive elevated console on every boot, and
+    # an unattended run hangs there until it times out. Approving that once per
+    # release folder is expected. Approving it on every reset is not.
+    #
+    # It used to be data\fw_state.json and survived simply by not being deleted.
+    # It is the app_kv row 'fw_state' now (ADR-0017), so it has to be read out
+    # of the database before the wipe and written back into a fresh one after.
     $keep = $null
-    $fwState = Join-Path $paths.DataFolder 'fw_state.json'
-    if (Test-Path -LiteralPath $fwState) {
-        try { $keep = Get-Content -LiteralPath $fwState -Raw -Encoding UTF8 } catch { }
-    }
+    try { $keep = Get-SandboxFwStateJson -TargetRoot $TargetRoot } catch { }
 
     foreach ($folder in @($paths.DataFolder, $paths.LogsFolder)) {
         if (Test-Path -LiteralPath $folder) {
@@ -1041,11 +1141,10 @@ function Reset-SandboxTarget {
     }
 
     if ($null -ne $keep) {
-        try {
-            New-Item -ItemType Directory -Path $paths.DataFolder -Force | Out-Null
-            [System.IO.File]::WriteAllText($fwState, $keep, [System.Text.UTF8Encoding]::new($false))
+        New-Item -ItemType Directory -Path $paths.DataFolder -Force | Out-Null
+        if (-not (Restore-SandboxFwStateJson -TargetRoot $TargetRoot -ValueJson $keep)) {
+            Write-Host '  Could not carry the firewall state across the reset - expect a UAC prompt on the next boot.' -ForegroundColor Yellow
         }
-        catch { }
     }
 
     # Keep website\generated\ itself - only its runtime contents are ours.
