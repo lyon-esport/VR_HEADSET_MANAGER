@@ -193,27 +193,14 @@ if (Test-Path -Path $scripts_init) {
 # An empty registry is a normal first-run state rather than a fault.
     $global:knownHeadsets = @(Get-KnownHeadsets)
 
-# Data file initialization of the headsets infos file.
-# Seed one row per known headset using the same default shape that
-# Get-KnownHeadsetInfos returns when a headset is offline, so the UI
-# renders the full list immediately instead of waiting for the first
-# VRMonitor poll cycle (~10-20s with several headsets).
+# Live headset status is a database table now (ADR-0016), reset and seeded by
+# scripts_init.ps1 right after the database opens - before this line runs. The
+# per-startup CSV seed that used to live here is gone with it.
+#
+# The path global is kept only so the legacy importer can still name the file it
+# reads when migrating another installation. Nothing live reads it.
 $global:knownHeadsetsInfosFilePath = "$ScriptPath\data\known_headsets_infos.csv"
 $global:knownHeadsetsInfos = @()
-# The file is ID-keyed and carries live status only (ADR-0016). Both the seed rows and the
-# empty-registry header are derived from Get-HeadsetInfosCsvColumn / New-DefaultHeadsetInfo,
-# so this can never drift from the schema VRMonitor exports a few seconds later.
-$infosColumns = Get-HeadsetInfosCsvColumn
-$seedRows = @()
-foreach ($h in $global:knownHeadsets) {
-    $seedRows += (New-DefaultHeadsetInfo -knownHeadset $h | Select-Object -Property $infosColumns)
-}
-if ($seedRows.Count -gt 0) {
-    $seedRows | Export-Csv -LiteralPath $global:knownHeadsetsInfosFilePath -Delimiter ";" -Encoding UTF8 -NoTypeInformation
-} else {
-    $headerLine = ($infosColumns | ForEach-Object { '"' + $_ + '"' }) -join ";"
-    $headerLine | Out-File -LiteralPath $global:knownHeadsetsInfosFilePath -Encoding UTF8
-}
 
 
 

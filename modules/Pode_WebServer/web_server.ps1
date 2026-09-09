@@ -278,7 +278,9 @@ $script:installJobs = @{}
 $script:knownHeadsetsCache      = $null
 $script:knownHeadsetsCacheMtime = $null
 
-# mtime-based cache for known_headsets_infos.csv, keyed by headset ID.
+# Live-status cache, keyed by headset ID. Invalidated by the headset_status
+# change counter rather than a file mtime (the name of the second variable is
+# kept so the two stay obviously paired).
 $script:headsetInfosCache      = $null
 $script:headsetInfosCacheMtime = $null
 
@@ -301,29 +303,39 @@ function Get-KnownHeadsetsCached {
 }
 
 function Get-HeadsetInfosCache {
-    # Returns a hashtable of live-status rows from data\known_headsets_infos.csv, keyed by
-    # headset ID as a string ($null when the file does not exist yet).
+    # Returns a hashtable of live-status rows keyed by headset ID as a string
+    # ($null when the status table cannot be read).
     #
-    # Keyed on ID, never on Name (ADR-0016): the infos file carries no identity columns, and
-    # a display name is a mutable label - joining on it made a rename or a DHCP address swap
+    # Keyed on ID, never on Name (ADR-0016): status rows carry no identity columns, and a
+    # display name is a mutable label - joining on it made a rename or a DHCP address swap
     # attach one headset's live status to another row until the next write cycle.
     #
-    # The parse is cached per file-mtime so N concurrent pollers (every headset monitoring
-    # overlay polls at 1Hz) share a single disk read. Without it the single-threaded request
-    # loop spends most of its time re-parsing the same file.
-    $infosPath = $global:knownHeadsetsInfosFilePath
-    if (-not $infosPath -or -not (Test-Path -LiteralPath $infosPath)) { return $null }
+    # The cache key is the table's change counter instead of a file mtime. Same purpose:
+    # every headset monitoring overlay polls at 1Hz, and the request loop is
+    # single-threaded, so without this it would spend most of its time re-reading rows
+    # that did not change. Get-DbTableVersion is one indexed scalar read, and the counter
+    # only moves when a trigger fires on an actual write.
+    try {
+        $version = Get-DbTableVersion -Name 'headset_status'
+    }
+    catch {
+        return $null
+    }
 
-    $infosMtime = (Get-Item -LiteralPath $infosPath -ErrorAction SilentlyContinue).LastWriteTimeUtc
-    if (-not $script:headsetInfosCache -or $script:headsetInfosCacheMtime -ne $infosMtime) {
-        $rows  = @(Import-Csv -LiteralPath $infosPath -Delimiter ";" -Encoding UTF8)
+    if (-not $script:headsetInfosCache -or $script:headsetInfosCacheMtime -ne $version) {
+        try {
+            $rows = @(Invoke-DbQuery -Name 'status.list')
+        }
+        catch {
+            return $null
+        }
         $cache = @{}
         foreach ($r in $rows) {
             $key = [string]$r.ID
             if (-not [string]::IsNullOrWhiteSpace($key)) { $cache[$key] = $r }
         }
         $script:headsetInfosCache      = $cache
-        $script:headsetInfosCacheMtime = $infosMtime
+        $script:headsetInfosCacheMtime = $version
     }
     return $script:headsetInfosCache
 }
@@ -460,7 +472,11 @@ $resolveJobBlock = {
         $global:ConfigFilePath     = $ConfigFilePath
         $global:IsWebServerProcess = $true
         . (Join-Path $ScriptPath 'modules\scripts_init.ps1')
-        Update-AppCacheOnline -AppCacheFilePath (Join-Path $ScriptPath 'data\known_apps.csv') -ProgressFile $ProgressFile -ForceOnline:$ForceOnline
+        # No cache path to pass any more: the catalogue is a table. Dot-sourcing
+        # scripts_init above with IsWebServerProcess set gives this process its own
+        # Worker database connection, so the batch write at the end of the resolve
+        # lands through the same retry path as every other writer.
+        Update-AppCacheOnline -ProgressFile $ProgressFile -ForceOnline:$ForceOnline
         Set-ResolveProg 'done'
     } catch {
         $err = ($_.ToString() -replace '"', "'") -replace '[^\x20-\x7E]', ''
@@ -1872,22 +1888,17 @@ try {
                 $safeName  = [regex]::Match(($nameParam -replace ' ','_'), '^[\w\-]+$').Value
                 if (-not $safeName) { throw "Invalid headset name" }
 
+                # favorites.list already joins the catalogue, so DisplayName and
+                # LocalIconPath arrive resolved; the second pass over
+                # known_apps.csv this used to do is gone.
                 $favList = @()
-                $favRows = Get-FavoriteApps -headsetName $safeName
-                foreach ($r in $favRows) {
+                foreach ($r in @(Get-FavoriteApps -headsetName $safeName)) {
                     if ($r.PackageName) {
-                        $favList += @{ package = $r.PackageName; displayName = $r.DisplayName }
-                    }
-                }
-                $appNamesPath = if ($global:AppCacheFilePath) { $global:AppCacheFilePath } else { [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_apps.csv")) }
-                if (Test-Path -LiteralPath $appNamesPath) {
-                    $appNames = @{}
-                    Import-Csv -LiteralPath $appNamesPath -Delimiter "," | ForEach-Object { $appNames[$_.PackageName] = $_ }
-                    $favList = $favList | ForEach-Object {
-                        $entry = $appNames[$_.package]
-                        $dn    = if ($entry -and $entry.DisplayName) { $entry.DisplayName } else { $_.displayName }
-                        $icon  = if ($entry) { $entry.LocalIconPath } else { '' }
-                        @{ package = $_.package; displayName = $dn; localIconPath = $icon }
+                        $favList += @{
+                            package       = $r.PackageName
+                            displayName   = $r.DisplayName
+                            localIconPath = $r.LocalIconPath
+                        }
                     }
                 }
                 $json = ConvertTo-Json @($favList) -Compress
@@ -1924,20 +1935,10 @@ try {
                 $safeName  = [regex]::Match(($nameParam -replace ' ','_'), '^[\w\-]+$').Value
                 if (-not $safeName) { throw "Invalid headset name" }
 
-                $appNamesPath = if ($global:AppCacheFilePath) { $global:AppCacheFilePath } else { [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_apps.csv")) }
-                $cachePath    = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\${safeName}_installed_apps.csv"))
                 $metaHomePkg  = 'com.oculus.vrshell'
 
                 # Load favorites
                 $favPkgs = @(Get-FavoriteApps -headsetName $safeName | Select-Object -ExpandProperty PackageName)
-
-                # Load known_apps.csv as the live source of truth for display names and icons
-                $appNamesLookup = @{}
-                if (Test-Path -LiteralPath $appNamesPath) {
-                    @(Import-Csv -LiteralPath $appNamesPath -Delimiter ",") | ForEach-Object {
-                        if ($_.PackageName) { $appNamesLookup[$_.PackageName] = $_ }
-                    }
-                }
 
                 # Refresh cache from headset when requested (covers both includeSystem and default)
                 if ($refresh) {
@@ -1949,18 +1950,21 @@ try {
                     Update-InstalledAppsCache -Device $device -headsetName $headset.Name
                 }
 
-                if (Test-Path -LiteralPath $cachePath) {
-                    # Read lean cache (PackageName, Version) and enrich from known_apps.csv
-                    $cachedRows = @(Import-Csv -LiteralPath $cachePath -Delimiter ",")
+                # The cache read and the catalogue enrichment are one query now:
+                # installed.list_joined does the join the two Import-Csv calls
+                # here used to do by hand. "No cache yet" is an empty result
+                # rather than a missing file.
+                $cachedRows = @(Get-HeadsetInstalledAppsCached -headsetName $safeName)
+                if ($cachedRows.Count -gt 0) {
                     $appList = @($cachedRows | ForEach-Object {
-                        $pkg   = $_.PackageName
-                        $entry = if ($appNamesLookup.ContainsKey($pkg)) { $appNamesLookup[$pkg] } else { $null }
-                        $dn    = if ($entry -and $entry.DisplayName -and $entry.DisplayName -ne $pkg) { $entry.DisplayName } else { $pkg }
-                        $icon  = if ($entry -and $entry.LocalIconPath) { $entry.LocalIconPath } else { '' }
-                        $tp    = if ($entry) { ConvertTo-ThirdPartyBool $entry } else { $true }
-                        @{ package = $pkg; displayName = $dn; localIconPath = $icon; version = $_.Version; pendingVersion = if ($_.PSObject.Properties['PendingVersion']) { $_.PendingVersion } else { '' }; storeVersion = if ($_.PSObject.Properties['StoreVersion']) { $_.StoreVersion } else { '' }; sizeBytes = if ($_.PSObject.Properties['SizeBytes'] -and $_.SizeBytes -match '^\d+$') { [long]$_.SizeBytes } else { 0L }; favorite = ($favPkgs -contains $pkg -or $pkg -eq $metaHomePkg); thirdParty = $tp }
+                        $pkg = $_.PackageName
+                        $dn  = if ($_.DisplayName -and $_.DisplayName -ne $pkg) { $_.DisplayName } else { $pkg }
+                        $sz  = 0L
+                        if ($null -ne $_.SizeBytes) { [void][long]::TryParse([string]$_.SizeBytes, [ref]$sz) }
+                        @{ package = $pkg; displayName = $dn; localIconPath = $_.LocalIconPath; version = $_.Version; pendingVersion = $_.PendingVersion; storeVersion = $_.StoreVersion; sizeBytes = $sz; favorite = ($favPkgs -contains $pkg -or $pkg -eq $metaHomePkg); thirdParty = (ConvertTo-BoolField $_.ThirdParty) }
                     } | Where-Object { $includeSystem -or $_.thirdParty } | Sort-Object { $_.displayName })
                 } else {
+                    $appNamesLookup = Get-AppCatalogMap
                     # Fallback: live ADB call (no cache yet)
                     $rows    = Get-KnownHeadsets
                     $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
@@ -2466,13 +2470,12 @@ try {
                 $result  = @{ package = ''; displayName = ''; localIconPath = '' }
                 if ($pkg) {
                     $result.package = $pkg
-                    $appCsvPath = if ($global:AppCacheFilePath) { $global:AppCacheFilePath } else { [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_apps.csv")) }
-                    if (Test-Path -LiteralPath $appCsvPath) {
-                        $entry = Import-Csv -LiteralPath $appCsvPath -Delimiter "," | Where-Object { $_.PackageName -eq $pkg } | Select-Object -First 1
-                        if ($entry) {
-                            if ($entry.DisplayName) { $result.displayName   = $entry.DisplayName }
-                            if ($entry.LocalIconPath) { $result.localIconPath = $entry.LocalIconPath }
-                        }
+                    # One row by primary key instead of scanning the whole
+                    # catalogue: this endpoint is polled per headset.
+                    $entry = @(Invoke-DbQuery -Name 'catalog.get' -Parameters @{ package_name = $pkg }) | Select-Object -First 1
+                    if ($entry) {
+                        if ($entry.DisplayName)   { $result.displayName   = $entry.DisplayName }
+                        if ($entry.LocalIconPath) { $result.localIconPath = $entry.LocalIconPath }
                     }
                     if (-not $result.displayName) { $result.displayName = $pkg }
                 }
@@ -3905,25 +3908,21 @@ try {
 
         # ── Known Apps Management API ─────────────────────────────────────────────
 
-        # API: GET /api/appnames  - returns all rows from app_names.csv as JSON
+        # API: GET /api/appnames  - returns the whole app catalogue as JSON.
+        # Note this endpoint is PascalCase while every other app endpoint is
+        # camelCase; known_apps_manager.html depends on that, so it is preserved.
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/appnames') {
             try {
-                $appCsvPath = if ($global:AppCacheFilePath) { $global:AppCacheFilePath } else {
-                    [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_apps.csv"))
-                }
-                $appObjects = @()
-                if (Test-Path -LiteralPath $appCsvPath) {
-                    $appObjects = @(Import-Csv -LiteralPath $appCsvPath -Delimiter "," |
-                        ForEach-Object {
-                            [PSCustomObject]@{
-                                PackageName   = [string]$_.PackageName
-                                DisplayName   = [string]$_.DisplayName
-                                IconUrl       = [string]$_.IconUrl
-                                LocalIconPath = [string]$_.LocalIconPath
-                                ThirdParty    = ConvertTo-ThirdPartyBool $_
-                            }
-                        })
-                }
+                $appObjects = @(@(Invoke-DbQuery -Name 'catalog.list') |
+                    ForEach-Object {
+                        [PSCustomObject]@{
+                            PackageName   = [string]$_.PackageName
+                            DisplayName   = [string]$_.DisplayName
+                            IconUrl       = [string]$_.IconUrl
+                            LocalIconPath = [string]$_.LocalIconPath
+                            ThirdParty    = ConvertTo-BoolField $_.ThirdParty
+                        }
+                    })
                 $appsJson = $appObjects | ConvertTo-Json -Compress -Depth 2
                 if ($appObjects.Count -eq 0) { $appsJson = '[]' }
                 elseif ($appObjects.Count -eq 1) { $appsJson = '[' + $appsJson + ']' }
@@ -3954,26 +3953,19 @@ try {
                 $pkg = ($json.PackageName -replace '[^\w\.\-]','').Trim()
                 if (-not $pkg) { throw "Invalid PackageName" }
 
-                $appCsvPath = if ($global:AppCacheFilePath) { $global:AppCacheFilePath } else {
-                    [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_apps.csv"))
-                }
-
-                $rows  = @()
-                $cache = [ordered]@{}
-                if (Test-Path -LiteralPath $appCsvPath) {
-                    foreach ($r in @(Import-Csv -LiteralPath $appCsvPath -Delimiter ",")) {
-                        $cache[$r.PackageName] = $r
-                    }
-                }
-                $cache[$pkg] = [PSCustomObject]@{
-                    PackageName   = $pkg
-                    DisplayName   = [string]$json.DisplayName
-                    IconUrl       = [string]$json.IconUrl
-                    LocalIconPath = [string]$json.LocalIconPath
-                    ThirdParty    = [bool]$json.ThirdParty
-                }
-                $cache.Values | Sort-Object DisplayName |
-                    Export-Csv -LiteralPath $appCsvPath -NoTypeInformation -Encoding UTF8 -Force
+                # One row written, not the whole catalogue rewritten. LatestVersion
+                # is preserved because the editor UI does not expose it and must
+                # not clear what Update-AppCacheOnline resolved.
+                $existing = @(Invoke-DbQuery -Name 'catalog.get' -Parameters @{ package_name = $pkg }) | Select-Object -First 1
+                $latest   = if ($existing) { [string]$existing.LatestVersion } else { '' }
+                Invoke-DbNonQuery -Name 'catalog.upsert' -Parameters @{
+                    package_name    = $pkg
+                    display_name    = [string]$json.DisplayName
+                    icon_url        = [string]$json.IconUrl
+                    local_icon_path = [string]$json.LocalIconPath
+                    third_party     = (ConvertTo-DbBool $json.ThirdParty)
+                    latest_version  = $latest
+                } | Out-Null
 
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
                 $response.StatusCode      = 200
@@ -4001,20 +3993,10 @@ try {
                 $pkg = ($json.PackageName -replace '[^\w\.\-]','').Trim()
                 if (-not $pkg) { throw "Invalid PackageName" }
 
-                $appCsvPath = if ($global:AppCacheFilePath) { $global:AppCacheFilePath } else {
-                    [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_apps.csv"))
-                }
-
-                if (Test-Path -LiteralPath $appCsvPath) {
-                    $rows = @(Import-Csv -LiteralPath $appCsvPath -Delimiter ",") |
-                            Where-Object { $_.PackageName -ne $pkg }
-                    if ($rows.Count -gt 0) {
-                        $rows | Export-Csv -LiteralPath $appCsvPath -NoTypeInformation -Encoding UTF8 -Force
-                    } else {
-                        '"PackageName","DisplayName","IconUrl","LocalIconPath","Type"' |
-                            Set-Content -LiteralPath $appCsvPath -Encoding UTF8 -Force
-                    }
-                }
+                # One DELETE. The old path rewrote every surviving row, and its
+                # empty-catalogue branch wrote a header naming the long-retired
+                # "Type" column - a schema the readers no longer understood.
+                Invoke-DbNonQuery -Name 'catalog.delete' -Parameters @{ package_name = $pkg } | Out-Null
 
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
                 $response.StatusCode      = 200
@@ -4032,7 +4014,7 @@ try {
             continue
         }
 
-        # API: POST /api/appnames/clear  - archive current file, create empty replacement
+        # API: POST /api/appnames/clear  - empty the catalogue and re-seed from template
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/appnames/clear') {
             try {
                 $ok = Clear-AppNamesCache
@@ -4055,12 +4037,11 @@ try {
         # API: GET /api/defaultfavorites  - returns ordered rows from the default favorites template
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/defaultfavorites') {
             try {
+                # The template stays a FILE - it is a shipped, operator-editable
+                # seed, and /api/defaultfavorites/toggle and /reorder still write
+                # it in place. Only the catalogue lookup moved to the database.
                 $templatePath = Join-Path $ScriptPath "templates\data\default_favorite_apps.csv"
-                $appCsvPath   = if ($global:AppCacheFilePath) { $global:AppCacheFilePath } else { [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "data\known_apps.csv")) }
-                $appNames     = @{}
-                if (Test-Path -LiteralPath $appCsvPath) {
-                    Import-Csv -LiteralPath $appCsvPath -Delimiter "," | ForEach-Object { if ($_.PackageName) { $appNames[$_.PackageName] = $_ } }
-                }
+                $appNames     = Get-AppCatalogMap
                 $result = @()
                 if (Test-Path -LiteralPath $templatePath) {
                     Import-Csv -LiteralPath $templatePath -Delimiter "," | ForEach-Object {

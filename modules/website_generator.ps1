@@ -39,10 +39,10 @@ function Update-HeadsetMonitoringFile {
     }
 
     if ($null -eq $knownHeadsetsInfo) {
+        # Called with $null by Save-Headsets, which has no live records in hand.
+        # The monitor's fast path passes its in-memory records instead.
         $raw = @()
-        if ($global:knownHeadsetsInfosFilePath -and (Test-Path -LiteralPath $global:knownHeadsetsInfosFilePath)) {
-            $raw = @(Import-Csv -LiteralPath $global:knownHeadsetsInfosFilePath -Delimiter ";" -Encoding UTF8)
-        }
+        try { $raw = @(Invoke-DbQuery -Name 'status.list') } catch { $raw = @() }
         $knownHeadsetsInfo = [System.Collections.ArrayList]$raw
     }
 

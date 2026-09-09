@@ -201,11 +201,17 @@ if (Get-Command Initialize-Database -ErrorAction SilentlyContinue) {
             Write-Log (Get-MessageString -Key 'Database.NoBackupAvailable') -Level WARNING
         }
 
-        # One-way cut-over of the legacy data\ files, main process only.
-        # Deliberately area by area: a file is only imported and moved aside
-        # once the code that reads it has been switched to the database. The
-        # remaining areas still read their files and are migrated in later
-        # steps, so importing them here would strand that code.
+        # NO legacy import runs here.
+        #
+        # The cut-over from the flat data\ files was a ONE-TIME operation and it
+        # has been done: the originals were imported and deleted. Re-checking for
+        # them on every startup would only add work to a path that can never find
+        # anything, and it would silently re-import a file an operator dropped
+        # into data\ by hand - overwriting live rows with stale ones.
+        #
+        # Import-LegacyDataFiles still exists in modules\database.ps1, and its
+        # test layer still covers it. It is now an operator tool, to be called
+        # deliberately when migrating some other installation, never automatic.
         if ($dbRole -eq 'Main') {
             # Live kiosk reachability does not survive a restart, exactly as the
             # JSON snapshot it replaces did not: the monitor refills it within a
@@ -213,23 +219,19 @@ if (Get-Command Initialize-Database -ErrorAction SilentlyContinue) {
             try { Invoke-DbNonQuery -Name 'kiosk_status.truncate' | Out-Null }
             catch { Write-Log ("Could not clear the kiosk status table: " + $_.Exception.Message) -Level WARNING }
 
+            # Same rule for headset live status (ADR-0016): reset it, then give
+            # every headset a default row so the UI renders the full list at once
+            # instead of waiting out the first poll cycle - 10 to 20 seconds with
+            # several headsets. The defaults come from the table definition, so
+            # this seed cannot drift from the shape the monitor writes moments
+            # later, which a hand-built seed row could and did.
             try {
-                # 'status' and 'apps' are deliberately still excluded: the
-                # monitor keeps writing known_headsets_infos.csv and the
-                # per-headset app caches are still files, so moving either
-                # aside would strand the code that owns it.
-                $legacy = Import-LegacyDataFiles -Include snapshots, vqa, kiosks, headsets, timers, discovery
-                if ($legacy.Imported.Count -gt 0) {
-                    Write-Log ("Legacy data imported: {0} file(s) moved to {1}" -f $legacy.Imported.Count, $legacy.LegacyFolder) -Level INFO
-                }
-                foreach ($impErr in $legacy.Errors) {
-                    Write-Log ("Legacy import problem with {0}: {1}" -f $impErr.File, $impErr.Error) -Level WARNING
-                }
-            } catch {
-                # A failed import must not stop the app: the database is
-                # already usable and the originals are still on disk.
-                Write-Log ("Legacy import failed: " + $_.Exception.Message) -Level WARNING
+                Invoke-DbTransaction -Script {
+                    Invoke-DbNonQuery -Name 'status.truncate'     | Out-Null
+                    Invoke-DbNonQuery -Name 'status.seed_missing' | Out-Null
+                } | Out-Null
             }
+            catch { Write-Log ("Could not reset the headset status table: " + $_.Exception.Message) -Level WARNING }
         }
     } catch {
         $dbError = (Get-MessageString -Key 'Database.InitFailed') -f $_.Exception.Message
@@ -248,11 +250,18 @@ if (Get-Command Initialize-Database -ErrorAction SilentlyContinue) {
     }
 }
 
-# Initialize known_apps.csv from template on first startup
-if ($global:AppCacheFilePath -and -not (Test-Path -LiteralPath $global:AppCacheFilePath)) {
-    if (Get-Command Initialize-AppNamesCache -ErrorAction SilentlyContinue) {
-        Initialize-AppNamesCache -AppCacheFilePath $global:AppCacheFilePath
-    }
+# Seed the app catalogue from templates\data\known_apps.csv on a fresh install.
+#
+# Runs unconditionally rather than behind a "does the file exist" test, because
+# the catalogue is a table now and Initialize-AppNamesCache self-guards on the
+# row count: it no-ops the moment the catalogue holds anything, so an operator's
+# resolved metadata is never overwritten by template values.
+#
+# Main process only. A worker seeding at startup would race the main process
+# through the same rows for no benefit.
+if ($dbRole -eq 'Main' -and (Get-Command Initialize-AppNamesCache -ErrorAction SilentlyContinue)) {
+    try { Initialize-AppNamesCache }
+    catch { Write-Log ("App catalogue seed failed: " + $_.Exception.Message) -Level WARNING }
 }
 
 # Video Quality Automation startup: crash-recovery + history truncation.

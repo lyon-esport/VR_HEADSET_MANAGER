@@ -8,8 +8,10 @@
 function Get-KnownHeadsets {
     param (
         # Accepted and ignored: kept so existing callers keep compiling. The CSV
-        # is no longer the source of truth.
-        [string]$knownHeadsetsFilePath = $global:knownHeadsetsFilePath
+        # is no longer the source of truth. No default value: referencing a
+        # $global: that may not be set throws under Set-StrictMode, and nothing
+        # reads this.
+        [string]$knownHeadsetsFilePath
     )
 
     # Rows come back in display order (sort_order, then id) with the legacy
@@ -29,6 +31,58 @@ function Get-KnownHeadsets {
 } # OK
 
 
+<#
+.SYNOPSIS
+    Resolve a headset display name to its permanent id. Returns 0 when unknown.
+.DESCRIPTION
+    The app-related functions all take a -headsetName, because in the CSV era the
+    name WAS the storage key: data\<Name>_installed_apps.csv. The tables are keyed
+    on the permanent id instead, so every one of those call sites needs this
+    translation.
+
+    It has to accept two spellings of the same headset. The console passes the
+    real name with spaces ("Q3 RED"); the web server passes the already
+    underscore-converted form ("Q3_RED") because that is what it built the
+    filename from. Both produced the same file, so the difference never mattered
+    before - Convert-Displayname is idempotent. Against the database it does
+    matter, and a silent 0 here would empty a headset's app list in the web UI
+    while the console kept working. So: try the name as given, then retry with
+    underscores read back as spaces.
+
+    A name that matches nothing returns 0 rather than throwing; callers treat
+    that as "no rows", exactly as a missing CSV file used to behave.
+.EXAMPLE
+    $id = Resolve-HeadsetIdByName -Name 'Q3_RED'
+#>
+function Resolve-HeadsetIdByName {
+    param (
+        [string]$Name
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Name)) { return 0 }
+
+    # Underscores back to spaces for the second attempt. Skipped when the name
+    # holds no underscore, so the common case is a single query.
+    $candidates = @($Name)
+    if ($Name -like '*_*') { $candidates += ($Name -replace '_', ' ') }
+
+    foreach ($candidate in $candidates) {
+        try {
+            $row = @(Invoke-DbQuery -Name 'headsets.get_by_name' -Parameters @{ name = [string]$candidate })
+            if ($row.Count -gt 0) {
+                $id = 0
+                if ([int]::TryParse([string]$row[0].ID, [ref]$id) -and $id -gt 0) { return $id }
+            }
+        }
+        catch {
+            Write-Log ("Resolve-HeadsetIdByName failed for '{0}' - {1}" -f $candidate, $_.Exception.Message) -Level DEBUG
+            return 0
+        }
+    }
+    return 0
+} # OK
+
+
 # DISPLAY ALL HEADSETS
 # WITH PING, ADB PORT, AND SCRCPY STREAM STATUS TESTING
 #Show-HeadsetsTable -FieldsToShow @("ID", "Name", "Model", "Ping", "ADBReachable", "SCRCPY")
@@ -39,43 +93,35 @@ function Get-KnownHeadsets {
 #Show-HeadsetsTable -FieldsToShow @("ID","Name","Model","IPAddress","Ping","ADBWifi")
 
 function Get-HeadsetInfosMerged {
-    # Reads the live-status file and grafts the identity columns back on from the registry,
-    # joined by ID. known_headsets_infos.csv carries ID + live status only (ADR-0016), so any
-    # display that wants Name / IPAddress / Brand / Model / SerialNumber has to come here.
-    # Rows whose ID is no longer in the registry (removed headset) are dropped.
+    # Registry identity plus live status, joined on ID and returned in display order.
+    # Status rows carry ID + live fields only (ADR-0016), so any display that wants
+    # Name / IPAddress / Brand / Model / SerialNumber has to come here.
+    #
+    # The hand-rolled join this replaces - read the file, hashtable the registry, graft
+    # five fields back on, skip rows whose headset is gone - is now one query. The INNER
+    # JOIN inside v_headset_full drops the orphan rows for the same reason the old loop
+    # did: a status row without a headset is not displayable.
     param (
-        [string]$FilePath = $global:knownHeadsetsInfosFilePath
+        # Accepted and ignored: kept so existing callers keep compiling. No
+        # default value on purpose - referencing a $global: that may not be set
+        # throws under Set-StrictMode, and this parameter is never read.
+        [string]$FilePath
     )
 
-    if (-not $FilePath -or -not (Test-Path -LiteralPath $FilePath)) { return @() }
-
-    $infos = @(Import-Csv -LiteralPath $FilePath -Delimiter ";" -Encoding UTF8)
-    if ($infos.Count -eq 0) { return @() }
-
-    $registryById = @{}
-    foreach ($h in @(Get-KnownHeadsets)) {
-        $rid = [string]$h.ID
-        if (-not [string]::IsNullOrWhiteSpace($rid)) { $registryById[$rid] = $h }
+    try {
+        return @(Invoke-DbQuery -Name 'status.merged')
     }
-
-    $merged = @()
-    foreach ($info in $infos) {
-        $owner = $registryById[[string]$info.ID]
-        if (-not $owner) { continue }
-        $row = $info.PSObject.Copy()
-        foreach ($field in @("Name","IPAddress","Brand","Model","SerialNumber")) {
-            $value = if ($owner.PSObject.Properties[$field]) { $owner.$field } else { "" }
-            if ($row.PSObject.Properties[$field]) { $row.$field = $value }
-            else { $row | Add-Member -MemberType NoteProperty -Name $field -Value $value }
-        }
-        $merged += $row
+    catch {
+        Write-Log ("Get-HeadsetInfosMerged failed - " + $_.Exception.Message) -Level ERROR
+        return @()
     }
-    return $merged
 }
 
 function Show-HeadsetsTable {
     param (
-        [string]$FilePath = $global:knownHeadsetsInfosFilePath,
+        # Vestigial, see Get-HeadsetInfosMerged. No default: an unset $global:
+        # throws under strict mode and nothing reads this.
+        [string]$FilePath,
         [string[]]$FieldsToShow = @("all")
     )
 
@@ -197,16 +243,18 @@ function Show-HeadsetsConfig {
 
 function Show-HeadsetsTableColored {
     param (
-        [array]$knownHeadsetsInfosFilePath = $global:knownHeadsetsInfosFilePath,
+        # Vestigial, see Get-HeadsetInfosMerged. No default: an unset $global:
+        # throws under strict mode and nothing reads this.
+        [array]$knownHeadsetsInfosFilePath,
         [array]$FieldsToShow = @("ID","Name","IPAddress","Ping","ADBWifi","Battery","Charging","Temp","SCRCPY","Model","SerialNumber","RunningApp"),
         [bool]$UseColors = $true
     )
 
-    # Live status joined to the registry by ID - the infos file has no identity columns.
-    $knownHeadsetsInfo = @(Get-HeadsetInfosMerged -FilePath $knownHeadsetsInfosFilePath)
+    # Live status joined to the registry by ID - status rows have no identity columns.
+    $knownHeadsetsInfo = @(Get-HeadsetInfosMerged)
     # Check whether data is present
     if (-not $knownHeadsetsInfo -or $knownHeadsetsInfo.Count -eq 0) {
-        Write-Log ($msg.NoHeadsetInInfosFile -f $knownHeadsetsInfosFilePath) -Level DEBUG
+        Write-Log ($msg.NoHeadsetInInfosFile -f $global:databaseFilePath) -Level DEBUG
         return
     }
 
@@ -605,12 +653,65 @@ function Add-Headset {
     # Save to the CSV file
     Save-Headsets -headsets $headsets
 
-    # Copy default favorites template to the new headset's favorites file
-    $safeName        = $Name -replace ' ','_'
+    # Seed the new headset's favourites from the shipped template. The template
+    # stays a FILE on purpose (templates\data\, operator-editable, shipped); only
+    # the per-headset copy of it moved into the database. Save-Headsets above has
+    # already created the row, so the id exists to attach the favourites to.
+    Initialize-HeadsetFavorites -headsetName $Name
+} # OK
+
+
+<#
+.SYNOPSIS
+    Seed one headset's favourites from templates\data\default_favorite_apps.csv.
+.DESCRIPTION
+    Replaces the file copy Add-Headset used to do. Only seeds a headset that has
+    no favourites yet, which is what "and the destination file does not exist"
+    meant before - re-running it never overwrites an operator's choices.
+.EXAMPLE
+    Initialize-HeadsetFavorites -headsetName 'Q3 RED'
+#>
+function Initialize-HeadsetFavorites {
+    param (
+        [Parameter(Mandatory = $true)][string]$headsetName
+    )
+
+    $headsetId = Resolve-HeadsetIdByName -Name $headsetName
+    if ($headsetId -le 0) {
+        Write-Log ("Initialize-HeadsetFavorites: no headset named '{0}'" -f $headsetName) -Level DEBUG
+        return
+    }
+
+    try {
+        if (@(Invoke-DbQuery -Name 'favorites.list' -Parameters @{ headset_id = $headsetId }).Count -gt 0) { return }
+    } catch { return }
+
     $templateFavPath = Join-Path $global:ScriptPath "templates\data\default_favorite_apps.csv"
-    $newFavPath      = Join-Path $global:ScriptPath "data\${safeName}_favorite_apps.csv"
-    if ((Test-Path -LiteralPath $templateFavPath) -and -not (Test-Path -LiteralPath $newFavPath)) {
-        Copy-Item -LiteralPath $templateFavPath -Destination $newFavPath
+    if (-not (Test-Path -LiteralPath $templateFavPath)) { return }
+
+    try {
+        $rows  = @(Import-Csv -LiteralPath $templateFavPath -Delimiter "," -Encoding UTF8)
+        $batch = @()
+        $order = 0
+        foreach ($r in $rows) {
+            if (-not $r.PackageName) { continue }
+            $display = ''
+            if ($r.PSObject.Properties['DisplayName']) { $display = [string]$r.DisplayName }
+            $batch += @{
+                headset_id   = $headsetId
+                package_name = [string]$r.PackageName
+                display_name = $display
+                sort_order   = $order
+            }
+            $order++
+        }
+        if ($batch.Count -gt 0) {
+            Invoke-DbBatch -Name 'favorites.insert' -Rows $batch | Out-Null
+            Write-Log ("Seeded {0} default favourites for '{1}'." -f $batch.Count, $headsetName) -Level DEBUG
+        }
+    }
+    catch {
+        Write-Log ("Initialize-HeadsetFavorites failed for '{0}' - {1}" -f $headsetName, $_.Exception.Message) -Level WARNING
     }
 } # OK
 
@@ -740,15 +841,13 @@ function Rename-Headset {
         Write-Log ("Regenerated [video].html and [timer].html for '$newDisplayName'.") -Level DEBUG
     }
 
-    # 5. Rename data files (installed_apps + favorites) if they exist
-    foreach ($suffix in @('_installed_apps.csv', '_favorite_apps.csv')) {
-        $oldDataFile = Join-Path $global:ScriptPath "data\$oldDisplayName$suffix"
-        $newDataFile = Join-Path $global:ScriptPath "data\$newDisplayName$suffix"
-        if (Test-Path $oldDataFile) {
-            Rename-Item -LiteralPath $oldDataFile -NewName (Split-Path $newDataFile -Leaf) -Force -ErrorAction SilentlyContinue
-            Write-Log ("Renamed data file: $oldDataFile -> $newDataFile") -Level DEBUG
-        }
-    }
+    # 5. Installed apps and favourites need NO work on a rename any more.
+    #    They used to live in data\<Name>_installed_apps.csv and
+    #    data\<Name>_favorite_apps.csv, so the name was the storage key and a
+    #    rename meant renaming files - which silently lost both caches whenever
+    #    the rename raced anything holding them open. The rows are keyed on the
+    #    permanent headset id now, so the rename is invisible to them. This is
+    #    the same argument ADR-0016 makes for the live status file.
 
     return $true
 } # OK
@@ -779,18 +878,10 @@ function Remove-Headset {
         # Remove the headset from the list
         $headsets = @($headsets | Where-Object { $_.ID -ne $ID })
         Write-Log ($msg.HeadsetRemoved -f $ID, $headsetToRemove.Name) -Level INFO
-        # Delete the installed apps cache file for this headset
-        $cachePath = Join-Path $global:ScriptPath "data\$(Convert-Displayname $headsetToRemove.Name)_installed_apps.csv"
-        if (Test-Path $cachePath) {
-            Remove-Item $cachePath -Force -ErrorAction SilentlyContinue
-            Write-Log ("Deleted installed apps cache: $cachePath") -Level DEBUG
-        }
-        # Delete the per-headset favorites file
-        $favPath = Join-Path $global:ScriptPath "data\$(Convert-Displayname $headsetToRemove.Name)_favorite_apps.csv"
-        if (Test-Path $favPath) {
-            Remove-Item $favPath -Force -ErrorAction SilentlyContinue
-            Write-Log ("Deleted favorites cache: $favPath") -Level DEBUG
-        }
+        # The installed-apps cache and the favourites are removed by
+        # ON DELETE CASCADE when Save-Headsets drops the headset row below, so
+        # there is nothing to delete here any more. Doing it explicitly would
+        # also be wrong: it would run before the row is gone.
         # Stop timer job and delete timer files (.txt and .run)
         Stop-HeadsetTimer -headsetId ([int]$headsetToRemove.ID)
         $timerTxt = Get-TimerFilePath    -headsetId ([int]$headsetToRemove.ID)

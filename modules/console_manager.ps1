@@ -803,25 +803,89 @@ function Show-SubMenu-EditHeadset { #CHOICE 3
     Update-HeadsetField -ID ([int]$idInput) -Field $field -NewValue $newValue
 } # OK
 
+# RETIRED - the favourites live in headset_favorite_apps now, keyed on the
+# permanent headset id. Kept only so the legacy importer can still name the file
+# it is reading. Do not use it to locate live data.
 function Get-FavoriteAppsCachePath {
     param ([string]$headsetName)
     return Join-Path $global:ScriptPath "data\$(Convert-Displayname $headsetName)_favorite_apps.csv"
 }
 
+<#
+.SYNOPSIS
+    Favourite apps of one headset, in the operator's order.
+.DESCRIPTION
+    Same return shape the CSV gave: rows with PackageName and DisplayName, now
+    with LocalIconPath and IconUrl joined in from the catalogue.
+
+    The old no-name form read a global data\favorite_apps.csv left over from
+    before favourites were per-headset. Nothing calls it that way and there is no
+    headset id to attach such a row to, so it returns empty.
+.EXAMPLE
+    $favorites = Get-FavoriteApps -headsetName 'Q3 RED'
+#>
 function Get-FavoriteApps {
     param ([string]$headsetName = '')
-    $csvPath = if ($headsetName) { Get-FavoriteAppsCachePath $headsetName } else { Join-Path $global:ScriptPath "data\favorite_apps.csv" }
-    if (-not (Test-Path -LiteralPath $csvPath)) { return @() }
-    return @(Import-Csv -LiteralPath $csvPath -Delimiter ",")
+
+    $headsetId = Resolve-HeadsetIdByName -Name $headsetName
+    if ($headsetId -le 0) { return @() }
+    try {
+        return @(Invoke-DbQuery -Name 'favorites.list' -Parameters @{ headset_id = $headsetId })
+    }
+    catch {
+        Write-Log ("Get-FavoriteApps failed for '{0}' - {1}" -f $headsetName, $_.Exception.Message) -Level ERROR
+        return @()
+    }
 }
 
+<#
+.SYNOPSIS
+    Replace one headset's favourites with the given list, in array order.
+.DESCRIPTION
+    Array position becomes sort_order, which is what CSV row order used to carry
+    implicitly. Clear-then-insert in ONE transaction so a reader never observes a
+    half-written list, and so removing a favourite is expressed by its absence -
+    the same semantics rewriting the whole CSV gave for free. An empty array
+    clears the list, as writing a header-only file did.
+.EXAMPLE
+    Save-FavoriteApps -favorites $rows -headsetName 'Q3 RED'
+#>
 function Save-FavoriteApps {
     param ([array]$favorites, [string]$headsetName = '')
-    $csvPath = if ($headsetName) { Get-FavoriteAppsCachePath $headsetName } else { Join-Path $global:ScriptPath "data\favorite_apps.csv" }
-    if ($favorites.Count -eq 0) {
-        Set-Content -LiteralPath $csvPath -Value '"PackageName","DisplayName"' -Encoding UTF8
-    } else {
-        $favorites | Export-Csv -LiteralPath $csvPath -NoTypeInformation -Encoding UTF8 -Force
+
+    $headsetId = Resolve-HeadsetIdByName -Name $headsetName
+    if ($headsetId -le 0) {
+        Write-Log ("Save-FavoriteApps: no headset named '{0}'" -f $headsetName) -Level WARNING
+        return
+    }
+
+    # Bound outside the scriptblock: PowerShell resolves variables against the
+    # runtime scope chain when the block runs, so the block must not depend on
+    # names the caller might also be using.
+    $rowsToSave = @($favorites)
+    try {
+        Invoke-DbTransaction -Script {
+            Invoke-DbNonQuery -Name 'favorites.delete_for_headset' -Parameters @{ headset_id = $headsetId } | Out-Null
+            $batch = @()
+            $order = 0
+            foreach ($f in $rowsToSave) {
+                if (-not $f.PackageName) { continue }
+                $display = ''
+                if ($f.PSObject.Properties['DisplayName']) { $display = [string]$f.DisplayName }
+                $batch += @{
+                    headset_id   = $headsetId
+                    package_name = [string]$f.PackageName
+                    display_name = $display
+                    sort_order   = $order
+                }
+                $order++
+            }
+            # One bound statement reused across the rows, not a call per row.
+            Invoke-DbBatch -Name 'favorites.insert' -Rows $batch | Out-Null
+        } | Out-Null
+    }
+    catch {
+        Write-Log ("Save-FavoriteApps failed for '{0}' - {1}" -f $headsetName, $_.Exception.Message) -Level ERROR
     }
 }
 
@@ -857,13 +921,13 @@ function Show-SubMenu-LaunchApp {
     Write-Host $msg.LaunchAppTitle -BackgroundColor DarkCyan -ForegroundColor White
     Write-Host ""
     Write-Host ($msg.LaunchAppLoadingApps -f $headset.Name) -ForegroundColor DarkGray
-    $safeName  = Convert-Displayname $headset.Name
-    $cachePath = Join-Path $global:ScriptPath "data\${safeName}_installed_apps.csv"
-    if (Test-Path $cachePath) {
-        $installedApps = @(Import-Csv -Path $cachePath -Delimiter "," | ForEach-Object {
-            [PSCustomObject]@{ PackageName = $_.PackageName; DisplayName = $_.DisplayName; IconUrl = $_.IconUrl }
-        })
-    } else {
+    # DisplayName and IconUrl are joined in from the catalogue rather than read
+    # off the cache row. The per-headset CSV used to carry its own copy of both,
+    # but the cache moved to a lean schema and stopped writing them, so this menu
+    # has been listing blank names since. The catalogue is the only place that
+    # owns that metadata, so read it from there.
+    $installedApps = @(Get-HeadsetInstalledAppsCached -headsetName $headset.Name -ThirdPartyOnly)
+    if ($installedApps.Count -eq 0) {
         $wifiDevice = Get-BestAdbDevice -Headset $headset
         $installedApps = if ($wifiDevice) { @(Get-HeadsetInstalledApps -Device $wifiDevice -ThirdPartyOnly) } else { @() }
     }

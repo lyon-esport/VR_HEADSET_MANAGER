@@ -1648,14 +1648,12 @@ function Invoke-HeadsetApp {
             return $false
         }
 
-        # Search cache
-        $cacheFile = if ($global:AppCacheFilePath) { $global:AppCacheFilePath } else { Join-Path $global:ScriptPath "data\known_apps.csv" }
-        $match = $null
-        if (Test-Path $cacheFile) {
-            $match = @(Import-Csv -Path $cacheFile -Delimiter ",") |
-                     Where-Object { $_.DisplayName -eq $DisplayName } |
-                     Select-Object -First 1
-        }
+        # Search the catalogue by display name. Still a scan rather than a query:
+        # display_name is not unique and has no index, and "first match wins" is
+        # the behaviour this has always had.
+        $match = @(Invoke-DbQuery -Name 'catalog.list') |
+                 Where-Object { $_.DisplayName -eq $DisplayName } |
+                 Select-Object -First 1
 
         if ($match) {
             $PackageName = $match.PackageName
@@ -1761,13 +1759,8 @@ function Get-HeadsetInstalledApps {
             if ($line -match '^package:(.+)$') { $Matches[1].Trim() }
         }
 
-        # Load app_names.csv cache into a hashtable for fast lookup
-        $cache = @{}
-        if (Test-Path $AppCacheFilePath) {
-            foreach ($row in @(Import-Csv -Path $AppCacheFilePath -Delimiter ",")) {
-                $cache[$row.PackageName] = $row
-            }
-        }
+        # Load the catalogue into a hashtable for fast lookup
+        $cache = Get-AppCatalogMap
 
         # Resolve missing packages online if requested
 
@@ -1792,25 +1785,36 @@ function Get-HeadsetInstalledApps {
             }
         }
 
-        # Persist new packages and always sync ThirdParty from live ADB result
-        $needsWrite = $false
+        # Persist new packages and always sync ThirdParty from live ADB result.
+        # Only rows that actually differ are upserted; the whole-catalogue rewrite
+        # this used to do is what made concurrent callers lose each other's work.
+        $catalogBatch = @()
         foreach ($pkg in $packages) {
             $pkgIsThirdParty = if ($ThirdPartyOnly) { $true } elseif ($thirdPartySet.ContainsKey($pkg)) { $true } else { $false }
-            if (-not $cache.ContainsKey($pkg)) {
+            $entry = $cache[$pkg]
+            if (-not $entry) {
                 $shortName = if ($pkg.StartsWith('com.')) { $pkg.Substring(4) } else { $pkg }
-                $cache[$pkg] = [PSCustomObject]@{ PackageName=$pkg; DisplayName=$shortName; IconUrl=''; LocalIconPath=''; ThirdParty=$pkgIsThirdParty }
-                $needsWrite = $true
+                $entry = [PSCustomObject]@{ PackageName=$pkg; DisplayName=$shortName; IconUrl=''; LocalIconPath=''; ThirdParty=$pkgIsThirdParty; LatestVersion='' }
+                $cache[$pkg] = $entry
             } else {
-                $cached = [string]$cache[$pkg].ThirdParty
-                if ($cached -eq '' -or $null -eq $cache[$pkg].ThirdParty -or ($cached -ne "$pkgIsThirdParty")) {
-                    $cache[$pkg] | Add-Member -MemberType NoteProperty -Name ThirdParty -Value $pkgIsThirdParty -Force
-                    $needsWrite = $true
-                }
+                # ThirdParty comes back from the view as 'True'/'False', so compare
+                # through ConvertTo-DbBool rather than string-matching a bool.
+                $cached = [string]$entry.ThirdParty
+                if ($cached -ne '' -and (ConvertTo-DbBool $cached) -eq (ConvertTo-DbBool $pkgIsThirdParty)) { continue }
+                $entry | Add-Member -MemberType NoteProperty -Name ThirdParty -Value $pkgIsThirdParty -Force
+            }
+            $catalogBatch += @{
+                package_name    = $pkg
+                display_name    = [string]$entry.DisplayName
+                icon_url        = [string]$entry.IconUrl
+                local_icon_path = [string]$entry.LocalIconPath
+                third_party     = (ConvertTo-DbBool $pkgIsThirdParty)
+                latest_version  = [string]$entry.LatestVersion
             }
         }
-        if ($needsWrite) {
-            $cache.Values | Sort-Object DisplayName | Export-Csv -LiteralPath $AppCacheFilePath -NoTypeInformation -Encoding UTF8
-            Write-Log ($msg.AppDisplayNameNotFound -f "known_apps.csv updated with ThirdParty/new packages") -Level DEBUG
+        if ($catalogBatch.Count -gt 0) {
+            Invoke-DbBatch -Name 'catalog.upsert' -Rows $catalogBatch | Out-Null
+            Write-Log ($msg.AppDisplayNameNotFound -f "app catalogue updated with ThirdParty/new packages") -Level DEBUG
         }
 
         $apps = foreach ($pkg in $packages) {
@@ -1947,12 +1951,24 @@ function Get-AppInfo {
                 }
                 
 
-    # 1. Check local cache first
+    # 1. Check the catalogue first.
+    #
+    # This used to load the WHOLE known_apps.csv and, on any change, write the
+    # whole thing back. Get-AppInfo runs in every per-headset monitoring runspace
+    # on every poll, so with N headsets that was N processes rewriting one file
+    # with no lock - the last writer won and the others' resolutions vanished
+    # silently. One row in, one row out removes the hazard entirely.
+    #
+    # The hashtable shape is kept so the rest of the function reads unchanged; it
+    # simply never holds more than this one package.
     $cache = @{}
-    if (Test-Path -LiteralPath $AppCacheFilePath) {
-        foreach ($row in @(Import-Csv -LiteralPath $AppCacheFilePath -Delimiter ",")) {
-            $cache[$row.PackageName] = $row
+    try {
+        foreach ($row in @(Invoke-DbQuery -Name 'catalog.get' -Parameters @{ package_name = $PackageName })) {
+            $cache[[string]$row.PackageName] = $row
         }
+    }
+    catch {
+        Write-Log ("Get-AppInfo: catalogue read failed for {0} - {1}" -f $PackageName, $_.Exception.Message) -Level DEBUG
     }
     # If the cache contains the package with all info let's return it !
     # But first, always check templates\website\assets\app_icons — operator-supplied icons take priority
@@ -1961,7 +1977,7 @@ function Get-AppInfo {
         $localResolved = Resolve-LocalAppIcon -PackageName $PackageName -IconCacheDir $IconCacheDir
         if ($localResolved -and $cache[$PackageName].LocalIconPath -ne $localResolved) {
             $cache[$PackageName].LocalIconPath = $localResolved
-            $cache.Values | Sort-Object DisplayName | Export-Csv -LiteralPath $AppCacheFilePath -NoTypeInformation -Encoding UTF8
+            Save-AppCatalogEntry -Entry $cache[$PackageName]
         }
         return $cache[$PackageName]
     }
@@ -2074,26 +2090,77 @@ function Get-AppInfo {
                ($appInfos.IconUrl -ne $cache[$PackageName].IconUrl) -or
                ($appInfos.LocalIconPath -ne $cache[$PackageName].LocalIconPath)
     if ($changed) {
-        # Preserve ThirdParty from existing row so the column is not lost on write
-        $existingTp = if ($cache.ContainsKey($PackageName)) { $cache[$PackageName].ThirdParty } else { $null }
-        $appInfos | Add-Member -MemberType NoteProperty -Name ThirdParty -Value $existingTp -Force
+        # Preserve ThirdParty and LatestVersion from the existing row: this
+        # function resolves display metadata only and must not clear columns it
+        # knows nothing about. catalog.upsert overwrites every column it is given.
+        $existingTp     = if ($cache.ContainsKey($PackageName)) { $cache[$PackageName].ThirdParty }    else { $null }
+        $existingLatest = if ($cache.ContainsKey($PackageName)) { $cache[$PackageName].LatestVersion } else { '' }
+        $appInfos | Add-Member -MemberType NoteProperty -Name ThirdParty    -Value $existingTp     -Force
+        $appInfos | Add-Member -MemberType NoteProperty -Name LatestVersion -Value $existingLatest -Force
         $cache[$PackageName] = $appInfos
-        $cache.Values | Sort-Object DisplayName | Export-Csv -LiteralPath $AppCacheFilePath -NoTypeInformation -Encoding UTF8
+        Save-AppCatalogEntry -Entry $appInfos
     }
     return $appInfos
 }
 
+
+<#
+.SYNOPSIS
+    Write one catalogue entry, from a row carrying the legacy column names.
+.DESCRIPTION
+    The single write point for app_catalog outside the batch paths. Takes the
+    PascalCase shape every caller in this module already builds (PackageName,
+    DisplayName, IconUrl, LocalIconPath, ThirdParty, LatestVersion) and maps it to
+    the snake_case parameters of catalog.upsert.
+
+    ThirdParty defaults to true when absent, matching Get-AppInfoFromKnownApps and
+    the legacy importer, so a row is never silently reclassified as a system app.
+.EXAMPLE
+    Save-AppCatalogEntry -Entry $appInfos
+#>
+function Save-AppCatalogEntry {
+    param (
+        [Parameter(Mandatory = $true)]$Entry
+    )
+
+    if (-not $Entry -or -not $Entry.PackageName) { return }
+
+    $thirdParty = 1
+    if ($Entry.PSObject.Properties['ThirdParty'] -and "$($Entry.ThirdParty)" -ne '') {
+        $thirdParty = ConvertTo-DbBool $Entry.ThirdParty -Default $true
+    }
+    $latest = ''
+    if ($Entry.PSObject.Properties['LatestVersion']) { $latest = [string]$Entry.LatestVersion }
+
+    try {
+        Invoke-DbNonQuery -Name 'catalog.upsert' -Parameters @{
+            package_name    = [string]$Entry.PackageName
+            display_name    = [string]$Entry.DisplayName
+            icon_url        = [string]$Entry.IconUrl
+            local_icon_path = [string]$Entry.LocalIconPath
+            third_party     = $thirdParty
+            latest_version  = $latest
+        } | Out-Null
+    }
+    catch {
+        Write-Log ("Save-AppCatalogEntry failed for {0} - {1}" -f $Entry.PackageName, $_.Exception.Message) -Level WARNING
+    }
+}
+
 function Update-AppCacheOnline {
     param(
+        # Accepted and ignored: kept so existing callers keep compiling.
         [string]$AppCacheFilePath = $global:AppCacheFilePath,
         [string]$ProgressFile = '',
         [int]$MaxThreads = 12,
         [switch]$ForceOnline = $false
     )
-    if (-not $AppCacheFilePath) { $AppCacheFilePath = Join-Path $global:ScriptPath "data\known_apps.csv" }
-    if (-not (Test-Path -LiteralPath $AppCacheFilePath)) { return }
 
-    $rows = @(Import-Csv -LiteralPath $AppCacheFilePath -Delimiter ",")
+    # The selection stays in PowerShell rather than becoming a WHERE clause: it
+    # compares DisplayName against the com.-stripped package name, which SQL
+    # cannot express as cheaply, and keeping it here means the filter that decides
+    # what to re-fetch from the network is unchanged by this migration.
+    $rows = @(Invoke-DbQuery -Name 'catalog.list')
     $toResolve = if ($ForceOnline) { $rows } else {
         @($rows | Where-Object {
             [string]::IsNullOrWhiteSpace($_.DisplayName) -or
@@ -2181,14 +2248,13 @@ function Update-AppCacheOnline {
     $pool.Close()
     $pool.Dispose()
 
-    # Phase 2: serial icon downloads then single CSV write
-    $cache = @{}
-    foreach ($row in @(Import-Csv -LiteralPath $AppCacheFilePath -Delimiter ",")) {
-        if (-not $row.PSObject.Properties['LatestVersion']) {
-            $row | Add-Member -MemberType NoteProperty -Name LatestVersion -Value '' -Force
-        }
-        $cache[$row.PackageName] = $row
-    }
+    # Phase 2: serial icon downloads, then one batched catalogue write.
+    #
+    # $dirty records WHICH packages actually changed. The CSV version only needed
+    # a single $changed flag because it rewrote the entire file either way; a
+    # batch of upserts should carry only the rows that moved.
+    $cache = Get-AppCatalogMap
+    $dirty = @{}
     $IconCacheDir = Join-Path $global:ScriptPath "website\assets\app_icons"
     if (-not (Test-Path -LiteralPath $IconCacheDir)) {
         New-Item -ItemType Directory -Path $IconCacheDir -Force | Out-Null
@@ -2234,6 +2300,7 @@ function Update-AppCacheOnline {
             else { $entry | Add-Member -MemberType NoteProperty -Name LatestVersion -Value $r.LatestVersion -Force }
         }
         $changed = $true
+        $dirty[$pkg] = $true
     }
 
     # Phase 3: sync operator icons from templates\website\assets\app_icons for ALL packages in cache.
@@ -2245,6 +2312,7 @@ function Update-AppCacheOnline {
             if ($localPath -and $cache[$pkg].LocalIconPath -ne $localPath) {
                 $cache[$pkg].LocalIconPath = $localPath
                 $changed = $true
+                $dirty[$pkg] = $true
             }
         }
     }
@@ -2261,13 +2329,35 @@ function Update-AppCacheOnline {
             if ([string]::IsNullOrWhiteSpace($cache[$pkg].LocalIconPath)) {
                 $cache[$pkg].LocalIconPath = "/assets/app_icons/android.png"
                 $changed = $true
+                $dirty[$pkg] = $true
             }
         }
     }
 
-    if ($changed) {
-        $cache.Values | Sort-Object DisplayName |
-            Export-Csv -LiteralPath $AppCacheFilePath -NoTypeInformation -Encoding UTF8
+    if ($changed -and $dirty.Count -gt 0) {
+        # One transaction for the lot. This runs in the resolve job, a separate
+        # process from the console and the monitor, so the batch is exactly the
+        # kind of write the WAL journal and the retry wrapper exist to serialise.
+        $batch = @()
+        foreach ($pkg in $dirty.Keys) {
+            $entry = $cache[$pkg]
+            if (-not $entry) { continue }
+            $thirdParty = 1
+            if ($entry.PSObject.Properties['ThirdParty'] -and "$($entry.ThirdParty)" -ne '') {
+                $thirdParty = ConvertTo-DbBool $entry.ThirdParty -Default $true
+            }
+            $batch += @{
+                package_name    = [string]$pkg
+                display_name    = [string]$entry.DisplayName
+                icon_url        = [string]$entry.IconUrl
+                local_icon_path = [string]$entry.LocalIconPath
+                third_party     = $thirdParty
+                latest_version  = [string]$entry.LatestVersion
+            }
+        }
+        if ($batch.Count -gt 0) {
+            Invoke-DbBatch -Name 'catalog.upsert' -Rows $batch | Out-Null
+        }
     }
 
     Write-Log "Update-AppCacheOnline: resolved $done / $total packages" -Level INFO
@@ -2278,39 +2368,147 @@ function Update-AppCacheOnline {
 }
 
 
+# RETIRED - the per-headset installed-app cache lives in headset_installed_apps,
+# keyed on the permanent headset id. Kept only so the legacy importer can name
+# the file it reads. Do not use it to locate live data.
 function Get-InstalledAppsCachePath {
     param ([string]$headsetName)
     return Join-Path $global:ScriptPath "data\$(Convert-Displayname $headsetName)_installed_apps.csv"
 }
 
 
+<#
+.SYNOPSIS
+    The whole app catalogue as a hashtable keyed on package name.
+.DESCRIPTION
+    Replaces the "Import-Csv the whole known_apps.csv into a hashtable" idiom that
+    appeared in half a dozen functions. Rows carry the legacy column names
+    (PackageName / DisplayName / IconUrl / LocalIconPath / ThirdParty /
+    LatestVersion) because they come through v_app_catalog, so callers that used
+    to read CSV rows need no other change.
+
+    Returns an empty hashtable rather than throwing when the database is
+    unreachable, matching how a missing CSV used to behave.
+.EXAMPLE
+    $catalog = Get-AppCatalogMap
+    $catalog['com.oculus.browser'].DisplayName
+#>
+function Get-AppCatalogMap {
+    $map = @{}
+    try {
+        foreach ($row in @(Invoke-DbQuery -Name 'catalog.list')) {
+            if ($row.PackageName) { $map[[string]$row.PackageName] = $row }
+        }
+    }
+    catch {
+        Write-Log ("Get-AppCatalogMap failed - " + $_.Exception.Message) -Level ERROR
+    }
+    return $map
+}
+
+
+<#
+.SYNOPSIS
+    One headset's cached installed apps, with catalogue metadata joined in.
+.DESCRIPTION
+    The database replacement for reading data\<Name>_installed_apps.csv. Rows
+    carry the lean cache columns (PackageName, Version, PendingVersion,
+    StoreVersion, SizeBytes) plus DisplayName, IconUrl, LocalIconPath and
+    ThirdParty resolved from the catalogue.
+
+    -ThirdPartyOnly filters out the built-in packages, which is what callers that
+    only want launchable apps want.
+.EXAMPLE
+    $apps = Get-HeadsetInstalledAppsCached -headsetName 'Q3 RED' -ThirdPartyOnly
+#>
+function Get-HeadsetInstalledAppsCached {
+    param (
+        [string]$headsetName,
+        [switch]$ThirdPartyOnly
+    )
+
+    $headsetId = Resolve-HeadsetIdByName -Name $headsetName
+    if ($headsetId -le 0) { return @() }
+
+    try {
+        $rows = @(Invoke-DbQuery -Name 'installed.list_joined' -Parameters @{ headset_id = $headsetId })
+    }
+    catch {
+        Write-Log ("Get-HeadsetInstalledAppsCached failed for '{0}' - {1}" -f $headsetName, $_.Exception.Message) -Level ERROR
+        return @()
+    }
+
+    if ($ThirdPartyOnly) {
+        $rows = @($rows | Where-Object { ConvertTo-BoolField $_.ThirdParty })
+    }
+    return $rows
+}
+
+
 function Initialize-AppNamesCache {
     <#
     .SYNOPSIS
-    Creates known_apps.csv from the template at templates\data\known_apps.csv.
-    Falls back to writing an empty header if the template is missing.
-    Called on first startup and by Clear-AppNamesCache.
+    Seeds the app catalogue from templates\data\known_apps.csv when it is empty.
+
+    .DESCRIPTION
+    The catalogue is a table now, but the seed stays a shipped, human-readable
+    file - it carries the pre-filled OS app names a fresh install needs.
+
+    No-ops when the catalogue already holds rows, so it is safe to call on every
+    startup: an operator's edits are never overwritten by the template.
 
     .EXAMPLE
     Initialize-AppNamesCache
-    Initialize-AppNamesCache -AppCacheFilePath "C:\path\to\known_apps.csv"
     #>
     param(
+        # Accepted and ignored: kept so existing callers keep compiling.
         [string]$AppCacheFilePath = $global:AppCacheFilePath
     )
-    if (-not $AppCacheFilePath) {
-        $AppCacheFilePath = Join-Path $global:ScriptPath "data\known_apps.csv"
+
+    try {
+        $existing = Invoke-DbScalar -Name 'catalog.count'
+        if ($null -ne $existing -and [int]$existing -gt 0) { return }
     }
+    catch {
+        Write-Log ("Initialize-AppNamesCache: could not read the catalogue - " + $_.Exception.Message) -Level WARNING
+        return
+    }
+
     $templatePath = Join-Path $global:ScriptPath "templates\data\known_apps.csv"
-    if (Test-Path -LiteralPath $templatePath) {
-        $dir = Split-Path $AppCacheFilePath -Parent
-        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-        Copy-Item -LiteralPath $templatePath -Destination $AppCacheFilePath -Force
-        Write-Log "App cache initialized from template" -Level INFO
-    } else {
-        '"PackageName","DisplayName","IconUrl","LocalIconPath","ThirdParty","LatestVersion"' |
-            Set-Content -LiteralPath $AppCacheFilePath -Encoding UTF8 -Force
-        Write-Log "App cache template not found, created empty cache" -Level WARNING
+    if (-not (Test-Path -LiteralPath $templatePath)) {
+        Write-Log "App cache template not found, catalogue left empty" -Level WARNING
+        return
+    }
+
+    try {
+        $batch = @()
+        foreach ($r in @(Import-Csv -LiteralPath $templatePath -Delimiter "," -Encoding UTF8)) {
+            if (-not $r.PackageName) { continue }
+            # The shipped template predates the ThirdParty column on some rows and
+            # may still carry the older Type = third-party/built-in spelling, the
+            # same two shapes the legacy importer handles.
+            $thirdParty = 1
+            if ($r.PSObject.Properties['ThirdParty'] -and "$($r.ThirdParty)" -ne '') {
+                $thirdParty = ConvertTo-DbBool $r.ThirdParty
+            } elseif ($r.PSObject.Properties['Type'] -and "$($r.Type)" -ne '') {
+                $thirdParty = if ("$($r.Type)" -eq 'third-party') { 1 } else { 0 }
+            }
+            $batch += @{
+                package_name    = [string]$r.PackageName
+                display_name    = [string]$(if ($r.PSObject.Properties['DisplayName'])   { $r.DisplayName }   else { '' })
+                icon_url        = [string]$(if ($r.PSObject.Properties['IconUrl'])       { $r.IconUrl }       else { '' })
+                local_icon_path = [string]$(if ($r.PSObject.Properties['LocalIconPath']) { $r.LocalIconPath } else { '' })
+                third_party     = $thirdParty
+                latest_version  = [string]$(if ($r.PSObject.Properties['LatestVersion']) { $r.LatestVersion } else { '' })
+            }
+        }
+        if ($batch.Count -gt 0) {
+            Invoke-DbBatch -Name 'catalog.upsert' -Rows $batch | Out-Null
+            Write-Log ("App catalogue seeded from template ({0} entries)" -f $batch.Count) -Level INFO
+        }
+    }
+    catch {
+        Write-Log ("Initialize-AppNamesCache failed - " + $_.Exception.Message) -Level ERROR
     }
 }
 
@@ -2321,36 +2519,33 @@ function Clear-AppNamesCache {
     Archives known_apps.csv and wipes the app_icons cache folder.
 
     .DESCRIPTION
-    - Renames known_apps.csv to known_apps_old_<timestamp>.csv (preserves data).
-    - Creates a fresh empty known_apps.csv with the correct header.
+    - Empties the app_catalog table and re-seeds it from the shipped template.
     - Deletes all files in website\assets\app_icons\ except those that originated
       from templates\website\assets\app_icons (operator-supplied icons are never deleted).
     Returns $true on success, $false on failure.
+
+    The timestamped known_apps_old_<stamp>.csv archive the CSV era wrote is gone:
+    there is no file to rename, and the whole point of the operation is to discard
+    resolved metadata that turned out wrong. Backup-Database covers the case where
+    the operator wants the previous contents back.
 
     .EXAMPLE
     Clear-AppNamesCache
     #>
     param(
+        # Accepted and ignored: kept so existing callers keep compiling.
         [string]$AppCacheFilePath = $global:AppCacheFilePath
     )
-    if (-not $AppCacheFilePath) {
-        $AppCacheFilePath = Join-Path $global:ScriptPath "data\known_apps.csv"
-    }
 
     try {
-        # Archive existing CSV
-        if (Test-Path -LiteralPath $AppCacheFilePath) {
-            $stamp   = Get-Date -Format 'yyyy.MM.dd-HH.mm'
-            $dir     = Split-Path $AppCacheFilePath -Parent
-            $base    = [System.IO.Path]::GetFileNameWithoutExtension($AppCacheFilePath)
-            $ext     = [System.IO.Path]::GetExtension($AppCacheFilePath)
-            $archive = Join-Path $dir ($base + '_old_' + $stamp + $ext)
-            Rename-Item -LiteralPath $AppCacheFilePath -NewName $archive -Force -ErrorAction Stop
-            Write-Log "App cache archived to $archive" -Level INFO
-        }
-
-        # Re-initialize from template (pre-fills OS app names)
-        Initialize-AppNamesCache -AppCacheFilePath $AppCacheFilePath
+        # Clear and re-seed in one transaction: a reader must never see the
+        # catalogue empty, which is exactly what the window between the two used
+        # to look like when this renamed a file and wrote a new one.
+        Invoke-DbTransaction -Script {
+            Invoke-DbNonQuery -Name 'catalog.clear' | Out-Null
+            Initialize-AppNamesCache
+        } | Out-Null
+        Write-Log "App catalogue cleared and re-seeded from template" -Level INFO
 
         # Wipe app_icons cache — preserve files that came from templates\website\assets\app_icons
         $iconCacheDir = Join-Path $global:ScriptPath "website\assets\app_icons"
@@ -2377,18 +2572,16 @@ function Clear-AppNamesCache {
 function Get-AppInfoFromKnownApps {
     <#
     .SYNOPSIS
-    Enriches a list of package names with metadata from known_apps.csv.
+    Enriches a list of package names with metadata from the app catalogue.
     Returns PackageName, DisplayName, IconUrl, LocalIconPath, ThirdParty for each package.
     Missing packages get safe defaults (DisplayName=PackageName, empty icons, ThirdParty=$true).
+
+    Reads the whole catalogue once rather than one query per package: the list is
+    typically most of the catalogue anyway, and a per-package query would defeat
+    the prepared-statement cache for no gain.
     #>
     param([string[]]$PackageNames)
-    $appNamesPath = if ($global:AppCacheFilePath) { $global:AppCacheFilePath } else { Join-Path $global:ScriptPath "data\known_apps.csv" }
-    $cache = @{}
-    if (Test-Path -LiteralPath $appNamesPath) {
-        Import-Csv -LiteralPath $appNamesPath -Delimiter "," | ForEach-Object {
-            if ($_.PackageName) { $cache[$_.PackageName] = $_ }
-        }
-    }
+    $cache = Get-AppCatalogMap
     return @($PackageNames | ForEach-Object {
         $pkg   = $_
         $entry = $cache[$pkg]
@@ -2412,8 +2605,15 @@ function Update-InstalledAppsCache {
     )
 
     try {
-        $cachePath    = Get-InstalledAppsCachePath -headsetName $headsetName
-        $appNamesPath = if ($global:AppCacheFilePath) { $global:AppCacheFilePath } else { Join-Path $global:ScriptPath "data\known_apps.csv" }
+        # The cache is keyed on the permanent headset id now, not on a filename
+        # built from the display name. No id means no row to attach to, so there
+        # is nothing useful to do - and silently writing under a wrong id would be
+        # worse than skipping.
+        $headsetId = Resolve-HeadsetIdByName -Name $headsetName
+        if ($headsetId -le 0) {
+            Write-Log ("Update-InstalledAppsCache: no headset named '{0}'" -f $headsetName) -Level DEBUG
+            return
+        }
 
         # Fetch third-party packages from headset
         $rawOutput = Invoke-AdbCmd -Device $Device -Command "shell pm list packages -3" -adb $adb
@@ -2429,39 +2629,48 @@ function Update-InstalledAppsCache {
         $thirdSet    = @{}; foreach ($p in $packages) { $thirdSet[$p] = $true }
         $builtInPkgs = @($allPkgs | Where-Object { -not $thirdSet.ContainsKey($_) })
 
-        # Load current known_apps.csv
-        $appNames = @{}
-        if (Test-Path -LiteralPath $appNamesPath) {
-            Import-Csv -LiteralPath $appNamesPath -Delimiter "," | ForEach-Object {
-                if ($_.PackageName) { $appNames[$_.PackageName] = $_ }
-            }
-        }
+        # Load the current catalogue
+        $appNames = Get-AppCatalogMap
 
-        # Persist new/updated entries for both third-party and built-in packages
-        $needsWrite = $false
-        foreach ($pkg in $packages) {
-            if (-not $appNames.ContainsKey($pkg)) {
-                $shortName = if ($pkg.StartsWith('com.')) { $pkg.Substring(4) } else { $pkg }
-                $appNames[$pkg] = [PSCustomObject]@{ PackageName=$pkg; DisplayName=$shortName; IconUrl=''; LocalIconPath=''; ThirdParty=$true }
-                $needsWrite = $true
-            } elseif ($null -eq $appNames[$pkg].ThirdParty -or "$($appNames[$pkg].ThirdParty)" -eq '') {
-                $appNames[$pkg] | Add-Member -MemberType NoteProperty -Name ThirdParty -Value $true -Force
-                $needsWrite = $true
+        # Persist new/updated entries for both third-party and built-in packages.
+        # Only the rows that actually change are written. The CSV era had to
+        # rewrite the whole file for a single new package, and with one runspace
+        # per headset doing that concurrently the last writer silently won.
+        $catalogBatch = @()
+        foreach ($group in @(
+            @{ Packages = $packages;     ThirdParty = 1 },
+            @{ Packages = $builtInPkgs;  ThirdParty = 0 }
+        )) {
+            foreach ($pkg in $group.Packages) {
+                $entry = $appNames[$pkg]
+                if ($entry) {
+                    # Known package: the only thing worth fixing is a row whose
+                    # third_party flag was never set (pre-ThirdParty-column data).
+                    if ($null -ne $entry.ThirdParty -and "$($entry.ThirdParty)" -ne '') { continue }
+                    $catalogBatch += @{
+                        package_name    = $pkg
+                        display_name    = [string]$entry.DisplayName
+                        icon_url        = [string]$entry.IconUrl
+                        local_icon_path = [string]$entry.LocalIconPath
+                        third_party     = $group.ThirdParty
+                        latest_version  = [string]$entry.LatestVersion
+                    }
+                } else {
+                    $shortName = if ($pkg.StartsWith('com.')) { $pkg.Substring(4) } else { $pkg }
+                    $catalogBatch += @{
+                        package_name    = $pkg
+                        display_name    = $shortName
+                        icon_url        = ''
+                        local_icon_path = ''
+                        third_party     = $group.ThirdParty
+                        latest_version  = ''
+                    }
+                }
             }
         }
-        foreach ($pkg in $builtInPkgs) {
-            if (-not $appNames.ContainsKey($pkg)) {
-                $shortName = if ($pkg.StartsWith('com.')) { $pkg.Substring(4) } else { $pkg }
-                $appNames[$pkg] = [PSCustomObject]@{ PackageName=$pkg; DisplayName=$shortName; IconUrl=''; LocalIconPath=''; ThirdParty=$false }
-                $needsWrite = $true
-            } elseif ($null -eq $appNames[$pkg].ThirdParty -or "$($appNames[$pkg].ThirdParty)" -eq '') {
-                $appNames[$pkg] | Add-Member -MemberType NoteProperty -Name ThirdParty -Value $false -Force
-                $needsWrite = $true
-            }
-        }
-        if ($needsWrite) {
-            $appNames.Values | Sort-Object DisplayName | Export-Csv -LiteralPath $appNamesPath -NoTypeInformation -Encoding UTF8
-            Write-Log "known_apps.csv: updated with new/typed packages" -Level DEBUG
+        if ($catalogBatch.Count -gt 0) {
+            Invoke-DbBatch -Name 'catalog.upsert' -Rows $catalogBatch | Out-Null
+            Write-Log ("App catalogue: {0} new/typed packages" -f $catalogBatch.Count) -Level DEBUG
         }
 
         # When -ResolveMissing: fetch online metadata for packages not yet fully resolved
@@ -2475,14 +2684,9 @@ function Update-InstalledAppsCache {
             }
         }
 
-        # Reload known_apps lookup (may have been updated by ResolveMissing / Get-AppInfo above)
+        # Reload the catalogue (Get-AppInfo above may have resolved entries)
         if ($ResolveMissing) {
-            $appNames = @{}
-            if (Test-Path -LiteralPath $appNamesPath) {
-                Import-Csv -LiteralPath $appNamesPath -Delimiter "," | ForEach-Object {
-                    if ($_.PackageName) { $appNames[$_.PackageName] = $_ }
-                }
-            }
+            $appNames = Get-AppCatalogMap
         }
 
         # Fetch version names for all installed packages in a single ADB call
@@ -2522,15 +2726,12 @@ function Update-InstalledAppsCache {
             }
         }
 
-        # Load latest store versions from known_apps.csv for cross-reference
+        # Latest store versions for cross-reference, from the catalogue already in
+        # hand rather than a third read of the same data.
         $storeVersionMap = @{}
-        $appNamesPathForStore = if ($global:AppCacheFilePath) { $global:AppCacheFilePath } else { Join-Path $global:ScriptPath "data\known_apps.csv" }
-        if (Test-Path -LiteralPath $appNamesPathForStore) {
-            Import-Csv -LiteralPath $appNamesPathForStore -Delimiter "," | ForEach-Object {
-                if ($_.PackageName -and $_.PSObject.Properties['LatestVersion'] -and $_.LatestVersion) {
-                    $storeVersionMap[$_.PackageName] = $_.LatestVersion
-                }
-            }
+        foreach ($key in $appNames.Keys) {
+            $latest = $appNames[$key].LatestVersion
+            if ($latest) { $storeVersionMap[$key] = $latest }
         }
 
         # Fetch per-package storage sizes (single ADB call)
@@ -2538,42 +2739,42 @@ function Update-InstalledAppsCache {
 
         # Build new rows (all packages - third-party and built-in; lean schema)
         $allPkgsSorted = @($allPkgs | Sort-Object)
-        $newRows = $allPkgsSorted | ForEach-Object {
+        $newRows = @($allPkgsSorted | ForEach-Object {
             $pkg  = $_
             $ver  = if ($versions.ContainsKey($pkg))        { $versions[$pkg] }        else { '' }
             $pver = if ($pendingVersions.ContainsKey($pkg)) { $pendingVersions[$pkg] } else { '' }
             $sver = if ($storeVersionMap.ContainsKey($pkg) -and $storeVersionMap[$pkg] -and $storeVersionMap[$pkg] -ne $ver) { $storeVersionMap[$pkg] } else { '' }
             $sz   = if ($storageSizes.ContainsKey($pkg))    { $storageSizes[$pkg] }    else { 0 }
-            [PSCustomObject]@{ PackageName = $pkg; Version = $ver; PendingVersion = $pver; StoreVersion = $sver; SizeBytes = $sz }
-        }
-
-        # Compare with existing cache; always write when -ResolveMissing or schema is outdated
-        $changed = $ResolveMissing.IsPresent
-        if (-not $changed -and (Test-Path -LiteralPath $cachePath)) {
-            $existingRows = @(Import-Csv -LiteralPath $cachePath -Delimiter ",")
-            $existing = @($existingRows | Select-Object -ExpandProperty PackageName | Sort-Object)
-            $changed  = ($existing -join ',') -ne ($allPkgsSorted -join ',')
-            # Force rewrite when PendingVersion, StoreVersion, or SizeBytes column is absent (schema migration)
-            if (-not $changed -and $existingRows.Count -gt 0 -and (
-                $null -eq $existingRows[0].PSObject.Properties['PendingVersion'] -or
-                $null -eq $existingRows[0].PSObject.Properties['StoreVersion'] -or
-                $null -eq $existingRows[0].PSObject.Properties['SizeBytes'])) {
-                $changed = $true
+            @{
+                headset_id      = $headsetId
+                package_name    = $pkg
+                version         = [string]$ver
+                pending_version = [string]$pver
+                store_version   = [string]$sver
+                size_bytes      = [int64]$sz
             }
-            # Rewrite when StoreVersion values have changed (e.g. after Update-AppCacheOnline fetched new versions)
-            if (-not $changed -and $existingRows.Count -gt 0) {
-                $existingStoreMap = @{}
-                $existingRows | ForEach-Object { if ($_.PackageName -and $_.PSObject.Properties['StoreVersion']) { $existingStoreMap[$_.PackageName] = $_.StoreVersion } }
-                $changed = [bool]($newRows | Where-Object { ($existingStoreMap[$_.PackageName] -or '') -ne $_.StoreVersion } | Select-Object -First 1)
-            }
-        } elseif (-not (Test-Path -LiteralPath $cachePath)) {
-            $changed = $true
-        }
+        })
 
-        if ($changed) {
-            $newRows | Export-Csv -LiteralPath $cachePath -NoTypeInformation -Delimiter "," -Encoding UTF8 -Force
-            Write-Log ($msg.InstalledAppsCacheUpdated -f $headsetName, $allPkgsSorted.Count) -Level DEBUG
-        }
+        # The whole change-detection block that used to sit here is gone. It
+        # existed to avoid rewriting an entire CSV for an unchanged app list, and
+        # to force a rewrite when the file's columns were stale. Neither applies:
+        # the columns are the table's, and replacing the rows costs one
+        # transaction whether or not they differ - cheaper than the comparison
+        # read it was avoiding.
+        #
+        # Clear-then-insert in ONE transaction, so an uninstall is expressed by
+        # absence (what rewriting the file gave for free) and no reader ever sees
+        # a partially-refreshed app list.
+        # Invoke-DbBatch, not a per-row loop: it binds the statement once and
+        # reuses it, which is roughly ten times faster over a few hundred apps.
+        # Nested inside the transaction below, it joins that transaction rather
+        # than opening its own.
+        $rowsToSave = $newRows
+        Invoke-DbTransaction -Script {
+            Invoke-DbNonQuery -Name 'installed.delete_for_headset' -Parameters @{ headset_id = $headsetId } | Out-Null
+            Invoke-DbBatch -Name 'installed.insert' -Rows $rowsToSave | Out-Null
+        } | Out-Null
+        Write-Log ($msg.InstalledAppsCacheUpdated -f $headsetName, $allPkgsSorted.Count) -Level DEBUG
     }
     catch {
         Write-Log ($msg.InstalledAppsCacheFailed -f $headsetName, $_) -Level DEBUG
@@ -2626,13 +2827,18 @@ function Get-HeadsetPendingAppUpdates {
         if ($curId -and $curVer) { $sessionVersionMap[$curId] = $curVer }
     }
 
-    # Current versions from CSV cache (avoids extra ADB round-trip)
+    # Current versions from the installed-apps cache (avoids extra ADB round-trip)
     $csvVersionMap = @{}
     if ($headsetName) {
-        $cachePath = Get-InstalledAppsCachePath -headsetName $headsetName
-        if (Test-Path -LiteralPath $cachePath) {
-            Import-Csv -LiteralPath $cachePath -Delimiter "," | ForEach-Object {
-                if ($_.PackageName) { $csvVersionMap[$_.PackageName] = $_.Version }
+        $headsetId = Resolve-HeadsetIdByName -Name $headsetName
+        if ($headsetId -gt 0) {
+            try {
+                foreach ($row in @(Invoke-DbQuery -Name 'installed.list' -Parameters @{ headset_id = $headsetId })) {
+                    if ($row.PackageName) { $csvVersionMap[[string]$row.PackageName] = $row.Version }
+                }
+            }
+            catch {
+                Write-Log ("Get-HeadsetPendingAppUpdates: installed-apps read failed - " + $_.Exception.Message) -Level DEBUG
             }
         }
     }

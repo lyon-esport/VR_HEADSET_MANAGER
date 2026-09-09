@@ -343,18 +343,15 @@ function Start-VRMonitor {
             $ip      = $headset.IPAddress
             $stopKey = "_stop_$ip"
 
-            # Pre-load battery history from existing CSV so time-remaining estimates survive restarts.
-            # Matched on ID: the infos file is ID-keyed (ADR-0016) and the address is volatile,
+            # Pre-load battery history so time-remaining estimates survive a restart.
+            # Fetched by ID: status rows are id-keyed (ADR-0016) and the address is volatile,
             # so a headset that moved would otherwise inherit the previous occupant's history.
+            # This used to scan the whole status CSV for one row; it is now one indexed read.
             $localBattHistory = ""
-            if (Test-Path -LiteralPath $global:knownHeadsetsInfosFilePath) {
-                try {
-                    $ownId = [string]$headset.ID
-                    $row = Import-Csv -LiteralPath $global:knownHeadsetsInfosFilePath -Delimiter ";" -Encoding UTF8 |
-                           Where-Object { [string]$_.ID -eq $ownId } | Select-Object -First 1
-                    if ($row -and $row.BatteryHistory) { $localBattHistory = $row.BatteryHistory }
-                } catch {}
-            }
+            try {
+                $row = @(Invoke-DbQuery -Name 'status.get' -Parameters @{ headset_id = [int]$headset.ID }) | Select-Object -First 1
+                if ($row -and $row.BatteryHistory) { $localBattHistory = [string]$row.BatteryHistory }
+            } catch {}
 
             # Two-speed poll (ADR-0015). Stage 1 is cheap (ping + TCP probe + local process scan,
             # no adb.exe spawn) and is the only thing the UI reacts to for "is it up / is it
@@ -812,14 +809,46 @@ function Start-VRMonitor {
                     $lastFingerprint = ""
                 }
                 else {
-                    # Export ID + live status only (ADR-0016). Name/IPAddress/Brand/Model/
-                    # SerialNumber are authoritative in known_headsets.csv and are deliberately
-                    # NOT duplicated here - a rename or an IP change must not require this file
-                    # to be rewritten. The explicit Select-Object also pins the column order
-                    # instead of inheriting it from whichever object happens to be first.
-                    $knownHeadsetsInfo |
-                        Select-Object -Property (Get-HeadsetInfosCsvColumn) |
-                        Export-Csv -LiteralPath $global:knownHeadsetsInfosFilePath -Delimiter ";" -Encoding UTF8 -NoTypeInformation
+                    # Write ID + live status only (ADR-0016). Name/IPAddress/Brand/Model/
+                    # SerialNumber are authoritative in the registry and are deliberately
+                    # NOT duplicated here - a rename or an IP change must not touch a
+                    # status row.
+                    #
+                    # One batch = one transaction. The CSV rewrite this replaces was the
+                    # most frequent write in the application (up to 2 Hz behind the
+                    # fingerprint gate) and it rewrote every row to change one.
+                    #
+                    # Rows are built explicitly rather than piped through Select-Object:
+                    # ping/adb_wifi are INTEGER columns with CHECK (x IN (0,1)), so a .NET
+                    # bool has to become 0/1, and every text column is NOT NULL, so a $null
+                    # from a headset that never answered has to become the '-' placeholder
+                    # the CSV era wrote. Binding the record as-is would fail the constraint
+                    # on the first offline headset.
+                    $statusRows = @()
+                    foreach ($info in $knownHeadsetsInfo) {
+                        $statusRows += @{
+                            ID                     = [int]$info.ID
+                            Ping                   = (ConvertTo-DbBool $info.Ping)
+                            ADBWifi                = (ConvertTo-DbBool $info.ADBWifi)
+                            Battery                = [string](Get-StatusFieldOrDash $info.Battery)
+                            Charging               = [string](Get-StatusFieldOrDash $info.Charging)
+                            ChargingWattage        = [string](Get-StatusFieldOrDash $info.ChargingWattage)
+                            Temp                   = [string](Get-StatusFieldOrDash $info.Temp)
+                            BatteryControllerLeft  = [string](Get-StatusFieldOrDash $info.BatteryControllerLeft)
+                            BatteryControllerRight = [string](Get-StatusFieldOrDash $info.BatteryControllerRight)
+                            PowerState             = [string](Get-StatusFieldOrDash $info.PowerState)
+                            TimeRemainingMin       = [string](Get-StatusFieldOrDash $info.TimeRemainingMin)
+                            BatteryHistory         = [string]$(if ($null -eq $info.BatteryHistory) { '' } else { $info.BatteryHistory })
+                            SCRCPY                 = [string](Get-StatusFieldOrDash $info.SCRCPY)
+                            RunningApp             = [string](Get-StatusFieldOrDash $info.RunningApp)
+                            RunningAppIcon         = [string]$(if ($null -eq $info.RunningAppIcon) { '' } else { $info.RunningAppIcon })
+                        }
+                    }
+                    try {
+                        Invoke-DbBatch -Name 'status.upsert' -Rows $statusRows | Out-Null
+                    } catch {
+                        Write-Log ("VRMonitor: live status write failed - " + $_.Exception.Message) -Level WARNING
+                    }
 
                     Update-HeadsetMonitoringFile -knownHeadsetsInfo $knownHeadsetsInfo
 
@@ -954,6 +983,26 @@ function Start-VRMonitor {
     }
 }
 
+
+<#
+.SYNOPSIS
+    A live-status text field, with '-' standing in for "nothing known yet".
+.DESCRIPTION
+    Every text column of headset_status is NOT NULL, and the CSV era's own
+    placeholder for an unanswered field was the single character '-' (see
+    New-DefaultHeadsetInfo). This keeps that convention at the write boundary so
+    a headset that has never answered still produces a valid row instead of
+    failing the insert.
+.EXAMPLE
+    Get-StatusFieldOrDash $info.Battery
+#>
+function Get-StatusFieldOrDash {
+    param($Value)
+    if ($null -eq $Value) { return '-' }
+    $text = [string]$Value
+    if ([string]::IsNullOrWhiteSpace($text)) { return '-' }
+    return $text
+}
 
 function Get-HeadsetInfosCsvColumn {
     # Canonical column list of data\known_headsets_infos.csv, in export order (ADR-0016).
