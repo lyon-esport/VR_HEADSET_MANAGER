@@ -567,6 +567,17 @@
               exactly the same; remote power control and device reporting do not.
             </p>
             <div class="form-row">
+              <a class="btn" href="kiosk-launcher/Start-Kiosk-BASIC.exe" download="Start-Kiosk-BASIC.exe">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Windows - single-file build (.exe)
+              </a>
+            </div>
+            <p class="launcher-modal-desc">
+              Same script as below, just packaged as a single standalone executable -
+              nothing to unzip, self-extracts <code>Start-KioskChrome.ps1</code> next to
+              itself on first run.
+            </p>
+            <div class="form-row">
               <a class="btn" href="kiosk-launcher/Start-KioskChrome.ps1" download="Start-KioskChrome.ps1">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 Windows (.ps1)
@@ -623,25 +634,28 @@
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           Stop kiosk session
         </button>
+        <button class="btn btn-danger" id="shutdown-host-btn" disabled>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
+          Shutdown kiosk host
+        </button>
         <span id="push-new-link-status" style="font-size:11px;color:#888"></span>
       </div>
 
-      <!-- Power control is deliberately in its own row, away from the casting
-           buttons: rebooting or shutting down a showroom PC is not something an
-           operator should be able to reach with a mis-click while pushing a link.
-           Only advanced kiosks (Start-KioskAgent.*) can be powered off - a basic
-           v1 kiosk has no agent to receive the order. -->
-      <!-- Hidden entirely until at least one known kiosk runs the advanced
-           launcher - with only basic kiosks around, nothing here could ever act. -->
+      <!-- Reboot is kept in its own row: it is still a destructive power action,
+           but less irreversible than a host shutdown (the PC comes back on its
+           own), so a plain confirm() stays proportionate. Shutdown moved next to
+           "Stop kiosk session" above, gated by its own type-YES modal instead -
+           that per-click confirmation is a stronger guard against a mis-click
+           than physical row separation ever was.
+           Hidden entirely until at least one known kiosk has ever reported as
+           advanced (Start-KioskAgent.*) - a basic v1 kiosk has no agent to
+           receive the order, so with only basic kiosks around nothing here
+           could ever act. -->
       <div class="power-row" id="power-row" style="display:none">
         <span class="power-label">Power control kiosk PC</span>
         <button class="btn btn-danger" id="power-reboot-btn" disabled>
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
           Reboot PC
-        </button>
-        <button class="btn btn-danger" id="power-shutdown-btn" disabled>
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
-          Shut down PC
         </button>
         <span id="power-status" style="font-size:11px;color:#888"></span>
       </div>
@@ -1029,6 +1043,15 @@
     // A kiosk running the basic v1 launcher never reports and leaves them null.
     function isAdvancedKiosk(k) {
       return !!(k && k.Advanced && !k.AgentStale);
+    }
+
+    // Whether a kiosk has EVER reported as advanced, regardless of current
+    // staleness. A momentarily-late report does not mean the agent is gone -
+    // power actions must stay reachable for it (the backend already makes its
+    // own live-vs-stale delivery choice), so use this instead of isAdvancedKiosk
+    // for anything that decides whether an action is possible at all.
+    function hasAdvancedAgent(k) {
+      return !!(k && k.Advanced);
     }
 
     function fmtUptime(sec) {
@@ -1606,12 +1629,13 @@
       return Object.keys(pushKioskSelected).filter(function(id) { return pushKioskSelected[id]; });
     }
 
-    // Only the ticked kiosks that actually run the agent - the ones a power
-    // order can reach.
+    // Only the ticked kiosks that have ever reported an agent - the ones a
+    // power order can reach (a momentarily stale report still gets queued or
+    // sentinel-delivered server-side, so staleness must not exclude a kiosk here).
     function selectedAdvancedKiosks() {
       return selectedKioskIds()
         .map(function(id) { return lastKiosks.find(function(x) { return String(x.ID) === id; }); })
-        .filter(function(k) { return isAdvancedKiosk(k); });
+        .filter(function(k) { return hasAdvancedAgent(k); });
     }
 
     function kioskLabel(k) {
@@ -1627,12 +1651,12 @@
       // The whole power row only exists once an advanced kiosk does. With only
       // basic kiosks registered there is nothing it could ever act on, so showing
       // permanently-disabled power buttons would just be noise.
-      var anyAdvancedKnown = lastKiosks.some(isAdvancedKiosk);
+      var anyAdvancedKnown = lastKiosks.some(hasAdvancedAgent);
       var powerRow = document.getElementById('power-row');
       if (powerRow) powerRow.style.display = anyAdvancedKnown ? '' : 'none';
 
       var advanced = selectedAdvancedKiosks();
-      var powerBtns = [document.getElementById('power-reboot-btn'), document.getElementById('power-shutdown-btn')];
+      var powerBtns = [document.getElementById('power-reboot-btn'), document.getElementById('shutdown-host-btn')];
       powerBtns.forEach(function(btn) {
         if (!btn) return;
         btn.disabled = advanced.length === 0;
@@ -1642,9 +1666,11 @@
       });
     }
 
-    // Shared handler for the two power buttons. Basic (v1) kiosks in the
-    // selection are reported as skipped rather than silently ignored.
-    function runPowerAction(action, verb) {
+    // Reboot handler. Basic (v1) kiosks in the selection are reported as
+    // skipped rather than silently ignored. Shutdown lives in its own
+    // type-YES modal below - it is far less reversible than a reboot (the PC
+    // does not come back on its own), so a plain confirm() is not enough for it.
+    function runRebootAction() {
       var statusEl = document.getElementById('power-status');
       var selected = selectedKioskIds();
       var advanced = selectedAdvancedKiosks();
@@ -1657,30 +1683,25 @@
 
       var skipped = selected.length - advanced.length;
       var names = advanced.map(kioskLabel).join(', ');
-      var msg = verb.toUpperCase() + ' ' + advanced.length + ' kiosk PC(s): ' + names + '.\n\n';
-      if (action === 'shutdown') {
-        msg += 'These PCs will power off and can only be turned back on physically, ' +
-               'at the device itself.\n\n';
-      } else {
-        msg += 'These PCs will restart. The kiosk browser comes back automatically ' +
-               'once the agent starts again at boot (see the README for autostart).\n\n';
-      }
+      var msg = 'REBOOT ' + advanced.length + ' kiosk PC(s): ' + names + '.\n\n' +
+                'These PCs will restart. The kiosk browser comes back automatically ' +
+                'once the agent starts again at boot (see the README for autostart).\n\n';
       if (skipped > 0) {
         msg += skipped + ' selected screen(s) run the basic launcher and will be skipped.\n\n';
       }
       msg += 'Continue?';
       if (!confirm(msg)) return;
 
-      var btns = [document.getElementById('power-reboot-btn'), document.getElementById('power-shutdown-btn')];
-      btns.forEach(function(b) { if (b) b.disabled = true; });
-      statusEl.textContent = 'Sending ' + verb + ' order...';
+      var btn = document.getElementById('power-reboot-btn');
+      if (btn) btn.disabled = true;
+      statusEl.textContent = 'Sending Reboot order...';
       statusEl.style.color = '#888';
 
-      Promise.all(advanced.map(function(k) { return powerKiosk(k.ID, action); }))
+      Promise.all(advanced.map(function(k) { return powerKiosk(k.ID, 'reboot'); }))
         .then(function(results) {
           var okCount = results.filter(function(r) { return r && r.ok; }).length;
           if (okCount === results.length) {
-            statusEl.textContent = verb + ' ordered on ' + okCount + ' screen(s).';
+            statusEl.textContent = 'Reboot ordered on ' + okCount + ' screen(s).';
             statusEl.style.color = '#22c55e';
           } else {
             var firstErr = (results.find(function(r) { return r && !r.ok && r.error; }) || {}).error;
@@ -1697,12 +1718,91 @@
         });
     }
 
-    document.getElementById('power-reboot-btn').addEventListener('click', function() {
-      runPowerAction('reboot', 'Reboot');
-    });
-    document.getElementById('power-shutdown-btn').addEventListener('click', function() {
-      runPowerAction('shutdown', 'Shut down');
-    });
+    document.getElementById('power-reboot-btn').addEventListener('click', runRebootAction);
+
+    // Shutdown kiosk host: type-YES modal, mirroring the shared
+    // .shutdown-all-modal__* / .vrhm-sd-btn styling injected globally by
+    // assets/topbar.js (see TopBar._showShutdownAllModal) so it reads the same
+    // as the other destructive-action confirmations in this app.
+    function showKioskShutdownModal() {
+      var advanced = selectedAdvancedKiosks();
+      if (!advanced.length) return;
+      var skipped = selectedKioskIds().length - advanced.length;
+      var names = advanced.map(kioskLabel).join(', ');
+
+      var existing = document.getElementById('kiosk-shutdown-modal');
+      if (existing) existing.remove();
+
+      var powerIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;margin-right:6px"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>';
+
+      var overlay = document.createElement('div');
+      overlay.id        = 'kiosk-shutdown-modal';
+      overlay.className = 'shutdown-all-modal';
+      overlay.innerHTML =
+        '<div class="shutdown-all-modal__box">' +
+          '<div class="shutdown-all-modal__title">' + powerIcon + 'Shutdown kiosk host PC(s)?</div>' +
+          '<div class="shutdown-all-modal__sub">This will power off ' + advanced.length + ' kiosk PC(s): ' + esc(names) + '. ' +
+            'They can only be turned back on physically, at the device itself.' +
+            (skipped > 0 ? ' ' + skipped + ' selected screen(s) run the basic launcher and will be skipped.' : '') +
+          '</div>' +
+          '<div class="shutdown-all-modal__confirm-row">Type <strong>YES</strong> to confirm:' +
+            '<input class="shutdown-all-modal__input" id="kiosk-sd-input" type="text" placeholder="YES" autocomplete="off" spellcheck="false"></div>' +
+          '<div class="shutdown-all-modal__actions">' +
+            '<button class="vrhm-sd-btn" id="kiosk-sd-cancel">Cancel</button>' +
+            '<button class="vrhm-sd-btn danger" id="kiosk-sd-confirm" disabled>Shutdown</button>' +
+          '</div>' +
+          '<div class="shutdown-all-modal__status" id="kiosk-sd-status" style="display:none"></div>' +
+        '</div>';
+      document.body.appendChild(overlay);
+
+      var inputEl    = document.getElementById('kiosk-sd-input');
+      var confirmBtn = document.getElementById('kiosk-sd-confirm');
+      var cancelBtn  = document.getElementById('kiosk-sd-cancel');
+      var statusEl   = document.getElementById('kiosk-sd-status');
+
+      function updateBtn() { confirmBtn.disabled = inputEl.value !== 'YES'; }
+      inputEl.addEventListener('input', updateBtn);
+      setTimeout(function() { inputEl.focus(); }, 50);
+
+      function close() { overlay.remove(); }
+      cancelBtn.addEventListener('click', close);
+      overlay.addEventListener('click', function(e) { if (e.target === overlay) close(); });
+      document.addEventListener('keydown', function onEsc(e) {
+        if (e.key === 'Escape' && document.getElementById('kiosk-shutdown-modal')) { close(); document.removeEventListener('keydown', onEsc); }
+      });
+
+      confirmBtn.addEventListener('click', function() {
+        confirmBtn.disabled = true;
+        cancelBtn.disabled  = true;
+        statusEl.style.display = 'block';
+        statusEl.textContent = 'Sending shutdown order...';
+        statusEl.style.color = '#888';
+
+        Promise.all(advanced.map(function(k) { return powerKiosk(k.ID, 'shutdown'); }))
+          .then(function(results) {
+            var okCount = results.filter(function(r) { return r && r.ok; }).length;
+            if (okCount === results.length) {
+              statusEl.textContent = 'Shutdown ordered on ' + okCount + ' screen(s).';
+              statusEl.style.color = '#22c55e';
+            } else {
+              var firstErr = (results.find(function(r) { return r && !r.ok && r.error; }) || {}).error;
+              statusEl.textContent = okCount + '/' + results.length + ' succeeded' + (firstErr ? ' - ' + firstErr : '');
+              statusEl.style.color = '#eab308';
+              cancelBtn.disabled = false;
+            }
+            updatePushBtnState();
+            pollKiosks();
+            if (okCount === results.length) setTimeout(close, 2000);
+          })
+          .catch(function() {
+            statusEl.textContent = 'Server unreachable';
+            statusEl.style.color = '#ef4444';
+            cancelBtn.disabled = false;
+          });
+      });
+    }
+
+    document.getElementById('shutdown-host-btn').addEventListener('click', showKioskShutdownModal);
 
     document.getElementById('table-body').addEventListener('change', function(e) {
       var cb = e.target.closest('input[type=checkbox][data-select-kiosk]');
