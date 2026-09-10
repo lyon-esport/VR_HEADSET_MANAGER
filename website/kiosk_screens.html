@@ -7,6 +7,7 @@
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
   <link rel="stylesheet" href="assets/topbar.css">
   <script src="assets/topbar.js"></script>
+  <script src="assets/live_events.js"></script>
   <style>
     :root {
       --bg:                 #111;
@@ -1988,7 +1989,19 @@
     })();
 
     pollKiosks();
-    setInterval(pollKiosks, 4000);
+    // With /api/events connected, pollKiosks is driven by the kiosk change counters and
+    // this timer drops to a slow safety net (see live_events.js). kiosks_status.json is
+    // written by the VRMonitor fast path, so the counter moves as soon as a kiosk's
+    // reachability actually changes rather than up to 4 s later.
+    (function kioskLoop() {
+      var delay = (window.LiveEvents && LiveEvents.isConnected()) ? 15000 : 4000;
+      setTimeout(function () { pollKiosks(); kioskLoop(); }, delay);
+    })();
+    if (window.LiveEvents) {
+      LiveEvents.subscribe('kiosk_status',        pollKiosks);
+      LiveEvents.subscribe('kiosks',              pollKiosks);
+      LiveEvents.subscribe('kiosk_agent_reports', pollKiosks);
+    }
     loadHeadsetsForCast();
   </script>
 </body>

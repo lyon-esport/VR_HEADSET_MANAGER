@@ -7,6 +7,7 @@
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
   <link rel="stylesheet" href="assets/topbar.css">
   <script src="assets/topbar.js"></script>
+  <script src="assets/live_events.js"></script>
   <style>
     :root {
       --bg:                #111;
@@ -1205,9 +1206,17 @@
     // Load-tier state: populated by /api/load-tier on page-init, refreshed on every poll cycle.
     // multiplier = 1 (idle) | 2 (mitigation) | 5 (max).
     var loadTier = { tier: 'idle', multiplier: 1, base: { vrmonitor: 5, computer_monitoring: 60 } };
-    function nextStatusDelay() {
+    // SSE heartbeat: while /api/events is connected the page is told when something
+    // actually changed, so the poll chain is only a safety net (see live_events.js).
+    var SSE_HEARTBEAT_MS = 15000;
+    function baseStatusDelay() {
       try { return Math.max(500, (loadTier.base.vrmonitor || 5) * (loadTier.multiplier || 1) * 1000); }
       catch (e) { return REFRESH_MS; }
+    }
+    function nextStatusDelay() {
+      var base = baseStatusDelay();
+      if (window.LiveEvents && LiveEvents.isConnected()) { return Math.max(base, SSE_HEARTBEAT_MS); }
+      return base;
     }
     function refreshLoadTier() {
       return fetch('/api/load-tier').then(function(r){ return r.json(); }).then(function(j){
@@ -3049,16 +3058,32 @@
 
     // setTimeout chain. Single cadence indexed to VRMonitor.refresh_timer x multiplier so
     // the whole page slows down together under load (idle ~5 s, mitigation x2, max x5).
+    // With /api/events connected these three are driven by their change counters instead
+    // and this chain drops to a slow safety net (see live_events.js).
     function pollAll() {
       Promise.all([
         pollHeadsetsCsv(),
         pollHeadsetsStatus(),
-        Promise.resolve(pollForNewUsbHeadset()),
-        pollDiscoveredDevices(),
-        refreshLoadTier()
+        pollDiscoveredDevices()
       ]).finally(function() { setTimeout(pollAll, nextStatusDelay()); });
     }
-    refreshLoadTier().finally(pollAll);
+    // The USB probe keeps the ORIGINAL cadence even when SSE is connected: it reads a
+    // temp file written by a background job, not a database table, so no change counter
+    // can announce it. Slowing it to the SSE heartbeat would make "plug a headset in and
+    // it appears" take 15 s instead of ~2 s.
+    function usbLoop() {
+      Promise.resolve(pollForNewUsbHeadset()).finally(function() { setTimeout(usbLoop, baseStatusDelay()); });
+    }
+    // Load tier changes on the order of minutes; it does not need to ride on every tick.
+    function loadTierLoop() {
+      refreshLoadTier().finally(function() { setTimeout(loadTierLoop, 30000); });
+    }
+    if (window.LiveEvents) {
+      LiveEvents.subscribe('headset_status',      pollHeadsetsStatus);
+      LiveEvents.subscribe('headsets',            pollHeadsetsCsv);
+      LiveEvents.subscribe('discovered_headsets', pollDiscoveredDevices);
+    }
+    refreshLoadTier().finally(function() { pollAll(); usbLoop(); loadTierLoop(); });
 
     // Timer helpers
 
