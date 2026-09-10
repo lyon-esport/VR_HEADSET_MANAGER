@@ -1052,6 +1052,63 @@ function Get-StatusFieldOrDash {
     return $text
 }
 
+<#
+.SYNOPSIS
+    Battery samples for one headset over a time window, oldest first.
+.DESCRIPTION
+    The shared backend behind the battery-history graph: the web API
+    (GET /api/battery-history) and any console caller both go through here, so
+    the window clamping and the timestamp format live in exactly one place.
+
+    Reads the battery_history table through the named query 'battery.window'.
+    Rows are only written when the level CHANGES (trigger trg_status_battery_sample),
+    so a stable headset legitimately returns very few rows - the query seeds the
+    series with the last sample before the window precisely so a flat line is
+    still drawable. Callers must treat the series as a STEP function: each value
+    holds until the next sample.
+
+    Retention is database.battery_history_hours (default 24), swept by
+    Invoke-DbMaintenance, so asking for more hours than that returns only what
+    survived the sweep.
+
+    Never throws - returns an empty array on any failure, like the rest of the
+    monitoring read paths.
+.PARAMETER HeadsetId
+    Permanent headset id (ADR-0016). Not the name, not the address.
+.PARAMETER Hours
+    Size of the window ending now, in hours. Clamped to 0.25 .. 168.
+.EXAMPLE
+    Get-BatteryHistory -HeadsetId 1 -Hours 24 | Format-Table
+.EXAMPLE
+    (Get-BatteryHistory -HeadsetId 3 -Hours 1).Count
+#>
+function Get-BatteryHistory {
+    param (
+        [Parameter(Mandatory = $true)][int]$HeadsetId,
+        [double]$Hours = 24
+    )
+
+    if ($HeadsetId -le 0) { return @() }
+
+    # Clamp rather than reject: this is a display window, and a caller asking for
+    # something silly should get a sane graph, not an error page.
+    if ($Hours -lt 0.25) { $Hours = 0.25 }
+    if ($Hours -gt 168)  { $Hours = 168 }
+
+    try {
+        # Same ISO-8601 UTC shape the sampling trigger writes and Invoke-DbMaintenance
+        # prunes on, so the comparison stays a plain string compare on an indexed column.
+        $since = [datetime]::UtcNow.AddHours(-$Hours).ToString('yyyy-MM-ddTHH:mm:ssZ')
+        return @(Invoke-DbQuery -Name 'battery.window' -Parameters @{
+            headset_id = $HeadsetId
+            since      = $since
+        })
+    } catch {
+        Write-Log ("Get-BatteryHistory failed for headset {0}: {1}" -f $HeadsetId, $_.Exception.Message) -Level DEBUG
+        return @()
+    }
+}
+
 function Get-HeadsetInfosCsvColumn {
     # Canonical column list of data\known_headsets_infos.csv, in export order (ADR-0016).
     # ID is the ONLY key; Name / IPAddress / Brand / Model / SerialNumber are authoritative

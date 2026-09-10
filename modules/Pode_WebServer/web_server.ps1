@@ -1890,6 +1890,47 @@ try {
             continue
         }
 
+        # API: GET /api/battery-history?id=3&hours=24  - battery samples for one headset
+        # Backs the battery graph: the hover sparkline on headsets_monitoring.html and the
+        # full battery_history.html page. Read-only, DB-backed, no side effects.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/battery-history') {
+            try {
+                $rawId = $request.QueryString['id']
+                $idVal = 0
+                if (-not [int]::TryParse([string]$rawId, [ref]$idVal) -or $idVal -le 0) {
+                    Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = 'Missing or invalid id parameter' }
+                    continue
+                }
+
+                # Only the four windows the UI offers. Anything else silently falls back to
+                # the widest one - this is a display window, not a command, so a stale link
+                # should still draw a graph rather than an error page.
+                $hoursVal = 24
+                $rawHours = [string]$request.QueryString['hours']
+                if ($rawHours -and @('1','3','12','24') -contains $rawHours) { $hoursVal = [int]$rawHours }
+
+                # An empty series is a VALID answer, not a 404: samples are only written when
+                # the level changes, so a headset that held steady across the whole window
+                # genuinely has nothing to return. The page says so in words.
+                $samples = @(Get-BatteryHistory -HeadsetId $idVal -Hours $hoursVal |
+                    ForEach-Object { @{ ts = [string]$_.ts; pct = [int]$_.pct } })
+
+                Send-JsonResponse -Response $response -Body @{
+                    ok             = $true
+                    id             = $idVal
+                    hours          = $hoursVal
+                    retentionHours = [int]$global:databaseBatteryHistoryHours
+                    nowUtc         = [datetime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+                    samples        = $samples
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
         # API: GET /api/favoriteapps?name=Q3_BLUE  - returns Meta Home + per-headset favorites as JSON
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/favoriteapps') {
             try {

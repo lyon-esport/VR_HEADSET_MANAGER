@@ -6,7 +6,12 @@
   <title>VR Headsets - Monitoring</title>
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
   <link rel="stylesheet" href="assets/topbar.css">
+  <link rel="stylesheet" href="assets/vendor/uplot/uPlot.min.css">
   <script src="assets/topbar.js"></script>
+  <!-- Loaded here, not at the end of <body>: renderTable() calls into
+       BatteryChart on the first poll, which can land before a deferred script. -->
+  <script src="assets/vendor/uplot/uPlot.iife.min.js"></script>
+  <script src="assets/battery_chart.js"></script>
   <style>
     :root {
       --bg:                 #111;
@@ -149,6 +154,73 @@
       border-color: rgba(59,130,246,0.6);
     }
 
+    /* ── Battery cell button ──────────────────────────────────────────────────
+       The battery level is a button: hover shows a 1h sparkline, click opens the
+       full battery history page. Sized to sit inside the table row without
+       changing its height. */
+    .batt-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 3px;
+      width: 100%;
+      min-width: 54px;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      padding: 3px 6px;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 13px;
+      font-variant-numeric: tabular-nums;
+      text-align: left;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .batt-btn:hover {
+      background: rgba(59,130,246,0.10);
+      border-color: rgba(59,130,246,0.45);
+    }
+    /* Both are <span>, so they need display:block - an inline box ignores
+       width/height and the bar would silently render at 0x0. */
+    .batt-btn .batt-bar-wrap {
+      display: block;
+      height: 3px;
+      background: #222;
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .batt-btn .batt-bar { display: block; height: 100%; border-radius: 2px; }
+
+    /* Hover sparkline. Lives on <body>, never inside the table: renderTable
+       replaces the whole tbody every poll and would destroy anything anchored
+       in a row mid-hover. */
+    #batt-tip {
+      position: fixed;
+      z-index: 900;
+      display: none;
+      background: var(--th-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      box-shadow: 0 6px 24px rgba(0,0,0,0.45);
+      pointer-events: none;
+    }
+    #batt-tip .tip-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 11px;
+      color: #888;
+      margin-bottom: 4px;
+      white-space: nowrap;
+    }
+    #batt-tip .tip-head strong { color: var(--text); font-size: 12px; }
+    #batt-tip .tip-chart { width: 190px; height: 56px; }
+    #batt-tip .tip-msg   { width: 190px; font-size: 11px; color: #777; line-height: 1.5; }
+    #batt-tip .tip-foot  { font-size: 10px; color: #666; margin-top: 4px; text-align: right; }
+
     /* ── Light mode ─────────────────────────────────────────────────────────── */
     [data-theme="light"] {
       --bg:        #f0f0f0;
@@ -164,6 +236,11 @@
     [data-theme="light"] tbody tr          { border-color: var(--border); }
     [data-theme="light"] .mon-launch-btn   { background: #e8e8e8; border-color: #c8c8c8; color: #555; }
     [data-theme="light"] .mon-launch-btn:hover { background: rgba(59,130,246,0.1); border-color: rgba(59,130,246,0.5); color: #3b82f6; }
+    [data-theme="light"] .batt-btn .batt-bar-wrap { background: #ccc; }
+    [data-theme="light"] #batt-tip         { background: #fff; border-color: #d8d8d8; box-shadow: 0 6px 24px rgba(0,0,0,0.15); }
+    [data-theme="light"] #batt-tip .tip-head { color: #6b7280; }
+    [data-theme="light"] #batt-tip .tip-msg  { color: #6b7280; }
+    [data-theme="light"] #batt-tip .tip-foot { color: #888; }
 
     /* ── Computer monitoring dropdown ── */
     .comp-section {
@@ -478,6 +555,29 @@
       return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     }
 
+    // Battery level as a button: hover shows a 1h sparkline, click opens the full
+    // history page. Falls back to plain text when there is no reading or no id to
+    // address - a dash is not worth a control.
+    function battButton(r) {
+      var raw = r['battery'];
+      if (raw == null || raw === '' || raw === '-') return '<span style="color:#333">-</span>';
+
+      var pct = parseInt(String(raw).replace('%', ''), 10);
+      var txt = String(raw).indexOf('%') === -1 && !isNaN(pct) ? (pct + ' %') : String(raw);
+      var id  = parseInt(r['id'], 10) || 0;
+      if (isNaN(pct) || !id) return esc(txt);
+
+      var name  = r['name'] || '';
+      var color = BatteryChart.levelColor(pct);
+      var width = Math.max(0, Math.min(100, pct));
+      // No title= on purpose: the native tooltip would fight the sparkline.
+      return '<button class="batt-btn" data-batt-id="' + id + '" data-batt-name="' + esc(name) + '" ' +
+             'data-batt-pct="' + pct + '" aria-label="Battery history for ' + esc(name) + '">' +
+               '<span class="batt-val">' + esc(txt) + '</span>' +
+               '<span class="batt-bar-wrap"><span class="batt-bar" style="width:' + width + '%;background:' + color + '"></span></span>' +
+             '</button>';
+    }
+
     function renderTable(rows) {
       var body = document.getElementById('table-body');
       if (!rows.length) {
@@ -524,7 +624,7 @@
           '<td class="center">' + pill(scrcpyOk ? 'OK' : 'OFF', scrcpyOk ? 'pill-blue' : 'pill-orange') + '</td>' +
           '<td class="center">' + (charging ? pill(chargingLabel,'pill-green') : pill('No','pill-red')) + '</td>' +
           '<td class="center">' + powerPill + '</td>' +
-          '<td>' + esc(r['battery'] || '-') + '</td>' +
+          '<td>' + battButton(r) + '</td>' +
           '<td style="color:#888;font-size:12px">' + esc(timeCell) + '</td>' +
           '<td>' + esc(r['battery_ctrl_left']  || '-') + '</td>' +
           '<td>' + esc(r['battery_ctrl_right'] || '-') + '</td>' +
@@ -544,8 +644,101 @@
         .then(function(items) {
           renderTable(items);
           applyFilter();
+          reanchorBattTip();
         })
         .catch(function() {});
+    }
+
+    // ── Battery hover sparkline ────────────────────────────────────────────────
+    // renderTable() replaces the entire tbody on every poll, so nothing here may
+    // depend on a row surviving: the tooltip is a single element on <body>, the
+    // handlers are delegated on the table, and the open tooltip is tracked by
+    // headset ID so it can be re-anchored to the freshly rendered button.
+    var battTipEl    = null;
+    var battTipId    = 0;    // headset id currently shown, 0 = hidden
+    var battTipChart = null;
+    var battCache    = {};   // id -> { at, payload }, so repeated hovers do not refetch
+    var BATT_CACHE_MS = 30000;
+
+    function battTip() {
+      if (!battTipEl) {
+        battTipEl = document.createElement('div');
+        battTipEl.id = 'batt-tip';
+        document.body.appendChild(battTipEl);
+      }
+      return battTipEl;
+    }
+
+    function hideBattTip() {
+      battTipId = 0;
+      if (battTipChart && battTipChart.plot) { try { battTipChart.plot.destroy(); } catch (e) {} }
+      battTipChart = null;
+      if (battTipEl) battTipEl.style.display = 'none';
+    }
+
+    function positionBattTip(btn) {
+      var el = battTip();
+      el.style.display = 'block';
+      var r = btn.getBoundingClientRect();
+      var w = el.offsetWidth  || 210;
+      var h = el.offsetHeight || 90;
+      var left = Math.max(8, Math.min(r.left + r.width / 2 - w / 2, window.innerWidth - w - 8));
+      var top  = r.top - h - 8;
+      if (top < 8) top = r.bottom + 8;   // not enough room above - flip below
+      el.style.left = left + 'px';
+      el.style.top  = top + 'px';
+    }
+
+    function renderBattTip(btn, payload) {
+      var el   = battTip();
+      var name = btn.dataset.battName || ('#' + btn.dataset.battId);
+      var pct  = parseInt(btn.dataset.battPct, 10);
+
+      el.innerHTML =
+        '<div class="tip-head"><strong>' + esc(name) + '</strong><span>last 1h</span></div>' +
+        '<div class="tip-chart" id="batt-tip-chart"></div>' +
+        '<div class="tip-foot">click for 24 / 12 / 3 / 1h history</div>';
+
+      var host = el.querySelector('#batt-tip-chart');
+      var res  = BatteryChart.render(host, payload, { mode: 'mini', width: 190, height: 56 });
+      if (!res) {
+        // No sample in the window is normal, not an error: the level simply did
+        // not change. Say what it is holding at instead of drawing an empty box.
+        host.outerHTML = '<div class="tip-msg">No change in the last hour' +
+          (isNaN(pct) ? '' : ' - holding at ' + pct + ' %') + '.</div>';
+      }
+      battTipChart = res;
+      positionBattTip(btn);
+    }
+
+    function showBattTip(btn) {
+      var id = parseInt(btn.dataset.battId, 10) || 0;
+      if (!id) return;
+      battTipId = id;
+
+      var c = battCache[id];
+      if (c && (Date.now() - c.at) < BATT_CACHE_MS) { renderBattTip(btn, c.payload); return; }
+
+      fetch('/api/battery-history?id=' + id + '&hours=1')
+        .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function(j) {
+          battCache[id] = { at: Date.now(), payload: j };
+          // The pointer may have left or moved on while the fetch was in flight,
+          // and the row may have been re-rendered underneath it.
+          if (battTipId !== id) return;
+          var cur = document.querySelector('.batt-btn[data-batt-id="' + id + '"]');
+          if (cur) renderBattTip(cur, j);
+        })
+        .catch(function() {});
+    }
+
+    // Called after every table rebuild: keep the tooltip glued to its button, or
+    // drop it if that headset's row is gone or filtered out.
+    function reanchorBattTip() {
+      if (!battTipId) return;
+      var btn = document.querySelector('.batt-btn[data-batt-id="' + battTipId + '"]');
+      if (!btn || btn.offsetParent === null) { hideBattTip(); return; }
+      positionBattTip(btn);
     }
 
     // ── Computer monitoring ──────────────────────────────────────────────────
@@ -1023,11 +1216,37 @@
         setTimeout(statusLoop, nextStatusDelay());
       });
     }
-    statusLoop();
+    // Battery bands come from config (Monitoring.thresholds) - fetch them BEFORE the
+    // first paint so a row is never coloured on the fallback values and then silently
+    // recoloured a few seconds later. loadThresholds always resolves.
+    BatteryChart.loadThresholds().finally(statusLoop);
 
     document.getElementById('headsets-table').addEventListener('click', function(e) {
       var btn = e.target.closest('[data-launch-app]');
-      if (btn) openLaunchModal(btn.dataset.launchApp);
+      if (btn) { openLaunchModal(btn.dataset.launchApp); return; }
+
+      var batt = e.target.closest('.batt-btn');
+      if (batt) {
+        hideBattTip();
+        window.location.href = 'battery_history.html?id=' + batt.dataset.battId + '&hours=24';
+      }
+    });
+
+    // Hover in/out for the battery sparkline. Delegated so it survives the tbody
+    // being rebuilt on every poll.
+    document.getElementById('headsets-table').addEventListener('mouseover', function(e) {
+      var btn = e.target.closest('.batt-btn');
+      if (!btn) return;
+      var id = parseInt(btn.dataset.battId, 10) || 0;
+      if (id && id === battTipId) return;   // already showing this one
+      showBattTip(btn);
+    });
+    document.getElementById('headsets-table').addEventListener('mouseout', function(e) {
+      var btn = e.target.closest('.batt-btn');
+      if (!btn) return;
+      // Ignore moves between children of the same button.
+      if (e.relatedTarget && btn.contains(e.relatedTarget)) return;
+      hideBattTip();
     });
   </script>
   <script src="assets/app_launcher.js"></script>
