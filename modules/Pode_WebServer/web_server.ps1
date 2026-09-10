@@ -3586,47 +3586,71 @@ try {
             continue
         }
 
-        # API: GET /api/logs?n=200  - returns last N lines of today's log file as JSON array
+        # API: GET /api/logs/sources - every log file in the log folder, classified by
+        # family (main program / mediamtx / web server / scrcpy / ffmpeg push / kiosk).
+        # Feeds the log-type and log-file dropdowns on help.html. Sorted by family, then
+        # newest first, so the first entry of a type is the one to select by default.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/logs/sources') {
+            try {
+                $sourceRows = @(Get-LogSources | ForEach-Object {
+                    @{
+                        id        = $_.Id
+                        type      = $_.Type
+                        typeLabel = $_.TypeLabel
+                        label     = $_.Label
+                        size      = $_.SizeBytes
+                        lastWrite = $_.LastWrite
+                    }
+                })
+                Send-JsonResponse -Response $response -Body @{ ok = $true; sources = $sourceRows }
+            } catch {
+                Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'server error' } -StatusCode 500
+            } finally { $response.Close() }
+            continue
+        }
+
+        # API: GET /api/logs?file=<name>&n=200
+        # Returns the last N lines of one log file as a bare JSON array (the shape
+        # help.html and the non-regression suite already expect).
+        # 'file' is a source id from /api/logs/sources; without it the newest main
+        # program log is served, which is the original file-less behaviour.
+        # Get-LogTail reads from the END of the file - the log folder holds files of
+        # hundreds of MB and this request loop is single-threaded.
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/logs') {
             try {
-                $qn      = [System.Web.HttpUtility]::ParseQueryString($request.Url.Query)['n']
+                $logQuery = [System.Web.HttpUtility]::ParseQueryString($request.Url.Query)
+                $qn       = $logQuery['n']
                 $maxLines = if ($qn -and $qn -match '^\d+$') { [int]$qn } else { 200 }
                 if ($maxLines -gt 2000) { $maxLines = 2000 }
-                $lines   = @()
-                $logPath = $null
-                if ($global:logFile -and (Test-Path -LiteralPath $global:logFile)) {
-                    $logPath = $global:logFile
-                } elseif ($global:logFolder -and (Test-Path -LiteralPath $global:logFolder)) {
-                    $latest  = Get-ChildItem -LiteralPath $global:logFolder -Filter 'log_*.txt' |
-                               Sort-Object LastWriteTime -Descending | Select-Object -First 1
-                    if ($latest) { $logPath = $latest.FullName }
+
+                $logSources = @(Get-LogSources)
+                $logSource  = $null
+                $qFile      = $logQuery['file']
+                if ($qFile) {
+                    # Only ids the enumerator itself produced are accepted, so an
+                    # arbitrary path can never reach Get-LogTail.
+                    $logSource = $logSources | Where-Object { $_.Id -eq $qFile } | Select-Object -First 1
                 }
-                if ($logPath) {
-                    $fs = [System.IO.File]::Open($logPath, [System.IO.FileMode]::Open,
-                          [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
-                    $sr = [System.IO.StreamReader]::new($fs, [System.Text.Encoding]::Default)
-                    try {
-                        $all = [System.Collections.Generic.List[string]]::new()
-                        while (-not $sr.EndOfStream) { $all.Add($sr.ReadLine()) }
-                        $slice = if ($all.Count -le $maxLines) { $all.ToArray() } else { $all.GetRange($all.Count - $maxLines, $maxLines).ToArray() }
-                        $lines = $slice -replace '\\', '\\\\' -replace '"', '\"'
-                    } finally { $sr.Close(); $fs.Close() }
+                if (-not $logSource) {
+                    $logSource = $logSources | Where-Object { $_.Type -eq 'main' } | Select-Object -First 1
                 }
-                $jsonLines = '[' + (($lines | ForEach-Object { '"' + $_ + '"' }) -join ',') + ']'
-                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonLines)
-                $response.StatusCode      = 200
-                $response.ContentType     = 'application/json; charset=utf-8'
-                $response.Headers.Add('Access-Control-Allow-Origin', '*')
-                $response.ContentLength64 = $respBytes.Length
-                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+
+                # NOT '$lines = if (...) { @(...) }': an if-block unrolls its output, so a
+                # single-line result would arrive as a bare string and $lines[0] would be
+                # its first character. Assign the wrapped call directly.
+                $lines = @()
+                if ($logSource) {
+                    $lines = @(Get-LogTail -Name $logSource.Id -MaxLines $maxLines -Encoding $logSource.Encoding)
+                }
+
+                # ConvertTo-Json emits a bare string for a one-element array, and
+                # help.html requires Array.isArray - so wrap that case by hand.
+                $rawJson = if ($lines.Count -eq 0) { '[]' }
+                           elseif ($lines.Count -eq 1) { '[' + (ConvertTo-Json -InputObject $lines[0] -Compress) + ']' }
+                           else { ConvertTo-Json -InputObject $lines -Compress }
+                Send-JsonResponse -Response $response -Raw $rawJson
             } catch {
-                try {
-                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('[]')
-                    $response.StatusCode      = 500
-                    $response.ContentType     = 'application/json; charset=utf-8'
-                    $response.ContentLength64 = $errBytes.Length
-                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
-                } catch {}
+                Send-JsonResponse -Response $response -Raw '[]' -StatusCode 500
             } finally { $response.Close() }
             continue
         }
@@ -3822,47 +3846,48 @@ try {
             continue
         }
 
-        # API: GET /api/logs?n=200  - returns last N lines of today's log file as JSON array
+        # API: GET /api/logs?file=<name>&n=200
+        # Returns the last N lines of one log file as a bare JSON array (the shape
+        # help.html and the non-regression suite already expect).
+        # 'file' is a source id from /api/logs/sources; without it the newest main
+        # program log is served, which is the original file-less behaviour.
+        # Get-LogTail reads from the END of the file - the log folder holds files of
+        # hundreds of MB and this request loop is single-threaded.
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/logs') {
             try {
-                $qn      = [System.Web.HttpUtility]::ParseQueryString($request.Url.Query)['n']
+                $logQuery = [System.Web.HttpUtility]::ParseQueryString($request.Url.Query)
+                $qn       = $logQuery['n']
                 $maxLines = if ($qn -and $qn -match '^\d+$') { [int]$qn } else { 200 }
                 if ($maxLines -gt 2000) { $maxLines = 2000 }
-                $lines   = @()
-                $logPath = $null
-                if ($global:logFile -and (Test-Path -LiteralPath $global:logFile)) {
-                    $logPath = $global:logFile
-                } elseif ($global:logFolder -and (Test-Path -LiteralPath $global:logFolder)) {
-                    $latest  = Get-ChildItem -LiteralPath $global:logFolder -Filter 'log_*.txt' |
-                               Sort-Object LastWriteTime -Descending | Select-Object -First 1
-                    if ($latest) { $logPath = $latest.FullName }
+
+                $logSources = @(Get-LogSources)
+                $logSource  = $null
+                $qFile      = $logQuery['file']
+                if ($qFile) {
+                    # Only ids the enumerator itself produced are accepted, so an
+                    # arbitrary path can never reach Get-LogTail.
+                    $logSource = $logSources | Where-Object { $_.Id -eq $qFile } | Select-Object -First 1
                 }
-                if ($logPath) {
-                    $fs = [System.IO.File]::Open($logPath, [System.IO.FileMode]::Open,
-                          [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
-                    $sr = [System.IO.StreamReader]::new($fs, [System.Text.Encoding]::Default)
-                    try {
-                        $all = [System.Collections.Generic.List[string]]::new()
-                        while (-not $sr.EndOfStream) { $all.Add($sr.ReadLine()) }
-                        $slice = if ($all.Count -le $maxLines) { $all.ToArray() } else { $all.GetRange($all.Count - $maxLines, $maxLines).ToArray() }
-                        $lines = $slice -replace '\\', '\\\\' -replace '"', '\"'
-                    } finally { $sr.Close(); $fs.Close() }
+                if (-not $logSource) {
+                    $logSource = $logSources | Where-Object { $_.Type -eq 'main' } | Select-Object -First 1
                 }
-                $jsonLines = '[' + (($lines | ForEach-Object { '"' + $_ + '"' }) -join ',') + ']'
-                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonLines)
-                $response.StatusCode      = 200
-                $response.ContentType     = 'application/json; charset=utf-8'
-                $response.Headers.Add('Access-Control-Allow-Origin', '*')
-                $response.ContentLength64 = $respBytes.Length
-                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+
+                # NOT '$lines = if (...) { @(...) }': an if-block unrolls its output, so a
+                # single-line result would arrive as a bare string and $lines[0] would be
+                # its first character. Assign the wrapped call directly.
+                $lines = @()
+                if ($logSource) {
+                    $lines = @(Get-LogTail -Name $logSource.Id -MaxLines $maxLines -Encoding $logSource.Encoding)
+                }
+
+                # ConvertTo-Json emits a bare string for a one-element array, and
+                # help.html requires Array.isArray - so wrap that case by hand.
+                $rawJson = if ($lines.Count -eq 0) { '[]' }
+                           elseif ($lines.Count -eq 1) { '[' + (ConvertTo-Json -InputObject $lines[0] -Compress) + ']' }
+                           else { ConvertTo-Json -InputObject $lines -Compress }
+                Send-JsonResponse -Response $response -Raw $rawJson
             } catch {
-                try {
-                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('[]')
-                    $response.StatusCode      = 500
-                    $response.ContentType     = 'application/json; charset=utf-8'
-                    $response.ContentLength64 = $errBytes.Length
-                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
-                } catch {}
+                Send-JsonResponse -Response $response -Raw '[]' -StatusCode 500
             } finally { $response.Close() }
             continue
         }

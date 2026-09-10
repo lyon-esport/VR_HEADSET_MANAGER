@@ -278,7 +278,18 @@
     OpenApp = "Ouverture du dossier de l'application."
     OpenConfig = "Ouverture du fichier de configuration."
     OpenKnownHeadsets = "Ouverture du fichier de configuration des casques connus."
-    InvalidOptionFiles = "Option invalide. Veuillez entrer 1, 2, 3, 4, 5 ou 0."
+    InvalidOptionFiles = "Option invalide. Veuillez entrer 1, 2, 3, 4, 5, 6 ou 0."
+    # Selecteur de log (equivalent console de la liste deroulante de help.html).
+    # Groupe imbrique volontairement : Import-PowerShellDataFile limite un
+    # hashtable a 500 paires de premier niveau et ce fichier en est proche.
+    Logs = @{
+        OpenLogFile = "`t 6. Ouvrir un fichier de log specifique"
+        SelectType  = "Selectionnez un type de log :"
+        SelectFile  = "Selectionnez un fichier de log :"
+        NoFiles     = "Aucun fichier de log trouve dans '{0}'."
+        Opening     = "Ouverture du fichier de log : {0}"
+        Cancel      = "`t 0. Annuler"
+    }
     # Open-File
     FileNotExist = "Le fichier '{0}' n'existe pas."
 

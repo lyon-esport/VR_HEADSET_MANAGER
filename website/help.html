@@ -212,6 +212,15 @@
     .logs-body .log-ok   { color: #34d399; }
     .logs-body .log-info { color: #60a5fa; }
     .logs-body .log-dbg  { color: #64748b; }
+    .logs-picker { display: flex; gap: 8px; align-items: center; padding: 6px 16px; flex-shrink: 0; flex-wrap: wrap; }
+    .logs-picker label { font-size: 11px; color: var(--muted); }
+    .logs-select {
+      font-size: 11px; padding: 3px 6px; border-radius: 4px; cursor: pointer;
+      background: #1a1a1a; border: 1px solid #333; color: #9ca3af; max-width: 260px;
+    }
+    [data-theme=light] .logs-select { background: #f3f4f6; border-color: #d1d5db; color: #374151; }
+    .logs-select:hover { border-color: #3b82f6; }
+    .logs-single-file { font-size: 11px; color: var(--muted); font-style: italic; }
     .logs-filters { display: flex; gap: 6px; padding: 6px 16px; flex-shrink: 0; flex-wrap: wrap; border-top: 1px solid #2a2a2a; }
     [data-theme=light] .logs-filters { border-top-color: #e5e7eb; }
     .logs-filter-btn {
@@ -471,6 +480,13 @@
             <button class="logs-ctrl-btn" id="logs-scroll-btn" title="Enable live scroll (updates every 10s)">Live scroll</button>
             <button class="logs-ctrl-btn" id="logs-reverse-btn" title="Toggle order">Newest first</button>
           </div>
+        </div>
+        <div class="logs-picker">
+          <label for="logs-type-select">Log type</label>
+          <select class="logs-select" id="logs-type-select"></select>
+          <label for="logs-file-select" id="logs-file-label">File</label>
+          <select class="logs-select" id="logs-file-select"></select>
+          <span class="logs-single-file" id="logs-single-file"></span>
         </div>
         <div class="logs-filters" id="logs-filters"></div>
         <div class="logs-body" id="logs-body"></div>
@@ -762,6 +778,14 @@
     var _activeFilters   = {};
     var _liveInterval    = null;
     var _forceRedraw     = false;
+    // Log source selection. _sources is the flat list from /api/logs/sources (already
+    // ordered by family, newest file first inside each family), so "first match" is
+    // always the newest file of a type.
+    var _sources         = [];
+    var _currentType     = 'main';
+    var _currentFile     = null;
+    var _currentLabel    = '';
+    var _sourcesLoadedAt = 0;
     var logsBody    = document.getElementById('logs-body');
     var logsStatus  = document.getElementById('logs-status');
     var clearBtn    = document.getElementById('logs-clear-btn');
@@ -796,6 +820,82 @@
       _forceRedraw = true;
       fetchLogs();
       document.getElementById('logs-more-status').textContent = 'Showing up to ' + _fetchCount + ' lines';
+    });
+
+    // ---- Log source pickers (type -> file) ----
+    var typeSelect  = document.getElementById('logs-type-select');
+    var fileSelect  = document.getElementById('logs-file-select');
+    var fileLabel   = document.getElementById('logs-file-label');
+    var singleFile  = document.getElementById('logs-single-file');
+
+    function sourcesOfType(type) {
+      return _sources.filter(function(s) { return s.type === type; });
+    }
+    function renderTypeSelect() {
+      var seen = {}, types = [];
+      _sources.forEach(function(s) {
+        if (!seen[s.type]) { seen[s.type] = true; types.push({ type: s.type, label: s.typeLabel }); }
+      });
+      if (!seen[_currentType]) _currentType = types.length ? types[0].type : 'main';
+      typeSelect.innerHTML = '';
+      types.forEach(function(t) {
+        var o = document.createElement('option');
+        o.value = t.type; o.textContent = t.label;
+        if (t.type === _currentType) o.selected = true;
+        typeSelect.appendChild(o);
+      });
+    }
+    function renderFileSelect() {
+      var list = sourcesOfType(_currentType);
+      // Keep the operator's file if it survived a refresh, else fall back to the
+      // newest one of that type (the list is already newest-first).
+      var keep = list.filter(function(s) { return s.id === _currentFile; })[0];
+      var chosen = keep || list[0] || null;
+      _currentFile  = chosen ? chosen.id : null;
+      _currentLabel = chosen ? chosen.label : '';
+      fileSelect.innerHTML = '';
+      list.forEach(function(s) {
+        var o = document.createElement('option');
+        o.value = s.id; o.textContent = s.label;
+        if (s.id === _currentFile) o.selected = true;
+        fileSelect.appendChild(o);
+      });
+      // Second dropdown only earns its place when there is a choice to make.
+      var many = list.length > 1;
+      fileSelect.hidden = !many;
+      fileLabel.hidden  = !many;
+      singleFile.hidden = many;
+      singleFile.textContent = many ? '' : _currentLabel;
+    }
+    function loadSources(thenFetch) {
+      return fetch('/api/logs/sources')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          if (d && d.ok && Array.isArray(d.sources)) {
+            _sources = d.sources;
+            _sourcesLoadedAt = Date.now();
+            renderTypeSelect();
+            renderFileSelect();
+          }
+          // Even if the list is unusable, still show something: with no file selected
+          // /api/logs serves the main log, exactly as it did before the picker existed.
+          if (thenFetch) { _forceRedraw = true; fetchLogs(); }
+        })
+        .catch(function() { if (thenFetch) { _forceRedraw = true; fetchLogs(); } });
+    }
+    typeSelect.addEventListener('change', function() {
+      _currentType = typeSelect.value;
+      _currentFile = null;           // pick the newest file of the new type
+      renderFileSelect();
+      _lastNewest = ''; _forceRedraw = true;
+      fetchLogs();
+    });
+    fileSelect.addEventListener('change', function() {
+      _currentFile = fileSelect.value;
+      var s = _sources.filter(function(x) { return x.id === _currentFile; })[0];
+      _currentLabel = s ? s.label : '';
+      _lastNewest = ''; _forceRedraw = true;
+      fetchLogs();
     });
 
     function lineLevel(l) {
@@ -847,7 +947,13 @@
       return cls ? '<span class="' + cls + '">' + safe + '</span>' : safe;
     }
     function fetchLogs() {
-      fetch('/api/logs?n=' + _fetchCount)
+      // A new day's file (or a new scrcpy session) appears while the page is open;
+      // re-read the source list at most once a minute so the dropdowns stay current
+      // without a request per poll.
+      if (Date.now() - _sourcesLoadedAt > 60000) { _sourcesLoadedAt = Date.now(); loadSources(false); }
+      var url = '/api/logs?n=' + _fetchCount;
+      if (_currentFile) url += '&file=' + encodeURIComponent(_currentFile);
+      fetch(url)
         .then(function(r) { return r.json(); })
         .then(function(lines) {
           if (!Array.isArray(lines)) return;
@@ -864,7 +970,8 @@
             }
             var prevScroll = logsBody.scrollTop;
             logsBody.innerHTML = ordered.map(formatLine).join('\n');
-            logsStatus.textContent = lines.length + ' lines - last updated ' + new Date().toLocaleTimeString();
+            logsStatus.textContent = lines.length + ' lines from ' + (_currentFile || 'the main log')
+              + ' - last updated ' + new Date().toLocaleTimeString();
             if (_autoScroll) {
               logsBody.scrollTop = _reversed ? 0 : logsBody.scrollHeight;
             } else {
@@ -874,7 +981,8 @@
         })
         .catch(function() { logsStatus.textContent = 'Could not reach server.'; });
     }
-    fetchLogs();
+    // Build the pickers first, then load the selected log (defaults to today's main log).
+    loadSources(true);
   </script>
 </body>
 </html>

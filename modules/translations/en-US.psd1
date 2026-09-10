@@ -280,7 +280,18 @@
     OpenApp = "Opening application folder."
     OpenConfig = "Opening configuration file."
     OpenKnownHeadsets = "Opening known headsets configuration file."
-    InvalidOptionFiles = "Invalid option. Please enter 1, 2, 3, 4, 5 or 0."
+    InvalidOptionFiles = "Invalid option. Please enter 1, 2, 3, 4, 5, 6 or 0."
+    # Log picker (console equivalent of the log-type dropdown on help.html).
+    # Nested on purpose: Import-PowerShellDataFile caps a hashtable literal at 500
+    # top-level pairs and this file is already near it.
+    Logs = @{
+        OpenLogFile = "`t 6. Open a specific log file"
+        SelectType  = "Select a log type:"
+        SelectFile  = "Select a log file:"
+        NoFiles     = "No log files found in '{0}'."
+        Opening     = "Opening log file: {0}"
+        Cancel      = "`t 0. Cancel"
+    }
     # Open-File
     FileNotExist = "The file '{0}' does not exist."
 

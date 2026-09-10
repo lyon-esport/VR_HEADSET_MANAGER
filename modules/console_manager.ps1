@@ -1794,6 +1794,7 @@ function Show-SubMenu-FilesAndFolders{
     Write-Host $msg.OpenAppFolder
     Write-Host $msg.EditConfigFile
     Write-Host $msg.EditKnownHeadsetsConfig
+    Write-Host (Get-MessageString -Key 'Logs.OpenLogFile')
 
     Write-Host $msg.ReturnPreviousMenu
     $userInput = $(Read-Host $msg.YourChoice).ToUpper() #ToUpper = Convert user input to uppercase for case-insensitive comparison
@@ -1832,10 +1833,13 @@ function Show-SubMenu-FilesAndFolders{
                 Write-Log ("Headset export failed: " + $_.Exception.Message) -Level ERROR
             }
         }
+        '6' {
+            Show-SubMenu-LogFiles
+        }
         '0' {
             Write-Log -Message $msg.ReturnPreviousDots -Level "INFO"
             Start-Sleep -seconds 2
-            break 
+            break
         }
 
         default {
@@ -1843,6 +1847,63 @@ function Show-SubMenu-FilesAndFolders{
             Write-Host $msg.InvalidOptionFiles -ForegroundColor Yellow
         }
     }
+}
+
+
+function Show-SubMenu-LogFiles {
+    <#
+    .SYNOPSIS
+    Console log picker: choose a log type, then a file, and open it.
+
+    .DESCRIPTION
+    The CLI counterpart of the log-type / log-file dropdowns on help.html - both are
+    driven by the same Get-LogSources enumeration, so they always offer the same list.
+    The folder holds well over a hundred files, which is why the type comes first.
+    #>
+    $sources = @(Get-LogSources)
+    if ($sources.Count -eq 0) {
+        Write-Host ((Get-MessageString -Key 'Logs.NoFiles') -f $global:logFolder) -ForegroundColor Yellow
+        Start-Sleep -Seconds 2
+        return
+    }
+
+    # Types in Get-LogSources order (families first, newest file first inside each).
+    $types = @()
+    foreach ($source in $sources) {
+        if ($types.Id -notcontains $source.Type) {
+            $types += [PSCustomObject]@{ Id = $source.Type; Label = $source.TypeLabel }
+        }
+    }
+
+    Write-Host ''
+    Write-Host (Get-MessageString -Key 'Logs.SelectType') -ForegroundColor Cyan
+    for ($i = 0; $i -lt $types.Count; $i++) {
+        $count = @($sources | Where-Object { $_.Type -eq $types[$i].Id }).Count
+        Write-Host ("`t {0}. {1} ({2})" -f ($i + 1), $types[$i].Label, $count)
+    }
+    Write-Host (Get-MessageString -Key 'Logs.Cancel')
+    $typeChoice = Read-Host $msg.YourChoice
+    if ($typeChoice -eq '0' -or -not ($typeChoice -match '^\d+$')) { return }
+    $typeIndex = [int]$typeChoice - 1
+    if ($typeIndex -lt 0 -or $typeIndex -ge $types.Count) { return }
+
+    $files = @($sources | Where-Object { $_.Type -eq $types[$typeIndex].Id })
+
+    Write-Host ''
+    Write-Host (Get-MessageString -Key 'Logs.SelectFile') -ForegroundColor Cyan
+    for ($i = 0; $i -lt $files.Count; $i++) {
+        $sizeMb = [Math]::Round($files[$i].SizeBytes / 1MB, 1)
+        Write-Host ("`t {0}. {1,-34} {2,8} MB   {3}" -f ($i + 1), $files[$i].Label, $sizeMb, $files[$i].LastWrite)
+    }
+    Write-Host (Get-MessageString -Key 'Logs.Cancel')
+    $fileChoice = Read-Host $msg.YourChoice
+    if ($fileChoice -eq '0' -or -not ($fileChoice -match '^\d+$')) { return }
+    $fileIndex = [int]$fileChoice - 1
+    if ($fileIndex -lt 0 -or $fileIndex -ge $files.Count) { return }
+
+    $selected = $files[$fileIndex]
+    Write-Log ((Get-MessageString -Key 'Logs.Opening') -f $selected.Id) -Level INFO
+    Open-File -filePath (Join-Path $global:logFolder $selected.Id)
 }
 
 function Open-Folder {

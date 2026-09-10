@@ -37,7 +37,12 @@ function Write-MediaMtxYml {
     # The YAML is written as UTF-8 without BOM so non-ASCII chars (e.g. accented
     # letters in the path) are preserved correctly. PS5 Set-Content -Encoding UTF8
     # adds a BOM which breaks YAML parsers, so we use .NET directly.
-    $mediamtxLogFile = (Join-Path $global:logFolder "mediamtx.log").Replace('\', '/')
+    # The file name is date-stamped like every other log family (log_<date>.txt,
+    # webserver_<date>_out.log): this function only runs from Start-MediaMtx, so the
+    # stamp is the date the server was started, and Remove-OldLogFiles purges the
+    # old ones. Without it mediamtx appends to one file forever (it reached 742 MB).
+    $dateStamp       = Get-Date -Format "yyyy-MM-dd"
+    $mediamtxLogFile = (Join-Path $global:logFolder "mediamtx_$dateStamp.log").Replace('\', '/')
 
     # In pipe capture modes the app pushes RTSP into mediamtx from per-headset ffmpeg
     # processes, so the YAML needs an "all_others" path that accepts publishers without

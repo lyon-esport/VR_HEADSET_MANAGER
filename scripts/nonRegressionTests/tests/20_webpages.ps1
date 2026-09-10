@@ -331,6 +331,34 @@ Invoke-RegressionTest -Name '/api/logs returns recent log lines' -Test {
     Assert-True ($lines.Count -gt 0) 'log endpoint returned nothing'
 }
 
+Invoke-RegressionTest -Name '/api/logs/sources lists log files by type' -Test {
+    $r = Invoke-VrmApi -Path '/api/logs/sources'
+    Assert-True $r.Ok 'GET /api/logs/sources'
+    $sources = @($r.Json.sources)
+    Add-TestEvidence ("{0} source(s), types: {1}" -f $sources.Count, (($sources.type | Select-Object -Unique) -join ', '))
+    Assert-True ($sources.Count -gt 0) 'no log sources returned'
+    # The main program log must always be offered - it is the picker's default.
+    Assert-True (($sources.type) -contains 'main') "no 'main' log type in the source list"
+}
+
+Invoke-RegressionTest -Name '/api/logs serves a selected log file' -Test {
+    $r = Invoke-VrmApi -Path '/api/logs/sources'
+    Assert-True $r.Ok 'GET /api/logs/sources'
+    $main = @($r.Json.sources | Where-Object { $_.type -eq 'main' })[0]
+    Assert-True ($null -ne $main) 'no main log source to request'
+    $r2 = Invoke-VrmApi -Path ('/api/logs?n=25&file=' + [uri]::EscapeDataString($main.id))
+    Assert-True $r2.Ok 'GET /api/logs?file='
+    $lines = @($r2.Json)
+    Add-TestEvidence ("{0} returned {1} line(s)" -f $main.id, $lines.Count)
+    Assert-True ($lines.Count -gt 0) 'selected log file returned nothing'
+    # A bogus id must fall back to the main log, never read outside the log folder.
+    $r3 = Invoke-VrmApi -Path '/api/logs?n=5&file=..%2F..%2Fconfig%2Fconfig.json'
+    Assert-True $r3.Ok 'GET /api/logs with a traversal attempt'
+    $fallback = @($r3.Json)
+    Add-TestEvidence ("traversal attempt fell back to {0} line(s)" -f $fallback.Count)
+    Assert-True (($fallback -join '') -notmatch '"WebServer"') 'traversal attempt leaked config.json'
+}
+
 Invoke-RegressionTest -Name '/api/appnames returns the known-apps catalog' -Test {
     $r = Invoke-VrmApi -Path '/api/appnames'
     Assert-Equal 200 $r.StatusCode 'GET /api/appnames'
