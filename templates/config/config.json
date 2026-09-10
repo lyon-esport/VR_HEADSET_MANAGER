@@ -236,7 +236,8 @@
                                           "headset_battery_criticalLevel":  30,
                                           "controllers_battery_warningLevel":  30,
                                           "controllers_battery_criticalLevel":  15,
-                                          "temperature_highLevel":  50
+                                          "temperature_highLevel":  50,
+                                          "temperature_warningLevel":  42
                                       }
                    },
     "mediamtx":  {
@@ -265,7 +266,7 @@
                      "busy_timeout_ms":  5000,
                      "retry_max":  6,
                      "integrity_check":  "quick",
-                     "battery_history_hours":  24,
+                     "metric_history_hours":  24,
                      "maintenance_interval_min":  60,
                      "backup":  {
                                     "keep":  5,

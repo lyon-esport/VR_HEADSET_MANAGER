@@ -219,7 +219,12 @@ function Get-Config {
     $global:Monitoring_headsetTemplate = Join-Path -Path $global:ScriptPath -ChildPath ("\website\template\"+$configContent.Monitoring.HeadsetTemplate)
     $videoTemplateName = if ($configContent.Monitoring.VideoTemplate) { $configContent.Monitoring.VideoTemplate } else { "headset_scrcpy.pshtml" }
     $global:Monitoring_videoTemplate    = Join-Path -Path $global:ScriptPath -ChildPath ("\website\template\"+$videoTemplateName)
-    $global:Monitoring_temperature_highLevel = $configContent.Monitoring.thresholds.temperature_highLevel
+    # Guarded and cast like every other threshold. It was not, and a missing key
+    # landed here as $null, which website_generator.ps1 then baked into every
+    # overlay as "var _TEMP_HIGH = ;" - a syntax error taking the whole overlay
+    # script down, from one absent config value.
+    $global:Monitoring_temperature_highLevel            = if ($null -ne $configContent.Monitoring.thresholds.temperature_highLevel)            { [int]$configContent.Monitoring.thresholds.temperature_highLevel            } else { 50 }
+    $global:Monitoring_temperature_warningLevel         = if ($null -ne $configContent.Monitoring.thresholds.temperature_warningLevel)         { [int]$configContent.Monitoring.thresholds.temperature_warningLevel         } else { 42 }
     $global:Monitoring_headset_battery_warningLevel      = if ($null -ne $configContent.Monitoring.thresholds.headset_battery_warningLevel)      { [int]$configContent.Monitoring.thresholds.headset_battery_warningLevel      } else { 40 }
     $global:Monitoring_headset_battery_criticalLevel     = if ($null -ne $configContent.Monitoring.thresholds.headset_battery_criticalLevel)     { [int]$configContent.Monitoring.thresholds.headset_battery_criticalLevel     } else { 30 }
     $global:Monitoring_controllers_battery_warningLevel  = if ($null -ne $configContent.Monitoring.thresholds.controllers_battery_warningLevel)  { [int]$configContent.Monitoring.thresholds.controllers_battery_warningLevel  } else { 30 }
@@ -288,11 +293,20 @@ function Get-Config {
     $global:databaseBusyTimeoutMs = if ($dbCfg -and $dbCfg.busy_timeout_ms) { [int]$dbCfg.busy_timeout_ms } else { 5000 }
     $global:databaseRetryMax      = if ($dbCfg -and $null -ne $dbCfg.retry_max) { [int]$dbCfg.retry_max } else { 6 }
     $global:databaseIntegrityCheck = if ($dbCfg -and $dbCfg.integrity_check) { [string]$dbCfg.integrity_check } else { "quick" }
-    # Battery history retention, in hours, and how often the maintenance sweep
-    # that enforces it is allowed to run. The sweep is deliberately NOT on the
-    # insert path: sampling happens on every battery change, and making each
-    # sample pay for a prune would put a DELETE inside the monitor's hot write.
-    $global:databaseBatteryHistoryHours = if ($dbCfg -and $null -ne $dbCfg.battery_history_hours) { [int]$dbCfg.battery_history_hours } else { 24 }
+    # Metric history retention, in hours, and how often the maintenance sweep that
+    # enforces it is allowed to run. The sweep is deliberately NOT on the insert
+    # path: sampling happens on every reading change, and making each sample pay
+    # for a prune would put a DELETE inside the monitor's hot write.
+    #
+    # Named battery_history_hours before migration 006 generalised the table to
+    # every metric. The old key is still honoured as a fallback so an operator's
+    # existing config.json keeps working untouched - it is their file, and a
+    # rename we chose should not silently reset their retention to the default.
+    $global:databaseMetricHistoryHours = if ($dbCfg -and $null -ne $dbCfg.metric_history_hours) { [int]$dbCfg.metric_history_hours }
+                                         elseif ($dbCfg -and $null -ne $dbCfg.battery_history_hours) { [int]$dbCfg.battery_history_hours }
+                                         else { 24 }
+    # Kept as an alias: web_server.ps1's legacy /api/battery-history still reads it.
+    $global:databaseBatteryHistoryHours = $global:databaseMetricHistoryHours
     $global:databaseMaintenanceIntervalMin = if ($dbCfg -and $null -ne $dbCfg.maintenance_interval_min) { [int]$dbCfg.maintenance_interval_min } else { 60 }
     $global:databaseBackupKeep    = if ($dbCfg -and $dbCfg.backup -and $null -ne $dbCfg.backup.keep) { [int]$dbCfg.backup.keep } else { 5 }
     $global:databaseBackupOnStartup = if ($dbCfg -and $dbCfg.backup -and $null -ne $dbCfg.backup.on_startup) { [bool]$dbCfg.backup.on_startup } else { $true }

@@ -109,7 +109,7 @@ function New-TempDatabaseRoot {
     $global:databaseIntegrityCheck  = 'quick'
     $global:databaseBackupKeep      = 3
     $global:databaseBackupOnStartup = $false
-    $global:databaseBatteryHistoryHours    = 24
+    $global:databaseMetricHistoryHours     = 24
     $global:databaseMaintenanceIntervalMin = 60
     $global:debugLevelToConsole     = 'NONE'
     $global:debugLevelToFile        = 'NONE'

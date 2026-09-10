@@ -128,7 +128,7 @@ Invoke-RegressionTest -Name 'Initialize-Database -Role Main creates the full sch
         Assert-True ($result.SchemaVersion -ge 1) 'schema version is at least 1'
 
         $expected = @(
-            'schema_version','db_versions','headsets','headset_status','battery_history',
+            'schema_version','db_versions','headsets','headset_status','metric_history',
             'kiosks','kiosk_status','kiosk_agent_reports','kiosk_commands','kiosk_autoadd_ignore',
             'discovered_headsets','headset_discovery_ignore','app_catalog','headset_installed_apps',
             'headset_favorite_apps','headset_timers','vqa_history','app_kv'
@@ -434,37 +434,98 @@ INSERT INTO headset_timers(headset_id,minutes,seconds,mode) VALUES (1,10,0,'dec'
     }
 }
 
-Invoke-RegressionTest -Name 'the battery trigger samples only, and never prunes' -Test {
-    $sandbox = New-TempDatabaseRoot -Name 'battery'
+Invoke-RegressionTest -Name 'the metric triggers sample only, and never prune' -Test {
+    $sandbox = New-TempDatabaseRoot -Name 'metrics'
     try {
         Initialize-Database -Role Main -SkipBackup | Out-Null
         Invoke-DbNonQuery -Sql "INSERT INTO headsets(id,name,ip_address) VALUES (1,'A','10.0.0.1'); INSERT INTO headset_status(headset_id) VALUES (1);" | Out-Null
 
         # Migration 005 moved retention off the trigger and onto the maintenance
-        # sweep. Sampling fires on every battery change, inside the monitor's
+        # sweep. Sampling fires on every reading change, inside the monitor's
         # batched status write, so a DELETE and a correlated subquery there were
         # paid for by every sample - and anything that throws in that
         # transaction loses the whole tick, for every headset.
         for ($i = 1; $i -le 130; $i++) {
             $ts = (Get-Date).AddSeconds(-$i).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-            Invoke-DbNonQuery -Sql ("INSERT OR REPLACE INTO battery_history(headset_id, ts, pct) VALUES (1, '{0}', {1});" -f $ts, ($i % 100)) | Out-Null
+            Invoke-DbNonQuery -Sql ("INSERT OR REPLACE INTO metric_history(headset_id, metric, ts, value) VALUES (1, 'battery', '{0}', {1});" -f $ts, ($i % 100)) | Out-Null
         }
         # Count what actually landed rather than assuming 130. Timestamps are
         # whole seconds, so if the loop above straddles a second boundary two
         # iterations can produce the same ts and INSERT OR REPLACE merges them.
-        $before = [int](Invoke-DbScalar -Sql 'SELECT COUNT(*) FROM battery_history WHERE headset_id = 1;')
+        $before = [int](Invoke-DbScalar -Sql "SELECT COUNT(*) FROM metric_history WHERE headset_id = 1 AND metric = 'battery';")
         Assert-True ($before -gt 100) 'well over the old 100-row cap was seeded'
 
-        Invoke-DbNonQuery -Sql "UPDATE headset_status SET battery = '55' WHERE headset_id = 1;" | Out-Null
+        Invoke-DbNonQuery -Sql "UPDATE headset_status SET battery = '55 %' WHERE headset_id = 1;" | Out-Null
 
-        $n = [int](Invoke-DbScalar -Sql 'SELECT COUNT(*) FROM battery_history WHERE headset_id = 1;')
-        Add-TestEvidence ("battery_history rows: {0} seeded -> {1} after one sample" -f $before, $n)
+        $n = [int](Invoke-DbScalar -Sql "SELECT COUNT(*) FROM metric_history WHERE headset_id = 1 AND metric = 'battery';")
+        Add-TestEvidence ("battery rows: {0} seeded -> {1} after one sample" -f $before, $n)
         Assert-Equal ($before + 1) $n 'the trigger added its sample and removed nothing'
+
+        # "85 %" is what headset_status actually holds; CAST must stop at the space.
+        $lvl = [double](Invoke-DbScalar -Sql "SELECT value FROM metric_history WHERE headset_id = 1 AND metric = 'battery' ORDER BY ts DESC LIMIT 1;")
+        Assert-Equal 55 ([int]$lvl) 'a "55 %" display string is stored as 55'
 
         # The placeholder '-' must never be sampled.
         Invoke-DbNonQuery -Sql "UPDATE headset_status SET battery = '-' WHERE headset_id = 1;" | Out-Null
-        $latest = [string](Invoke-DbScalar -Sql 'SELECT pct FROM battery_history WHERE headset_id = 1 ORDER BY ts DESC LIMIT 1;')
-        Assert-True ($latest -ne '-') 'the dash placeholder is not recorded as a sample'
+        $after = [int](Invoke-DbScalar -Sql "SELECT COUNT(*) FROM metric_history WHERE headset_id = 1 AND metric = 'battery';")
+        Assert-Equal $n $after 'the dash placeholder is not recorded as a sample'
+    } finally {
+        Remove-TempDatabaseRoot -Sandbox $sandbox | Out-Null
+    }
+}
+
+Invoke-RegressionTest -Name 'temperature is sampled at 0.1 C, comma decimal included' -Test {
+    $sandbox = New-TempDatabaseRoot -Name 'temperature'
+    try {
+        Initialize-Database -Role Main -SkipBackup | Out-Null
+        Invoke-DbNonQuery -Sql "INSERT INTO headsets(id,name,ip_address) VALUES (1,'A','10.0.0.1'); INSERT INTO headset_status(headset_id) VALUES (1);" | Out-Null
+
+        # The whole point of a REAL column: an INTEGER one would hand 36.4 back as
+        # 36, silently, because a value is read through its column's DECLARED type.
+        Invoke-DbNonQuery -Sql "UPDATE headset_status SET temp = '36.4' WHERE headset_id = 1;" | Out-Null
+        $t = [double](Invoke-DbScalar -Sql "SELECT value FROM metric_history WHERE headset_id = 1 AND metric = 'temp' ORDER BY ts DESC LIMIT 1;")
+        Add-TestEvidence ("stored temperature: {0}" -f $t)
+        Assert-Equal 36.4 $t 'a decimal temperature keeps its tenth of a degree'
+
+        # Get-HeadsetBatteryStatus formats with .ToString("0.0"), which yields a
+        # COMMA under a FR locale. CAST('36,4' AS REAL) is 36 without the REPLACE.
+        Invoke-DbNonQuery -Sql "UPDATE headset_status SET temp = '41,7' WHERE headset_id = 1;" | Out-Null
+        $t2 = [double](Invoke-DbScalar -Sql "SELECT value FROM metric_history WHERE headset_id = 1 AND metric = 'temp' ORDER BY ts DESC LIMIT 1;")
+        Add-TestEvidence ("stored comma-decimal temperature: {0}" -f $t2)
+        Assert-Equal 41.7 $t2 'a comma decimal separator is not truncated'
+
+        # Each column feeds its own metric, and nothing bleeds across.
+        Invoke-DbNonQuery -Sql "UPDATE headset_status SET battery_controller_left = '72 %', battery_controller_right = '68 %', charging_wattage = '18' WHERE headset_id = 1;" | Out-Null
+        foreach ($pair in @(@('ctrl_left',72), @('ctrl_right',68), @('wattage',18))) {
+            $v = [double](Invoke-DbScalar -Sql ("SELECT value FROM metric_history WHERE headset_id = 1 AND metric = '{0}' ORDER BY ts DESC LIMIT 1;" -f $pair[0]))
+            Assert-Equal ([double]$pair[1]) $v ("{0} sampled from its own column" -f $pair[0])
+        }
+    } finally {
+        Remove-TempDatabaseRoot -Sandbox $sandbox | Out-Null
+    }
+}
+
+Invoke-RegressionTest -Name 'metric.prune removes only samples past the cutoff' -Test {
+    $sandbox = New-TempDatabaseRoot -Name 'prune'
+    try {
+        Initialize-Database -Role Main -SkipBackup | Out-Null
+        Invoke-DbNonQuery -Sql "INSERT INTO headsets(id,name,ip_address) VALUES (1,'A','10.0.0.1'); INSERT INTO headset_status(headset_id) VALUES (1);" | Out-Null
+
+        $old   = [datetime]::UtcNow.AddHours(-48).ToString('yyyy-MM-ddTHH:mm:ssZ')
+        $fresh = [datetime]::UtcNow.AddMinutes(-5).ToString('yyyy-MM-ddTHH:mm:ssZ')
+        foreach ($m in @('battery','temp','ctrl_left','ctrl_right','wattage')) {
+            Invoke-DbNonQuery -Sql ("INSERT INTO metric_history(headset_id, metric, ts, value) VALUES (1,'{0}','{1}',10),(1,'{0}','{2}',20);" -f $m, $old, $fresh) | Out-Null
+        }
+
+        # One DELETE covers every headset and every metric - that is the point of
+        # folding the per-metric tables into one.
+        $cutoff  = [datetime]::UtcNow.AddHours(-24).ToString('yyyy-MM-ddTHH:mm:ssZ')
+        $removed = Invoke-DbNonQuery -Name 'metric.prune' -Parameters @{ cutoff = $cutoff }
+        Add-TestEvidence ("pruned {0} row(s) across 5 metrics" -f $removed)
+        Assert-Equal 5 ([int]$removed) 'exactly the five stale rows went'
+
+        $left = [int](Invoke-DbScalar -Sql 'SELECT COUNT(*) FROM metric_history;')
+        Assert-Equal 5 $left 'the five fresh rows survived'
     } finally {
         Remove-TempDatabaseRoot -Sandbox $sandbox | Out-Null
     }

@@ -1054,20 +1054,48 @@ function Get-StatusFieldOrDash {
 
 <#
 .SYNOPSIS
-    Battery samples for one headset over a time window, oldest first.
+    The metrics that metric_history records, and how each one is presented.
 .DESCRIPTION
-    The shared backend behind the battery-history graph: the web API
-    (GET /api/battery-history) and any console caller both go through here, so
-    the window clamping and the timestamp format live in exactly one place.
+    Single source of truth for the metric list on the PowerShell side. Every key
+    here has a matching sampling trigger in migration 006 and a matching entry in
+    the METRICS registry in website\assets\battery_chart.js - all three must be
+    changed together when a metric is added, and this one is what the web API
+    validates against, so an unknown key can never reach a query.
 
-    Reads the battery_history table through the named query 'battery.window'.
-    Rows are only written when the level CHANGES (trigger trg_status_battery_sample),
-    so a stable headset legitimately returns very few rows - the query seeds the
+    Percent metrics are drawn on a pinned 0..100 axis; the others are auto-scaled,
+    because pinning a temperature to 0..100 flattens a 30->45 C swing into a
+    straight line.
+.EXAMPLE
+    (Get-HeadsetMetricDefinition).Keys
+.EXAMPLE
+    (Get-HeadsetMetricDefinition)['temp'].Unit
+#>
+function Get-HeadsetMetricDefinition {
+    return [ordered]@{
+        battery    = @{ Label = 'Battery';        Unit = '%'; Column = 'battery';                  IsPercent = $true  }
+        temp       = @{ Label = 'Temperature';    Unit = 'C'; Column = 'temp';                     IsPercent = $false }
+        ctrl_left  = @{ Label = 'Controller L';   Unit = '%'; Column = 'battery_controller_left';  IsPercent = $true  }
+        ctrl_right = @{ Label = 'Controller R';   Unit = '%'; Column = 'battery_controller_right'; IsPercent = $true  }
+        wattage    = @{ Label = 'Charging power'; Unit = 'W'; Column = 'charging_wattage';         IsPercent = $false }
+    }
+}
+
+<#
+.SYNOPSIS
+    Samples of one metric for one headset over a time window, oldest first.
+.DESCRIPTION
+    The shared backend behind the metric-history graph: the web API
+    (GET /api/metric-history) and any console caller both go through here, so the
+    window clamping and the timestamp format live in exactly one place.
+
+    Reads the metric_history table through the named query 'metric.window'. Rows
+    are only written when the value CHANGES (the trg_status_*_sample triggers), so
+    a stable headset legitimately returns very few rows - the query seeds the
     series with the last sample before the window precisely so a flat line is
     still drawable. Callers must treat the series as a STEP function: each value
     holds until the next sample.
 
-    Retention is database.battery_history_hours (default 24), swept by
+    Retention is database.metric_history_hours (default 24), swept by
     Invoke-DbMaintenance, so asking for more hours than that returns only what
     survived the sweep.
 
@@ -1075,12 +1103,63 @@ function Get-StatusFieldOrDash {
     monitoring read paths.
 .PARAMETER HeadsetId
     Permanent headset id (ADR-0016). Not the name, not the address.
+.PARAMETER Metric
+    One of the keys of Get-HeadsetMetricDefinition. Anything else returns @().
 .PARAMETER Hours
-    Size of the window ending now, in hours. Clamped to 0.25 .. 168.
+    Size of the window ending now, in hours. Clamped to 0.25 .. the retention
+    period (never below 168, so the four fixed windows always work).
+.EXAMPLE
+    Get-MetricHistory -HeadsetId 1 -Metric temp -Hours 24 | Format-Table
+.EXAMPLE
+    (Get-MetricHistory -HeadsetId 3 -Metric battery -Hours 1).Count
+#>
+function Get-MetricHistory {
+    param (
+        [Parameter(Mandatory = $true)][int]$HeadsetId,
+        [string]$Metric = 'battery',
+        [double]$Hours = 24
+    )
+
+    if ($HeadsetId -le 0) { return @() }
+
+    # Whitelist, not a pass-through: @metric reaches a query, and an unknown key
+    # would silently return an empty graph rather than saying anything.
+    $defs = Get-HeadsetMetricDefinition
+    if (-not $defs.Contains($Metric)) { return @() }
+
+    # Clamp rather than reject: this is a display window, and a caller asking for
+    # something silly should get a sane graph, not an error page. The ceiling
+    # follows the retention period - a fixed 168 would silently truncate the
+    # "all records" window on any install keeping more than 7 days.
+    $retention = if ($global:databaseMetricHistoryHours) { [double]$global:databaseMetricHistoryHours } else { 24 }
+    $ceiling   = [Math]::Max(168, $retention)
+    if ($Hours -lt 0.25)     { $Hours = 0.25 }
+    if ($Hours -gt $ceiling) { $Hours = $ceiling }
+
+    try {
+        # Same ISO-8601 UTC shape the sampling triggers write and Invoke-DbMaintenance
+        # prunes on, so the comparison stays a plain string compare on an indexed column.
+        $since = [datetime]::UtcNow.AddHours(-$Hours).ToString('yyyy-MM-ddTHH:mm:ssZ')
+        return @(Invoke-DbQuery -Name 'metric.window' -Parameters @{
+            headset_id = $HeadsetId
+            metric     = $Metric
+            since      = $since
+        })
+    } catch {
+        Write-Log ("Get-MetricHistory failed for headset {0} metric {1}: {2}" -f $HeadsetId, $Metric, $_.Exception.Message) -Level DEBUG
+        return @()
+    }
+}
+
+<#
+.SYNOPSIS
+    Battery samples for one headset over a time window, oldest first.
+.DESCRIPTION
+    Thin wrapper over Get-MetricHistory -Metric battery, kept for its existing
+    { ts; pct } contract - GET /api/battery-history and any console caller still
+    consume that shape. New callers should use Get-MetricHistory directly.
 .EXAMPLE
     Get-BatteryHistory -HeadsetId 1 -Hours 24 | Format-Table
-.EXAMPLE
-    (Get-BatteryHistory -HeadsetId 3 -Hours 1).Count
 #>
 function Get-BatteryHistory {
     param (
@@ -1088,25 +1167,8 @@ function Get-BatteryHistory {
         [double]$Hours = 24
     )
 
-    if ($HeadsetId -le 0) { return @() }
-
-    # Clamp rather than reject: this is a display window, and a caller asking for
-    # something silly should get a sane graph, not an error page.
-    if ($Hours -lt 0.25) { $Hours = 0.25 }
-    if ($Hours -gt 168)  { $Hours = 168 }
-
-    try {
-        # Same ISO-8601 UTC shape the sampling trigger writes and Invoke-DbMaintenance
-        # prunes on, so the comparison stays a plain string compare on an indexed column.
-        $since = [datetime]::UtcNow.AddHours(-$Hours).ToString('yyyy-MM-ddTHH:mm:ssZ')
-        return @(Invoke-DbQuery -Name 'battery.window' -Parameters @{
-            headset_id = $HeadsetId
-            since      = $since
-        })
-    } catch {
-        Write-Log ("Get-BatteryHistory failed for headset {0}: {1}" -f $HeadsetId, $_.Exception.Message) -Level DEBUG
-        return @()
-    }
+    return @(Get-MetricHistory -HeadsetId $HeadsetId -Metric 'battery' -Hours $Hours |
+        ForEach-Object { [PSCustomObject]@{ ts = $_.ts; pct = [int]$_.value } })
 }
 
 function Get-HeadsetInfosCsvColumn {

@@ -874,8 +874,15 @@
         { path: 'Battery.headset_charging_power_W', label: 'Charging Power', type: 'number', min: 1, max: 200, unit: 'W',
           desc: 'Expected charging wattage used for battery time-remaining estimates.' },
         { type: 'subgroup', label: 'Temperature' },
+        { path: 'Monitoring.thresholds.temperature_warningLevel', label: 'Warning Temperature', type: 'number', min: 30, max: 80, unit: 'C',
+          desc: 'Headset temperature at which the history graph turns amber. Should sit below the high threshold.' },
         { path: 'Monitoring.thresholds.temperature_highLevel', label: 'High Temperature', type: 'number', min: 30, max: 80, unit: 'C',
-          desc: 'Headset temperature at which a heat warning is shown on the overlay.' }
+          desc: 'Headset temperature at which a heat warning is shown on the overlay, and the history graph turns red.' },
+        { type: 'subgroup', label: 'History' },
+        { path: 'database.metric_history_hours', label: 'History Retention', type: 'number', min: 1, max: 8760, unit: 'hours',
+          desc: 'How long per-headset samples (battery, temperature, controllers, charging power) are kept before '
+              + 'being swept. Applies on the next maintenance pass, which runs at most once an hour. Set above 24 '
+              + 'to get an "All records" window on the Metric History page.' }
       ],
       'acc-vqa-body': [
         { path: 'VideoQualityAutomation.enabled', label: 'Enable VQA', type: 'boolean',

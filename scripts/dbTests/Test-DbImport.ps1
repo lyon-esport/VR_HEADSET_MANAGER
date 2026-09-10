@@ -391,7 +391,7 @@ Invoke-RegressionTest -Name 'the pre-ADR-0016 20-column status file still import
         Assert-Equal '65' ([string]$row.Battery) 'the live value was read from the old column set'
 
         # The legacy file's BatteryHistory column is deliberately NOT carried
-        # over (migration 005): those samples are rows in battery_history now and
+        # over (migrations 005/006): those samples are rows in metric_history now and
         # the packed string has no column to land in. The fixture still contains
         # it, so this proves an unknown legacy column is ignored rather than
         # breaking the import.

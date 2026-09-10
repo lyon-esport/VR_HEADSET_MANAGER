@@ -276,7 +276,7 @@ Invoke-RegressionTest -Name 'battery history samples on change, one row per seco
         # a given second wins and nothing throws.
         foreach ($pct in @('80', '79', '79', '78')) { Set-TestStatus -HeadsetId $id -Battery $pct }
 
-        $hist   = @(Invoke-DbQuery -Sql "SELECT ts, pct FROM battery_history WHERE headset_id = $id ORDER BY ts;")
+        $hist   = @(Invoke-DbQuery -Sql "SELECT ts, value AS pct FROM metric_history WHERE headset_id = $id AND metric = 'battery' ORDER BY ts;")
         $levels = @($hist | ForEach-Object { [int]$_.pct })
         Add-TestEvidence ("after burst: {0} row(s), values {1}" -f $hist.Count, ($levels -join ', '))
         Assert-Equal 1 $hist.Count 'a burst inside one second collapses to a single sample'
@@ -286,16 +286,16 @@ Invoke-RegressionTest -Name 'battery history samples on change, one row per seco
         # A change in a later second is a new sample, not an overwrite.
         Start-Sleep -Seconds 2
         Set-TestStatus -HeadsetId $id -Battery '77'
-        $hist   = @(Invoke-DbQuery -Sql "SELECT ts, pct FROM battery_history WHERE headset_id = $id ORDER BY ts;")
+        $hist   = @(Invoke-DbQuery -Sql "SELECT ts, value AS pct FROM metric_history WHERE headset_id = $id AND metric = 'battery' ORDER BY ts;")
         $levels = @($hist | ForEach-Object { [int]$_.pct })
         Add-TestEvidence ("after the next second: {0} row(s), values {1}" -f $hist.Count, ($levels -join ', '))
         Assert-Equal 2 $hist.Count 'a change in a later second is a new sample'
         Assert-Equal 77 $levels[1] 'and it holds the new reading'
 
         # A repeated value never fires the trigger at all.
-        $before = @(Invoke-DbQuery -Sql "SELECT ts FROM battery_history WHERE headset_id = $id;").Count
+        $before = @(Invoke-DbQuery -Sql "SELECT ts FROM metric_history WHERE headset_id = $id AND metric = 'battery';").Count
         Set-TestStatus -HeadsetId $id -Battery '77'
-        $after = @(Invoke-DbQuery -Sql "SELECT ts FROM battery_history WHERE headset_id = $id;").Count
+        $after = @(Invoke-DbQuery -Sql "SELECT ts FROM metric_history WHERE headset_id = $id AND metric = 'battery';").Count
         Assert-Equal $before $after 'an unchanged battery value adds no history row'
     } finally {
         Remove-TempDatabaseRoot -Sandbox $sandbox | Out-Null
@@ -362,8 +362,8 @@ Invoke-RegressionTest -Name 'battery history is stored ONLY in its own table (mi
         # The table is still fed, by the trigger on the Battery column.
         Set-TestStatus -HeadsetId $id -Battery '80'
         Set-TestStatus -HeadsetId $id -Battery '79'
-        $rows = @(Invoke-DbQuery -Sql "SELECT pct FROM battery_history WHERE headset_id = $id;")
-        Assert-True ($rows.Count -gt 0) 'samples still land in the battery_history table'
+        $rows = @(Invoke-DbQuery -Sql "SELECT value AS pct FROM metric_history WHERE headset_id = $id AND metric = 'battery';")
+        Assert-True ($rows.Count -gt 0) 'samples still land in the metric_history table'
     } finally {
         Remove-TempDatabaseRoot -Sandbox $sandbox | Out-Null
     }
@@ -380,7 +380,7 @@ Invoke-RegressionTest -Name 'the poll runspace preloads its history from the tab
         foreach ($s in @(@{h=$idA;t='2026-01-01T10:00:00Z';p=80}, @{h=$idA;t='2026-01-01T10:05:00Z';p=79},
                          @{h=$idA;t='2026-01-01T10:10:00Z';p=78}, @{h=$idA;t='2026-01-01T10:15:00Z';p=77},
                          @{h=$idB;t='2026-01-01T10:00:00Z';p=50})) {
-            Invoke-DbNonQuery -Sql ("INSERT INTO battery_history(headset_id, ts, pct) VALUES ({0}, '{1}', {2});" -f $s.h, $s.t, $s.p) | Out-Null
+            Invoke-DbNonQuery -Sql ("INSERT INTO metric_history(headset_id, metric, ts, value) VALUES ({0}, 'battery', '{1}', {2});" -f $s.h, $s.t, $s.p) | Out-Null
         }
 
         # battery.recent is what the runspace calls. Newest N, returned OLDEST
@@ -408,7 +408,7 @@ Invoke-RegressionTest -Name 'the poll runspace preloads its history from the tab
     }
 }
 
-Invoke-RegressionTest -Name 'maintenance prunes battery history to the retention window' -Test {
+Invoke-RegressionTest -Name 'maintenance prunes metric history to the retention window' -Test {
     $sandbox = New-StatusSandbox -Name 'stretain'
     try {
         Add-Headset -IPAddress '10.0.0.1' -Name 'A' -Model 'Quest 3' -SerialNumber 'SER-A'
@@ -419,27 +419,27 @@ Invoke-RegressionTest -Name 'maintenance prunes battery history to the retention
         $stale = @(25, 48, 200)
         foreach ($h in ($fresh + $stale)) {
             $ts = $now.AddHours(-$h).ToString('yyyy-MM-ddTHH:mm:ssZ')
-            Invoke-DbNonQuery -Sql ("INSERT INTO battery_history(headset_id, ts, pct) VALUES ({0}, '{1}', 50);" -f $id, $ts) | Out-Null
+            Invoke-DbNonQuery -Sql ("INSERT INTO metric_history(headset_id, metric, ts, value) VALUES ({0}, 'battery', '{1}', 50);" -f $id, $ts) | Out-Null
         }
-        Assert-Equal 6 (@(Invoke-DbQuery -Sql "SELECT ts FROM battery_history WHERE headset_id = $id;")).Count 'six samples seeded'
+        Assert-Equal 6 (@(Invoke-DbQuery -Sql "SELECT ts FROM metric_history WHERE headset_id = $id AND metric = 'battery';")).Count 'six samples seeded'
 
         # Retention is enforced by the maintenance sweep, NOT by the sampling
         # trigger: sampling fires on every battery change and sits inside the
         # monitor's batched status write, where a DELETE has no business.
-        $global:databaseBatteryHistoryHours = 24
+        $global:databaseMetricHistoryHours = 24
         Invoke-DbMaintenance -Force | Out-Null
 
-        $left = @(Invoke-DbQuery -Sql "SELECT ts FROM battery_history WHERE headset_id = $id;")
+        $left = @(Invoke-DbQuery -Sql "SELECT ts FROM metric_history WHERE headset_id = $id AND metric = 'battery';")
         Add-TestEvidence ("{0} of 6 samples left after a 24h prune" -f $left.Count)
         Assert-Equal 3 $left.Count 'only the samples inside the window survived'
 
         # And it self-throttles, so the slow loop can call it every tick.
-        Invoke-DbNonQuery -Sql ("INSERT INTO battery_history(headset_id, ts, pct) VALUES ({0}, '{1}', 50);" -f $id, $now.AddHours(-99).ToString('yyyy-MM-ddTHH:mm:ssZ')) | Out-Null
+        Invoke-DbNonQuery -Sql ("INSERT INTO metric_history(headset_id, metric, ts, value) VALUES ({0}, 'battery', '{1}', 50);" -f $id, $now.AddHours(-99).ToString('yyyy-MM-ddTHH:mm:ssZ')) | Out-Null
         $global:databaseMaintenanceIntervalMin = 60
         Assert-False ([bool](Invoke-DbMaintenance)) 'a second call inside the interval is skipped'
-        Assert-Equal 4 (@(Invoke-DbQuery -Sql "SELECT ts FROM battery_history WHERE headset_id = $id;")).Count 'so the stale sample is still there'
+        Assert-Equal 4 (@(Invoke-DbQuery -Sql "SELECT ts FROM metric_history WHERE headset_id = $id AND metric = 'battery';")).Count 'so the stale sample is still there'
         Assert-True ([bool](Invoke-DbMaintenance -Force)) '-Force overrides the throttle'
-        Assert-Equal 3 (@(Invoke-DbQuery -Sql "SELECT ts FROM battery_history WHERE headset_id = $id;")).Count 'and prunes it'
+        Assert-Equal 3 (@(Invoke-DbQuery -Sql "SELECT ts FROM metric_history WHERE headset_id = $id AND metric = 'battery';")).Count 'and prunes it'
     } finally {
         Remove-TempDatabaseRoot -Sandbox $sandbox | Out-Null
     }

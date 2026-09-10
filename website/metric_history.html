@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Metric History - VR Headset Manager</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+  <link rel="stylesheet" href="assets/topbar.css">
+  <link rel="stylesheet" href="assets/vendor/uplot/uPlot.min.css">
+  <script src="assets/topbar.js"></script>
+  <style>
+    :root {
+      --bg:        #111;
+      --muted:     #444;
+      --text:      #ccc;
+      --panel-bg:  #1a1a1a;
+      --border:    #222;
+      --accent:    #3b82f6;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      background: var(--bg);
+      min-height: 100vh;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      color: var(--text);
+      overflow-x: hidden;
+    }
+
+    .page { padding: 24px; max-width: 1280px; margin: 0 auto; }
+
+    /* -- Controls row -- */
+    .bh-controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .bh-controls .lbl {
+      font-size: 11px;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: #777;
+    }
+    #headset-select, #metric-select {
+      background: var(--panel-bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 5px;
+      padding: 6px 10px;
+      font-size: 13px;
+      font-family: inherit;
+      min-width: 160px;
+    }
+    .bh-windows { display: flex; gap: 4px; margin-left: auto; }
+    .bh-win-btn {
+      background: var(--panel-bg);
+      border: 1px solid var(--border);
+      color: #888;
+      border-radius: 5px;
+      padding: 6px 14px;
+      font-size: 12px;
+      font-family: inherit;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+    }
+    .bh-win-btn:hover { background: rgba(59,130,246,0.10); border-color: rgba(59,130,246,0.5); color: var(--accent); }
+    .bh-win-btn.active { background: rgba(59,130,246,0.20); border-color: rgba(59,130,246,0.7); color: var(--accent); }
+
+    /* -- Chart panel -- */
+    .bh-panel {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--panel-bg);
+      padding: 16px;
+    }
+    #chart { width: 100%; min-height: 300px; }
+
+    .bh-empty {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 300px;
+      text-align: center;
+      gap: 8px;
+      padding: 24px;
+    }
+    .bh-empty .title { font-size: 14px; font-weight: 600; color: #aaa; }
+    .bh-empty .sub   { font-size: 12px; color: #666; max-width: 560px; line-height: 1.6; }
+
+    /* -- Stat strip -- */
+    .bh-stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 1px;
+      margin-top: 16px;
+      background: var(--border);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    /* No stats to show (empty window) - the bare border would read as a stray rule. */
+    .bh-stats:empty { display: none; }
+    .bh-stat { background: var(--panel-bg); padding: 10px 14px; }
+    .bh-stat .k {
+      font-size: 10px;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: #777;
+      margin-bottom: 4px;
+    }
+    .bh-stat .v { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text); }
+    .bh-stat .v.small { font-size: 12px; font-weight: 600; color: #999; }
+
+    .bh-note { margin-top: 12px; font-size: 11px; color: #555; line-height: 1.6; }
+
+    /* uPlot legend inherits the page palette rather than its own defaults. */
+    .u-legend { font-size: 12px; color: #999; }
+    .u-legend .u-marker { border-radius: 2px; }
+
+    /* -- Light mode ---------------------------------------------------------- */
+    [data-theme="light"] {
+      --bg:       #f0f0f0;
+      --muted:    #999;
+      --text:     #222;
+      --panel-bg: #fff;
+      --border:   #d8d8d8;
+    }
+    [data-theme="light"] .bh-controls .lbl  { color: #6b7280; }
+    [data-theme="light"] .bh-win-btn        { background: #e8e8e8; border-color: #c8c8c8; color: #555; }
+    [data-theme="light"] .bh-win-btn:hover  { background: rgba(59,130,246,0.10); border-color: rgba(59,130,246,0.5); color: var(--accent); }
+    [data-theme="light"] .bh-win-btn.active { background: rgba(59,130,246,0.15); border-color: rgba(59,130,246,0.6); color: var(--accent); }
+    [data-theme="light"] .bh-empty .title   { color: #444; }
+    [data-theme="light"] .bh-empty .sub     { color: #6b7280; }
+    [data-theme="light"] .bh-stat .k        { color: #6b7280; }
+    [data-theme="light"] .bh-stat .v.small  { color: #555; }
+    [data-theme="light"] .bh-note           { color: #888; }
+    [data-theme="light"] .u-legend          { color: #555; }
+  </style>
+</head>
+<body>
+
+  <header class="topbar">
+    <script>document.write(TopBar.brandHTML)</script>
+    <div class="v-sep"></div>
+    <script>document.write(TopBar.compactDropdownHTML)</script>
+    <span class="topbar-title">Metric History</span>
+
+    <div class="topbar-right">
+      <script>document.write(TopBar.monitoringBtnHTML)</script>
+      <script>document.write(TopBar.manageDevicesBtnHTML)</script>
+      <script>document.write(TopBar.configMenuHTML)</script>
+    </div>
+  </header>
+
+  <div class="page">
+    <div class="bh-controls">
+      <span class="lbl">Headset</span>
+      <select id="headset-select"><option value="">Loading...</option></select>
+      <span class="lbl">Metric</span>
+      <select id="metric-select"></select>
+      <!-- Filled by renderWindowButtons(): the "all records" button only exists
+           when retention is wider than 24h, so it is not markup. -->
+      <div class="bh-windows" id="window-buttons"></div>
+    </div>
+
+    <div class="bh-panel">
+      <div id="chart"></div>
+    </div>
+
+    <div class="bh-stats" id="stats"></div>
+    <div class="bh-note" id="note"></div>
+  </div>
+
+  <script src="assets/vendor/uplot/uPlot.iife.min.js"></script>
+  <script src="assets/battery_chart.js"></script>
+  <script>
+    'use strict';
+
+    // -- State ----------------------------------------------------------------
+    var FIXED_WINDOWS = [1, 3, 12, 24];
+
+    var params    = new URLSearchParams(location.search);
+    var headsetId = parseInt(params.get('id'), 10) || 0;
+    var metric    = params.get('metric') || 'battery';
+    if (MetricChart.metricKeys().indexOf(metric) === -1) metric = 'battery';
+
+    // 'all' is a window like any other here; the server resolves it to the live
+    // retention period and echoes back the numeric hours it used.
+    var win = params.get('hours') || '24';
+    if (win !== 'all' && FIXED_WINDOWS.indexOf(parseInt(win, 10)) === -1) win = '24';
+
+    var chart       = null;   // { plot, stats, metric } from MetricChart.render
+    var lastPayload = null;   // kept so a resize/theme flip can redraw without refetching
+    var headsets    = [];
+
+    // Same load-tier cadence the monitoring page uses, so this page does not poll
+    // harder than the rest of the UI while the machine is under pressure.
+    var loadTier = { multiplier: 1, base: { vrmonitor: 4 } };
+    function nextDelay() {
+      try { return Math.max(2000, (loadTier.base.vrmonitor || 4) * (loadTier.multiplier || 1) * 1000); }
+      catch (e) { return 4000; }
+    }
+    function refreshLoadTier() {
+      return fetch('/api/load-tier')
+        .then(function (r) { return r.json(); })
+        .then(function (j) { if (j && j.loadTier) loadTier = j.loadTier; })
+        .catch(function () {});
+    }
+
+    function esc(s) {
+      return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function fmtLocal(iso) {
+      var d = new Date(iso);
+      if (isNaN(d.getTime())) return '-';
+      return d.toLocaleString();
+    }
+
+    // "72" -> "3d", "36" -> "36h". Used for the All button's label only.
+    function fmtSpan(h) {
+      if (h >= 48 && h % 24 === 0) return (h / 24) + 'd';
+      if (h >= 48) return Math.round(h / 24) + 'd';
+      return h + 'h';
+    }
+
+    // Hours the current window stands for, for copy that has to name a duration
+    // before the payload has arrived.
+    function currentHours() {
+      return win === 'all' ? MetricChart.getRetentionHours() : parseInt(win, 10);
+    }
+
+    // -- URL <-> state --------------------------------------------------------
+    // Kept in the address bar so a view is linkable and survives a reload.
+    function syncUrl() {
+      var q = '?id=' + headsetId + '&metric=' + encodeURIComponent(metric) + '&hours=' + win;
+      history.replaceState(null, '', location.pathname + q);
+    }
+
+    function setTitle() {
+      var h = headsets.filter(function (x) { return x.id === headsetId; })[0];
+      var name = h ? h.name : ('#' + headsetId);
+      document.title = MetricChart.metricDef(metric).label + ' History - ' + name;
+    }
+
+    // -- Controls -------------------------------------------------------------
+    /* The four fixed windows always render. "All records" is appended ONLY when
+     * retention is wider than 24h - below that it would be a second 24h button
+     * with a different label. Retention comes from the config fetch that
+     * loadThresholds() already makes, so the buttons are right on first paint
+     * rather than after the first payload lands. */
+    function renderWindowButtons() {
+      var retention = MetricChart.getRetentionHours();
+      var html = FIXED_WINDOWS.map(function (h) {
+        return '<button class="bh-win-btn' + (win === String(h) ? ' active' : '') +
+               '" data-win="' + h + '">' + h + 'h</button>';
+      }).join('');
+      if (retention > 24) {
+        html += '<button class="bh-win-btn' + (win === 'all' ? ' active' : '') +
+                '" data-win="all" title="Everything still kept (' + retention + ' hours)">All (' +
+                fmtSpan(retention) + ')</button>';
+      } else if (win === 'all') {
+        // Retention was lowered while a saved link still asks for 'all'; there is
+        // no button to select, so fall back rather than leave nothing highlighted.
+        win = '24';
+        return renderWindowButtons();
+      }
+      document.getElementById('window-buttons').innerHTML = html;
+    }
+
+    function renderMetricSelect() {
+      document.getElementById('metric-select').innerHTML =
+        MetricChart.metricKeys().map(function (k) {
+          return '<option value="' + k + '"' + (k === metric ? ' selected' : '') + '>' +
+                 esc(MetricChart.metricDef(k).label) + '</option>';
+        }).join('');
+    }
+
+    // -- Rendering ------------------------------------------------------------
+    function renderEmpty(payload) {
+      var retention = (payload && payload.retentionHours) || MetricChart.getRetentionHours();
+      var h = (payload && payload.hours) || currentHours();
+      var label = MetricChart.metricDef(metric).label.toLowerCase();
+      document.getElementById('chart').innerHTML =
+        '<div class="bh-empty">' +
+          '<div class="title">No ' + esc(label) + ' samples in the last ' + h + ' hour' + (h === 1 ? '' : 's') + '</div>' +
+          '<div class="sub">A sample is only recorded when the value actually changes, so a headset that is ' +
+            'switched off, unreachable, or holding steady produces no rows. History is kept for ' +
+            retention + ' hours. Try a wider window.</div>' +
+        '</div>';
+      document.getElementById('stats').innerHTML = '';
+    }
+
+    function renderStats(payload, s) {
+      var samples = payload.samples;
+      if (!Array.isArray(samples)) samples = samples ? [samples] : [];
+      var firstTs = samples.length ? samples[0].ts : null;
+      var lastTs  = samples.length ? samples[samples.length - 1].ts : null;
+
+      var def = MetricChart.metricDef(metric);
+
+      // Net change over the window, from the first drawn value (which may be the
+      // seed sample from before the window) to the current one.
+      var delta = s.last - s.first;
+      var deltaTxt = (delta > 0 ? '+' : '') + delta.toFixed(def.dp) + (def.unit === '%' ? ' %' : ' ' + def.unit);
+      // Which direction is "good" depends on the metric: losing battery is bad,
+      // losing degrees is not. A neutral metric gets no colour at all.
+      var deltaColor = '#888';
+      if (delta !== 0 && def.dir !== 'neutral') {
+        var bad = (def.dir === 'low-bad') ? (delta < 0) : (delta > 0);
+        deltaColor = bad ? '#f97316' : '#22c55e';
+      }
+
+      var cells = [
+        { k: 'Current',   v: MetricChart.formatValue(s.last, metric), color: MetricChart.levelColor(s.last, metric) },
+        { k: 'Minimum',   v: MetricChart.formatValue(s.min, metric) },
+        { k: 'Maximum',   v: MetricChart.formatValue(s.max, metric) },
+        { k: 'Net change', v: deltaTxt, color: deltaColor },
+        { k: 'Samples',   v: String(s.count) },
+        { k: 'First sample', v: fmtLocal(firstTs), small: true },
+        { k: 'Last sample',  v: fmtLocal(lastTs),  small: true }
+      ];
+
+      document.getElementById('stats').innerHTML = cells.map(function (c) {
+        var style = c.color ? ' style="color:' + c.color + '"' : '';
+        return '<div class="bh-stat"><div class="k">' + esc(c.k) + '</div>' +
+               '<div class="v' + (c.small ? ' small' : '') + '"' + style + '>' + esc(c.v) + '</div></div>';
+      }).join('');
+    }
+
+    function draw() {
+      if (!lastPayload) return;
+      var el = document.getElementById('chart');
+      var res = MetricChart.render(el, lastPayload, {
+        mode: 'full',
+        metric: metric,
+        width: el.clientWidth || 900,
+        height: 320
+      });
+      if (!res) { renderEmpty(lastPayload); chart = null; return; }
+      chart = res;
+      renderStats(lastPayload, res.stats);
+    }
+
+    function load() {
+      if (!headsetId) {
+        document.getElementById('chart').innerHTML =
+          '<div class="bh-empty"><div class="title">No headset selected</div>' +
+          '<div class="sub">Pick one from the dropdown above, or click a battery level or ' +
+          'temperature on the Headsets Monitoring page.</div></div>';
+        return Promise.resolve();
+      }
+      return fetch('/api/metric-history?id=' + headsetId + '&metric=' + encodeURIComponent(metric) + '&hours=' + win)
+        .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function (j) {
+          lastPayload = j;
+          draw();
+        })
+        .catch(function () {});
+    }
+
+    document.getElementById('window-buttons').addEventListener('click', function (e) {
+      var btn = e.target.closest('.bh-win-btn');
+      if (!btn) return;
+      win = btn.dataset.win;
+      var all = document.querySelectorAll('.bh-win-btn');
+      for (var i = 0; i < all.length; i++) all[i].classList.toggle('active', all[i] === btn);
+      syncUrl();
+      load();
+    });
+
+    document.getElementById('headset-select').addEventListener('change', function (e) {
+      headsetId = parseInt(e.target.value, 10) || 0;
+      syncUrl();
+      setTitle();
+      load();
+    });
+
+    document.getElementById('metric-select').addEventListener('change', function (e) {
+      metric = e.target.value;
+      // The previous metric's series must not linger under the new axis while the
+      // fetch is in flight - a temperature drawn on a 0..100 battery scale is a
+      // convincing-looking lie.
+      lastPayload = null;
+      document.getElementById('chart').innerHTML = '';
+      document.getElementById('stats').innerHTML = '';
+      syncUrl();
+      setTitle();
+      load();
+    });
+
+    function loadHeadsets() {
+      return fetch('/api/headsets-status')
+        .then(function (r) { return r.json(); })
+        .then(function (items) {
+          headsets = (items || []).map(function (r) { return { id: r.id, name: r.name }; });
+          // Landing here with no ?id (e.g. straight from the menu) picks the first
+          // headset rather than showing an empty page for no reason.
+          if (!headsetId && headsets.length) { headsetId = headsets[0].id; syncUrl(); }
+          var sel = document.getElementById('headset-select');
+          sel.innerHTML = headsets.map(function (h) {
+            return '<option value="' + h.id + '"' + (h.id === headsetId ? ' selected' : '') + '>' +
+                   esc(h.name) + '</option>';
+          }).join('') || '<option value="">No headsets</option>';
+          setTitle();
+        })
+        .catch(function () {});
+    }
+
+    // uPlot is fixed-size at construction, so both a resize and a theme flip mean
+    // a rebuild. Redraw from the cached payload - neither needs a refetch.
+    var resizeTimer = null;
+    window.addEventListener('resize', function () {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(draw, 150);
+    });
+    MetricChart.observeTheme(draw);
+
+    document.getElementById('note').textContent =
+      'Samples are recorded only when the value changes. The line is a step: each value ' +
+      'holds until the next recorded change.';
+
+    // -- Boot -----------------------------------------------------------------
+    function loop() {
+      load().then(function () { setTimeout(loop, nextDelay()); });
+    }
+    // Config first: the chart line, the fill and the "Current" stat are all coloured
+    // by the thresholds, and the window buttons depend on the retention period, so
+    // drawing before they land would flash the wrong band and the wrong buttons.
+    MetricChart.loadThresholds()
+      .then(function () { renderMetricSelect(); renderWindowButtons(); })
+      .then(refreshLoadTier)
+      .then(loadHeadsets)
+      .then(function () { syncUrl(); loop(); });
+    setInterval(refreshLoadTier, 60000);
+  </script>
+</body>
+</html>

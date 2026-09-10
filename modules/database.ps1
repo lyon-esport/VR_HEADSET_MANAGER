@@ -753,11 +753,12 @@ $script:DbLastMaintenance = $null
 .SYNOPSIS
     Runs periodic database housekeeping. Self-throttling and never throws.
 .DESCRIPTION
-    Currently one job: enforce the battery-history retention window
-    (database.battery_history_hours, default 24).
+    Currently one job: enforce the metric-history retention window
+    (database.metric_history_hours, default 24), across every headset and every
+    metric in one DELETE.
 
-    Retention is deliberately NOT enforced by the sampling trigger. A sample is
-    taken on every battery change for every headset, so pruning there would put
+    Retention is deliberately NOT enforced by the sampling triggers. A sample is
+    taken on every reading change for every headset, so pruning there would put
     a DELETE and a correlated subquery on the monitor's hot write path - and
     that path is one batched transaction covering every headset, so anything
     that throws in it loses the whole tick's status.
@@ -780,16 +781,16 @@ function Invoke-DbMaintenance {
     }
     $script:DbLastMaintenance = Get-Date
 
-    $hours = if ($global:databaseBatteryHistoryHours) { [int]$global:databaseBatteryHistoryHours } else { 24 }
+    $hours = if ($global:databaseMetricHistoryHours) { [int]$global:databaseMetricHistoryHours } else { 24 }
     if ($hours -le 0) { return $false }
 
     try {
-        # Same ISO-8601 UTC shape the sampling trigger writes, so the comparison
+        # Same ISO-8601 UTC shape the sampling triggers write, so the comparison
         # is a plain string compare against an indexed column.
         $cutoff  = [datetime]::UtcNow.AddHours(-$hours).ToString('yyyy-MM-ddTHH:mm:ssZ')
-        $removed = Invoke-DbNonQuery -Name 'battery.prune' -Parameters @{ cutoff = $cutoff }
+        $removed = Invoke-DbNonQuery -Name 'metric.prune' -Parameters @{ cutoff = $cutoff }
         if ($removed -gt 0) {
-            Write-Log ("Database maintenance: removed {0} battery sample(s) older than {1}h." -f $removed, $hours) -Level DEBUG
+            Write-Log ("Database maintenance: removed {0} metric sample(s) older than {1}h." -f $removed, $hours) -Level DEBUG
         }
         return $true
     }

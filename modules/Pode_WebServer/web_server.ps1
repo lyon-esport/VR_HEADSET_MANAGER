@@ -1931,6 +1931,69 @@ try {
             continue
         }
 
+        # API: GET /api/metric-history?id=3&metric=temp&hours=24  - one metric's samples
+        # for one headset. Backs the metric graph: the hover sparkline on
+        # headsets_monitoring.html and the full metric_history.html page. Read-only,
+        # DB-backed, no side effects.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/metric-history') {
+            try {
+                $rawId = $request.QueryString['id']
+                $idVal = 0
+                if (-not [int]::TryParse([string]$rawId, [ref]$idVal) -or $idVal -le 0) {
+                    Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = 'Missing or invalid id parameter' }
+                    continue
+                }
+
+                # Unknown metric falls back rather than 400s, for the same reason a bad
+                # window does: a stale or hand-typed link should still draw something.
+                $metricDefs = Get-HeadsetMetricDefinition
+                $metricVal  = [string]$request.QueryString['metric']
+                if (-not $metricVal -or -not $metricDefs.Contains($metricVal)) { $metricVal = 'battery' }
+
+                # The four windows the UI offers, plus 'all'. Anything else silently falls
+                # back to 24h - this is a display window, not a command.
+                #
+                # 'all' resolves HERE, from the live retention period, so "all records"
+                # always means "everything still kept" and the page never has to know the
+                # number. The response echoes the resolved numeric hours, which is what the
+                # chart pins its x scale to, so the chart needs no special case.
+                $retentionHours = if ($global:databaseMetricHistoryHours) { [int]$global:databaseMetricHistoryHours } else { 24 }
+                $hoursVal   = 24
+                $windowName = '24'
+                $rawHours   = [string]$request.QueryString['hours']
+                if ($rawHours -eq 'all') {
+                    $hoursVal   = $retentionHours
+                    $windowName = 'all'
+                } elseif ($rawHours -and @('1','3','12','24') -contains $rawHours) {
+                    $hoursVal   = [int]$rawHours
+                    $windowName = $rawHours
+                }
+
+                # An empty series is a VALID answer, not a 404: samples are only written when
+                # the value changes, so a headset that held steady across the whole window
+                # genuinely has nothing to return. The page says so in words.
+                $samples = @(Get-MetricHistory -HeadsetId $idVal -Metric $metricVal -Hours $hoursVal |
+                    ForEach-Object { @{ ts = [string]$_.ts; value = [double]$_.value } })
+
+                Send-JsonResponse -Response $response -Body @{
+                    ok             = $true
+                    id             = $idVal
+                    metric         = $metricVal
+                    unit           = [string]$metricDefs[$metricVal].Unit
+                    hours          = $hoursVal
+                    window         = $windowName
+                    retentionHours = $retentionHours
+                    nowUtc         = [datetime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+                    samples        = $samples
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
         # API: GET /api/favoriteapps?name=Q3_BLUE  - returns Meta Home + per-headset favorites as JSON
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/favoriteapps') {
             try {

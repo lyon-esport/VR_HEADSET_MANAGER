@@ -555,26 +555,41 @@
       return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     }
 
-    // Battery level as a button: hover shows a 1h sparkline, click opens the full
+    // The status columns carry display strings, not numbers: "85 %", "36.4", "18".
+    // parseFloat stops at the space, and the comma swap covers a FR-locale decimal.
+    function metricNumber(raw) {
+      if (raw == null || raw === '' || raw === '-') return null;
+      var n = parseFloat(String(raw).replace(',', '.').replace('%', ''));
+      return isNaN(n) ? null : n;
+    }
+
+    // A metric value as a button: hover shows a 1h sparkline, click opens the full
     // history page. Falls back to plain text when there is no reading or no id to
     // address - a dash is not worth a control.
-    function battButton(r) {
-      var raw = r['battery'];
-      if (raw == null || raw === '' || raw === '-') return '<span style="color:#333">-</span>';
-
-      var pct = parseInt(String(raw).replace('%', ''), 10);
-      var txt = String(raw).indexOf('%') === -1 && !isNaN(pct) ? (pct + ' %') : String(raw);
-      var id  = parseInt(r['id'], 10) || 0;
-      if (isNaN(pct) || !id) return esc(txt);
+    //
+    // Shared by the Battery and Temp cells, so both behave identically. The bar is
+    // drawn only for percent metrics: "width: 36%" is a meaningful fill for a
+    // battery and a meaningless one for 36 degrees.
+    function metricButton(r, metric, raw) {
+      var v  = metricNumber(raw);
+      var id = parseInt(r['id'], 10) || 0;
+      if (v === null || !id) return '<span style="color:#333">-</span>';
 
       var name  = r['name'] || '';
-      var color = BatteryChart.levelColor(pct);
-      var width = Math.max(0, Math.min(100, pct));
+      var def   = MetricChart.metricDef(metric);
+      var color = MetricChart.levelColor(v, metric);
+      var txt   = MetricChart.formatValue(v, metric);
+      var bar   = '';
+      if (def.unit === '%') {
+        var width = Math.max(0, Math.min(100, v));
+        bar = '<span class="batt-bar-wrap"><span class="batt-bar" style="width:' + width + '%;background:' + color + '"></span></span>';
+      }
       // No title= on purpose: the native tooltip would fight the sparkline.
-      return '<button class="batt-btn" data-batt-id="' + id + '" data-batt-name="' + esc(name) + '" ' +
-             'data-batt-pct="' + pct + '" aria-label="Battery history for ' + esc(name) + '">' +
-               '<span class="batt-val">' + esc(txt) + '</span>' +
-               '<span class="batt-bar-wrap"><span class="batt-bar" style="width:' + width + '%;background:' + color + '"></span></span>' +
+      return '<button class="batt-btn" data-metric-id="' + id + '" data-metric-key="' + esc(metric) + '" ' +
+             'data-metric-name="' + esc(name) + '" data-metric-val="' + v + '" ' +
+             'aria-label="' + esc(def.label) + ' history for ' + esc(name) + '">' +
+               '<span class="batt-val"' + (def.unit === '%' ? '' : ' style="color:' + color + '"') + '>' + esc(txt) + '</span>' +
+               bar +
              '</button>';
     }
 
@@ -624,11 +639,11 @@
           '<td class="center">' + pill(scrcpyOk ? 'OK' : 'OFF', scrcpyOk ? 'pill-blue' : 'pill-orange') + '</td>' +
           '<td class="center">' + (charging ? pill(chargingLabel,'pill-green') : pill('No','pill-red')) + '</td>' +
           '<td class="center">' + powerPill + '</td>' +
-          '<td>' + battButton(r) + '</td>' +
+          '<td>' + metricButton(r, 'battery', r['battery']) + '</td>' +
           '<td style="color:#888;font-size:12px">' + esc(timeCell) + '</td>' +
           '<td>' + esc(r['battery_ctrl_left']  || '-') + '</td>' +
           '<td>' + esc(r['battery_ctrl_right'] || '-') + '</td>' +
-          '<td>' + esc(r['temp'] || '-') + (r['temp'] && r['temp'] !== '-' ? ' C' : '') + '</td>' +
+          '<td>' + metricButton(r, 'temp', r['temp']) + '</td>' +
           '<td style="color:#666">' + esc(r['model'] || '-') + '</td>' +
           '<td>' + appCell + '</td>' +
           '<td><button class="mon-launch-btn" data-launch-app="' + dn + '" title="Launch an app on ' + esc(r['name'] || '') + '">' +
@@ -655,10 +670,20 @@
     // handlers are delegated on the table, and the open tooltip is tracked by
     // headset ID so it can be re-anchored to the freshly rendered button.
     var battTipEl    = null;
-    var battTipId    = 0;    // headset id currently shown, 0 = hidden
+    // "<id>|<metric>" currently shown, '' = hidden. Keyed on BOTH because one row
+    // now has two hoverable cells: tracking the id alone would make a hover on
+    // Temp look like the Battery tooltip that is already open, and skip it.
+    var battTipKey   = '';
     var battTipChart = null;
-    var battCache    = {};   // id -> { at, payload }, so repeated hovers do not refetch
+    var battCache    = {};   // "<id>|<metric>" -> { at, payload }, so repeated hovers do not refetch
     var BATT_CACHE_MS = 30000;
+
+    function metricTipKey(id, metric) { return id + '|' + metric; }
+
+    // The button for one metric of one headset, or null once the row is gone.
+    function metricBtnEl(id, metric) {
+      return document.querySelector('.batt-btn[data-metric-id="' + id + '"][data-metric-key="' + metric + '"]');
+    }
 
     function battTip() {
       if (!battTipEl) {
@@ -670,7 +695,7 @@
     }
 
     function hideBattTip() {
-      battTipId = 0;
+      battTipKey = '';
       if (battTipChart && battTipChart.plot) { try { battTipChart.plot.destroy(); } catch (e) {} }
       battTipChart = null;
       if (battTipEl) battTipEl.style.display = 'none';
@@ -690,43 +715,47 @@
     }
 
     function renderBattTip(btn, payload) {
-      var el   = battTip();
-      var name = btn.dataset.battName || ('#' + btn.dataset.battId);
-      var pct  = parseInt(btn.dataset.battPct, 10);
+      var el     = battTip();
+      var metric = btn.dataset.metricKey || 'battery';
+      var name   = btn.dataset.metricName || ('#' + btn.dataset.metricId);
+      var val    = parseFloat(btn.dataset.metricVal);
+      var def    = MetricChart.metricDef(metric);
 
       el.innerHTML =
-        '<div class="tip-head"><strong>' + esc(name) + '</strong><span>last 1h</span></div>' +
+        '<div class="tip-head"><strong>' + esc(name) + '</strong><span>' + esc(def.label) + ' - last 1h</span></div>' +
         '<div class="tip-chart" id="batt-tip-chart"></div>' +
-        '<div class="tip-foot">click for 24 / 12 / 3 / 1h history</div>';
+        '<div class="tip-foot">click for full history</div>';
 
       var host = el.querySelector('#batt-tip-chart');
-      var res  = BatteryChart.render(host, payload, { mode: 'mini', width: 190, height: 56 });
+      var res  = MetricChart.render(host, payload, { mode: 'mini', metric: metric, width: 190, height: 56 });
       if (!res) {
-        // No sample in the window is normal, not an error: the level simply did
+        // No sample in the window is normal, not an error: the value simply did
         // not change. Say what it is holding at instead of drawing an empty box.
         host.outerHTML = '<div class="tip-msg">No change in the last hour' +
-          (isNaN(pct) ? '' : ' - holding at ' + pct + ' %') + '.</div>';
+          (isNaN(val) ? '' : ' - holding at ' + MetricChart.formatValue(val, metric)) + '.</div>';
       }
       battTipChart = res;
       positionBattTip(btn);
     }
 
     function showBattTip(btn) {
-      var id = parseInt(btn.dataset.battId, 10) || 0;
+      var id     = parseInt(btn.dataset.metricId, 10) || 0;
+      var metric = btn.dataset.metricKey || 'battery';
       if (!id) return;
-      battTipId = id;
+      var key = metricTipKey(id, metric);
+      battTipKey = key;
 
-      var c = battCache[id];
+      var c = battCache[key];
       if (c && (Date.now() - c.at) < BATT_CACHE_MS) { renderBattTip(btn, c.payload); return; }
 
-      fetch('/api/battery-history?id=' + id + '&hours=1')
+      fetch('/api/metric-history?id=' + id + '&metric=' + encodeURIComponent(metric) + '&hours=1')
         .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
         .then(function(j) {
-          battCache[id] = { at: Date.now(), payload: j };
-          // The pointer may have left or moved on while the fetch was in flight,
-          // and the row may have been re-rendered underneath it.
-          if (battTipId !== id) return;
-          var cur = document.querySelector('.batt-btn[data-batt-id="' + id + '"]');
+          battCache[key] = { at: Date.now(), payload: j };
+          // The pointer may have left or moved on to another cell while the fetch
+          // was in flight, and the row may have been re-rendered underneath it.
+          if (battTipKey !== key) return;
+          var cur = metricBtnEl(id, metric);
           if (cur) renderBattTip(cur, j);
         })
         .catch(function() {});
@@ -735,8 +764,9 @@
     // Called after every table rebuild: keep the tooltip glued to its button, or
     // drop it if that headset's row is gone or filtered out.
     function reanchorBattTip() {
-      if (!battTipId) return;
-      var btn = document.querySelector('.batt-btn[data-batt-id="' + battTipId + '"]');
+      if (!battTipKey) return;
+      var parts  = battTipKey.split('|');
+      var btn    = metricBtnEl(parts[0], parts[1]);
       if (!btn || btn.offsetParent === null) { hideBattTip(); return; }
       positionBattTip(btn);
     }
@@ -1216,10 +1246,10 @@
         setTimeout(statusLoop, nextStatusDelay());
       });
     }
-    // Battery bands come from config (Monitoring.thresholds) - fetch them BEFORE the
-    // first paint so a row is never coloured on the fallback values and then silently
+    // Metric bands come from config (Monitoring.thresholds) - fetch them BEFORE the
+    // first paint so a cell is never coloured on the fallback values and then silently
     // recoloured a few seconds later. loadThresholds always resolves.
-    BatteryChart.loadThresholds().finally(statusLoop);
+    MetricChart.loadThresholds().finally(statusLoop);
 
     document.getElementById('headsets-table').addEventListener('click', function(e) {
       var btn = e.target.closest('[data-launch-app]');
@@ -1228,17 +1258,21 @@
       var batt = e.target.closest('.batt-btn');
       if (batt) {
         hideBattTip();
-        window.location.href = 'battery_history.html?id=' + batt.dataset.battId + '&hours=24';
+        window.location.href = 'metric_history.html?id=' + batt.dataset.metricId +
+          '&metric=' + encodeURIComponent(batt.dataset.metricKey || 'battery') + '&hours=24';
       }
     });
 
-    // Hover in/out for the battery sparkline. Delegated so it survives the tbody
+    // Hover in/out for the metric sparkline. Delegated so it survives the tbody
     // being rebuilt on every poll.
     document.getElementById('headsets-table').addEventListener('mouseover', function(e) {
       var btn = e.target.closest('.batt-btn');
       if (!btn) return;
-      var id = parseInt(btn.dataset.battId, 10) || 0;
-      if (id && id === battTipId) return;   // already showing this one
+      var id = parseInt(btn.dataset.metricId, 10) || 0;
+      if (!id) return;
+      // Already showing this exact cell. Compared on id AND metric: moving from
+      // Battery to Temp on the same row is a different tooltip, not the same one.
+      if (metricTipKey(id, btn.dataset.metricKey || 'battery') === battTipKey) return;
       showBattTip(btn);
     });
     document.getElementById('headsets-table').addEventListener('mouseout', function(e) {
