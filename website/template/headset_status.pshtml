@@ -211,7 +211,6 @@
       </main>
     </div>
 
-    <script src="/assets/live_events.js"></script>
     <script>
       // Baked-in constants from template generation (static, never change at runtime)
       var _ID    = '<%= $id %>';
@@ -335,26 +334,16 @@
         applyTempClass();
       });
 
-      // Live updates: /api/events pushes a nudge when the headset_status change counter
-      // moves, so this overlay re-fetches on a real change instead of every 2 s. Every
-      // OBS Browser source pointing at this page used to be a permanent 0.5 Hz client,
-      // and the request rate scaled with headsets x open sources.
+      // Polling: fetch only JSON data, update DOM in-place (no full-page reload)
       (function () {
-        var SAFETY_MS = 15000;   // slow net when SSE is connected
-        var POLL_MS   = 2000;    // original cadence, used when it is not
+        var INTERVAL_MS = 2000;
         function refresh() {
           fetch('/api/headset-status?id=' + encodeURIComponent(_ID), { cache: 'no-store' })
             .then(function (r) { return r.json(); })
             .then(_updateFromJson)
             .catch(function () {});
         }
-        function safetyLoop() {
-          var connected = (window.LiveEvents && LiveEvents.isConnected());
-          setTimeout(function () { refresh(); safetyLoop(); }, connected ? SAFETY_MS : POLL_MS);
-        }
-        if (window.LiveEvents) { LiveEvents.subscribe('headset_status', refresh); }
-        refresh();
-        safetyLoop();
+        setInterval(refresh, INTERVAL_MS);
       })();
     </script>
   </body>

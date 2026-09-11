@@ -8,7 +8,6 @@
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
   <link rel="stylesheet" href="assets/topbar.css">
   <script src="assets/topbar.js"></script>
-  <script src="assets/live_events.js"></script>
   <style>
     /* --------- Configuration --------------------------------------------------------------------------------------------------------------------------------------------------------------------- */
     :root {
@@ -548,15 +547,9 @@
     // Load-tier state: populated by /api/load-tier on page-init, refreshed on every poll completion.
     // multiplier = 1 (idle) | 2 (mitigation) | 5 (max). base.vrmonitor is in seconds.
     var loadTier = { tier: 'idle', multiplier: 1, base: { vrmonitor: 5, computer_monitoring: 60 } };
-    // SSE heartbeat: while /api/events is connected the page is told when something
-    // actually changed, so the poll chain is only a safety net (see live_events.js).
-    var SSE_HEARTBEAT_MS = 15000;
     function nextStatusDelay() {
-      try {
-        var base = Math.max(500, (loadTier.base.vrmonitor || 5) * (loadTier.multiplier || 1) * 1000);
-        if (window.LiveEvents && LiveEvents.isConnected()) { return Math.max(base, SSE_HEARTBEAT_MS); }
-        return base;
-      } catch (e) { return REFRESH_MS; }
+      try { return Math.max(500, (loadTier.base.vrmonitor || 5) * (loadTier.multiplier || 1) * 1000); }
+      catch (e) { return REFRESH_MS; }
     }
     function refreshLoadTier() {
       return fetch('/api/load-tier').then(function(r){ return r.json(); }).then(function(j){
@@ -1591,22 +1584,14 @@
           });
         }
         // Bootstrap: learn the tier + base from the server BEFORE scheduling polls.
-        // With /api/events connected, pollHeadsetsStatus is driven by the headset_status
-        // change counter and this chain drops to a slow safety net (see live_events.js).
+        // After every poll completion, refresh the tier in parallel and re-schedule using
+        // setTimeout (not setInterval) so each tick re-reads the current multiplier.
         function statusLoop() {
-          Promise.all([pollHeadsetsStatus(), refreshCaptureMode()]).finally(function() {
+          Promise.all([pollHeadsetsStatus(), refreshLoadTier(), refreshCaptureMode()]).finally(function() {
             setTimeout(statusLoop, nextStatusDelay());
           });
         }
-        function loadTierLoop() {
-          refreshLoadTier().finally(function() { setTimeout(loadTierLoop, 30000); });
-        }
-        if (window.LiveEvents) {
-          LiveEvents.subscribe('headset_status', pollHeadsetsStatus);
-          LiveEvents.subscribe('headsets',       checkHeadsetListChanged);
-          LiveEvents.subscribe('kiosks',         fetchKioskList);
-        }
-        refreshLoadTier().finally(function() { statusLoop(); loadTierLoop(); });
+        refreshLoadTier().finally(statusLoop);
         document.querySelectorAll('#grid .cell').forEach(function(cell) {
           var dn = cell.dataset.display;
           if (!dn) return;

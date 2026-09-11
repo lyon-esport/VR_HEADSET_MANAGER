@@ -276,13 +276,7 @@
     "WebServer":  {
                       "enabled":  true,
                       "port":  8080,
-                      "openBrowserOnStartup":  true,
-                      "sse":  {
-                                  "enabled":  true,
-                                  "poll_ms":  250,
-                                  "max_clients":  32,
-                                  "heartbeat_sec":  15
-                              }
+                      "openBrowserOnStartup":  true
                   },
     "Network":  {
                     "waitForValidNetwork":  true,

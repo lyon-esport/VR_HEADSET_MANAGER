@@ -8,7 +8,6 @@
   <link rel="stylesheet" href="assets/topbar.css">
   <link rel="stylesheet" href="assets/vendor/uplot/uPlot.min.css">
   <script src="assets/topbar.js"></script>
-  <script src="assets/live_events.js"></script>
   <!-- Loaded here, not at the end of <body>: renderTable() calls into
        BatteryChart on the first poll, which can land before a deferred script. -->
   <script src="assets/vendor/uplot/uPlot.iife.min.js"></script>
@@ -514,16 +513,7 @@
     // Load-tier state: populated by /api/load-tier on page-init, refreshed periodically.
     // multiplier = 1 (idle) | 2 (mitigation) | 5 (max).
     var loadTier = { tier: 'idle', multiplier: 1, base: { vrmonitor: 4, computer_monitoring: 30 } };
-    // SSE heartbeat: while /api/events is connected the page is told when something
-    // actually changed, so the timer below is only a safety net (see live_events.js).
-    var SSE_HEARTBEAT_MS = 15000;
-    function nextStatusDelay()  {
-      try {
-        var base = Math.max(500, (loadTier.base.vrmonitor || 4) * (loadTier.multiplier || 1) * 1000);
-        if (window.LiveEvents && LiveEvents.isConnected()) { return Math.max(base, SSE_HEARTBEAT_MS); }
-        return base;
-      } catch (e) { return REFRESH_MS; }
-    }
+    function nextStatusDelay()  { try { return Math.max(500, (loadTier.base.vrmonitor || 4) * (loadTier.multiplier || 1) * 1000); }    catch (e) { return REFRESH_MS; } }
     function nextComputerDelay(){ try { return Math.max(1000, (loadTier.base.computer_monitoring || 30) * (loadTier.multiplier || 1) * 1000); } catch (e) { return 30000; } }
     function refreshLoadTier()  {
       return fetch('/api/load-tier').then(function(r){ return r.json(); }).then(function(j){
@@ -1251,22 +1241,10 @@
     // ── /Video Quality Automation ───────────────────────────────────────────
 
     // Status loop: bootstrap-then-recursive setTimeout so each tick re-reads the multiplier.
-    // With SSE connected this degrades to a slow safety net - pollHeadsetsStatus is driven
-    // by the headset_status change counter instead (subscription below).
     function statusLoop() {
-      pollHeadsetsStatus().finally(function() {
+      Promise.all([pollHeadsetsStatus(), refreshLoadTier()]).finally(function() {
         setTimeout(statusLoop, nextStatusDelay());
       });
-    }
-    // Load tier no longer rides along with every status tick: it changes on the order of
-    // minutes, and at 1 Hz-class cadences it was doubling the request rate for nothing.
-    function loadTierLoop() {
-      refreshLoadTier().finally(function() { setTimeout(loadTierLoop, 30000); });
-    }
-    loadTierLoop();
-    if (window.LiveEvents) {
-      LiveEvents.subscribe('headset_status', pollHeadsetsStatus);
-      LiveEvents.subscribe('headsets',       pollHeadsetsStatus);
     }
     // Metric bands come from config (Monitoring.thresholds) - fetch them BEFORE the
     // first paint so a cell is never coloured on the fallback values and then silently
