@@ -32,7 +32,7 @@ scripts/dbTests/reports/
 /sources/ffmpeg-8.1-essentials_build.zip
 /sources/ffmpeg*
 /sources/Archives/
-
+/sources/Tools/*
 #Web and app data
 /app_icons
 

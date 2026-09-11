@@ -73,6 +73,7 @@ Invoke-RegressionTest -Name 'Add a headset by IP' -Test {
     Add-TestEvidence ("row: ID={0} IP={1} Model={2} Profile={3}" -f $row.ID, $row.IPAddress, $row.Model, $row.ScrcpyProfile)
     Assert-Equal $nrtIp $row.IPAddress 'stored IP'
     Assert-Equal 'Quest 3' $row.Model 'stored model'
+    Assert-Equal 'square-R-N-45-10' $row.ScrcpyProfile 'default Scrcpy profile'
 }
 
 Invoke-RegressionTest -Name 'New headset gets its default side files' -Test {
