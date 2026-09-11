@@ -3,15 +3,6 @@
 # NETWORK SEARCH #
 ##########################
 
-function Get-Test {
-    param (
-        $message
-    )
-    Write-Host "This is a test! $message"
-} 
-
-
-
 function Add-Headset-ScanNetwork {
     [CmdletBinding()]
     param (

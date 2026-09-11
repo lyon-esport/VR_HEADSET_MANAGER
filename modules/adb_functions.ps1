@@ -240,58 +240,6 @@ function Invoke-AdbCmd {
 }
 
 
-<#
-function Install-OculusWirelessAdbApk {
-    Write-Log ($msg.FeatureNotImplemented) -Level WARNING
-    #Fonction a ecrire - Copie en vrac des actions a realiser en ADB USB
-    # Test concurrent USB connection if other headsets are already connected via WiFi
-    # Install the app and launch it on the headset
-    # If the headset is already connected,
-
-    # Usefull adb commands : https://gist.github.com/Pulimet/5013acf2cd5b28e55036c82c91bd56d8
-    
-    .\adb -d
-    adb -e install path/to/app.apk
-        -d                        - directs command to the only connected USB device...
-        -e                        - directs command to the only running emulator...
-        -s <serial number>        ...
-        -p <product name or path> ...
-
-    
-
-    .\adb.exe devices -l
-    .\adb connect 192.168.1.253:5555
-    if (((.\adb.exe devices | Select-String $adb_device -AllMatches).Matches.Count) -lt 1) {
-       Write-Log ($msg.NoHeadsetToAdd) -Level WARNING
-    }
-    elseif (((.\adb.exe devices | Select-String $adb_device -AllMatches).Matches.Count) -gt 1)
-
-    cd "C:\Users\Crazy\Documents\Scripts\Quest screen mirroring Streaming\scrcpy-win64-v3.2"
-    .\adb.exe usb
-    .\adb.exe install -r "C:\Users\Crazy\Documents\Scripts\Quest screen mirroring Streaming\ADB Wireless activator\tdg.oculuswirelessadb-1.2.apk" #-r = reinstall pour re-ecraser l'application
-    .\adb.exe shell pm grant tdg.oculuswirelessadb android.permission.WRITE_SECURE_SETTINGS
-    .\adb.exe shell pm grant tdg.oculuswirelessadb android.permission.READ_LOGS
-    .\adb.exe shell am start -n tdg.oculuswirelessadb/.MainActivity
-
-    .\adb.exe tcpip 5555
-    
-    Connect using Wifi
-    .\adb.exe shell ip route
-    .\adb.exe  connect 192.168.1.253:5555
-    .\adb.exe disconnect 192.168.1.253:5555
-    .\adb.exe kill-server
-
-    #KEY COMMANDS
-     .\adb.exe shell input keyevent 3 #Simulate Home button press
-     .\adb.exe shell input keyevent 4 #Simulate Back button press
-     .\adb.exe shell input keyevent 26 #Simulate Power button press
-     .\adb.exe shell input keyevent 82 #Simulate Menu button press
-    .\adb.exe shell input keyevent 223 #Simulate Volume Up button press
-    .\adb.exe shell input keyevent 224 #Simulate Volume Down button press
-    
-
-#>
-
 function Start-AdbServer {
     <#
     .SYNOPSIS
