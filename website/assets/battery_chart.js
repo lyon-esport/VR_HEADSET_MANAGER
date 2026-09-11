@@ -232,9 +232,86 @@
     };
   }
 
+  /* Builds a vertical linear canvas gradient for the line stroke or area fill,
+   * switching colors at configured warning and critical thresholds along the Y axis.
+   * This ensures that timing intervals above/below thresholds are colored accurately
+   * (e.g. orange for temperature spikes above warning threshold, green when normal)
+   * rather than recoloring the entire chart based on the latest single sample. */
+  function makeGradient(u, metric, isFill) {
+    var d = metricDef(metric);
+    if (d.dir === 'neutral' || !d.warn) {
+      var c = d.dir === 'neutral' ? '#3b82f6' : levelColor(u.scales.y.max, metric);
+      return isFill ? fillFor(c) : c;
+    }
+
+    var yMin = u.scales.y.min;
+    var yMax = u.scales.y.max;
+    if (yMin == null || yMax == null || yMin === yMax) {
+      var c = levelColor(yMax, metric);
+      return isFill ? fillFor(c) : c;
+    }
+
+    var topY = u.valToPos(yMax, 'y', true);
+    var botY = u.valToPos(yMin, 'y', true);
+    var grad = u.ctx.createLinearGradient(0, topY, 0, botY);
+
+    var cCrit = isFill ? fillFor('#ef4444') : '#ef4444';
+    var cWarn = isFill ? fillFor('#f97316') : '#f97316';
+    var cOk   = isFill ? fillFor('#22c55e') : '#22c55e';
+
+    function colorAt(y) {
+      if (d.dir === 'high-bad') {
+        if (y >= d.crit) return cCrit;
+        if (y >= d.warn) return cWarn;
+        return cOk;
+      }
+      // low-bad
+      if (y <= d.crit) return cCrit;
+      if (y < d.warn) return cWarn;
+      return cOk;
+    }
+
+    var tCrit = (yMax - d.crit) / (yMax - yMin);
+    var tWarn = (yMax - d.warn) / (yMax - yMin);
+
+    var transitions = [];
+    if (tCrit >= 0 && tCrit <= 1) transitions.push({ t: Math.max(0, Math.min(1, tCrit)), y: d.crit });
+    if (tWarn >= 0 && tWarn <= 1) transitions.push({ t: Math.max(0, Math.min(1, tWarn)), y: d.warn });
+    transitions.sort(function (a, b) { return a.t - b.t; });
+
+    var uniqueTransitions = [];
+    for (var k = 0; k < transitions.length; k++) {
+      if (k === 0 || Math.abs(transitions[k].t - transitions[k - 1].t) > 1e-4) {
+        uniqueTransitions.push(transitions[k]);
+      }
+    }
+
+    // Top color at t = 0 (y = yMax)
+    grad.addColorStop(0, colorAt(yMax));
+
+    for (var i = 0; i < uniqueTransitions.length; i++) {
+      var tr = uniqueTransitions[i];
+      var t = tr.t;
+      if (t === 0) {
+        grad.addColorStop(0, colorAt(tr.y + 0.001));
+        grad.addColorStop(0.005, colorAt(tr.y - 0.001));
+      } else if (t === 1) {
+        grad.addColorStop(0.995, colorAt(tr.y + 0.001));
+        grad.addColorStop(1, colorAt(tr.y - 0.001));
+      } else {
+        grad.addColorStop(t, colorAt(tr.y + 0.001));
+        grad.addColorStop(t, colorAt(tr.y - 0.001));
+      }
+    }
+
+    // Bottom color at t = 1 (y = yMin)
+    grad.addColorStop(1, colorAt(yMin));
+
+    return grad;
+  }
+
   function buildOpts(mode, s, width, height, metric) {
     var d    = metricDef(metric);
-    var line = levelColor(s.last, metric);
     var grid = isLight() ? 'rgba(0,0,0,0.10)' : 'rgba(255,255,255,0.08)';
     var axis = cssVar('--muted', isLight() ? '#6b7280' : '#999');
     var mini = (mode === 'mini');
@@ -242,8 +319,8 @@
 
     var series1 = {
       label:  d.label,
-      stroke: line,
-      fill:   fillFor(line),
+      stroke: function (u) { return makeGradient(u, metric, false); },
+      fill:   function (u) { return makeGradient(u, metric, true); },
       width:  mini ? 1.5 : 2,
       points: { show: false },
       paths:  uPlot.paths.stepped({ align: 1 }),
@@ -265,8 +342,34 @@
       // Mini keeps a little headroom on top: a full battery sits at y=100 and the
       // stroke would otherwise be flush against the tooltip border.
       padding: mini ? [7, 4, 2, 4] : [12, 16, 4, 4],
-      cursor: mini ? { show: false } : { y: false, points: { size: 6 } },
-      legend: { show: !mini },
+      cursor: mini ? { show: false } : {
+        y: false,
+        points: {
+          size: 6,
+          stroke: function (u, seriesIdx) {
+            var val = (u.cursor && u.cursor.idx != null && u.data[seriesIdx]) ? u.data[seriesIdx][u.cursor.idx] : s.last;
+            return levelColor(val, metric);
+          },
+          fill: function (u, seriesIdx) {
+            var val = (u.cursor && u.cursor.idx != null && u.data[seriesIdx]) ? u.data[seriesIdx][u.cursor.idx] : s.last;
+            return levelColor(val, metric);
+          }
+        }
+      },
+      legend: {
+        show: !mini,
+        markers: {
+          width: 2,
+          stroke: function (u, seriesIdx) {
+            var val = (u.cursor && u.cursor.idx != null && u.data[seriesIdx]) ? u.data[seriesIdx][u.cursor.idx] : s.last;
+            return levelColor(val, metric);
+          },
+          fill: function (u, seriesIdx) {
+            var val = (u.cursor && u.cursor.idx != null && u.data[seriesIdx]) ? u.data[seriesIdx][u.cursor.idx] : s.last;
+            return levelColor(val, metric);
+          }
+        }
+      },
       scales: {
         x: { time: true, range: s.range },
         // Percent metrics are pinned: an auto y scale would turn a 2% dip into a

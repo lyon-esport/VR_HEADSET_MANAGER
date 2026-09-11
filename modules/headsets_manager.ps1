@@ -664,7 +664,7 @@ function Add-Headset {
         IPAddress    = $IPAddress
         scrcpy_AutoRestart = "True"
         Record       = "False"
-        ScrcpyProfile = "square-R-N-45-20"
+        ScrcpyProfile = "square-R-N-45-10"
         Brand        = ""
         Model        = $Model
         SerialNumber = $SerialNumber

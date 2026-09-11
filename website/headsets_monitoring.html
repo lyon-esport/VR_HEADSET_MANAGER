@@ -173,7 +173,7 @@
       font-family: inherit;
       font-size: 13px;
       font-variant-numeric: tabular-nums;
-      text-align: left;
+      text-align: center;
       cursor: pointer;
       transition: background 0.15s, border-color 0.15s;
     }
@@ -567,9 +567,9 @@
     // history page. Falls back to plain text when there is no reading or no id to
     // address - a dash is not worth a control.
     //
-    // Shared by the Battery and Temp cells, so both behave identically. The bar is
-    // drawn only for percent metrics: "width: 36%" is a meaningful fill for a
-    // battery and a meaningless one for 36 degrees.
+    // Shared by the Battery, Temp, Controller L/R and Charging power cells.
+    // The bar is drawn only for percent metrics: "width: 36%" is a meaningful fill for a
+    // battery and a meaningless one for 36 degrees or 15 watts.
     function metricButton(r, metric, raw) {
       var v  = metricNumber(raw);
       var id = parseInt(r['id'], 10) || 0;
@@ -612,7 +612,6 @@
         var scrcpyOk = !!r['scrcpy'];
         var charging = !!r['charging'];
         var chargingWattage = r['charging_wattage'] || '';
-        var chargingLabel = (charging && chargingWattage) ? chargingWattage + ' W' : (charging ? 'Yes' : 'No');
         var powerState = (r['power_state'] || '').toLowerCase();
         var powerPill  = powerState === 'charging'    ? pill('Charging',    'pill-green')
                        : powerState === 'discharging' ? pill('Discharging', 'pill-orange')
@@ -630,6 +629,9 @@
 
         var pingStr   = pingOk   ? 'true' : 'false';
         var scrcpyStr = scrcpyOk ? 'true' : 'false';
+        var chargingCell = (charging && chargingWattage)
+          ? metricButton(r, 'wattage', chargingWattage)
+          : (charging ? pill('Yes', 'pill-green') : pill('No', 'pill-red'));
         return '<tr data-ping="' + pingStr + '" data-scrcpy="' + scrcpyStr + '">' +
           '<td>' + esc(r['id'] || '') + '</td>' +
           '<td><strong>' + esc(r['name'] || '') + '</strong></td>' +
@@ -637,12 +639,12 @@
           '<td class="center">' + pill(pingOk ? 'OK' : 'KO', pingOk ? 'pill-green' : 'pill-red') + '</td>' +
           '<td class="center">' + pill(adbOk  ? 'OK' : 'KO', adbOk  ? 'pill-green' : 'pill-red') + '</td>' +
           '<td class="center">' + pill(scrcpyOk ? 'OK' : 'OFF', scrcpyOk ? 'pill-blue' : 'pill-orange') + '</td>' +
-          '<td class="center">' + (charging ? pill(chargingLabel,'pill-green') : pill('No','pill-red')) + '</td>' +
+          '<td class="center">' + chargingCell + '</td>' +
           '<td class="center">' + powerPill + '</td>' +
           '<td>' + metricButton(r, 'battery', r['battery']) + '</td>' +
           '<td style="color:#888;font-size:12px">' + esc(timeCell) + '</td>' +
-          '<td>' + esc(r['battery_ctrl_left']  || '-') + '</td>' +
-          '<td>' + esc(r['battery_ctrl_right'] || '-') + '</td>' +
+          '<td>' + metricButton(r, 'ctrl_left', r['battery_ctrl_left']) + '</td>' +
+          '<td>' + metricButton(r, 'ctrl_right', r['battery_ctrl_right']) + '</td>' +
           '<td>' + metricButton(r, 'temp', r['temp']) + '</td>' +
           '<td style="color:#666">' + esc(r['model'] || '-') + '</td>' +
           '<td>' + appCell + '</td>' +
@@ -1259,7 +1261,7 @@
       if (batt) {
         hideBattTip();
         window.location.href = 'metric_history.html?id=' + batt.dataset.metricId +
-          '&metric=' + encodeURIComponent(batt.dataset.metricKey || 'battery') + '&hours=24';
+          '&metric=' + encodeURIComponent(batt.dataset.metricKey || 'battery') + '&hours=1';
       }
     });
 
