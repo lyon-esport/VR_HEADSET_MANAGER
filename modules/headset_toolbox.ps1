@@ -1,10 +1,22 @@
 #################
 # HEADSET TOOLBOX PACKAGE
 #
-# Builds a downloadable, standalone zip a technician runs on a DIFFERENT PC than
-# this server: it enables WiFi ADB on a USB-connected headset, then registers it
-# with this server (add new, or update IP if the serial is already known) via
-# POST /api/headsets/register-by-serial.
+# Builds a downloadable zip a technician runs on a DIFFERENT PC than this
+# server, bundling 3 self-contained, portable .exe tools:
+#   Start-HeadsetToolbox.exe  - enables WiFi ADB on a USB-connected headset,
+#                               then registers it with this server via
+#                               POST /api/headsets/register-by-serial
+#   Start-Kiosk-Agent.exe     - kiosk screen launcher/agent
+#   Find-VRHM-Server.exe      - standalone LAN scanner / cache-populator
+#
+# No server address or IP is ever baked into the zip: each exe embeds its own
+# script (and, for the headset tool, adb.exe + its DLLs) as resources and
+# self-extracts them into its own subfolder on first run, then self-discovers
+# the VRHM server (LAN scan, confirmed via GET /api/version returning
+# {"app":"VRHM",...}) and remembers it in a single vrhm_server_cache.json
+# shared by all 3 tools at the root of the extracted folder. This makes the
+# zip fully portable - it works unmodified on any VRHM installation and
+# survives a DHCP change on either side.
 #################
 
 function Get-HeadsetToolboxPackagePath {
@@ -22,118 +34,61 @@ function Get-HeadsetToolboxPackagePath {
 function New-HeadsetToolboxPackage {
     <#
     .SYNOPSIS
-    Builds the ready-to-use headset toolbox zip: the standalone script, a bundled
-    adb.exe (+ its two DLLs, copied from the currently active ADB folder), and a
-    .cmd launcher with this server's URL baked in. Regenerated at every app
-    startup so a DHCP lease change on the server never leaves a previously
-    downloaded zip pointing at the wrong address.
+    Builds the ready-to-use VRHM-Headset-Toolbox.zip by copying 3 committed,
+    self-contained .exe binaries into a zip root and adding one static
+    reference file for Linux kiosks. The zip's content is fully static (no
+    server-specific data is ever baked in - see the module header), so this
+    is just a copy+zip; it is still rebuilt at every app startup purely for
+    consistency with how the app has always refreshed this download.
 
     Zip contents:
-      Start-HeadsetToolbox.cmd     -> Enable-HeadsetWifiAdb.ps1 -ServerUrl <this server>
-      Enable-HeadsetWifiAdb.ps1    -> standalone detect+enable+register script
-      adb.exe, AdbWinApi.dll, AdbWinUsbApi.dll -> copied from $global:adbFolder
+      Start-HeadsetToolbox.exe   -> committed binary; embeds Enable-HeadsetWifiAdb.ps1 + adb.exe + AdbWinApi.dll + AdbWinUsbApi.dll
+      Start-Kiosk-Agent.exe      -> committed binary; embeds Start-KioskAgent.ps1
+      Find-VRHM-Server.exe       -> committed binary; embeds Find-VRHM-Server.ps1
+      kiosk-launcher\Start-KioskAgent-Linux.sh -> static copy for Linux kiosks (the exe above is Windows-only)
+
+    Each exe self-extracts its own dependencies into its own subfolder next to
+    itself on first run (never overwriting an existing local copy), and all
+    3 share one vrhm_server_cache.json written at the extracted root the
+    first time any of them finds the VRHM server on the LAN.
 
     Returns the zip path on success, $null on failure. Never throws: a missing
     zip only costs the operator a convenience download.
     .EXAMPLE
     New-HeadsetToolboxPackage
-    New-HeadsetToolboxPackage -ServerUrl "http://192.168.1.37:8080"
     #>
     param(
-        [string]$ServerUrl = (Get-ServerLanUrl),
         [string]$OutputPath = (Get-HeadsetToolboxPackagePath)
     )
 
-    $sourceFolder = Join-Path $global:ScriptPath "website\headset-toolbox"
-    if (-not (Test-Path -LiteralPath $sourceFolder)) {
-        Write-Log "New-HeadsetToolboxPackage: source folder not found at $sourceFolder" -Level WARNING
-        return $null
-    }
-
-    if (-not $ServerUrl) {
-        Write-Log "New-HeadsetToolboxPackage: no LAN address available; the .cmd will require the server URL as an argument." -Level WARNING
-    }
-
-    $port    = if ($global:WebServer_port) { $global:WebServer_port } else { 8080 }
-    $stamp   = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
     $staging = Join-Path $env:TEMP ("vrhm_headset_toolbox_pkg_" + [guid]::NewGuid().ToString('N'))
 
     try {
         New-Item -ItemType Directory -Path $staging -Force -ErrorAction Stop | Out-Null
 
-        # ---- Copy the standalone script ----
-        $scriptSrc = Join-Path $sourceFolder 'Enable-HeadsetWifiAdb.ps1'
-        if (Test-Path -LiteralPath $scriptSrc) {
-            Copy-Item -LiteralPath $scriptSrc -Destination (Join-Path $staging 'Enable-HeadsetWifiAdb.ps1') -Force -ErrorAction Stop
-        } else {
-            Write-Log "New-HeadsetToolboxPackage: 'Enable-HeadsetWifiAdb.ps1' missing from $sourceFolder - aborting." -Level WARNING
-            return $null
-        }
-
-        # ---- Copy adb.exe + its two DLLs from the currently active ADB folder ----
-        if (-not $global:adbFolder -or -not (Test-Path -LiteralPath $global:adbFolder)) {
-            Write-Log "New-HeadsetToolboxPackage: active ADB folder not found ($global:adbFolder) - aborting." -Level WARNING
-            return $null
-        }
-        foreach ($name in @('adb.exe', 'AdbWinApi.dll', 'AdbWinUsbApi.dll')) {
-            $src = Join-Path $global:adbFolder $name
-            if (Test-Path -LiteralPath $src) {
-                Copy-Item -LiteralPath $src -Destination (Join-Path $staging $name) -Force -ErrorAction Stop
-            } else {
-                Write-Log "New-HeadsetToolboxPackage: '$name' missing from $global:adbFolder - not included in the package." -Level WARNING
-            }
-        }
-
-        # ---- Generate the .cmd launcher ----
-        # Batch files are written with CRLF and pure ASCII: some Windows shells
-        # mis-handle LF-only .cmd files, and a stray non-ASCII byte here would be
-        # decoded with the console codepage.
-        $bakedUrl = if ($ServerUrl) { $ServerUrl } else { "" }
-
-        $cmdLines = @(
-            '@echo off'
-            'REM ==========================================================='
-            'REM  VR HEADSET MANAGER - Remote Headset Toolbox'
-            'REM'
-            "REM  Generated by VR HEADSET MANAGER on $stamp"
-            "REM  Server address baked in below: $bakedUrl"
-            'REM'
-            'REM  Double-click to run with a headset connected via USB. It'
-            'REM  enables WiFi ADB on the headset, then registers it with the'
-            'REM  VR HEADSET MANAGER server (adds it, or updates its IP if the'
-            'REM  serial number is already known).'
-            'REM'
-            'REM  To point it at a different server, pass the IP or URL:'
-            'REM      Start-HeadsetToolbox.cmd 192.168.1.50'
-            "REM      Start-HeadsetToolbox.cmd http://192.168.1.50:$port"
-            'REM ==========================================================='
-            'setlocal EnableExtensions'
-            ''
-            "set `"SERVER_URL=$bakedUrl`""
-            'if not "%~1"=="" set "SERVER_URL=%~1"'
-            ''
-            'if "%SERVER_URL%"=="" goto :nourl'
-            ''
-            'REM Accept a bare IP as well as a full URL.'
-            'echo.%SERVER_URL% | findstr /B /I /C:"http" >nul'
-            "if errorlevel 1 set `"SERVER_URL=http://%SERVER_URL%:$port`""
-            ''
-            'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Enable-HeadsetWifiAdb.ps1" -ServerUrl "%SERVER_URL%"'
-            'echo.'
-            'pause'
-            'exit /b'
-            ''
-            ':nourl'
-            'echo.'
-            'echo No server address is configured in this file.'
-            'echo Re-download the package from VR HEADSET MANAGER, or pass the address:'
-            'echo     Start-HeadsetToolbox.cmd 192.168.1.50'
-            'echo.'
-            'pause'
+        # ---- Copy the 3 self-contained exe tools into the zip root ----
+        $exeSpecs = @(
+            @{ Src = Join-Path $global:ScriptPath "website\headset-toolbox\Start-HeadsetToolbox.exe"; Name = 'Start-HeadsetToolbox.exe' },
+            @{ Src = Join-Path $global:ScriptPath "website\kiosk-launcher\Start-Kiosk-Agent.exe";      Name = 'Start-Kiosk-Agent.exe' },
+            @{ Src = Join-Path $global:ScriptPath "website\find-server\Find-VRHM-Server.exe";          Name = 'Find-VRHM-Server.exe' }
         )
+        foreach ($spec in $exeSpecs) {
+            if (-not (Test-Path -LiteralPath $spec.Src)) {
+                Write-Log "New-HeadsetToolboxPackage: '$($spec.Name)' missing at $($spec.Src) - aborting." -Level WARNING
+                return $null
+            }
+            Copy-Item -LiteralPath $spec.Src -Destination (Join-Path $staging $spec.Name) -Force -ErrorAction Stop
+        }
 
-        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-        [System.IO.File]::WriteAllText((Join-Path $staging 'Start-HeadsetToolbox.cmd'), (($cmdLines -join "`r`n") + "`r`n"), $utf8NoBom)
+        # ---- Static reference copy for Linux kiosks (Start-Kiosk-Agent.exe is Windows-only) ----
+        $kioskLinuxSrc = Join-Path $global:ScriptPath "website\kiosk-launcher\Start-KioskAgent-Linux.sh"
+        if (Test-Path -LiteralPath $kioskLinuxSrc) {
+            $kioskStaging = Join-Path $staging "kiosk-launcher"
+            New-Item -ItemType Directory -Path $kioskStaging -Force -ErrorAction Stop | Out-Null
+            Copy-Item -LiteralPath $kioskLinuxSrc -Destination (Join-Path $kioskStaging 'Start-KioskAgent-Linux.sh') -Force -ErrorAction Stop
+        } else {
+            Write-Log "New-HeadsetToolboxPackage: 'Start-KioskAgent-Linux.sh' missing from website\kiosk-launcher - not included in the package." -Level WARNING
+        }
 
         # ---- Zip it ----
         $outFolder = Split-Path -Parent $OutputPath
@@ -147,7 +102,7 @@ function New-HeadsetToolboxPackage {
         Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
         [System.IO.Compression.ZipFile]::CreateFromDirectory($staging, $OutputPath)
 
-        Write-Log "New-HeadsetToolboxPackage: headset toolbox package rebuilt for $bakedUrl -> $OutputPath" -Level INFO
+        Write-Log "New-HeadsetToolboxPackage: headset toolbox package rebuilt -> $OutputPath" -Level INFO
         return $OutputPath
     } catch {
         Write-Log "New-HeadsetToolboxPackage: failed to build the headset toolbox package - $($_.Exception.Message)" -Level WARNING

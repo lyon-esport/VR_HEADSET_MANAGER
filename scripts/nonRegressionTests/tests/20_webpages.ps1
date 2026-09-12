@@ -120,17 +120,46 @@ Invoke-RegressionTest -Name 'Generated per-headset pages are served' -Test {
 # Static route security
 # ---------------------------------------------------------------------------
 
-Invoke-RegressionTest -Name 'data\ route serves monitoring JSON' -Test {
-    $r = Invoke-VrmApi -Path '/data/computer_monitoring.json'
-    Assert-Equal 200 $r.StatusCode 'GET /data/computer_monitoring.json'
-    Assert-NotNull $r.Json 'computer_monitoring.json parses over HTTP'
+Invoke-RegressionTest -Name 'data\ route is refused entirely' -Test {
+    # INVERTED deliberately. This used to assert that GET /data/computer_monitoring.json
+    # returned 200. The data folder is no longer web-readable at all - web_server.ps1
+    # refuses the whole "data/" prefix with 403 before any file lookup:
+    #
+    #   "The data folder is no longer web-readable. It used to serve .csv/.json
+    #    straight off disk, which is how the monitoring and VQA pages read their
+    #    state; both now go through an API that returns the same shape from the
+    #    database. Refusing the whole prefix keeps a stale legacy_* copy from
+    #    being served too."
+    #
+    # So the security property to protect is that the prefix stays closed, for a
+    # real file as well as a missing one - a 403 on a file that exists is what
+    # proves the refusal happens before the lookup, not just as a side effect of
+    # the file being absent.
+    $probe = Join-Path $paths.DataFolder 'nrt_route_probe.json'
+    try {
+        Set-Content -LiteralPath $probe -Value '{"nrt":true}' -Encoding UTF8
+        $r = Invoke-VrmApi -Path '/data/nrt_route_probe.json'
+        Add-TestEvidence ("GET /data/nrt_route_probe.json (file EXISTS) -> HTTP {0}" -f $r.StatusCode)
+        Assert-Equal 403 $r.StatusCode 'an existing file under data\ is still refused'
+    } finally {
+        Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+    }
+
+    $r2 = Invoke-VrmApi -Path '/data/known_headsets.csv'
+    Add-TestEvidence ("GET /data/known_headsets.csv -> HTTP {0}" -f $r2.StatusCode)
+    Assert-Equal 403 $r2.StatusCode 'the legacy CSV export path is refused too'
 }
 
-Invoke-RegressionTest -Name 'data\ route refuses non-CSV/JSON extensions' -Test {
+Invoke-RegressionTest -Name 'data\ route refuses an operational file' -Test {
+    # Renamed: the old name ('refuses non-CSV/JSON extensions') implied that CSV and
+    # JSON under data\ ARE served. They are not any more - the whole prefix is
+    # refused, see the test above. The assertion is unchanged and still worth
+    # keeping: a PID file is the case that would matter most if the prefix were
+    # ever reopened.
     $r = Invoke-VrmApi -Path '/data/webserver.pid'
     Add-TestEvidence ("GET /data/webserver.pid -> HTTP {0}" -f $r.StatusCode)
     Assert-True ($r.StatusCode -eq 403 -or $r.StatusCode -eq 404) `
-        ("expected 403/404 for a non-whitelisted extension, got {0}" -f $r.StatusCode)
+        ("expected 403/404 for a file under data\, got {0}" -f $r.StatusCode)
 }
 
 Invoke-RegressionTest -Name 'Static route blocks path traversal' -Test {

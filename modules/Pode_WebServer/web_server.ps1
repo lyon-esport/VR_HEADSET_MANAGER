@@ -376,7 +376,12 @@ $installJobBlock = {
     }
 
     function Run-AdbExe {
-        param([string]$args2)
+        # $TimeoutSec bounds the wait. An unbounded WaitForExit() here meant a wedged
+        # "adb install" or "shell mkdir" hung the whole install job with nothing able
+        # to recover it - the operator saw a progress bar frozen at a step forever and
+        # the only way out was /api/install-cancel. 15 minutes is generous enough for a
+        # large install over WiFi ADB while still being finite.
+        param([string]$args2, [int]$TimeoutSec = 900)
         $psi = [System.Diagnostics.ProcessStartInfo]::new()
         $psi.FileName               = $adbExe
         $psi.Arguments              = $args2
@@ -389,7 +394,10 @@ $installJobBlock = {
         $proc.Start() | Out-Null
         $outTask = $proc.StandardOutput.ReadToEndAsync()
         $errTask = $proc.StandardError.ReadToEndAsync()
-        $proc.WaitForExit()
+        if (-not $proc.WaitForExit($TimeoutSec * 1000)) {
+            try { $proc.Kill() } catch {}
+            return @{ ExitCode = -2; Output = "adb timed out after $TimeoutSec s"; Ok = $false }
+        }
         $out = $outTask.GetAwaiter().GetResult()
         $err = $errTask.GetAwaiter().GetResult()
         return @{ ExitCode = $proc.ExitCode; Output = "$out $err".Trim(); Ok = ($proc.ExitCode -eq 0) }
@@ -512,28 +520,36 @@ $script:updateVersionsJob          = $null
 $script:updateVersionsProgFile     = [System.IO.Path]::Combine($env:TEMP, 'vrm_update_versions.json')
 $script:updateVersionsHeadsetName  = $null
 
-# Background USB detection - single persistent job, loads modules once, polls every 3 seconds
-$script:usbInfoResultFile = [System.IO.Path]::Combine($env:TEMP, 'vrm_usb_info.json')
+# USB detection is NOT probed here any more.
+#
+# There used to be a persistent Start-Job at this point - a separate
+# powershell.exe that dot-sourced the entire module set and re-ran the full USB
+# detail probe every 3 seconds, forever, writing the result to a temp file. It
+# cost a measured 137 MB of RAM plus a continuous stream of adb.exe launches
+# that duplicated, and raced with, the VRMonitor's own USB probe against the
+# same single adb server - all to answer "is a new headset plugged in?" for one
+# blinking button on headsets_settings.html.
+#
+# VRMonitor is now the single USB owner and publishes its snapshot to the
+# app_kv row 'usb_device' whenever it changes (ADR-0017). /api/usbdeviceinfo
+# reads that row.
 $script:usbInfoJob = $null
 
-if ($adbPath -and (Test-Path -LiteralPath $adbPath)) {
-    $uvSp = $ScriptPath; $uvCp = $ConfigFilePath; $uvExe = $adbPath; $uvPort = $adbPort; $uvPkg = $apkPackage
-    $uvOut = $script:usbInfoResultFile
-    $script:usbInfoJob = Start-Job -ScriptBlock {
-        param($sp, $cp, $exe, $port, $pkg, $outFile)
-        $global:ScriptPath = $sp; $global:ConfigFilePath = $cp; $global:IsWebServerProcess = $true
-        . (Join-Path $sp 'modules\scripts_init.ps1')
-        while ($true) {
-            try {
-                $result = Get-AdbUsbDeviceDetails -adb $exe -AdbPort $port -PackageName $pkg
-                $json = if ($result) { $result | ConvertTo-Json -Compress } else { 'null' }
-            } catch {
-                $json = 'null'
-            }
-            try { [System.IO.File]::WriteAllText($outFile, $json) } catch {}
-            Start-Sleep -Seconds 3
+function Get-PublishedUsbSnapshot {
+    # Returns the last USB snapshot VRMonitor published, or $null when nothing is
+    # cabled / nothing has been published yet. Never throws: a USB read must not
+    # be able to take down a request handler.
+    try {
+        $raw = Get-DbKeyValue -Key 'usb_device'
+        if (-not $raw) { return $null }
+        if ($raw -is [string]) {
+            if ($raw -eq 'null' -or [string]::IsNullOrWhiteSpace($raw)) { return $null }
+            return ($raw | ConvertFrom-Json)
         }
-    } -ArgumentList $uvSp, $uvCp, $uvExe, $uvPort, $uvPkg, $uvOut
+        return $raw
+    } catch {
+        return $null
+    }
 }
 
 try {
@@ -2194,19 +2210,18 @@ try {
                 $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
                 if (-not $headset) { throw "Headset not found" }
 
+                # Read the published snapshot instead of shelling out. This route is
+                # polled every 5 s per open apps page, and it used to spawn an
+                # "adb devices" AND run Get-UsbDeviceSpeed - which walked the whole
+                # PnP tree, unfiltered and uncached - on every one of those polls.
                 $usbAvailable = $false
                 $usbSpeed     = $null
-                if ($headset.SerialNumber -and $adbPath -and (Test-Path -LiteralPath $adbPath)) {
-                    try {
-                        $usbLine = & $adbPath devices 2>$null | Where-Object { $_ -match "`tdevice$" -and $_ -notmatch ':' }
-                        if ($usbLine) {
-                            $serial = ($usbLine -split "`t")[0].Trim()
-                            if ($serial -eq $headset.SerialNumber) {
-                                $usbAvailable = $true
-                                $usbSpeed     = Get-UsbDeviceSpeed -Serial $serial
-                            }
-                        }
-                    } catch {}
+                if ($headset.SerialNumber) {
+                    $snap = Get-PublishedUsbSnapshot
+                    if ($snap -and $snap.SerialNumber -eq $headset.SerialNumber) {
+                        $usbAvailable = $true
+                        $usbSpeed     = $snap.UsbSpeed
+                    }
                 }
 
                 $wifiAvailable = $false
@@ -2438,17 +2453,31 @@ try {
                 $contentType = $request.ContentType -replace ';.*','' | ForEach-Object { $_.Trim() }
                 $transport   = $request.Headers['X-Transport']  # 'usb', 'wifi', or empty (auto)
 
-                # Helper: resolve device by transport preference
+                # Helper: resolve device by transport preference.
+                #
+                # USB is the DEFAULT when the cabled headset is the target one - this is
+                # the one place USB bandwidth genuinely pays, because an OBB push is
+                # multiple GB and WiFi ADB makes that painful. It used to require the
+                # client to opt in with X-Transport: usb, and re-shelled "adb devices"
+                # to check; the published snapshot already knows (ADR-0021).
+                # X-Transport is still honoured as an explicit override in both
+                # directions.
                 $resolveDevice = {
                     param($headset2)
-                    if ($transport -eq 'usb' -and $headset2.SerialNumber -and $adbPath -and (Test-Path -LiteralPath $adbPath)) {
-                        $usbLine = & $adbPath devices 2>$null | Where-Object { $_ -match "`tdevice$" -and $_ -notmatch ':' }
-                        $serial  = if ($usbLine) { ($usbLine -split "`t")[0].Trim() } else { $null }
-                        if ($serial -eq $headset2.SerialNumber) {
-                            return [PSCustomObject]@{ DeviceId = $serial; ConnectionType = 'USB'; IP = $null; Port = $null }
-                        }
-                    } elseif ($transport -eq 'wifi') {
+                    if ($transport -eq 'wifi') {
                         return Get-AdbWifiDevice -headsetIP $headset2.IPAddress -AdbPort $adbPort -adb $adbPath
+                    }
+                    if ($headset2.SerialNumber) {
+                        $snap = Get-PublishedUsbSnapshot
+                        if ($snap -and $snap.SerialNumber -eq $headset2.SerialNumber) {
+                            return [PSCustomObject]@{ DeviceId = $snap.DeviceId; ConnectionType = 'USB'; IP = $null; Port = $null }
+                        }
+                    }
+                    if ($transport -eq 'usb') {
+                        # Explicitly asked for USB but it is not the cabled headset - fall
+                        # through rather than silently installing over WiFi on a caller
+                        # that chose USB on purpose.
+                        return $null
                     }
                     return Get-BestAdbDevice -Headset $headset2 -AdbPort $adbPort -adb $adbPath
                 }
@@ -2690,7 +2719,10 @@ try {
         # API: GET /api/detectusbheadset  - detects a USB-connected ADB device and returns its WiFi IP
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/detectusbheadset') {
             try {
-                $usbInfo = Get-AdbUsbDeviceDetails -adb $adbPath
+                # Published snapshot, not a live probe: the full detail probe took
+                # ~450 ms and this listener loop is single-threaded, so running it
+                # here stalled every other request for its duration.
+                $usbInfo = Get-PublishedUsbSnapshot
                 $result = if ($usbInfo -and $usbInfo.IP -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') {
                     @{ found = $true; ip = $usbInfo.IP; model = $usbInfo.Model }
                 } else {
@@ -2721,6 +2753,8 @@ try {
         # API: POST /api/enablewifiadb  - runs adb tcpip 5555 on the USB-connected headset
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/enablewifiadb') {
             try {
+                # Claim USB: this runs adb tcpip, which re-enumerates the transport.
+                Set-UsbBusy -Seconds 45
                 $result = Enable-AdbTcpIp -AdbPort $adbPort -adb $adbPath
                 $json   = ConvertTo-Json $result -Compress
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes($json)
@@ -2746,6 +2780,9 @@ try {
         # API: POST /api/installadbwifiapk  - installs the WiFi ADB APK on the USB-connected headset
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/installadbwifiapk') {
             try {
+                # Claim USB: Install-OculusWirelessAdbApk runs BOTH 'adb usb' and
+                # 'adb tcpip', so it bounces the transport twice.
+                Set-UsbBusy -Seconds 180
                 $device = Get-AdbUsbDeviceDetails -adb $adbPath
                 if (-not $device) {
                     $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"No USB headset detected"}')
@@ -2792,6 +2829,8 @@ try {
         # API: POST /api/connectwifi  - connects USB device to the configured WiFi network
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/connectwifi') {
             try {
+                # Claim USB: changing the headset's network changes its address.
+                Set-UsbBusy -Seconds 60
                 $result = @{ ok = $false; error = '' }
                 if (-not ($adbPath -and (Test-Path -LiteralPath $adbPath))) {
                     $result.error = 'ADB not found.'
@@ -3028,11 +3067,8 @@ try {
         # API: GET /api/usbdeviceinfo  - returns full details of USB-connected ADB device
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/usbdeviceinfo') {
             try {
-                # Build response from last result written by the persistent USB probe job
-                $details = try {
-                    $raw = [System.IO.File]::ReadAllText($script:usbInfoResultFile)
-                    if ($raw -and $raw -ne 'null') { $raw | ConvertFrom-Json } else { $null }
-                } catch { $null }
+                # Last snapshot published by VRMonitor, the single USB owner.
+                $details = Get-PublishedUsbSnapshot
                 $result  = @{ found = $false; ip = ''; brand = ''; model = ''; serialNumber = ''; ssid = ''; expectedSsid = ''; ssidMatch = $false; wifiAdbOpen = $false; apkInstalled = $false; alreadyRegistered = $false }
                 if ($details) {
                     $knownNetworks   = Get-WifiNetworks
@@ -3763,9 +3799,9 @@ try {
                 $versionStr  = if (Test-Path -LiteralPath $versionFile) {
                     (Get-Content -LiteralPath $versionFile -Raw).Trim()
                 } else { 'unknown' }
-                Send-JsonResponse -Response $response -Body @{ version = $versionStr }
+                Send-JsonResponse -Response $response -Body @{ app = 'VRHM'; version = $versionStr }
             } catch {
-                try { Send-JsonResponse -Response $response -Body @{ version = 'unknown' } } catch {}
+                try { Send-JsonResponse -Response $response -Body @{ app = 'VRHM'; version = 'unknown' } } catch {}
             } finally { $response.Close() }
             continue
         }
@@ -4000,9 +4036,9 @@ try {
                 $versionStr  = if (Test-Path -LiteralPath $versionFile) {
                     (Get-Content -LiteralPath $versionFile -Raw).Trim()
                 } else { 'unknown' }
-                Send-JsonResponse -Response $response -Body @{ version = $versionStr }
+                Send-JsonResponse -Response $response -Body @{ app = 'VRHM'; version = $versionStr }
             } catch {
-                try { Send-JsonResponse -Response $response -Body @{ version = 'unknown' } } catch {}
+                try { Send-JsonResponse -Response $response -Body @{ app = 'VRHM'; version = 'unknown' } } catch {}
             } finally { $response.Close() }
             continue
         }
@@ -5146,6 +5182,9 @@ try {
 } finally {
     $listener.Stop()
     $listener.Close()
+    # $script:usbInfoJob is retained as $null so this teardown stays harmless if
+    # anything else ever sets it; the USB probe job itself is gone (see the note
+    # where it used to be created).
     if ($script:usbInfoJob) {
         Stop-Job  $script:usbInfoJob -ErrorAction SilentlyContinue
         Remove-Job $script:usbInfoJob -Force -ErrorAction SilentlyContinue

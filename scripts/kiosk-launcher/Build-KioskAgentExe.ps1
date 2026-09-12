@@ -2,10 +2,12 @@
     Build-KioskAgentExe.ps1
 
     One-time (re-runnable) dev tool. Compiles KioskAgentStub.cs into
-    website\kiosk-launcher\Start-Kiosk-ADVANCED.exe, with the current
+    website\kiosk-launcher\Start-Kiosk-Agent.exe, with the current
     website\kiosk-launcher\Start-KioskAgent.ps1 embedded as a manifest
     resource (so the exe is a single, standalone download - it self-extracts
-    that script next to itself on first run) and the existing
+    that script into a kiosk-launcher\ subfolder next to itself on first run,
+    and shares its vrhm_server_cache.json with the other toolbox tools when
+    run from inside VRHM-Headset-Toolbox.zip) and the existing
     sources\graph_assets\VR_HEADSET_MANAGER.ico embedded as its icon.
 
     Re-run this whenever KioskAgentStub.cs or Start-KioskAgent.ps1 changes,
@@ -23,7 +25,7 @@ $projectRoot     = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $stubSourcePath  = Join-Path $PSScriptRoot "KioskAgentStub.cs"
 $icoPath         = Join-Path $projectRoot "sources\graph_assets\VR_HEADSET_MANAGER.ico"
 $agentScriptPath = Join-Path $projectRoot "website\kiosk-launcher\Start-KioskAgent.ps1"
-$exeOutputPath   = Join-Path $projectRoot "website\kiosk-launcher\Start-Kiosk-ADVANCED.exe"
+$exeOutputPath   = Join-Path $projectRoot "website\kiosk-launcher\Start-Kiosk-Agent.exe"
 
 if (-not (Test-Path -LiteralPath $stubSourcePath)) {
     throw "Kiosk agent stub source not found: $stubSourcePath"

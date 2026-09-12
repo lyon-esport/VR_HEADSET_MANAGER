@@ -476,6 +476,76 @@ function Test-MdnsFirewallCurrent {
     }
 }
 
+# Full path of the PowerShell host running this process (the exe Windows Firewall
+# attributes our sockets to). Every VRHM process - console, VRMonitor job, web
+# server, poll runspaces - is the same exe, so one rule covers them all.
+# $null when it cannot be resolved; callers then skip the rule rather than
+# creating an unscoped one.
+function Get-PowerShellHostPath {
+    try {
+        $p = (Get-Process -Id $PID -ErrorAction Stop).Path
+        if (-not [string]::IsNullOrWhiteSpace($p)) { return $p }
+    } catch { }
+    try {
+        return [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+    } catch {
+        return $null
+    }
+}
+
+# Inbound BLOCK rules whose Program filter is $HostExe - i.e. what Windows writes
+# when someone answers Cancel to its own "allow this app?" popup. A Deny rule takes
+# precedence over every Allow rule, so one of these silently defeats the companion
+# discovery rule below. Returns @() when there is none (or on any read failure -
+# this is advisory only and must never fail startup).
+function Get-HostExeBlockRule {
+    param([string]$HostExe)
+    if ([string]::IsNullOrWhiteSpace($HostExe)) { return @() }
+    try {
+        return @(Get-NetFirewallRule -Direction Inbound -Action Block -Enabled True -ErrorAction Stop |
+                 Where-Object {
+                     $prog = ($_ | Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue).Program
+                     $prog -and ($prog -ieq $HostExe)
+                 })
+    } catch {
+        return @()
+    }
+}
+
+# Returns $true if an enabled companion-discovery rule exists whose Program filter
+# matches the PowerShell host currently running the app.
+#
+# Why a PROGRAM rule and not a port rule: Invoke-CompanionDiscovery BINDS UDP 5556
+# (network_scanner.ps1) inside powershell.exe. Windows' own "allow this app?"
+# notification is app-scoped, so a port-only rule does not suppress it - the
+# operator gets a native popup whose Cancel button writes a BLOCK rule for
+# powershell.exe, silently killing companion discovery from then on. Scoping the
+# rule to Program + UDP 5556 answers Windows at bind time without opening the
+# PowerShell host to anything else.
+#
+# The Program path is part of the check: a release extracted to a new folder still
+# runs the same system powershell.exe, but a switch between Windows PowerShell and
+# another host would drift, and the rule is rebuilt then.
+function Test-CompanionFirewallCurrent {
+    param([string]$HostExe)
+    if ([string]::IsNullOrWhiteSpace($HostExe)) { return $true }
+    try {
+        $rules = @(Get-NetFirewallRule -ErrorAction Stop |
+                   Where-Object { $_.DisplayName -ilike "*VR_HEADSET_MANAGER*Companion*" -and $_.Enabled -eq 'True' })
+        if ($rules.Count -eq 0) { return $false }
+        $paths = @($rules | Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue |
+                            Select-Object -ExpandProperty Program)
+        foreach ($p in $paths) {
+            if ($p -ieq $HostExe) { return $true }
+        }
+        return $false
+    } catch {
+        # Same posture as Unblock-ADBFirewallRule: a read failure means "cannot
+        # determine state", so emit the task and let the elevated batch settle it.
+        return $false
+    }
+}
+
 # Returns $true if MediaMTX firewall rules exist AND their ports match current config.
 # Used to detect port changes in config.json that require rule recreation.
 function Test-MediaMtxFirewallCurrent {
@@ -616,6 +686,74 @@ New-NetFirewallRule -DisplayName '_[VR_HEADSET_MANAGER]WebServer_Allowed TCP [IN
         }
     } catch {
         Write-Log ($msg.WebServerFirewallRuleFailed -f $_) -Level ERROR
+    }
+}
+
+
+function Unblock-CompanionDiscoveryFirewallRule {
+    param(
+        # When set, returns a task hashtable instead of opening an admin console directly.
+        # Used by Initialize-ComputerSetup to batch all tasks into one elevation.
+        [switch]$ReturnTask
+    )
+    # 5556 is fixed by the VRHM Companion protocol (the Android app's DiscoveryServer
+    # listens on it), exactly as 5353 is fixed by mDNS - same reason neither is a
+    # config key. It is the default of Invoke-CompanionDiscovery -UdpPort.
+    $port     = 5556
+    $ruleName = "_[VR_HEADSET_MANAGER]Companion_Discovery"
+    try {
+        $hostExe = Get-PowerShellHostPath
+        if (-not $hostExe) {
+            Write-Log "Unblock-CompanionDiscoveryFirewallRule: cannot resolve the PowerShell host path - skipping." -Level DEBUG
+            return
+        }
+        # A Deny rule BEATS an Allow rule in Windows Firewall, so our rule is
+        # powerless against the block rule Windows writes when someone answers
+        # Cancel to its own popup. We do not delete rules we did not create -
+        # naming them and the one-line cleanup is the useful thing to do here.
+        $blockers = @(Get-HostExeBlockRule -HostExe $hostExe)
+        if ($blockers.Count -gt 0) {
+            Write-Log ("A firewall BLOCK rule exists for '{0}' ({1}) - it overrides any allow rule, so companion discovery will stay blocked. Remove it with: Get-NetFirewallRule -DisplayName '{2}' | Remove-NetFirewallRule" -f `
+                        $hostExe, (($blockers | ForEach-Object { $_.DisplayName }) -join ', '), $blockers[0].DisplayName) -Level WARNING
+        }
+
+        if (Test-CompanionFirewallCurrent -HostExe $hostExe) {
+            Write-Log "Companion discovery firewall rule already present" -Level DEBUG
+            return
+        }
+        Write-Log ("Companion discovery firewall rule missing - requesting creation (UDP {0}, {1})" -f $port, $hostExe) -Level INFO
+        $title   = "FIREWALL RULE REQUIRED - Companion App"
+        $details = "Allowing headset companion-app discovery:`nUDP port : $port (inbound)`nProgram  : $hostExe`nProfile  : All (Domain, Private, Public)`n`nWithout this rule Windows shows its own popup on every`nlaunch, and its Cancel button BLOCKS PowerShell for good.`n(Any previous VR_HEADSET_MANAGER Companion rule will be removed first.)"
+        $exeEsc  = $hostExe -replace "'", "''"
+        if ($ReturnTask) {
+            return @{
+                Title       = $title
+                Details     = $details
+                ActionLabel = "Create rule"
+                Script      = @"
+Get-NetFirewallRule | Where-Object { `$_.DisplayName -ilike '*VR_HEADSET_MANAGER*Companion*' } | Remove-NetFirewallRule -ErrorAction Continue
+New-NetFirewallRule -DisplayName '$ruleName UDP [IN]' -Direction Inbound -Program '$exeEsc' -Protocol UDP -LocalPort $port -Action Allow -Profile Any -Description 'Allow VR Headset Manager companion-app discovery' -ErrorAction Continue | Out-Null
+"@
+                VerifyScript = @"
+`$r = @(Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { `$_.DisplayName -ilike '*VR_HEADSET_MANAGER*Companion*' -and `$_.Enabled -eq 'True' })
+`$paths = (`$r | Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue).Program
+(`$r.Count -ge 1) -and (`$paths -contains '$exeEsc')
+"@
+            }
+        } else {
+            # Standalone (non-batch) path: drop stale rules first, then create the new one.
+            Get-NetFirewallRule -ErrorAction SilentlyContinue |
+                Where-Object { $_.DisplayName -ilike "*VR_HEADSET_MANAGER*Companion*" } |
+                Remove-NetFirewallRule -ErrorAction SilentlyContinue
+            Invoke-AsAdmin -ScriptBlock {
+                param($N, $P, $Port)
+                New-NetFirewallRule -DisplayName "$N UDP [IN]" -Direction Inbound -Program $P `
+                    -Protocol UDP -LocalPort $Port -Action Allow -Profile Any `
+                    -Description 'Allow VR Headset Manager companion-app discovery' -ErrorAction Continue | Out-Null
+            } -N $ruleName -P $hostExe -Port $port
+        }
+    } catch {
+        Write-Log ("Failed to manage the companion discovery firewall rule: " + $_) -Level ERROR
     }
 }
 
@@ -910,6 +1048,13 @@ function Initialize-ComputerSetup {
 
     $wsTask = Unblock-WebServerFirewallRule -ReturnTask
     if ($wsTask -is [hashtable]) { $pendingTasks += $wsTask }
+
+    # Must be part of THIS batch, not left to Windows: Invoke-CompanionDiscovery
+    # binds UDP 5556 from the VRMonitor slow path seconds after startup, and with
+    # no matching program rule Windows raises its own notification - whose Cancel
+    # writes a lasting BLOCK rule for the PowerShell host.
+    $companionTask = Unblock-CompanionDiscoveryFirewallRule -ReturnTask
+    if ($companionTask -is [hashtable]) { $pendingTasks += $companionTask }
 
     if ($global:MdnsResponder_enabled) {
         if (Test-MdnsFirewallCurrent) {

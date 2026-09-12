@@ -28,6 +28,21 @@
 .PARAMETER MaxThreads
     Maximum number of parallel runspaces used for the port scan. Default 50.
 
+.PARAMETER ServerCachePath
+    Full path of a vrhm_server_cache.json file to write the selected server
+    address to (same {IPAddress,Port} shape used by Start-KioskAgent.ps1 and
+    Enable-HeadsetWifiAdb.ps1), so those tools can pick it up without
+    re-scanning. Optional - if omitted, nothing is written; this script only
+    prints its findings.
+
+    When more than one VR HEADSET MANAGER server is found, the operator is
+    asked which one to remember. A single result is written without a prompt.
+
+.PARAMETER First
+    Skip that prompt and always remember the first server found. Intended for
+    scripted or unattended use; it is also the fallback when no interactive
+    console is available.
+
 .EXAMPLE
     .\Find-VRHM-Server.ps1
 
@@ -35,15 +50,17 @@
     .\Find-VRHM-Server.ps1 -Port 8090
 
 .NOTES
-    Safe to run repeatedly. Read-only: it never opens firewall rules, writes
-    files, or requires Administrator rights.
+    Safe to run repeatedly. Read-only unless -ServerCachePath is given: it
+    never opens firewall rules or requires Administrator rights.
 #>
 
 [CmdletBinding()]
 param(
     [int]$Port,
     [int]$TimeoutMs = 300,
-    [int]$MaxThreads = 50
+    [int]$MaxThreads = 50,
+    [string]$ServerCachePath = "",
+    [switch]$First
 )
 
 $DefaultPort = 8080
@@ -273,8 +290,9 @@ foreach ($candidate in $openHosts) {
     try {
         $uri = "http://${ip}:${Port}/api/version"
         $response = Invoke-RestMethod -Uri $uri -TimeoutSec 2 -ErrorAction Stop
-        if ($response -and $response.version) {
+        if ($response -and $response.app -eq 'VRHM') {
             $found += [PSCustomObject]@{
+                Index     = $found.Count + 1
                 IPAddress = $ip
                 Port      = $Port
                 Version   = $response.version
@@ -294,4 +312,73 @@ if ($found.Count -eq 0) {
 
 Write-Host "VR HEADSET MANAGER instance(s) found:" -ForegroundColor Green
 Write-Host ''
-$found | Format-Table -AutoSize IPAddress, Port, Version, Url
+$found | Format-Table -AutoSize @{ Name = '#'; Expression = { $_.Index } }, IPAddress, Port, Version, Url
+
+if (-not $ServerCachePath) {
+    return
+}
+
+function Select-FoundServer {
+    <#
+    .SYNOPSIS
+    Asks the operator which of several confirmed servers should be written to
+    the cache file. Returns the chosen entry, or $null when the operator chose
+    to skip. Never prompts for a single result, when -First was passed, or when
+    there is no interactive console to prompt on.
+    #>
+    param([object[]]$Servers)
+
+    if ($Servers.Count -eq 1 -or $First) {
+        return $Servers[0]
+    }
+
+    if (-not [Environment]::UserInteractive) {
+        Write-Host "No interactive console - remembering the first server found." -ForegroundColor Yellow
+        return $Servers[0]
+    }
+
+    while ($true) {
+        Write-Host ''
+        Write-Host "Which server should be remembered in the cache file?" -ForegroundColor Cyan
+        Write-Host "  [1-$($Servers.Count)] pick a server from the list above (Enter = 1)"
+        Write-Host "  [S] skip - do not write the cache file"
+
+        try {
+            $choice = Read-Host "Choice"
+        } catch {
+            Write-Host "Could not read your choice - remembering the first server found." -ForegroundColor Yellow
+            return $Servers[0]
+        }
+
+        if ([string]::IsNullOrWhiteSpace($choice)) {
+            return $Servers[0]
+        }
+        if ($choice.Trim() -match '^(?i)s$') {
+            return $null
+        }
+        if ($choice.Trim() -match '^\d+$') {
+            $index = [int]$choice.Trim()
+            if ($index -ge 1 -and $index -le $Servers.Count) {
+                return $Servers[$index - 1]
+            }
+        }
+
+        Write-Host "Please enter a number between 1 and $($Servers.Count), or S to skip." -ForegroundColor Yellow
+    }
+}
+
+$selected = Select-FoundServer -Servers $found
+
+if (-not $selected) {
+    Write-Host ''
+    Write-Host "No server was remembered - the cache file was left unchanged." -ForegroundColor Yellow
+    exit 0
+}
+
+try {
+    (@{ IPAddress = $selected.IPAddress; Port = $selected.Port } | ConvertTo-Json -Compress) |
+        Set-Content -LiteralPath $ServerCachePath -Encoding UTF8 -NoNewline
+    Write-Host "Remembered $($selected.IPAddress):$($selected.Port) at $ServerCachePath" -ForegroundColor Green
+} catch {
+    Write-Host "Could not write the server cache file at $ServerCachePath - $($_.Exception.Message)" -ForegroundColor Yellow
+}

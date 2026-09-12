@@ -243,19 +243,44 @@ Invoke-RegressionTest -Name 'Rename moves the generated pages, and apps follow w
     Assert-NotNull (Get-NrtHeadsetRow -Name $nrtName) 'renamed back'
 }
 
-Invoke-RegressionTest -Name 'Reordering rewrites the IDs' -Test {
+Invoke-RegressionTest -Name 'Reordering changes display order but NOT the IDs' -Test {
+    # Inverted deliberately. This test used to be called "Reordering rewrites the
+    # IDs" and asserted that IDs are resequenced by row position. That is exactly
+    # what ADR-0016 (and ADR-0010 before it) forbids:
+    #
+    #   "ID is already a permanent identity that is never resequenced by row
+    #    position"   - docs\adr\0016-id-keyed-live-status-file.md
+    #   "ID is a permanent identity, never a position"
+    #                - modules\headsets_manager.ps1, Save-Headsets
+    #
+    # The ID is the join key for live status, installed apps and favourites, so
+    # renumbering it on a drag-and-drop would silently reattach one headset's data
+    # to another. The registry is what carries display order; the ID must survive it.
     $r = Invoke-VrmApi -Path '/api/addheadset' -Method POST -Body @{
         name = $nrtName2; ip = $nrtIp2; model = 'Quest 2'; serialNumber = 'NRTSERIAL003'
     }
     Assert-VrmOk -Result $r -Label 'add the second headset'
 
+    $idBefore = @{}
+    foreach ($row in (Get-NrtHeadsetRows)) { $idBefore[$row.Name] = [int]$row.ID }
+    Add-TestEvidence ("ids before: {0}" -f (($idBefore.GetEnumerator() | ForEach-Object { "{0}={1}" -f $_.Key, $_.Value }) -join ', '))
+
     $r = Invoke-VrmApi -Path '/api/reorderheadsets' -Method POST -Body @{ order = @($nrtName2, $nrtName) }
     Assert-VrmOk -Result $r -Label 'reorder headsets'
 
-    $rows = Get-NrtHeadsetRows | Sort-Object { [int]$_.ID }
+    # Display order = the order the registry returns, NOT an ID sort.
+    $rows = @(Get-NrtHeadsetRows)
     Add-TestEvidence ("order now: {0}" -f (($rows | ForEach-Object { "{0}={1}" -f $_.ID, $_.Name }) -join ', '))
-    Assert-Equal $nrtName2 $rows[0].Name 'first headset after reorder'
-    Assert-Equal $nrtName  $rows[1].Name 'second headset after reorder'
+
+    $ours = @($rows | Where-Object { $_.Name -eq $nrtName -or $_.Name -eq $nrtName2 })
+    Assert-Equal $nrtName2 $ours[0].Name 'reordered headset comes first in display order'
+    Assert-Equal $nrtName  $ours[1].Name 'other headset comes second in display order'
+
+    foreach ($row in $rows) {
+        if ($idBefore.ContainsKey($row.Name)) {
+            Assert-Equal $idBefore[$row.Name] ([int]$row.ID) ("ID of '{0}' is unchanged by the reorder" -f $row.Name)
+        }
+    }
 }
 
 # ---------------------------------------------------------------------------

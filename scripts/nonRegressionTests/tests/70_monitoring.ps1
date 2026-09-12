@@ -36,34 +36,51 @@ Invoke-RegressionTest -Name 'App is running' -Test {
 }
 
 Invoke-RegressionTest -Name 'VRMonitor poll loop is still advancing' -Test {
-    Assert-FileExists $paths.ComputerMonJson 'data\computer_monitoring.json'
+    # Reads the snapshot through GET /api/computer-monitoring, not off disk.
+    # ADR-0017 moved it into the app_kv table (Set-DbKeyValue -Key
+    # 'computer_monitoring'); data\computer_monitoring.json is not written any
+    # more, so the old file assertions failed on every post-migration run.
+    $r = Invoke-VrmApi -Path '/api/computer-monitoring'
+    $before = if ($r.Ok) { $r.Json } else { $null }
+    Assert-NotNull $before 'first computer-monitoring sample'
+    Assert-NotNull $before.Timestamp 'first sample Timestamp'
 
-    $config = Read-JsonFileUtf8 -Path $paths.ConfigFile
-    $refreshSec = 15
-    if ($config -and $config.ComputerMonitoring -and $config.ComputerMonitoring.refresh_timer_sec) {
-        $refreshSec = [int]$config.ComputerMonitoring.refresh_timer_sec
+    # Force the refresh rather than waiting out the timer.
+    #
+    # Sleeping refresh_timer_sec + 8 was not reliable: the interval is ADAPTIVE
+    # (Get-AdaptiveMonitorInterval = refresh_timer_sec * Get-LoadMultiplier, capped
+    # at 600s), and this section runs straight after the streaming matrix, so
+    # scrcpy + ffmpeg + mediamtx have the load multiplier well above 1. The loop
+    # was healthy and simply not due yet - the app logs "Computer monitoring
+    # skipped (not due yet)" - so the test failed on a machine doing exactly what
+    # it was designed to do.
+    #
+    # POST /api/computer-monitoring/force-refresh drops the flag file that
+    # Update-ComputerMonitoring checks BEFORE the throttle, which is precisely
+    # what it exists for. That makes this a test of "is the loop alive and does it
+    # produce new samples", not a race against a variable timer.
+    $fr = Invoke-VrmApi -Path '/api/computer-monitoring/force-refresh' -Method POST -Body @{}
+    Assert-True $fr.Ok 'POST /api/computer-monitoring/force-refresh accepted'
+
+    $deadline = (Get-Date).AddSeconds(90)
+    $after    = $null
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 2
+        $r2 = Invoke-VrmApi -Path '/api/computer-monitoring'
+        if ($r2.Ok -and $r2.Json -and $r2.Json.Timestamp -and $r2.Json.Timestamp -ne $before.Timestamp) {
+            $after = $r2.Json
+            break
+        }
     }
 
-    $before = Read-JsonFileUtf8 -Path $paths.ComputerMonJson
-    Assert-NotNull $before 'first computer_monitoring.json sample'
-    Add-TestArtifact -SourcePath $paths.ComputerMonJson -Category data -Rename 'computer_monitoring_before.json'
-
-    $waitSec = $refreshSec + 8
-    Add-TestEvidence ("waiting {0}s (refresh_timer_sec={1}) for the loop to produce a new sample" -f $waitSec, $refreshSec)
-    Start-Sleep -Seconds $waitSec
-
-    $after = Read-JsonFileUtf8 -Path $paths.ComputerMonJson
-    Assert-NotNull $after 'second computer_monitoring.json sample'
-    Add-TestArtifact -SourcePath $paths.ComputerMonJson -Category data -Rename 'computer_monitoring_after.json'
-
+    Assert-NotNull $after 'the loop must publish a new sample after a forced refresh'
     Add-TestEvidence ("timestamp {0} -> {1}" -f $before.Timestamp, $after.Timestamp)
-    Assert-True ($after.Timestamp -ne $before.Timestamp) `
-        'computer_monitoring.json Timestamp must advance - the poll loop looks stalled otherwise'
 }
 
-Invoke-RegressionTest -Name 'computer_monitoring.json carries plausible hardware fields' -Test {
-    $snapshot = Read-JsonFileUtf8 -Path $paths.ComputerMonJson
-    Assert-NotNull $snapshot 'computer_monitoring.json parses'
+Invoke-RegressionTest -Name 'computer-monitoring snapshot carries plausible hardware fields' -Test {
+    $r = Invoke-VrmApi -Path '/api/computer-monitoring'
+    $snapshot = if ($r.Ok) { $r.Json } else { $null }
+    Assert-NotNull $snapshot 'GET /api/computer-monitoring returns a snapshot'
     Assert-NotNull $snapshot.CPU 'CPU node'
     Assert-NotNull $snapshot.CPU.Model 'CPU.Model'
     Assert-NotNull $snapshot.RAM 'RAM node'

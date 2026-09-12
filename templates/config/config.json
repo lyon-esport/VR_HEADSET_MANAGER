@@ -20,7 +20,7 @@
                       "refresh_timer":  5,
                       "showConsole":  false,
                       "networkDiscovery":  {
-                                               "enabled":  false,
+                                               "enabled":  true,
                                                "interval_sec":  60
                                            }
                   },

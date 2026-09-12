@@ -939,7 +939,14 @@ function Start-VRMonitor {
 
                 $knownHeadsets = @(Get-KnownHeadsets)
 
-                Invoke-UsbHeadsetActions | Out-Null
+                # Guarded like the discovery/companion calls below it: anything that
+                # escapes here would abort the rest of the slow tick (service
+                # watchdogs, Update-ComputerMonitoring, VQA) for every headset.
+                try {
+                    Invoke-UsbHeadsetActions | Out-Null
+                } catch {
+                    Write-Log ("VRMonitor: USB tick failed: " + $_.Exception.Message) -Level WARNING
+                }
 
                 # Discover companion apps: heals IP drift silently and returns companion states
                 try {
@@ -1318,13 +1325,14 @@ function Get-HeadsetInfoStage2Identity {
         BatteryControllerLeft = "-"; BatteryControllerRight = "-"
     }
     try {
-        $bm = Get-HeadsetBrandModel -Device $Device -adb $adb
+        # -IncludeSerial folds ro.serialno into the same batched getprop call, so brand,
+        # model and serial cost ONE adb round-trip instead of two.
+        $bm = Get-HeadsetBrandModel -Device $Device -IncludeSerial -adb $adb
         if ($bm) {
             if ($bm.Brand) { $out.Brand = $bm.Brand }
             if (-not [string]::IsNullOrWhiteSpace($bm.Model)) { $out.Model = $bm.Model }
+            if (-not [string]::IsNullOrWhiteSpace($bm.Serial)) { $out.SerialNumber = $bm.Serial }
         }
-        $serial = Invoke-AdbCmd -Device $Device -Command "shell getprop ro.serialno" -adb $adb
-        if ($serial) { $out.SerialNumber = ($serial -join '').Trim() }
 
         $batteryInfo = Get-HeadsetBatteryStatus -Device $Device -adb $adb -Brand $out.Brand
         if ($batteryInfo) {

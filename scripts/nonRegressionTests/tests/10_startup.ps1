@@ -242,14 +242,20 @@ Invoke-RegressionTest -Name 'VRMonitor is producing monitoring data' -Test {
     Add-TestEvidence ("registry rows={0}  status rows={1}" -f $registry.Count, $statusRows.Count)
     Assert-Equal $registry.Count $statusRows.Count 'every registered headset has a live-status row'
 
+    # The snapshot is a DATABASE row, not a file (ADR-0017). Update-ComputerMonitoring
+    # writes it with Set-DbKeyValue -Key 'computer_monitoring'; data\computer_monitoring.json
+    # is no longer produced at all. This used to assert on that file and so failed on
+    # every run after the SQLite migration.
+    # The endpoint answers 404 until the first snapshot exists, and the body IS
+    # the snapshot object (no envelope) - so poll until Timestamp shows up.
     $deadline = (Get-Date).AddSeconds(60)
-    while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $paths.ComputerMonJson)) {
+    $snapshot = $null
+    while ((Get-Date) -lt $deadline) {
+        $r = Invoke-VrmApi -Path '/api/computer-monitoring'
+        if ($r.Ok -and $r.Json -and $r.Json.Timestamp) { $snapshot = $r.Json; break }
         Start-Sleep -Milliseconds 750
     }
-    Assert-FileExists $paths.ComputerMonJson 'data\computer_monitoring.json'
-
-    $snapshot = Read-JsonFileUtf8 -Path $paths.ComputerMonJson
-    Assert-NotNull $snapshot 'computer_monitoring.json parses'
+    Assert-NotNull $snapshot 'GET /api/computer-monitoring returns a snapshot'
     Assert-NotNull $snapshot.Timestamp 'snapshot Timestamp'
     Assert-NotNull $snapshot.CPU 'snapshot CPU node'
     Add-TestEvidence ("timestamp = {0}" -f $snapshot.Timestamp)

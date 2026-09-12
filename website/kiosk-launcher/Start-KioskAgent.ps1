@@ -17,11 +17,11 @@
       5. Server discovery - unless -ServerUrl or -ServerIp is given, the script
          finds the VR HEADSET MANAGER server on its own by scanning the local
          network, the same way scripts/Tools/Find-VRHM-Server.ps1 does. A
-         successful match is cached next to this script, so later reboots
-         resolve instantly. If nothing is found, it offers to retry the scan,
-         accept a manually typed IP, or be cancelled with Ctrl+C - see
-         -ServerIp below for the routed-network case (scanning does not cross
-         subnets).
+         successful match is cached (next to this script by default, or at
+         -ServerCachePath if given), so later reboots resolve instantly. If
+         nothing is found, it offers to retry the scan, accept a manually
+         typed IP, or be cancelled with Ctrl+C - see -ServerIp below for the
+         routed-network case (scanning does not cross subnets).
       6. Reporting - every few seconds it tells the VR HEADSET MANAGER server
          this PC's computer name, OS version, Chrome version, and whether the
          connection to the server runs over Ethernet or WiFi. That information
@@ -65,6 +65,13 @@
     Port to use with -ServerIp, and the port scanned during automatic server
     discovery (default 8080 - the VR HEADSET MANAGER web server's default).
 
+.PARAMETER ServerCachePath
+    Full path of the vrhm_server_cache.json file this tool reads and writes
+    the last-known server address to. Defaults to a file next to this script.
+    Start-Kiosk-Agent.exe overrides this to a single cache file shared with
+    the other toolbox tools (Start-HeadsetToolbox.exe, Find-VRHM-Server.exe)
+    when run from inside the combined VRHM-Headset-Toolbox.zip.
+
 .PARAMETER ReportIntervalSec
     How often to report to the server, in seconds (default 5). This also bounds
     how long a reboot/shutdown order takes to arrive.
@@ -101,6 +108,7 @@ param (
     [string]$ServerUrl = "",
     [string]$ServerIp = "",
     [int]$ServerPort = 8080,
+    [string]$ServerCachePath = "",
     [int]$ReportIntervalSec = 5,
     [switch]$NoAutoRestartBrowser,
     [string]$ChromePath = ""
@@ -772,6 +780,7 @@ function Invoke-KioskCommand {
 # ---------------------------------------------------------------------------
 
 function Get-VrhmServerCachePath {
+    if ($ServerCachePath) { return $ServerCachePath }
     $scriptDir = $null
     if ($PSCommandPath) { $scriptDir = Split-Path -Parent $PSCommandPath }
     if (-not $scriptDir) { $scriptDir = $PSScriptRoot }
@@ -801,11 +810,16 @@ function Write-VrhmServerCache {
 }
 
 function Test-VrhmServerAt {
+    <#
+    .SYNOPSIS
+    Returns $true only when the given address is genuinely a VR HEADSET
+    MANAGER server - not just any web server answering on that port.
+    #>
     param([string]$IPAddress, [int]$Port, [int]$TimeoutSec = 2)
     try {
         $uri = "http://${IPAddress}:${Port}/api/version"
         $response = Invoke-RestMethod -Uri $uri -TimeoutSec $TimeoutSec -ErrorAction Stop
-        return [bool]($response -and $response.version)
+        return [bool]($response -and $response.app -eq 'VRHM')
     } catch {
         return $false
     }

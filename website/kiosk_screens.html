@@ -498,14 +498,15 @@
             <div class="panel-title">Windows - standalone kiosk agent (easiest)</div>
             <p class="launcher-modal-desc">
               A single, self-contained executable - nothing to unzip. Copy it to the
-              kiosk PC and double-click <code>Start-Kiosk-ADVANCED.exe</code> - it asks
+              kiosk PC and double-click <code>Start-Kiosk-Agent.exe</code> - it asks
               for administrator rights, starts the kiosk browser, and finds this server
               on the network automatically (nothing to type). The first run also
-              extracts its own <code>Start-KioskAgent.ps1</code> source next to itself,
-              so it stays inspectable and editable afterward.
+              extracts its own <code>Start-KioskAgent.ps1</code> source into a
+              kiosk-launcher\ subfolder next to itself, so it stays inspectable and
+              editable afterward.
             </p>
             <div class="form-row">
-              <a class="btn" href="kiosk-launcher/Start-Kiosk-ADVANCED.exe" download="Start-Kiosk-ADVANCED.exe">
+              <a class="btn" href="kiosk-launcher/Start-Kiosk-Agent.exe" download="Start-Kiosk-Agent.exe">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 Download kiosk agent (.exe)
               </a>
@@ -513,7 +514,7 @@
             <p class="launcher-modal-desc">
               On a routed network (server not on the kiosk's own subnet), pass the
               address directly instead of relying on the scan:
-              <code>Start-Kiosk-ADVANCED.exe -ServerIp 10.0.5.12</code>. For the
+              <code>Start-Kiosk-Agent.exe -ServerIp 10.0.5.12</code>. For the
               original casting-only launcher, see Setup Scripts - Basic below.
             </p>
           </div>

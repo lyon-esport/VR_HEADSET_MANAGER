@@ -90,7 +90,10 @@ function Invoke-Adb {
         [Parameter(Mandatory = $true)]
         [string[]]$Arguments,
         [string]$Adb = $global:adbPath,
-        [int]$TimeoutSeconds = 0
+        # 15s, not 0. A 0 here means WaitForExit() with no bound, so a wedged adb
+        # server hangs the calling runspace forever with nothing to recover it.
+        # Callers that need longer (install/push) pass their own value.
+        [int]$TimeoutSeconds = 15
     )
 
     if (-not (Test-Path -LiteralPath $Adb)) {
@@ -143,10 +146,46 @@ function Invoke-Adb {
 }
 
 
+function Test-AdbTransportFailure {
+    <#
+    .SYNOPSIS
+    True when an Invoke-Adb result failed because the TRANSPORT is gone (device not
+    connected / offline / unauthorized), as opposed to the command itself failing.
+
+    .DESCRIPTION
+    Used by Invoke-AdbCmd to decide whether a failure is worth a reconnect-and-retry.
+    adb.exe is not localized, so matching its English diagnostics is locale-safe.
+
+    A timeout (ExitCode -2) is deliberately NOT a transport failure: retrying would
+    cost a second full timeout, doubling the wall clock for no new information.
+    #>
+    param($Result)
+
+    if (-not $Result) { return $false }
+    if ($Result.ExitCode -eq -2) { return $false }   # our own timeout
+    if ($Result.ExitCode -eq -1) { return $false }   # adb.exe missing
+
+    $text = ((@($Result.StdErr) + @($Result.StdOut)) -join ' ')
+    if ([string]::IsNullOrWhiteSpace($text)) { return $false }
+
+    # Match adb's ACTUAL transport diagnostics, not loose substrings.
+    #
+    # A bare "not found" was far too broad: plenty of perfectly normal command
+    # failures say it (a missing package, a missing file, a shell builtin), and
+    # treating those as a dead transport sends the caller into the reconnect
+    # branch - which, for a USB device, ends in a thrown AdbCmdUsbNotDetected
+    # instead of the $false the caller expected. "device 'X' not found" is the
+    # transport error; "not found" on its own is usually the command's own.
+    return [bool]($text -match "(?i)device\s+'[^']*'\s+not\s+found|no devices?/emulators? found|device offline|device unauthorized|device still connecting|protocol fault|error:\s*closed|transport (?:not found|is closed)")
+}
+
+
 function Invoke-AdbCmd {
     <#
     .SYNOPSIS
-    Validates device reachability then executes an ADB command, returning stdout on success.
+    Executes an ADB command, returning stdout on success; reconnects and retries once
+    if the transport turns out to be gone.
+
     .DESCRIPTION
     - $Device: PSCustomObject from Get-AdbWifiDevice/Get-AdbUsbDevice, OR a plain "IP:Port" string.
     - $Command is a string of ADB arguments after -s <DeviceId>
@@ -154,6 +193,19 @@ function Invoke-AdbCmd {
     - Throws a descriptive exception for infrastructure failures (unreachable, unauthorized).
     - Returns $false when the command runs but exits with a non-zero exit code.
     - Returns a string array (may be empty @()) on success.
+
+    ORDER MATTERS - do not reintroduce a pre-flight check. This function used to run
+    "adb devices" BEFORE every command to validate the transport, which made every
+    single call cost TWO adb.exe processes instead of one. With ~95 call sites and a
+    per-headset poll loop, that was the single largest source of process churn in the
+    app (~780 adb.exe/min at 5 headsets).
+
+    The happy path now spawns exactly one process. The transport checks still exist,
+    with identical semantics and identical exception messages - they just moved into
+    the failure branch, where they cost nothing until something is actually wrong.
+    There is no added latency for an unreachable headset: adb fails immediately with
+    "device not found" because the adb server already knows the transport is gone;
+    it does not go to the network to find out.
     #>
     param (
         [Parameter(Mandatory=$true)]
@@ -167,7 +219,7 @@ function Invoke-AdbCmd {
 
     if (-not $Device) { throw ($msg.AdbCmdDeviceNull) }
 
-    # Accept plain "IP:Port" string — coerce to a minimal WiFi device object
+    # Accept plain "IP:Port" string - coerce to a minimal WiFi device object
     if ($Device -is [string]) {
         $parts = $Device -split ':'
         $Device = [PSCustomObject]@{
@@ -184,31 +236,42 @@ function Invoke-AdbCmd {
 
     $deviceId = $Device.DeviceId
 
+    # Split $Command preserving quoted segments (handles paths with spaces)
+    $tokens = [regex]::Matches($Command, '"[^"]*"|\S+') | ForEach-Object { $_.Value.Trim('"') }
+    $argv   = @('-s', $deviceId) + $tokens
+
+    # ---- Attempt 1: just run it. One process. ----
+    $result = Invoke-Adb -Arguments $argv -TimeoutSeconds $TimeoutSeconds -Adb $adb
+    if ($result.Ok) { return $result.StdOut }
+
+    # Failed. A plain command error (bad package, missing path, ...) is not our problem.
+    if (-not (Test-AdbTransportFailure -Result $result)) {
+        if (-not $SilentOnFail) {
+            $errDetail = ($result.StdErr + $result.StdOut) -join ' '
+            Write-Log ($msg.AdbCmdFailed -f $deviceId, $Command, $result.ExitCode, $errDetail) -Level WARNING
+        }
+        return $false
+    }
+
+    # ---- Transport is gone: recover, with the original diagnostics ----
     if ($Device.ConnectionType -eq 'WiFi') {
         $ip   = $Device.IP
         $port = if ($Device.Port) { $Device.Port } else { $global:adbPort_default }
 
-        # Fast path: already connected — skip all network checks
+        $portOpen = (Test-Port -hostname $ip -port $port).open
+        if (-not $portOpen) {
+            $pingOk = Test-Connection -ComputerName $ip -Count 1 -Quiet -ErrorAction SilentlyContinue
+            if (-not $pingOk) {
+                throw ($msg.AdbCmdPingFailed -f $ip)
+            }
+            throw ($msg.AdbCmdPortClosed -f $ip, $port)
+        }
+
+        & $adb connect $deviceId 2>$null | Out-Null
         $isConnected = [bool](& $adb devices 2>$null |
             Where-Object { $_ -match ("^" + [regex]::Escape($deviceId) + "\s+device$") })
-
         if (-not $isConnected) {
-            # Only run network checks when ADB is not yet connected
-            $portOpen = (Test-Port -hostname $ip -port $port).open
-            if (-not $portOpen) {
-                $pingOk = Test-Connection -ComputerName $ip -Count 1 -Quiet -ErrorAction SilentlyContinue
-                if (-not $pingOk) {
-                    throw ($msg.AdbCmdPingFailed -f $ip)
-                }
-                throw ($msg.AdbCmdPortClosed -f $ip, $port)
-            }
-
-            & $adb connect $deviceId 2>$null | Out-Null
-            $isConnected = [bool](& $adb devices 2>$null |
-                Where-Object { $_ -match ("^" + [regex]::Escape($deviceId) + "\s+device$") })
-            if (-not $isConnected) {
-                throw ($msg.AdbCmdWifiNotConnected -f $deviceId)
-            }
+            throw ($msg.AdbCmdWifiNotConnected -f $deviceId)
         }
 
     } elseif ($Device.ConnectionType -eq 'USB') {
@@ -221,22 +284,115 @@ function Invoke-AdbCmd {
         if (-not ($devicesOutput | Where-Object { $_ -match "`tdevice$" -and $_ -notmatch ':' })) {
             throw ($msg.AdbCmdUsbNotDetected)
         }
-    }
 
-    # Split $Command preserving quoted segments (handles paths with spaces)
-    $tokens = [regex]::Matches($Command, '"[^"]*"|\S+') | ForEach-Object { $_.Value.Trim('"') }
-
-    $result = Invoke-Adb -Arguments (@('-s', $deviceId) + $tokens) `
-                         -TimeoutSeconds $TimeoutSeconds -Adb $adb
-
-    if (-not $result.Ok) {
+    } else {
+        # Unknown connection type - nothing to reconnect, report as a plain failure.
         if (-not $SilentOnFail) {
             $errDetail = ($result.StdErr + $result.StdOut) -join ' '
-            Write-Log ($msg.AdbCmdFailed -f $Device.DeviceId, $Command, $result.ExitCode, $errDetail) -Level WARNING
+            Write-Log ($msg.AdbCmdFailed -f $deviceId, $Command, $result.ExitCode, $errDetail) -Level WARNING
         }
         return $false
     }
-    return $result.StdOut
+
+    # ---- Attempt 2: transport restored, run it once more ----
+    $result = Invoke-Adb -Arguments $argv -TimeoutSeconds $TimeoutSeconds -Adb $adb
+    if ($result.Ok) { return $result.StdOut }
+
+    if (-not $SilentOnFail) {
+        $errDetail = ($result.StdErr + $result.StdOut) -join ' '
+        Write-Log ($msg.AdbCmdFailed -f $deviceId, $Command, $result.ExitCode, $errDetail) -Level WARNING
+    }
+    return $false
+}
+
+
+function Get-AdbPropBatch {
+    <#
+    .SYNOPSIS
+    Reads several getprop values (and optionally the wlan0 IP) in ONE adb call.
+
+    .DESCRIPTION
+    One "adb shell" round-trip instead of one per property. Each Invoke-AdbCmd is a
+    process spawn, so reading manufacturer + model + serial separately cost three of
+    them; this costs one.
+
+    Segments are separated by an echoed marker rather than parsed positionally from a
+    single blob, because getprop prints an EMPTY line for a property the device does
+    not have - without the marker an absent property would silently shift every later
+    value up by one. Only ";" and "echo" are used, no shell quoting or $ expansion, so
+    nothing has to survive two layers of argument escaping.
+
+    Returns a hashtable keyed by property name, plus 'WlanIp' when -IncludeWlanIp is
+    set. A property the device does not have comes back as an empty string, never $null.
+
+    .EXAMPLE
+    $p = Get-AdbPropBatch -Device $usbDevice -Properties @('ro.product.manufacturer','ro.serialno') -IncludeWlanIp
+    $p['ro.serialno']; $p['WlanIp']
+    #>
+    param (
+        [Parameter(Mandatory=$true)]
+        $Device,
+        # Not mandatory: -IncludeWlanIp alone is a legitimate call (read just the
+        # address), and a mandatory [string[]] would prompt on an empty array.
+        [string[]]$Properties = @(),
+        [switch]$IncludeWlanIp,
+        [int]$TimeoutSeconds = 10,
+        [string]$adb = $global:adbPath
+    )
+
+    if (-not $Properties) { $Properties = @() }
+    if ($Properties.Count -eq 0 -and -not $IncludeWlanIp) { return @{} }
+
+    $marker = '__VRHM__'
+    $out    = @{}
+    foreach ($p in $Properties) { $out[$p] = '' }
+    if ($IncludeWlanIp) { $out['WlanIp'] = '' }
+
+    $parts = @()
+    foreach ($p in $Properties) {
+        $parts += "getprop $p"
+        $parts += "echo $marker"
+    }
+    if ($IncludeWlanIp) {
+        $parts += "ip -f inet addr show wlan0"
+        $parts += "echo $marker"
+    }
+
+    # The outer quotes make the whole script ONE token for Invoke-AdbCmd's tokenizer,
+    # which Invoke-Adb then re-quotes for the command line - so adb hands the entire
+    # string to the device shell, unsplit.
+    $cmd = 'shell "' + ($parts -join '; ') + '"'
+
+    $lines = Invoke-AdbCmd -Device $Device -Command $cmd -TimeoutSeconds $TimeoutSeconds -adb $adb
+    if ($lines -eq $false) { return $out }
+
+    # Split the output back into one segment per requested item, in order.
+    $segments = @()
+    $current  = @()
+    foreach ($line in @($lines)) {
+        if ($line.Trim() -eq $marker) {
+            $segments += ,@($current)
+            $current = @()
+        } else {
+            $current += $line
+        }
+    }
+
+    $i = 0
+    foreach ($p in $Properties) {
+        if ($i -lt $segments.Count) { $out[$p] = (@($segments[$i]) -join '').Trim() }
+        $i++
+    }
+    if ($IncludeWlanIp -and $i -lt $segments.Count) {
+        foreach ($line in @($segments[$i])) {
+            if ($line -match 'inet\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/') {
+                $out['WlanIp'] = $Matches[1]
+                break
+            }
+        }
+    }
+
+    return $out
 }
 
 
@@ -691,12 +847,39 @@ function Get-UsbDeviceSpeed {
     #>
     param([string]$Serial)
     if (-not $Serial) { return $null }
+
+    # Memoized per serial. A device's negotiated USB link speed cannot change
+    # while it stays plugged into the same port, so this is a constant for the
+    # lifetime of the connection - yet /api/headset-connection-check is polled
+    # every 5 s by the apps page, and this used to redo the whole tree walk each
+    # time.
+    if (-not $script:UsbSpeedCache) { $script:UsbSpeedCache = @{} }
+    if ($script:UsbSpeedCache.ContainsKey($Serial)) { return $script:UsbSpeedCache[$Serial] }
+
     try {
-        $device = Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue |
-            Where-Object { $_.InstanceId -like "USB\*\$Serial" } |
+        # Filter in the provider, not in PowerShell. The old form was
+        # "Get-PnpDevice -PresentOnly | Where-Object InstanceId -like ...", which
+        # enumerates EVERY present device on the machine and discards almost all
+        # of them client-side.
+        $device = Get-PnpDevice -PresentOnly -InstanceId "USB\*\$Serial" -ErrorAction SilentlyContinue |
             Select-Object -First 1
+        if (-not $device) {
+            # Wildcard -InstanceId is not honoured on every Windows build; fall
+            # back to a server-side CIM filter rather than to a full enumeration.
+            $esc = $Serial -replace "'", "''"
+            $device = Get-CimInstance -ClassName Win32_PnPEntity `
+                        -Filter "DeviceID LIKE 'USB%\\$esc'" -ErrorAction SilentlyContinue |
+                      Select-Object -First 1
+            if ($device -and -not $device.InstanceId) {
+                $device = [PSCustomObject]@{ InstanceId = $device.DeviceID }
+            }
+        }
         if (-not $device) { return $null }
 
+        # Every exit below assigns $speed and falls through to the single cache
+        # write at the end - an early "return" here would skip the memo and make
+        # the cache never fill for the fast (most common) paths.
+        $speed     = $null
         $currentId = $device.InstanceId
         for ($i = 0; $i -lt 8; $i++) {
             $prop = Get-PnpDeviceProperty -InstanceId $currentId -KeyName 'DEVPKEY_Device_Parent' -ErrorAction SilentlyContinue
@@ -704,22 +887,40 @@ function Get-UsbDeviceSpeed {
             $parentId = $prop.Data
 
             # InstanceId of the controller often contains the controller type
-            if ($parentId -match 'xHCI|XHCI') { return 'USB 3.0' }
-            if ($parentId -match 'EHCI|ehci')  { return 'USB 2.0' }
+            if ($parentId -match 'xHCI|XHCI') { $speed = 'USB 3.0'; break }
+            if ($parentId -match 'EHCI|ehci') { $speed = 'USB 2.0'; break }
 
             # Fall back to device friendly name / description
             $parentDev = Get-PnpDevice -InstanceId $parentId -ErrorAction SilentlyContinue
             if ($parentDev) {
                 $name = "$($parentDev.FriendlyName) $($parentDev.Description)"
-                if ($name -match 'xHCI|SuperSpeed|USB 3') { return 'USB 3.0' }
-                if ($name -match 'EHCI|USB 2')             { return 'USB 2.0' }
+                if ($name -match 'xHCI|SuperSpeed|USB 3') { $speed = 'USB 3.0'; break }
+                if ($name -match 'EHCI|USB 2')            { $speed = 'USB 2.0'; break }
             }
             $currentId = $parentId
         }
-        return $null
+
+        # Cache negatives too: a device whose controller type cannot be determined
+        # will not become determinable on the next poll, and re-walking eight
+        # parent hops to rediscover that is the worst case, not the cheap one.
+        $script:UsbSpeedCache[$Serial] = $speed
+        return $speed
     } catch {
         return $null
     }
+}
+
+
+function Clear-UsbSpeedCache {
+    <#
+    .SYNOPSIS
+    Drops memoized USB link speeds. Call when a device is unplugged, so a replug
+    into a different port is measured again rather than answered from the memo.
+    #>
+    param([string]$Serial)
+    if (-not $script:UsbSpeedCache) { return }
+    if ($Serial) { $script:UsbSpeedCache.Remove($Serial) | Out-Null }
+    else         { $script:UsbSpeedCache = @{} }
 }
 
 
@@ -769,30 +970,80 @@ function Enable-AdbTcpIp {
     }
 
     try {
-        $usbLine = & $adb devices 2>$null | Where-Object { $_ -match "`tdevice$" -and $_ -notmatch ':' }
+        # Wait briefly for the USB transport rather than giving up on the first look.
+        #
+        # The transport genuinely blips: measured on a Quest 3, it disappears from
+        # "adb devices" for about a second while the app starts (the adb server is
+        # restarted during startup), with NO Windows PnP event - the device stays
+        # enumerated, only the ADB transport goes. An operator pressing the button
+        # during that window used to get a flat "No USB headset detected", and the
+        # non-regression suite failed intermittently for the same reason.
+        # 15s, not 5s: tcpip re-enumeration takes about ten seconds, and the most
+        # likely reason USB is briefly absent is that something just ran tcpip -
+        # including the VRMonitor USB watcher onboarding this very headset.
+        $usbLine  = $null
+        $deadline = (Get-Date).AddSeconds(15)
+        while ($true) {
+            $usbLine = & $adb devices 2>$null | Where-Object { $_ -match "`tdevice$" -and $_ -notmatch ':' }
+            if ($usbLine -or (Get-Date) -ge $deadline) { break }
+            Start-Sleep -Milliseconds 500
+        }
         if (-not $usbLine) {
             return [PSCustomObject]@{ ok = $false; error = "No USB headset detected" }
         }
         $deviceId  = ($usbLine -split "`t")[0].Trim()
         $usbDevice = [PSCustomObject]@{ DeviceId = $deviceId; ConnectionType = 'USB'; IP = $null; Port = $null }
 
-        $model = ((Invoke-AdbCmd -Device $usbDevice -Command "shell getprop ro.product.model" -adb $adb) -join '').Trim()
+        # Model and the wlan0 address in one batched call instead of two round-trips.
+        $bm    = Get-HeadsetBrandModel -Device $usbDevice -adb $adb
+        $model = if ($bm) { $bm.Model } else { '' }
+        $net   = Get-AdbPropBatch -Device $usbDevice -adb $adb -IncludeWlanIp
+        $ip    = $net['WlanIp']
+
+        # Short-circuit when WiFi ADB is ALREADY live for this headset.
+        #
+        # The IP is read BEFORE tcpip precisely so this check can exist. Firing
+        # tcpip unconditionally re-enumerates the USB transport - a measured ~10s
+        # outage - so doing it when the transport is already up is pure harm: it
+        # breaks USB for ten seconds to reach a state we were already in. The
+        # VRMonitor watcher may well have onboarded this headset seconds ago.
+        if ($ip) {
+            $alreadyUp = [bool](& $adb devices 2>$null |
+                Where-Object { $_ -match ("^" + [regex]::Escape("${ip}:${AdbPort}") + "\s+device$") })
+            if ($alreadyUp) {
+                Write-Log ($msg.AdbWifiAlreadyConnected -f "${ip}:${AdbPort}") -Level DEBUG
+                return [PSCustomObject]@{ ok = $true; model = $model; ip = $ip; port = $AdbPort; connected = $true }
+            }
+        }
 
         # Enable TCP/IP mode
         Invoke-AdbCmd -Device $usbDevice -Command "tcpip $AdbPort" -adb $adb | Out-Null
         Start-Sleep -Seconds 2
 
-        # Retrieve WiFi IP
-        $ip = ''
-        $ipOutput = Invoke-AdbCmd -Device $usbDevice -Command "shell ip -f inet addr show wlan0" -adb $adb
-        foreach ($line in $ipOutput) {
-            if ($line -match 'inet\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/') {
-                $ip = $Matches[1]; break
-            }
+        # Re-read the address after tcpip: on a headset that had no wlan0 address
+        # a moment ago, this is the read that finds it.
+        if (-not $ip) {
+            $net = Get-AdbPropBatch -Device $usbDevice -adb $adb -IncludeWlanIp
+            $ip  = $net['WlanIp']
+        }
+
+        # Connect, then report whether the transport actually came up.
+        #
+        # This tail used to be missing, and its absence was not cosmetic: "adb
+        # tcpip" only puts the DEVICE into tcpip mode, it does not create the
+        # host-side transport. So "adb devices" never listed ip:port, WifiAdbOpen
+        # stayed false forever, the UI showed WiFi ADB as closed right after
+        # reporting success - and Invoke-UsbHeadsetActions, which gates on that
+        # same flag, re-fired tcpip on every tick. Each re-fire re-enumerates the
+        # USB transport (measured ~10 s outage on a Quest 3). Verified on a real
+        # Quest 3: after tcpip the device IS listening and a plain connect works.
+        $connected = $false
+        if ($ip) {
+            $connected = Connect-HeadsetWifiAdb -IPAddress $ip -AdbPort $AdbPort -adb $adb
         }
 
         Write-Log ($msg.ActivatingWifiAdbPort -f $AdbPort) -Level INFO
-        return [PSCustomObject]@{ ok = $true; model = $model; ip = $ip; port = $AdbPort }
+        return [PSCustomObject]@{ ok = $true; model = $model; ip = $ip; port = $AdbPort; connected = $connected }
     } catch {
         Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
         return [PSCustomObject]@{ ok = $false; error = $_.Exception.Message }
@@ -803,80 +1054,126 @@ function Enable-AdbTcpIp {
 function Invoke-UsbHeadsetActions {
     <#
     .SYNOPSIS
-    Runs automated background actions on a USB-connected headset. No user prompts.
-    Called on every VRMonitor loop iteration.
+    Compatibility entry point for the USB onboarding tick. The logic now lives in
+    modules\usb_manager.ps1 (Update-UsbWatchState); this wrapper remains because
+    the console menu and the non-regression harness refer to it by name.
 
     .DESCRIPTION
-    - Silently checks for a USB ADB device via Get-AdbUsbDeviceInfo (single attempt, no prompts).
-    - Returns $null immediately if no USB device is present.
-    - If a USB headset is found and already connected to WiFi, enables TCP/IP
-      wireless ADB automatically.
-    - Matches the headset in known_headsets.csv by ro.serialno and updates its IP if it changed.
-    - Returns a result object for use by future actions added to this function.
+    The old implementation ran the FULL ~17-spawn detail probe on every VRMonitor
+    slow tick, re-read the whole headset registry, and called Set-HeadsetIdentity
+    unconditionally - whether or not anything had changed. It also gated its
+    "already enabled" check on a WifiAdbOpen flag that could never become true
+    (nothing ever ran "adb connect"), so it re-fired "adb tcpip" forever, each
+    time knocking the USB transport out for about ten seconds.
+
+    Steady state is now ONE "adb devices" call. See usb_manager.ps1's header for
+    the escalation ladder.
+
+    Returns the same shape as before, or $null when nothing is cabled.
     #>
     param (
         [int]$AdbPort = $global:adbPort_default,
         [string]$adb  = $global:adbPath
     )
 
-    if (-not $adb -or -not (Test-Path $adb)) { return $null }
+    if (-not $adb -or -not (Test-Path -LiteralPath $adb)) { return $null }
+    if (-not (Get-Command Update-UsbWatchState -ErrorAction SilentlyContinue)) { return $null }
 
+    # A private state bag: this wrapper is called on the main thread, so it applies
+    # the identity write itself instead of handing it to someone else.
+    if (-not $script:UsbInlineState) { $script:UsbInlineState = @{} }
+
+    # This runs on the VRMonitor SLOW TICK, and that caller does not guard it.
+    # Anything escaping here aborts the rest of the tick - service watchdogs,
+    # Update-ComputerMonitoring, VQA - for every headset, not just this one. The
+    # original implementation wrapped its whole body for exactly this reason.
+    $action = 'error'
     try {
-        $deviceInfo = Get-AdbUsbDeviceDetails -AdbPort $AdbPort -adb $adb
-        if (-not $deviceInfo) { return $null }
+        $action = Update-UsbWatchState -SharedState $script:UsbInlineState -AdbPort $AdbPort -adb $adb
+    } catch {
+        Write-Log ("Invoke-UsbHeadsetActions: USB tick failed: " + $_.Exception.Message) -Level WARNING
+        return $null
+    }
 
-        $deviceId = $deviceInfo.DeviceId
-        $model    = $deviceInfo.Model
-        $ip       = $deviceInfo.IP
-        $serial   = $deviceInfo.SerialNumber
+    $req = $script:UsbInlineState['_usb_onboard_request']
+    if ($req) {
+        $script:UsbInlineState['_usb_onboard_request'] = $null
+        try {
+            # The watcher now publishes this on EVERY tick, because the registry can
+            # change while USB sits still - a headset registered with a stale address
+            # after the memo was seeded must still heal. So the throttle lives here,
+            # and it is the headsets CHANGE COUNTER, not a timer:
+            #
+            #   - (serial, ip) differs from what we last applied  -> the device moved
+            #   - the headsets counter moved                      -> the registry
+            #                                                        changed under us
+            #
+            # Either way we re-check; otherwise we skip. That keeps Get-KnownHeadsets
+            # (a whole-table read) off the steady-state poll path, which CLAUDE.md
+            # calls out explicitly, while still healing within one tick of a change.
+            $version = -1
+            try { $version = [int64](Get-DbTableVersion -Name 'headsets') } catch { $version = -1 }
 
-        Write-Log ($msg.UsbHeadsetConnected -f $model, $deviceId) -Level INFO
+            $last    = $script:UsbLastApplied
+            $changed = (-not $last) -or
+                       ($last.Serial  -ne $req.SerialNumber) -or
+                       ($last.Ip      -ne $req.IPAddress)    -or
+                       ($last.Version -ne $version)          -or
+                       ($version -lt 0)
 
-        $wifiAdbEnabled = $false
-
-        # Resolve known headset entry first - we only enable WiFi ADB for known headsets
-        # to avoid repeated USB disconnect/reconnect cycles on unregistered devices.
-        $knownMatch = $null
-        if ($serial) {
-            $knownHeadsets = Get-KnownHeadsets
-            $knownMatch = $knownHeadsets | Where-Object { $_.SerialNumber -eq $serial } | Select-Object -First 1
-        }
-
-        if ($ip) {
-            if ($knownMatch) {
-                if (-not $deviceInfo.WifiAdbOpen) {
-                    # Enable TCP/IP mode - this disconnects USB momentarily (by design)
-                    Invoke-AdbCmd -Device $deviceInfo -Command "tcpip $AdbPort" -adb $adb | Out-Null
-                    Start-Sleep -Seconds 1
-                    Write-Log ($msg.UsbWifiAdbEnabled -f $model, $ip, $AdbPort) -Level SUCCESS
-                } else {
-                    Write-Log ($msg.AdbWifiAlreadyConnected -f "${ip}:${AdbPort}") -Level DEBUG
+            if ($changed) {
+                # Only for a serial we already know: enabling WiFi ADB on an
+                # unregistered device would disconnect/reconnect it repeatedly, and an
+                # unknown device is the "new device" modal's business, not ours.
+                $known = @(Get-KnownHeadsets) | Where-Object { $_.SerialNumber -eq $req.SerialNumber } | Select-Object -First 1
+                if ($known) {
+                    $res = Set-HeadsetIdentity -SerialNumber $req.SerialNumber -IPAddress $req.IPAddress `
+                                               -Model $req.Model -Brand $req.Brand -Source 'usb-local'
+                    if ($res -and $res.Action -and $res.Action -ne 'unchanged') {
+                        Write-Log ("USB: healed '{0}' to {1} ({2})" -f $res.Name, $req.IPAddress, $res.Action) -Level INFO
+                        # Our own write bumps the counter; re-read so the next tick
+                        # does not see a phantom change and redo the work.
+                        try { $version = [int64](Get-DbTableVersion -Name 'headsets') } catch { }
+                    }
                 }
-                $wifiAdbEnabled = $true
-
-                # Update the address through the serial-keyed writer rather than poking the
-                # field directly: a USB-connected headset is the most authoritative source
-                # there is, and if another row is squatting the new address it must be
-                # released instead of leaving two rows on the same IP.
-                Set-HeadsetIdentity -SerialNumber $serial -IPAddress $ip -Model $model `
-                                    -Brand $deviceInfo.Brand -Source 'usb-local' | Out-Null
-            } else {
-                Write-Log ($msg.UsbHeadsetNoWifiIp -f $model) -Level DEBUG
+                $script:UsbLastApplied = @{ Serial = $req.SerialNumber; Ip = $req.IPAddress; Version = $version }
             }
-        } else {
-            Write-Log ($msg.UsbHeadsetNoWifiIp -f $model) -Level DEBUG
+        } catch {
+            Write-Log ("Invoke-UsbHeadsetActions: identity update failed: " + $_.Exception.Message) -Level WARNING
         }
+    }
 
-        return [PSCustomObject]@{
-            deviceId       = $deviceId
-            model          = $model
-            ip             = $ip
-            serialNumber   = $serial
-            wifiAdbEnabled = $wifiAdbEnabled
+    $snap = $script:UsbInlineState['_usb_device']
+
+    # Publish for the web server, on change only.
+    #
+    # This is what lets /api/usbdeviceinfo stop running its own probe. It used to
+    # be fed by a dedicated Start-Job inside the web server - a whole extra
+    # powershell.exe (measured 137 MB) holding a fourth copy of the module set,
+    # re-running the full detail probe every 3 seconds forever just to answer
+    # "is a new headset plugged in?" for one blinking button. There is now one
+    # prober, and its result travels through app_kv (ADR-0017).
+    try {
+        $json = if ($snap) { $snap | ConvertTo-Json -Compress -Depth 5 } else { 'null' }
+        if ($json -ne $script:UsbLastPublished) {
+            $script:UsbLastPublished = $json
+            if (Get-Command Set-DbKeyValue -ErrorAction SilentlyContinue) {
+                Set-DbKeyValue -Key 'usb_device' -Value $json
+            }
         }
     } catch {
-        Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
-        return $null
+        Write-Log ("Invoke-UsbHeadsetActions: could not publish USB snapshot: " + $_.Exception.Message) -Level DEBUG
+    }
+
+    if (-not $snap) { return $null }
+
+    return [PSCustomObject]@{
+        deviceId       = $snap.DeviceId
+        model          = $snap.Model
+        ip             = $snap.IP
+        serialNumber   = $snap.SerialNumber
+        wifiAdbEnabled = [bool]$snap.WifiAdbOpen
+        action         = $action
     }
 }
 
@@ -884,103 +1181,23 @@ function Invoke-UsbHeadsetActions {
 function Get-AdbUsbDeviceDetails {
     <#
     .SYNOPSIS
-    Returns full details about a USB-connected ADB device for the web UI.
+    Full details of a USB-connected ADB device. Thin wrapper over
+    Get-UsbDeviceSnapshot in modules\usb_manager.ps1, kept for its existing
+    callers (console menu, web endpoints, non-regression tests).
 
     .DESCRIPTION
-    Single-attempt, no interactive prompts. Returns DeviceId, IP, Model,
-    SerialNumber, WiFiSSID, WifiAdbOpen (bool), ApkInstalled (bool), or $null.
-    Designed for the /api/usbdeviceinfo web server route.
+    Same return shape as before. The implementation moved so that the cheap
+    presence check and the expensive detail probe could finally be separated -
+    this function is the expensive one, and it is now only called when something
+    actually changed or an operator asked.
     #>
     param (
         [string]$PackageName = $global:ADBWirelessActivatorPackageName,
         [int]$AdbPort        = $global:adbPort_default,
         [string]$adb         = $global:adbPath
     )
-
-    if (-not $adb -or -not (Test-Path $adb)) { return $null }
-
-    try {
-        $usbLine = & $adb devices 2>$null | Where-Object { $_ -match "`tdevice$" -and $_ -notmatch ':' }
-        if (-not $usbLine) { return $null }
-
-        $deviceId  = ($usbLine -split "`t")[0].Trim()
-        $usbDevice = [PSCustomObject]@{ DeviceId = $deviceId; ConnectionType = 'USB'; IP = $null; Port = $null }
-
-        # WiFi IP from wlan0
-        $ip = ''
-        $ipOutput = Invoke-AdbCmd -Device $usbDevice -Command "shell ip -f inet addr show wlan0" -adb $adb
-        foreach ($line in $ipOutput) {
-            if ($line -match 'inet\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/') {
-                $ip = $Matches[1]; break
-            }
-        }
-
-        # Brand-aware friendly model name: Meta -> ro.product.model (e.g. "Quest 3"),
-        # Pico -> pxr.vendorhw.product.model (e.g. "PICO 4 Ultra" instead of code "A9210").
-        $bm           = Get-HeadsetBrandModel -Device $usbDevice -adb $adb
-        $brand        = if ($bm) { $bm.Brand } else { "" }
-        $model        = if ($bm) { $bm.Model } else { "" }
-        $serialNumber = ((Invoke-AdbCmd -Device $usbDevice -Command "shell getprop ro.serialno" -adb $adb) -join '').Trim()
-
-        # Current WiFi SSID - robust fallback chain for Quest 3 / Android 12+ firmware changes
-        $ssid = ''
-        # Primary: cmd wifi status (Android 11+) - clean output, no mWifiInfo dependency
-        $cmdStatus = Invoke-AdbCmd -Device $usbDevice -Command "shell cmd wifi status" -adb $adb
-        if ($cmdStatus -ne $false) {
-            foreach ($line in @($cmdStatus)) {
-                if ($line -match '\bssid="([^"]+)"') { $ssid = $Matches[1]; break }
-                if ($line -match '\bSSID:\s+([^,\s]+)') {
-                    $candidate = $Matches[1].Trim().Trim('"')
-                    if ($candidate -and $candidate -ne '<unknssid>') { $ssid = $candidate; break }
-                }
-            }
-        }
-        # Fallback: dumpsys wifi (older firmware)
-        if (-not $ssid) {
-            $wifiLines = @(Invoke-AdbCmd -Device $usbDevice -Command "shell dumpsys wifi" -adb $adb)
-            foreach ($line in $wifiLines) {
-                if ($line -match '\bSSID:\s+"([^"]+)"') {
-                    $candidate = $Matches[1]
-                    # Guard against stale $Matches leaking an IP from the earlier wlan0 extraction
-                    if ($candidate -notmatch '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') { $ssid = $candidate; break }
-                }
-                if ($line -match '\bssid="([^"]+)"') { $ssid = $Matches[1]; break }
-            }
-        }
-
-        # WiFi ADB already open on IP:Port?
-        $wifiAdbOpen = $false
-        if ($ip) {
-            $wifiDeviceId = "${ip}:${AdbPort}"
-            $adbDevices   = & $adb devices 2>$null
-            $wifiAdbOpen  = [bool]($adbDevices | Where-Object { $_ -match ("^" + [regex]::Escape($wifiDeviceId) + "\s+device$") })
-        }
-
-        # APK installed?
-        $apkInstalled = $false
-        if ($PackageName) {
-            $pmResult     = Invoke-AdbCmd -Device $usbDevice -Command "shell pm list packages $PackageName" -adb $adb
-            $apkInstalled = $pmResult -ne $false -and [bool]($pmResult | Where-Object { $_ -match "package:$([regex]::Escape($PackageName))" })
-        }
-
-        return [PSCustomObject]@{
-            DeviceId       = $deviceId
-            ConnectionType = 'USB'
-            IP             = $ip
-            Brand          = $brand
-            Model          = $model
-            SerialNumber   = $serialNumber
-            WiFiSSID       = $ssid
-            WifiAdbOpen    = $wifiAdbOpen
-            ApkInstalled   = $apkInstalled
-            Port           = $null
-        }
-    } catch {
-        Write-Log ($msg.ADBExecutionFailed -f $_.Exception.Message) -Level ERROR
-        return $null
-    }
+    return Get-UsbDeviceSnapshot -PackageName $PackageName -AdbPort $AdbPort -adb $adb
 }
-
 
 
 function Get-AdbWifiDevice {
@@ -1057,29 +1274,43 @@ function Get-HeadsetBrandModel {
     #   - Meta: ro.product.model = "Quest 3" / "Quest Pro" / ...
     #   - Pico: ro.product.model = "A9210" (useless code); use pxr.vendorhw.product.model
     #          (= "PICO 4 Ultra") with sys.pxr.product.name as secondary fallback.
+    # -IncludeSerial adds ro.serialno to the SAME batch and returns it as .Serial, so a
+    # caller that needs identity does not pay a second round-trip for it.
     param (
         [Parameter(Mandatory=$true)]
         [PSCustomObject]$Device,
+        [switch]$IncludeSerial,
         [string]$adb = $global:adbPath
     )
-    if (-not $Device) { return @{ Brand = ""; Model = $null } }
+    if (-not $Device) { return @{ Brand = ""; Model = $null; Serial = "" } }
 
-    $manufacturer = ((Invoke-AdbCmd -Device $Device -Command "shell getprop ro.product.manufacturer" -adb $adb) -join '').Trim()
+    # All props in ONE adb call. Reading them one at a time cost 2 spawns on Meta and up
+    # to 4 on Pico (whose model needs a fallback chain); the batch costs 1 either way.
+    # Asking for the Pico props on a Meta headset is free - getprop just returns empty
+    # for a property that does not exist.
+    $wanted = @(
+        'ro.product.manufacturer',
+        'ro.product.model',
+        'pxr.vendorhw.product.model',
+        'sys.pxr.product.name'
+    )
+    if ($IncludeSerial) { $wanted += 'ro.serialno' }
+
+    $props = Get-AdbPropBatch -Device $Device -adb $adb -Properties $wanted
+
+    $manufacturer = $props['ro.product.manufacturer']
+    $serial       = if ($IncludeSerial) { $props['ro.serialno'] } else { "" }
 
     if ($manufacturer -match '(?i)pico') {
-        $model = ((Invoke-AdbCmd -Device $Device -Command "shell getprop pxr.vendorhw.product.model" -adb $adb) -join '').Trim()
-        if ([string]::IsNullOrWhiteSpace($model)) {
-            $model = ((Invoke-AdbCmd -Device $Device -Command "shell getprop sys.pxr.product.name" -adb $adb) -join '').Trim()
-        }
-        if ([string]::IsNullOrWhiteSpace($model)) {
-            $model = ((Invoke-AdbCmd -Device $Device -Command "shell getprop ro.product.model" -adb $adb) -join '').Trim()
-        }
-        return @{ Brand = "Pico"; Model = $model }
+        $model = $props['pxr.vendorhw.product.model']
+        if ([string]::IsNullOrWhiteSpace($model)) { $model = $props['sys.pxr.product.name'] }
+        if ([string]::IsNullOrWhiteSpace($model)) { $model = $props['ro.product.model'] }
+        return @{ Brand = "Pico"; Model = $model; Serial = $serial }
     }
 
-    $model = ((Invoke-AdbCmd -Device $Device -Command "shell getprop ro.product.model" -adb $adb) -join '').Trim()
+    $model = $props['ro.product.model']
     $brand = if ($manufacturer -match '(?i)oculus|meta') { "Meta" } else { "" }
-    return @{ Brand = $brand; Model = $model }
+    return @{ Brand = $brand; Model = $model; Serial = $serial }
 }
 
 function Get-HeadsetModel {
@@ -1919,7 +2150,7 @@ function Get-AppInfo {
         Write-Log ("Get-AppInfo: catalogue read failed for {0} - {1}" -f $PackageName, $_.Exception.Message) -Level DEBUG
     }
     # If the cache contains the package with all info let's return it !
-    # But first, always check templates\website\assets\app_icons — operator-supplied icons take priority
+    # But first, always check templates\website\assets\app_icons - operator-supplied icons take priority
     # and must be copied to app_icons even on early-return paths.
     if ($cache.ContainsKey($PackageName) -and $cache[$PackageName].DisplayName -and ($cache[$PackageName].DisplayName -ne $PackageName_short)) {
         $localResolved = Resolve-LocalAppIcon -PackageName $PackageName -IconCacheDir $IconCacheDir
@@ -2492,7 +2723,7 @@ function Clear-AppNamesCache {
         } | Out-Null
         Write-Log "App catalogue cleared and re-seeded from template" -Level INFO
 
-        # Wipe app_icons cache — preserve files that came from templates\website\assets\app_icons
+        # Wipe app_icons cache - preserve files that came from templates\website\assets\app_icons
         $iconCacheDir = Join-Path $global:ScriptPath "website\assets\app_icons"
         $sourcesDir   = Join-Path $global:ScriptPath "templates\website\assets\app_icons"
         if (Test-Path -LiteralPath $iconCacheDir) {

@@ -729,9 +729,7 @@
       var label = FILTER_LABELS[currentPresetFilter];
       var textEl = document.getElementById('no-match-msg-text');
       if (textEl) {
-        textEl.textContent = label
-          ? ('No ' + label + ' available headset to display')
-          : 'No available headset to display';
+        textEl.textContent = 'No available headset capture to display';
       }
       msg.hidden = false;
     }

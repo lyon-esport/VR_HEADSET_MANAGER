@@ -701,8 +701,9 @@ write_vrhm_server_cache() {
 }
 
 test_vrhm_server_at() {
-    # $1 = ip, $2 = port. Succeeds (exit 0) if a VRHM /api/version answers.
-    curl -s -m 2 "http://$1:$2/api/version" 2>/dev/null | grep -q '"version"'
+    # $1 = ip, $2 = port. Succeeds (exit 0) only when /api/version identifies
+    # itself as VRHM - not just any web server answering on that port.
+    curl -s -m 2 "http://$1:$2/api/version" 2>/dev/null | grep -q '"app"[[:space:]]*:[[:space:]]*"VRHM"'
 }
 
 probe_host_port() {

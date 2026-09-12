@@ -14,9 +14,13 @@
     -Unattended, mirroring how sections 50/60 stay green with no headset
     configured.
 
-    GET /api/usbdeviceinfo is answered from a persistent background probe job
-    (web_server.ps1) that refreshes every ~3s, not synchronously - every read
-    here polls rather than expecting an instant answer.
+    GET /api/usbdeviceinfo is answered from a cached snapshot, not probed
+    synchronously - every read here polls rather than expecting an instant
+    answer. The snapshot is now published by VRMonitor into the app_kv row
+    'usb_device' (ADR-0021); it used to come from a persistent background probe
+    job inside web_server.ps1, which was deleted because it duplicated
+    VRMonitor's probe from a second process. The polling approach is unchanged -
+    only the producer moved - so the freshness assumption here still holds.
 
     What this proves, in order:
       - a USB-connected headset is detected with real serial/model/SSID data
