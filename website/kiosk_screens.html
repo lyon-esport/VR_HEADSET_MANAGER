@@ -495,62 +495,55 @@
         </div>
         <div class="modal-body">
           <div class="panel">
-            <div class="panel-title">Windows - standalone kiosk agent (easiest)</div>
+            <div class="panel-title">Windows - VRHM Headset Toolbox (recommended)</div>
             <p class="launcher-modal-desc">
-              A single, self-contained executable - nothing to unzip. Copy it to the
-              kiosk PC and double-click <code>Start-Kiosk-Agent.exe</code> - it asks
-              for administrator rights, starts the kiosk browser, and finds this server
-              on the network automatically (nothing to type). The first run also
-              extracts its own <code>Start-KioskAgent.ps1</code> source into a
-              kiosk-launcher\ subfolder next to itself, so it stays inspectable and
-              editable afterward.
+              One self-contained executable - nothing to unzip, no address to type.
+              Copy it to the kiosk PC, run it, and pick
+              <strong>Kiosk Agent</strong>: it finds this server on the network,
+              asks for administrator rights, installs Chrome if it is missing, opens
+              the firewall and starts the kiosk. The same tool also onboards USB
+              headsets, so a technician only ever needs this one file.
             </p>
             <div class="form-row">
-              <a class="btn" href="kiosk-launcher/Start-Kiosk-Agent.exe" download="Start-Kiosk-Agent.exe">
+              <a class="btn" href="headset-toolbox/VRHM-Headset-Toolbox.exe" download="VRHM-Headset-Toolbox.exe">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                Download kiosk agent (.exe)
-              </a>
-            </div>
-            <p class="launcher-modal-desc">
-              On a routed network (server not on the kiosk's own subnet), pass the
-              address directly instead of relying on the scan:
-              <code>Start-Kiosk-Agent.exe -ServerIp 10.0.5.12</code>. For the
-              original casting-only launcher, see Setup Scripts - Basic below.
-            </p>
-          </div>
-
-          <div class="panel">
-            <div class="panel-title">Setup Scripts - Advanced (manual)</div>
-            <p class="launcher-modal-desc">
-              The individual scripts, if you would rather not use the standalone .exe
-              (or need the Linux one). On top of opening the firewall and launching
-              Chrome in kiosk mode, the advanced launcher finds this server
-              automatically, reports the PC's computer name, OS and network link type
-              back here, lets you reboot or shut the PC down remotely, and restarts the
-              browser by itself if it crashes. It stays running - keep its window open.
-            </p>
-            <div class="form-row">
-              <a class="btn" href="kiosk-launcher/Start-KioskAgent.ps1" download="Start-KioskAgent.ps1">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                Windows (.ps1)
-              </a>
-              <a class="btn" href="kiosk-launcher/Start-KioskAgent-Linux.sh" download="Start-KioskAgent-Linux.sh">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                Debian / Raspberry Pi (.sh)
+                Download VRHM Headset Toolbox (.exe)
               </a>
             </div>
 
             <!-- The server address is discovered automatically, but pinning it
-                 explicitly (this page already knows it) skips the scan and avoids
-                 the first-run prompt on a routed network. -->
+                 explicitly (this page already knows it) skips the scan and is what
+                 an autostart shortcut should use. -->
             <p class="launcher-modal-desc" style="margin-bottom:4px">
-              Optional - run it on the kiosk PC pinned to this server's address:
+              For an autostart shortcut, or on a routed network where the scan cannot
+              reach this server, start it straight in kiosk mode:
             </p>
             <div class="cmd-box">
               <code id="agent-cmd-win"></code>
               <button class="copy-btn" id="agent-cmd-win-copy" title="Copy command">
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
               </button>
+            </div>
+            <p class="launcher-modal-desc">
+              The first run unpacks its PowerShell sources into a
+              <code>VRHM-Toolbox\</code> folder next to itself, so everything stays
+              readable and editable afterwards.
+            </p>
+          </div>
+
+          <div class="panel">
+            <div class="panel-title">Debian / Raspberry Pi</div>
+            <p class="launcher-modal-desc">
+              The same agent for a Linux kiosk: finds this server on its own, reports
+              the PC's name, OS and link type back here, and accepts remote reboot,
+              shutdown and browser restart. It stays in the foreground - it is the
+              agent. Needs only curl, no jq or python.
+            </p>
+            <div class="form-row">
+              <a class="btn" href="headset-toolbox/Start-KioskAgent-Linux.sh" download="Start-KioskAgent-Linux.sh">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Download Linux agent (.sh)
+              </a>
             </div>
             <div class="cmd-box">
               <code id="agent-cmd-linux"></code>
@@ -561,37 +554,17 @@
           </div>
 
           <div class="panel">
-            <div class="panel-title">Setup Scripts - Basic</div>
+            <div class="panel-title">Fallback - casting only</div>
             <p class="launcher-modal-desc">
-              The original launcher: opens the firewall for Chrome's remote debugging
+              A plain script that opens the firewall for Chrome's remote debugging
               port and launches Chrome in kiosk mode, nothing more. Casting works
               exactly the same; remote power control and device reporting do not.
+              Use it only when the toolbox above cannot run on that PC.
             </p>
             <div class="form-row">
-              <a class="btn" href="kiosk-launcher/Start-Kiosk-BASIC.exe" download="Start-Kiosk-BASIC.exe">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                Windows - single-file build (.exe)
-              </a>
-            </div>
-            <p class="launcher-modal-desc">
-              Same script as below, just packaged as a single standalone executable -
-              nothing to unzip, self-extracts <code>Start-KioskChrome.ps1</code> next to
-              itself on first run.
-            </p>
-            <div class="form-row">
-              <a class="btn" href="kiosk-launcher/Start-KioskChrome.ps1" download="Start-KioskChrome.ps1">
+              <a class="btn" href="headset-toolbox/Start-KioskChrome.ps1" download="Start-KioskChrome.ps1">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 Windows (.ps1)
-              </a>
-              <a class="btn" href="kiosk-launcher/Start-KioskChrome-Linux.sh" download="Start-KioskChrome-Linux.sh">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                Debian / Raspberry Pi (.sh)
-              </a>
-            </div>
-            <div class="form-row">
-              <a class="btn" href="kiosk-launcher/README-KioskChrome.md" download="README-KioskChrome.md">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                README (setup + troubleshooting)
               </a>
             </div>
           </div>
@@ -635,19 +608,14 @@
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           Stop kiosk session
         </button>
-        <button class="btn btn-danger" id="shutdown-host-btn" disabled>
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
-          Shutdown kiosk host
-        </button>
         <span id="push-new-link-status" style="font-size:11px;color:#888"></span>
       </div>
 
-      <!-- Reboot is kept in its own row: it is still a destructive power action,
-           but less irreversible than a host shutdown (the PC comes back on its
-           own), so a plain confirm() stays proportionate. Shutdown moved next to
-           "Stop kiosk session" above, gated by its own type-YES modal instead -
-           that per-click confirmation is a stronger guard against a mis-click
-           than physical row separation ever was.
+      <!-- Both host power actions live in this row, away from the casting
+           buttons above. They are NOT equally guarded: reboot uses a plain
+           confirm() (the PC comes back on its own), while shutdown is gated by
+           its own type-YES modal - that per-click confirmation, not physical
+           separation, is what protects against a mis-click.
            Hidden entirely until at least one known kiosk has ever reported as
            advanced (Start-KioskAgent.*) - a basic v1 kiosk has no agent to
            receive the order, so with only basic kiosks around nothing here
@@ -657,6 +625,10 @@
         <button class="btn btn-danger" id="power-reboot-btn" disabled>
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
           Reboot PC
+        </button>
+        <button class="btn btn-danger" id="shutdown-host-btn" disabled>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
+          Shutdown kiosk host
         </button>
         <span id="power-status" style="font-size:11px;color:#888"></span>
       </div>
@@ -1006,7 +978,7 @@
     // no server dependency) - this is the default page Start-KioskChrome.ps1 /
     // Start-KioskChrome-Linux.sh open on launch, and what the "Waiting screen"
     // button pushes back to selected kiosks. Keep this string identical to the
-    // default $Url in website/kiosk-launcher/Start-KioskChrome.ps1 and the
+    // default $Url in website/headset-toolbox/Start-KioskChrome.ps1 and the
     // default URL in Start-KioskChrome-Linux.sh.
     var WAITING_SCREEN_URL = "data:text/html,%3Chtml%3E%3Chead%3E%3Cmeta%20charset%3D'utf-8'%3E%3Ctitle%3EKiosk%3C%2Ftitle%3E%3Cstyle%3Ehtml%2Cbody%7Bmargin%3A0%3Bheight%3A100%25%3Bbackground%3A%23000%3Bcolor%3A%23fff%3Bdisplay%3Aflex%3Balign-items%3Acenter%3Bjustify-content%3Acenter%3Bfont-family%3Asystem-ui%2Csans-serif%3Bflex-direction%3Acolumn%7Dh1%7Bfont-size%3A3vw%3Bletter-spacing%3A.08em%3Btext-transform%3Auppercase%3Bcolor%3A%23888%3Bmargin%3A0%7Dh2%7Bfont-size%3A5vw%3Bfont-weight%3A700%3Bmargin%3A12px%200%200%7D%3C%2Fstyle%3E%3C%2Fhead%3E%3Cbody%3E%3Ch1%3EKiosk%20Mode%3C%2Fh1%3E%3Ch2%3EReady%20to%20stream%3C%2Fh2%3E%3C%2Fbody%3E%3C%2Fhtml%3E";
 
@@ -1668,9 +1640,9 @@
     }
 
     // Reboot handler. Basic (v1) kiosks in the selection are reported as
-    // skipped rather than silently ignored. Shutdown lives in its own
-    // type-YES modal below - it is far less reversible than a reboot (the PC
-    // does not come back on its own), so a plain confirm() is not enough for it.
+    // skipped rather than silently ignored. Shutdown has its own type-YES
+    // modal - it is far less reversible than a reboot (the PC does not come
+    // back on its own), so a plain confirm() is not enough for it.
     function runRebootAction() {
       var statusEl = document.getElementById('power-status');
       var selected = selectedKioskIds();
@@ -1967,9 +1939,13 @@
     // operator never has to work out what to pass to -ServerUrl / --server-url.
     (function initLauncherCommands() {
       var origin = window.location.origin;
+      // The toolbox takes the address split into -vrhm_ip / -vrhm_port, so the
+      // host and port are pulled apart here rather than pasted as a URL.
+      var host = window.location.hostname;
+      var port = window.location.port || '8080';
       var pairs = [
         { el: 'agent-cmd-win',   copy: 'agent-cmd-win-copy',
-          text: '.\\Start-KioskAgent.ps1 -ServerUrl ' + origin },
+          text: '.\\VRHM-Headset-Toolbox.exe -kiosk -vrhm_ip ' + host + ' -vrhm_port ' + port },
         { el: 'agent-cmd-linux', copy: 'agent-cmd-linux-copy',
           text: './Start-KioskAgent-Linux.sh --server-url ' + origin }
       ];

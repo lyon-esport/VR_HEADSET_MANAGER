@@ -180,6 +180,14 @@ $mimeTypes = @{
     '.ttf'  = 'font/ttf'
     '.txt'  = 'text/plain; charset=utf-8'
     '.zip'  = 'application/zip'
+    # The toolbox downloads: an exe, the Linux kiosk script, the basic Windows
+    # kiosk script and its readme are all served straight off website\, so they
+    # need a type here or they fall back to application/octet-stream.
+    '.exe'  = 'application/octet-stream'
+    '.ps1'  = 'text/plain; charset=utf-8'
+    '.sh'   = 'text/plain; charset=utf-8'
+    '.md'   = 'text/plain; charset=utf-8'
+    '.apk'  = 'application/vnd.android.package-archive'
 }
 
 
@@ -2907,7 +2915,10 @@ try {
 
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/wifi-networks') {
             try {
-                $networks  = @(Get-WifiNetworks)
+                # Skip any entry without an SSID: a nameless row is not selectable
+                # by anything downstream, and it renders as a blank, pushable choice
+                # in the remote toolbox's network list.
+                $networks  = @(Get-WifiNetworks) | Where-Object { $_ -and $_.SSID }
                 $result    = @($networks | ForEach-Object { @{ ssid = $_.SSID; passwordHint = '****'; preferred = $_.Preferred } })
                 $jsonOut   = ConvertTo-Json $result -Compress
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonOut)
@@ -3225,6 +3236,150 @@ try {
                     default          { $_.Exception.Message }
                 }
                 Send-JsonResponse -Response $response -Body @{ ok = $false; error = $errMsg }
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/headsets/push-wifi  body: {"serialNumber":"...","ssid":"..."}
+        #
+        # Moves one known headset onto one of the WiFi networks THIS server holds
+        # the password for. The password never leaves the server: the push runs
+        # over the server's own ADB connection to the headset (USB when it is
+        # cabled here, WiFi ADB otherwise).
+        #
+        # The headset is scanned first, from its OWN radio - an SSID it cannot see
+        # (a 6 GHz-only network on an older headset, typically) is refused rather
+        # than pushed, because pushing it would drop the headset off the network
+        # with no way back. The reachable known networks come back in
+        # visibleKnown so the caller can offer an alternative.
+        #
+        # Called by the remote VRHM Headset Toolbox and by the console's
+        # per-headset WiFi action - same function behind both (ADR-0012).
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/headsets/push-wifi') {
+            try {
+                if ($request.ContentLength64 -gt 4096) { throw "Request body too large" }
+                $reader = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body   = $reader.ReadToEnd(); $reader.Close()
+                $json   = $body | ConvertFrom-Json
+
+                $safeSsid = ([string]$json.ssid).Trim()
+                if (-not $safeSsid -or $safeSsid.Length -gt 64) { throw "INVALID_SSID" }
+
+                $safeSerial = if ($json.serialNumber) { ([string]$json.serialNumber).Trim() } else { '' }
+                $safeName   = if ($json.name)         { ([string]$json.name).Trim() }         else { '' }
+                if ($safeSerial.Length -gt 60 -or $safeName.Length -gt 40) { throw "INVALID_HEADSET" }
+
+                $headsets = @(Get-KnownHeadsets)
+                $headset  = $null
+                if ($safeSerial) {
+                    $headset = $headsets | Where-Object { $_.SerialNumber -eq $safeSerial } | Select-Object -First 1
+                }
+                if (-not $headset -and $safeName) {
+                    $headset = $headsets | Where-Object { $_.Name -eq $safeName } | Select-Object -First 1
+                }
+                if (-not $headset) { throw "UNKNOWN_HEADSET" }
+
+                $push = Invoke-HeadsetWifiPush -Headset $headset -Ssid $safeSsid -AdbPort $adbPort -adb $adbPath
+
+                Send-JsonResponse -Response $response -Body @{
+                    ok           = [bool]$push.Ok
+                    visible      = $push.Visible
+                    pushed       = [bool]$push.Pushed
+                    visibleKnown = @($push.VisibleKnown)
+                    error        = $push.Error
+                }
+            } catch {
+                $errMsg = switch -Regex ($_.Exception.Message) {
+                    'INVALID_SSID'    { 'Invalid or missing WiFi network name.' }
+                    'INVALID_HEADSET' { 'Invalid headset identifier.' }
+                    'UNKNOWN_HEADSET' { 'This headset is not registered on this server.' }
+                    default           { $_.Exception.Message }
+                }
+                Send-JsonResponse -Response $response -Body @{ ok = $false; pushed = $false; visibleKnown = @(); error = $errMsg }
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: GET /api/adb-tools
+        #
+        # adb.exe plus its two Windows USB DLLs, zipped, taken from the ADB folder
+        # THIS server runs. The remote toolbox (VRHM-Headset-Toolbox.exe) does not
+        # embed adb: it downloads it here on first use, so it can never drift from
+        # the build this server manages headsets with, and the binary stays small.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/adb-tools') {
+            try {
+                $zipPath = New-AdbToolsPackage
+                if (-not $zipPath -or -not (Test-Path -LiteralPath $zipPath)) {
+                    Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'adb tools are not available on this server.' } -StatusCode 404
+                } else {
+                    $zipInfo = Get-Item -LiteralPath $zipPath
+                    $response.StatusCode      = 200
+                    $response.ContentType     = 'application/zip'
+                    $response.AddHeader('Content-Disposition', 'attachment; filename="adb-tools.zip"')
+                    $response.ContentLength64 = $zipInfo.Length
+                    $stream = [System.IO.File]::OpenRead($zipPath)
+                    try { $stream.CopyTo($response.OutputStream) } finally { $stream.Dispose() }
+                }
+            } catch {
+                try { Send-JsonResponse -Response $response -Body @{ ok = $false; error = $_.Exception.Message } -StatusCode 500 } catch {}
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: GET /api/adb-wifi-apk/info
+        #
+        # What the APK download IS, without downloading it: the package name the
+        # remote toolbox needs to ask a headset "do you already have this?", plus
+        # the file name and size. Without it the toolbox would have to download
+        # ~14 MB just to find out the app is already installed, or hardcode a
+        # package name that config.apk.adbWirelessActivatorPackageName is free to
+        # change.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/adb-wifi-apk/info') {
+            try {
+                $apkPresent = [bool]($apkPath -and (Test-Path -LiteralPath $apkPath))
+                $payload = @{
+                    ok          = $true
+                    available   = $apkPresent
+                    packageName = $apkPackage
+                    fileName    = $(if ($apkPresent) { (Get-Item -LiteralPath $apkPath).Name } else { $null })
+                    sizeBytes   = $(if ($apkPresent) { (Get-Item -LiteralPath $apkPath).Length } else { 0 })
+                }
+                Send-JsonResponse -Response $response -Body $payload
+            } catch {
+                Send-JsonResponse -Response $response -Body @{ ok = $false; error = $_.Exception.Message } -StatusCode 500
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: GET /api/adb-wifi-apk
+        #
+        # The WiFi ADB helper APK, streamed from sources\ (the folder and file
+        # name both come from config.apk.*). The remote toolbox downloads it and
+        # runs "adb install" itself, so the APK is never embedded in the toolbox
+        # binary and always matches what this server ships.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/adb-wifi-apk') {
+            try {
+                if (-not $apkPath -or -not (Test-Path -LiteralPath $apkPath)) {
+                    Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'The WiFi ADB APK is not present on this server.' } -StatusCode 404
+                } else {
+                    $apkInfo = Get-Item -LiteralPath $apkPath
+                    $response.StatusCode      = 200
+                    $response.ContentType     = 'application/vnd.android.package-archive'
+                    $response.AddHeader('Content-Disposition', ('attachment; filename="{0}"' -f $apkInfo.Name))
+                    $response.ContentLength64 = $apkInfo.Length
+                    $stream = [System.IO.File]::OpenRead($apkPath)
+                    try { $stream.CopyTo($response.OutputStream) } finally { $stream.Dispose() }
+                }
+            } catch {
+                try { Send-JsonResponse -Response $response -Body @{ ok = $false; error = $_.Exception.Message } -StatusCode 500 } catch {}
             } finally {
                 $response.Close()
             }
@@ -4025,20 +4180,6 @@ try {
                     $response.ContentLength64 = $errBytes.Length
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
-            } finally { $response.Close() }
-            continue
-        }
-
-        # API: GET /api/version  - returns the application version string from version.txt
-        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/version') {
-            try {
-                $versionFile = Join-Path $global:ScriptPath 'version.txt'
-                $versionStr  = if (Test-Path -LiteralPath $versionFile) {
-                    (Get-Content -LiteralPath $versionFile -Raw).Trim()
-                } else { 'unknown' }
-                Send-JsonResponse -Response $response -Body @{ app = 'VRHM'; version = $versionStr }
-            } catch {
-                try { Send-JsonResponse -Response $response -Body @{ app = 'VRHM'; version = 'unknown' } } catch {}
             } finally { $response.Close() }
             continue
         }

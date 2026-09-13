@@ -80,6 +80,173 @@ function Connect-HeadsetToWifi {
 }
 
 
+function Get-HeadsetVisibleWifiNetworks {
+    <#
+    .SYNOPSIS
+    The WiFi networks the HEADSET's own radio can currently see.
+
+    .DESCRIPTION
+    The scan runs on the headset, never on the server: a 6 GHz-only network is
+    perfectly visible to a modern PC and completely invisible to an older
+    headset that has no radio for that band. Pushing such an SSID would drop the
+    headset off the network with no way back, so every push is gated on this.
+
+    Returns @(@{Ssid;Frequency;Rssi}), or $null when the firmware does not
+    support the command - $null means "unknown", which is deliberately NOT the
+    same as an empty array ("nothing in range").
+
+    .EXAMPLE
+    $seen = Get-HeadsetVisibleWifiNetworks -Device $device
+    #>
+    param(
+        [Parameter(Mandatory = $true)][object]$Device,
+        [int]$SettleSeconds = 4
+    )
+
+    # start-scan only kicks a scan off; the results land a moment later.
+    Invoke-AdbCmd -Device $Device -Command "shell cmd -w wifi start-scan" -SilentOnFail | Out-Null
+    Start-Sleep -Seconds $SettleSeconds
+
+    $out = Invoke-AdbCmd -Device $Device -Command "shell cmd -w wifi list-scan-results" -SilentOnFail
+    if ($out -eq $false) { return $null }
+
+    $lines = @($out)
+    if ($lines.Count -eq 0) { return $null }
+
+    $joined = ($lines -join "`n")
+    if ($joined -match '(?i)unknown command|Exception|not supported') { return $null }
+
+    $results = @()
+    foreach ($line in $lines) {
+        $text = [string]$line
+        if (-not $text) { continue }
+        # Header row of "list-scan-results" - skip it rather than parse it.
+        if ($text -match '(?i)^\s*BSSID\b') { continue }
+        # A row, as a Quest 3 actually prints it:
+        #   b4:fb:e4:c8:6c:d6  5180  -81(0:-83/1:-85)  >1000.0  MyWifi  [WPA2-PSK-CCMP][ESS]
+        # Note the RSSI column is NOT a bare number (it carries the per-chain
+        # detail in parentheses) and the age column is not one either - both are
+        # matched as opaque tokens and only the leading integer of the RSSI is
+        # read back out.
+        if ($text -match '^\s*([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})\s+(\d+)\s+(\S+)\s+(\S+)\s+(.*)$') {
+            $rest = $Matches[5]
+            # Trailing capability flags such as [WPA2-PSK-CCMP][RSN-PSK-CCMP][ESS]
+            # are not part of the SSID - and there is always more than one group,
+            # so the strip has to be repeated, not anchored to a single pair.
+            $ssid = ($rest -replace '(\s*\[[^\]]*\])+\s*$', '').Trim()
+            $rssi = 0
+            if ($Matches[3] -match '^(-?\d+)') { $rssi = [int]$Matches[1] }
+            # A hidden network prints an empty SSID column; there is nothing to
+            # match against, so it is dropped rather than recorded as "".
+            if ($ssid) {
+                $results += @{ Ssid = $ssid; Frequency = [int]$Matches[2]; Rssi = $rssi }
+            }
+        }
+    }
+
+    if ($results.Count -eq 0) { return @() }
+    return $results
+}
+
+
+function Test-HeadsetWifiSsidVisible {
+    <#
+    .SYNOPSIS
+    $true / $false when the headset's own scan settles the question, $null when
+    the headset could not be scanned at all.
+
+    .EXAMPLE
+    if ((Test-HeadsetWifiSsidVisible -Device $device -Ssid 'VR-LAB') -eq $false) { ... }
+    #>
+    param(
+        [Parameter(Mandatory = $true)][object]$Device,
+        [Parameter(Mandatory = $true)][string]$Ssid
+    )
+
+    $seen = Get-HeadsetVisibleWifiNetworks -Device $Device
+    if ($null -eq $seen) { return $null }
+    return [bool](@($seen | Where-Object { $_.Ssid -eq $Ssid }).Count -gt 0)
+}
+
+
+function Invoke-HeadsetWifiPush {
+    <#
+    .SYNOPSIS
+    Moves one known headset onto one of the WiFi networks this server holds the
+    password for - over the server's own ADB connection, so the password never
+    leaves the server.
+
+    .DESCRIPTION
+    The headset is scanned FIRST (Get-HeadsetVisibleWifiNetworks). When it
+    cannot see the requested SSID, nothing is pushed and the headset is left on
+    its current network; the reachable known networks are returned instead so
+    the caller can offer an alternative. A headset that cannot be scanned at all
+    is treated as "unknown" and only pushed when -Force is passed.
+
+    Works for a headset reached over WiFi ADB and for one cabled to this server:
+    Get-BestAdbDevice prefers USB when it is there.
+
+    Returns @{Ok; Visible; Pushed; VisibleKnown; Error}.
+
+    .EXAMPLE
+    $r = Invoke-HeadsetWifiPush -Headset $headset -Ssid 'VR-LAB'
+    if (-not $r.Pushed) { $r.VisibleKnown }
+    #>
+    param(
+        [Parameter(Mandatory = $true)][object]$Headset,
+        [Parameter(Mandatory = $true)][string]$Ssid,
+        [switch]$Force,
+        [int]$AdbPort = 5555,
+        [string]$adb = $global:adbPath
+    )
+
+    $result = @{ Ok = $false; Visible = $null; Pushed = $false; VisibleKnown = @(); Error = $null }
+
+    $known = @(Get-WifiNetworks)
+    if (-not ($known | Where-Object { $_.SSID -eq $Ssid })) {
+        $result.Error = "This server does not know the password for '$Ssid'."
+        return $result
+    }
+
+    $device = $null
+    try {
+        $device = Get-BestAdbDevice -Headset $Headset -AdbPort $AdbPort -adb $adb
+    } catch {
+        $device = $null
+    }
+    if (-not $device) {
+        $result.Error = "The headset could not be reached over ADB."
+        return $result
+    }
+
+    $seen = Get-HeadsetVisibleWifiNetworks -Device $device
+    if ($null -ne $seen) {
+        $visibleSsids = @($seen | ForEach-Object { $_.Ssid } | Select-Object -Unique)
+        $result.Visible = [bool]($visibleSsids -contains $Ssid)
+        $result.VisibleKnown = @($known | Where-Object { $visibleSsids -contains $_.SSID } | ForEach-Object { $_.SSID })
+
+        if (-not $result.Visible -and -not $Force) {
+            $result.Ok = $true
+            $result.Error = "The headset cannot see '$Ssid' - nothing was pushed, it stays on its current network."
+            Write-Log ("WiFi push refused for '{0}': headset {1} cannot see that SSID." -f $Ssid, $Headset.Name) -Level WARNING
+            return $result
+        }
+    } else {
+        Write-Log ("Could not scan WiFi networks from headset {0} - pushing '{1}' without the visibility check." -f $Headset.Name, $Ssid) -Level WARNING
+    }
+
+    $brand = if ($Headset.Brand) { [string]$Headset.Brand } else { "" }
+    $pushed = Connect-HeadsetToWifi -Device $device -Ssid $Ssid -Brand $brand
+
+    $result.Ok     = $true
+    $result.Pushed = [bool]$pushed
+    if (-not $pushed) {
+        $result.Error = "The headset refused the WiFi change (see the server log for details)."
+    }
+    return $result
+}
+
+
 # Wrapper around `& $adb ...` that captures stdout, stderr, and exit code.
 # Returns @{ ExitCode; StdOut; StdErr; Ok }.
 # - StdOut / StdErr are arrays of lines (may be empty).

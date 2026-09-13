@@ -384,6 +384,17 @@
         NameExists    = "Un casque nomme '{0}' existe deja (ID {1}). Le nom identifie un casque dans les fonctions applications, favoris et minuteur : il doit etre unique."
         ExportedTo    = "Registre des casques exporte vers {0}"
         NameAmbiguous = "Plusieurs casques portent le nom '{0}'. Utilisation de l'ID {1}. Renommez-en un : les applications et les favoris sont resolus par nom et seront rattaches au mauvais casque."
+        # --- WiFi push (console + POST /api/headsets/push-wifi) ---
+        WifiMenuEntry     = "7. Envoyer un reseau WiFi vers un casque"
+        WifiPickHeadset   = "ID du casque (0 pour revenir)"
+        WifiPickNetwork   = "Numero du reseau WiFi (0 pour revenir)"
+        WifiNoNetworks    = "Aucun reseau WiFi enregistre sur ce serveur (Configuration -> Reseaux WiFi)."
+        WifiScanning      = "Recherche des reseaux visibles par le casque..."
+        WifiNotVisible    = "Le casque ne voit pas '{0}' - rien n'a ete envoye, il reste sur son reseau actuel."
+        WifiVisibleKnown  = "Reseaux visibles par ce casque et connus du serveur : {0}"
+        WifiPushOk        = "Le casque '{0}' a ete bascule sur le reseau WiFi '{1}'."
+        WifiPushFailed    = "Echec de l'envoi WiFi : {0}"
+        WifiPreferredTag  = "(prefere)"
     }
 
     # ==========================================
@@ -726,4 +737,4 @@
         PowerSent           = "Action '{0}' envoyee au kiosk '{1}'."
         PowerFailed         = "Echec de l'action '{0}' pour le kiosk '{1}' : {2}"
     }
-}
+}

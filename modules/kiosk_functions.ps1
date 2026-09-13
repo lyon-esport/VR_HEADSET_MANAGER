@@ -415,10 +415,10 @@ function Invoke-KioskScan {
 #################
 # KIOSK AGENT - REPORT CACHE AND COMMAND QUEUE
 #
-# The advanced kiosk launcher (website\kiosk-launcher\Start-KioskAgent.ps1 /
-# Start-KioskAgent-Linux.sh) never listens on a port. It only makes outbound
-# calls: to its own loopback CDP port, and to this server's
-# POST /api/kiosks/agent-report endpoint every few seconds. That request
+# The advanced kiosk launcher (VRHM-Headset-Toolbox.exe, whose kiosk half is
+# website/headset-toolbox/program/VrhmKioskAgent.ps1, or Start-KioskAgent-Linux.sh)
+# never listens on a port. It only makes outbound calls: to its own loopback
+# CDP port, and to this server's POST /api/kiosks/agent-report endpoint every few seconds. That request
 # carries the kiosk's hardware/OS/link info (cached here by Save-KioskAgentReport)
 # and its response carries any pending operator command (queued here by
 # Add-KioskCommand, drained by Get-PendingKioskCommand).

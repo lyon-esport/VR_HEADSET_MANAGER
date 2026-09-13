@@ -1,115 +1,111 @@
 #################
-# HEADSET TOOLBOX PACKAGE
+# HEADSET TOOLBOX SUPPORT
 #
-# Builds a downloadable zip a technician runs on a DIFFERENT PC than this
-# server, bundling 3 self-contained, portable .exe tools:
-#   Start-HeadsetToolbox.exe  - enables WiFi ADB on a USB-connected headset,
-#                               then registers it with this server via
-#                               POST /api/headsets/register-by-serial
-#   Start-Kiosk-Agent.exe     - kiosk screen launcher/agent
-#   Find-VRHM-Server.exe      - standalone LAN scanner / cache-populator
+# The toolbox a technician runs on a DIFFERENT PC than this server is now ONE
+# committed binary, website\headset-toolbox\VRHM-Headset-Toolbox.exe, served
+# straight off the website folder. Nothing is generated for it at startup and
+# there is no zip any more - the exe embeds its own program files and
+# self-discovers this server (LAN scan confirmed via GET /api/version returning
+# {"app":"VRHM",...}).
 #
-# No server address or IP is ever baked into the zip: each exe embeds its own
-# script (and, for the headset tool, adb.exe + its DLLs) as resources and
-# self-extracts them into its own subfolder on first run, then self-discovers
-# the VRHM server (LAN scan, confirmed via GET /api/version returning
-# {"app":"VRHM",...}) and remembers it in a single vrhm_server_cache.json
-# shared by all 3 tools at the root of the extracted folder. This makes the
-# zip fully portable - it works unmodified on any VRHM installation and
-# survives a DHCP change on either side.
+# What this module still owns is the ONE thing the toolbox cannot carry itself:
+# adb. The exe deliberately does not embed adb.exe - it downloads it from this
+# server on first use (GET /api/adb-tools), so it always runs the exact adb
+# build this server manages its headsets with, and the binary stays small.
+#
+# The package below is that download: a zip of adb.exe + its two DLLs, taken
+# from the live config.ADB.folder and rebuilt whenever the source adb is newer
+# than the zip.
 #################
 
-function Get-HeadsetToolboxPackagePath {
+function Get-AdbToolsPackagePath {
     <#
     .SYNOPSIS
-    Returns the path of the generated headset toolbox zip. It lives under
-    website\generated\ (excluded from releases, served through the web server's
-    transparent generated\ fallback), so the URL is
-    /headset-toolbox/VRHM-Headset-Toolbox.zip.
+    Path of the generated adb tools zip. It lives under website\generated\
+    (excluded from releases and from git), and is streamed by
+    GET /api/adb-tools rather than being linked directly.
+    .EXAMPLE
+    $zip = Get-AdbToolsPackagePath
     #>
-    return (Join-Path $global:ScriptPath "website\generated\headset-toolbox\VRHM-Headset-Toolbox.zip")
+    return (Join-Path $global:ScriptPath "website\generated\headset-toolbox\adb-tools.zip")
 }
 
 
-function New-HeadsetToolboxPackage {
+function New-AdbToolsPackage {
     <#
     .SYNOPSIS
-    Builds the ready-to-use VRHM-Headset-Toolbox.zip by copying 3 committed,
-    self-contained .exe binaries into a zip root and adding one static
-    reference file for Linux kiosks. The zip's content is fully static (no
-    server-specific data is ever baked in - see the module header), so this
-    is just a copy+zip; it is still rebuilt at every app startup purely for
-    consistency with how the app has always refreshed this download.
+    Builds (or refreshes) the adb tools zip the remote toolbox downloads:
+    adb.exe, AdbWinApi.dll and AdbWinUsbApi.dll from this server's active ADB
+    folder.
 
-    Zip contents:
-      Start-HeadsetToolbox.exe   -> committed binary; embeds Enable-HeadsetWifiAdb.ps1 + adb.exe + AdbWinApi.dll + AdbWinUsbApi.dll
-      Start-Kiosk-Agent.exe      -> committed binary; embeds Start-KioskAgent.ps1
-      Find-VRHM-Server.exe       -> committed binary; embeds Find-VRHM-Server.ps1
-      kiosk-launcher\Start-KioskAgent-Linux.sh -> static copy for Linux kiosks (the exe above is Windows-only)
+    .DESCRIPTION
+    Lazy: an existing zip is reused unless -Force is passed or the source
+    adb.exe is newer than it, so the common case - a technician downloading it -
+    costs nothing. Never throws; a failure only costs the operator a download.
 
-    Each exe self-extracts its own dependencies into its own subfolder next to
-    itself on first run (never overwriting an existing local copy), and all
-    3 share one vrhm_server_cache.json written at the extracted root the
-    first time any of them finds the VRHM server on the LAN.
+    Returns the zip path on success, $null on failure.
 
-    Returns the zip path on success, $null on failure. Never throws: a missing
-    zip only costs the operator a convenience download.
     .EXAMPLE
-    New-HeadsetToolboxPackage
+    $zip = New-AdbToolsPackage
     #>
     param(
-        [string]$OutputPath = (Get-HeadsetToolboxPackagePath)
+        [string]$OutputPath = (Get-AdbToolsPackagePath),
+        [switch]$Force
     )
 
-    $staging = Join-Path $env:TEMP ("vrhm_headset_toolbox_pkg_" + [guid]::NewGuid().ToString('N'))
-
     try {
-        New-Item -ItemType Directory -Path $staging -Force -ErrorAction Stop | Out-Null
+        $adbExe = $global:adbPath
+        if (-not $adbExe -or -not (Test-Path -LiteralPath $adbExe)) {
+            Write-Log "New-AdbToolsPackage: adb.exe not found at '$adbExe' - cannot build the adb tools package." -Level WARNING
+            return $null
+        }
 
-        # ---- Copy the 3 self-contained exe tools into the zip root ----
-        $exeSpecs = @(
-            @{ Src = Join-Path $global:ScriptPath "website\headset-toolbox\Start-HeadsetToolbox.exe"; Name = 'Start-HeadsetToolbox.exe' },
-            @{ Src = Join-Path $global:ScriptPath "website\kiosk-launcher\Start-Kiosk-Agent.exe";      Name = 'Start-Kiosk-Agent.exe' },
-            @{ Src = Join-Path $global:ScriptPath "website\find-server\Find-VRHM-Server.exe";          Name = 'Find-VRHM-Server.exe' }
-        )
-        foreach ($spec in $exeSpecs) {
-            if (-not (Test-Path -LiteralPath $spec.Src)) {
-                Write-Log "New-HeadsetToolboxPackage: '$($spec.Name)' missing at $($spec.Src) - aborting." -Level WARNING
-                return $null
+        $adbFolder = Split-Path -Parent $adbExe
+        $sources   = @($adbExe)
+        # The two DLLs are what make USB work on Windows; a missing one is not
+        # fatal here (some builds ship without them), it just is not included.
+        foreach ($dll in @('AdbWinApi.dll', 'AdbWinUsbApi.dll')) {
+            $dllPath = Join-Path $adbFolder $dll
+            if (Test-Path -LiteralPath $dllPath) {
+                $sources += $dllPath
+            } else {
+                Write-Log "New-AdbToolsPackage: '$dll' missing from $adbFolder - not included." -Level WARNING
             }
-            Copy-Item -LiteralPath $spec.Src -Destination (Join-Path $staging $spec.Name) -Force -ErrorAction Stop
         }
 
-        # ---- Static reference copy for Linux kiosks (Start-Kiosk-Agent.exe is Windows-only) ----
-        $kioskLinuxSrc = Join-Path $global:ScriptPath "website\kiosk-launcher\Start-KioskAgent-Linux.sh"
-        if (Test-Path -LiteralPath $kioskLinuxSrc) {
-            $kioskStaging = Join-Path $staging "kiosk-launcher"
-            New-Item -ItemType Directory -Path $kioskStaging -Force -ErrorAction Stop | Out-Null
-            Copy-Item -LiteralPath $kioskLinuxSrc -Destination (Join-Path $kioskStaging 'Start-KioskAgent-Linux.sh') -Force -ErrorAction Stop
-        } else {
-            Write-Log "New-HeadsetToolboxPackage: 'Start-KioskAgent-Linux.sh' missing from website\kiosk-launcher - not included in the package." -Level WARNING
+        if ((-not $Force) -and (Test-Path -LiteralPath $OutputPath)) {
+            $zipTime = (Get-Item -LiteralPath $OutputPath).LastWriteTimeUtc
+            $srcTime = (Get-Item -LiteralPath $adbExe).LastWriteTimeUtc
+            if ($zipTime -ge $srcTime) { return $OutputPath }
         }
 
-        # ---- Zip it ----
-        $outFolder = Split-Path -Parent $OutputPath
-        if (-not (Test-Path -LiteralPath $outFolder)) {
-            New-Item -ItemType Directory -Path $outFolder -Force -ErrorAction Stop | Out-Null
-        }
-        if (Test-Path -LiteralPath $OutputPath) {
-            Remove-Item -LiteralPath $OutputPath -Force -ErrorAction Stop
-        }
+        $staging = Join-Path $env:TEMP ("vrhm_adb_tools_pkg_" + [guid]::NewGuid().ToString('N'))
+        try {
+            New-Item -ItemType Directory -Path $staging -Force -ErrorAction Stop | Out-Null
+            foreach ($src in $sources) {
+                Copy-Item -LiteralPath $src -Destination (Join-Path $staging (Split-Path -Leaf $src)) -Force -ErrorAction Stop
+            }
 
-        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
-        [System.IO.Compression.ZipFile]::CreateFromDirectory($staging, $OutputPath)
+            $outFolder = Split-Path -Parent $OutputPath
+            if (-not (Test-Path -LiteralPath $outFolder)) {
+                New-Item -ItemType Directory -Path $outFolder -Force -ErrorAction Stop | Out-Null
+            }
+            if (Test-Path -LiteralPath $OutputPath) {
+                Remove-Item -LiteralPath $OutputPath -Force -ErrorAction Stop
+            }
 
-        Write-Log "New-HeadsetToolboxPackage: headset toolbox package rebuilt -> $OutputPath" -Level INFO
-        return $OutputPath
+            Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+            [System.IO.Compression.ZipFile]::CreateFromDirectory($staging, $OutputPath)
+
+            Write-Log "New-AdbToolsPackage: adb tools package rebuilt -> $OutputPath" -Level INFO
+            return $OutputPath
+        } finally {
+            if (Test-Path -LiteralPath $staging) {
+                Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
     } catch {
-        Write-Log "New-HeadsetToolboxPackage: failed to build the headset toolbox package - $($_.Exception.Message)" -Level WARNING
+        Write-Log "New-AdbToolsPackage: failed to build the adb tools package - $($_.Exception.Message)" -Level WARNING
         return $null
-    } finally {
-        if (Test-Path -LiteralPath $staging) {
-            Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
-        }
     }
 }

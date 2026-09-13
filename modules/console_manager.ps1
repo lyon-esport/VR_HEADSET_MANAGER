@@ -1107,6 +1107,7 @@ function Show-SubMenu-ManageHeadset { #CHOICE 4
     Write-Host $msg.LaunchApp
     Write-Host $msg.KillApp
     Write-Host $msg.UninstallApp
+    Write-Host $msg.Headset.WifiMenuEntry
 
     Write-Host $msg.ReturnPreviousMenu
     $userInput = $(Read-Host $msg.YourChoice).ToUpper() #ToUpper = Convert user input to uppercase for case-insensitive comparison
@@ -1119,6 +1120,9 @@ function Show-SubMenu-ManageHeadset { #CHOICE 4
     elseif ($userInput -eq '2') {
         Write-Host $msg.StartWifiADB
         Enable-WiFiADB
+    }
+    elseif ($userInput -eq '7') {
+        Show-SubMenu-PushHeadsetWifi
     }
     elseif ($userInput -in ('3','4','5','6')) {
         Write-Host $msg.AppManager
@@ -1135,6 +1139,74 @@ function Show-SubMenu-ManageHeadset { #CHOICE 4
         Write-Log -Message $msg.ReturnMainMenu -Level "INFO"
     }
 } # TODO
+
+function Show-SubMenu-PushHeadsetWifi {
+    <#
+    .SYNOPSIS
+    Console counterpart of POST /api/headsets/push-wifi: pushes one of the
+    server's known WiFi networks onto a headset, over the server's own ADB
+    connection (ADR-0012 - same Invoke-HeadsetWifiPush behind both).
+
+    .DESCRIPTION
+    The SSID is checked against what the HEADSET can see before anything is
+    pushed, so a network the headset has no radio for (6 GHz on an older model)
+    is refused instead of stranding it off the network.
+
+    .EXAMPLE
+    Show-SubMenu-PushHeadsetWifi
+    #>
+    $headsets = @(Get-KnownHeadsets)
+    if ($headsets.Count -eq 0) {
+        Write-Host $msg.NoHeadsetInFile -ForegroundColor Yellow
+        Start-Sleep -Seconds 2
+        return
+    }
+
+    $networks = @(Get-WifiNetworks)
+    if ($networks.Count -eq 0) {
+        Write-Log $msg.Headset.WifiNoNetworks -Level WARNING
+        Start-Sleep -Seconds 3
+        return
+    }
+
+    Show-HeadsetsTable
+    Write-Host ""
+    $headsetChoice = Read-Host $msg.Headset.WifiPickHeadset
+    if ($headsetChoice -eq '0' -or -not $headsetChoice) { return }
+
+    $headset = $headsets | Where-Object { [string]$_.ID -eq [string]$headsetChoice } | Select-Object -First 1
+    if (-not $headset) {
+        Write-Log $msg.UnrecognizedOption -Level ERROR
+        Start-Sleep -Seconds 2
+        return
+    }
+
+    Write-Host ""
+    for ($i = 0; $i -lt $networks.Count; $i++) {
+        $tag = if ($networks[$i].Preferred) { " " + $msg.Headset.WifiPreferredTag } else { "" }
+        Write-Host ("{0}. {1}{2}" -f ($i + 1), $networks[$i].SSID, $tag)
+    }
+    Write-Host ""
+    $netChoice = Read-Host $msg.Headset.WifiPickNetwork
+    $netIndex = 0
+    if (-not [int]::TryParse($netChoice, [ref]$netIndex) -or $netIndex -lt 1 -or $netIndex -gt $networks.Count) { return }
+    $ssid = $networks[$netIndex - 1].SSID
+
+    Write-Log $msg.Headset.WifiScanning -Level INFO
+    $result = Invoke-HeadsetWifiPush -Headset $headset -Ssid $ssid
+
+    if ($result.Pushed) {
+        Write-Log ($msg.Headset.WifiPushOk -f $headset.Name, $ssid) -Level SUCCESS
+    } elseif ($result.Visible -eq $false) {
+        Write-Log ($msg.Headset.WifiNotVisible -f $ssid) -Level WARNING
+        if (@($result.VisibleKnown).Count -gt 0) {
+            Write-Log ($msg.Headset.WifiVisibleKnown -f (@($result.VisibleKnown) -join ', ')) -Level INFO
+        }
+    } else {
+        Write-Log ($msg.Headset.WifiPushFailed -f $result.Error) -Level ERROR
+    }
+    Start-Sleep -Seconds 3
+}
 
 function Show-SubMenu-scrcpyTracking { #CHOICE 5
     Clear-Host
@@ -2354,4 +2426,4 @@ function Add-Headset-Manually {
     Add-Headset -IPAddress $ip -Name $name
 
     Write-Host "Headset added successfully!" -ForegroundColor Cyan
-} #OK
+} #OK

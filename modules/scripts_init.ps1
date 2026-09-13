@@ -273,21 +273,19 @@ if ($global:VQA_Enabled -and -not $global:IsVRMonitorJob -and -not $global:IsDas
     }
 }
 
-# Rebuild the ready-to-use headset toolbox zip. Its content is fully static
-# (all 3 bundled exes self-discover the VRHM server - no address is ever
-# baked in), so this is just a cheap copy+zip of committed binaries; done on
-# every startup purely for consistency with how this download has always
-# been refreshed. Main process only - the child processes would just
-# duplicate the work.
-# (The kiosk-launcher zip used to be rebuilt the same way here; it was removed
-# in favor of Start-Kiosk-Agent.exe, which discovers the server itself.)
+# Pre-build the adb tools zip the remote toolbox downloads (GET /api/adb-tools).
+# Cheap and lazy - New-AdbToolsPackage reuses an existing zip unless the active
+# adb.exe is newer - but doing it here means a technician's first download is
+# instant instead of waiting on a zip being built inside the request.
+# Main process only; the child processes would just duplicate the work.
+# (The toolbox zip that used to be rebuilt here is gone: the toolbox is now one
+# committed exe, VRHM-Headset-Toolbox.exe, served straight off website\.)
 if (-not $global:IsVRMonitorJob -and -not $global:IsDashboardProcess -and -not $global:IsWebServerProcess) {
-    if (Get-Command New-HeadsetToolboxPackage -ErrorAction SilentlyContinue) {
-        try { New-HeadsetToolboxPackage | Out-Null }
-        catch { Write-Log ("Headset toolbox package build failed: " + $_.Exception.Message) -Level WARNING }
+    if (Get-Command New-AdbToolsPackage -ErrorAction SilentlyContinue) {
+        try { New-AdbToolsPackage | Out-Null }
+        catch { Write-Log ("adb tools package build failed: " + $_.Exception.Message) -Level WARNING }
     }
 }
-
 
 # Returns the path of the web server PID lock file.
 function Get-WebServerPidPath {

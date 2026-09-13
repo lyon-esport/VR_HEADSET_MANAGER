@@ -385,6 +385,17 @@
         NameExists    = "A headset named '{0}' already exists (ID {1}). Names identify a headset in the apps, favourites and timer features, so they must be unique."
         ExportedTo    = "Headset registry exported to {0}"
         NameAmbiguous = "More than one headset is named '{0}'. Using ID {1}. Rename one of them: apps and favourites are resolved by name and will be attached to the wrong headset."
+        # --- WiFi push (console + POST /api/headsets/push-wifi) ---
+        WifiMenuEntry     = "7. Push a WiFi network to a headset"
+        WifiPickHeadset   = "Headset ID (0 to go back)"
+        WifiPickNetwork   = "WiFi network number (0 to go back)"
+        WifiNoNetworks    = "No WiFi network is registered on this server (Configuration -> WiFi networks)."
+        WifiScanning      = "Asking the headset which networks it can see..."
+        WifiNotVisible    = "The headset cannot see '{0}' - nothing was pushed, it stays on its current network."
+        WifiVisibleKnown  = "Networks this headset can see and this server knows: {0}"
+        WifiPushOk        = "Headset '{0}' was moved to WiFi network '{1}'."
+        WifiPushFailed    = "WiFi push failed: {0}"
+        WifiPreferredTag  = "(preferred)"
     }
 
     # ==========================================
@@ -726,4 +737,4 @@
         PowerSent           = "Power action '{0}' sent to kiosk '{1}'."
         PowerFailed         = "Power action '{0}' failed for kiosk '{1}': {2}"
     }
-}
+}
