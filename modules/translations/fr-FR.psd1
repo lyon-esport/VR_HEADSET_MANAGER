@@ -384,6 +384,7 @@
         NameExists    = "Un casque nomme '{0}' existe deja (ID {1}). Le nom identifie un casque dans les fonctions applications, favoris et minuteur : il doit etre unique."
         ExportedTo    = "Registre des casques exporte vers {0}"
         NameAmbiguous = "Plusieurs casques portent le nom '{0}'. Utilisation de l'ID {1}. Renommez-en un : les applications et les favoris sont resolus par nom et seront rattaches au mauvais casque."
+        ScrcpyOptSetDefaultView = "Definir la vue par defaut pour ce modele (utilisee pour les nouveaux casques)"
         # --- WiFi push (console + POST /api/headsets/push-wifi) ---
         WifiMenuEntry     = "7. Envoyer un reseau WiFi vers un casque"
         WifiPickHeadset   = "ID du casque (0 pour revenir)"
@@ -678,7 +679,8 @@
         ActionShutdown      = "  H. Eteindre le PC kiosk (kiosks avances)"
         ActionDelete        = "  D. Supprimer"
         ActionCancel        = "  0. Annuler"
-        PushUrlPrompt       = "Entrez l'URL a envoyer : "
+        PushUrlPrompt       = "Entrez l'URL a envoyer (ou W pour un mur de casques personnalise) : "
+        PushWallIdsPrompt   = "IDs des casques dans l'ordre d'affichage, separes par des virgules (vide = tous) : "
         LocalhostWarning    = "Cette URL utilise 'localhost', qui pointe vers l'ecran kiosk lui-meme, pas vers ce PC. URL suggeree : {0}"
         LocalhostConfirm    = "Utiliser l'URL suggeree a la place ? (O/N) : "
         PushCancelled       = "Envoi annule."

@@ -146,6 +146,8 @@ function Get-Config {
         $global:scrcpyRecordFolder = Join-Path -Path $global:ScriptPath -ChildPath $configContent.scrcpy.recordFolder
     }
     $global:scrcpyRecordMinFreeSpaceGB = if ($null -ne $configContent.scrcpy.recordMinFreeSpaceGB) { [int]$configContent.scrcpy.recordMinFreeSpaceGB } else { 5 }
+    $global:scrcpyDefaultFps = if ($null -ne $configContent.scrcpy.defaultFps) { [int]$configContent.scrcpy.defaultFps } else { 30 }
+    $global:scrcpyDefaultBitrateMbps = if ($null -ne $configContent.scrcpy.defaultBitrateMbps) { [int]$configContent.scrcpy.defaultBitrateMbps } else { 8 }
 
 
     $global:ADBWirelessActivatorAPK = Join-Path -Path $(Join-Path -Path $sourcesPath -ChildPath $configContent.apk.adbWirelessActivatorFolder) -ChildPath $configContent.apk.adbWirelessActivatorApk

@@ -201,6 +201,12 @@
     [data-theme=light] .pro-icon-btn:hover { background:#f3f4f6; }
     .pro-icon-del:hover { border-color:#ef4444; color:#ef4444; background:rgba(239,68,68,.1); }
     .pro-icon-ok:hover  { border-color:#22c55e; color:#22c55e; background:rgba(34,197,94,.1); }
+    .pro-th-star, .pro-td-star { width:22px; text-align:center; padding-left:8px !important; padding-right:2px !important; }
+    .pro-star-btn { background:none; border:none; cursor:pointer; padding:2px; color:var(--muted); line-height:0; }
+    .pro-star-btn svg { display:block; }
+    .pro-star-btn:hover { color:#fbbf24; }
+    .pro-star-btn.active { color:#fbbf24; }
+    .pro-star-btn.active svg { fill:#fbbf24; }
     .pro-crop-inp  { width:148px; font-family:'Consolas',monospace; font-size:11px; }
     .pro-angle-inp { width:64px; }
     .pro-name-inp  { width:96px; }
@@ -842,6 +848,11 @@
           desc: 'Folder where scrcpy recordings are saved. Use forward slashes, e.g. D:/DATA/Records.' },
         { path: 'scrcpy.recordMinFreeSpaceGB', label: 'Min. Free Space', type: 'number', min: 1, max: 9999, unit: 'GB',
           desc: 'Recording is auto-disabled on all headsets when free space drops below this value.' },
+        { type: 'subgroup', label: 'Default Capture Profile' },
+        { path: 'scrcpy.defaultFps', label: 'Default FPS', type: 'number', min: 1, max: 120, unit: 'fps',
+          desc: 'Capture framerate assigned to a newly added headset. Existing headsets are unaffected - change their profile individually on the Headsets page.' },
+        { path: 'scrcpy.defaultBitrateMbps', label: 'Default Bandwidth', type: 'number', min: 1, max: 200, unit: 'Mbps',
+          desc: 'Capture bitrate assigned to a newly added headset. Existing headsets are unaffected - change their profile individually on the Headsets page. The starred view (Manage Headset Profiles) sets which crop template is used.' },
         { type: 'subgroup', label: 'Performance' },
         { path: 'Performance.GPU_Acceleration', label: 'GPU Acceleration', type: 'boolean',
           desc: 'Use GPU hardware acceleration where available.' },
@@ -1386,8 +1397,9 @@
 
       html += '<div class="pro-section-hd"><span>Views</span>'
         + '<button data-action="add-view">+ Add View</button></div>'
+        + '<p style="font-size:11px;color:var(--muted);margin:0 22px 8px">The starred view is used as the capture profile for a newly added headset of this model.</p>'
         + '<div class="pro-table-wrap"><table class="pro-table"><thead><tr>'
-        + '<th class="pro-th-drag"></th><th>View Name</th><th class="pro-th-crop">Left Eye Crop</th><th class="pro-th-angle">L Angle</th>'
+        + '<th class="pro-th-drag"></th><th class="pro-th-star" title="Default view for new headsets"></th><th>View Name</th><th class="pro-th-crop">Left Eye Crop</th><th class="pro-th-angle">L Angle</th>'
         + '<th class="pro-th-crop">Right Eye Crop</th><th class="pro-th-angle">R Angle</th><th class="pro-th-actions"></th>'
         + '</tr></thead><tbody id="pro-views-tbody">';
 
@@ -1395,7 +1407,8 @@
       vnames.forEach(function(vn) {
         var le = (views[vn] && views[vn].left_eye)  || {};
         var re = (views[vn] && views[vn].right_eye) || {};
-        html += (_proEditView === vn) ? proViewEditRow(vn, le, re) : proViewReadRow(vn, le, re);
+        var isDefault = !!(views[vn] && views[vn].default);
+        html += (_proEditView === vn) ? proViewEditRow(vn, le, re) : proViewReadRow(vn, le, re, isDefault);
       });
       if (_proNewView) html += proViewNewRow();
       html += '</tbody></table>';
@@ -1406,9 +1419,12 @@
       initProDragDrop();
     }
 
-    function proViewReadRow(vn, le, re) {
+    function proViewReadRow(vn, le, re, isDefault) {
       return '<tr draggable="true" data-view="' + proEsc(vn) + '">'
         + '<td class="pro-td-drag" title="Drag to reorder">&#8942;</td>'
+        + '<td class="pro-td-star"><button class="pro-star-btn' + (isDefault ? ' active' : '') + '" data-action="toggle-default-view" data-view="' + proEsc(vn) + '" title="' + (isDefault ? 'Default view for new headsets' : 'Set as default view for new headsets') + '">'
+        + '<svg width="13" height="13" viewBox="0 0 24 24" fill="' + (isDefault ? 'currentColor' : 'none') + '" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>'
+        + '</button></td>'
         + '<td class="pro-td-name">' + proEsc(vn) + '</td>'
         + '<td class="pro-td-crop">' + proEsc(le.crop || '') + '</td>'
         + '<td class="pro-td-angle">' + (le.angle != null ? le.angle : 0) + '</td>'
@@ -1422,6 +1438,7 @@
     function proViewEditRow(vn, le, re) {
       return '<tr>'
         + '<td class="pro-td-drag"></td>'
+        + '<td class="pro-td-star"></td>'
         + '<td><input id="ev-name" class="cfg-input pro-name-inp" value="' + proEsc(vn) + '"></td>'
         + '<td><input id="ev-le-crop" class="cfg-input pro-crop-inp" value="' + proEsc(le.crop||'') + '" placeholder="w:h:x:y"></td>'
         + '<td><input type="number" id="ev-le-angle" class="cfg-input pro-angle-inp" value="' + (le.angle!=null?le.angle:0) + '"></td>'
@@ -1435,6 +1452,7 @@
     function proViewNewRow() {
       return '<tr>'
         + '<td class="pro-td-drag"></td>'
+        + '<td class="pro-td-star"></td>'
         + '<td><input id="nv-name" class="cfg-input pro-name-inp" placeholder="e.g. wide"></td>'
         + '<td><input id="nv-le-crop" class="cfg-input pro-crop-inp" placeholder="w:h:x:y"></td>'
         + '<td><input type="number" id="nv-le-angle" class="cfg-input pro-angle-inp" value="0"></td>'
@@ -1554,6 +1572,15 @@
         collectProGeneralSettings(); _proEditView = vn; _proNewView = false;
         renderProBody(); var ei = document.getElementById('ev-name'); if (ei) ei.focus(); return;
       }
+      if (action === 'toggle-default-view') {
+        var mDef = _proData[_proModel];
+        if (mDef && mDef.views) {
+          Object.keys(mDef.views).forEach(function(k) { if (mDef.views[k]) delete mDef.views[k].default; });
+          if (mDef.views[vn]) mDef.views[vn].default = true;
+          _proDirty = true; renderProBody();
+        }
+        return;
+      }
       if (action === 'delete-view') {
         var mdl = _proData[_proModel];
         if (mdl && mdl.views && mdl.views[vn]) { delete mdl.views[vn]; _proDirty = true; _proEditView = null; _proNewView = false; renderProBody(); }
@@ -1584,7 +1611,9 @@
         var la = parseFloat(document.getElementById('nv-le-angle').value) || 0;
         var rc = (document.getElementById('nv-re-crop').value || '').trim();
         var ra = parseFloat(document.getElementById('nv-re-angle').value) || 0;
+        var isFirstView = Object.keys(m3.views).length === 0;
         m3.views[nn] = { left_eye: { crop: lc, angle: la }, right_eye: { crop: rc, angle: ra } };
+        if (isFirstView) m3.views[nn].default = true;
         _proDirty = true; _proNewView = false; renderProBody(); return;
       }
       if (action === 'cancel-new-view') { _proNewView = false; renderProBody(); }
@@ -1643,7 +1672,9 @@
             var la2 = parseFloat(document.getElementById('nv-le-angle').value) || 0;
             var rc2 = (document.getElementById('nv-re-crop').value || '').trim();
             var ra2 = parseFloat(document.getElementById('nv-re-angle').value) || 0;
+            var isFirstView2 = Object.keys(m32.views).length === 0;
             m32.views[nn2] = { left_eye: { crop: lc2, angle: la2 }, right_eye: { crop: rc2, angle: ra2 } };
+            if (isFirstView2) m32.views[nn2].default = true;
             _proDirty = true;
           }
         }

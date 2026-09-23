@@ -61,6 +61,59 @@ function ConvertTo-ScrcpyProfile {
 }
 
 
+# Resolves the view to use for a NEW headset of the given model: the view
+# flagged "default": true under scrcpy.parameters.<Model>.views (set from
+# vrhm_config.html's "Manage Headset Profiles" star, or via
+# Set-ScrcpyDefaultView in the console), else the first view defined for
+# that model, else the literal 'square' when the model is blank/unknown or
+# has no views (Model is often not known yet at headset-creation time).
+function Get-ScrcpyDefaultView {
+    param(
+        [string]$Model
+    )
+    if (-not $Model -or -not $global:scrcpyParameters.$Model -or -not $global:scrcpyParameters.$Model.views) {
+        return 'square'
+    }
+    $viewNames = @($global:scrcpyParameters.$Model.views | Get-Member -MemberType NoteProperty | Select-Object -ExpandProperty Name)
+    if ($viewNames.Count -eq 0) { return 'square' }
+    $starred = $viewNames | Where-Object { $global:scrcpyParameters.$Model.views.$_.default -eq $true } | Select-Object -First 1
+    if ($starred) { return $starred }
+    return $viewNames[0]
+}
+
+
+# Flags one view as the default for a model (clearing the flag on every
+# other view of that model), persisted to the live config.json. Console
+# counterpart of the star toggle in vrhm_config.html's "Manage Headset
+# Profiles" modal, which persists the same "default": true key through the
+# generic POST /api/config/save. Returns $true/$false.
+function Set-ScrcpyDefaultView {
+    param(
+        [Parameter(Mandatory)] [string]$Model,
+        [Parameter(Mandatory)] [string]$View
+    )
+    $cfgPath = Join-Path $global:ScriptPath 'config\config.json'
+    $cfg = Read-ConfigJson -ConfigFilePath $cfgPath -NonInteractive
+    if (-not $cfg -or -not $cfg.scrcpy -or -not $cfg.scrcpy.parameters -or -not $cfg.scrcpy.parameters.$Model -or -not $cfg.scrcpy.parameters.$Model.views -or -not $cfg.scrcpy.parameters.$Model.views.$View) {
+        Write-Log "Set-ScrcpyDefaultView: model '$Model' or view '$View' not found in config.json." -Level ERROR
+        return $false
+    }
+    foreach ($vName in ($cfg.scrcpy.parameters.$Model.views.PSObject.Properties.Name)) {
+        $isDefault = ($vName -eq $View)
+        $viewObj = $cfg.scrcpy.parameters.$Model.views.$vName
+        if ($viewObj.PSObject.Properties.Name -contains 'default') {
+            $viewObj.default = $isDefault
+        } elseif ($isDefault) {
+            $viewObj | Add-Member -MemberType NoteProperty -Name 'default' -Value $true
+        }
+    }
+    Write-FileWithoutBom -Path $cfgPath -Content (($cfg | ConvertTo-Json -Depth 12))
+    Get-Config
+    Write-Log ("Set-ScrcpyDefaultView: '{0}' is now the default view for model '{1}'." -f $View, $Model) -Level INFO
+    return $true
+}
+
+
 # Build the scrcpy argument string from a model template (config.json) and a per-headset profile.
 # Profile format: [L/R]-[D/N]-FPS-BW  e.g. "R-N-45-20"
 #   L/R = Left or Right eye  (selects crop + angle from model template)

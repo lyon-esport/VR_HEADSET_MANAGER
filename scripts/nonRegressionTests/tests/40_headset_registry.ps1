@@ -73,7 +73,10 @@ Invoke-RegressionTest -Name 'Add a headset by IP' -Test {
     Add-TestEvidence ("row: ID={0} IP={1} Model={2} Profile={3}" -f $row.ID, $row.IPAddress, $row.Model, $row.ScrcpyProfile)
     Assert-Equal $nrtIp $row.IPAddress 'stored IP'
     Assert-Equal 'Quest 3' $row.Model 'stored model'
-    Assert-Equal 'square-R-N-45-10' $row.ScrcpyProfile 'default Scrcpy profile'
+    # Default view comes from the model's starred view in scrcpy.parameters (config.json;
+    # "square" is starred for every shipped model template), FPS/bandwidth from
+    # scrcpy.defaultFps / scrcpy.defaultBitrateMbps (config.json).
+    Assert-Equal 'square-R-N-30-8' $row.ScrcpyProfile 'default Scrcpy profile'
 }
 
 Invoke-RegressionTest -Name 'New headset gets its default side files' -Test {

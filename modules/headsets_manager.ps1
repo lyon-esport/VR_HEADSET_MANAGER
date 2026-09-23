@@ -664,7 +664,7 @@ function Add-Headset {
         IPAddress    = $IPAddress
         scrcpy_AutoRestart = "True"
         Record       = "False"
-        ScrcpyProfile = "square-R-N-45-10"
+        ScrcpyProfile = (ConvertTo-ScrcpyProfile -View (Get-ScrcpyDefaultView -Model $Model) -Eye 'R' -AudioDup $false -Fps $global:scrcpyDefaultFps -BitrateMbps $global:scrcpyDefaultBitrateMbps)
         Brand        = ""
         Model        = $Model
         SerialNumber = $SerialNumber

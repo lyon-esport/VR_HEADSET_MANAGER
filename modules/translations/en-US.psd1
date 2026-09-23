@@ -384,6 +384,7 @@
     Headset = @{
         NameExists    = "A headset named '{0}' already exists (ID {1}). Names identify a headset in the apps, favourites and timer features, so they must be unique."
         ExportedTo    = "Headset registry exported to {0}"
+        ScrcpyOptSetDefaultView = "Set default view for this model (used for new headsets)"
         NameAmbiguous = "More than one headset is named '{0}'. Using ID {1}. Rename one of them: apps and favourites are resolved by name and will be attached to the wrong headset."
         # --- WiFi push (console + POST /api/headsets/push-wifi) ---
         WifiMenuEntry     = "7. Push a WiFi network to a headset"
@@ -678,7 +679,8 @@
         ActionShutdown      = "  H. Shut down the kiosk PC (advanced kiosks)"
         ActionDelete        = "  D. Delete"
         ActionCancel        = "  0. Cancel"
-        PushUrlPrompt       = "Enter URL to push: "
+        PushUrlPrompt       = "Enter URL to push (or W for a custom headset wall): "
+        PushWallIdsPrompt   = "Headset IDs in display order, comma separated (empty = all headsets): "
         LocalhostWarning    = "This URL uses 'localhost', which resolves to the kiosk screen itself, not this PC. Suggested URL: {0}"
         LocalhostConfirm    = "Use the suggested URL instead? (Y/N): "
         PushCancelled       = "Push cancelled."

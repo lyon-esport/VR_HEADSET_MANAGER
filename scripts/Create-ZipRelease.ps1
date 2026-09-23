@@ -67,6 +67,34 @@ while ($Version -notmatch '^[\d][\w.\-_]*$') {
 Write-Host "  Version : $Version" -ForegroundColor White
 Write-Host ""
 
+# --- RESTAMP TOOLBOX EXE WITH THE RELEASE VERSION ---
+# The committed website\headset-toolbox\VRHM-Headset-Toolbox.exe was built with whatever
+# version.txt said at the time (DEVELOPPMENT-VERSION in the dev tree). Rebuild it here with the
+# real release version so the shipped exe's file properties actually match what is being
+# released. website\generated\ is already release-excluded, so the stamped copy never leaks into
+# the zip on its own - it is only ever substituted in explicitly below.
+$toolboxBuildScript = Join-Path $projectRoot "scripts\headset-toolbox\Build-VrhmToolboxExe.ps1"
+$toolboxRelativePath = "website\headset-toolbox\VRHM-Headset-Toolbox.exe"
+$stampedToolboxExePath = $null
+if (Test-Path -LiteralPath $toolboxBuildScript) {
+    $candidatePath = Join-Path $projectRoot "website\generated\headset-toolbox\VRHM-Headset-Toolbox.release.exe"
+    Write-Host "[ Restamping toolbox exe with version $Version ]" -ForegroundColor Gray
+    try {
+        & $toolboxBuildScript -Version $Version -OutputPath $candidatePath
+        if (Test-Path -LiteralPath $candidatePath) {
+            $stampedToolboxExePath = $candidatePath
+            Write-Host "  Stamped exe : $candidatePath" -ForegroundColor White
+        } else {
+            Write-Host "  WARNING: restamp produced no output file - shipping the committed exe as-is." -ForegroundColor Yellow
+        }
+    } catch {
+        Write-Host "  WARNING: could not restamp the toolbox exe ($($_.Exception.Message)) - shipping the committed exe as-is." -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "  WARNING: $toolboxBuildScript not found - shipping the committed toolbox exe as-is." -ForegroundColor Yellow
+}
+Write-Host ""
+
 # --- ZIP PATH ---
 $zipName = "$folderName.v$Version.zip"
 $zipPath = Join-Path $outputDir $zipName
@@ -161,8 +189,16 @@ try {
         $rel       = $file.FullName.Substring($projectRoot.Length + 1)
         $entryName = "$folderName\$rel"
         $entry     = $zip.CreateEntry($entryName, [System.IO.Compression.CompressionLevel]::Optimal)
+        # The toolbox exe gets the release-stamped copy when the restamp above succeeded, so the
+        # shipped binary's file properties match this release's version. Everything else - and
+        # the toolbox exe itself when restamping was unavailable - is read straight off disk.
+        $sourcePath = if ($rel -eq $toolboxRelativePath -and $stampedToolboxExePath) {
+            $stampedToolboxExePath
+        } else {
+            $file.FullName
+        }
         $es = $entry.Open()
-        $fs = [System.IO.File]::OpenRead($file.FullName)
+        $fs = [System.IO.File]::OpenRead($sourcePath)
         $fs.CopyTo($es)
         $fs.Dispose()
         $es.Dispose()

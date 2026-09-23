@@ -1392,6 +1392,7 @@ function Show-SubMenu-ScrcpyOptions {
             # Built-in non-removable view: works on any headset, no per-model crop entry needed.
             if ('fullscreen' -notin $availableViews) { $availableViews += 'fullscreen' }
             $viewList = $availableViews -join ', '
+            $defaultView = Get-ScrcpyDefaultView -Model $headsetModel
 
             Clear-Host
             Write-Host "$($msg.ScrcpyOptionsTitle) - $($headset.Name)" -ForegroundColor Cyan
@@ -1403,6 +1404,7 @@ function Show-SubMenu-ScrcpyOptions {
             Write-Host " [3]  $($msg.ScrcpyOptAudioLabel.PadRight(16)) : $audioLabel"
             Write-Host " [4]  $($msg.ScrcpyOptFPSLabel.PadRight(16)) : $fps"
             Write-Host " [5]  $($msg.ScrcpyOptBitrateLabel.PadRight(16)) : $bw"
+            Write-Host " [6]  $($msg.Headset.ScrcpyOptSetDefaultView)"
             Write-Host " [0]  $($msg.Return)"
 
             $opt = Read-Host $msg.ScrcpyOptionsEnterOption
@@ -1412,7 +1414,8 @@ function Show-SubMenu-ScrcpyOptions {
                     Write-Host "  Available views:"
                     for ($vi = 0; $vi -lt $availableViews.Count; $vi++) {
                         $marker = if ($availableViews[$vi] -eq $view) { '*' } else { ' ' }
-                        Write-Host ("    {0}. {1} {2}" -f ($vi + 1), $availableViews[$vi], $marker)
+                        $defTag = if ($availableViews[$vi] -eq $defaultView) { ' (default)' } else { '' }
+                        Write-Host ("    {0}. {1} {2}{3}" -f ($vi + 1), $availableViews[$vi], $marker, $defTag)
                     }
                     $numInput = Read-Host ("  Select view (1-{0}, current: {1})" -f $availableViews.Count, $view)
                     if ($numInput -match '^\d+$') {
@@ -1462,6 +1465,39 @@ function Show-SubMenu-ScrcpyOptions {
                     } else {
                         Write-Host $msg.ScrcpyOptionsInvalidNumber -ForegroundColor Red
                         Start-Sleep -Seconds 2
+                    }
+                }
+                '6' {
+                    if (-not $headsetModel) {
+                        Write-Host "  This headset has no known Model yet - it must be connected at least once." -ForegroundColor Red
+                        Start-Sleep -Seconds 2
+                    } else {
+                        # 'fullscreen' is synthesized in code, not a real config.json key - it
+                        # can never be persisted as a model's default view.
+                        $settableViews = @($availableViews | Where-Object { $_ -ne 'fullscreen' })
+                        Write-Host ("  Available views for model '{0}':" -f $headsetModel)
+                        for ($vi = 0; $vi -lt $settableViews.Count; $vi++) {
+                            $defTag = if ($settableViews[$vi] -eq $defaultView) { ' (current default)' } else { '' }
+                            Write-Host ("    {0}. {1}{2}" -f ($vi + 1), $settableViews[$vi], $defTag)
+                        }
+                        $numInput = Read-Host ("  Select the new default view (1-{0})" -f $settableViews.Count)
+                        if ($numInput -match '^\d+$') {
+                            $numIdx = [int]$numInput - 1
+                            if ($numIdx -ge 0 -and $numIdx -lt $settableViews.Count) {
+                                if (Set-ScrcpyDefaultView -Model $headsetModel -View $settableViews[$numIdx]) {
+                                    Write-Host ("  '{0}' is now the default view for model '{1}'." -f $settableViews[$numIdx], $headsetModel) -ForegroundColor Green
+                                } else {
+                                    Write-Host "  Failed to set default view - see log for details." -ForegroundColor Red
+                                }
+                                Start-Sleep -Seconds 2
+                            } else {
+                                Write-Host ("  Invalid choice. Enter a number between 1 and {0}." -f $settableViews.Count) -ForegroundColor Red
+                                Start-Sleep -Seconds 2
+                            }
+                        } else {
+                            Write-Host "  Invalid input. Enter a number." -ForegroundColor Red
+                            Start-Sleep -Seconds 2
+                        }
                     }
                 }
                 '0' { break }
@@ -2177,6 +2213,14 @@ function Show-SubMenu-KioskScreens {
 
                 if ($action -eq 'P') {
                     $url = (Read-Host $msg.Kiosk.PushUrlPrompt).Trim()
+                    if ($url.ToUpper() -eq 'W') {
+                        # Custom wall: ordered headset IDs -> ?filterid= (same as the web checklist)
+                        Write-Host ""
+                        foreach ($h in @(Get-KnownHeadsets)) { Write-Host ("  {0,3}  {1}" -f $h.ID, $h.Name) }
+                        $idsRaw = (Read-Host $msg.Kiosk.PushWallIdsPrompt).Trim()
+                        $wallIds = @($idsRaw -split '[,\s]+' | Where-Object { $_ -match '^\d+$' } | ForEach-Object { [int]$_ })
+                        $url = Get-KioskWallUrl -HeadsetId $wallIds
+                    }
                     if (-not $url) {
                         Write-Host $msg.Kiosk.PushCancelled -ForegroundColor DarkGray
                         Start-Sleep -Seconds 1

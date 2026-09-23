@@ -604,6 +604,29 @@
       return rows.map(function(r) { return r.ID + ':' + r.Name; }).join('|');
     }
 
+    // ?filterid=3,1 - show only these headset IDs, in this order (custom wall for one kiosk).
+    // Non-numeric tokens and duplicates are dropped. Empty array = no filter (whole wall).
+    function parseFilterIds(raw) {
+      var seen = {}, out = [];
+      (raw || '').split(',').forEach(function(tok) {
+        tok = tok.trim();
+        if (/^\d+$/.test(tok) && !seen[tok]) { seen[tok] = true; out.push(tok); }
+      });
+      return out;
+    }
+    var filterIds = parseFilterIds(new URLSearchParams(window.location.search).get('filterid'));
+
+    // Rows to build cells for: the listed IDs in list order, or every row when no filter is set
+    // or none of its IDs exists (a stale link must still show something).
+    function applyIdFilter(rows) {
+      if (!filterIds.length) return rows;
+      var byId = {};
+      rows.forEach(function(r) { byId[String(r['ID'] || '').trim()] = r; });
+      var picked = [];
+      filterIds.forEach(function(id) { if (byId[id]) picked.push(byId[id]); });
+      return picked.length ? picked : rows;
+    }
+
     function applyPresetFilter(f) {
       Object.keys(headsetVisible).forEach(function(dn) {
         var stat = headsetStatus[dn] || { ping: false, scrcpy: false };
@@ -945,9 +968,10 @@
           updateAutoRestartButtons();
           if (!initialFilterApplied) {
             initialFilterApplied = true;
-            if (document.body.classList.contains('hidetopbar')) {
-              // Wall view (hidetopbar): always live-streams-only, regardless of what was
-              // streaming at page-load time.
+            if (document.body.classList.contains('hidetopbar') || filterIds.length) {
+              // Wall view (hidetopbar) or custom ?filterid= wall: always live-streams-only,
+              // regardless of what was streaming at page-load time. Offline listed headsets
+              // are hidden; the remaining cells keep the ?filterid= order (DOM order).
               currentPresetFilter = 'scrcpy';
               applyPresetFilter('scrcpy');
               TopBar.setActiveFilter('scrcpy');
@@ -1508,7 +1532,9 @@
             if (callback) callback();
             return;
           }
-          rows.forEach(function(row) {
+          // lastHeadsetsSignature above stays on the UNFILTERED rows (checkHeadsetListChanged
+          // compares against the unfiltered API list); only the cells built are filtered/ordered.
+          applyIdFilter(rows).forEach(function(row) {
             var name = (row['Name'] || '').trim();
             var id   = String(row['ID'] || '').trim();
             if (!name) return;

@@ -456,6 +456,34 @@ function Get-ServerLanUrl {
     return ("http://{0}:{1}" -f $chosen.IPAddress, $Port)
 }
 
+function Get-KioskWallUrl {
+    <#
+    .SYNOPSIS
+    Builds the video-wall URL to push to a kiosk screen: the wall page in kiosk mode
+    (?hidetopbar=1), optionally restricted to an ORDERED list of headset IDs (?filterid=3,1 -
+    video_monitor.html shows only those headsets, in that order, hiding the offline ones).
+    Console counterpart of the ticked/reordered headset list on kiosk_screens.html.
+    Without -HeadsetId the URL is the whole live wall. Falls back to localhost when no LAN
+    address is found, so the caller's Resolve-LocalhostReplacement guard still applies.
+    .EXAMPLE
+    Get-KioskWallUrl -HeadsetId 3,1            # -> http://192.168.1.37:8080/?hidetopbar=1&filterid=3,1
+    Get-KioskWallUrl -NoOverlay                # -> http://192.168.1.37:8080/?hidetopbar=1&nooverlay=1
+    #>
+    param(
+        [int[]]$HeadsetId = @(),
+        [switch]$NoOverlay
+    )
+
+    $base = Get-ServerLanUrl
+    if (-not $base) { $base = "http://localhost:{0}" -f $global:WebServer_port }
+
+    $ids = @($HeadsetId | Select-Object -Unique)
+    $url = "$base/?hidetopbar=1"
+    if ($ids.Count -gt 0) { $url += "&filterid=" + ($ids -join ',') }
+    if ($NoOverlay) { $url += "&nooverlay=1" }
+    return $url
+}
+
 
 # ---------------------------------------------------------------------------
 # RETIRED PATH HELPERS

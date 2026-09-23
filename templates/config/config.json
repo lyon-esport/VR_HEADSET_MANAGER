@@ -58,6 +58,8 @@
                    "folder":  "scrcpy\\scrcpy-win64-v4.1",
                    "recordFolder":  "C:\\DATA\\MEDIA\\VR_Records",
                    "recordMinFreeSpaceGB":  5,
+                   "defaultFps":  30,
+                   "defaultBitrateMbps":  8,
                    "parameters":  {
                                       "Quest 3":  {
                                                       "views":  {
@@ -79,7 +81,8 @@
                                                                                    "right_eye":  {
                                                                                                      "crop":  "1580:1580:2300:250",
                                                                                                      "angle":  -21
-                                                                                                 }
+                                                                                                 },
+                                                                                   "default":  true
                                                                                },
                                                                     "portrait":  {
                                                                                      "left_eye":  {
@@ -128,7 +131,8 @@
                                                                                    "right_eye":  {
                                                                                                      "crop":  "1475:1475:2028:190",
                                                                                                      "angle":  0
-                                                                                                 }
+                                                                                                 },
+                                                                                   "default":  true
                                                                                },
                                                                     "portrait":  {
                                                                                      "left_eye":  {
@@ -187,7 +191,8 @@
                                                                                         "right_eye":  {
                                                                                                           "crop":  "1680:1680:2400:240",
                                                                                                           "angle":  0
-                                                                                                      }
+                                                                                                      },
+                                                                                        "default":  true
                                                                                     },
                                                                          "portrait":  {
                                                                                           "left_eye":  {
