@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">VRHM ADB WiFi</string>
+
+    <string name="title">ADB over Wi-Fi</string>
+    <string name="label_port">ADB TCP port</string>
+    <string name="btn_enable">Enable</string>
+    <string name="btn_disable">Disable</string>
+    <string name="label_options">Options</string>
+    <string name="cb_enable_at_launch">Enable at application launch</string>
+    <string name="cb_start_on_boot">Auto start on headset startup</string>
+    <string name="cb_auto_hide">Auto hide the window once enabled</string>
+    <string name="label_setup">Setup</string>
+    <string name="btn_overlay">Allow opening the window at startup</string>
+    <string name="label_log">Log</string>
+
+    <string name="status_working">Working…</string>
+    <string name="status_enabled">ADB over Wi-Fi: ENABLED (port %1$d)</string>
+    <string name="status_disabled">ADB over Wi-Fi: DISABLED (port %1$d)</string>
+    <string name="connect_cmd">From your computer: adb connect %1$s:%2$d</string>
+    <string name="headset_ip">Headset IP: %1$s</string>
+    <string name="no_wifi">The headset is not connected to Wi-Fi.</string>
+    <string name="error_port">Port must be between %1$d and %2$d</string>
+
+    <string name="setup_perm_ok">✔ WRITE_SECURE_SETTINGS granted.</string>
+    <string name="setup_perm_missing">✘ WRITE_SECURE_SETTINGS missing (needed to enable ADB without a computer). Grant it once from a computer:\nadb shell pm grant %1$s android.permission.WRITE_SECURE_SETTINGS</string>
+    <string name="setup_client_ok">✔ Built-in adb client authorized by the headset.</string>
+    <string name="setup_client_missing">✘ Built-in adb client not authorized yet (one-time). Plug the headset into a computer and run:\nadb tcpip 5555\nthen press Enable here and accept the prompt in the headset with \"Always allow\".</string>
+    <string name="setup_overlay_missing">ⓘ To also open this window at startup (ADB is enabled in the background either way), allow \"Display over other apps\", or from a computer:\nadb shell appops set %1$s SYSTEM_ALERT_WINDOW allow</string>
+    <string name="overlay_settings_unavailable">Settings screen not available on this headset - use the adb appops command shown above.</string>
+
+    <string name="log_enabling">Enabling ADB over Wi-Fi on port %1$d…</string>
+    <string name="log_disabling">Disabling ADB over Wi-Fi…</string>
+
+    <string name="notif_channel">ADB over Wi-Fi</string>
+    <string name="notif_enabling">Enabling ADB over Wi-Fi…</string>
+    <string name="notif_enabled">ADB over Wi-Fi enabled: adb connect %1$s:%2$d</string>
+</resources>

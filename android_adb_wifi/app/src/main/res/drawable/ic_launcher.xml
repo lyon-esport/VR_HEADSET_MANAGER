@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <path
+        android:fillColor="#1E88E5"
+        android:pathData="M24,0a24,24 0,1 1,0 48a24,24 0,1 1,0 -48z"/>
+    <!-- Same Wi-Fi arcs as ic_notification, scaled into the circle -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M13,20l2,2c4.97,-4.97 13.03,-4.97 18,0l2,-2C28.93,13.93 19.08,13.93 13,20zM21,28l3,3 3,-3c-1.65,-1.66 -4.34,-1.66 -6,0zM17,24l2,2c2.76,-2.76 7.24,-2.76 10,0l2,-2C27.14,20.14 20.87,20.14 17,24z"/>
+</vector>

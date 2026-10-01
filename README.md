@@ -56,6 +56,7 @@ Full details: [Installation](docs/installation.md) → [Getting started](docs/ge
 | [Video Quality Automation](docs/vqa.md) | Automatic performance mitigation explained |
 | [Timer API](docs/docs_timer_api.md) | REST API for per-headset session timers |
 | [Enable ADB over WiFi](docs/docs_HowToEnableADBWifi.md) | How to enable wireless ADB on a Meta Quest |
+| [VRHM ADB WiFi app](docs/android-adb-wifi.md) | Headset app that turns ADB over Wi-Fi back on after reboots, without a computer |
 | [Troubleshooting](docs/troubleshooting.md) | Common problems and how to fix them |
 
 ## Supported headsets

@@ -13,3 +13,6 @@
   - Follow the process to managed automatically the VR headset for screen copy.
 
 The app [oculus-wireless-adb](https://github.com/thedroidgeek/oculus-wireless-adb) is available in **_sources\ADB Wireless activator**
+
+### OPTION 2 : Enable from inside the headset with the VRHM ADB WiFi app
+  - After a one-time setup with a computer, the [VRHM ADB WiFi app](android-adb-wifi.md) turns ADB over Wi-Fi (port 5555 by default) back on by itself — at app launch or at headset startup.
