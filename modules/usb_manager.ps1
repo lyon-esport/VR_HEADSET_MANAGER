@@ -79,6 +79,10 @@ function Get-AdbUsbPresence {
         Unauthorized   = $false
         WifiTransports = @()
         OfflineWifi    = @()
+        # EVERY cabled transport in state 'device', not just the first. Onboarding
+        # stays single-device (Serial above); this list only feeds the published
+        # 'usb_devices' set that the USB-first resolver reads (ADR-0024, proposed).
+        UsbDevices     = @()
     }
     if (-not $adb -or -not (Test-Path -LiteralPath $adb)) { return $out }
 
@@ -86,6 +90,7 @@ function Get-AdbUsbPresence {
 
     $live    = @()
     $offline = @()
+    $usbLive = @()
     foreach ($line in $lines) {
         if ($line -notmatch "`t") { continue }
         $parts = $line -split "`t"
@@ -97,6 +102,8 @@ function Get-AdbUsbPresence {
             continue
         }
 
+        if ($state -eq 'device') { $usbLive += $id }
+
         # First USB entry wins. A single cabled headset is the supported shape.
         if (-not $out.Serial) {
             $out.Serial = $id
@@ -107,6 +114,7 @@ function Get-AdbUsbPresence {
 
     $out.WifiTransports = $live
     $out.OfflineWifi    = $offline
+    $out.UsbDevices     = $usbLive
     return $out
 }
 
@@ -413,6 +421,10 @@ function Update-UsbWatchState {
     if (Test-UsbBusy) { return 'busy' }
 
     $presence = Get-AdbUsbPresence -adb $adb
+
+    # Every cabled transport, for the USB-first resolver. Taken from the listing we
+    # already paid for - publishing it costs no extra adb call.
+    if ($SharedState) { $SharedState['_usb_devices'] = @($presence.UsbDevices) }
 
     # ---- Nothing cabled ----
     if (-not $presence.Serial) {

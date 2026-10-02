@@ -293,6 +293,8 @@
       transition: opacity .12s, border-color .12s;
     }
     .hs-adv-btn:hover { opacity: 1; border-color: var(--accent, #22c55e); }
+    a.hs-adv-btn { text-decoration: none; }
+    .hs-adv-actions { display: inline-flex; gap: 6px; }
     /* Advanced settings modal */
     .advsettings-modal {
       position: fixed; inset: 0; background: rgba(0,0,0,0.72);
@@ -1475,7 +1477,10 @@
               '</svg>' +
               'Advanced Settings' +
             '</span>' +
-            '<button class="hs-adv-btn" data-adv-settings="' + dn + '" data-adv-brand="' + esc(cfg.Brand || '') + '">Configure</button>' +
+            '<span class="hs-adv-actions">' +
+              '<a class="hs-adv-btn" href="headset_diag.html?id=' + encodeURIComponent(cfg.ID) + '" title="Diagnostics: firmware, health, wireless, USB cable, operator actions">DIAG</a>' +
+              '<button class="hs-adv-btn" data-adv-settings="' + dn + '" data-adv-brand="' + esc(cfg.Brand || '') + '">Configure</button>' +
+            '</span>' +
           '</div>' +
           '<div class="card-power-row">' +
             '<span class="power-label">' +
@@ -2037,6 +2042,14 @@
 
         var adbDot = document.querySelector('[data-dot-adb="' + dn + '"] .dot');
         if (adbDot) { adbDot.className = 'dot ' + (s.adb ? 'dot-green' : 'dot-grey'); }
+        // Transport badge (ADR-0024, proposed): which link ADB and scrcpy use right now.
+        var adbWrap  = document.querySelector('[data-dot-adb="' + dn + '"]');
+        var adbLabel = adbWrap ? adbWrap.querySelector('.status-dot-label') : null;
+        if (adbLabel) {
+          var tr = (s.adb && s.transport) ? s.transport : '';
+          adbLabel.textContent = tr ? 'ADB ' + tr : 'ADB';
+          adbWrap.title = tr ? 'ADB over ' + tr : 'ADB';
+        }
 
         var scrcpyDot = document.querySelector('[data-dot-scrcpy="' + dn + '"] .dot');
         if (scrcpyDot) { scrcpyDot.className = 'dot ' + (s.scrcpy ? 'dot-blue' : 'dot-grey'); }
@@ -2134,7 +2147,8 @@
               scrcpy:         !!item.scrcpy,
               model:          item.model || '',
               runningApp:     item.running_app     || '',
-              runningAppIcon: item.running_app_icon || ''
+              runningAppIcon: item.running_app_icon || '',
+              transport:      item.adb_transport   || ''
             };
           });
           if (cardsBuilt) updateStatusDots();

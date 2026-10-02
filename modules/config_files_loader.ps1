@@ -217,6 +217,20 @@ function Get-Config {
     $global:adbPath = Join-Path -Path $global:adbFolder -ChildPath "adb.exe"
     $global:adbPort_default = $configContent.ADB.adbPort_default
 
+    # USB-first transport (ADR-0024, proposed). Every key defaults when absent so a
+    # config.json written before these existed keeps loading untouched.
+    $global:ADB_PreferUsb = if ($null -ne $configContent.ADB.prefer_usb) { ConvertTo-BoolField $configContent.ADB.prefer_usb } else { $true }
+    $switchMode = if ($configContent.scrcpy.usb_switch_mode) { ([string]$configContent.scrcpy.usb_switch_mode).Trim().ToLowerInvariant() } else { 'stable' }
+    if (@('stable','immediate','next_start') -notcontains $switchMode) { $switchMode = 'stable' }
+    $global:Scrcpy_UsbSwitchMode      = $switchMode
+    $global:Scrcpy_UsbSwitchStableSec = if ($null -ne $configContent.scrcpy.usb_switch_stable_sec) { [Math]::Max(0, [int]$configContent.scrcpy.usb_switch_stable_sec) } else { 10 }
+
+    # Headset DIAG page (website\headset_diag.html).
+    $diagCfg = $configContent.Diag
+    $global:Diag_AutoRefreshSec   = if ($diagCfg -and $null -ne $diagCfg.auto_refresh_sec)  { [Math]::Max(5, [int]$diagCfg.auto_refresh_sec) } else { 30 }
+    $global:Diag_CableTestPasses  = if ($diagCfg -and $null -ne $diagCfg.cable_test_passes) { [Math]::Min(10, [Math]::Max(1, [int]$diagCfg.cable_test_passes)) } else { 3 }
+    $global:Diag_CommandPresets   = if ($diagCfg -and $diagCfg.command_presets) { @($diagCfg.command_presets) } else { @() }
+
 
     $global:Monitoring_headsetTemplate = Join-Path -Path $global:ScriptPath -ChildPath ("\website\template\"+$configContent.Monitoring.HeadsetTemplate)
     $videoTemplateName = if ($configContent.Monitoring.VideoTemplate) { $configContent.Monitoring.VideoTemplate } else { "headset_scrcpy.pshtml" }

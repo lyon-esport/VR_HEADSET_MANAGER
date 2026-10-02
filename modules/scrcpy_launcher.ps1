@@ -206,11 +206,13 @@ function ConvertTo-ScrcpyArguments {
 # Returns the running scrcpy process whose window title matches $displayName,
 # or $null if none found. $displayName must be in window-title form (spaces -> underscores).
 # Only considers processes launched from this app's scrcpy folder to avoid killing foreign scrcpy instances.
+# -serialNumber also matches a capture started over USB ("-s <serial>", ADR-0024 proposed).
 function Get-ScrcpyProcess {
     param(
         [Parameter(Mandatory=$true)]
         [string]$displayName,
-        [string]$headsetIP = ''
+        [string]$headsetIP = '',
+        [string]$serialNumber = ''
     )
     $ownedProcs = Get-Process -Name "scrcpy" -ErrorAction SilentlyContinue |
         Where-Object { $_.Path -like "$($global:scrcpyFolder)\scrcpy.exe" }
@@ -227,6 +229,7 @@ function Get-ScrcpyProcess {
         if ($cimProc) { $cimProc.Dispose() }
         if (-not $cmdLine) { return $false }
         if ($headsetIP -and $cmdLine -match [regex]::Escape($headsetIP)) { return $true }
+        if ($serialNumber -and $cmdLine -match ('-s\s+"?' + [regex]::Escape($serialNumber) + '"?(\s|$)')) { return $true }
         if ($cmdLine -match [regex]::Escape($displayName)) { return $true }
         return $false
     } | Select-Object -First 1
@@ -569,7 +572,16 @@ function start-screenCopy {
 
         [int]$adbPort = $global:adbPort_default,
 
-        [string]$scrcpyProfile = "R-N-45-20"
+        [string]$scrcpyProfile = "R-N-45-20",
+
+        # USB-first capture (ADR-0024, proposed). The serial is looked up in the
+        # registry by address when the caller does not pass it. -Transport WiFi
+        # forces the pre-ADR behaviour (scrcpy.usb_switch_mode = next_start keeps a
+        # running WiFi capture untouched; it does not use this).
+        [string]$serialNumber = '',
+
+        [ValidateSet('Auto','USB','WiFi')]
+        [string]$Transport = 'Auto'
 
     )
 
@@ -586,31 +598,57 @@ function start-screenCopy {
     $adb_device = "$headsetIP`:$adbPort"
     $scrcpy = $global:scrcpyFilePath
 
-    if (-not(test-port -hostname $headsetIP -port $adbPort).open){ # Check if the ADB port is open
-        Write-Log -Message ($msg.AdbPortNotResponding -f $adbPort) -Level WARNING
-        return
+    # USB when this headset is cabled and USB is preferred; the 5555 pre-check and
+    # "adb connect" below are WiFi-only and are skipped for a USB capture.
+    if (-not $serialNumber -and $Transport -ne 'WiFi') {
+        try {
+            $row = @(Get-KnownHeadsets) | Where-Object { $_.IPAddress -eq $headsetIP } | Select-Object -First 1
+            if ($row -and $row.SerialNumber) { $serialNumber = ([string]$row.SerialNumber).Trim() }
+        } catch { }
+    }
+    $usbSerial = $null
+    if ($serialNumber -and $Transport -ne 'WiFi' -and ($Transport -eq 'USB' -or (Get-AdbPreferUsb))) {
+        $busy = $false
+        if (Get-Command Test-UsbBusy -ErrorAction SilentlyContinue) { $busy = [bool](Test-UsbBusy) }
+        if (-not $busy -and (Test-HeadsetOnUsb -SerialNumber $serialNumber)) { $usbSerial = $serialNumber }
     }
 
-    # ADB port open, initiating connection to the headset
-    try {
-        Write-Log -Message ($msg.ScrcpyCheckingAdb -f $adb_device) -Level "INFO"
-
-        $connectedDevices = & $adb devices | Select-String $adb_device -AllMatches
-        if ($connectedDevices.Matches.Count -lt 1) {
-            Write-Log -Message ($msg.NoActiveAdbConnection -f $adb_device) -Level "INFO"
-            & $adb connect $adb_device | Out-Null
-            Start-Sleep -Seconds 2
+    $captureDevice = $null
+    if ($usbSerial) {
+        $adb_device    = $usbSerial
+        $captureDevice = [PSCustomObject]@{ DeviceId = $usbSerial; ConnectionType = 'USB'; IP = $null; Port = $null }
+        Write-Log -Message ((Get-MessageString -Key 'Diag.Transport.ScrcpyUsb' -Fallback 'scrcpy for {0} starts over USB ({1})') -f $displayName, $usbSerial) -Level INFO
+    } else {
+        if ($Transport -eq 'USB') {
+            Write-Log -Message ((Get-MessageString -Key 'Diag.Transport.UsbUnavailable' -Fallback 'USB transport requested for {0} but the headset is not cabled') -f $displayName) -Level WARNING
+            return
+        }
+        if (-not(test-port -hostname $headsetIP -port $adbPort).open){ # Check if the ADB port is open
+            Write-Log -Message ($msg.AdbPortNotResponding -f $adbPort) -Level WARNING
+            return
         }
 
-    } catch {
-        Write-Log -Message ($msg.ScrcpyExecError -f $_.Exception.Message) -Level "ERROR"
-		return
+        # ADB port open, initiating connection to the headset
+        try {
+            Write-Log -Message ($msg.ScrcpyCheckingAdb -f $adb_device) -Level "INFO"
+
+            $connectedDevices = & $adb devices | Select-String $adb_device -AllMatches
+            if ($connectedDevices.Matches.Count -lt 1) {
+                Write-Log -Message ($msg.NoActiveAdbConnection -f $adb_device) -Level "INFO"
+                & $adb connect $adb_device | Out-Null
+                Start-Sleep -Seconds 2
+            }
+
+        } catch {
+            Write-Log -Message ($msg.ScrcpyExecError -f $_.Exception.Message) -Level "ERROR"
+            return
+        }
+        $captureDevice = Get-AdbWifiDevice -headsetIP $headsetIP
     }
 
 
 	$options = ""
-    $wifiDevice     = Get-AdbWifiDevice -headsetIP $headsetIP
-    $headsetModel   = if ($wifiDevice) { Get-HeadsetModel -Device $wifiDevice } else { $null }
+    $headsetModel   = if ($captureDevice) { Get-HeadsetModel -Device $captureDevice } else { $null }
     Write-Log -Message ($msg.ScrcpyModelDetected -f $headsetModel) -Level "INFO"
     $modelTemplate  = $global:scrcpyParameters.$headsetModel
     $sourceCodec    = if ($modelTemplate -and $modelTemplate.video_codec) { $modelTemplate.video_codec } else { 'h264' }
@@ -766,7 +804,7 @@ function Watch-ScrcpyProcesses {
         $headsetInfos = Get-KnownHeadsetInfos $headset
         if (ConvertTo-BoolField $headsetInfos.ADBWifi) {
             Write-Log ($msg.ScrcpyCheckProcess -f $headset.Name, $headset.IPAddress) -Level DEBUG
-            $runningScrcpyProcess_forThisheadset = Get-ScrcpyProcess -displayName (Convert-Displayname $headset.Name) -headsetIP $headset.IPAddress
+            $runningScrcpyProcess_forThisheadset = Get-ScrcpyProcess -displayName (Convert-Displayname $headset.Name) -headsetIP $headset.IPAddress -serialNumber ([string]$headset.SerialNumber)
 
             Write-Log ($msg.ScrcpyProcessFound -f $runningScrcpyProcess_forThisheadset) -Level DEBUG
             if (-not $runningScrcpyProcess_forThisheadset) {
@@ -780,7 +818,7 @@ function Watch-ScrcpyProcesses {
                     }
                 } catch {}
                 $headsetProfile = if ($headset.ScrcpyProfile) { $headset.ScrcpyProfile } else { "R-N-45-20" }
-                start-screenCopy -displayName $headset.Name -headsetIP $headset.IPAddress -recording (ConvertTo-BoolField $headset.Record) -scrcpyProfile $headsetProfile
+                start-screenCopy -displayName $headset.Name -headsetIP $headset.IPAddress -recording (ConvertTo-BoolField $headset.Record) -scrcpyProfile $headsetProfile -serialNumber ([string]$headset.SerialNumber)
             } else {
                 # scrcpy is running - check if parameters have changed
                 $shouldRestart = $false
@@ -839,6 +877,17 @@ function Watch-ScrcpyProcesses {
                     }
                 }
 
+                # Move a running WiFi capture to USB according to scrcpy.usb_switch_mode.
+                # The reverse needs no rule: when the cable goes, scrcpy dies with its
+                # transport and the branch above restarts it on WiFi on the next pass.
+                if (-not $shouldRestart) {
+                    $switch = Get-ScrcpyTransportSwitch -Headset $headset -CommandLine $cmdLine
+                    if ($switch.Switch) {
+                        Write-Log ((Get-MessageString -Key 'Diag.Transport.ScrcpySwitch' -Fallback 'scrcpy for {0}: moving capture to USB ({1})') -f $headset.Name, $switch.Reason) -Level INFO
+                        $shouldRestart = $true
+                    }
+                }
+
                 if ($shouldRestart) {
                     Write-Log ($msg.ScrcpyRestarting -f $headset.Name) -Level INFO
                     # Send WM_CLOSE so scrcpy can finalise any recording file before exiting
@@ -851,10 +900,66 @@ function Watch-ScrcpyProcesses {
                         Stop-Process -Id $runningScrcpyProcess_forThisheadset.Id -Force -ErrorAction SilentlyContinue
                         Start-Sleep -Seconds 1
                     }
-                    start-screenCopy -displayName $headset.Name -headsetIP $headset.IPAddress -recording $expectedRecording -scrcpyProfile $headsetProfile
+                    # Always through Stop-HeadsetPipeline (ADR-0003): the bridge job and
+                    # the ffmpeg push are tied to the scrcpy that just exited.
+                    Stop-HeadsetPipeline -SafeName (Convert-Displayname $headset.Name)
+                    start-screenCopy -displayName $headset.Name -headsetIP $headset.IPAddress -recording $expectedRecording -scrcpyProfile $headsetProfile -serialNumber ([string]$headset.SerialNumber)
                 }
             }
         }
+    }
+}
+
+
+function Get-ScrcpyTransportSwitch {
+    <#
+    .SYNOPSIS
+    Decides whether a RUNNING scrcpy capture should be restarted on USB.
+
+    .DESCRIPTION
+    Reads the transport off the running command line ("-s <serial>" is USB,
+    "-s <ip>:<port>" is WiFi) and applies scrcpy.usb_switch_mode:
+      stable      the serial has been in the published USB set for at least
+                  scrcpy.usb_switch_stable_sec, and the headset is not recording
+                  (a restart would split the recording file)
+      immediate   as soon as the serial is published
+      next_start  never - USB is picked up the next time the capture starts
+    Returns @{ Switch = [bool]; Reason = [string] }. Never throws.
+    .EXAMPLE
+    (Get-ScrcpyTransportSwitch -Headset $h -CommandLine $cmd).Switch
+    #>
+    param(
+        [Parameter(Mandatory=$true)]$Headset,
+        [string]$CommandLine
+    )
+    $no = @{ Switch = $false; Reason = '' }
+    try {
+        if (-not $CommandLine) { return $no }
+        if (-not (Get-AdbPreferUsb)) { return $no }
+        $mode = if ($global:Scrcpy_UsbSwitchMode) { [string]$global:Scrcpy_UsbSwitchMode } else { 'stable' }
+        if ($mode -eq 'next_start') { return $no }
+
+        $serial = ([string]$Headset.SerialNumber).Trim()
+        if (-not $serial) { return $no }
+        if ($CommandLine -notmatch '-s\s+"?(?<id>[^\s"]+)') { return $no }
+        if ($Matches['id'] -notmatch ':') { return $no }              # already on USB
+
+        if (Get-Command Test-UsbBusy -ErrorAction SilentlyContinue) { if (Test-UsbBusy) { return $no } }
+        if (-not (Test-HeadsetOnUsb -SerialNumber $serial)) { return $no }
+
+        if ($mode -eq 'immediate') { return @{ Switch = $true; Reason = 'immediate' } }
+
+        # stable
+        if (ConvertTo-BoolField $Headset.Record) { return $no }
+        $entry = @(Get-PublishedUsbDevices) | Where-Object { $_.Serial -eq $serial } | Select-Object -First 1
+        $since = [datetime]::MinValue
+        if (-not $entry -or -not $entry.Since -or -not [datetime]::TryParse([string]$entry.Since, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AdjustToUniversal, [ref]$since)) { return $no }
+        $need  = if ($null -ne $global:Scrcpy_UsbSwitchStableSec) { [int]$global:Scrcpy_UsbSwitchStableSec } else { 10 }
+        $age   = ([datetime]::UtcNow - $since).TotalSeconds
+        if ($age -ge $need) { return @{ Switch = $true; Reason = ("stable for {0}s" -f [int]$age) } }
+        return $no
+    } catch {
+        return $no
     }
 }
 

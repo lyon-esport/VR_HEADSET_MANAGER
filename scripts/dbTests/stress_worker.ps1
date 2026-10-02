@@ -87,6 +87,7 @@ try {
                             BatteryControllerLeft = '-'; BatteryControllerRight = '-'
                             PowerState = '-'; TimeRemainingMin = '-'
                             SCRCPY = '-'; RunningApp = '-'; RunningAppIcon = ''
+                            CpuTemp = '-'; GpuTemp = '-'; SkinTemp = '-'; AdbTransport = '-'
                         }
                     }
                     Invoke-DbBatch -Name 'status.upsert' -Rows $rows | Out-Null

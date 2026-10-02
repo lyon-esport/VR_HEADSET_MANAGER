@@ -74,6 +74,7 @@ All thresholds and switches of the automatic quality mitigation — explained in
 |---|---|---|
 | `folder` | `scrcpy\scrcpy-win64-v...` | scrcpy/ADB binaries folder inside `sources\` (the scrcpy release bundles `adb.exe`, so this always holds the same value as `scrcpy.folder`) |
 | `adbPort_default` | `5555` | Default ADB WiFi port |
+| `prefer_usb` | `true` | When a known headset is plugged in by USB, every ADB command and the scrcpy capture use the cable; if it is pulled, commands fall back to WiFi ADB on their own |
 
 Each scrcpy version lives in its own folder under `sources\scrcpy\`, so several can coexist; this key selects the active one. Switch versions from the web UI (Configuration -> Advanced) rather than editing it by hand.
 
@@ -84,6 +85,8 @@ Each scrcpy version lives in its own folder under `sources\scrcpy\`, so several 
 | `folder` | `scrcpy\scrcpy-win64-v...` | Same value as `ADB.folder` above |
 | `recordFolder` | `C:\DATA\MEDIA\VR_Records` | Where recordings are written |
 | `recordMinFreeSpaceGB` | `5` | Below this free space, recording is disabled automatically |
+| `usb_switch_mode` | `stable` | What a running WiFi capture does when its headset is plugged in by USB: `stable` (restart on USB once the cable has been connected for `usb_switch_stable_sec`, never while recording), `immediate`, or `next_start` (never interrupt). A pulled cable always restarts the capture on WiFi |
+| `usb_switch_stable_sec` | `10` | Cable-connected delay used by `stable` |
 | `parameters.<Model>` | — | Per-model capture profiles (see below) |
 
 Each supported model (`Quest 3`, `Quest 2`, `PICO 4 Ultra`) defines:
@@ -133,6 +136,16 @@ Browser-side behavior of the video wall: pause hidden streams after `pauseWhenHi
 ### `MdnsResponder`
 
 Optional mDNS responder so the web UI is reachable at `http://vrhm.local` instead of an IP. Disabled by default (mDNS resolution works from computers, but most mobile devices ignore it).
+
+### `Diag`
+
+Settings of the per-headset [DIAG page](web-interface.md#headset-diag).
+
+| Key | Default | Description |
+|---|---|---|
+| `auto_refresh_sec` | `30` | Auto-refresh interval of the DIAG page (minimum 5) |
+| `cable_test_passes` | `3` | Number of 32 MB push/pull passes of the USB cable test (1-10) |
+| `command_presets` | 5 presets | `[{ "name", "command" }]` shown in the ADB shell panel. Shell commands only, without the `adb shell` prefix; double quotes are not supported |
 
 ### `Battery`
 

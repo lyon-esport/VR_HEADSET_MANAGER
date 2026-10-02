@@ -87,6 +87,10 @@ function Set-TestStatus {
         SCRCPY                 = $Scrcpy
         RunningApp             = $RunningApp
         RunningAppIcon         = ''
+        CpuTemp                = '-'
+        GpuTemp                = '-'
+        SkinTemp               = '-'
+        AdbTransport           = '-'
     } | Out-Null
 }
 
@@ -323,6 +327,7 @@ Invoke-RegressionTest -Name 'a battery burst does not abort the whole status bat
                 BatteryControllerLeft = '-'; BatteryControllerRight = '-'
                 PowerState = '-'; TimeRemainingMin = '-'
                 SCRCPY = '-'; RunningApp = '-'; RunningAppIcon = ''
+                CpuTemp = '-'; GpuTemp = '-'; SkinTemp = '-'; AdbTransport = '-'
             }
         }
         Invoke-DbBatch -Name 'status.upsert' -Rows $rows | Out-Null
@@ -464,6 +469,7 @@ Invoke-RegressionTest -Name 'an offline headset writes a valid row through the b
             BatteryControllerLeft = '-'; BatteryControllerRight = '-'
             PowerState = '-'; TimeRemainingMin = '-'
             SCRCPY = '-'; RunningApp = '-'; RunningAppIcon = ''
+            CpuTemp = '-'; GpuTemp = '-'; SkinTemp = '-'; AdbTransport = '-'
         }
         Invoke-DbBatch -Name 'status.upsert' -Rows @($row) | Out-Null
 
@@ -506,6 +512,7 @@ Invoke-RegressionTest -Name 'a failed statement does not poison the query for th
             BatteryControllerLeft = '-'; BatteryControllerRight = '-'
             PowerState = '-'; TimeRemainingMin = '-'
             SCRCPY = '-'; RunningApp = '-'; RunningAppIcon = ''
+            CpuTemp = '-'; GpuTemp = '-'; SkinTemp = '-'; AdbTransport = '-'
         }
         $bad = $good.Clone(); $bad.ID = $bogus
         Assert-Throws -Script { Invoke-DbBatch -Name 'status.upsert' -Rows @($good, $bad) } -Match 'constraint' -Label 'a batch containing an orphan row'

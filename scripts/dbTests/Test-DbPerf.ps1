@@ -377,6 +377,7 @@ Invoke-RegressionTest -Name 'the monitor fast-path write fits inside its tick' -
                 BatteryControllerLeft = '-'; BatteryControllerRight = '-'
                 PowerState = '-'; TimeRemainingMin = '-'
                 SCRCPY = '-'; RunningApp = '-'; RunningAppIcon = ''
+                CpuTemp = '-'; GpuTemp = '-'; SkinTemp = '-'; AdbTransport = '-'
             }
         }
         $batch = $rows
