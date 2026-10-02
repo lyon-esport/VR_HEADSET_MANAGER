@@ -739,4 +739,26 @@
         PowerSent           = "Action '{0}' envoyee au kiosk '{1}'."
         PowerFailed         = "Echec de l'action '{0}' pour le kiosk '{1}' : {2}"
     }
-}
+
+    # ==========================================
+    # Page DIAG casque + transport ADB USB en priorite
+    # NOTE: groupe imbrique volontairement - la table racine est a sa limite de
+    # 500 paires. Utiliser Get-MessageString -Key 'Diag.X' / 'Diag.Transport.X'.
+    # ==========================================
+    Diag = @{
+        CableTestDone  = "Test du cable USB sur {0} : envoi {1} Mo/s, reception {2} Mo/s, {3} erreur(s)"
+        CommandBlocked = "DIAG : commande refusee sur {0} : {1}"
+        CommandRun     = "DIAG : commande shell sur {0} ({1}) : {2}"
+        ActionRun      = "DIAG : action {0} sur {1}"
+        TlsConnect     = "DIAG (experimental) : adb connect {0} -> {1}"
+        Transport = @{
+            UsbChosen      = "Transport USB choisi pour {0} (serie {1})"
+            FallbackToWifi = "Transport USB perdu pour {0} : nouvel essai en WiFi ({1})"
+            FallbackFailed = "Transport USB perdu pour {0} et ADB WiFi injoignable a {1}"
+            UsbSetChanged  = "Transports USB actuels : {0}"
+            ScrcpyUsb      = "scrcpy pour {0} demarre en USB ({1})"
+            UsbUnavailable = "Transport USB demande pour {0} mais le casque n'est pas branche"
+            ScrcpySwitch   = "scrcpy pour {0} : bascule de la capture en USB ({1})"
+        }
+    }
+}

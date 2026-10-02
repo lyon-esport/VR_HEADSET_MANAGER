@@ -6,6 +6,7 @@
 -- of this table.
 SELECT ID, Ping, ADBWifi, Battery, Charging, ChargingWattage, Temp,
        BatteryControllerLeft, BatteryControllerRight, PowerState,
-       TimeRemainingMin, SCRCPY, RunningApp, RunningAppIcon
+       TimeRemainingMin, SCRCPY, RunningApp, RunningAppIcon,
+       CpuTemp, GpuTemp, SkinTemp, AdbTransport
 FROM v_headset_status
 WHERE ID = CAST(@headset_id AS TEXT);

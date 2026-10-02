@@ -739,4 +739,26 @@
         PowerSent           = "Power action '{0}' sent to kiosk '{1}'."
         PowerFailed         = "Power action '{0}' failed for kiosk '{1}': {2}"
     }
-}
+
+    # ==========================================
+    # Headset DIAG page + USB-first ADB transport
+    # NOTE: nested under one top-level key on purpose - the top-level table is at
+    # its 500-pair limit. Use Get-MessageString -Key 'Diag.X' / 'Diag.Transport.X'.
+    # ==========================================
+    Diag = @{
+        CableTestDone  = "USB cable test on {0}: push {1} MB/s, pull {2} MB/s, {3} error(s)"
+        CommandBlocked = "DIAG: command refused on {0}: {1}"
+        CommandRun     = "DIAG: shell command on {0} ({1}): {2}"
+        ActionRun      = "DIAG: action {0} on {1}"
+        TlsConnect     = "DIAG (experimental): adb connect {0} -> {1}"
+        Transport = @{
+            UsbChosen      = "USB transport chosen for {0} (serial {1})"
+            FallbackToWifi = "USB transport lost for {0}: retrying over WiFi ({1})"
+            FallbackFailed = "USB transport lost for {0} and WiFi ADB at {1} is not reachable"
+            UsbSetChanged  = "USB transports now: {0}"
+            ScrcpyUsb      = "scrcpy for {0} starts over USB ({1})"
+            UsbUnavailable = "USB transport requested for {0} but the headset is not cabled"
+            ScrcpySwitch   = "scrcpy for {0}: moving capture to USB ({1})"
+        }
+    }
+}

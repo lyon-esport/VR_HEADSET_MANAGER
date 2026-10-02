@@ -1169,6 +1169,105 @@ try {
             continue
         }
 
+        # ---- Headset DIAG page (website\headset_diag.html, modules\headset_diag.ps1) ----
+        # Web-only by decision (ADR-0023, proposed); the logic lives in the module.
+        # The request loop is single-threaded, so each call is ONE section and at
+        # most one adb shell spawn - the page loads its sections one after the other.
+
+        # API: GET /api/headset-diag?id=3&section=firmware|health|wireless|usb|fleet|tls|summary
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/headset-diag') {
+            try {
+                $idVal = 0
+                if (-not [int]::TryParse([string]$request.QueryString['id'], [ref]$idVal) -or $idVal -le 0) {
+                    Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = 'Missing or invalid id parameter' }
+                    continue
+                }
+                $section = ([string]$request.QueryString['section']).ToLowerInvariant()
+                if (@('firmware','health','wireless','usb','fleet','tls','summary') -notcontains $section) {
+                    Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = 'Unknown section' }
+                    continue
+                }
+                $data = Get-HeadsetDiagSection -Id $idVal -Section $section
+                Send-JsonResponse -Response $response -Depth 8 -Body @{
+                    ok      = $true
+                    id      = $idVal
+                    section = $section
+                    at      = [datetime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+                    data    = $data
+                }
+            } catch {
+                $code = if ($_.Exception.Message -eq 'Headset not found') { 404 } else { 500 }
+                Send-JsonResponse -Response $response -StatusCode $code -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: GET /api/headset-diag/presets  - the ADB panel presets (config Diag.command_presets)
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/headset-diag/presets') {
+            try {
+                Send-JsonResponse -Response $response -Body @{ ok = $true; presets = @(Get-HeadsetDiagPresets) }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/headset-diag/action  body: {"id":3,"action":"bluetooth","args":{"enable":false}}
+        # Allow-listed in Invoke-HeadsetDiagAction; an unknown action is a 400.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/headset-diag/action') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body   = $reader.ReadToEnd(); $reader.Close()
+                $json   = $body | ConvertFrom-Json
+                $idVal  = 0
+                if (-not $json -or -not [int]::TryParse([string]$json.id, [ref]$idVal) -or $idVal -le 0) {
+                    Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = 'Missing or invalid id' }
+                    continue
+                }
+                $action = [string]$json.action
+                if ($action -notmatch '^[a-z_]{2,40}$') {
+                    Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = 'Invalid action' }
+                    continue
+                }
+                $result = Invoke-HeadsetDiagAction -Id $idVal -Action $action -Arguments $json.args
+                Send-JsonResponse -Response $response -Depth 8 -Body @{ ok = $true; action = $action; result = $result }
+            } catch {
+                $code = if ($_.Exception.Message -like 'Unknown DIAG action*' -or $_.Exception.Message -like 'Invalid*' -or $_.Exception.Message -like 'Unknown recovery*') { 400 } elseif ($_.Exception.Message -eq 'Headset not found') { 404 } else { 500 }
+                Send-JsonResponse -Response $response -StatusCode $code -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
+        # API: POST /api/headset-diag/command  body: {"id":3,"command":"getprop ro.product.model"}
+        # Shell only, blocked patterns refused (200 with blocked=true), every run logged.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/headset-diag/command') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+                $body   = $reader.ReadToEnd(); $reader.Close()
+                $json   = $body | ConvertFrom-Json
+                $idVal  = 0
+                if (-not $json -or -not [int]::TryParse([string]$json.id, [ref]$idVal) -or $idVal -le 0) {
+                    Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = 'Missing or invalid id' }
+                    continue
+                }
+                $ctx    = Resolve-DiagHeadset -Id $idVal
+                $result = Invoke-HeadsetCustomCommand -Headset $ctx.Headset -Device $ctx.Device -Command ([string]$json.command)
+                Send-JsonResponse -Response $response -Body @{ ok = $true; result = $result }
+            } catch {
+                $code = if ($_.Exception.Message -eq 'Headset not found') { 404 } else { 500 }
+                Send-JsonResponse -Response $response -StatusCode $code -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
         # API: GET /api/companion-info?name=Q3_BLUE
         # Calls GET http://<IP>:8765/info on the VRHM Companion app and returns the result.
         # Returns {"ok":false,"companion":false} when the companion app is not running.
@@ -1902,6 +2001,11 @@ try {
                             running_app_icon      = if ($info.RunningAppIcon) { $info.RunningAppIcon } else { '' }
                             model                 = if ($h.Model -and $h.Model -ne '-') { $h.Model } else { '' }
                             scrcpy_auto_restart   = [bool]($h.scrcpy_AutoRestart -eq 'True')
+                            # Migration 007: thermalservice temperatures + ADB transport badge.
+                            cpu_temp              = if ($info.CpuTemp  -and $info.CpuTemp  -ne '-') { $info.CpuTemp }  else { '-' }
+                            gpu_temp              = if ($info.GpuTemp  -and $info.GpuTemp  -ne '-') { $info.GpuTemp }  else { '-' }
+                            skin_temp             = if ($info.SkinTemp -and $info.SkinTemp -ne '-') { $info.SkinTemp } else { '-' }
+                            adb_transport         = if ($info.AdbTransport -and $info.AdbTransport -ne '-') { $info.AdbTransport } else { '' }
                         }
                     }
                 )
@@ -2438,7 +2542,7 @@ try {
                 }
                 $device = try { Get-BestAdbDevice -headset $headset } catch { $null }
                 if (-not $device) {
-                    $device = try { Get-AdbWifiDevice -headsetIP $headset.IP } catch { $null }
+                    $device = try { Get-AdbWifiDevice -headsetIP $headset.IPAddress } catch { $null }
                 }
                 if (-not $device) {
                     Send-JsonResponse -Response $response -StatusCode 503 -Body @{ ok = $false; error = 'device not reachable' }
@@ -2473,9 +2577,15 @@ try {
                 $resolveDevice = {
                     param($headset2)
                     if ($transport -eq 'wifi') {
-                        return Get-AdbWifiDevice -headsetIP $headset2.IPAddress -AdbPort $adbPort -adb $adbPath
+                        return Resolve-HeadsetAdbDevice -Headset $headset2 -PreferTransport WiFi -AdbPort $adbPort -adb $adbPath
                     }
                     if ($headset2.SerialNumber) {
+                        # Installs take the cable whenever it is there, whatever
+                        # ADB.prefer_usb says: an OBB push is multiple GB.
+                        $usb = Resolve-HeadsetAdbDevice -Headset $headset2 -PreferTransport USB -AdbPort $adbPort -adb $adbPath
+                        if ($usb) { return $usb }
+                        # The older single-device snapshot still counts: it is what a
+                        # VRMonitor started before 'usb_devices' existed publishes.
                         $snap = Get-PublishedUsbSnapshot
                         if ($snap -and $snap.SerialNumber -eq $headset2.SerialNumber) {
                             return [PSCustomObject]@{ DeviceId = $snap.DeviceId; ConnectionType = 'USB'; IP = $null; Port = $null }
@@ -2487,7 +2597,7 @@ try {
                         # that chose USB on purpose.
                         return $null
                     }
-                    return Get-BestAdbDevice -Headset $headset2 -AdbPort $adbPort -adb $adbPath
+                    return Resolve-HeadsetAdbDevice -Headset $headset2 -PreferTransport WiFi -AdbPort $adbPort -adb $adbPath
                 }
 
                 # Helper: start the install background job and respond with jobId
@@ -4627,6 +4737,18 @@ try {
 
                 $utf8NoBom = New-Object System.Text.UTF8Encoding $false
                 [System.IO.File]::WriteAllText($cfgFile, $body, $utf8NoBom)
+
+                # USB-first transport and DIAG settings apply to this process at once
+                # (VRMonitor re-reads config on its own slow tick). Same defaults and
+                # clamps as Get-Config.
+                if ($newCfg) {
+                    if ($newCfg.ADB -and $null -ne $newCfg.ADB.prefer_usb) { $global:ADB_PreferUsb = ConvertTo-BoolField $newCfg.ADB.prefer_usb }
+                    if ($newCfg.Diag) {
+                        if ($null -ne $newCfg.Diag.auto_refresh_sec)  { $global:Diag_AutoRefreshSec  = [Math]::Max(5, [int]$newCfg.Diag.auto_refresh_sec) }
+                        if ($null -ne $newCfg.Diag.cable_test_passes) { $global:Diag_CableTestPasses = [Math]::Min(10, [Math]::Max(1, [int]$newCfg.Diag.cable_test_passes)) }
+                        if ($newCfg.Diag.command_presets)             { $global:Diag_CommandPresets  = @($newCfg.Diag.command_presets) }
+                    }
+                }
 
                 $restarted = @{ mediamtx = $false; scrcpy = @(); pending = $false; captureMode = $false }
                 if ($streamingChanged) {

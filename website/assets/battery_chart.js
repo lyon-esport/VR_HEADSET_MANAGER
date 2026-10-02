@@ -36,7 +36,7 @@
 
   /* The metric registry. Mirrors Get-HeadsetMetricDefinition in
    * modules\headsets_monitoring.ps1 and the trg_status_*_sample triggers in
-   * migration 006 - all three change together when a metric is added.
+   * migrations 006/007 - all three change together when a metric is added.
    *
    *   dir   'low-bad'  a LOW value is the problem (battery, controllers)
    *         'high-bad' a HIGH value is the problem (temperature)
@@ -71,6 +71,24 @@
     },
     wattage: {
       label: 'Charging power', unit: 'W', dir: 'neutral', scale: 'auto', dp: 1
+    },
+    /* Migration 007: hottest sensor of each type from dumpsys thermalservice.
+     * Skin temperature lives in the same range as the battery one, so it shares
+     * the operator's temperature bands. CPU and GPU run 30+ degrees hotter in
+     * normal use - the battery bands would paint every sample red - so they keep
+     * fixed bands with no config key until an operator asks for one. */
+    cpu_temp: {
+      label: 'CPU temperature', unit: 'C', dir: 'high-bad', scale: 'auto', dp: 1,
+      warn: 75, crit: 90
+    },
+    gpu_temp: {
+      label: 'GPU temperature', unit: 'C', dir: 'high-bad', scale: 'auto', dp: 1,
+      warn: 75, crit: 90
+    },
+    skin_temp: {
+      label: 'Skin temperature', unit: 'C', dir: 'high-bad', scale: 'auto', dp: 1,
+      cfgWarn: 'temperature_warningLevel', cfgCrit: 'temperature_highLevel',
+      warn: 42, crit: 50
     }
   };
 
