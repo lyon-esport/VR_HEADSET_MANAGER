@@ -8,7 +8,8 @@
 SELECT ID, Name, IPAddress, scrcpy_AutoRestart, Record, ScrcpyProfile,
        Brand, Model, SerialNumber,
        Ping, ADBWifi, Battery, Charging, ChargingWattage, Temp,
+       CpuTemp, GpuTemp, SkinTemp,
        BatteryControllerLeft, BatteryControllerRight, PowerState,
-       TimeRemainingMin, SCRCPY, RunningApp, RunningAppIcon
+       TimeRemainingMin, AdbTransport, SCRCPY, RunningApp, RunningAppIcon
 FROM v_headset_full
 ORDER BY SortOrder, CAST(ID AS INTEGER);

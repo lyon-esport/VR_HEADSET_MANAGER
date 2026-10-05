@@ -156,6 +156,9 @@ Enable **Recording** on a headset's card in **Headset Settings** to save its cap
 - Files go to the configured record folder (default `C:\DATA\MEDIA\VR_Records`, see [configuration](configuration.md#headset-capture-profiles-scrcpy))
 - The recording is a lossless copy of the capture (no re-encoding)
 - A **minimum free space guard** (default 5 GB) automatically disables recording on all headsets when the drive runs low; the web UI shows a storage warning banner
+- **A new file for each capture session.** Unplugging a cable or restarting a capture starts a new timestamped `.mkv`; the previous one is finalised when its session ends. Recordings are Matroska (`.mkv`) on purpose, because the format stays readable even if a capture is cut abruptly.
+- **No empty files.** A capture attempt that never produced video (for example a relaunch while the cable is half unplugged) would leave a 0-byte file; the app deletes those automatically when the session ends, and logs a warning for any file under 64 KB, which it keeps.
+- **If a recording was cut abruptly** (ffmpeg had to be force-stopped after 15 s, which the log reports with the file name), the file still plays in VLC and decodes in ffmpeg, but its duration and seek index are missing. Repair it with `ffmpeg -i broken.mkv -c copy fixed.mkv`.
 
 ---
 

@@ -739,4 +739,15 @@
         PowerSent           = "Action '{0}' envoyee au kiosk '{1}'."
         PowerFailed         = "Echec de l'action '{0}' pour le kiosk '{1}' : {2}"
     }
+
+    # ==========================================
+    # Page DIAG du casque et transport USB prioritaire. Groupe imbrique pour la
+    # meme raison que Kiosk / Discovery : la table de premier niveau est a la
+    # limite de 500 cles. Utiliser Get-MessageString -Key 'Diag.X'.
+    # ==========================================
+    Diag = @{
+        FallbackToWifi    = "Transport USB perdu pour {0} - nouvel essai en WiFi ({1})."
+        ScrcpyCableLost   = "Cable USB retire pour {0} - la capture repasse en WiFi."
+        ScrcpySwitchToUsb = "Cable USB detecte pour {0} - la capture passe du WiFi a l'USB."
+    }
 }

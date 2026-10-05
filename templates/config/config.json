@@ -52,7 +52,8 @@
                                },
     "ADB":  {
                 "folder":  "scrcpy\\scrcpy-win64-v4.1",
-                "adbPort_default":  5555
+                "adbPort_default":  5555,
+                "prefer_usb":  true
             },
     "scrcpy":  {
                    "folder":  "scrcpy\\scrcpy-win64-v4.1",
@@ -60,6 +61,8 @@
                    "recordMinFreeSpaceGB":  5,
                    "defaultFps":  30,
                    "defaultBitrateMbps":  8,
+                   "usb_switch_mode":  "stable",
+                   "usb_switch_stable_sec":  10,
                    "parameters":  {
                                       "Quest 3":  {
                                                       "views":  {
@@ -242,7 +245,11 @@
                                           "controllers_battery_warningLevel":  30,
                                           "controllers_battery_criticalLevel":  15,
                                           "temperature_highLevel":  50,
-                                          "temperature_warningLevel":  42
+                                          "temperature_warningLevel":  42,
+                                          "cpu_temperature_highLevel":  85,
+                                          "cpu_temperature_warningLevel":  75,
+                                          "gpu_temperature_highLevel":  85,
+                                          "gpu_temperature_warningLevel":  75
                                       }
                    },
     "mediamtx":  {
@@ -278,10 +285,38 @@
                                     "on_startup":  true
                                 }
                  },
+    "Diag":  {
+                 "auto_refresh_sec":  30,
+                 "cable_test_passes":  3,
+                 "command_presets":  [
+                                         {
+                                             "name":  "Battery dump",
+                                             "command":  "dumpsys battery"
+                                         },
+                                         {
+                                             "name":  "WiFi dump",
+                                             "command":  "dumpsys wifi | grep -E 'mWifiInfo|Wifi is'"
+                                         },
+                                         {
+                                             "name":  "Top processes",
+                                             "command":  "top -m 10 -n 1 -b"
+                                         },
+                                         {
+                                             "name":  "Disabled packages",
+                                             "command":  "pm list packages -d"
+                                         }
+                                     ]
+             },
     "WebServer":  {
                       "enabled":  true,
                       "port":  8080,
-                      "openBrowserOnStartup":  true
+                      "openBrowserOnStartup":  true,
+                      "sse":  {
+                                  "enabled":  true,
+                                  "poll_ms":  250,
+                                  "max_clients":  32,
+                                  "heartbeat_sec":  15
+                              }
                   },
     "Network":  {
                     "waitForValidNetwork":  true,

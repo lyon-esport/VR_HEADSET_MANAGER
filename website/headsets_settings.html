@@ -1475,7 +1475,10 @@
               '</svg>' +
               'Advanced Settings' +
             '</span>' +
-            '<button class="hs-adv-btn" data-adv-settings="' + dn + '" data-adv-brand="' + esc(cfg.Brand || '') + '">Configure</button>' +
+            '<span style="display:inline-flex;gap:6px">' +
+              '<a class="hs-adv-btn" href="headset_diag.html?id=' + encodeURIComponent(cfg.ID) + '" title="Diagnostics for this headset" style="text-decoration:none;display:inline-block">DIAG</a>' +
+              '<button class="hs-adv-btn" data-adv-settings="' + dn + '" data-adv-brand="' + esc(cfg.Brand || '') + '">Configure</button>' +
+            '</span>' +
           '</div>' +
           '<div class="card-power-row">' +
             '<span class="power-label">' +
@@ -2038,6 +2041,15 @@
         var adbDot = document.querySelector('[data-dot-adb="' + dn + '"] .dot');
         if (adbDot) { adbDot.className = 'dot ' + (s.adb ? 'dot-green' : 'dot-grey'); }
 
+        // Which ADB transport the monitor is really using (USB when the headset is cabled to
+        // this PC, WiFi otherwise) - shown next to the dot so a cabled headset visibly is.
+        var adbLabel = document.querySelector('[data-dot-adb="' + dn + '"] .status-dot-label');
+        if (adbLabel) {
+          var tr = s.adb && s.transport ? s.transport : '';
+          adbLabel.textContent = tr ? 'ADB ' + tr : 'ADB';
+          adbLabel.parentNode.title = tr ? 'ADB over ' + tr : 'ADB';
+        }
+
         var scrcpyDot = document.querySelector('[data-dot-scrcpy="' + dn + '"] .dot');
         if (scrcpyDot) { scrcpyDot.className = 'dot ' + (s.scrcpy ? 'dot-blue' : 'dot-grey'); }
 
@@ -2131,6 +2143,7 @@
             headsetStatus[dn] = {
               ping:           !!item.ping,
               adb:            !!item.adb,
+              transport:      item.adb_transport || '',
               scrcpy:         !!item.scrcpy,
               model:          item.model || '',
               runningApp:     item.running_app     || '',

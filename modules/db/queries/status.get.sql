@@ -5,7 +5,8 @@
 -- instead. Kept because "one status row by id" is the natural single-row read
 -- of this table.
 SELECT ID, Ping, ADBWifi, Battery, Charging, ChargingWattage, Temp,
+       CpuTemp, GpuTemp, SkinTemp,
        BatteryControllerLeft, BatteryControllerRight, PowerState,
-       TimeRemainingMin, SCRCPY, RunningApp, RunningAppIcon
+       TimeRemainingMin, AdbTransport, SCRCPY, RunningApp, RunningAppIcon
 FROM v_headset_status
 WHERE ID = CAST(@headset_id AS TEXT);

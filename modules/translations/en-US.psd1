@@ -739,4 +739,15 @@
         PowerSent           = "Power action '{0}' sent to kiosk '{1}'."
         PowerFailed         = "Power action '{0}' failed for kiosk '{1}': {2}"
     }
+
+    # ==========================================
+    # Headset DIAG page and USB-first transport. Nested for the same reason as
+    # Kiosk / Discovery: the top-level table is at the 500 key limit. Use
+    # Get-MessageString -Key 'Diag.X'.
+    # ==========================================
+    Diag = @{
+        FallbackToWifi    = "USB transport lost for {0} - retrying over WiFi ({1})."
+        ScrcpyCableLost   = "USB cable removed for {0} - moving the capture to WiFi."
+        ScrcpySwitchToUsb = "USB cable detected for {0} - moving the capture from WiFi to USB."
+    }
 }

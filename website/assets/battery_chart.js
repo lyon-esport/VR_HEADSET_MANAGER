@@ -71,6 +71,25 @@
     },
     wattage: {
       label: 'Charging power', unit: 'W', dir: 'neutral', scale: 'auto', dp: 1
+    },
+    // CPU / GPU / skin temperatures from thermalservice (migration 007). Skin reuses the
+    // battery-temperature bands on purpose: one operator setting, one meaning of "hot".
+    // CPU and GPU have bands of their own: they run 20+ C hotter than the battery under load, so
+    // the battery bands painted normal operation red.
+    cpu_temp: {
+      label: 'CPU temperature', unit: 'C', dir: 'high-bad', scale: 'auto', dp: 1,
+      cfgWarn: 'cpu_temperature_warningLevel', cfgCrit: 'cpu_temperature_highLevel',
+      warn: 75, crit: 85
+    },
+    gpu_temp: {
+      label: 'GPU temperature', unit: 'C', dir: 'high-bad', scale: 'auto', dp: 1,
+      cfgWarn: 'gpu_temperature_warningLevel', cfgCrit: 'gpu_temperature_highLevel',
+      warn: 75, crit: 85
+    },
+    skin_temp: {
+      label: 'Skin temperature', unit: 'C', dir: 'high-bad', scale: 'auto', dp: 1,
+      cfgWarn: 'temperature_warningLevel', cfgCrit: 'temperature_highLevel',
+      warn: 42, crit: 50
     }
   };
 

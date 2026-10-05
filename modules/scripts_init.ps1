@@ -154,7 +154,7 @@ $moduleFiles = Get-ChildItem -Path $ModulesPath -Filter "*.ps1" -File | Sort-Obj
 
     # Load centralized translations based on selected language.
     # Runs after the config if/else so it also applies when the config file was
-    # missing (no language set) — falls back to English in that case.
+    # missing (no language set) - falls back to English in that case.
     $translationsFolder = Join-Path $modulesPath "translations"
     $translationsEn     = Join-Path $translationsFolder "en-US.psd1"
     $translationsLang   = if ($global:SelectedLanguage) {
@@ -162,12 +162,12 @@ $moduleFiles = Get-ChildItem -Path $ModulesPath -Filter "*.ps1" -File | Sort-Obj
                           } else { $null }
 
     if ($translationsLang -and (Test-Path $translationsLang)) {
-        $global:msg = Import-PowerShellDataFile -Path $translationsLang
+        $global:msg = Import-PowerShellDataFile -LiteralPath $translationsLang
     } elseif (Test-Path $translationsEn) {
         if ($global:SelectedLanguage -and $global:SelectedLanguage -ne 'en-US') {
             Write-Host "Translations for '$($global:SelectedLanguage)' not found, falling back to English." -ForegroundColor Yellow
         }
-        $global:msg = Import-PowerShellDataFile -Path $translationsEn
+        $global:msg = Import-PowerShellDataFile -LiteralPath $translationsEn
     } else {
         Write-Host "[ERROR] No translation file found in $translationsFolder" -ForegroundColor Red
         Write-Host "[ERROR] a default translation file en-US.psd1 is required for the application to run." -ForegroundColor Red
@@ -232,6 +232,13 @@ if (Get-Command Initialize-Database -ErrorAction SilentlyContinue) {
                 } | Out-Null
             }
             catch { Write-Log ("Could not reset the headset status table: " + $_.Exception.Message) -Level WARNING }
+
+            # The published set of cabled USB headsets is live state too. A row left over from
+            # the previous run would make the first scrcpy launch after startup believe a cable
+            # is still plugged in and capture over a USB transport that no longer exists; the
+            # monitor republishes it within its first slow tick.
+            try { Set-DbKeyValue -Key 'usb_devices' -Value '[]' }
+            catch { Write-Log ("Could not clear the published USB device set: " + $_.Exception.Message) -Level WARNING }
         }
     } catch {
         $dbError = (Get-MessageString -Key 'Database.InitFailed') -f $_.Exception.Message
@@ -707,7 +714,7 @@ function Start-WebServer {
     # relaunch the server again. web_server.ps1 rewrites the same value once it has
     # successfully bound the port.
     if ($global:WebServerProcess) {
-        $global:WebServerProcess.Id | Set-Content -LiteralPath $webServerPidFile -Force -Encoding UTF8 -ErrorAction SilentlyContinue
+        $global:WebServerProcess.Id | Set-Content -LiteralPath $webServerPidFile -Force -Encoding ASCII -ErrorAction SilentlyContinue
         Write-Log ($msg.WebServerStarted -f $global:WebServer_port, $global:WebServerProcess.Id) -Level INFO
     }
 }

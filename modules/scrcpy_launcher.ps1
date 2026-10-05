@@ -210,7 +210,10 @@ function Get-ScrcpyProcess {
     param(
         [Parameter(Mandatory=$true)]
         [string]$displayName,
-        [string]$headsetIP = ''
+        [string]$headsetIP = '',
+        # A USB launch carries -s <serial> instead of -s ip:port, so the serial identifies the
+        # session just as well as the address does.
+        [string]$headsetSerial = ''
     )
     $ownedProcs = Get-Process -Name "scrcpy" -ErrorAction SilentlyContinue |
         Where-Object { $_.Path -like "$($global:scrcpyFolder)\scrcpy.exe" }
@@ -227,6 +230,7 @@ function Get-ScrcpyProcess {
         if ($cimProc) { $cimProc.Dispose() }
         if (-not $cmdLine) { return $false }
         if ($headsetIP -and $cmdLine -match [regex]::Escape($headsetIP)) { return $true }
+        if ($headsetSerial -and $headsetSerial -ne '-' -and $cmdLine -match ('-s\s+\x22?' + [regex]::Escape($headsetSerial) + '(?:\x22|\s|$)')) { return $true }
         if ($cmdLine -match [regex]::Escape($displayName)) { return $true }
         return $false
     } | Select-Object -First 1
@@ -249,6 +253,69 @@ function Get-ScrcpyProcess {
 # -------------------------------------------------------------------
 if (-not (Get-Variable -Name HeadsetPipelines -Scope Global -ErrorAction SilentlyContinue)) {
     $global:HeadsetPipelines = @{}
+}
+
+# Recording files that scrcpy (windowed LocalWindow mode) writes DIRECTLY, keyed by the safe display
+# name, so they can be checked once the session is over. In the pipe modes ffmpeg writes the file and
+# the path lives in $global:HeadsetPipelines[<name>].RecordFile instead.
+if (-not (Get-Variable -Name DirectRecordings -Scope Global -ErrorAction SilentlyContinue)) {
+    $global:DirectRecordings = @{}
+}
+
+function Complete-RecordingFile {
+    <#
+    .SYNOPSIS
+    Checks a recording file once the session that wrote it has ended: deletes it if it is EMPTY
+    (0 bytes), and warns if it is suspiciously small. Returns $true when a file was removed.
+
+    .DESCRIPTION
+    A recording file is created the moment a capture attempt starts, long before any video exists,
+    and every restart attempt gets a NEW timestamped name. An attempt that fails right away - the
+    cable pulled during a relaunch, a headset that has just gone to sleep - therefore leaves a
+    0-byte .mkv behind. A real folder held four of them from one burst of restarts (plus a 1 KB
+    one), and they look exactly like a broken recording the operator would waste time on.
+
+    Only a 0-byte file is deleted: it provably holds nothing. A small but non-empty file is KEPT and
+    flagged, because it might hold the only footage of something; the 64 KB threshold is far below
+    a second of video at any bitrate this app uses, so it is a header with no usable picture.
+    Never throws: this runs while sessions are being torn down.
+
+    .EXAMPLE
+    Complete-RecordingFile -Path 'D:\Records\2026-10-05\Q3_BLUE\Q3_BLUE_20261005_101500.mkv'
+    #>
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+    try {
+        if (-not (Test-Path -LiteralPath $Path)) { return $false }
+        $len = (Get-Item -LiteralPath $Path -ErrorAction Stop).Length
+        if ($len -eq 0) {
+            Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
+            Write-Log ("Removed an empty recording left by a capture attempt that never produced video: {0}" -f $Path) -Level INFO
+            return $true
+        }
+        if ($len -lt 65536) {
+            Write-Log ("Recording is very small ({0} bytes), probably without usable video: {1}" -f $len, $Path) -Level WARNING
+        }
+    } catch {
+        Write-Log ("Complete-RecordingFile could not check '{0}': {1}" -f $Path, $_.Exception.Message) -Level DEBUG
+    }
+    return $false
+}
+
+function Complete-DirectRecording {
+    <#
+    .SYNOPSIS
+    Runs Complete-RecordingFile on the file scrcpy was writing directly for one headset (windowed
+    LocalWindow mode) and forgets it. Call it once that scrcpy process has exited.
+    .EXAMPLE
+    Complete-DirectRecording -SafeName 'Q3_BLUE'
+    #>
+    param([Parameter(Mandatory)][string]$SafeName)
+    $path = $global:DirectRecordings[$SafeName]
+    if (-not $path) { return }
+    $global:DirectRecordings.Remove($SafeName)
+    [void](Complete-RecordingFile -Path $path)
 }
 
 function Get-HeadsetPipeNames {
@@ -401,7 +468,11 @@ function Start-FfmpegStreamPush {
     # same as every other path-bearing argument in this list (e.g. the -i pipe path).
     # Manually pre-quoting here would double-quote the value.
     if ($RecordFile) {
-        $argList.AddRange([string[]]@('-map','0','-c','copy','-y',$RecordFile))
+        # -flush_packets 1: have the muxer hand data to the OS as soon as a Matroska cluster is
+        # complete instead of leaving it in ffmpeg's buffer, so a kill loses the cluster in progress
+        # rather than whatever was buffered. Measured at 8 Mbps: no CPU or memory difference and
+        # about 15% more write calls (~4 per second, ~220 KB each) - it forces nothing to physical disk.
+        $argList.AddRange([string[]]@('-map','0','-c','copy','-flush_packets','1','-y',$RecordFile))
     }
     # Started via raw Process/ProcessStartInfo (not Start-Process) so we retain a live,
     # writable StandardInput stream - needed to ask ffmpeg to quit gracefully ("q") on
@@ -537,14 +608,20 @@ function Stop-HeadsetPipeline {
                     $ff.StandardInput.Flush()
                     $ff.StandardInput.Close()
                 } catch {}
-                if (-not $ff.WaitForExit(5000)) {
-                    Write-Log ("Stop-HeadsetPipeline: ffmpeg for {0} did not exit gracefully within timeout - forcing kill" -f $SafeName) -Level WARNING
+                # 15 s, not 5: finalising the recording (index, flush of a multi-GB file on a disk that
+                # OBS may be writing to at the same time) can legitimately take longer than 5 s, and a
+                # kill in that window is what leaves a recording without its index.
+                if (-not $ff.WaitForExit(15000)) {
+                    Write-Log ("Stop-HeadsetPipeline: ffmpeg for {0} did not exit gracefully within 15 s - forcing kill. The recording '{1}' may lack its index: it stays playable in VLC / ffmpeg, and can be repaired with: ffmpeg -i <file> -c copy <fixed>.mkv" -f $SafeName, $entry.RecordFile) -Level WARNING
                     try { Stop-Process -Id $ff.Id -Force -ErrorAction SilentlyContinue } catch {}
+                    try { [void]$ff.WaitForExit(3000) } catch {}
                 }
             }
         } catch {}
         try { $ff.CancelErrorRead() } catch {}
     }
+    # ffmpeg is gone: check what it left behind (empty file from an attempt that never got video).
+    if ($entry.RecordFile) { [void](Complete-RecordingFile -Path $entry.RecordFile) }
     if ($entry.FfmpegErrorSubId) {
         try { Unregister-Event -SubscriptionId $entry.FfmpegErrorSubId -ErrorAction SilentlyContinue } catch {}
     }
@@ -569,7 +646,14 @@ function start-screenCopy {
 
         [int]$adbPort = $global:adbPort_default,
 
-        [string]$scrcpyProfile = "R-N-45-20"
+        [string]$scrcpyProfile = "R-N-45-20",
+
+        # Which ADB transport to capture over. Auto follows config ADB.prefer_usb: USB (-s <serial>)
+        # when the headset is cabled to this PC, WiFi (-s ip:port) otherwise. The watchdog passes
+        # WiFi explicitly only when it must not interrupt a session (never today); every other
+        # caller leaves it on Auto.
+        [ValidateSet('Auto','USB','WiFi')]
+        [string]$transport = 'Auto'
 
     )
 
@@ -583,25 +667,21 @@ function start-screenCopy {
     }
 
     $adb = $global:adbPath
-    $adb_device = "$headsetIP`:$adbPort"
     $scrcpy = $global:scrcpyFilePath
 
-    if (-not(test-port -hostname $headsetIP -port $adbPort).open){ # Check if the ADB port is open
-        Write-Log -Message ($msg.AdbPortNotResponding -f $adbPort) -Level WARNING
-        return
-    }
+    # A previous windowed (LocalWindow) session for this headset is over: check the file it wrote.
+    Complete-DirectRecording -SafeName $displayName
 
-    # ADB port open, initiating connection to the headset
+    # Pick the transport. The registry row supplies the serial number the USB transport is
+    # keyed on; a caller that only has an address still works, it just never gets USB.
+    # Resolve-HeadsetAdbDevice replaces the old port probe + "adb connect" for the WiFi case
+    # (Get-AdbWifiDevice does both) and costs no adb.exe at all for the USB case.
+    $knownRow = @(Get-KnownHeadsets) | Where-Object { $_.IPAddress -eq $headsetIP } | Select-Object -First 1
+    if (-not $knownRow) { $knownRow = [PSCustomObject]@{ Name = $displayName; IPAddress = $headsetIP; SerialNumber = '' } }
+    $captureDevice = $null
     try {
-        Write-Log -Message ($msg.ScrcpyCheckingAdb -f $adb_device) -Level "INFO"
-
-        $connectedDevices = & $adb devices | Select-String $adb_device -AllMatches
-        if ($connectedDevices.Matches.Count -lt 1) {
-            Write-Log -Message ($msg.NoActiveAdbConnection -f $adb_device) -Level "INFO"
-            & $adb connect $adb_device | Out-Null
-            Start-Sleep -Seconds 2
-        }
-
+        Write-Log -Message ($msg.ScrcpyCheckingAdb -f "$headsetIP`:$adbPort") -Level "INFO"
+        $captureDevice = Resolve-HeadsetAdbDevice -Headset $knownRow -PreferTransport $transport -AdbPort $adbPort
     } catch {
         Write-Log -Message ($msg.ScrcpyExecError -f $_.Exception.Message) -Level "ERROR"
 		return
@@ -609,8 +689,14 @@ function start-screenCopy {
 
 
 	$options = ""
-    $wifiDevice     = Get-AdbWifiDevice -headsetIP $headsetIP
-    $headsetModel   = if ($wifiDevice) { Get-HeadsetModel -Device $wifiDevice } else { $null }
+    if (-not $captureDevice) {
+        # Neither USB nor WiFi answered: same outcome as the old "ADB port closed" exit.
+        Write-Log -Message ($msg.AdbPortNotResponding -f $adbPort) -Level WARNING
+        return
+    }
+    $adb_device = $captureDevice.DeviceId
+    Write-Log ("scrcpy capture for {0} over {1} ({2})" -f $displayName, $captureDevice.ConnectionType, $adb_device) -Level INFO
+    $headsetModel   = Get-HeadsetModel -Device $captureDevice
     Write-Log -Message ($msg.ScrcpyModelDetected -f $headsetModel) -Level "INFO"
     $modelTemplate  = $global:scrcpyParameters.$headsetModel
     $sourceCodec    = if ($modelTemplate -and $modelTemplate.video_codec) { $modelTemplate.video_codec } else { 'h264' }
@@ -650,6 +736,7 @@ function start-screenCopy {
         Write-Log -Message ($msg.ScrcpyRecording -f $recordFile) -Level "INFO"
     } else {
         $recordOption = ""
+        $recordFile = ''
     }
     # Dispatch on capture mode:
     #   StreamOnly          -> --no-window + record-to-pipe + ffmpeg push to RTSP
@@ -705,6 +792,10 @@ function start-screenCopy {
 		return
     }
 
+    # Windowed LocalWindow mode: scrcpy itself writes the recording. Remember the file so it can be
+    # checked once the session is over (Complete-DirectRecording).
+    if (-not $usePipe -and $recordFile) { $global:DirectRecordings[$displayName] = $recordFile }
+
     if ($usePipe) {
         # Wait for scrcpy to open its record file (connect to pipe-in) and produce the first
         # video packets so the H.264 extradata is available - ffmpeg needs it for the RTSP
@@ -748,6 +839,87 @@ function start-screenCopy {
 
 
 
+function Get-ScrcpyTransportDecision {
+    <#
+    .SYNOPSIS
+    Decides whether a RUNNING scrcpy session should be restarted because the best ADB
+    transport for its headset changed. Returns @{ Restart; Reason; Current; Preferred }.
+
+    .DESCRIPTION
+    The session is bound to the transport it was launched with: "-s <serial>" is USB,
+    "-s ip:port" is WiFi. Two situations call for a restart:
+
+      * The session is on USB but the cable is gone. scrcpy usually exits by itself, but not
+        always promptly, and a dead capture is a black tile on every wall - so restart now;
+        start-screenCopy then resolves to WiFi on its own.
+      * The session is on WiFi and the headset has been cabled. Whether that interrupts the
+        stream is the operator choice scrcpy.usb_switch_mode:
+          stable      switch once the serial has been cabled for scrcpy.usb_switch_stable_sec
+                      AND the headset is not recording (the default - a flapping cable must
+                      not bounce the stream, and a recording must not be cut in two)
+          immediate   switch as soon as the cable is seen, even while recording
+          next_start  never interrupt: USB is used the next time scrcpy starts
+
+    Nothing is decided while an operator action holds USB (Test-UsbBusy): those actions
+    re-enumerate the transport for seconds, and the published set is unreliable meanwhile.
+    The cabled set is VRMonitor published snapshot, so this costs no adb.exe.
+
+    .EXAMPLE
+    $d = Get-ScrcpyTransportDecision -Headset $headset -CommandLine $cmdLine -Recording $false
+    if ($d.Restart) { Write-Log $d.Reason }
+    #>
+    param(
+        [Parameter(Mandatory=$true)] $Headset,
+        [string]$CommandLine,
+        [bool]$Recording = $false
+    )
+
+    $d = [PSCustomObject]@{ Restart = $false; Reason = ''; Current = '-'; Preferred = '-' }
+    if (-not $CommandLine) { return $d }
+    if ($CommandLine -match '-s\s+\x22?([^\s\x22]+)') {
+        $d.Current = $(if ($Matches[1] -match ':') { 'WiFi' } else { 'USB' })
+    } else {
+        return $d
+    }
+
+    $busy = $false
+    if (Get-Command Test-UsbBusy -ErrorAction SilentlyContinue) { $busy = Test-UsbBusy }
+    if ($busy) { return $d }
+
+    $serial = if ($Headset.SerialNumber) { ([string]$Headset.SerialNumber).Trim() } else { '' }
+    $cabled = $null
+    if ($serial -and $serial -ne '-') {
+        $cabled = @(Get-PublishedUsbDevices | Where-Object { $_.Serial -eq $serial }) | Select-Object -First 1
+    }
+    $preferUsb = if ($null -ne $global:ADB_prefer_usb) { [bool]$global:ADB_prefer_usb } else { $true }
+    $d.Preferred = $(if ($cabled -and $preferUsb) { 'USB' } else { 'WiFi' })
+
+    if ($d.Current -eq 'USB') {
+        if (-not $cabled) {
+            $d.Restart = $true
+            $d.Reason  = (Get-MessageString -Key 'Diag.ScrcpyCableLost' -Fallback 'USB cable removed for {0} - moving the capture to WiFi.') -f $Headset.Name
+        }
+        return $d
+    }
+
+    # Currently on WiFi.
+    if ($d.Preferred -ne 'USB') { return $d }
+    $mode = if ($global:scrcpyUsbSwitchMode) { [string]$global:scrcpyUsbSwitchMode } else { 'stable' }
+    $switchMsg = (Get-MessageString -Key 'Diag.ScrcpySwitchToUsb' -Fallback 'USB cable detected for {0} - moving the capture from WiFi to USB.') -f $Headset.Name
+    if ($mode -eq 'immediate') {
+        $d.Restart = $true; $d.Reason = $switchMsg
+    } elseif ($mode -eq 'stable' -and -not $Recording) {
+        $since = [datetime]::MinValue
+        $parsed = [datetime]::TryParse([string]$cabled.Since, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AdjustToUniversal, [ref]$since)
+        $stableSec = if ($global:scrcpyUsbSwitchStableSec) { [int]$global:scrcpyUsbSwitchStableSec } else { 10 }
+        if ($parsed -and (([datetime]::UtcNow - $since).TotalSeconds -ge $stableSec)) {
+            $d.Restart = $true; $d.Reason = $switchMsg
+        }
+    }
+    return $d
+}
+
+
 function Watch-ScrcpyProcesses {
 
     # Step 1: Retrieve scrcpy processes running on the machine
@@ -766,7 +938,7 @@ function Watch-ScrcpyProcesses {
         $headsetInfos = Get-KnownHeadsetInfos $headset
         if (ConvertTo-BoolField $headsetInfos.ADBWifi) {
             Write-Log ($msg.ScrcpyCheckProcess -f $headset.Name, $headset.IPAddress) -Level DEBUG
-            $runningScrcpyProcess_forThisheadset = Get-ScrcpyProcess -displayName (Convert-Displayname $headset.Name) -headsetIP $headset.IPAddress
+            $runningScrcpyProcess_forThisheadset = Get-ScrcpyProcess -displayName (Convert-Displayname $headset.Name) -headsetIP $headset.IPAddress -headsetSerial $headset.SerialNumber
 
             Write-Log ($msg.ScrcpyProcessFound -f $runningScrcpyProcess_forThisheadset) -Level DEBUG
             if (-not $runningScrcpyProcess_forThisheadset) {
@@ -839,18 +1011,34 @@ function Watch-ScrcpyProcesses {
                     }
                 }
 
+                # USB-first transport: move the session when the cable appears or disappears.
+                # Skipped when a restart is already due for another reason - that restart
+                # re-resolves the transport anyway. See Get-ScrcpyTransportDecision for the
+                # three scrcpy.usb_switch_mode behaviours.
+                if (-not $shouldRestart) {
+                    $transportDecision = Get-ScrcpyTransportDecision -Headset $headset -CommandLine $cmdLine -Recording $expectedRecording
+                    if ($transportDecision.Restart) {
+                        Write-Log $transportDecision.Reason -Level INFO
+                        $shouldRestart = $true
+                    }
+                }
+
                 if ($shouldRestart) {
                     Write-Log ($msg.ScrcpyRestarting -f $headset.Name) -Level INFO
                     # Send WM_CLOSE so scrcpy can finalise any recording file before exiting
-                    $closed = $runningScrcpyProcess_forThisheadset.CloseMainWindow()
+                    # Same rule as Stop-Scrcpy: only a scrcpy that HAS a window can be closed politely, and
+                    # only a window that ignored the request deserves the "may be incomplete" warning.
+                    $hadWindow = ($runningScrcpyProcess_forThisheadset.MainWindowHandle -ne [IntPtr]::Zero)
+                    $closed = $hadWindow -and $runningScrcpyProcess_forThisheadset.CloseMainWindow()
                     if ($closed) {
                         $runningScrcpyProcess_forThisheadset.WaitForExit(10000) | Out-Null
                     }
                     if (-not $runningScrcpyProcess_forThisheadset.HasExited) {
-                        Write-Log ($msg.ScrcpyStopTimeout -f $headset.Name) -Level WARNING
+                        if ($hadWindow) { Write-Log ($msg.ScrcpyStopTimeout -f $headset.Name) -Level WARNING }
                         Stop-Process -Id $runningScrcpyProcess_forThisheadset.Id -Force -ErrorAction SilentlyContinue
                         Start-Sleep -Seconds 1
                     }
+                    Complete-DirectRecording -SafeName (Convert-Displayname $headset.Name)
                     start-screenCopy -displayName $headset.Name -headsetIP $headset.IPAddress -recording $expectedRecording -scrcpyProfile $headsetProfile
                 }
             }
@@ -876,6 +1064,7 @@ function Stop-Scrcpy {
             # down any leftover pipe-bridge/ffmpeg-push trio for this headset
             # before returning, so the registry doesn't leak.
             Stop-HeadsetPipeline -SafeName $displayName
+            Complete-DirectRecording -SafeName $displayName
             if ($msg.ScrcpyNotRunning) { Write-Log ($msg.ScrcpyNotRunning -f $displayName) -Level WARNING }
             return $false
         }
@@ -886,10 +1075,19 @@ function Stop-Scrcpy {
     }
 
     foreach ($proc in $procs) {
-        $closed = $proc.CloseMainWindow()
+        # Only a scrcpy WITH a window can be asked politely (WM_CLOSE lets it finalise a recording it
+        # writes itself). StreamOnly runs with --no-window: there is nothing to close, ending it is
+        # the normal stop, and its recording is written by ffmpeg, which finalises on end-of-input.
+        # Warning "recording may be incomplete" for that case was noise that hid real problems.
+        $hadWindow = ($proc.MainWindowHandle -ne [IntPtr]::Zero)
+        $closed = $hadWindow -and $proc.CloseMainWindow()
         if ($closed) { $proc.WaitForExit(10000) | Out-Null }
         if (-not $proc.HasExited) {
-            Write-Log ($msg.ScrcpyStopTimeout -f $proc.MainWindowTitle) -Level WARNING
+            if ($hadWindow) {
+                Write-Log ($msg.ScrcpyStopTimeout -f $proc.MainWindowTitle) -Level WARNING
+            } else {
+                Write-Log "Stopping a windowless scrcpy (its recording, if any, is finalised by ffmpeg)." -Level DEBUG
+            }
             Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
             Start-Sleep -Seconds 1
         }
@@ -902,6 +1100,8 @@ function Stop-Scrcpy {
     } else {
         foreach ($key in @($global:HeadsetPipelines.Keys)) { Stop-HeadsetPipeline -SafeName $key }
     }
+    if ($HeadsetName) { Complete-DirectRecording -SafeName (Convert-Displayname $HeadsetName) }
+    else { foreach ($key in @($global:DirectRecordings.Keys)) { Complete-DirectRecording -SafeName $key } }
 
     if ($HeadsetName) {
         Write-Log ($msg.ScrcpyStopForHeadset -f (Convert-Displayname $HeadsetName)) -Level INFO

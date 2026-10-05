@@ -57,6 +57,20 @@
     implies "no prompts at all"), but you do not need it just to bypass the
     menu - passing the run parameters is enough.
 
+.PARAMETER AutoApproveSetup
+    Auto-approves the app's first-boot computer setup (firewall rules, URL ACL,
+    Windows Defender exclusion) so a new release folder starts with no keypress.
+    Exports VRHM_AUTO_APPROVE_SETUP=1 to the app; the app's setup boxes then
+    skip their "[Y or Enter] / [any key] Skip" prompt. The process-kill box
+    never auto-approves.
+
+    Windows cannot approve a UAC dialog from a non-elevated process, so a first
+    boot (no firewall state recorded yet for the target folder) REQUIRES this
+    script to be started from an ELEVATED PowerShell: the app then inherits
+    elevation and no UAC dialog is raised. Otherwise the run stops with exit 2.
+    Once the folder has been set up, elevation is no longer needed.
+    Combine with -Unattended for a fully hands-off run.
+
 .PARAMETER RestoreOnly
     Do not run any test. Just tear down a sandbox left behind by a crashed run.
 
@@ -80,6 +94,10 @@
 
 .EXAMPLE
     .\scripts\Invoke-NonRegressionTests.ps1 -Depth Light -Sections 10,20 -Mode Auto -Unattended
+
+.EXAMPLE
+    # From an ELEVATED PowerShell: fully hands-off first boot of a fresh release
+    .\scripts\Invoke-NonRegressionTests.ps1 -VRHMFolder "C:\path\VR_HEADSET_MANAGER.v1.2.3" -Mode Auto -Unattended -AutoApproveSetup
 #>
 param(
     [string]$VRHMFolder = '',
@@ -94,6 +112,7 @@ param(
     [string]$HeadsetName = '',
     [switch]$AllowDestructive,
     [switch]$Unattended,
+    [switch]$AutoApproveSetup,
     [switch]$RestoreOnly,
     [switch]$KeepSandbox,
     [switch]$Force
@@ -131,6 +150,7 @@ $sectionRegistry = @(
     [PSCustomObject]@{ Id = 60; Title = 'Streaming matrix';      File = '60_streaming.ps1';        Light = 1; Standard = 10; Full = 35; Operator = $true  }
     [PSCustomObject]@{ Id = 70; Title = 'Monitoring';            File = '70_monitoring.ps1';       Light = 1; Standard = 3;  Full = 5;  Operator = $false }
     [PSCustomObject]@{ Id = 80; Title = 'Apps manager';          File = '80_apps.ps1';             Light = 0; Standard = 4;  Full = 8;  Operator = $true  }
+    [PSCustomObject]@{ Id = 85; Title = 'DIAG and USB transport'; File = '85_diag_transport.ps1';   Light = 0; Standard = 6;  Full = 12; Operator = $true  }
     [PSCustomObject]@{ Id = 90; Title = 'Shutdown and reaper';   File = '90_shutdown.ps1';         Light = 1; Standard = 2;  Full = 3;  Operator = $false }
 )
 
@@ -412,7 +432,24 @@ if ($selected.Count -eq 0) {
 $plannedMinutes = 0
 foreach ($s in $selected) { $plannedMinutes += (Get-SectionEstimate -Section $s -AtDepth $Depth) }
 
+# -AutoApproveSetup: a first boot needs elevation, and a UAC dialog cannot be answered from
+# here. Fail fast rather than burn the whole startup timeout on an unanswerable prompt.
+if ($AutoApproveSetup) {
+    $isElevated = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    $fwStateKnown = $false
+    try { $fwStateKnown = ($null -ne (Get-SandboxFwStateJson -TargetRoot $target)) } catch { }
+    if (-not $isElevated -and -not $fwStateKnown) {
+        Write-Host ''
+        Write-Host 'ERROR: -AutoApproveSetup needs an elevated PowerShell on the first boot of this folder.' -ForegroundColor Red
+        Write-Host '       Windows cannot approve a UAC prompt from a non-elevated process. Start PowerShell' -ForegroundColor DarkGray
+        Write-Host '       as Administrator and re-run, or drop the flag and approve the prompt by hand.' -ForegroundColor DarkGray
+        exit 2
+    }
+    $env:VRHM_AUTO_APPROVE_SETUP = '1'
+}
+
 Initialize-TestRun -TargetRoot $target -Version $Version -Mode $Mode -Depth $Depth -ReportFolder (Join-Path $harnessRoot 'reports') | Out-Null
+$global:TestRun.AutoApproveSetup = [bool]$AutoApproveSetup
 $global:TestRun.AllowDestructive = [bool]$AllowDestructive
 $global:TestRun.HeadsetName = $HeadsetName
 # Sections 50/60 use this to decide whether prompting for a headset is allowed.
@@ -488,6 +525,7 @@ try {
 }
 finally {
     # Teardown always runs, including on Ctrl+C.
+    if ($AutoApproveSetup) { Remove-Item Env:\VRHM_AUTO_APPROVE_SETUP -ErrorAction SilentlyContinue }
     if (Get-Command Stop-SandboxApp -ErrorAction SilentlyContinue) {
         try { Stop-SandboxApp -TargetRoot $target | Out-Null } catch { }
     }

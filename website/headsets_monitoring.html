@@ -396,7 +396,7 @@
             <th>Name</th>
             <th>IP Address</th>
             <th>Ping</th>
-            <th>ADB WiFi</th>
+            <th>ADB</th>
             <th>Scrcpy</th>
             <th>Charging</th>
             <th>Power</th>
@@ -405,6 +405,7 @@
             <th>Ctrl L</th>
             <th>Ctrl R</th>
             <th>Temp</th>
+            <th>CPU</th>
             <th>Model</th>
             <th>Running App</th>
             <th></th>
@@ -596,7 +597,7 @@
     function renderTable(rows) {
       var body = document.getElementById('table-body');
       if (!rows.length) {
-        body.innerHTML = '<tr><td colspan="16" id="empty-msg">' +
+        body.innerHTML = '<tr><td colspan="17" id="empty-msg">' +
           '<div class="empty-title">No headsets found in the known headsets list.</div>' +
           '<div><a class="empty-add-btn" href="headsets_settings.html#manage">' +
             '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>' +
@@ -637,7 +638,7 @@
           '<td><strong>' + esc(r['name'] || '') + '</strong></td>' +
           '<td style="font-family:monospace;font-size:12px">' + esc(r['ip_address'] || '') + '</td>' +
           '<td class="center">' + pill(pingOk ? 'OK' : 'KO', pingOk ? 'pill-green' : 'pill-red') + '</td>' +
-          '<td class="center">' + pill(adbOk  ? 'OK' : 'KO', adbOk  ? 'pill-green' : 'pill-red') + '</td>' +
+          '<td class="center">' + pill(adbOk  ? ('OK' + (r['adb_transport'] ? ' ' + r['adb_transport'] : '')) : 'KO', adbOk  ? 'pill-green' : 'pill-red') + '</td>' +
           '<td class="center">' + pill(scrcpyOk ? 'OK' : 'OFF', scrcpyOk ? 'pill-blue' : 'pill-orange') + '</td>' +
           '<td class="center">' + chargingCell + '</td>' +
           '<td class="center">' + powerPill + '</td>' +
@@ -646,6 +647,7 @@
           '<td>' + metricButton(r, 'ctrl_left', r['battery_ctrl_left']) + '</td>' +
           '<td>' + metricButton(r, 'ctrl_right', r['battery_ctrl_right']) + '</td>' +
           '<td>' + metricButton(r, 'temp', r['temp']) + '</td>' +
+          '<td>' + metricButton(r, 'cpu_temp', r['cpu_temp']) + '</td>' +
           '<td style="color:#666">' + esc(r['model'] || '-') + '</td>' +
           '<td>' + appCell + '</td>' +
           '<td><button class="mon-launch-btn" data-launch-app="' + dn + '" title="Launch an app on ' + esc(r['name'] || '') + '">' +

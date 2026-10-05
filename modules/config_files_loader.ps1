@@ -121,7 +121,7 @@ function Get-Config {
             Rename-Item -LiteralPath $global:AppCacheFilePath -NewName (Split-Path $newPath -Leaf) -ErrorAction SilentlyContinue
         }
         $configContent.Paths.AppCacheFileName = 'known_apps.csv'
-        try { $configContent | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $ConfigFilePath -Encoding UTF8 } catch {}
+        try { [System.IO.File]::WriteAllText($ConfigFilePath, ($configContent | ConvertTo-Json -Depth 20), (New-Object System.Text.UTF8Encoding($false))) } catch {}
         $global:AppCacheFileName = 'known_apps.csv'
         $global:AppCacheFilePath = $newPath
         Write-Host "Config: migrated app_names.csv to known_apps.csv"
@@ -137,7 +137,7 @@ function Get-Config {
         if ($repairedRecordFolder -ne $configContent.scrcpy.recordFolder) {
             Write-Log ("Repaired mojibake in scrcpy.recordFolder: '{0}' -> '{1}'" -f $configContent.scrcpy.recordFolder, $repairedRecordFolder) -Level WARNING
             $configContent.scrcpy.recordFolder = $repairedRecordFolder
-            try { $configContent | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $ConfigFilePath -Encoding UTF8 } catch {}
+            try { [System.IO.File]::WriteAllText($ConfigFilePath, ($configContent | ConvertTo-Json -Depth 20), (New-Object System.Text.UTF8Encoding($false))) } catch {}
         }
     }
     if ($configContent.scrcpy.recordFolder -contains "\" -or "/" ) {
@@ -148,6 +148,13 @@ function Get-Config {
     $global:scrcpyRecordMinFreeSpaceGB = if ($null -ne $configContent.scrcpy.recordMinFreeSpaceGB) { [int]$configContent.scrcpy.recordMinFreeSpaceGB } else { 5 }
     $global:scrcpyDefaultFps = if ($null -ne $configContent.scrcpy.defaultFps) { [int]$configContent.scrcpy.defaultFps } else { 30 }
     $global:scrcpyDefaultBitrateMbps = if ($null -ne $configContent.scrcpy.defaultBitrateMbps) { [int]$configContent.scrcpy.defaultBitrateMbps } else { 8 }
+    # How a RUNNING scrcpy session moves to USB once the headset is cabled: 'stable' waits
+    # usb_switch_stable_sec of continuous presence (and no recording), 'immediate' switches on
+    # detection, 'next_start' never interrupts a session. Anything else falls back to 'stable'.
+    $usbSwitchMode = if ($configContent.scrcpy.usb_switch_mode) { ([string]$configContent.scrcpy.usb_switch_mode).ToLowerInvariant() } else { 'stable' }
+    if (@('stable','immediate','next_start') -notcontains $usbSwitchMode) { $usbSwitchMode = 'stable' }
+    $global:scrcpyUsbSwitchMode      = $usbSwitchMode
+    $global:scrcpyUsbSwitchStableSec = if ($null -ne $configContent.scrcpy.usb_switch_stable_sec) { [Math]::Max(1, [int]$configContent.scrcpy.usb_switch_stable_sec) } else { 10 }
 
 
     $global:ADBWirelessActivatorAPK = Join-Path -Path $(Join-Path -Path $sourcesPath -ChildPath $configContent.apk.adbWirelessActivatorFolder) -ChildPath $configContent.apk.adbWirelessActivatorApk
@@ -216,6 +223,9 @@ function Get-Config {
     $global:adbFolder = Join-Path -Path $sourcesPath -ChildPath $configContent.ADB.folder
     $global:adbPath = Join-Path -Path $global:adbFolder -ChildPath "adb.exe"
     $global:adbPort_default = $configContent.ADB.adbPort_default
+    # USB-first transport: when a known headset is cabled to THIS PC, every ADB call and the
+    # scrcpy capture prefer the USB transport and fall back to WiFi when the cable drops.
+    $global:ADB_prefer_usb = if ($null -ne $configContent.ADB.prefer_usb) { [bool]$configContent.ADB.prefer_usb } else { $true }
 
 
     $global:Monitoring_headsetTemplate = Join-Path -Path $global:ScriptPath -ChildPath ("\website\template\"+$configContent.Monitoring.HeadsetTemplate)
@@ -227,6 +237,13 @@ function Get-Config {
     # script down, from one absent config value.
     $global:Monitoring_temperature_highLevel            = if ($null -ne $configContent.Monitoring.thresholds.temperature_highLevel)            { [int]$configContent.Monitoring.thresholds.temperature_highLevel            } else { 50 }
     $global:Monitoring_temperature_warningLevel         = if ($null -ne $configContent.Monitoring.thresholds.temperature_warningLevel)         { [int]$configContent.Monitoring.thresholds.temperature_warningLevel         } else { 42 }
+    # CPU and GPU run much hotter than the battery under load (a Quest 3 sits at 60-65 C while
+    # streaming), so they have bands of their own. Reusing the battery bands painted a perfectly
+    # normal 65 C red. Skin and battery keep using temperature_*Level above.
+    $global:Monitoring_cpu_temperature_highLevel        = if ($null -ne $configContent.Monitoring.thresholds.cpu_temperature_highLevel)        { [int]$configContent.Monitoring.thresholds.cpu_temperature_highLevel        } else { 85 }
+    $global:Monitoring_cpu_temperature_warningLevel     = if ($null -ne $configContent.Monitoring.thresholds.cpu_temperature_warningLevel)     { [int]$configContent.Monitoring.thresholds.cpu_temperature_warningLevel     } else { 75 }
+    $global:Monitoring_gpu_temperature_highLevel        = if ($null -ne $configContent.Monitoring.thresholds.gpu_temperature_highLevel)        { [int]$configContent.Monitoring.thresholds.gpu_temperature_highLevel        } else { 85 }
+    $global:Monitoring_gpu_temperature_warningLevel     = if ($null -ne $configContent.Monitoring.thresholds.gpu_temperature_warningLevel)     { [int]$configContent.Monitoring.thresholds.gpu_temperature_warningLevel     } else { 75 }
     $global:Monitoring_headset_battery_warningLevel      = if ($null -ne $configContent.Monitoring.thresholds.headset_battery_warningLevel)      { [int]$configContent.Monitoring.thresholds.headset_battery_warningLevel      } else { 40 }
     $global:Monitoring_headset_battery_criticalLevel     = if ($null -ne $configContent.Monitoring.thresholds.headset_battery_criticalLevel)     { [int]$configContent.Monitoring.thresholds.headset_battery_criticalLevel     } else { 30 }
     $global:Monitoring_controllers_battery_warningLevel  = if ($null -ne $configContent.Monitoring.thresholds.controllers_battery_warningLevel)  { [int]$configContent.Monitoring.thresholds.controllers_battery_warningLevel  } else { 30 }
@@ -312,6 +329,18 @@ function Get-Config {
     $global:databaseMaintenanceIntervalMin = if ($dbCfg -and $null -ne $dbCfg.maintenance_interval_min) { [int]$dbCfg.maintenance_interval_min } else { 60 }
     $global:databaseBackupKeep    = if ($dbCfg -and $dbCfg.backup -and $null -ne $dbCfg.backup.keep) { [int]$dbCfg.backup.keep } else { 5 }
     $global:databaseBackupOnStartup = if ($dbCfg -and $dbCfg.backup -and $null -ne $dbCfg.backup.on_startup) { [bool]$dbCfg.backup.on_startup } else { $true }
+
+    # Headset DIAG page (headset_diag.html). Every value has a default so a config.json written
+    # before the "Diag" section existed still loads. command_presets is kept as an array of
+    # @{ name; command } objects exactly as the page renders them.
+    $diagCfg = $configContent.Diag
+    $global:Diag_auto_refresh_sec  = if ($diagCfg -and $null -ne $diagCfg.auto_refresh_sec)  { [Math]::Max(5, [int]$diagCfg.auto_refresh_sec) } else { 30 }
+    $global:Diag_cable_test_passes = if ($diagCfg -and $null -ne $diagCfg.cable_test_passes) { [Math]::Min(10, [Math]::Max(1, [int]$diagCfg.cable_test_passes)) } else { 3 }
+    $global:Diag_command_presets   = @()
+    if ($diagCfg -and $diagCfg.command_presets) {
+        $global:Diag_command_presets = @($diagCfg.command_presets | Where-Object { $_.name -and $_.command } |
+            ForEach-Object { [PSCustomObject]@{ name = [string]$_.name; command = [string]$_.command } })
+    }
 
     # Web server
     $global:WebServer_enabled = if ($null -ne $configContent.WebServer.enabled) { [bool]$configContent.WebServer.enabled } else { $false }

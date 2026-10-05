@@ -45,6 +45,17 @@ function Get-NrtDevHeadsets {
     #>
     param([Parameter(Mandatory = $true)][string]$DevRoot)
 
+    # The registry lives in the dev database now (ADR-0017). known_headsets.csv is only the
+    # operator's optional export, so it is as old as the last export: a real run found it five
+    # weeks stale, missing a headset and holding addresses from another network, which made the
+    # harness skip a headset that was sitting right there. Read the database first.
+    try {
+        $dbRows = @(Get-SandboxDbRows -TargetRoot $DevRoot -Sql 'SELECT ID, Name, IPAddress, Model, Brand, SerialNumber, ScrcpyProfile FROM v_headsets ORDER BY SortOrder;')
+        $dbRows = @($dbRows | Where-Object { $_.IPAddress })
+        if ($dbRows.Count -gt 0) { return $dbRows }
+    } catch { }
+
+    # Fallback for a dev folder with no readable database: the CSV export.
     $csv = Join-Path $DevRoot 'data\known_headsets.csv'
     if (-not (Test-Path -LiteralPath $csv)) { return @() }
 

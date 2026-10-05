@@ -46,6 +46,10 @@
 
 # --- Sources: explicitly included subfolders ---
 /sources/ADB Wireless activator/
+# ffmpeg is REQUIRED at startup when mediamtx is enabled (Test-RequiredBinaries). It must match
+# ffmpeg.folder in templates\config\config.json, otherwise the extracted release stops at
+# "CRITICAL: required program files are missing" (CLAUDE.md rule 7).
+/sources/ffmpeg/ffmpeg-9.0.1/
 /sources/MediaMTX/mediamtx_v1.20.1_windows_amd64/
 /sources/scrcpy/scrcpy-win64-v4.1/
 /sources/sqlite/System.Data.SQLite-1.0.119/

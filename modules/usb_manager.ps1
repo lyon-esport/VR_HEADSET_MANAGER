@@ -79,6 +79,11 @@ function Get-AdbUsbPresence {
         Unauthorized   = $false
         WifiTransports = @()
         OfflineWifi    = @()
+        # EVERY cabled transport, whatever its state - Serial/State above keep describing
+        # only the first one (onboarding stays single-device), but the USB-first transport
+        # needs to know about all of them: with two headsets cabled, each must resolve to
+        # its own USB transport.
+        UsbDevices     = @()
     }
     if (-not $adb -or -not (Test-Path -LiteralPath $adb)) { return $out }
 
@@ -86,6 +91,7 @@ function Get-AdbUsbPresence {
 
     $live    = @()
     $offline = @()
+    $usbAll  = @()
     foreach ($line in $lines) {
         if ($line -notmatch "`t") { continue }
         $parts = $line -split "`t"
@@ -97,7 +103,10 @@ function Get-AdbUsbPresence {
             continue
         }
 
-        # First USB entry wins. A single cabled headset is the supported shape.
+        $usbAll += [PSCustomObject]@{ Serial = $id; State = $state }
+
+        # First USB entry wins for ONBOARDING. A single cabled headset is the supported
+        # shape there; the full list is in UsbDevices.
         if (-not $out.Serial) {
             $out.Serial = $id
             $out.State  = $state
@@ -107,7 +116,52 @@ function Get-AdbUsbPresence {
 
     $out.WifiTransports = $live
     $out.OfflineWifi    = $offline
+    $out.UsbDevices     = $usbAll
     return $out
+}
+
+
+function Get-UsbDeviceSet {
+    <#
+    .SYNOPSIS
+    The cabled USB transports that are LIVE (state 'device'), each with the time it first
+    became live, for publication to the app_kv row 'usb_devices'.
+
+    .DESCRIPTION
+    This is what the USB-first transport reads instead of spawning "adb devices": the
+    steady-state watcher tick already holds that listing, so publishing the serials costs
+    nothing extra and every other process (monitor runspaces, web server, scrcpy watcher)
+    answers "is serial S cabled right now?" from one cheap row. VRMonitor stays the only
+    USB prober (ADR-0021) - this is a view of what it already saw, not a second probe.
+
+    Since is carried across ticks per serial, so a consumer can ask "has this headset been
+    cabled for N seconds" (the scrcpy 'stable' switch mode). A serial that disappears loses
+    its entry, so a re-plug restarts the clock.
+
+    Returns @() when nothing is cabled. Never throws.
+
+    .EXAMPLE
+    $set = Get-UsbDeviceSet -Presence (Get-AdbUsbPresence)
+    #>
+    param($Presence)
+
+    if (-not $script:UsbSince) { $script:UsbSince = @{} }
+    $now  = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    $live = @()
+    try {
+        if ($Presence -and $Presence.UsbDevices) {
+            foreach ($d in @($Presence.UsbDevices)) {
+                if ($d.State -ne 'device') { continue }
+                if (-not $script:UsbSince.ContainsKey($d.Serial)) { $script:UsbSince[$d.Serial] = $now }
+                $live += [PSCustomObject]@{ Serial = $d.Serial; State = $d.State; Since = $script:UsbSince[$d.Serial] }
+            }
+        }
+        $liveSerials = @($live | ForEach-Object { $_.Serial })
+        foreach ($k in @($script:UsbSince.Keys)) {
+            if ($liveSerials -notcontains $k) { $script:UsbSince.Remove($k) }
+        }
+    } catch { }
+    return $live
 }
 
 
@@ -321,7 +375,11 @@ function Set-UsbBusy {
     param([int]$Seconds = 60)
     try {
         if (Get-Command Set-DbKeyValue -ErrorAction SilentlyContinue) {
-            Set-DbKeyValue -Key 'usb_busy_until' -Value ((Get-Date).AddSeconds($Seconds).ToUniversalTime().ToString('o'))
+            # Stored as a JSON STRING (quoted). app_kv values are JSON documents and
+            # Get-DbKeyValue parses them on read: a bare ISO timestamp is not valid JSON, so the
+            # read warned on every call and returned nothing - the busy flag never took effect
+            # and the log filled with one warning per ADB call.
+            Set-DbKeyValue -Key 'usb_busy_until' -Value ('"' + (Get-Date).AddSeconds($Seconds).ToUniversalTime().ToString('o') + '"')
         }
     } catch { }
 }
@@ -331,7 +389,7 @@ function Clear-UsbBusy {
     param()
     try {
         if (Get-Command Set-DbKeyValue -ErrorAction SilentlyContinue) {
-            Set-DbKeyValue -Key 'usb_busy_until' -Value ([datetime]::MinValue.ToUniversalTime().ToString('o'))
+            Set-DbKeyValue -Key 'usb_busy_until' -Value ('"' + [datetime]::MinValue.ToUniversalTime().ToString('o') + '"')
         }
     } catch { }
 }
@@ -344,9 +402,16 @@ function Test-UsbBusy {
         if (-not (Get-Command Get-DbKeyValue -ErrorAction SilentlyContinue)) { return $false }
         $raw = Get-DbKeyValue -Key 'usb_busy_until'
         if (-not $raw) { return $false }
+        # The stored value is an ISO-8601 UTC string. Depending on the PowerShell version
+        # ConvertFrom-Json hands it back as a string or as a DateTime, so accept both, and parse
+        # a string with the invariant culture so a FR locale cannot misread it.
         $until = [datetime]::MinValue
-        if (-not [datetime]::TryParse([string]$raw, [ref]$until)) { return $false }
-        return ((Get-Date).ToUniversalTime() -lt $until.ToUniversalTime())
+        if ($raw -is [datetime]) {
+            $until = $raw
+        } elseif (-not [datetime]::TryParse([string]$raw, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AdjustToUniversal, [ref]$until)) {
+            return $false
+        }
+        return ([datetime]::UtcNow -lt $until.ToUniversalTime())
     } catch { return $false }
 }
 
@@ -386,6 +451,33 @@ function Publish-UsbIdentity {
 }
 
 
+function Publish-UsbDeviceSet {
+    <#
+    .SYNOPSIS
+    Writes the live cabled USB set to the app_kv row usb_devices, only when it changed.
+
+    .DESCRIPTION
+    This row is what Get-PublishedUsbDevices reads, so every process answers "is serial S cabled
+    right now" from one cheap read instead of spawning adb. VRMonitor is its only writer
+    (ADR-0021). Never throws: publishing must not be able to abort a watcher tick.
+
+    .EXAMPLE
+    Publish-UsbDeviceSet -Set @(Get-UsbDeviceSet -Presence (Get-AdbUsbPresence))
+    #>
+    param($Set)
+    try {
+        $json = ConvertTo-Json -InputObject @($Set | Where-Object { $_ }) -Compress -Depth 4
+        if ($json -eq $script:UsbDevicesLastPublished) { return }
+        if (Get-Command Set-DbKeyValue -ErrorAction SilentlyContinue) {
+            Set-DbKeyValue -Key 'usb_devices' -Value $json
+            $script:UsbDevicesLastPublished = $json
+        }
+    } catch {
+        Write-Log ("Publish-UsbDeviceSet: " + $_.Exception.Message) -Level DEBUG
+    }
+}
+
+
 function Update-UsbWatchState {
     <#
     .SYNOPSIS
@@ -394,6 +486,7 @@ function Update-UsbWatchState {
     .DESCRIPTION
     Publishes into $SharedState:
       _usb_device          the snapshot for the web server / UI ($null when nothing cabled)
+      _usb_devices         every live cabled transport @{Serial;State;Since}, for the USB-first resolver
       _usb_onboard_request an identity write for the MAIN thread to apply
 
     Returns a short string naming what it did, for logging: 'idle', 'noop',
@@ -413,6 +506,17 @@ function Update-UsbWatchState {
     if (Test-UsbBusy) { return 'busy' }
 
     $presence = Get-AdbUsbPresence -adb $adb
+
+    # Publish every live cabled transport for the USB-first resolver, BEFORE any early
+    # return below: an idle tick (nothing cabled) must publish the empty set too, otherwise
+    # an unplugged headset would keep resolving to a dead USB transport.
+    $usbSet = @(Get-UsbDeviceSet -Presence $presence)
+    if ($SharedState) { $SharedState['_usb_devices'] = $usbSet }
+    # ...and write it to app_kv RIGHT HERE, not after this function returns. The caller only
+    # publishes once the tick is over, and a tick that onboards (adb tcpip, then waiting for the
+    # transport) takes 10-15 s: for that whole time every other process was reading a set that
+    # still said "nothing cabled". Writing on change costs nothing in steady state.
+    Publish-UsbDeviceSet -Set $usbSet
 
     # ---- Nothing cabled ----
     if (-not $presence.Serial) {

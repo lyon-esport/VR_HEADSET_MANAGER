@@ -184,10 +184,10 @@ function ConvertTo-ThirdPartyBool {
 }
 
 
-# Repairs a string that was UTF-8 text mis-decoded as Windows-1252 (mojibake), e.g. "VidÃ©os"
+# Repairs a string that was UTF-8 text mis-decoded as Windows-1252 (mojibake), e.g. a "Videos" folder name that arrives as "Vid" + two garbage characters + "os"
 # instead of "Videos". Re-encodes as Windows-1252 bytes, then strictly re-decodes those bytes as
 # UTF-8; if that succeeds and differs from the input, the fix is accepted and the loop repeats
-# (capped at 3 passes) so a double mis-decode ("VidÃƒÂ©os") also unwinds in one call. A string that
+# (capped at 3 passes) so a double mis-decode (text decoded twice) also unwinds in one call. A string that
 # is not mojibake fails the strict UTF-8 decode and is returned unchanged - this cannot corrupt an
 # already-correct accented string.
 function Repair-MojibakeUtf8String {
@@ -925,7 +925,7 @@ function Get-GpuInfo {
                 if ($mapMemUse.ContainsKey($luid)) {
                     $usedBytes   = $mapMemUse[$luid]
                     $vramUsedGB  = [Math]::Round($usedBytes / 1GB, 2)
-                    # Always use physical VRAM capacity for percentage — Total Committed is virtual
+                    # Always use physical VRAM capacity for percentage - Total Committed is virtual
                     # committed memory (much smaller than card capacity) and gives wrong results.
                     $vramFreeGB  = if ($vramBytes -gt 0) { [Math]::Round(($vramBytes - $usedBytes) / 1GB, 2) } else { $null }
                     $vramUsedPct = if ($vramBytes -gt 0) { [int][Math]::Round($usedBytes / $vramBytes * 100) } else { $null }

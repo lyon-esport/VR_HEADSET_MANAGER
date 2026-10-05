@@ -282,7 +282,7 @@ Invoke-RegressionTest -Name 'six runspaces each open their own connection and wr
                         Invoke-DbNonQuery -Name 'status.upsert' -Parameters @{
                             ID = $HeadsetId; Ping = 1; ADBWifi = 1
                             Battery = [string](30 + ($i % 50))
-                            Charging = '-'; ChargingWattage = '-'; Temp = '-'
+                            Charging = '-'; ChargingWattage = '-'; Temp = '-'; CpuTemp = '-'; GpuTemp = '-'; SkinTemp = '-'; AdbTransport = '-'
                             BatteryControllerLeft = '-'; BatteryControllerRight = '-'
                             PowerState = '-'; TimeRemainingMin = '-'
                             SCRCPY = '-'; RunningApp = '-'; RunningAppIcon = ''
@@ -333,7 +333,7 @@ Invoke-RegressionTest -Name 'the write-ahead log is checkpointed back and does n
             foreach ($id in 1..5) {
                 $rows += @{
                     ID = $id; Ping = 1; ADBWifi = 1; Battery = [string](20 + ($round % 60))
-                    Charging = '-'; ChargingWattage = '-'; Temp = '-'
+                    Charging = '-'; ChargingWattage = '-'; Temp = '-'; CpuTemp = '-'; GpuTemp = '-'; SkinTemp = '-'; AdbTransport = '-'
                     BatteryControllerLeft = '-'; BatteryControllerRight = '-'
                     PowerState = '-'; TimeRemainingMin = '-'
                     SCRCPY = '-'; RunningApp = '-'; RunningAppIcon = ''

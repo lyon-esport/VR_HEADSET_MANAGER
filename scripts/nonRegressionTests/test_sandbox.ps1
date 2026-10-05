@@ -507,7 +507,13 @@ function Test-SandboxPreconditions {
     #    release is a new path - so Initialize-ComputerSetup will want to
     #    elevate once. Better to say so now than to surprise the operator with
     #    a UAC dialog in the middle of an unattended run.
-    if ($ok) {
+    $autoApprove = ($global:TestRun -and $global:TestRun.AutoApproveSetup)
+    if ($ok -and $autoApprove) {
+        Write-Host ''
+        Write-Host '  NOTE: -AutoApproveSetup is on - firewall rules, URL ACL and Defender' -ForegroundColor Yellow
+        Write-Host '        exclusion are approved automatically on a first boot.' -ForegroundColor Yellow
+    }
+    elseif ($ok) {
         Write-Host ''
         Write-Host '  NOTE: this release folder is a new program path, so Windows will ask' -ForegroundColor Yellow
         Write-Host '        once for elevation to register its firewall rules, URL ACL and' -ForegroundColor Yellow
@@ -685,7 +691,12 @@ function Start-SandboxApp {
     # across a reset, so this should fire once per release folder, not per run.
     $fwStateJson = $null
     try { $fwStateJson = Get-SandboxFwStateJson -TargetRoot $TargetRoot } catch { }
-    if ($null -eq $fwStateJson) {
+    $autoApprove = ($global:TestRun -and $global:TestRun.AutoApproveSetup)
+    if ($null -eq $fwStateJson -and $autoApprove) {
+        Write-Host ''
+        Write-Host '  First boot of this release folder - firewall/URL ACL/Defender setup is auto-approved.' -ForegroundColor Yellow
+    }
+    elseif ($null -eq $fwStateJson) {
         Write-Host ''
         Write-Host '  +-------------------------------------------------------------+' -ForegroundColor Yellow
         Write-Host '  | FIRST BOOT OF THIS RELEASE FOLDER - UAC PROMPT INCOMING      |' -ForegroundColor Yellow
@@ -731,6 +742,7 @@ function Wait-SandboxReady {
     $lastWaitingFor = ''
     $stalledSince = $null
     $uacHintShown = $false
+    $autoApprove = ($global:TestRun -and $global:TestRun.AutoApproveSetup)
 
     while ((Get-Date) -lt $deadline) {
         if ($MainProcess -and $MainProcess.HasExited) {
@@ -760,7 +772,7 @@ function Wait-SandboxReady {
         if ($null -ne $stalledSince -and ((Get-Date) - $stalledSince).TotalSeconds -gt 40 -and -not $uacHintShown) {
             $pending = $null
             try { $pending = Get-SandboxFwStateJson -TargetRoot $TargetRoot } catch { }
-            if ($null -eq $pending) {
+            if ($null -eq $pending -and -not $autoApprove) {
                 Write-Host '    Still waiting. Check for a pending Windows UAC prompt and approve it.' -ForegroundColor Yellow
                 $uacHintShown = $true
             }

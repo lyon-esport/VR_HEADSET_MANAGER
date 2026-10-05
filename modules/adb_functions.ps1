@@ -130,6 +130,9 @@ function Get-HeadsetVisibleWifiNetworks {
         # read back out.
         if ($text -match '^\s*([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})\s+(\d+)\s+(\S+)\s+(\S+)\s+(.*)$') {
             $rest = $Matches[5]
+            # Keep the capability flags ([WPA2-PSK-CCMP][ESS] ...) before they are stripped from the SSID:
+            # the DIAG page needs them to pick open / wpa2 / wpa3 for "cmd wifi connect-network".
+            $flags = (([regex]::Matches($rest, '\[[^\]]*\]') | ForEach-Object { $_.Value }) -join '')
             # Trailing capability flags such as [WPA2-PSK-CCMP][RSN-PSK-CCMP][ESS]
             # are not part of the SSID - and there is always more than one group,
             # so the strip has to be repeated, not anchored to a single pair.
@@ -139,7 +142,7 @@ function Get-HeadsetVisibleWifiNetworks {
             # A hidden network prints an empty SSID column; there is nothing to
             # match against, so it is dropped rather than recorded as "".
             if ($ssid) {
-                $results += @{ Ssid = $ssid; Frequency = [int]$Matches[2]; Rssi = $rssi }
+                $results += @{ Ssid = $ssid; Frequency = [int]$Matches[2]; Rssi = $rssi; Flags = $flags }
             }
         }
     }
@@ -271,6 +274,8 @@ function Invoke-Adb {
     $psi.FileName               = $Adb
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError  = $true
+    $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+    $psi.StandardErrorEncoding  = [System.Text.Encoding]::UTF8
     $psi.UseShellExecute        = $false
     $psi.CreateNoWindow         = $true
     $psi.Arguments = ($Arguments | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } }) -join ' '
@@ -381,7 +386,13 @@ function Invoke-AdbCmd {
         [string]$Command,
         [int]$TimeoutSeconds = 7,
         [string]$adb = $global:adbPath,
-        [switch]$SilentOnFail
+        [switch]$SilentOnFail,
+        # $Command is ONE shell script handed to "adb shell" as a single argument, not a list
+        # of adb arguments. Needed for chained commands (";", "|", quotes): the default path
+        # splits on whitespace and trims double quotes per token, which is fine for plain
+        # "shell getprop x" but mangles a script. Embedded double quotes are escaped for the
+        # Windows command line; the device shell sees the script verbatim.
+        [switch]$ShellScript
     )
 
     if (-not $Device) { throw ($msg.AdbCmdDeviceNull) }
@@ -404,8 +415,12 @@ function Invoke-AdbCmd {
     $deviceId = $Device.DeviceId
 
     # Split $Command preserving quoted segments (handles paths with spaces)
-    $tokens = [regex]::Matches($Command, '"[^"]*"|\S+') | ForEach-Object { $_.Value.Trim('"') }
-    $argv   = @('-s', $deviceId) + $tokens
+    if ($ShellScript) {
+        $argv = @('-s', $deviceId, 'shell', ($Command -replace '"', '\"'))
+    } else {
+        $tokens = [regex]::Matches($Command, '"[^"]*"|\S+') | ForEach-Object { $_.Value.Trim('"') }
+        $argv   = @('-s', $deviceId) + $tokens
+    }
 
     # ---- Attempt 1: just run it. One process. ----
     $result = Invoke-Adb -Arguments $argv -TimeoutSeconds $TimeoutSeconds -Adb $adb
@@ -421,7 +436,38 @@ function Invoke-AdbCmd {
     }
 
     # ---- Transport is gone: recover, with the original diagnostics ----
-    if ($Device.ConnectionType -eq 'WiFi') {
+
+    # USB-first: a device the resolver handed out as USB carries the headset's WiFi address
+    # (HeadsetIP). When the cable drops mid-session, retry ONCE over WiFi instead of failing -
+    # the headset is almost always still on the network. Never the other way round: a WiFi
+    # failure is not retried over USB here, because Resolve-HeadsetAdbDevice already prefers
+    # USB on the next call whenever the published snapshot says the cable is present.
+    $fellBack = $false
+    # Whatever happens next, this cable entry has just failed: stop every later lookup in this
+    # process from choosing it until it is re-plugged (see Get-PublishedUsbDevices).
+    if ($Device.ConnectionType -eq 'USB') { Register-UsbTransportFailure -Serial ([string]$Device.DeviceId) }
+    if ($Device.ConnectionType -eq 'USB' -and $Device.PSObject.Properties['HeadsetIP'] -and $Device.HeadsetIP) {
+        $fbPort = if ($Device.PSObject.Properties['HeadsetPort'] -and $Device.HeadsetPort) { [int]$Device.HeadsetPort } else { [int]$global:adbPort_default }
+        $wifiDev = Get-AdbWifiDevice -headsetIP $Device.HeadsetIP -AdbPort $fbPort -adb $adb
+        if ($wifiDev) {
+            Write-Log ((Get-MessageString -Key 'Diag.FallbackToWifi' -Fallback 'USB transport lost for {0} - retrying over WiFi ({1}).') -f $deviceId, $wifiDev.DeviceId) -Level WARNING
+            # Tell the CALLER what really answered. The device object it passed in is shared by
+            # reference, so update it in place: otherwise a caller that reports the transport
+            # (the DIAG page, the status badge) keeps saying USB for a command that went over
+            # WiFi, and later calls with the same object would retry the dead cable first.
+            foreach ($p in 'DeviceId', 'ConnectionType', 'IP', 'Port') {
+                $Device | Add-Member -NotePropertyName $p -NotePropertyValue $wifiDev.$p -Force
+            }
+            $Device   = $wifiDev
+            $deviceId = $wifiDev.DeviceId
+            $argv[1]  = $deviceId
+            $fellBack = $true
+        }
+    }
+
+    if ($fellBack) {
+        # Transport already re-established by Get-AdbWifiDevice; go straight to attempt 2.
+    } elseif ($Device.ConnectionType -eq 'WiFi') {
         $ip   = $Device.IP
         $port = if ($Device.Port) { $Device.Port } else { $global:adbPort_default }
 
@@ -1091,10 +1137,200 @@ function Clear-UsbSpeedCache {
 }
 
 
+function Get-PublishedUsbDevices {
+    <#
+    .SYNOPSIS
+    The cabled USB transports VRMonitor last published (app_kv row 'usb_devices'), as
+    @(@{Serial;State;Since}). @() when nothing is cabled or nothing was published yet.
+
+    .DESCRIPTION
+    Reads what usb_manager.ps1 already saw instead of spawning "adb devices" - one cheap
+    scalar read, memoised for -MaxAgeSec so a burst of ADB calls (a poll cycle runs several)
+    costs one read. The memo is per process/runspace, like the database connection itself.
+    Never throws: a transport lookup must not be able to take down a poll or a request.
+
+    .EXAMPLE
+    (Get-PublishedUsbDevices | Where-Object Serial -eq '1WMHH123').Since
+    #>
+    param([int]$MaxAgeSec = 2, [switch]$IncludeDead)
+
+    try {
+        $now = [datetime]::UtcNow
+        if (-not $IncludeDead -and $null -ne $script:UsbDevicesCache -and $script:UsbDevicesCacheAt -and
+            (($now - $script:UsbDevicesCacheAt).TotalSeconds -lt $MaxAgeSec)) {
+            return @($script:UsbDevicesCache)
+        }
+
+        $list = @()
+        if (Get-Command Get-DbKeyValue -ErrorAction SilentlyContinue) {
+            $raw = Get-DbKeyValue -Key 'usb_devices'
+            if ($raw) {
+                $parsed = $null
+                if ($raw -is [string]) {
+                    if ($raw -ne 'null' -and -not [string]::IsNullOrWhiteSpace($raw)) { $parsed = $raw | ConvertFrom-Json }
+                } else {
+                    $parsed = $raw
+                }
+                $list = @($parsed | Where-Object { $_ -and $_.Serial })
+            }
+        }
+        if ($IncludeDead) { return @($list) }
+
+        # Drop the entries THIS process has just watched fail. The published set is one slow tick
+        # old at best, and after an unplug it can say "cabled" for as long as the monitor takes to
+        # tick again (it did not, for over a minute, in a real run) - during which every call tried
+        # the dead cable first. Register-UsbTransportFailure remembers the exact plug instance
+        # (its Since stamp) that failed; the entry is ignored while it is still that same instance
+        # and for a bounded time. A real re-plug gets a new Since from the monitor and is trusted
+        # at once, and the time bound lets a transient failure on a cable that is really there heal.
+        if ($script:UsbDeadMemo -and $script:UsbDeadMemo.Count -gt 0) {
+            $keep = @()
+            foreach ($e in $list) {
+                $m = $script:UsbDeadMemo[[string]$e.Serial]
+                if ($m) {
+                    $age = ($now - $m.At).TotalSeconds
+                    $deadSec = if ($script:UsbDeadMemoSec) { [int]$script:UsbDeadMemoSec } else { 60 }
+                    if ($m.Since -eq [string]$e.Since -and $age -lt $deadSec) { continue }
+                    $script:UsbDeadMemo.Remove([string]$e.Serial)
+                }
+                $keep += $e
+            }
+            $list = $keep
+        }
+
+        $script:UsbDevicesCache   = $list
+        $script:UsbDevicesCacheAt = $now
+        return @($list)
+    } catch {
+        return @()
+    }
+}
+
+# How long a cable entry that has just failed is ignored (see Get-PublishedUsbDevices).
+$script:UsbDeadMemoSec = 60
+
+function Register-UsbTransportFailure {
+    <#
+    .SYNOPSIS
+    Records that the USB transport of one headset just failed, so every later lookup in this
+    process stops choosing it until the cable is really re-plugged (or 60 s pass).
+
+    .DESCRIPTION
+    Called by Invoke-AdbCmd the moment a USB device hits a transport failure. It marks the
+    CURRENT published entry for that serial (matched on its Since stamp) as unusable for this
+    process. The memo is per process and per runspace on purpose: each learns from its own first
+    failed call, with no shared state to keep consistent. Does nothing when the serial is not in
+    the published set.
+
+    .EXAMPLE
+    Register-UsbTransportFailure -Serial '2G0YC5ZG1W00ZJ'
+    #>
+    param([Parameter(Mandatory=$true)][string]$Serial)
+
+    # This runs inside the failure path of every ADB call, so it must never be the thing that
+    # throws: a bookkeeping error here would turn a recoverable cable drop into a failed command.
+    try {
+        if (-not $script:UsbDeadMemo) { $script:UsbDeadMemo = @{} }
+        $entry = @(Get-PublishedUsbDevices -IncludeDead | Where-Object { $_.Serial -eq $Serial }) | Select-Object -First 1
+        if (-not $entry) { return }
+        $already = $script:UsbDeadMemo[$Serial]
+        $script:UsbDeadMemo[$Serial] = @{ Since = [string]$entry.Since; At = [datetime]::UtcNow }
+        $script:UsbDevicesCache = $null
+        if (-not $already -or $already.Since -ne [string]$entry.Since) {
+            Write-Log ("USB transport of {0} failed - ignoring the published cable entry (since {1}) until it is re-plugged." -f $Serial, $entry.Since) -Level INFO
+        }
+    } catch { }
+}
+
+
+function Resolve-HeadsetAdbDevice {
+    <#
+    .SYNOPSIS
+    The ADB device object for a KNOWN headset: USB when it is cabled to this PC, WiFi
+    otherwise, with the other transport as the fallback.
+
+    .DESCRIPTION
+    USB is faster, steadier and does not depend on the headset's WiFi. The cabled set comes
+    from the snapshot VRMonitor publishes (Get-PublishedUsbDevices) - no "adb devices" per
+    call. USB is skipped while an operator action holds it (Test-UsbBusy: those run
+    "adb usb"/"adb tcpip", which re-enumerate the transport for seconds).
+
+    -PreferTransport only changes the ORDER, never whether a headset is reachable:
+      Auto  follow config ADB.prefer_usb (USB first when true, WiFi first when false)
+      USB   USB first, WiFi if the headset is not cabled
+      WiFi  WiFi first, USB if the WiFi transport cannot be established
+
+    The returned object carries SerialNumber, HeadsetIP and HeadsetPort next to the usual
+    DeviceId / ConnectionType / IP / Port. Invoke-AdbCmd uses HeadsetIP to retry once over
+    WiFi if a USB device's cable drops mid-command. $null when neither transport works.
+
+    LAN discovery, the network scanner and USB onboarding deliberately do NOT use this:
+    they act on a device that is not (yet) a known headset.
+
+    .EXAMPLE
+    $dev = Resolve-HeadsetAdbDevice -Headset $headset
+    Invoke-AdbCmd -Device $dev -Command "shell getprop ro.product.model"
+    #>
+    param (
+        [Parameter(Mandatory=$true)] $Headset,
+        [ValidateSet('Auto','USB','WiFi')][string]$PreferTransport = 'Auto',
+        [string]$adb = $global:adbPath,
+        [int]$AdbPort = 0
+    )
+
+    if ($AdbPort -le 0) { $AdbPort = if ($global:adbPort_default) { [int]$global:adbPort_default } else { 5555 } }
+
+    $serial = if ($Headset.SerialNumber) { ([string]$Headset.SerialNumber).Trim() } else { '' }
+    if ($serial -eq '-') { $serial = '' }
+    $ip = if ($Headset.IPAddress -and -not (Test-UnknownIp $Headset.IPAddress)) { [string]$Headset.IPAddress } else { $null }
+
+    $usbFirst = switch ($PreferTransport) {
+        'USB'   { $true }
+        'WiFi'  { $false }
+        default { if ($null -ne $global:ADB_prefer_usb) { [bool]$global:ADB_prefer_usb } else { $true } }
+    }
+
+    $newUsb = {
+        param($s)
+        $busy = $false
+        if (Get-Command Test-UsbBusy -ErrorAction SilentlyContinue) { $busy = Test-UsbBusy }
+        if ($busy -or -not $s) { return $null }
+        $cabled = @(Get-PublishedUsbDevices | Where-Object { $_.Serial -eq $s })
+        if ($cabled.Count -eq 0) { return $null }
+        return [PSCustomObject]@{
+            DeviceId = $s; ConnectionType = 'USB'; IP = $null; Port = $null
+            SerialNumber = $s; HeadsetIP = $ip; HeadsetPort = $AdbPort
+        }
+    }
+    $newWifi = {
+        if (-not $ip) { return $null }
+        $d = Get-AdbWifiDevice -headsetIP $ip -AdbPort $AdbPort -adb $adb
+        if (-not $d) { return $null }
+        $d | Add-Member -NotePropertyName SerialNumber -NotePropertyValue $serial -Force
+        $d | Add-Member -NotePropertyName HeadsetIP    -NotePropertyValue $ip     -Force
+        $d | Add-Member -NotePropertyName HeadsetPort  -NotePropertyValue $AdbPort -Force
+        return $d
+    }
+
+    if ($usbFirst) {
+        $dev = & $newUsb $serial
+        if ($dev) { Write-Log ("USB transport selected for {0} (serial {1})" -f $Headset.Name, $serial) -Level DEBUG; return $dev }
+        return (& $newWifi)
+    }
+
+    $dev = & $newWifi
+    if ($dev) { return $dev }
+    return (& $newUsb $serial)
+}
+
+
 function Get-BestAdbDevice {
     <#
     .SYNOPSIS
-    Returns the fastest available ADB device for a known headset: USB if connected, WiFi otherwise.
+    Returns the ADB device for a known headset: USB if cabled, WiFi otherwise.
+    Kept under its historical name for its existing callers; the logic is now
+    Resolve-HeadsetAdbDevice, which reads the USB set VRMonitor publishes instead of
+    running "adb devices" on every call.
     #>
     param (
         [Parameter(Mandatory=$true)] $Headset,
@@ -1102,22 +1338,7 @@ function Get-BestAdbDevice {
         [int]$AdbPort = 5555
     )
 
-    if ($Headset.SerialNumber) {
-        try {
-            $usbLine = & $adb devices 2>$null | Where-Object { $_ -match "`tdevice$" -and $_ -notmatch ':' }
-            if ($usbLine) {
-                $serial = ($usbLine -split "`t")[0].Trim()
-                if ($serial -eq $Headset.SerialNumber) {
-                    Write-Log "USB connection preferred for $($Headset.Name) (serial $serial)" -Level DEBUG
-                    return [PSCustomObject]@{ DeviceId = $serial; ConnectionType = 'USB'; IP = $null; Port = $null }
-                }
-            }
-        } catch {
-            Write-Log ($msg.ADBExecutionFailed -f $_.Exception.Message) -Level ERROR
-        }
-    }
-
-    return Get-AdbWifiDevice -headsetIP $Headset.IPAddress -AdbPort $AdbPort -adb $adb
+    return Resolve-HeadsetAdbDevice -Headset $Headset -adb $adb -AdbPort $AdbPort
 }
 
 
@@ -1331,6 +1552,9 @@ function Invoke-UsbHeadsetActions {
     } catch {
         Write-Log ("Invoke-UsbHeadsetActions: could not publish USB snapshot: " + $_.Exception.Message) -Level DEBUG
     }
+
+    # The cabled-device set (app_kv 'usb_devices') is published by Update-UsbWatchState itself,
+    # at the top of the tick - see Publish-UsbDeviceSet.
 
     if (-not $snap) { return $null }
 
@@ -2232,7 +2456,31 @@ function Resolve-LocalAppIcon {
         $bestStem = [System.IO.Path]::GetFileNameWithoutExtension($sourceFile)
         $destName = "$bestStem$destExt"
         $destPath = Join-Path $IconCacheDir $destName
-        Copy-Item -LiteralPath $sourceFile -Destination $destPath -Force
+
+        # Copy only when the cached file is missing or stale. This function runs on every poll of
+        # every headset, so it used to re-copy the SAME icon (com.oculus.png is the foreground app
+        # of nearly every Quest) several times a minute - and with two headsets two poll runspaces
+        # copied it at the same instant, one failing with "file in use by another process" and
+        # losing that poll cycle's foreground-app lookup. A copy keeps the source's timestamp, so
+        # "same size and not older than the source" means the cache is already current.
+        $needCopy = $true
+        try {
+            if (Test-Path -LiteralPath $destPath) {
+                $src = Get-Item -LiteralPath $sourceFile
+                $dst = Get-Item -LiteralPath $destPath
+                if ($dst.Length -eq $src.Length -and $dst.LastWriteTimeUtc -ge $src.LastWriteTimeUtc) { $needCopy = $false }
+            }
+        } catch { $needCopy = $true }
+
+        if ($needCopy) {
+            try {
+                Copy-Item -LiteralPath $sourceFile -Destination $destPath -Force -ErrorAction Stop
+            } catch {
+                # Another runspace is writing the same icon right now. That is not a failure: the file
+                # is being put in place by an identical copy, so only give up if it still is not there.
+                if (-not (Test-Path -LiteralPath $destPath)) { throw }
+            }
+        }
         return "/assets/app_icons/$destName"
     }
 
@@ -4045,3 +4293,113 @@ function Set-HeadsetBrightnessCompanion {
     }
 }
 
+
+
+function ConvertFrom-ThermalService {
+    <#
+    .SYNOPSIS
+    Parses the output of "dumpsys thermalservice" into per-sensor-type temperatures.
+
+    .DESCRIPTION
+    Shared by the VRMonitor stage-2 read (CPU/GPU/skin into the metric history) and the
+    DIAG page health section, so the parsing lives in exactly one place.
+
+    thermalservice lists each sensor as
+        Temperature{mValue=36.4, mType=3, mName=VIRTUAL-SKIN, mStatus=0}
+    mType is the Android HardwareProperties type: 0 CPU, 1 GPU, 2 BATTERY, 3 SKIN,
+    4 USB_PORT. There are usually several sensors per type (cpu0..cpuN), so the value kept
+    per type is the MAXIMUM - the hottest core is what throttles the device.
+
+    The dump holds the same sensors twice, as "Cached temperatures" and as "Current
+    temperatures from HAL". The HAL section is preferred when present, because the cache
+    can be stale; the whole dump is used when the section is missing (older firmware).
+
+    NaN and absurd readings (<= 0 or > 150) are ignored: an unplugged or uncalibrated
+    sensor reports them and they would wreck the graph scale.
+
+    "Thermal Status: N" is the overall throttling level (0 none, 1 light, 2 moderate,
+    3 severe, 4 critical, 5 emergency, 6 shutdown), returned as Status.
+
+    Returns [PSCustomObject]@{ Cpu; Gpu; Battery; Skin; UsbPort; Status; Sensors } - each
+    temperature a [double] or $null when no sensor of that type reported; Sensors is the
+    flat list @{Type;Name;Value;Status} for the DIAG page.
+
+    .EXAMPLE
+    $t = ConvertFrom-ThermalService -Lines (Invoke-AdbCmd -Device $d -Command "shell dumpsys thermalservice")
+    $t.Cpu
+    #>
+    param([string[]]$Lines)
+
+    $result = [PSCustomObject]@{
+        Cpu = $null; Gpu = $null; Battery = $null; Skin = $null; UsbPort = $null
+        BatterySensor = $null; SkinSensor = $null
+        Status = $null; Sensors = @()
+    }
+    if (-not $Lines) { return $result }
+
+    $all = @($Lines)
+
+    # Prefer the live HAL section; fall back to the whole dump.
+    $start = -1
+    for ($i = 0; $i -lt $all.Count; $i++) {
+        if ($all[$i] -match 'Current temperatures from HAL') { $start = $i + 1; break }
+    }
+    $scan = @()
+    if ($start -ge 0) {
+        for ($i = $start; $i -lt $all.Count; $i++) {
+            # The section ends at the next non-indented heading (cooling devices, etc.).
+            if ($all[$i] -match '^\S' -and $all[$i] -notmatch 'Temperature\{') { break }
+            $scan += $all[$i]
+        }
+    }
+    if ($scan.Count -eq 0) { $scan = $all }
+
+    $inv     = [System.Globalization.CultureInfo]::InvariantCulture
+    $pattern = 'Temperature\{mValue=(?<v>[^,]+),\s*mType=(?<t>\d+),\s*mName=(?<n>[^,]*),\s*mStatus=(?<s>\d+)\}'
+    $best    = @{}
+    $sensors = @()
+    foreach ($line in $scan) {
+        $m = [regex]::Match($line, $pattern)
+        if (-not $m.Success) { continue }
+        $value = 0.0
+        if (-not [double]::TryParse($m.Groups['v'].Value.Trim(), [System.Globalization.NumberStyles]::Float, $inv, [ref]$value)) { continue }
+        if ([double]::IsNaN($value) -or $value -le 0 -or $value -gt 150) { continue }
+        $type = [int]$m.Groups['t'].Value
+        $sensors += [PSCustomObject]@{ Type = $type; Name = $m.Groups['n'].Value.Trim(); Value = $value; Status = [int]$m.Groups['s'].Value }
+        if (-not $best.ContainsKey($type) -or $value -gt $best[$type]) { $best[$type] = $value }
+    }
+
+    if ($best.ContainsKey(0)) { $result.Cpu     = $best[0] }
+    if ($best.ContainsKey(1)) { $result.Gpu     = $best[1] }
+    # Battery and skin are NOT the hottest sensor of their type. A Quest 3 reports a power-chip
+    # die (pm8550b_tz, ~58 C) and a fuel gauge next to the real battery sensor, and a dozen
+    # internal board sensors (soc-usr, rf-usr, pcb*-usr) next to the surface ones - taking the
+    # maximum put a chip temperature on the "battery" and "skin" tiles, 15-20 C above what the
+    # battery and the casing actually are. So prefer the sensor that carries the meaning:
+    #   battery  the one named "battery" (it equals dumpsys battery), then batt-virt-usr
+    #   skin     the virtual surface sensor (virtual-skin / skin / surf-virt-usr)
+    # and only fall back to the maximum when a firmware has none of them. CPU and GPU stay at
+    # the maximum on purpose: the hottest core is the one that throttles.
+    $preferred = {
+        param([int]$Type, [string[]]$NamePatterns)
+        $of = @($sensors | Where-Object { $_.Type -eq $Type })
+        if ($of.Count -eq 0) { return $null }
+        foreach ($rx in $NamePatterns) {
+            $hit = $of | Where-Object { $_.Name -match $rx } | Select-Object -First 1
+            if ($hit) { return $hit }
+        }
+        return ($of | Sort-Object Value -Descending | Select-Object -First 1)
+    }
+    $batterySensor = & $preferred 2 @('(?i)^battery$', '(?i)^batt-virt')
+    if ($batterySensor) { $result.Battery = $batterySensor.Value; $result.BatterySensor = $batterySensor.Name }
+    $skinSensor = & $preferred 3 @('(?i)^virtual-skin$', '(?i)^skin', '(?i)^surf-virt')
+    if ($skinSensor) { $result.Skin = $skinSensor.Value; $result.SkinSensor = $skinSensor.Name }
+    if ($best.ContainsKey(4)) { $result.UsbPort = $best[4] }
+    $result.Sensors = $sensors
+
+    foreach ($line in $all) {
+        $sm = [regex]::Match($line, 'Thermal Status:\s*(\d+)')
+        if ($sm.Success) { $result.Status = [int]$sm.Groups[1].Value; break }
+    }
+    return $result
+}

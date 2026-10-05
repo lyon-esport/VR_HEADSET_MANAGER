@@ -74,6 +74,7 @@ All thresholds and switches of the automatic quality mitigation — explained in
 |---|---|---|
 | `folder` | `scrcpy\scrcpy-win64-v...` | scrcpy/ADB binaries folder inside `sources\` (the scrcpy release bundles `adb.exe`, so this always holds the same value as `scrcpy.folder`) |
 | `adbPort_default` | `5555` | Default ADB WiFi port |
+| `prefer_usb` | `true` | When a known headset is cabled to this PC, use USB for every ADB call and for the scrcpy capture, and fall back to WiFi when the cable drops. `false` keeps everything on WiFi. Takes effect after an application restart |
 
 Each scrcpy version lives in its own folder under `sources\scrcpy\`, so several can coexist; this key selects the active one. Switch versions from the web UI (Configuration -> Advanced) rather than editing it by hand.
 
@@ -84,6 +85,8 @@ Each scrcpy version lives in its own folder under `sources\scrcpy\`, so several 
 | `folder` | `scrcpy\scrcpy-win64-v...` | Same value as `ADB.folder` above |
 | `recordFolder` | `C:\DATA\MEDIA\VR_Records` | Where recordings are written |
 | `recordMinFreeSpaceGB` | `5` | Below this free space, recording is disabled automatically |
+| `usb_switch_mode` | `stable` | What a RUNNING capture does when its headset gets cabled: `stable` (switch after the delay below, never while recording), `immediate`, or `next_start` (never interrupt, use USB at the next start). A capture on USB always falls back to WiFi when the cable is removed |
+| `usb_switch_stable_sec` | `10` | How long the cable must stay connected before `stable` mode moves a capture to USB |
 | `parameters.<Model>` | — | Per-model capture profiles (see below) |
 
 Each supported model (`Quest 3`, `Quest 2`, `PICO 4 Ultra`) defines:
@@ -105,6 +108,21 @@ Alert thresholds used by the web UI and the OBS overlays:
 | `headset_battery_warningLevel` / `criticalLevel` | 40 / 30 % |
 | `controllers_battery_warningLevel` / `criticalLevel` | 30 / 15 % |
 | `temperature_highLevel` | 50 °C |
+| `temperature_warningLevel` | 42 °C |
+| `cpu_temperature_warningLevel` / `cpu_temperature_highLevel` | 75 / 85 °C |
+| `gpu_temperature_warningLevel` / `gpu_temperature_highLevel` | 75 / 85 °C |
+
+CPU and GPU have their own bands because they run far hotter than the battery under load (a Quest 3 sits around 60-65 °C while streaming). Battery and skin temperatures use `temperature_*Level`. The bands colour the DIAG page tiles and the metric-history graphs.
+
+### `Diag`
+
+Settings of the headset DIAG page (see [Web interface](web-interface.md#headset-diag)):
+
+| Key | Default | Description |
+|---|---|---|
+| `auto_refresh_sec` | `30` | How often the page re-reads its sections while auto-refresh is on |
+| `cable_test_passes` | `3` | Push/pull passes run by the USB cable throughput test |
+| `command_presets` | 4 presets | List of `{ "name", "command" }` shown in the ADB shell panel. Edited in `config.json` (the config page has no editor for it) |
 
 ### `mediamtx`
 

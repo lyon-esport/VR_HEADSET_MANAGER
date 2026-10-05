@@ -66,7 +66,7 @@ function Write-Log {
 }
 
 
-# 📌 **Usage examples:**
+# **Usage examples:**
 <#
 Write-Log -Message "This is a debug message" -Level "DEBUG"
 Write-Log -Message "Process completed successfully" -Level "INFO"

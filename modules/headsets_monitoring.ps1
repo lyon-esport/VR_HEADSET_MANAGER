@@ -322,7 +322,7 @@ function Start-VRMonitor {
             # OF ITS OWN. A connection is never shared between runspaces - the
             # module refuses that explicitly, because a native SQLite handle used
             # from two threads corrupts memory silently.
-            foreach ($mod in @("logging.ps1","config_files_loader.ps1","utils.ps1","network_scanner.ps1","adb_functions.ps1","database.ps1","headsets_monitoring.ps1")) {
+            foreach ($mod in @("logging.ps1","config_files_loader.ps1","utils.ps1","network_scanner.ps1","adb_functions.ps1","database.ps1","usb_manager.ps1","headset_diag.ps1","headsets_monitoring.ps1")) {
                 $f = Join-Path $modPath $mod
                 if (Test-Path -LiteralPath $f) { . $f }
             }
@@ -332,7 +332,7 @@ function Start-VRMonitor {
             $transFolder = Join-Path $scriptPath "modules\translations"
             $transFile   = Join-Path $transFolder "$($global:SelectedLanguage).psd1"
             if (-not (Test-Path -LiteralPath $transFile)) { $transFile = Join-Path $transFolder "en-US.psd1" }
-            if (Test-Path -LiteralPath $transFile) { $global:msg = Import-PowerShellDataFile -Path $transFile }
+            if (Test-Path -LiteralPath $transFile) { $global:msg = Import-PowerShellDataFile -LiteralPath $transFile }
 
             # Worker role: open only, never migrate. Get-Config must have run
             # first - it is what sets the database paths.
@@ -379,6 +379,13 @@ function Start-VRMonitor {
             $appsCacheEvery   = 100
             $appsCacheCounter = 0
             $nextStatsAt      = [datetime]::MinValue   # first tick collects stats immediately
+            # Firmware version is read over ADB far less often than battery: it only changes
+            # on an OTA, so a 10 minute cadence is plenty and keeps it off the hot cycle.
+            $nextFirmwareAt   = [datetime]::MinValue
+            # The serial this runspace learned from the headset itself. $headset was captured
+            # at startup, so a row added from an IP alone has no serial in it - without this
+            # the USB-first transport could not tell the headset is cabled.
+            $learnedSerial    = ''
 
             # try/finally around the whole loop: the stop flags exit via return,
             # and this runspace owns a database connection that must be released
@@ -389,8 +396,16 @@ function Start-VRMonitor {
 
                 $sw = [System.Diagnostics.Stopwatch]::StartNew()
                 try {
+                    # The registry row as captured at startup, with the serial this runspace
+                    # has learned since filled in when the row never had one.
+                    $liveHeadset = $headset
+                    if ([string]::IsNullOrWhiteSpace([string]$headset.SerialNumber) -and $learnedSerial) {
+                        $liveHeadset = $headset.PSObject.Copy()
+                        $liveHeadset.SerialNumber = $learnedSerial
+                    }
+
                     # --- Stage 1: reachability (every tick) ---
-                    $s1 = Get-HeadsetInfoStage1Reachability -knownHeadset $headset
+                    $s1 = Get-HeadsetInfoStage1Reachability -knownHeadset $liveHeadset
                     foreach ($k in $s1.Keys) { $workingInfo.$k = $s1[$k] }
 
                     # --- Stage 2/3: identity, battery, foreground app (every refresh_timer) ---
@@ -399,13 +414,27 @@ function Start-VRMonitor {
                         $nextStatsAt = [datetime]::Now.AddSeconds($timer)
 
                         if ($workingInfo.ADBWifi) {
-                            $device = Get-AdbWifiDevice -headsetIP $ip
+                            # USB when the headset is cabled here, WiFi otherwise (and WiFi
+                            # again the moment the cable drops - Invoke-AdbCmd retries once).
+                            $device = Resolve-HeadsetAdbDevice -Headset $liveHeadset
                             if (-not $device) {
-                                $workingInfo.ADBWifi = $false
+                                $workingInfo.ADBWifi      = $false
+                                $workingInfo.AdbTransport = "-"
                             } else {
+                                $workingInfo.AdbTransport = $device.ConnectionType
+
                                 # --- Stage 2: identity + battery ---
-                                $s2 = Get-HeadsetInfoStage2Identity -knownHeadset $headset -Device $device
+                                $s2 = Get-HeadsetInfoStage2Identity -knownHeadset $liveHeadset -Device $device
                                 foreach ($k in $s2.Keys) { $workingInfo.$k = $s2[$k] }
+                                if ($workingInfo.SerialNumber -and $workingInfo.SerialNumber -ne "-") { $learnedSerial = [string]$workingInfo.SerialNumber }
+
+                                # --- Firmware history (slow cadence, one adb call) ---
+                                if ([datetime]::Now -ge $nextFirmwareAt) {
+                                    $nextFirmwareAt = [datetime]::Now.AddMinutes(10)
+                                    if (Get-Command Update-HeadsetFirmwareHistory -ErrorAction SilentlyContinue) {
+                                        try { Update-HeadsetFirmwareHistory -Device $device -HeadsetId ([int]$headset.ID) -Brand $workingInfo.Brand | Out-Null } catch { }
+                                    }
+                                }
 
                                 # Battery history + time estimate (local var persists across cycles)
                                 if ($workingInfo.Battery -ne "-") {
@@ -441,6 +470,10 @@ function Start-VRMonitor {
                         $workingInfo.Charging               = "-"
                         $workingInfo.ChargingWattage        = "-"
                         $workingInfo.Temp                   = "-"
+                        $workingInfo.CpuTemp                = "-"
+                        $workingInfo.GpuTemp                = "-"
+                        $workingInfo.SkinTemp               = "-"
+                        $workingInfo.AdbTransport           = "-"
                         $workingInfo.BatteryControllerLeft  = "-"
                         $workingInfo.BatteryControllerRight = "-"
                         $workingInfo.PowerState             = "-"
@@ -499,7 +532,7 @@ function Start-VRMonitor {
             $transFolder = Join-Path $scriptPath "modules\translations"
             $transFile   = Join-Path $transFolder "$($global:SelectedLanguage).psd1"
             if (-not (Test-Path -LiteralPath $transFile)) { $transFile = Join-Path $transFolder "en-US.psd1" }
-            if (Test-Path -LiteralPath $transFile) { $global:msg = Import-PowerShellDataFile -Path $transFile }
+            if (Test-Path -LiteralPath $transFile) { $global:msg = Import-PowerShellDataFile -LiteralPath $transFile }
 
             if (Get-Command Initialize-Database -ErrorAction SilentlyContinue) {
                 try { Initialize-Database -Role Worker | Out-Null } catch { }
@@ -566,7 +599,7 @@ function Start-VRMonitor {
             $transFolder = Join-Path $scriptPath "modules\translations"
             $transFile   = Join-Path $transFolder "$($global:SelectedLanguage).psd1"
             if (-not (Test-Path -LiteralPath $transFile)) { $transFile = Join-Path $transFolder "en-US.psd1" }
-            if (Test-Path -LiteralPath $transFile) { $global:msg = Import-PowerShellDataFile -Path $transFile }
+            if (Test-Path -LiteralPath $transFile) { $global:msg = Import-PowerShellDataFile -LiteralPath $transFile }
 
             if (Get-Command Initialize-Database -ErrorAction SilentlyContinue) {
                 try { Initialize-Database -Role Worker | Out-Null } catch { }
@@ -751,7 +784,7 @@ function Start-VRMonitor {
             # more but stay in the fingerprint: they gate the Update-HeadsetField write-back
             # and the Set-HeadsetIdentity queueing in the block below.
             $fp = ($knownHeadsetsInfo | ForEach-Object {
-                "$($_.ID)|$($_.Ping)|$($_.ADBWifi)|$($_.Battery)|$($_.Charging)|$($_.ChargingWattage)|$($_.Temp)|$($_.BatteryControllerLeft)|$($_.BatteryControllerRight)|$($_.PowerState)|$($_.TimeRemainingMin)|$($_.SCRCPY)|$($_.Brand)|$($_.Model)|$($_.SerialNumber)|$($_.RunningApp)"
+                "$($_.ID)|$($_.Ping)|$($_.ADBWifi)|$($_.Battery)|$($_.Charging)|$($_.ChargingWattage)|$($_.Temp)|$($_.CpuTemp)|$($_.GpuTemp)|$($_.SkinTemp)|$($_.BatteryControllerLeft)|$($_.BatteryControllerRight)|$($_.PowerState)|$($_.TimeRemainingMin)|$($_.AdbTransport)|$($_.SCRCPY)|$($_.Brand)|$($_.Model)|$($_.SerialNumber)|$($_.RunningApp)"
             }) -join '~'
 
             if ($fp -ne $lastFingerprint -and $knownHeadsets.Count -gt 0) {
@@ -871,10 +904,14 @@ function Start-VRMonitor {
                             Charging               = [string](Get-StatusFieldOrDash $info.Charging)
                             ChargingWattage        = [string](Get-StatusFieldOrDash $info.ChargingWattage)
                             Temp                   = [string](Get-StatusFieldOrDash $info.Temp)
+                            CpuTemp                = [string](Get-StatusFieldOrDash $info.CpuTemp)
+                            GpuTemp                = [string](Get-StatusFieldOrDash $info.GpuTemp)
+                            SkinTemp               = [string](Get-StatusFieldOrDash $info.SkinTemp)
                             BatteryControllerLeft  = [string](Get-StatusFieldOrDash $info.BatteryControllerLeft)
                             BatteryControllerRight = [string](Get-StatusFieldOrDash $info.BatteryControllerRight)
                             PowerState             = [string](Get-StatusFieldOrDash $info.PowerState)
                             TimeRemainingMin       = [string](Get-StatusFieldOrDash $info.TimeRemainingMin)
+                            AdbTransport           = [string](Get-StatusFieldOrDash $info.AdbTransport)
                             SCRCPY                 = [string](Get-StatusFieldOrDash $info.SCRCPY)
                             RunningApp             = [string](Get-StatusFieldOrDash $info.RunningApp)
                             RunningAppIcon         = [string]$(if ($null -eq $info.RunningAppIcon) { '' } else { $info.RunningAppIcon })
@@ -1084,6 +1121,9 @@ function Get-HeadsetMetricDefinition {
         ctrl_left  = @{ Label = 'Controller L';   Unit = '%'; Column = 'battery_controller_left';  IsPercent = $true  }
         ctrl_right = @{ Label = 'Controller R';   Unit = '%'; Column = 'battery_controller_right'; IsPercent = $true  }
         wattage    = @{ Label = 'Charging power'; Unit = 'W'; Column = 'charging_wattage';         IsPercent = $false }
+        cpu_temp   = @{ Label = 'CPU temperature'; Unit = 'C'; Column = 'cpu_temp';                IsPercent = $false }
+        gpu_temp   = @{ Label = 'GPU temperature'; Unit = 'C'; Column = 'gpu_temp';                IsPercent = $false }
+        skin_temp  = @{ Label = 'Skin temperature'; Unit = 'C'; Column = 'skin_temp';              IsPercent = $false }
     }
 }
 
@@ -1193,12 +1233,18 @@ function Get-HeadsetInfosCsvColumn {
         "Charging",
         "ChargingWattage",
         "Temp",
+        "CpuTemp",
+        "GpuTemp",
+        "SkinTemp",
         "BatteryControllerLeft",
         "BatteryControllerRight",
         "PowerState",
         "TimeRemainingMin",
-        # No BatteryHistory: the samples are rows in battery_history now
-        # (migration 005), written by a trigger on the Battery column above.
+        # No BatteryHistory: the samples are rows in metric_history now
+        # (migrations 005/006), written by a trigger on the Battery column above.
+        # AdbTransport (migration 007): USB or WiFi - which transport the monitor
+        # is using for this headset right now, a dash when neither answers.
+        "AdbTransport",
         "SCRCPY",
         "RunningApp",
         "RunningAppIcon"
@@ -1220,10 +1266,14 @@ function New-DefaultHeadsetInfo {
         Charging        = "-"
         ChargingWattage = "-"
         Temp            = "-"
+        CpuTemp         = "-"
+        GpuTemp         = "-"
+        SkinTemp        = "-"
         BatteryControllerLeft  = "-"
         BatteryControllerRight = "-"
         PowerState       = "-"
         TimeRemainingMin = "-"
+        AdbTransport     = "-"
         BatteryHistory   = ""
         SCRCPY           = "-"
         Brand            = ""
@@ -1242,7 +1292,7 @@ function Get-HeadsetInfoStage1Reachability {
         [int]$ADBPort = 5555,
         [int]$PingTimeout = 1000
     )
-    $out = @{ Ping = $false; ADBWifi = $false; SCRCPY = "-" }
+    $out = @{ Ping = $false; ADBWifi = $false; AdbTransport = "-"; SCRCPY = "-" }
     $IPAddress = $knownHeadset.IPAddress
 
     # Defensive: Sync-HeadsetRunspaces already skips rows with an unknown address, but a
@@ -1260,11 +1310,26 @@ function Get-HeadsetInfoStage1Reachability {
         $ping.Dispose()
     }
 
+    $wifiOpen = $false
     if ($out.Ping) {
         if ((Test-Port -hostname $IPAddress -port $ADBPort -timeout 400).open) {
-            $out.ADBWifi = $true
+            $wifiOpen = $true
         }
     }
+
+    # USB-first transport: a headset cabled to this PC is reachable over ADB even when its
+    # WiFi is off or the ping fails, so ADB reachable is true if EITHER transport is up.
+    # The cabled set is what VRMonitor published (no adb.exe spawn here - this runs every
+    # second per headset). AdbTransport names the one Resolve-HeadsetAdbDevice will pick.
+    $usbCabled = $false
+    $usbSerial = if ($knownHeadset.SerialNumber) { ([string]$knownHeadset.SerialNumber).Trim() } else { '' }
+    if ($usbSerial -and $usbSerial -ne '-' -and (Get-Command Get-PublishedUsbDevices -ErrorAction SilentlyContinue)) {
+        $usbCabled = [bool](@(Get-PublishedUsbDevices | Where-Object { $_.Serial -eq $usbSerial }).Count)
+    }
+    $preferUsb = if ($null -ne $global:ADB_prefer_usb) { [bool]$global:ADB_prefer_usb } else { $true }
+    if ($usbCabled -and ($preferUsb -or -not $wifiOpen)) { $out.AdbTransport = "USB" }
+    elseif ($wifiOpen)                                  { $out.AdbTransport = "WiFi" }
+    $out.ADBWifi = ($usbCabled -or $wifiOpen)
 
     # Fast path: check cached scrcpy PID (avoids WMI on every cycle)
     $cachedPid = $script:ScrcpyPidCache[$IPAddress]
@@ -1295,7 +1360,10 @@ function Get-HeadsetInfoStage1Reachability {
                         if ($cimProc) {
                             $cmdLine = $cimProc.CommandLine
                             $cimProc.Dispose()
-                            if ($cmdLine -match ([regex]::Escape($IPAddress) + "(:$ADBPort)?")) {
+                            # A WiFi launch carries -s ip:port; a USB launch carries
+                            # -s <serial>. Either one means this headset session.
+                            if ($cmdLine -match ([regex]::Escape($IPAddress) + "(:$ADBPort)?") -or
+                                ($usbSerial -and $usbSerial -ne '-' -and $cmdLine -match ('-s\s+\x22?' + [regex]::Escape($usbSerial) + '(?:\x22|\s|$)'))) {
                                 $matched = $true
                             }
                         }
@@ -1322,6 +1390,7 @@ function Get-HeadsetInfoStage2Identity {
     $out = @{
         Brand = ""; Model = "-"; SerialNumber = "-"
         Battery = "-"; Charging = "-"; ChargingWattage = "-"; Temp = "-"
+        CpuTemp = "-"; GpuTemp = "-"; SkinTemp = "-"
         BatteryControllerLeft = "-"; BatteryControllerRight = "-"
     }
     try {
@@ -1343,10 +1412,73 @@ function Get-HeadsetInfoStage2Identity {
             $out.BatteryControllerLeft  = if ($null -ne $batteryInfo.BatteryControllerLeft)  { "$($batteryInfo.BatteryControllerLeft) %" }  else { "-" }
             $out.BatteryControllerRight = if ($null -ne $batteryInfo.BatteryControllerRight) { "$($batteryInfo.BatteryControllerRight) %" } else { "-" }
         }
+
+        # CPU / GPU / skin temperatures from thermalservice, throttled to one read per 30 s
+        # per headset (Get-HeadsetThermalCached). The dumpsys is one adb round-trip and the
+        # readings move slowly, so reading it on every stage-2 cycle would only add process
+        # churn. Between reads the LAST values are returned: stage 2 returns every key on
+        # every call and the caller copies them all over the working record, so a key left
+        # at a dash would blank the columns - and the metric graph - until the next read.
+        $thermal = Get-HeadsetThermalCached -Device $Device -Key $knownHeadset.IPAddress -adb $adb
+        if ($thermal) {
+            if ($thermal.CpuTemp)  { $out.CpuTemp  = $thermal.CpuTemp }
+            if ($thermal.GpuTemp)  { $out.GpuTemp  = $thermal.GpuTemp }
+            if ($thermal.SkinTemp) { $out.SkinTemp = $thermal.SkinTemp }
+        }
     } catch {
         Write-Log -Message ($msg.AdbInfoFailed -f $knownHeadset.IPAddress, $_) -Level "ERROR"
     }
     return $out
+}
+
+function Get-HeadsetThermalCached {
+    <#
+    .SYNOPSIS
+    CPU/GPU/skin temperatures of one headset, read at most once per -EverySec seconds.
+
+    .DESCRIPTION
+    Wraps one "dumpsys thermalservice" (parsed by ConvertFrom-ThermalService) in a
+    per-key memo that lives as long as the calling runspace. Returns the cached values
+    between reads. Each value is a string formatted with the invariant culture (36.4),
+    matching what the status columns and the sampling triggers expect; an absent sensor
+    is $null, not a dash, so the caller decides the placeholder.
+
+    A failed read keeps the previous values and still advances the clock, so a headset
+    that does not answer is not asked again on every cycle.
+
+    .EXAMPLE
+    $t = Get-HeadsetThermalCached -Device $device -Key $ip
+    $t.CpuTemp
+    #>
+    param(
+        [Parameter(Mandatory=$true)] $Device,
+        [Parameter(Mandatory=$true)][string]$Key,
+        [int]$EverySec = 30,
+        [string]$adb = $global:adbPath
+    )
+
+    if (-not $script:ThermalState) { $script:ThermalState = @{} }
+    $st  = $script:ThermalState[$Key]
+    $now = [datetime]::UtcNow
+    if ($st -and (($now - $st.At).TotalSeconds -lt $EverySec)) { return $st }
+
+    $prev = $st
+    $st = @{ At = $now; CpuTemp = $null; GpuTemp = $null; SkinTemp = $null }
+    if ($prev) { $st.CpuTemp = $prev.CpuTemp; $st.GpuTemp = $prev.GpuTemp; $st.SkinTemp = $prev.SkinTemp }
+
+    try {
+        $lines = Invoke-AdbCmd -Device $Device -Command "shell dumpsys thermalservice" -TimeoutSeconds 10 -adb $adb -SilentOnFail
+        if ($lines) {
+            $t   = ConvertFrom-ThermalService -Lines $lines
+            $inv = [System.Globalization.CultureInfo]::InvariantCulture
+            $st.CpuTemp  = if ($null -ne $t.Cpu)  { ([double]$t.Cpu).ToString('0.0', $inv) }  else { $null }
+            $st.GpuTemp  = if ($null -ne $t.Gpu)  { ([double]$t.Gpu).ToString('0.0', $inv) }  else { $null }
+            $st.SkinTemp = if ($null -ne $t.Skin) { ([double]$t.Skin).ToString('0.0', $inv) } else { $null }
+        }
+    } catch { }
+
+    $script:ThermalState[$Key] = $st
+    return $st
 }
 
 function Get-HeadsetInfoStage3App {
@@ -1392,11 +1524,13 @@ function Get-KnownHeadsetInfos {
     foreach ($k in $s1.Keys) { $result.$k = $s1[$k] }
     if (-not $result.ADBWifi) { return $result }
 
-    $device = Get-AdbWifiDevice -headsetIP $knownHeadset.IPAddress -AdbPort $ADBPort -adb $adb
+    $device = Resolve-HeadsetAdbDevice -Headset $knownHeadset -AdbPort $ADBPort -adb $adb
     if (-not $device) {
         $result.ADBWifi = $false
+        $result.AdbTransport = "-"
         return $result
     }
+    $result.AdbTransport = $device.ConnectionType
 
     $s2 = Get-HeadsetInfoStage2Identity -knownHeadset $knownHeadset -Device $device -adb $adb
     foreach ($k in $s2.Keys) { $result.$k = $s2[$k] }

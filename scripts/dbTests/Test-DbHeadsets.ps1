@@ -32,6 +32,18 @@ $modulesRoot = Join-Path -Path (Get-DbTestRepoRoot) -ChildPath 'modules'
 # translations before calling any module function.
 $global:msg = Import-PowerShellDataFile -Path (Join-Path $modulesRoot 'translations\en-US.psd1')
 
+# Add-Headset builds the default scrcpy profile through ConvertTo-ScrcpyProfile and
+# Get-ScrcpyDefaultView (scrcpy_launcher.ps1) and reads three globals that Get-Config
+# normally sets. Loaded BEFORE the stubs below so those still win for the process and
+# window helpers; dot-sourcing only defines functions, nothing here launches scrcpy.
+. (Join-Path $modulesRoot 'scrcpy_launcher.ps1')
+$global:scrcpyParameters         = [PSCustomObject]@{}
+$global:scrcpyDefaultFps         = 30
+$global:scrcpyDefaultBitrateMbps = 8
+# The real one indexes $global:scrcpyParameters by model, which the strict-mode harness rejects
+# for a model with no entry. This is its documented fallback for an unknown model.
+function Get-ScrcpyDefaultView { param([string]$Model) return 'square' }
+
 function New-HeadsetSandbox {
     <#
     .SYNOPSIS

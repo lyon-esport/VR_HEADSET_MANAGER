@@ -124,6 +124,13 @@ function Import-DatabaseAssembly {
                Where-Object { $_.GetName().Name -eq 'System.Data.SQLite' } |
                Select-Object -First 1
     if ($already) {
+        # The engine version is read back by callers (and by the Unit layer) from this global.
+        # It used to be set only on the load path below, so a process that found the assembly
+        # already loaded - any second dot-source cycle, or a test run that executes several
+        # layers in one process - left it undefined.
+        if (-not $global:databaseEngineVersion) {
+            try { $global:databaseEngineVersion = [System.Data.SQLite.SQLiteConnection]::SQLiteVersion } catch { }
+        }
         $script:DbAssemblyLoaded = $true
         return $true
     }
@@ -1426,10 +1433,14 @@ function Import-LegacyDataFiles {
                 Charging               = [string](Get-LegacyField $r 'Charging' '-')
                 ChargingWattage        = [string](Get-LegacyField $r 'ChargingWattage' '-')
                 Temp                   = [string](Get-LegacyField $r 'Temp' '-')
+                CpuTemp                = [string](Get-LegacyField $r 'CpuTemp' '-')
+                GpuTemp                = [string](Get-LegacyField $r 'GpuTemp' '-')
+                SkinTemp               = [string](Get-LegacyField $r 'SkinTemp' '-')
                 BatteryControllerLeft  = [string](Get-LegacyField $r 'BatteryControllerLeft' '-')
                 BatteryControllerRight = [string](Get-LegacyField $r 'BatteryControllerRight' '-')
                 PowerState             = [string](Get-LegacyField $r 'PowerState' '-')
                 TimeRemainingMin       = [string](Get-LegacyField $r 'TimeRemainingMin' '-')
+                AdbTransport           = [string](Get-LegacyField $r 'AdbTransport' '-')
                 SCRCPY                 = [string](Get-LegacyField $r 'SCRCPY' '-')
                 RunningApp             = [string](Get-LegacyField $r 'RunningApp' '-')
                 RunningAppIcon         = [string](Get-LegacyField $r 'RunningAppIcon' '')
