@@ -195,7 +195,11 @@
       // EPS-rendered constants (baked into HTML at generation time)
       var WHEP_HOST = window.location.hostname || 'localhost';
       var WHEP_URL = 'http://' + WHEP_HOST + ':<%= $mediamtx_webrtc_port %>/<%= $stream_path %>/whep';
-      var RETRY_DELAY_MS = 5000;   // retry interval when stream is unavailable
+      // Retry delays when the stream is unavailable. The page is usually loaded a few seconds
+      // BEFORE mediamtx has a publisher (it is shown as soon as scrcpy runs), so the first
+      // attempts fail with a 404 - retry fast at first, then settle at 5 s.
+      var RETRY_DELAYS_MS = [500, 1000, 2000, 5000];
+      var retryCount = 0;
       var PAUSE_WHEN_HIDDEN = <%= if ($pause_when_hidden) { 'true' } else { 'false' } %>;
       var PAUSE_DELAY_MS = <%= $pause_when_hidden_delay_sec %> * 1000;
 
@@ -227,7 +231,9 @@
       function scheduleRetry() {
         cleanup();
         showStatus('Stream unavailable - retrying...');
-        retryTimer = setTimeout(connect, RETRY_DELAY_MS);
+        var delay = RETRY_DELAYS_MS[Math.min(retryCount, RETRY_DELAYS_MS.length - 1)];
+        retryCount++;
+        retryTimer = setTimeout(connect, delay);
       }
 
       async function connect() {
@@ -244,6 +250,7 @@
           pc.ontrack = function(evt) {
             if (evt.streams && evt.streams[0]) {
               videoEl.srcObject = evt.streams[0];
+              retryCount = 0;   // a later drop starts the fast retries again
               showStatus('');
             }
           };

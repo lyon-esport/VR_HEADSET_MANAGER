@@ -466,7 +466,13 @@ function Get-Config {
         $global:AdaptiveMonitoring_Enabled = $true
     }
     # Session cache for the resolved GPU encoder, populated lazily by Get-GpuEncoder.
-    $global:GpuEncoder = $null
+    # Created once, NEVER reset here: VRMonitor re-runs Get-Config on every slow tick, and
+    # wiping the cache made every scrcpy start re-probe the encoders (~11 s before the
+    # stream could publish). Get-GpuEncoder invalidates it itself when codec / GPU /
+    # acceleration / ffmpeg binary change.
+    if (-not (Get-Variable -Name GpuEncoder -Scope Global -ErrorAction SilentlyContinue)) {
+        $global:GpuEncoder = $null
+    }
 
     # GLOBAL VARIABLES FOR SCRCPY PROCESS TRACKING AND AUTO-RESTART
     $global:scrcpyProcesses = @() #will keep track of launched scrcpy processes

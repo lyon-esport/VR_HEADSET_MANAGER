@@ -1203,6 +1203,43 @@ try {
             continue
         }
 
+        # API: POST /api/headset-screen-frame  body {"id":3,"transport":"Auto|USB|WiFi"}
+        # One full, uncropped scrcpy frame of a headset for the visual view editor
+        # (vrhm_config.html, Headset Profiles). Logic in Get-HeadsetScreenFrame (scrcpy_launcher.ps1).
+        # The PNG lands in website\generated\view_editor\, served at /view_editor/<file> by the
+        # generated\ fallback. Blocks this listener for a few seconds (scrcpy records ~3 s).
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/headset-screen-frame') {
+            try {
+                if ($request.ContentLength64 -gt 4096) { throw "Request body too large" }
+                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body   = $reader.ReadToEnd(); $reader.Close()
+                $json   = $body | ConvertFrom-Json
+                $frameId = 0
+                if (-not [int]::TryParse([string]$json.id, [ref]$frameId) -or $frameId -le 0) { throw "INVALID_ID" }
+                $frameHeadset = Get-HeadsetDiagTarget -Id $frameId
+                if (-not $frameHeadset) { throw "UNKNOWN_HEADSET" }
+                $frameTransport = if ($json.transport) { [string]$json.transport } else { 'Auto' }
+                if (@('Auto','USB','WiFi') -notcontains $frameTransport) { $frameTransport = 'Auto' }
+                $frame = Get-HeadsetScreenFrame -Headset $frameHeadset -Transport $frameTransport
+                $frameUrl = if ($frame.Ok) { "/view_editor/{0}?t={1}" -f (Split-Path -Path $frame.Path -Leaf), [DateTime]::UtcNow.Ticks } else { $null }
+                Send-JsonResponse -Response $response -Body @{
+                    ok = [bool]$frame.Ok; url = $frameUrl; width = $frame.Width; height = $frame.Height
+                    transport = $frame.Transport; model = [string]$frameHeadset.Model; name = [string]$frameHeadset.Name
+                    error = $frame.Error
+                }
+            } catch {
+                $errMsg = switch -Regex ($_.Exception.Message) {
+                    'INVALID_ID'      { 'Invalid or missing headset id.' }
+                    'UNKNOWN_HEADSET' { 'This headset is not registered on this server.' }
+                    default           { $_.Exception.Message }
+                }
+                Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $errMsg }
+            } finally {
+                $response.Close()
+            }
+            continue
+        }
+
         # API: POST /api/headset-diag/action  body {"id":3,"action":"sync_clock","args":{...}}
         # One dispatcher over a CLOSED list of actions (Invoke-HeadsetDiagActionByName refuses
         # any other name). Same LAN-trust posture as the rest of the app (ADR-0014).

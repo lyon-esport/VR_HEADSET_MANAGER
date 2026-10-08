@@ -396,6 +396,12 @@
         WifiPushOk        = "Le casque '{0}' a ete bascule sur le reseau WiFi '{1}'."
         WifiPushFailed    = "Echec de l'envoi WiFi : {0}"
         WifiPreferredTag  = "(prefere)"
+        # --- Capture d'une image complete pour concevoir une vue scrcpy (console + POST /api/headset-screen-frame) ---
+        FrameMenuEntry    = "8. Capturer une image plein ecran (pour concevoir une vue de capture)"
+        FramePickHeadset  = "ID du casque (0 pour revenir)"
+        FrameCapturing    = "Capture d'une image complete de '{0}' avec scrcpy (quelques secondes)..."
+        FrameSaved        = "Image enregistree : {0} ({1} x {2} px, via {3}). Les valeurs de crop (l:h:x:y) sont dans ces pixels."
+        FrameFailed       = "Echec de la capture d'image : {0}"
     }
 
     # ==========================================

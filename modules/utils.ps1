@@ -1562,13 +1562,16 @@ function Get-GpuEncoderCandidates {
 function Get-GpuEncoder {
     param([switch]$Force)
     $codec = if ($global:mediamtxCodec) { $global:mediamtxCodec } else { 'h264' }
-    if (-not $Force -and $null -ne $global:GpuEncoder -and $global:GpuEncoder.Codec -eq $codec) { return $global:GpuEncoder }
+    # Everything that can change which encoder works. A cached result is reused only while
+    # all of it is unchanged, so a GPU / codec / ffmpeg version change in config re-probes.
+    $cacheKey = '{0}|{1}|{2}|{3}' -f $codec, $global:GPU_Index, [bool]$global:GPU_Acceleration, $global:ffmpegFilePath
+    if (-not $Force -and $null -ne $global:GpuEncoder -and $global:GpuEncoder.CacheKey -eq $cacheKey) { return $global:GpuEncoder }
 
     $x264Name = if ($codec -eq 'h265') { 'libx265' } else { 'libx264' }
 
     # GPU acceleration disabled -> always CPU software encoder
     if (-not $global:GPU_Acceleration) {
-        $global:GpuEncoder = @{ Name=$x264Name; Vendor='CPU'; ExtraArgs=@(); Codec=$codec }
+        $global:GpuEncoder = @{ Name=$x264Name; Vendor='CPU'; ExtraArgs=@(); Codec=$codec; CacheKey=$cacheKey }
         return $global:GpuEncoder
     }
 
@@ -1583,6 +1586,7 @@ function Get-GpuEncoder {
 
     $candidates = Get-GpuEncoderCandidates -GpuIndex $global:GPU_Index -Codec $codec
     foreach ($c in $candidates) {
+        $c.CacheKey = $cacheKey
         if ($c.Name -eq $x264Name) {
             # No probe needed - the software encoder is always present in the bundled ffmpeg.
             $global:GpuEncoder = $c
@@ -1605,7 +1609,7 @@ function Get-GpuEncoder {
         }
     }
     # Should never reach here (the software encoder is in the list and returned unconditionally above).
-    $global:GpuEncoder = @{ Name=$x264Name; Vendor='CPU'; ExtraArgs=@(); Codec=$codec }
+    $global:GpuEncoder = @{ Name=$x264Name; Vendor='CPU'; ExtraArgs=@(); Codec=$codec; CacheKey=$cacheKey }
     return $global:GpuEncoder
 }
 

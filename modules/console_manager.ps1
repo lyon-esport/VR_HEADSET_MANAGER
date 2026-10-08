@@ -1108,6 +1108,7 @@ function Show-SubMenu-ManageHeadset { #CHOICE 4
     Write-Host $msg.KillApp
     Write-Host $msg.UninstallApp
     Write-Host $msg.Headset.WifiMenuEntry
+    Write-Host $msg.Headset.FrameMenuEntry
 
     Write-Host $msg.ReturnPreviousMenu
     $userInput = $(Read-Host $msg.YourChoice).ToUpper() #ToUpper = Convert user input to uppercase for case-insensitive comparison
@@ -1123,6 +1124,9 @@ function Show-SubMenu-ManageHeadset { #CHOICE 4
     }
     elseif ($userInput -eq '7') {
         Show-SubMenu-PushHeadsetWifi
+    }
+    elseif ($userInput -eq '8') {
+        Show-SubMenu-CaptureHeadsetFrame
     }
     elseif ($userInput -in ('3','4','5','6')) {
         Write-Host $msg.AppManager
@@ -1204,6 +1208,51 @@ function Show-SubMenu-PushHeadsetWifi {
         }
     } else {
         Write-Log ($msg.Headset.WifiPushFailed -f $result.Error) -Level ERROR
+    }
+    Start-Sleep -Seconds 3
+}
+
+function Show-SubMenu-CaptureHeadsetFrame {
+    <#
+    .SYNOPSIS
+    Console counterpart of POST /api/headset-screen-frame: captures one full, uncropped
+    scrcpy frame of a headset (Get-HeadsetScreenFrame) and opens the PNG.
+
+    .DESCRIPTION
+    Drawing the crop rectangles is web-only (Configuration -> Headset Profiles -> Visual
+    editor); from the console the operator reads the pixel positions in an image viewer and
+    types the w:h:x:y values into the profile.
+
+    .EXAMPLE
+    Show-SubMenu-CaptureHeadsetFrame
+    #>
+    $headsets = @(Get-KnownHeadsets)
+    if ($headsets.Count -eq 0) {
+        Write-Host $msg.NoHeadsetInFile -ForegroundColor Yellow
+        Start-Sleep -Seconds 2
+        return
+    }
+
+    Show-HeadsetsTable
+    Write-Host ""
+    $headsetChoice = Read-Host $msg.Headset.FramePickHeadset
+    if ($headsetChoice -eq '0' -or -not $headsetChoice) { return }
+
+    $headset = $headsets | Where-Object { [string]$_.ID -eq [string]$headsetChoice } | Select-Object -First 1
+    if (-not $headset) {
+        Write-Log $msg.UnrecognizedOption -Level ERROR
+        Start-Sleep -Seconds 2
+        return
+    }
+
+    Write-Log ($msg.Headset.FrameCapturing -f $headset.Name) -Level INFO
+    $frame = Get-HeadsetScreenFrame -Headset $headset
+    if ($frame.Ok) {
+        Write-Log ($msg.Headset.FrameSaved -f $frame.Path, $frame.Width, $frame.Height, $frame.Transport) -Level SUCCESS
+        # Default image viewer - Open-File would open the PNG in notepad.
+        try { Start-Process -FilePath $frame.Path } catch { Write-Log $_.Exception.Message -Level WARNING }
+    } else {
+        Write-Log ($msg.Headset.FrameFailed -f $frame.Error) -Level ERROR
     }
     Start-Sleep -Seconds 3
 }

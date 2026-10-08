@@ -3191,6 +3191,11 @@ function Update-InstalledAppsCache {
         [Parameter(Mandatory=$true)]
         [PSCustomObject]$Device,
         [string]$headsetName,
+        # Permanent headset id, when the caller already has it. The VRMonitor poll
+        # runspace MUST pass it: it does not import headsets_manager.ps1, so
+        # Resolve-HeadsetIdByName does not exist there and the name lookup threw on
+        # every cycle - the monitor never refreshed any installed-apps list.
+        [int]$HeadsetId = 0,
         [switch]$ResolveMissing,
         [string]$adb = $global:adbPath
     )
@@ -3200,7 +3205,7 @@ function Update-InstalledAppsCache {
         # built from the display name. No id means no row to attach to, so there
         # is nothing useful to do - and silently writing under a wrong id would be
         # worse than skipping.
-        $headsetId = Resolve-HeadsetIdByName -Name $headsetName
+        $headsetId = if ($HeadsetId -gt 0) { $HeadsetId } else { Resolve-HeadsetIdByName -Name $headsetName }
         if ($headsetId -le 0) {
             Write-Log ("Update-InstalledAppsCache: no headset named '{0}'" -f $headsetName) -Level DEBUG
             return

@@ -114,6 +114,118 @@ function Set-ScrcpyDefaultView {
 }
 
 
+# Captures ONE full, uncropped frame of a headset screen as a PNG - the reference image the
+# visual view editor (vrhm_config.html, Headset Profiles) draws crop rectangles on. scrcpy has
+# no screenshot option, so this records a few seconds with NO --crop / --angle / --max-size
+# (native resolution = the coordinate system of the view crops) and extracts the last frame
+# with ffmpeg. adb screencap is deliberately not used: on a headset it does not necessarily
+# return the same image scrcpy captures, and the crop must be expressed in scrcpy's frame.
+# Returns @{Ok;Path;Width;Height;Transport;Error}. Never throws.
+# Example: Get-HeadsetScreenFrame -Headset (Get-HeadsetDiagTarget -Id 3)
+function Get-HeadsetScreenFrame {
+    param(
+        [Parameter(Mandatory)] $Headset,
+        [string]$OutFile,
+        [ValidateRange(1, 15)] [int]$DurationSec = 3,
+        [ValidateSet('Auto','USB','WiFi')] [string]$Transport = 'Auto'
+    )
+    $result = @{ Ok = $false; Path = $null; Width = 0; Height = 0; Transport = '-'; Error = $null }
+    $tmpMkv = $null
+    try {
+        if (-not $OutFile) {
+            $OutFile = Join-Path $global:ScriptPath ("website\generated\view_editor\headset_{0}.png" -f $Headset.ID)
+        }
+        $outDir = Split-Path -Path $OutFile -Parent
+        # .NET call: New-Item has no -LiteralPath in PS 5.1 and the project root is accented.
+        if (-not (Test-Path -LiteralPath $outDir)) { [void][System.IO.Directory]::CreateDirectory($outDir) }
+
+        if (-not $global:scrcpyFilePath -or -not (Test-Path -LiteralPath $global:scrcpyFilePath)) {
+            $result.Error = "scrcpy.exe not found at: $global:scrcpyFilePath"
+            return $result
+        }
+        if (-not $global:ffmpegFilePath -or -not (Test-Path -LiteralPath $global:ffmpegFilePath)) {
+            $result.Error = "ffmpeg.exe not found at: $global:ffmpegFilePath - install ffmpeg from the Advanced section of the configuration page."
+            return $result
+        }
+
+        $device = Resolve-HeadsetAdbDevice -Headset $Headset -PreferTransport $Transport
+        if (-not $device) {
+            $result.Error = ("Headset '{0}' is not reachable over USB or WiFi ADB." -f $Headset.Name)
+            return $result
+        }
+        $result.Transport = [string]$device.ConnectionType
+
+        $tmpMkv = Join-Path ([System.IO.Path]::GetTempPath()) ("vrhm_frame_{0}_{1}.mkv" -f $Headset.ID, [guid]::NewGuid().ToString('N'))
+        $scrcpyArgs = @('-s', $device.DeviceId, '--no-window', '--no-playback', '--no-audio',
+                        '--video-codec=h264', "--record=`"$tmpMkv`"", '--record-format=mkv',
+                        "--time-limit=$DurationSec")
+        $tpl = if ($Headset.Model) { $global:scrcpyParameters.($Headset.Model) } else { $null }
+        if ($tpl -and $tpl.video_encoder -and (-not $tpl.video_codec -or $tpl.video_codec -eq 'h264')) {
+            $scrcpyArgs += ("--video-encoder={0}" -f $tpl.video_encoder)
+        }
+
+        Write-Log ("Get-HeadsetScreenFrame: capturing '{0}' over {1} ({2})" -f $Headset.Name, $result.Transport, $device.DeviceId) -Level INFO
+        $psi = [System.Diagnostics.ProcessStartInfo]::new()
+        $psi.FileName               = $global:scrcpyFilePath
+        $psi.WorkingDirectory       = Split-Path -Path $global:scrcpyFilePath -Parent
+        $psi.Arguments              = $scrcpyArgs -join ' '
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError  = $true
+        $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+        $psi.StandardErrorEncoding  = [System.Text.Encoding]::UTF8
+        $psi.UseShellExecute        = $false
+        $psi.CreateNoWindow         = $true
+        $proc = [System.Diagnostics.Process]::new()
+        $proc.StartInfo = $psi
+        $scrcpyErr = ''
+        try {
+            [void]$proc.Start()
+            $outTask = $proc.StandardOutput.ReadToEndAsync()
+            $errTask = $proc.StandardError.ReadToEndAsync()
+            if (-not $proc.WaitForExit(($DurationSec + 12) * 1000)) {
+                try { $proc.Kill() } catch {}
+                [void]$proc.WaitForExit(3000)
+            }
+            $scrcpyErr = ([string]$errTask.GetAwaiter().GetResult()) + ([string]$outTask.GetAwaiter().GetResult())
+        } finally {
+            $proc.Dispose()
+        }
+
+        if (-not (Test-Path -LiteralPath $tmpMkv) -or (Get-Item -LiteralPath $tmpMkv).Length -eq 0) {
+            $tail = (@($scrcpyErr -split "`r?`n" | Where-Object { $_.Trim() }) | Select-Object -Last 4) -join ' | '
+            $result.Error = "scrcpy produced no video. If a stream is already running for this headset, stop it and retry. scrcpy: $tail"
+            Write-Log ("Get-HeadsetScreenFrame: {0}" -f $result.Error) -Level WARNING
+            return $result
+        }
+
+        if (Test-Path -LiteralPath $OutFile) { Remove-Item -LiteralPath $OutFile -Force -ErrorAction SilentlyContinue }
+        # Last frame first: the first one can still be a black/transition frame. -sseof needs the
+        # duration scrcpy writes on a clean close, hence the first-frame fallback.
+        & $global:ffmpegFilePath -hide_banner -loglevel error -y -sseof -1 -i $tmpMkv -frames:v 1 -update 1 $OutFile 2>$null | Out-Null
+        if (-not (Test-Path -LiteralPath $OutFile)) {
+            & $global:ffmpegFilePath -hide_banner -loglevel error -y -i $tmpMkv -frames:v 1 -update 1 $OutFile 2>$null | Out-Null
+        }
+        if (-not (Test-Path -LiteralPath $OutFile)) {
+            $result.Error = 'ffmpeg could not extract a frame from the scrcpy recording.'
+            return $result
+        }
+
+        Add-Type -AssemblyName System.Drawing
+        $img = [System.Drawing.Image]::FromFile($OutFile)
+        try { $result.Width = $img.Width; $result.Height = $img.Height } finally { $img.Dispose() }
+        $result.Path = $OutFile
+        $result.Ok   = $true
+        Write-Log ("Get-HeadsetScreenFrame: '{0}' frame {1}x{2} saved to {3}" -f $Headset.Name, $result.Width, $result.Height, $OutFile) -Level INFO
+    } catch {
+        $result.Error = $_.Exception.Message
+        Write-Log ("Get-HeadsetScreenFrame failed: {0}" -f $_.Exception.Message) -Level ERROR
+    } finally {
+        if ($tmpMkv -and (Test-Path -LiteralPath $tmpMkv)) { Remove-Item -LiteralPath $tmpMkv -Force -ErrorAction SilentlyContinue }
+    }
+    return $result
+}
+
+
 # Build the scrcpy argument string from a model template (config.json) and a per-headset profile.
 # Profile format: [L/R]-[D/N]-FPS-BW  e.g. "R-N-45-20"
 #   L/R = Left or Right eye  (selects crop + angle from model template)
@@ -921,6 +1033,16 @@ function Get-ScrcpyTransportDecision {
 
 
 function Watch-ScrcpyProcesses {
+    param(
+        # IP -> live info record, as the VRMonitor per-headset runspaces publish it in
+        # $sharedState (stage 1 refreshed every second). When a headset has a record here,
+        # its ADBWifi/Model are read from it instead of running a full synchronous
+        # Get-KnownHeadsetInfos poll (ping + ADB + battery + thermal + app) just to learn
+        # whether ADB is up - that poll, one headset after another, delayed every start.
+        [hashtable]$HeadsetInfo = $null,
+        # Limit the pass to these headset IDs (the VRMonitor fast-path start trigger).
+        [int[]]$HeadsetId = $null
+    )
 
     # Step 1: Retrieve scrcpy processes running on the machine
 
@@ -929,13 +1051,20 @@ function Watch-ScrcpyProcesses {
     # Get-KnownHeadsetInfos round trip per watchdog pass.
     $knownHeadsets_with_autorestart = Get-KnownHeadsets |
         Where-Object { (ConvertTo-BoolField $_.scrcpy_AutoRestart) -and -not (Test-UnknownIp $_.IPAddress) }
+    if ($HeadsetId) {
+        $knownHeadsets_with_autorestart = $knownHeadsets_with_autorestart | Where-Object { $HeadsetId -contains [int]$_.ID }
+    }
 
     # For each headset with autorestart, ensure there's a scrcpy process started
 
     foreach ($headset in $knownHeadsets_with_autorestart) {
         Write-Log ($msg.ScrcpyCheckHeadset -f $headset.Name, $headset.IPAddress) -Level DEBUG
 
-        $headsetInfos = Get-KnownHeadsetInfos $headset
+        $headsetInfos = $null
+        if ($HeadsetInfo -and $HeadsetInfo.ContainsKey([string]$headset.IPAddress)) {
+            $headsetInfos = $HeadsetInfo[[string]$headset.IPAddress]
+        }
+        if (-not $headsetInfos) { $headsetInfos = Get-KnownHeadsetInfos $headset }
         if (ConvertTo-BoolField $headsetInfos.ADBWifi) {
             Write-Log ($msg.ScrcpyCheckProcess -f $headset.Name, $headset.IPAddress) -Level DEBUG
             $runningScrcpyProcess_forThisheadset = Get-ScrcpyProcess -displayName (Convert-Displayname $headset.Name) -headsetIP $headset.IPAddress -headsetSerial $headset.SerialNumber

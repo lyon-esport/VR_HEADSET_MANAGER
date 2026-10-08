@@ -397,6 +397,12 @@
         WifiPushOk        = "Headset '{0}' was moved to WiFi network '{1}'."
         WifiPushFailed    = "WiFi push failed: {0}"
         WifiPreferredTag  = "(preferred)"
+        # --- Full-frame capture for designing a scrcpy view (console + POST /api/headset-screen-frame) ---
+        FrameMenuEntry    = "8. Capture a full-screen frame (to design a capture view)"
+        FramePickHeadset  = "Headset ID (0 to go back)"
+        FrameCapturing    = "Capturing one full frame of '{0}' with scrcpy (a few seconds)..."
+        FrameSaved        = "Frame saved: {0} ({1} x {2} px, over {3}). Crop values (w:h:x:y) are in these pixels."
+        FrameFailed       = "Frame capture failed: {0}"
     }
 
     # ==========================================

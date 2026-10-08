@@ -934,8 +934,49 @@
         body: JSON.stringify({ name: dn, value: newVal })
       })
       .then(function(r) { return r.json(); })
-      .then(function(j) { if (!j.ok) { autoRestartState[dn] = !newVal; updateAutoRestartButtons(); } })
+      .then(function(j) {
+        if (!j.ok) { autoRestartState[dn] = !newVal; updateAutoRestartButtons(); return; }
+        // Capture was just requested: VRMonitor starts scrcpy within ~1 s, so poll now
+        // and keep polling fast until the stream shows (see captureStarting()).
+        if (newVal) { delete _pendingSince[dn]; kickStatusLoop(); }
+      })
       .catch(function() { autoRestartState[dn] = !newVal; updateAutoRestartButtons(); });
+    }
+
+    // ------ Fast status polling while a capture is starting -----------------------------------
+    // A cell only loads its [video].html once the status poll reports scrcpy=true. The normal
+    // cadence is refresh_timer x load multiplier (5 s, up to 25 s under load), which was most of
+    // the delay between "capture started" and "video on screen". While a headset has auto-restart
+    // ON, ADB up and no stream yet, poll every FAST_STATUS_MS instead - for at most
+    // FAST_STATUS_MAX_MS per headset, so a headset whose capture keeps failing does not keep the
+    // page on a 1 s poll forever.
+    var FAST_STATUS_MS     = 1000;
+    var FAST_STATUS_MAX_MS = 60000;
+    var _pendingSince      = {};    // display name -> ms timestamp the pending state was first seen
+    var _statusTimer       = null;
+    var _statusInFlight    = false;
+    var _statusKick        = false;
+    var _statusLoopFn      = null;  // set once the status loop is bootstrapped
+
+    function captureStarting() {
+      var now = Date.now(), fast = false;
+      Object.keys(autoRestartState).forEach(function(dn) {
+        var st = headsetStatus[dn];
+        var pending = autoRestartState[dn] && st && st.adb && !st.scrcpy;
+        if (!pending) { delete _pendingSince[dn]; return; }
+        if (!_pendingSince[dn]) _pendingSince[dn] = now;
+        if (now - _pendingSince[dn] < FAST_STATUS_MAX_MS) fast = true;
+      });
+      return fast;
+    }
+
+    // Run the status loop now instead of waiting for its timer. If a poll is already in flight,
+    // flag it so that poll reschedules immediately - never start a second polling chain.
+    function kickStatusLoop() {
+      if (!_statusLoopFn) return;
+      if (_statusInFlight) { _statusKick = true; return; }
+      if (_statusTimer) { clearTimeout(_statusTimer); _statusTimer = null; }
+      _statusLoopFn();
     }
 
 
@@ -1611,10 +1652,15 @@
         // After every poll completion, refresh the tier in parallel and re-schedule using
         // setTimeout (not setInterval) so each tick re-reads the current multiplier.
         function statusLoop() {
+          _statusInFlight = true;
           Promise.all([pollHeadsetsStatus(), refreshLoadTier(), refreshCaptureMode()]).finally(function() {
-            setTimeout(statusLoop, nextStatusDelay());
+            _statusInFlight = false;
+            var delay = _statusKick ? 0 : (captureStarting() ? FAST_STATUS_MS : nextStatusDelay());
+            _statusKick = false;
+            _statusTimer = setTimeout(statusLoop, delay);
           });
         }
+        _statusLoopFn = statusLoop;
         refreshLoadTier().finally(statusLoop);
         document.querySelectorAll('#grid .cell').forEach(function(cell) {
           var dn = cell.dataset.display;
