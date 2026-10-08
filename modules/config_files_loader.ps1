@@ -448,8 +448,8 @@ function Get-Config {
         $global:GPU_Acceleration       = if ($null -ne $perf.GPU_Acceleration) { [bool]$perf.GPU_Acceleration } else { $true }
         $global:GPU_Index              = if ($null -ne $perf.GPU_Index) { [int]$perf.GPU_Index } else { 0 }
         $validCaptureModes             = @('StreamOnly','StreamAndLocalWindow','LocalWindow','Headless','WindowHeadless','WindowOnly','LocalOnly')
-        $cm                            = if ($perf.Capture_Mode) { [string]$perf.Capture_Mode } else { 'StreamAndLocalWindow' }
-        if ($cm -notin $validCaptureModes) { $cm = 'StreamAndLocalWindow' }
+        $cm                            = if ($perf.Capture_Mode) { [string]$perf.Capture_Mode } else { 'StreamOnly' }
+        if ($cm -notin $validCaptureModes) { $cm = 'StreamOnly' }
         $cm                            = switch ($cm) {
             'Headless'       { 'StreamOnly' }
             'WindowHeadless' { 'StreamAndLocalWindow' }
@@ -462,7 +462,7 @@ function Get-Config {
     } else {
         $global:GPU_Acceleration           = $true
         $global:GPU_Index                  = 0
-        $global:CaptureMode                = 'StreamAndLocalWindow'
+        $global:CaptureMode                = 'StreamOnly'
         $global:AdaptiveMonitoring_Enabled = $true
     }
     # Session cache for the resolved GPU encoder, populated lazily by Get-GpuEncoder.

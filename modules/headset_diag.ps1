@@ -604,7 +604,7 @@ function Get-HeadsetDiagWireless {
 
     Returns [PSCustomObject]@{ Ok; WifiEnabled; Ssid; Bssid; RssiDbm; LinkSpeedMbps;
     TxSpeedMbps; RxSpeedMbps; FrequencyMhz; Band; Standard; Ip; SavedNetworks;
-    MetaReachable; MetaLatencyMs; BluetoothEnabled; BluetoothState; BondedDevices; Error }.
+    MetaReachable; MetaLatencyMs; BluetoothEnabled; BluetoothState; BondedDevices; AdbTlsEnabled; Error }.
 
     .EXAMPLE
     Get-HeadsetDiagWireless -Device (Resolve-HeadsetAdbDevice -Headset $h)
@@ -619,7 +619,7 @@ function Get-HeadsetDiagWireless {
         LinkSpeedMbps = $null; TxSpeedMbps = $null; RxSpeedMbps = $null; FrequencyMhz = $null
         Band = $null; Standard = $null; Ip = $null; SavedNetworks = @()
         MetaReachable = $null; MetaLatencyMs = $null
-        BluetoothEnabled = $null; BluetoothState = $null; BondedDevices = @(); Error = $null
+        BluetoothEnabled = $null; BluetoothState = $null; BondedDevices = @(); AdbTlsEnabled = $null; Error = $null
     }
 
     try {
@@ -628,11 +628,14 @@ function Get-HeadsetDiagWireless {
             'cmd wifi list-networks 2>/dev/null',
             'ip -4 addr show wlan0 2>/dev/null',
             'ping -c 2 -W 2 graph.oculus.com 2>&1',
-            "dumpsys bluetooth_manager 2>/dev/null | grep -i -E 'enabled:|state:|^ *[0-9A-F]{2}(:[0-9A-F]{2}){5}'"
+            "dumpsys bluetooth_manager 2>/dev/null | grep -i -E 'enabled:|state:|^ *[0-9A-F]{2}(:[0-9A-F]{2}){5}'",
+            'settings get global adb_wifi_enabled'
         )
         if (-not $seg) { $r.Error = 'No answer from the headset.'; return $r }
 
         # --- WiFi link ---
+        $tlsRaw = Get-DiagFirstLine $seg[5]
+        if ($tlsRaw -eq '1') { $r.AdbTlsEnabled = $true } elseif ($tlsRaw -eq '0' -or $tlsRaw -eq 'null') { $r.AdbTlsEnabled = $false }
         $wifiText = (@($seg[0]) -join "`n")
         if ($wifiText -match '(?i)Wifi is (\w+)') { $r.WifiEnabled = ($Matches[1] -eq 'enabled') }
         $info = @($seg[0] | Where-Object { $_ -match 'mWifiInfo' } | Select-Object -First 1)
@@ -660,7 +663,7 @@ function Get-HeadsetDiagWireless {
         foreach ($l in @($seg[1])) {
             if ($l -match '^\s*(\d+)\s+(.+?)\s{2,}(\S.*?)\s*$') { $saved += [PSCustomObject]@{ Id = [int]$Matches[1]; Ssid = $Matches[2].Trim(); Security = $Matches[3].Trim() } }
         }
-        $r.SavedNetworks = $saved
+        $r.SavedNetworks = @(Merge-DiagSavedWifi -Rows $saved)
 
         # --- IP of wlan0 ---
         $ipLine = @($seg[2] | Where-Object { $_ -match 'inet\s+(\d+\.\d+\.\d+\.\d+)' } | Select-Object -First 1)
@@ -779,6 +782,69 @@ function Get-HeadsetDiagUsb {
 }
 
 
+function Measure-HeadsetAdbThroughput {
+    <#
+    .SYNOPSIS
+    The measuring core shared by the USB cable test and the WiFi throughput test: pushes then
+    pulls a random temporary file over the given ADB device, -Passes times, and reports MB/s per
+    pass. Returns @{ Ok; Passes; AvgPushMBps; AvgPullMBps; SizeMb; Error }.
+
+    .DESCRIPTION
+    Takes an already-resolved device and does NOT decide whether the transport is the right one -
+    the callers do that, because a number measured on the wrong link would be reported as if it
+    described the other. The remote and both local temp files are removed whatever happens.
+
+    .EXAMPLE
+    Measure-HeadsetAdbThroughput -Device $device -Passes 3 -SizeMb 32
+    #>
+    param(
+        [Parameter(Mandatory=$true)] $Device,
+        [Parameter(Mandatory=$true)][int]$Passes,
+        [int]$SizeMb = 32,
+        [string]$adb = $global:adbPath
+    )
+    $r = [PSCustomObject]@{ Ok = $false; Passes = @(); AvgPushMBps = $null; AvgPullMBps = $null; SizeMb = $SizeMb; Error = $null }
+    $tmp    = Join-Path -Path $env:TEMP -ChildPath ("vrhm_speed_{0}.bin" -f [guid]::NewGuid().ToString('N'))
+    $pulled = $tmp + '.pull'
+    $remote = '/sdcard/vrhm_speed_test.bin'
+    try {
+        $bytes = New-Object byte[] ($SizeMb * 1MB)
+        (New-Object System.Random).NextBytes($bytes)
+        [System.IO.File]::WriteAllBytes($tmp, $bytes)
+        $bytes = $null
+
+        $rows = @()
+        for ($p = 1; $p -le $Passes; $p++) {
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            $push = Invoke-Adb -Arguments @('-s', $Device.DeviceId, 'push', $tmp, $remote) -TimeoutSeconds 90 -Adb $adb
+            $sw.Stop()
+            if (-not $push.Ok) { $r.Error = 'Push failed: ' + (($push.StdErr + $push.StdOut) -join ' '); break }
+            $pushMbps = [Math]::Round($SizeMb / [Math]::Max(0.001, $sw.Elapsed.TotalSeconds), 1)
+
+            $sw.Restart()
+            $pull = Invoke-Adb -Arguments @('-s', $Device.DeviceId, 'pull', $remote, $pulled) -TimeoutSeconds 90 -Adb $adb
+            $sw.Stop()
+            if (-not $pull.Ok) { $r.Error = 'Pull failed: ' + (($pull.StdErr + $pull.StdOut) -join ' '); break }
+            $pullMbps = [Math]::Round($SizeMb / [Math]::Max(0.001, $sw.Elapsed.TotalSeconds), 1)
+
+            $rows += [PSCustomObject]@{ Pass = $p; PushMBps = $pushMbps; PullMBps = $pullMbps }
+        }
+        $r.Passes = $rows
+        if ($rows.Count -gt 0) {
+            $r.AvgPushMBps = [Math]::Round((($rows | Measure-Object -Property PushMBps -Average).Average), 1)
+            $r.AvgPullMBps = [Math]::Round((($rows | Measure-Object -Property PullMBps -Average).Average), 1)
+            $r.Ok = ($rows.Count -eq $Passes)
+        }
+    } catch {
+        $r.Error = $_.Exception.Message
+    } finally {
+        try { Invoke-AdbCmd -Device $Device -Command ("shell rm -f " + $remote) -SilentOnFail -adb $adb | Out-Null } catch { }
+        foreach ($f in @($tmp, $pulled)) { if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue } }
+    }
+    return $r
+}
+
+
 function Test-HeadsetUsbCable {
     <#
     .SYNOPSIS
@@ -793,8 +859,7 @@ function Test-HeadsetUsbCable {
 
     While it runs, USB is claimed with Set-UsbBusy so the VRMonitor watcher does not fire
     "adb tcpip" into the transfer, and released in the finally block. Refused outright when
-    an operator action already holds USB. The headset ends with no leftover file: the remote
-    and both local temp files are removed whatever happens.
+    an operator action already holds USB. The measuring itself is Measure-HeadsetAdbThroughput.
 
     Returns [PSCustomObject]@{ Ok; Refused; Passes; AvgPushMBps; AvgPullMBps; SizeMb; Error }.
 
@@ -816,45 +881,53 @@ function Test-HeadsetUsbCable {
     $device = Resolve-HeadsetAdbDevice -Headset $Headset -PreferTransport USB -adb $adb
     if (-not $device -or $device.ConnectionType -ne 'USB') { $r.Refused = $true; $r.Error = 'This headset is not connected over USB.'; return $r }
 
-    $tmp    = Join-Path -Path $env:TEMP -ChildPath ("vrhm_cable_{0}.bin" -f [guid]::NewGuid().ToString('N'))
-    $pulled = $tmp + '.pull'
-    $remote = '/sdcard/vrhm_cable_test.bin'
     Set-UsbBusy -Seconds ($Passes * 60 + 30)
     try {
-        $bytes = New-Object byte[] ($SizeMb * 1MB)
-        (New-Object System.Random).NextBytes($bytes)
-        [System.IO.File]::WriteAllBytes($tmp, $bytes)
-        $bytes = $null
-
-        $rows = @()
-        for ($p = 1; $p -le $Passes; $p++) {
-            $sw = [System.Diagnostics.Stopwatch]::StartNew()
-            $push = Invoke-Adb -Arguments @('-s', $device.DeviceId, 'push', $tmp, $remote) -TimeoutSeconds 90 -Adb $adb
-            $sw.Stop()
-            if (-not $push.Ok) { $r.Error = 'Push failed: ' + (($push.StdErr + $push.StdOut) -join ' '); break }
-            $pushMbps = [Math]::Round($SizeMb / [Math]::Max(0.001, $sw.Elapsed.TotalSeconds), 1)
-
-            $sw.Restart()
-            $pull = Invoke-Adb -Arguments @('-s', $device.DeviceId, 'pull', $remote, $pulled) -TimeoutSeconds 90 -Adb $adb
-            $sw.Stop()
-            if (-not $pull.Ok) { $r.Error = 'Pull failed: ' + (($pull.StdErr + $pull.StdOut) -join ' '); break }
-            $pullMbps = [Math]::Round($SizeMb / [Math]::Max(0.001, $sw.Elapsed.TotalSeconds), 1)
-
-            $rows += [PSCustomObject]@{ Pass = $p; PushMBps = $pushMbps; PullMBps = $pullMbps }
-        }
-        $r.Passes = $rows
-        if ($rows.Count -gt 0) {
-            $r.AvgPushMBps = [Math]::Round((($rows | Measure-Object -Property PushMBps -Average).Average), 1)
-            $r.AvgPullMBps = [Math]::Round((($rows | Measure-Object -Property PullMBps -Average).Average), 1)
-            $r.Ok = ($rows.Count -eq $Passes)
-        }
-    } catch {
-        $r.Error = $_.Exception.Message
+        $m = Measure-HeadsetAdbThroughput -Device $device -Passes $Passes -SizeMb $SizeMb -adb $adb
+        $r.Passes = $m.Passes; $r.AvgPushMBps = $m.AvgPushMBps; $r.AvgPullMBps = $m.AvgPullMBps; $r.Ok = $m.Ok; $r.Error = $m.Error
     } finally {
-        try { Invoke-AdbCmd -Device $device -Command ("shell rm -f " + $remote) -SilentOnFail -adb $adb | Out-Null } catch { }
-        foreach ($f in @($tmp, $pulled)) { if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue } }
         Clear-UsbBusy
     }
+    return $r
+}
+
+
+function Test-HeadsetWifiThroughput {
+    <#
+    .SYNOPSIS
+    Measures the real WiFi throughput between this PC and the headset: pushes then pulls a random
+    temporary file over the headset's WiFi ADB connection, -Passes times, and reports MB/s per pass.
+
+    .DESCRIPTION
+    The WiFi counterpart of Test-HeadsetUsbCable. A link can show a high negotiated speed and
+    still crawl under load (a busy channel, a weak signal, a congested access point); a transfer
+    shows what the video stream will actually get. WIFI ONLY: refused when the headset has no live
+    WiFi ADB connection, because a USB number would be reported as if it described the WiFi.
+    A cabled headset can be tested too, as long as its WiFi ADB is on - the transfer goes over
+    WiFi regardless of the cable. Unlike the cable test it does not claim USB, since nothing here
+    re-enumerates it. This measures PC to headset only (not internet speed).
+
+    Returns [PSCustomObject]@{ Ok; Refused; Passes; AvgPushMBps; AvgPullMBps; SizeMb; Error }.
+
+    .EXAMPLE
+    Test-HeadsetWifiThroughput -Headset $headset -Passes 3
+    #>
+    param(
+        [Parameter(Mandatory=$true)] $Headset,
+        [int]$Passes = 0,
+        [int]$SizeMb = 32,
+        [string]$adb = $global:adbPath
+    )
+
+    $r = [PSCustomObject]@{ Ok = $false; Refused = $false; Passes = @(); AvgPushMBps = $null; AvgPullMBps = $null; SizeMb = $SizeMb; Error = $null }
+    if ($Passes -le 0) { $Passes = if ($global:Diag_cable_test_passes) { [int]$global:Diag_cable_test_passes } else { 3 } }
+    if ($Passes -gt 10) { $Passes = 10 }
+
+    $device = Resolve-HeadsetAdbDevice -Headset $Headset -PreferTransport WiFi -adb $adb
+    if (-not $device -or $device.ConnectionType -ne 'WiFi') { $r.Refused = $true; $r.Error = 'This headset has no WiFi ADB connection to test (is WiFi ADB enabled and the headset on the network?).'; return $r }
+
+    $m = Measure-HeadsetAdbThroughput -Device $device -Passes $Passes -SizeMb $SizeMb -adb $adb
+    $r.Passes = $m.Passes; $r.AvgPushMBps = $m.AvgPushMBps; $r.AvgPullMBps = $m.AvgPullMBps; $r.Ok = $m.Ok; $r.Error = $m.Error
     return $r
 }
 
@@ -1277,6 +1350,19 @@ function Enable-HeadsetAdbTls {
     return Invoke-HeadsetDiagAction -Device $Device -Script 'settings put global adb_wifi_enabled 1'
 }
 
+function Disable-HeadsetAdbTls {
+    <#
+    .SYNOPSIS
+    Turns Wireless debugging (ADB over TLS) off: settings put global adb_wifi_enabled 0.
+    The normal WiFi ADB used by this app (adb tcpip 5555) is a different feature and is not
+    touched. Returns @{ Ok; Output; Error }.
+    .EXAMPLE
+    Disable-HeadsetAdbTls -Device $d
+    #>
+    param([Parameter(Mandatory=$true)] $Device)
+    return Invoke-HeadsetDiagAction -Device $Device -Script 'settings put global adb_wifi_enabled 0'
+}
+
 function Connect-HeadsetAdbTls {
     <#
     .SYNOPSIS
@@ -1410,7 +1496,7 @@ function Invoke-HeadsetDiagActionByName {
     $arg = { param($n) if ($null -eq $Arguments) { return $null }; if ($Arguments -is [System.Collections.IDictionary]) { return $Arguments[$n] }; $p = $Arguments.PSObject.Properties[$n]; if ($p) { return $p.Value } else { return $null } }
     $known = @('bluetooth_on','bluetooth_off','bluetooth_settings','sync_clock','reset_dns','updater_disable','updater_enable',
                'app_enable','app_disable','player_message','send_text','recover_wake','recover_home','recover_restart_shell',
-               'recover_restart_systemux','cable_test','tls_enable','tls_connect','command','wifi_scan','wifi_switch')
+               'recover_restart_systemux','cable_test','wifi_speed_test','tls_enable','tls_disable','tls_connect','command','wifi_scan','wifi_switch')
     if ($known -notcontains $Action) { $res.message = ('Unknown action: ' + $Action); return $res }
 
     Write-Log ("DIAG action '{0}' on headset '{1}'" -f $Action, $Headset.Name) -Level INFO
@@ -1421,6 +1507,13 @@ function Invoke-HeadsetDiagActionByName {
             $passes = 0; [void][int]::TryParse([string](& $arg 'passes'), [ref]$passes)
             $r = Test-HeadsetUsbCable -Headset $Headset -Passes $passes
             $res.transport = 'USB'; $res.result = $r; $res.ok = [bool]$r.Ok; $res.message = $r.Error
+            return $res
+        }
+
+        if ($Action -eq 'wifi_speed_test') {
+            $passes = 0; [void][int]::TryParse([string](& $arg 'passes'), [ref]$passes)
+            $r = Test-HeadsetWifiThroughput -Headset $Headset -Passes $passes
+            $res.transport = 'WiFi'; $res.result = $r; $res.ok = [bool]$r.Ok; $res.message = $r.Error
             return $res
         }
 
@@ -1445,6 +1538,7 @@ function Invoke-HeadsetDiagActionByName {
             'recover_restart_shell'    { Invoke-HeadsetRecovery -Device $device -Action 'RestartShell' }
             'recover_restart_systemux' { Invoke-HeadsetRecovery -Device $device -Action 'RestartSystemUX' }
             'tls_enable'               { Enable-HeadsetAdbTls -Device $device }
+            'tls_disable'              { Disable-HeadsetAdbTls -Device $device }
             'tls_connect'              { $p = 0; [void][int]::TryParse([string](& $arg 'port'), [ref]$p); Connect-HeadsetAdbTls -IP ([string]$Headset.IPAddress) -Port $p }
             'command'                  { Invoke-HeadsetCustomCommand -Device $device -Command ([string](& $arg 'command')) -HeadsetName ([string]$Headset.Name) }
             'wifi_scan'                { Get-HeadsetWifiOverview -Device $device }
@@ -1521,6 +1615,26 @@ function Get-WifiSecurityFromFlags {
 }
 
 
+function Merge-DiagSavedWifi {
+    <#
+    .SYNOPSIS
+    One row per SSID from the rows of "cmd wifi list-networks". The headset keeps one entry PER
+    security type (wpa2-psk and wpa3-sae for the same name), so the raw list shows each network twice.
+    Returns @(@{Id;Ssid;Security}) with the security types joined by " / ".
+    .EXAMPLE
+    Merge-DiagSavedWifi -Rows $saved
+    #>
+    param([AllowEmptyCollection()][array]$Rows = @())
+    $merged = @()
+    foreach ($g in ($Rows | Group-Object -Property Ssid)) {
+        $first = $g.Group | Select-Object -First 1
+        $secs = @($g.Group | ForEach-Object { $_.Security } | Select-Object -Unique)
+        $merged += [PSCustomObject]@{ Id = $first.Id; Ssid = $first.Ssid; Security = ($secs -join ' / ') }
+    }
+    return $merged
+}
+
+
 function Get-HeadsetSavedWifi {
     <#
     .SYNOPSIS
@@ -1536,7 +1650,7 @@ function Get-HeadsetSavedWifi {
     foreach ($l in @($a.Output)) {
         if ($l -match '^\s*(\d+)\s+(.+?)\s{2,}(\S.*?)\s*$') { $saved += [PSCustomObject]@{ Id = [int]$Matches[1]; Ssid = $Matches[2].Trim(); Security = $Matches[3].Trim() } }
     }
-    return $saved
+    return (Merge-DiagSavedWifi -Rows $saved)
 }
 
 

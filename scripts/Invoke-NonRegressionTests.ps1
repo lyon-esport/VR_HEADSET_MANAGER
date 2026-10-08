@@ -57,6 +57,11 @@
     implies "no prompts at all"), but you do not need it just to bypass the
     menu - passing the run parameters is enough.
 
+    End of run: unless -Unattended, the harness asks what to do with the app it
+    started: [Enter] keep it running and close the test window (default),
+    [Q] or [K] stop it and restore the folder, [R] retry chosen sections without
+    restarting. Keeping it leaves the sandbox seed in place; -RestoreOnly cleans up.
+
 .PARAMETER AutoApproveSetup
     Auto-approves the app's first-boot computer setup (firewall rules, URL ACL,
     Windows Defender exclusion) so a new release folder starts with no keypress.
@@ -466,6 +471,8 @@ foreach ($s in $selected) {
 }
 
 $exitCode = 2
+$keepAppRunning = $false
+$summaryShown = $false
 try {
     # --- Preconditions and sandbox provisioning -----------------------------
     if (Get-Command Test-SandboxPreconditions -ErrorAction SilentlyContinue) {
@@ -481,52 +488,109 @@ try {
     }
 
     # --- Run sections -------------------------------------------------------
-    $runIndex = 0
-    foreach ($section in $selected) {
-        $runIndex++
-        $remaining = 0
-        foreach ($s in ($selected | Select-Object -Skip $runIndex)) {
-            $remaining += (Get-SectionEstimate -Section $s -AtDepth $Depth)
-        }
-
-        Start-TestSection -Id ([string]$section.Id) -Title $section.Title -EstimateMinutes (Get-SectionEstimate -Section $section -AtDepth $Depth) | Out-Null
-
-        $sectionFile = Join-Path (Join-Path $harnessRoot 'tests') $section.File
-        if (-not (Test-Path -LiteralPath $sectionFile)) {
-            Write-TestResult -Status 'SKIP' -Name $section.Title -Detail 'section not implemented yet'
-            $global:TestRun.Results.Add([PSCustomObject]@{
-                Section = [string]$section.Id; Name = $section.Title; Status = 'SKIP'
-                Detail = 'section not implemented yet'; Evidence = @(); Warnings = @()
-                Duration = [TimeSpan]::Zero; Override = $false; At = Get-Date
-            }) | Out-Null
-        }
-        else {
-            try {
-                . $sectionFile
+    # The app stays up between passes (sections never start or stop it), so the
+    # end-of-run prompt below can offer "retry" without a restart.
+    $toRun = @($selected)
+    $keepAppRunning = $false
+    $summaryShown = $false
+    while ($true) {
+        $runIndex = 0
+        foreach ($section in $toRun) {
+            $runIndex++
+            $remaining = 0
+            foreach ($s in ($toRun | Select-Object -Skip $runIndex)) {
+                $remaining += (Get-SectionEstimate -Section $s -AtDepth $Depth)
             }
-            catch {
-                Write-TestResult -Status 'FAIL' -Name ("{0} (section aborted)" -f $section.Title) -Detail $_.Exception.Message
+
+            Start-TestSection -Id ([string]$section.Id) -Title $section.Title -EstimateMinutes (Get-SectionEstimate -Section $section -AtDepth $Depth) | Out-Null
+
+            $sectionFile = Join-Path (Join-Path $harnessRoot 'tests') $section.File
+            if (-not (Test-Path -LiteralPath $sectionFile)) {
+                Write-TestResult -Status 'SKIP' -Name $section.Title -Detail 'section not implemented yet'
                 $global:TestRun.Results.Add([PSCustomObject]@{
-                    Section = [string]$section.Id; Name = ("{0} (section aborted)" -f $section.Title); Status = 'FAIL'
-                    Detail = $_.Exception.Message; Evidence = @(); Warnings = @()
+                    Section = [string]$section.Id; Name = $section.Title; Status = 'SKIP'
+                    Detail = 'section not implemented yet'; Evidence = @(); Warnings = @()
                     Duration = [TimeSpan]::Zero; Override = $false; At = Get-Date
                 }) | Out-Null
             }
+            else {
+                try {
+                    . $sectionFile
+                }
+                catch {
+                    Write-TestResult -Status 'FAIL' -Name ("{0} (section aborted)" -f $section.Title) -Detail $_.Exception.Message
+                    $global:TestRun.Results.Add([PSCustomObject]@{
+                        Section = [string]$section.Id; Name = ("{0} (section aborted)" -f $section.Title); Status = 'FAIL'
+                        Detail = $_.Exception.Message; Evidence = @(); Warnings = @()
+                        Duration = [TimeSpan]::Zero; Override = $false; At = Get-Date
+                    }) | Out-Null
+                }
+            }
+
+            Complete-TestSection
+            if ($remaining -gt 0) {
+                Write-Host ("    ~{0} min of tests remaining" -f $remaining) -ForegroundColor DarkGray
+            }
         }
 
-        Complete-TestSection
-        if ($remaining -gt 0) {
-            Write-Host ("    ~{0} min of tests remaining" -f $remaining) -ForegroundColor DarkGray
+        $global:TestRun.FinishedAt = Get-Date
+        $exitCode = Get-TestExitCode
+
+        # --- End-of-run choice ----------------------------------------------
+        # -Unattended means no prompts: close the app as before.
+        if ($Unattended) { break }
+
+        Write-TestSummary
+        $summaryShown = $true
+        Write-Host ''
+        Write-Host '  The app is still running. What now?' -ForegroundColor White
+        Write-Host '    [Enter] Keep the app running and close this test window (default)'
+        Write-Host '    [Q] or [K] Close (kill) the app, restore the folder, and finish'
+        Write-Host '    [R] Retry: run one or more sections again'
+        $endChoice = Read-TestMenuChoice -Prompt '  Select' -Accept @('', 'Q', 'K', 'R') -Default ''
+
+        if ($endChoice -eq 'Q' -or $endChoice -eq 'K') { break }
+        if ($endChoice -eq '') { $keepAppRunning = $true; break }
+
+        # Retry: pick sections, drop their earlier results so the new verdict
+        # replaces the old one, then loop.
+        $retryable = @($sectionRegistry | Where-Object { (Get-SectionEstimate -Section $_ -AtDepth $Depth) -gt 0 })
+        Write-Host ''
+        Write-Host '  Sections:' -ForegroundColor Gray
+        foreach ($s in $retryable) {
+            $flag = ''
+            if ($s.Operator) { $flag = '  (needs operator)' }
+            Write-Host ("    {0}  {1}{2}" -f $s.Id, $s.Title, $flag)
         }
+        $raw = Read-Host '  Sections to retry (comma separated, empty = same as this run)'
+        $retryIds = @()
+        if ($raw -and $raw.Trim()) {
+            $retryIds = @($raw -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^\d+$' } | ForEach-Object { [int]$_ })
+        }
+        if ($retryIds.Count -gt 0) {
+            $toRun = @($retryable | Where-Object { $retryIds -contains $_.Id })
+        }
+        else {
+            $toRun = @($selected)
+        }
+        if ($toRun.Count -eq 0) {
+            Write-Host '  No matching section - nothing to retry.' -ForegroundColor Yellow
+            $toRun = @($selected)
+            continue
+        }
+        $retryKeys = @($toRun | ForEach-Object { [string]$_.Id })
+        $kept = @($global:TestRun.Results | Where-Object { $retryKeys -notcontains [string]$_.Section })
+        $keptSections = @($global:TestRun.Sections | Where-Object { $retryKeys -notcontains [string]$_.Id })
+        $global:TestRun.Sections.Clear()
+        foreach ($sec in $keptSections) { $global:TestRun.Sections.Add($sec) | Out-Null }
+        $global:TestRun.Results.Clear()
+        foreach ($r in $kept) { $global:TestRun.Results.Add($r) | Out-Null }
     }
-
-    $global:TestRun.FinishedAt = Get-Date
-    $exitCode = Get-TestExitCode
 }
 finally {
     # Teardown always runs, including on Ctrl+C.
     if ($AutoApproveSetup) { Remove-Item Env:\VRHM_AUTO_APPROVE_SETUP -ErrorAction SilentlyContinue }
-    if (Get-Command Stop-SandboxApp -ErrorAction SilentlyContinue) {
+    if ((-not $keepAppRunning) -and (Get-Command Stop-SandboxApp -ErrorAction SilentlyContinue)) {
         try { Stop-SandboxApp -TargetRoot $target | Out-Null } catch { }
     }
 
@@ -539,13 +603,21 @@ finally {
     # Restore the target to its just-extracted state so it can be tested again.
     # Section 10's packaging assertions only hold on a pristine extraction, and
     # the sandbox seed (config\config.json, data\) is what breaks them.
-    if ((-not $KeepSandbox) -and (Get-Command Reset-SandboxTarget -ErrorAction SilentlyContinue)) {
+    if ((-not $KeepSandbox) -and (-not $keepAppRunning) -and (Get-Command Reset-SandboxTarget -ErrorAction SilentlyContinue)) {
         try { Reset-SandboxTarget -TargetRoot $target -DevRoot $devRoot | Out-Null } catch { }
+    }
+
+    if ($keepAppRunning) {
+        Write-Host ''
+        Write-Host '  The app was left running in the test folder (the sandbox seed is still in place):' -ForegroundColor Yellow
+        Write-Host ("    {0}" -f $target) -ForegroundColor DarkGray
+        Write-Host '  To stop it and restore the folder, run:' -ForegroundColor Yellow
+        Write-Host '    .\scripts\Invoke-NonRegressionTests.ps1 -RestoreOnly -VRHMFolder <that folder>' -ForegroundColor DarkGray
     }
 
     if ($null -ne $global:TestRun) {
         if (-not $global:TestRun.FinishedAt) { $global:TestRun.FinishedAt = Get-Date }
-        Write-TestSummary
+        if (-not $summaryShown) { Write-TestSummary }
 
         try {
             $txt  = Write-TestReportText

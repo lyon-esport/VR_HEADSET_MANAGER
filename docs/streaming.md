@@ -27,8 +27,8 @@ The capture-mode selector in the **Headset Settings** top bar (config key `Perfo
 
 | Mode | Effect |
 |---|---|
-| **Stream only** | Publish to MediaMTX, no window on the PC (lightest on the GPU display side) |
-| **Stream + local scrcpy window** (default) | Publish to MediaMTX and show the local mirror window |
+| **Stream only** (default) | Publish to MediaMTX, no window on the PC (lightest on the GPU display side) |
+| **Stream + local scrcpy window** | Publish to MediaMTX and show the local mirror window |
 | **Local scrcpy window only** | Just the mirror window — nothing is restreamed |
 
 ## scrcpy capture profiles

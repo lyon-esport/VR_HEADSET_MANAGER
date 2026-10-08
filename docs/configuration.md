@@ -121,7 +121,7 @@ Settings of the headset DIAG page (see [Web interface](web-interface.md#headset-
 | Key | Default | Description |
 |---|---|---|
 | `auto_refresh_sec` | `30` | How often the page re-reads its sections while auto-refresh is on |
-| `cable_test_passes` | `3` | Push/pull passes run by the USB cable throughput test |
+| `cable_test_passes` | `3` | Push/pull passes run by the USB cable throughput test and the WiFi throughput test |
 | `command_presets` | 4 presets | List of `{ "name", "command" }` shown in the ADB shell panel. Edited in `config.json` (the config page has no editor for it) |
 
 ### `mediamtx`
@@ -162,7 +162,7 @@ Optional mDNS responder so the web UI is reachable at `http://vrhm.local` instea
 |---|---|---|
 | `GPU_Acceleration` | `true` | Use the GPU for video work |
 | `GPU_Index` | `0` | Which GPU to use (see GPU list on the Monitoring page) |
-| `Capture_Mode` | `StreamAndLocalWindow` | Whether captures show a local window in addition to streaming |
+| `Capture_Mode` | `StreamOnly` | Whether captures show a local window in addition to streaming |
 | `Adaptive_Monitoring.enabled` | `true` | Slow down polling of unreachable headsets |
 
 ## WiFi credentials (not in config.json)

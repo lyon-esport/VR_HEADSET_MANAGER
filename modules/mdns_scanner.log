@@ -1,0 +1,9 @@
+2026-10-08 19:15:01 [DEBUG] mDNS: Joined multicast group on interface 192.168.1.37
+2026-10-08 19:15:01 [DEBUG] mDNS: Joined multicast group on interface 172.24.0.1
+2026-10-08 19:15:01 [ERROR] mDNS: Fatal socket error: Exception lors de l'appel de « Send » avec « 3 » argument(s) : « Une opération a été tentée sur un hôte impossible à atteindre »
+2026-10-08 19:15:15 [DEBUG] mDNS: Joined multicast group on interface 192.168.1.37
+2026-10-08 19:15:15 [DEBUG] mDNS: Joined multicast group on interface 172.24.0.1
+2026-10-08 19:15:15 [ERROR] mDNS: Fatal socket error: Exception lors de l'appel de « Send » avec « 3 » argument(s) : « Une opération a été tentée sur un hôte impossible à atteindre »
+2026-10-08 19:15:19 [DEBUG] mDNS: Joined multicast group on interface 192.168.1.37
+2026-10-08 19:15:19 [DEBUG] mDNS: Joined multicast group on interface 172.24.0.1
+2026-10-08 19:15:19 [ERROR] mDNS: Fatal socket error: Exception lors de l'appel de « Send » avec « 3 » argument(s) : « Une opération a été tentée sur un hôte impossible à atteindre »

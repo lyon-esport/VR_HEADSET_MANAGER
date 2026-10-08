@@ -2107,6 +2107,18 @@ function Update-ScrcpyBinary {
             [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $destFolder)
             Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
 
+            # Some releases (seen with v5.0.1) wrap everything in one top-level folder inside the
+            # zip; flatten it so scrcpy.exe sits directly in $destFolder like every other version.
+            if (-not (Test-Path -LiteralPath (Join-Path $destFolder "scrcpy.exe"))) {
+                $inner = @(Get-ChildItem -LiteralPath $destFolder -Directory)
+                if ($inner.Count -eq 1 -and (Test-Path -LiteralPath (Join-Path $inner[0].FullName "scrcpy.exe"))) {
+                    foreach ($item in @(Get-ChildItem -LiteralPath $inner[0].FullName -Force)) {
+                        Move-Item -LiteralPath $item.FullName -Destination $destFolder -Force
+                    }
+                    Remove-Item -LiteralPath $inner[0].FullName -Recurse -Force -ErrorAction SilentlyContinue
+                }
+            }
+
             if (-not (Test-Path -LiteralPath (Join-Path $destFolder "scrcpy.exe"))) {
                 return @{ Success = $false; Version = $null; Folder = $null; Error = "Downloaded archive did not contain scrcpy.exe." }
             }
@@ -2171,6 +2183,156 @@ function Get-FfmpegInstalledVersions {
 function Set-FfmpegFolderConfig {
     param([Parameter(Mandatory = $true)][string]$RelativeFolder, [switch]$UpdateTemplate)
     Set-BinaryFolderConfig -ConfigPaths @('ffmpeg.folder') -RelativeFolder $RelativeFolder -UpdateTemplate:$UpdateTemplate
+}
+
+# Returns $true when running from the development tree. version.txt holds the literal
+# "DEVELOPPMENT-VERSION" there; a released build carries its real version number (the release
+# zip substitutes a synthetic version.txt), and a missing file counts as "not dev".
+# Used to gate dev-only housekeeping (template / .releaseinclude / .gitignore sync after a
+# binary update) that must never run on a production install.
+# Example: if (Test-DevVersion) { ... }
+function Test-DevVersion {
+    try {
+        $versionFile = Join-Path $global:ScriptPath 'version.txt'
+        if (-not (Test-Path -LiteralPath $versionFile -PathType Leaf)) { return $false }
+        $raw = Get-Content -LiteralPath $versionFile -Raw -Encoding UTF8
+        return ($null -ne $raw -and $raw.Trim() -eq 'DEVELOPPMENT-VERSION')
+    } catch {
+        return $false
+    }
+}
+
+# After a REAL binary update (not a rollback), keeps the dev tree's packaging files in step with
+# the newly installed version. Dev version only - returns $false and touches nothing otherwise.
+#   scripts\.releaseinclude : scrcpy / mediamtx -> the /sources/<parent>/<old>/ line is replaced by
+#                             the new folder; ffmpeg is NOT shipped, so its line (and the comment
+#                             block directly above it) is removed.
+#   .gitignore              : scrcpy / mediamtx -> a managed block ignoring every version under
+#                             sources\<parent>\ except the new one; ffmpeg -> nothing to do, the
+#                             existing "/sources/ffmpeg*" rule already ignores any version.
+# templates\config\config.json is handled by Set-BinaryFolderConfig -UpdateTemplate.
+# Each file is handled independently; a failure is logged as WARNING and never throws, because
+# the download and config.json write it follows already succeeded.
+# Returns @{ Dev; ReleaseInclude; GitIgnore } (booleans: file was changed).
+# Example: Sync-DevBinaryTracking -Binary scrcpy -RelativeFolder 'scrcpy\scrcpy-win64-v4.2'
+function Sync-DevBinaryTracking {
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet('scrcpy', 'mediamtx', 'ffmpeg')][string]$Binary,
+        [Parameter(Mandatory = $true)][string]$RelativeFolder
+    )
+    $out = @{ Dev = $false; ReleaseInclude = $false; GitIgnore = $false }
+    if (-not (Test-DevVersion)) { return $out }
+    $out.Dev = $true
+
+    $spec = @{
+        scrcpy   = @{ Parent = 'scrcpy';   InRelease = $true }
+        mediamtx = @{ Parent = 'MediaMTX'; InRelease = $true }
+        ffmpeg   = @{ Parent = 'ffmpeg';   InRelease = $false }
+    }[$Binary]
+    $leaf = Split-Path -Path $RelativeFolder -Leaf
+    $parentEsc = [regex]::Escape($spec.Parent)
+
+    # Splits text into lines (remembering the line ending and the trailing newline) so a file is
+    # rewritten the way it was found.
+    $readLines = {
+        param($file)
+        $raw = Get-Content -LiteralPath $file -Raw -Encoding UTF8
+        $eol = if ($raw -match "`r`n") { "`r`n" } else { "`n" }
+        $hadTrailing = $raw.EndsWith("`n")
+        $lines = [System.Collections.Generic.List[string]]::new()
+        foreach ($l in ($raw -split "\r?\n")) { $lines.Add($l) }
+        if ($hadTrailing -and $lines.Count -gt 0 -and $lines[$lines.Count - 1] -eq '') { $lines.RemoveAt($lines.Count - 1) }
+        return @{ Lines = $lines; Eol = $eol; Trailing = $hadTrailing }
+    }
+    $writeLines = {
+        param($file, $doc)
+        $text = ($doc.Lines -join $doc.Eol)
+        if ($doc.Trailing) { $text += $doc.Eol }
+        $text | Write-FileWithoutBom -Path $file
+    }
+
+    # --- scripts\.releaseinclude ---
+    try {
+        $file = Join-Path $global:ScriptPath 'scripts\.releaseinclude'
+        if (Test-Path -LiteralPath $file -PathType Leaf) {
+            $doc = & $readLines $file
+            $lines = $doc.Lines
+            $before = $lines -join "`n"
+            $pattern = '^\s*/sources/' + $parentEsc + '/'
+
+            if ($spec.InRelease) {
+                $newLine = "/sources/{0}/{1}/" -f $spec.Parent, $leaf
+                $first = -1
+                for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+                    if ($lines[$i] -imatch $pattern) {
+                        if ($first -ge 0) { $lines.RemoveAt($first) }
+                        $first = $i
+                    }
+                }
+                if ($first -ge 0) {
+                    $lines[$first] = $newLine
+                } else {
+                    $last = -1
+                    for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -imatch '^\s*/sources/') { $last = $i } }
+                    if ($last -ge 0) { $lines.Insert($last + 1, $newLine) } else { $lines.Add($newLine) }
+                }
+            } else {
+                for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+                    if ($lines[$i] -imatch $pattern) {
+                        $lines.RemoveAt($i)
+                        # drop the comment lines that sat directly above it
+                        while ($i -gt 0 -and $lines[$i - 1] -match '^\s*#') { $lines.RemoveAt($i - 1); $i-- }
+                    }
+                }
+            }
+            if (($lines -join "`n") -ne $before) {
+                & $writeLines $file $doc
+                $out.ReleaseInclude = $true
+                Write-Log ("Sync-DevBinaryTracking: updated scripts\.releaseinclude for {0} ({1})" -f $Binary, $leaf) -Level INFO
+            }
+        }
+    } catch {
+        Write-Log ("Sync-DevBinaryTracking: .releaseinclude not updated: " + $_.Exception.Message) -Level WARNING
+    }
+
+    # --- .gitignore (ffmpeg is already covered by "/sources/ffmpeg*") ---
+    if ($spec.InRelease) {
+        try {
+            $file = Join-Path $global:ScriptPath '.gitignore'
+            if (Test-Path -LiteralPath $file -PathType Leaf) {
+                $doc = & $readLines $file
+                $lines = $doc.Lines
+                $before = $lines -join "`n"
+                $begin = "# BEGIN vrhm-managed $Binary (Sync-DevBinaryTracking)"
+                $end   = "# END vrhm-managed $Binary"
+                $block = @(
+                    $begin,
+                    "# only the active version is tracked; older folders under sources are ignored",
+                    ("/sources/{0}/*" -f $spec.Parent),
+                    ("!/sources/{0}/{1}/" -f $spec.Parent, $leaf),
+                    $end
+                )
+                $s = $lines.IndexOf($begin)
+                $e = if ($s -ge 0) { $lines.IndexOf($end) } else { -1 }
+                if ($s -ge 0 -and $e -gt $s) {
+                    $lines.RemoveRange($s, $e - $s + 1)
+                    $lines.InsertRange($s, [string[]]$block)
+                } else {
+                    if ($lines.Count -gt 0 -and $lines[$lines.Count - 1] -ne '') { $lines.Add('') }
+                    $lines.AddRange([string[]]$block)
+                    $doc.Trailing = $true
+                }
+                if (($lines -join "`n") -ne $before) {
+                    & $writeLines $file $doc
+                    $out.GitIgnore = $true
+                    Write-Log ("Sync-DevBinaryTracking: updated .gitignore for {0} ({1})" -f $Binary, $leaf) -Level INFO
+                }
+            }
+        } catch {
+            Write-Log ("Sync-DevBinaryTracking: .gitignore not updated: " + $_.Exception.Message) -Level WARNING
+        }
+    }
+    return $out
 }
 
 #################

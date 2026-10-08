@@ -123,6 +123,11 @@
       <section class="dg-card" id="card-wifi">
         <h2>WiFi networks <span class="sub" id="sub-wifi"></span></h2>
         <div class="dg-body">
+          <div id="tls-warn" class="dg-banner-msg" style="display:none;margin-bottom:10px">
+            <strong>ADB over TLS (Wireless debugging) is ON for this headset.</strong>
+            It runs a second encrypted connection and mDNS traffic next to the normal WiFi ADB and can reduce the bandwidth available to the video stream.
+            <button class="dg-btn" type="button" id="btn-tls-warn-off" style="margin-left:8px">Turn it off</button>
+          </div>
           <div id="wifi-warn" class="dg-muted" style="display:none;margin-bottom:10px;color:var(--warn)">This headset is reached over WiFi: switching network drops the connection, so the result cannot be confirmed here. Plug the cable in first for a confirmed switch.</div>
           <div class="dg-row">
             <button class="dg-btn" type="button" id="btn-wifi-scan">Scan available networks</button>
@@ -138,6 +143,12 @@
             <label class="dg-muted"><input type="checkbox" id="wifi-save"> Save this password on the server</label>
             <button class="dg-btn" type="button" id="btn-wifi-connect">Connect headset</button>
           </div>
+          <h3 class="dg-h">WiFi throughput test</h3>
+          <div class="dg-row">
+            <button class="dg-btn" type="button" id="btn-wifi-speed">Run WiFi test</button>
+            <span class="dg-muted" id="wifi-speed-note">Pushes and pulls a test file over WiFi (PC to headset, not internet).</span>
+          </div>
+          <div id="wifi-speed-result"></div>
           <div class="dg-muted" style="font-size:11.5px">The headset only joins a network it can see. Passwords go to the headset over ADB and are never logged or shown again.</div>
         </div>
       </section>
@@ -217,6 +228,7 @@
           <div class="dg-row">
             <button class="dg-btn" type="button" id="btn-tls-status">Check status</button>
             <button class="dg-btn" type="button" id="btn-tls-enable" data-confirm="Turn Wireless debugging on for this headset?">Enable on headset</button>
+            <button class="dg-btn" type="button" id="btn-tls-disable">Disable on headset</button>
             <button class="dg-btn" type="button" id="btn-tls-connect" disabled>Connect to mDNS port</button>
           </div>
           <div id="tls-result" class="dg-muted"></div>
@@ -232,7 +244,7 @@
 
     var headsetId = 0, headsets = [], busy = false, loadToken = 0, refreshTimer = null, toastTimer = null;
     var cfg = { autoRefreshSec: 30, cablePasses: 3, presets: [] };
-    var thr = { base: { warn: 42, crit: 50 }, cpu: { warn: 75, crit: 85 }, gpu: { warn: 75, crit: 85 } };
+    var thr = { base: { warn: 42, crit: 50 }, cpu: { warn: 75, crit: 85 }, gpu: { warn: 75, crit: 85 }, batt: { warn: 40, crit: 30 } };
     var lastTls = null;
 
     function $(id) { return document.getElementById(id); }
@@ -395,6 +407,9 @@
       tiles += tile('Skin', t.Skin == null ? none() : fixed(t.Skin, 1) + ' C', tempClass(t.Skin), histLink('skin_temp'));
       tiles += tile('Battery', t.Battery == null ? none() : fixed(t.Battery, 1) + ' C', tempClass(t.Battery), histLink('temp'));
       var b = d.Battery || {};
+      if (b.Level !== null && b.Level !== undefined) {
+        tiles += tile('Battery level', esc(b.Level) + ' %', b.Level <= thr.batt.crit ? 'bad' : (b.Level < thr.batt.warn ? 'warn' : 'good'), null);
+      }
       if (b.HealthPct !== null && b.HealthPct !== undefined) {
         tiles += tile('Battery health', esc(b.HealthPct) + ' %', b.HealthPct < 70 ? 'bad' : (b.HealthPct < 85 ? 'warn' : 'good'), null);
       }
@@ -433,6 +448,48 @@
       return esc(r) + ' dBm ' + badge(q[0], q[1]);
     }
 
+    var lastWifiSpeedHtml = '';
+
+    function renderWifiSpeed(r) {
+      if (!r) { return ''; }
+      var html = '';
+      var rowsData = arr(r.Passes);
+      if (rowsData.length) {
+        html += '<table class="dg-t"><tr><th>Pass</th><th>Push MB/s</th><th>Pull MB/s</th></tr>' +
+          rowsData.map(function (p) { return '<tr><td>' + esc(p.Pass) + '</td><td>' + esc(p.PushMBps) + '</td><td>' + esc(p.PullMBps) + '</td></tr>'; }).join('') + '</table>';
+        var avg = Math.min(r.AvgPullMBps == null ? 1e9 : r.AvgPullMBps, r.AvgPushMBps == null ? 1e9 : r.AvgPushMBps);
+        var verdict = avg >= 25 ? badge('good for streaming', 'good') : (avg >= 10 ? badge('usable, limited headroom', 'warn') : badge('weak - check signal, band and access point', 'bad'));
+        html += '<div>Average push ' + val(r.AvgPushMBps, 'MB/s') + ', pull ' + val(r.AvgPullMBps, 'MB/s') + ' ' + verdict + '</div>';
+      }
+      return html;
+    }
+
+    function runWifiSpeed() {
+      var btn = $('btn-wifi-speed'); if (!btn) { return; }
+      btn.disabled = true; $('wifi-speed-note').textContent = 'Testing - this takes about a minute...'; $('wifi-speed-result').innerHTML = '';
+      lastWifiSpeedHtml = '';
+      busy = true;
+      post('/api/headset-diag/action', { id: headsetId, action: 'wifi_speed_test', args: { passes: cfg.cablePasses }, transport: 'WiFi' }).then(function (res) {
+        busy = false;
+        var b2 = $('btn-wifi-speed'); if (b2) { b2.disabled = false; }
+        var note = $('wifi-speed-note');
+        if (note) { note.textContent = res.ok ? 'Done.' : (res.message || res.error || 'The test failed.'); }
+        lastWifiSpeedHtml = renderWifiSpeed(res.result);
+        var out = $('wifi-speed-result'); if (out) { out.innerHTML = lastWifiSpeedHtml; }
+      });
+    }
+
+    function setTlsWarning(on) {
+      var w = $('tls-warn'); if (w) { w.style.display = on === true ? 'block' : 'none'; }
+    }
+
+    function tlsOff() {
+      return act('tls_disable', {}, 'Turn Wireless debugging (ADB over TLS) off on this headset? The normal WiFi ADB used by this app is not affected.').then(function (res) {
+        if (res && res.ok) { setTlsWarning(false); if ($('tls-result')) { checkTls(); } }
+        return res;
+      });
+    }
+
     function renderWireless(d) {
       var rows = [];
       rows.push(kv('WiFi', d.WifiEnabled === false ? badge('off', 'warn') : (d.WifiEnabled ? badge('on', 'good') : none())));
@@ -442,6 +499,8 @@
       rows.push(kv('Signal', rssiText(d.RssiDbm)));
       rows.push(kv('Link speed', d.LinkSpeedMbps != null ? esc(d.LinkSpeedMbps) + ' Mbps (tx ' + val(d.TxSpeedMbps) + ' / rx ' + val(d.RxSpeedMbps) + ')' : none()));
       rows.push(kv('IP address', val(d.Ip)));
+      rows.push(kv('ADB over TLS', d.AdbTlsEnabled === true ? badge('on', 'warn') : (d.AdbTlsEnabled === false ? badge('off', '') : none())));
+      setTlsWarning(d.AdbTlsEnabled);
       rows.push(kv('Meta servers', d.MetaReachable == null ? none() : (d.MetaReachable ? badge('reachable', 'good') + (d.MetaLatencyMs != null ? ' ' + esc(d.MetaLatencyMs) + ' ms' : '') : badge('unreachable', 'bad'))));
       var html = kvBlock(rows);
       var saved = arr(d.SavedNetworks);
@@ -503,7 +562,7 @@
       if (confirmText && !window.confirm(confirmText)) { return Promise.resolve(); }
       return post('/api/headset-diag/action', { id: headsetId, action: action, args: args || {}, transport: transportParam() }).then(function (res) {
         var ok = !!res.ok;
-        var msg = ok ? 'Done (' + (res.transport || '-') + ').' : (res.message || 'The action failed.');
+        var msg = ok ? 'Done (' + (res.transport || '-') + ').' : (res.message || res.error || 'The action failed.');
         if (ok && action === 'sync_clock' && res.result && res.result.TimeZone && !res.result.TimeZoneSet) { msg += ' Time zone not set.'; }
         toast(msg, ok);
         return res;
@@ -518,7 +577,7 @@
         busy = false;
         var b2 = $('btn-cable'); if (b2) { b2.disabled = false; }
         var note = $('cable-note');
-        if (note) { note.textContent = res.ok ? 'Done.' : (res.message || 'The test failed.'); }
+        if (note) { note.textContent = res.ok ? 'Done.' : (res.message || res.error || 'The test failed.'); }
         var out = $('cable-result'); if (out) { out.innerHTML = renderCable(res.result); }
       });
     }
@@ -654,11 +713,14 @@
       $('shell-cmd').addEventListener('keydown', function (e) { if (e.key === 'Enter') { runShell(); } });
       $('shell-preset').addEventListener('change', function () { if (this.value) { $('shell-cmd').value = this.value; } });
       $('btn-tls-status').addEventListener('click', checkTls);
-      $('btn-tls-enable').addEventListener('click', function () { act('tls_enable', {}, $('btn-tls-enable').getAttribute('data-confirm')); });
+      $('btn-tls-disable').addEventListener('click', tlsOff);
+      $('btn-tls-warn-off').addEventListener('click', tlsOff);
+      $('btn-tls-enable').addEventListener('click', function () { act('tls_enable', {}, $('btn-tls-enable').getAttribute('data-confirm')).then(function (res) { if (res && res.ok) { setTlsWarning(true); } }); });
       $('btn-tls-connect').addEventListener('click', function () {
         if (lastTls && lastTls.MdnsPort) { act('tls_connect', { port: lastTls.MdnsPort }).then(checkTls); }
       });
       document.addEventListener('click', function (e) { if (e.target && e.target.id === 'btn-cable') { runCable(); } });
+      document.addEventListener('click', function (e) { if (e.target && e.target.id === 'btn-wifi-speed') { runWifiSpeed(); } });
       bindWifi();
     }
 
@@ -697,6 +759,8 @@
           if (t.cpu_temperature_highLevel != null) { thr.cpu.crit = Number(t.cpu_temperature_highLevel); }
           if (t.gpu_temperature_warningLevel != null) { thr.gpu.warn = Number(t.gpu_temperature_warningLevel); }
           if (t.gpu_temperature_highLevel != null) { thr.gpu.crit = Number(t.gpu_temperature_highLevel); }
+          if (t.headset_battery_warningLevel != null) { thr.batt.warn = Number(t.headset_battery_warningLevel); }
+          if (t.headset_battery_criticalLevel != null) { thr.batt.crit = Number(t.headset_battery_criticalLevel); }
         }
         $('auto-label').textContent = 'Auto-refresh (' + cfg.autoRefreshSec + ' s)';
         var sel = $('shell-preset');

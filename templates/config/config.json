@@ -51,12 +51,12 @@
                                    "applied_file_name":  "vqa_applied.json"
                                },
     "ADB":  {
-                "folder":  "scrcpy\\scrcpy-win64-v4.1",
+                "folder":  "scrcpy\\scrcpy-win64-v5.0.1",
                 "adbPort_default":  5555,
                 "prefer_usb":  true
             },
     "scrcpy":  {
-                   "folder":  "scrcpy\\scrcpy-win64-v4.1",
+                   "folder":  "scrcpy\\scrcpy-win64-v5.0.1",
                    "recordFolder":  "C:\\DATA\\MEDIA\\VR_Records",
                    "recordMinFreeSpaceGB":  5,
                    "defaultFps":  30,
@@ -295,7 +295,7 @@
                                          },
                                          {
                                              "name":  "WiFi dump",
-                                             "command":  "dumpsys wifi | grep -E 'mWifiInfo|Wifi is'"
+                                             "command":  "dumpsys wifi | grep -E \u0027mWifiInfo|Wifi is\u0027"
                                          },
                                          {
                                              "name":  "Top processes",

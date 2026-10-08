@@ -3631,9 +3631,12 @@ try {
                 if ($mainProcs.Count -eq 0) { throw 'Main process not found' }
                 if ($mainProcs.Count -gt 1) { Write-Log "app-restart: multiple main.ps1 processes found ($($mainProcs.Count)), using first" -Level WARNING }
                 $mainPid = [uint32]$mainProcs[0].ProcessId
-                [void][VrmConsoleInput]::InjectKeys($mainPid, '00', $true)
+                $injected = [VrmConsoleInput]::InjectKeys($mainPid, '00', $true)
+                if (-not $injected) { throw "Could not attach to the console of main.ps1 (PID $mainPid)" }
+                Write-Log "app-restart: '00' injected into main.ps1 console (PID $mainPid)" -Level INFO
                 Send-JsonResponse -Response $response -Raw '{"ok":true}'
             } catch {
+                Write-Log ("app-restart failed: " + $_.Exception.Message) -Level ERROR
                 try { Send-JsonResponse -Response $response -Raw '{"ok":false,"error":"server error"}' -StatusCode 500 } catch {}
             } finally { $response.Close() }
             continue
@@ -4924,16 +4927,18 @@ try {
                 $result = Update-FfmpegBinary -SourcesFolder (Join-Path $ScriptPath "sources")
                 if ($result.Success) {
                     try {
-                        Set-FfmpegFolderConfig -RelativeFolder $result.Folder -UpdateTemplate
+                        Set-FfmpegFolderConfig -RelativeFolder $result.Folder -UpdateTemplate:(Test-DevVersion)
                     } catch {
                         Write-Log ("ffmpeg-update: Set-FfmpegFolderConfig failed: " + $_.Exception.Message) -Level WARNING
                         $result.Success = $false
                         $result.Error = "Downloaded but failed to update config.json: " + $_.Exception.Message
                     }
                 }
+                $devSync = $false
+                if ($result.Success) { $devSync = (Sync-DevBinaryTracking -Binary ffmpeg -RelativeFolder $result.Folder).Dev }
 
                 if ($result.Success) {
-                    Send-JsonResponse -Response $response -Body @{ ok = $true; newVersion = $result.Version; folder = $result.Folder; requiresRestart = $true }
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; newVersion = $result.Version; folder = $result.Folder; requiresRestart = $true; devSync = $devSync }
                 } else {
                     Send-JsonResponse -Response $response -StatusCode 502 -Body @{ ok = $false; error = $result.Error }
                 }
@@ -5136,16 +5141,18 @@ try {
                 $result = Update-MediaMtxBinary -SourcesFolder (Join-Path $ScriptPath "sources")
                 if ($result.Success) {
                     try {
-                        Set-MediaMtxFolderConfig -RelativeFolder $result.Folder -UpdateTemplate
+                        Set-MediaMtxFolderConfig -RelativeFolder $result.Folder -UpdateTemplate:(Test-DevVersion)
                     } catch {
                         Write-Log ("mediamtx-update: Set-MediaMtxFolderConfig failed: " + $_.Exception.Message) -Level WARNING
                         $result.Success = $false
                         $result.Error = "Downloaded but failed to update config.json: " + $_.Exception.Message
                     }
                 }
+                $devSync = $false
+                if ($result.Success) { $devSync = (Sync-DevBinaryTracking -Binary mediamtx -RelativeFolder $result.Folder).Dev }
 
                 if ($result.Success) {
-                    Send-JsonResponse -Response $response -Body @{ ok = $true; newVersion = $result.Version; folder = $result.Folder; requiresRestart = $true }
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; newVersion = $result.Version; folder = $result.Folder; requiresRestart = $true; devSync = $devSync }
                 } else {
                     Send-JsonResponse -Response $response -StatusCode 502 -Body @{ ok = $false; error = $result.Error }
                 }
@@ -5282,16 +5289,18 @@ try {
                 $result = Update-ScrcpyBinary -SourcesFolder (Join-Path $ScriptPath "sources")
                 if ($result.Success) {
                     try {
-                        Set-ScrcpyAdbFolderConfig -RelativeFolder $result.Folder -UpdateTemplate
+                        Set-ScrcpyAdbFolderConfig -RelativeFolder $result.Folder -UpdateTemplate:(Test-DevVersion)
                     } catch {
                         Write-Log ("scrcpy-update: Set-ScrcpyAdbFolderConfig failed: " + $_.Exception.Message) -Level WARNING
                         $result.Success = $false
                         $result.Error = "Downloaded but failed to update config.json: " + $_.Exception.Message
                     }
                 }
+                $devSync = $false
+                if ($result.Success) { $devSync = (Sync-DevBinaryTracking -Binary scrcpy -RelativeFolder $result.Folder).Dev }
 
                 if ($result.Success) {
-                    Send-JsonResponse -Response $response -Body @{ ok = $true; newVersion = $result.Version; folder = $result.Folder; requiresRestart = $true }
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; newVersion = $result.Version; folder = $result.Folder; requiresRestart = $true; devSync = $devSync }
                 } else {
                     Send-JsonResponse -Response $response -StatusCode 502 -Body @{ ok = $false; error = $result.Error }
                 }

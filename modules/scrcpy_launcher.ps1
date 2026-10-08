@@ -742,7 +742,7 @@ function start-screenCopy {
     #   StreamOnly          -> --no-window + record-to-pipe + ffmpeg push to RTSP
     #   StreamAndLocalWindow-> visible window + record-to-pipe + ffmpeg push to RTSP (no GDI)
     #   LocalWindow         -> visible window only, no streaming pipeline (file recording via scrcpy)
-    $captureMode = if ($global:CaptureMode) { $global:CaptureMode } else { 'StreamAndLocalWindow' }
+    $captureMode = if ($global:CaptureMode) { $global:CaptureMode } else { 'StreamOnly' }
     $usePipe = ($captureMode -in @('StreamOnly','StreamAndLocalWindow'))
 
     if ($captureMode -eq 'LocalWindow') {

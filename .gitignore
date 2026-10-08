@@ -70,3 +70,9 @@ auto.crt
 auto.key
 /null
 /-
+
+# BEGIN vrhm-managed scrcpy (Sync-DevBinaryTracking)
+# only the active version is tracked; older folders under sources are ignored
+/sources/scrcpy/*
+!/sources/scrcpy/scrcpy-win64-v5.0.1/
+# END vrhm-managed scrcpy
