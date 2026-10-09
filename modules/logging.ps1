@@ -125,6 +125,8 @@ $script:LogFamilies = @(
     @{ Order = 10; Type = 'main';      TypeLabel = 'Main program';  Encoding = 'ansi'; Pattern = '^log_(\d{4}-\d{2}-\d{2})\.txt$' }
     @{ Order = 20; Type = 'mediamtx';  TypeLabel = 'mediamtx';      Encoding = 'utf8'; Pattern = '^mediamtx(?:_(\d{4}-\d{2}-\d{2}))?\.log$' }
     @{ Order = 30; Type = 'webserver'; TypeLabel = 'Web server';    Encoding = 'utf8'; Pattern = '^webserver_(\d{4}-\d{2}-\d{2})_(out|err)\.log$' }
+    # scrcpy / ffmpeg logs are one file per capture session: <Headset>_<yyyyMMdd_HHmmss_fff>_...
+    # (older builds wrote one overwritten file per headset, without the stamp - still matched).
     @{ Order = 40; Type = 'scrcpy';    TypeLabel = 'scrcpy';        Encoding = 'ansi'; Pattern = '^(.+?)_(StandardOutput|StandardError)\.txt$' }
     @{ Order = 50; Type = 'ffmpeg';    TypeLabel = 'ffmpeg push';   Encoding = 'ansi'; Pattern = '^(.+?)_ffmpegPush_stderr\.txt$' }
     @{ Order = 60; Type = 'kiosk';     TypeLabel = 'Kiosk screens'; Encoding = 'utf8'; Pattern = '^kiosk_(\d{4}-\d{2}-\d{2})\.log$' }

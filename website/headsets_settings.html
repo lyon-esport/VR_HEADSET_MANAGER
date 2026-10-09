@@ -7,6 +7,7 @@
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
   <link rel="stylesheet" href="assets/topbar.css">
   <script src="assets/topbar.js"></script>
+  <script src="assets/live_events.js"></script>
   <style>
     :root {
       --bg:                #111;
@@ -2190,6 +2191,8 @@
 
     // At most one fast chain: only schedules when none is waiting.
     function ensureFastStatus() {
+      // With push connected the server announces the change itself - no need to poll.
+      if (window.LiveEvents && LiveEvents.isConnected()) return;
       if (_fastStatusTimer || !statusPending()) return;
       _fastStatusTimer = setTimeout(function() {
         _fastStatusTimer = null;
@@ -3142,6 +3145,13 @@
       ]).finally(function() { setTimeout(pollAll, nextStatusDelay()); });
     }
     refreshLoadTier().finally(pollAll);
+    // Push (ADR-0020): status dots (scrcpy blue dot, ADB, ping) and the registry fields
+    // (auto-restart / record buttons) refresh as soon as the server writes them. pollAll
+    // stays as the fallback when the push channel is unavailable.
+    if (window.LiveEvents) {
+      LiveEvents.subscribe('headset_status', pollHeadsetsStatus);
+      LiveEvents.subscribe('headsets',       pollHeadsetsCsv);
+    }
 
     // Timer helpers
 

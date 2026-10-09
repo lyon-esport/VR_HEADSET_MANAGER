@@ -13,9 +13,9 @@
     known_headsets_infos.csv only depends on registration, not reachability
     (Get-KnownHeadsetInfos always reports a row, ping success or not).
 
-    VQA is force-disabled by the sandbox for determinism (Initialize-
-    SandboxConfig) and section 20 already asserts /api/vqa/status reflects
-    that, so this section does not repeat it.
+    VQA runs as the release ships it - enabled, recommendations only, every
+    auto-apply flag off (Initialize-SandboxConfig) - and section 20 already
+    asserts /api/vqa/status reflects that, so this section does not repeat it.
 
     ASCII only (CLAUDE.md rule 1).
 #>

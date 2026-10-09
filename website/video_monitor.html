@@ -8,6 +8,7 @@
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
   <link rel="stylesheet" href="assets/topbar.css">
   <script src="assets/topbar.js"></script>
+  <script src="assets/live_events.js"></script>
   <style>
     /* --------- Configuration --------------------------------------------------------------------------------------------------------------------------------------------------------------------- */
     :root {
@@ -1662,6 +1663,13 @@
         }
         _statusLoopFn = statusLoop;
         refreshLoadTier().finally(statusLoop);
+        // Push (ADR-0020): a status write (scrcpy started/stopped, ADB up/down) re-runs the
+        // status fetch at once, so a cell loads its video as soon as scrcpy runs. The loop
+        // above stays as the fallback when the push channel is unavailable.
+        if (window.LiveEvents) {
+          LiveEvents.subscribe('headset_status', function() { pollHeadsetsStatus(); });
+          LiveEvents.subscribe('headsets',       function() { pollHeadsetsStatus(); });
+        }
         document.querySelectorAll('#grid .cell').forEach(function(cell) {
           var dn = cell.dataset.display;
           if (!dn) return;

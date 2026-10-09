@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="assets/topbar.css">
   <link rel="stylesheet" href="assets/vendor/uplot/uPlot.min.css">
   <script src="assets/topbar.js"></script>
+  <script src="assets/live_events.js"></script>
   <!-- Loaded here, not at the end of <body>: renderTable() calls into
        BatteryChart on the first poll, which can land before a deferred script. -->
   <script src="assets/vendor/uplot/uPlot.iife.min.js"></script>
@@ -1254,6 +1255,9 @@
     // first paint so a cell is never coloured on the fallback values and then silently
     // recoloured a few seconds later. loadThresholds always resolves.
     MetricChart.loadThresholds().finally(statusLoop);
+    // Push (ADR-0020): re-fetch as soon as the monitor writes a status change. The timer
+    // above stays as the fallback when the push channel is unavailable.
+    if (window.LiveEvents) { LiveEvents.subscribe('headset_status', pollHeadsetsStatus); }
 
     document.getElementById('headsets-table').addEventListener('click', function(e) {
       var btn = e.target.closest('[data-launch-app]');

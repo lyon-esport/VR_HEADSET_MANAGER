@@ -559,12 +559,256 @@ function Get-PublishedUsbSnapshot {
     }
 }
 
+# ---------------------------------------------------------------------------
+# SSE push channel (ADR-0020)
+#
+# Pages used to learn about a change only on their next poll (refresh_timer x load
+# multiplier: 5 s, up to 25 s), which made the BROWSER the slowest hop: the database
+# was always fresher than any page showing it.
+#
+# This pump holds the /api/events connections open and writes one frame whenever a
+# database change counter moves. The frame is an INVALIDATION NUDGE, not data: the
+# page reacts by running the fetch it already had, so no render path changes and the
+# pump's cost is one indexed read per tick however many clients are attached.
+#
+# Only the push channel of the reverted commit 7e52019 is restored here - not its
+# request-lane refactor. Two guards against what made that commit unusable:
+#   - a browser allows only ~6 open connections per server address, shared by every
+#     tab, iframe and OBS source. live_events.js therefore opens ONE stream per
+#     browser (shared across tabs) and never from an iframe; overlays keep polling.
+#   - a client that is gone is detected by the next write (frame or heartbeat) and
+#     dropped, and the client count is capped by WebServer.sse.max_clients.
+#
+# It is a runspace, not a Start-Job: a job is a separate process and an
+# HttpListenerContext cannot be serialized. It loads only the four modules it needs
+# and opens its own database connection (ADR-0017).
+# ---------------------------------------------------------------------------
+
+$script:SseQueue = [System.Collections.Queue]::Synchronized((New-Object System.Collections.Queue))
+$script:SseState = [hashtable]::Synchronized(@{ Stop = $false; Count = 0 })
+$script:SsePump  = $null
+
+$ssePumpBlock = {
+    param($sp, $cp, $logFolder, $logFile, $queue, $state, $pollMs, $heartbeatSec)
+
+    $global:ScriptPath         = $sp
+    $global:ConfigFilePath     = $cp
+    $global:IsWebServerProcess = $true
+    if ($logFolder) { $global:logFolder = $logFolder }
+    if ($logFile)   { $global:logFile   = $logFile }
+
+    try {
+        . (Join-Path $sp 'modules\logging.ps1')
+        . (Join-Path $sp 'modules\utils.ps1')
+        . (Join-Path $sp 'modules\config_files_loader.ps1')
+        . (Join-Path $sp 'modules\database.ps1')
+        Get-Config -ConfigFilePath $cp | Out-Null
+        # Translations in EVERY runspace that calls module functions: without $global:msg
+        # Write-Log throws on an empty string and would kill the pump on its first log line.
+        $langFile = Join-Path $sp ('modules\translations\' + $global:SelectedLanguage + '.psd1')
+        if (-not (Test-Path -LiteralPath $langFile)) { $langFile = Join-Path $sp 'modules\translations\en-US.psd1' }
+        $global:msg = Import-PowerShellDataFile -LiteralPath $langFile
+        Initialize-Database -Role Worker | Out-Null
+    } catch {
+        $state['Error'] = $_.Exception.Message
+        $state['Stop']  = $true
+        return
+    }
+
+    $utf8     = New-Object System.Text.UTF8Encoding($false)
+    $clients  = New-Object System.Collections.ArrayList
+    $lastMap  = @{}
+    $lastBeat = [datetime]::UtcNow
+
+    function Write-SseFrame {
+        param($Client, [string]$Text)
+        # $false when the socket is gone, so the caller can drop the client.
+        try {
+            $bytes = $utf8.GetBytes($Text)
+            $Client.Response.OutputStream.Write($bytes, 0, $bytes.Length)
+            $Client.Response.OutputStream.Flush()
+            return $true
+        } catch {
+            return $false
+        }
+    }
+
+    try {
+        while (-not $state['Stop']) {
+            # 1. Adopt newly handed-off connections. Held aside for this tick so they get
+            #    exactly one baseline frame and not also the change broadcast.
+            $fresh = New-Object System.Collections.ArrayList
+            while ($queue.Count -gt 0) {
+                $ctx = $null
+                try { $ctx = $queue.Dequeue() } catch { $ctx = $null }
+                if ($null -ne $ctx) { $null = $fresh.Add($ctx) }
+            }
+
+            # 2. Every counter in one round trip.
+            $map       = Get-DbTableVersionMap
+            $frameText = $null
+            $changed   = $false
+            if ($map.Count -gt 0) {
+                $pairs     = foreach ($k in ($map.Keys | Sort-Object)) { '"' + $k + '":' + $map[$k] }
+                $frameText = 'data: {"v":{' + ($pairs -join ',') + '}}' + "`n`n"
+                foreach ($k in $map.Keys) {
+                    if (-not $lastMap.ContainsKey($k) -or $lastMap[$k] -ne $map[$k]) { $changed = $true; break }
+                }
+                $lastMap = $map
+            }
+
+            # 3. Baseline for brand-new connections, so a (re)connecting page resyncs at
+            #    once instead of waiting for some counter to move.
+            foreach ($c in $fresh) {
+                if ($frameText) {
+                    if (Write-SseFrame -Client $c -Text $frameText) { $null = $clients.Add($c) }
+                    else { try { $c.Response.Close() } catch { } }
+                } else {
+                    # Database not readable this tick: send a comment so the client knows
+                    # the stream is open; the next good tick sends a real frame.
+                    if (Write-SseFrame -Client $c -Text ": open`n`n") { $null = $clients.Add($c) }
+                    else { try { $c.Response.Close() } catch { } }
+                }
+            }
+
+            # 4. Heartbeat: keeps proxies from closing an idle stream, and its write is
+            #    what detects a client that has gone away.
+            $beat = $null
+            if (([datetime]::UtcNow - $lastBeat).TotalSeconds -ge $heartbeatSec) {
+                $lastBeat = [datetime]::UtcNow
+                $beat = ": ping`n`n"
+            }
+            $frame = if ($changed) { $frameText } else { $null }
+
+            if (($frame -or $beat) -and $clients.Count -gt 0) {
+                $dead = New-Object System.Collections.ArrayList
+                foreach ($c in $clients) {
+                    $ok = $true
+                    # A client adopted this tick already received this exact state as its baseline.
+                    if ($frame -and -not $fresh.Contains($c)) { $ok = Write-SseFrame -Client $c -Text $frame }
+                    if ($ok -and $beat) { $ok = Write-SseFrame -Client $c -Text $beat }
+                    if (-not $ok) { $null = $dead.Add($c) }
+                }
+                foreach ($d in $dead) {
+                    $clients.Remove($d)
+                    try { $d.Response.Close() } catch { }
+                }
+            }
+
+            $state['Count'] = $clients.Count
+            Start-Sleep -Milliseconds $pollMs
+        }
+    } finally {
+        foreach ($c in $clients) { try { $c.Response.Close() } catch { } }
+        $state['Count'] = 0
+        if (Get-Command Close-DbConnection -ErrorAction SilentlyContinue) {
+            try { Close-DbConnection } catch { }
+        }
+    }
+}
+
+function Start-SsePumpRunspace {
+    # Creates the SSE pump runspace. Returns @{PS;Runspace;Handle} or $null.
+    # $null is a soft failure: /api/events then answers 404 and every page keeps the
+    # polling cadence it already had.
+    try {
+        $iss = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
+        $rs  = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace($iss)
+        $rs.ApartmentState = 'MTA'
+        $rs.ThreadOptions  = 'ReuseThread'
+        $rs.Open()
+
+        $ps = [System.Management.Automation.PowerShell]::Create()
+        $ps.Runspace = $rs
+        [void]$ps.AddScript($ssePumpBlock)
+        [void]$ps.AddArgument($ScriptPath)
+        [void]$ps.AddArgument($ConfigFilePath)
+        [void]$ps.AddArgument($global:logFolder)
+        [void]$ps.AddArgument($global:logFile)
+        [void]$ps.AddArgument($script:SseQueue)
+        [void]$ps.AddArgument($script:SseState)
+        [void]$ps.AddArgument([int]$global:WebServer_sse_poll_ms)
+        [void]$ps.AddArgument([int]$global:WebServer_sse_heartbeat_sec)
+        $handle = $ps.BeginInvoke()
+        return @{ PS = $ps; Runspace = $rs; Handle = $handle }
+    } catch {
+        Write-Log ("Web server: SSE pump failed to start: " + $_.Exception.Message) -Level ERROR
+        return $null
+    }
+}
+
+function Stop-SsePumpRunspace {
+    # Signals the pump to exit; its own finally closes every held connection, so
+    # browsers see a clean disconnect (and fall back to polling) rather than a hang.
+    if (-not $script:SsePump) { return }
+    try { $script:SseState['Stop'] = $true } catch { }
+    try {
+        $deadline = (Get-Date).AddSeconds(5)
+        while (-not $script:SsePump.Handle.IsCompleted -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 100
+        }
+    } catch { }
+    while ($script:SseQueue.Count -gt 0) {
+        try { $script:SseQueue.Dequeue().Response.Close() } catch { }
+    }
+    try { $script:SsePump.PS.Stop()          } catch { }
+    try { $script:SsePump.PS.Dispose()       } catch { }
+    try { $script:SsePump.Runspace.Close()   } catch { }
+    try { $script:SsePump.Runspace.Dispose() } catch { }
+    $script:SsePump = $null
+}
+
+if ($global:WebServer_sse_enabled) {
+    $script:SsePump = Start-SsePumpRunspace
+    if ($script:SsePump) {
+        Write-Log ("Web server: SSE pump started (poll {0} ms, max {1} clients)" -f $global:WebServer_sse_poll_ms, $global:WebServer_sse_max_clients) -Level INFO
+    } else {
+        Write-Log "Web server: SSE pump unavailable - browsers will fall back to polling" -Level WARNING
+    }
+} else {
+    Write-Log "Web server: SSE disabled by config - browsers will poll" -Level INFO
+}
+
 try {
     while ($listener.IsListening) {
         # GetContext() blocks until a request arrives
         $context  = $listener.GetContext()
         $request  = $context.Request
         $response = $context.Response
+
+        # API: GET /api/events - Server-Sent Events (ADR-0020). The ONLY route that does
+        # not close its response: the context is handed to the pump runspace, which owns
+        # it from then on. Holding the stream on this loop would freeze every other page.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/events') {
+            $pumpAlive = $script:SsePump -and -not $script:SsePump.Handle.IsCompleted -and -not $script:SseState['Stop']
+            if (-not $pumpAlive) {
+                # 404, not 500: the signal live_events.js uses to stop retrying and keep
+                # the page on its polling cadence.
+                try { $response.StatusCode = 404; $response.Close() } catch { }
+                continue
+            }
+            # Capacity is checked BEFORE the headers are set, so a refusal is a plain 503
+            # rather than a half-opened event stream.
+            if ([int]$script:SseState['Count'] + $script:SseQueue.Count -ge [int]$global:WebServer_sse_max_clients) {
+                try { $response.StatusCode = 503; $response.Close() } catch { }
+                continue
+            }
+            try {
+                $response.StatusCode  = 200
+                $response.ContentType = 'text/event-stream; charset=utf-8'
+                $response.Headers.Add('Cache-Control', 'no-cache')
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                # No ContentLength64: the body is an open-ended stream.
+                $response.SendChunked = $true
+                $response.KeepAlive   = $true
+                # Enqueue LAST: the pump writes as soon as it dequeues, so the headers
+                # must already be in place.
+                $script:SseQueue.Enqueue($context)
+            } catch {
+                try { $response.Close() } catch { }
+            }
+            continue
+        }
 
         # USB probe runs in a persistent background job - result read from temp file on demand
 
@@ -5497,6 +5741,8 @@ try {
         }
     }
 } finally {
+    # Before the listener goes: the pump's finally closes every held event stream.
+    Stop-SsePumpRunspace
     $listener.Stop()
     $listener.Close()
     # $script:usbInfoJob is retained as $null so this teardown stays harmless if

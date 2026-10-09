@@ -346,6 +346,16 @@ function Get-Config {
     $global:WebServer_enabled = if ($null -ne $configContent.WebServer.enabled) { [bool]$configContent.WebServer.enabled } else { $false }
     $global:WebServer_port    = if ($configContent.WebServer.port)               { [int]$configContent.WebServer.port }    else { 8080 }
     $global:WebServer_openBrowserOnStartup = if ($null -ne $configContent.WebServer.openBrowserOnStartup) { [bool]$configContent.WebServer.openBrowserOnStartup } else { $true }
+    # SSE push channel (ADR-0020). The web server's pump compares the database change
+    # counters and nudges connected browsers, so a page re-fetches on a real change
+    # instead of waiting for its poll timer. Disabled -> /api/events answers 404, the
+    # signal live_events.js uses to stay on the old polling cadence.
+    # poll_ms has a 100 ms floor clamped HERE, not only in the UI: the pump is a
+    # database read loop, and a value like 5 would spin a runspace for no benefit.
+    $global:WebServer_sse_enabled       = if ($null -ne $configContent.WebServer.sse.enabled) { [bool]$configContent.WebServer.sse.enabled } else { $true }
+    $global:WebServer_sse_poll_ms       = if ($configContent.WebServer.sse.poll_ms)       { [Math]::Max(100, [int]$configContent.WebServer.sse.poll_ms) } else { 250 }
+    $global:WebServer_sse_max_clients   = if ($configContent.WebServer.sse.max_clients)   { [Math]::Max(1, [int]$configContent.WebServer.sse.max_clients) } else { 32 }
+    $global:WebServer_sse_heartbeat_sec = if ($configContent.WebServer.sse.heartbeat_sec) { [Math]::Max(5, [int]$configContent.WebServer.sse.heartbeat_sec) } else { 15 }
 
     # mDNS responder
     $mdnsEnabledRaw = if ($null -ne $configContent.MdnsResponder.enabled) { $configContent.MdnsResponder.enabled } else { $false }

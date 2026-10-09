@@ -344,6 +344,26 @@ Invoke-RegressionTest -Name '/api/vqa/status reflects the sandbox setting' -Test
     Assert-Equal ([bool]$cfg.VideoQualityAutomation.enabled) ([bool]$r.Json.enabled) 'VQA enabled flag'
 }
 
+Invoke-RegressionTest -Name 'VQA ships enabled in recommendation-only mode' -Test {
+    # The release default (templates\config\config.json): VQA on, so the operator gets
+    # recommendations, but NOTHING applied automatically - an auto-apply flag that slipped
+    # to true would rewrite profiles and the mediamtx settings on a live show.
+    $tpl = Read-JsonFileUtf8 -Path $paths.TemplateConfig
+    $v = $tpl.VideoQualityAutomation
+    Add-TestEvidence ("template: enabled={0} auto_apply profiles={1} headsets={2} mediamtx={3}" -f $v.enabled, $v.auto_apply_profiles, $v.auto_apply_headsets, $v.auto_apply_mediamtx)
+    Assert-True ([bool]$v.enabled) 'templates\config\config.json: VideoQualityAutomation.enabled must be true'
+    Assert-False ([bool]$v.auto_apply_profiles) 'template auto_apply_profiles must be false'
+    Assert-False ([bool]$v.auto_apply_headsets) 'template auto_apply_headsets must be false'
+    Assert-False ([bool]$v.auto_apply_mediamtx) 'template auto_apply_mediamtx must be false'
+
+    # And the running app agrees: VQA loaded, VQO (auto-apply) off.
+    $r = Invoke-VrmApi -Path '/api/vqa/status'
+    Assert-Equal 200 $r.StatusCode 'GET /api/vqa/status'
+    Add-TestEvidence ("running app: enabled={0} enabled_vqo={1}" -f $r.Json.enabled, $r.Json.enabled_vqo)
+    Assert-True ([bool]$r.Json.enabled) 'the running app reports VQA disabled'
+    Assert-False ([bool]$r.Json.enabled_vqo) 'the running app reports an auto-apply (VQO) flag on'
+}
+
 Invoke-RegressionTest -Name 'Deprecated /api/vqa/toggle-vqo still reports as deprecated' -Test {
     $r = Invoke-VrmApi -Path '/api/vqa/toggle-vqo' -Method POST
     Add-TestEvidence ("POST /api/vqa/toggle-vqo -> HTTP {0}: {1}" -f $r.StatusCode, (Get-VrmApiExcerpt $r.Raw 120))
@@ -386,6 +406,134 @@ Invoke-RegressionTest -Name '/api/logs serves a selected log file' -Test {
     $fallback = @($r3.Json)
     Add-TestEvidence ("traversal attempt fell back to {0} line(s)" -f $fallback.Count)
     Assert-True (($fallback -join '') -notmatch '"WebServer"') 'traversal attempt leaked config.json'
+}
+
+# ---------------------------------------------------------------------------
+# Push channel (SSE, ADR-0020)
+#
+# /api/events holds a connection open for good. The first attempt at this feature
+# (commit 7e52019) was reverted because the web server "broke": these tests pin the
+# properties whose absence looks exactly like that - the stream starts, a change is
+# pushed, and above all ORDINARY requests keep answering while many streams are open.
+# Raw sockets are used because Invoke-WebRequest waits for a body that never ends.
+# ---------------------------------------------------------------------------
+
+function Open-NrtEventStream {
+    $u = [uri](Get-VrmApiBase)
+    $client = New-Object System.Net.Sockets.TcpClient($u.Host, $u.Port)
+    $stream = $client.GetStream()
+    $req = [System.Text.Encoding]::ASCII.GetBytes(("GET /api/events HTTP/1.1`r`nHost: {0}:{1}`r`nAccept: text/event-stream`r`n`r`n" -f $u.Host, $u.Port))
+    $stream.Write($req, 0, $req.Length)
+    return [PSCustomObject]@{ Client = $client; Stream = $stream; Text = '' }
+}
+
+# Reads until $Pattern matches the text received AFTER $FromIndex, or the timeout.
+# Returns the elapsed ms, or -1 on timeout.
+function Read-NrtEventStream {
+    param($Es, [string]$Pattern, [int]$TimeoutMs = 5000, [int]$FromIndex = 0)
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $buf = New-Object byte[] 8192
+    while ($sw.ElapsedMilliseconds -lt $TimeoutMs) {
+        if ($Es.Text.Length -gt $FromIndex -and $Es.Text.Substring($FromIndex) -match $Pattern) { return [int]$sw.ElapsedMilliseconds }
+        try {
+            if ($Es.Stream.DataAvailable) {
+                $n = $Es.Stream.Read($buf, 0, $buf.Length)
+                if ($n -le 0) { return -1 }
+                $Es.Text += [System.Text.Encoding]::UTF8.GetString($buf, 0, $n)
+            } else { Start-Sleep -Milliseconds 25 }
+        } catch { return -1 }
+    }
+    return -1
+}
+
+function Close-NrtEventStream { param($Es) try { $Es.Client.Close() } catch { } }
+
+function Test-NrtSseEnabled {
+    $cfg = Read-JsonFileUtf8 -Path $paths.ConfigFile
+    return -not ($cfg.WebServer.sse -and $null -ne $cfg.WebServer.sse.enabled -and -not [bool]$cfg.WebServer.sse.enabled)
+}
+
+Invoke-RegressionTest -Name 'Push channel: live_events.js is served' -Test {
+    Assert-VrmPageServed -Path '/assets/live_events.js' -ExpectContentType 'javascript' -MustContain 'LiveEvents' -MinLength 500 | Out-Null
+}
+
+Invoke-RegressionTest -Name 'Push channel: /api/events opens a stream with a baseline frame' -Test {
+    if (-not (Test-NrtSseEnabled)) { Skip-Test 'WebServer.sse.enabled is false in the sandbox config' }
+    $es = Open-NrtEventStream
+    try {
+        $ms = Read-NrtEventStream -Es $es -Pattern 'data: \{"v":\{' -TimeoutMs 5000
+        $head = ($es.Text -split "`r`n")[0]
+        Add-TestEvidence ("status line: {0}" -f $head)
+        Add-TestEvidence ("baseline frame after {0} ms" -f $ms)
+        Assert-Match $head '^HTTP/1\.1 200' '/api/events status'
+        Assert-Match $es.Text '(?i)content-type: text/event-stream' '/api/events content type'
+        Assert-True ($ms -ge 0) 'no baseline frame within 5 s'
+        Assert-Match $es.Text '"headset_status":\d+' 'baseline frame carries the headset_status counter'
+    } finally { Close-NrtEventStream $es }
+}
+
+Invoke-RegressionTest -Name 'Push channel: web server keeps answering with 10 streams open' -Test {
+    if (-not (Test-NrtSseEnabled)) { Skip-Test 'WebServer.sse.enabled is false in the sandbox config' }
+    $streams = @()
+    try {
+        for ($i = 0; $i -lt 10; $i++) { $streams += Open-NrtEventStream }
+        $opened = @($streams | Where-Object { (Read-NrtEventStream -Es $_ -Pattern 'data: \{"v":\{' -TimeoutMs 5000) -ge 0 }).Count
+        Add-TestEvidence ("{0}/10 streams received their baseline frame" -f $opened)
+        Assert-Equal 10 $opened 'streams with a baseline frame'
+
+        foreach ($path in @('/api/version', '/api/headsets-status', '/api/headsets', '/headsets_settings.html', '/api/load-tier')) {
+            $r = Invoke-VrmApi -Path $path -TimeoutSec 10
+            Add-TestEvidence ("{0} -> HTTP {1} in {2} ms" -f $path, $r.StatusCode, [int]$r.Elapsed.TotalMilliseconds)
+            Assert-True $r.Ok ("{0} failed while streams are open: HTTP {1} {2}" -f $path, $r.StatusCode, $r.Error)
+            Assert-True ($r.Elapsed.TotalMilliseconds -lt 3000) ("{0} took {1} ms with streams open" -f $path, [int]$r.Elapsed.TotalMilliseconds)
+        }
+    } finally {
+        foreach ($s in $streams) { Close-NrtEventStream $s }
+    }
+    # And after the clients are gone (dropped without a clean close), still fine.
+    Start-Sleep -Seconds 1
+    $r2 = Invoke-VrmApi -Path '/api/headsets-status' -TimeoutSec 10
+    Add-TestEvidence ("after closing: /api/headsets-status -> HTTP {0} in {1} ms" -f $r2.StatusCode, [int]$r2.Elapsed.TotalMilliseconds)
+    Assert-True $r2.Ok 'status endpoint after the streams were closed'
+}
+
+Invoke-RegressionTest -Name 'Push channel: a database change is pushed within 2 s' -Test {
+    if (-not (Test-NrtSseEnabled)) { Skip-Test 'WebServer.sse.enabled is false in the sandbox config' }
+    # A kiosk row on a TEST-NET address (RFC 5737, never routed) is the most harmless
+    # write available: it bumps the 'kiosks' counter and is removed right after.
+    $probeIp = '192.0.2.250'
+    $es = Open-NrtEventStream
+    $kioskId = $null
+    try {
+        Assert-True ((Read-NrtEventStream -Es $es -Pattern 'data: \{"v":\{' -TimeoutMs 5000) -ge 0) 'no baseline frame'
+        $before = [int64]([regex]::Match($es.Text, '"kiosks":(\d+)').Groups[1].Value)
+        $mark = $es.Text.Length
+
+        $add = Invoke-VrmApi -Path '/api/kiosks/add-manual' -Method POST -Body @{ ip = $probeIp; name = 'NRT SSE probe'; port = 9222 }
+        Assert-VrmOk -Result $add -Label 'POST /api/kiosks/add-manual'
+        # Other counters (live status written by the monitor) may push frames first, still
+        # carrying the old kiosks value - wait for the frame where kiosks actually moved.
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $after = $before
+        while ($sw.ElapsedMilliseconds -lt 2000 -and $after -le $before) {
+            [void](Read-NrtEventStream -Es $es -Pattern '"kiosks":\d+' -TimeoutMs 200 -FromIndex $mark)
+            foreach ($m in [regex]::Matches($es.Text.Substring($mark), '"kiosks":(\d+)')) {
+                if ([int64]$m.Groups[1].Value -gt $after) { $after = [int64]$m.Groups[1].Value }
+            }
+        }
+        Add-TestEvidence ("kiosks counter {0} -> {1}, pushed after {2} ms" -f $before, $after, $sw.ElapsedMilliseconds)
+        Assert-True ($after -gt $before) 'no frame with the new kiosks counter was pushed within 2 s of the database write'
+    } finally {
+        Close-NrtEventStream $es
+        $list = Invoke-VrmApi -Path '/api/kiosks'
+        foreach ($k in @($list.Json.kiosks) + @($list.Json)) {
+            if ($k -and $k.IPAddress -eq $probeIp -and $k.ID) { $kioskId = $k.ID }
+        }
+        if ($kioskId) {
+            $rm = Invoke-VrmApi -Path '/api/kiosks/remove' -Method POST -Body @{ id = [int]$kioskId }
+            Add-TestEvidence ("probe kiosk id {0} removed: HTTP {1}" -f $kioskId, $rm.StatusCode)
+        }
+    }
 }
 
 Invoke-RegressionTest -Name '/api/appnames returns the known-apps catalog' -Test {

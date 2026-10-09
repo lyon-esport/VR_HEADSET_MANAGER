@@ -75,7 +75,7 @@ function Get-SandboxDbRows {
         Opened Read Only against a WAL database, so it never blocks the running
         application and the application never blocks it. Pooling is off so the
         file handle is released the moment the connection closes, which matters
-        because Reset-SandboxTarget deletes the whole data folder afterwards.
+        because Reset-SandboxTarget moves the whole data folder aside afterwards.
     .EXAMPLE
         Get-SandboxDbRows -TargetRoot $root -Sql 'SELECT * FROM v_headsets ORDER BY SortOrder;'
     #>
@@ -569,11 +569,20 @@ function Initialize-SandboxConfig {
     $config.Logging.debugLevelToConsole    = 'ERROR'
     $config.scrcpy.recordFolder            = $paths.RecordFolder
     $config.ComputerMonitoring.refresh_timer_sec = 15
+    # mediamtx at 'info' (the shipped default is 'error', which logs nothing useful):
+    # a test run exists to be analysed, and only 'info' says when a publisher connects,
+    # when a reader attaches, and WHY mediamtx closed a session (e.g. a read timeout
+    # on a publisher that stopped sending - the exact question a dying stream raises).
+    $config.mediamtx.log_level = 'info'
 
-    # VQA rewrites config.json and scrcpy profiles underneath the tests, which
-    # would make streaming assertions non-deterministic. Section 60 owns those
-    # settings for the duration of the run.
-    $config.VideoQualityAutomation.enabled             = $false
+    # VQA runs exactly as the release ships it: ENABLED, recommendations only. Only the
+    # auto-apply half (VQO) rewrites config.json and scrcpy profiles underneath the
+    # tests - which would make the streaming assertions non-deterministic, and section
+    # 60 owns those settings for the run - so the three auto_apply_* flags stay off.
+    # Recommendations only write their own history/recommendation records. VQA used to
+    # be switched off entirely here, so the release was tested (and, now that test
+    # folders are kept, left on disk) in a configuration it never ships with.
+    $config.VideoQualityAutomation.enabled             = $true
     $config.VideoQualityAutomation.auto_apply_profiles = $false
     $config.VideoQualityAutomation.auto_apply_headsets = $false
     $config.VideoQualityAutomation.auto_apply_mediamtx = $false
@@ -1020,8 +1029,8 @@ function Remove-SandboxArtifacts {
 function Save-SandboxLogs {
     <#
     .SYNOPSIS
-        Copies the tested app's latest log file into the current run's
-        ArtifactFolder before Reset-SandboxTarget deletes logs\ entirely.
+        Copies the tested app's log files into the current run's ArtifactFolder,
+        so the report is self-contained. The originals stay in the test folder.
 
     .DESCRIPTION
         Section 10 already reads this same file to assert on its content, but
@@ -1047,6 +1056,21 @@ function Save-SandboxLogs {
         if ($logFile) {
             Add-TestArtifact -SourcePath $logFile.FullName -Category app_logs
         }
+    }
+    catch { }
+
+    # The per-process logs too: scrcpy and the ffmpeg pusher write their own stdout/stderr
+    # files (<Headset>_StandardError.txt, <Headset>_ffmpegPush_stderr.txt), plus mediamtx
+    # and the web server. Without them a stream that keeps dying shows up in the main log
+    # only as "scrcpy relaunched" with no reason, and the sandbox reset deletes the
+    # evidence. Size-capped so a runaway log cannot bloat the report folder.
+    try {
+        $maxBytes = 20MB
+        Get-ChildItem -LiteralPath $logRoot -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notlike 'log_*.txt' -and $_.Length -gt 0 -and $_.Length -le $maxBytes } |
+            ForEach-Object {
+                try { Add-TestArtifact -SourcePath $_.FullName -Category app_logs } catch { }
+            }
     }
     catch { }
 }
@@ -1105,12 +1129,19 @@ function Reset-SandboxTarget {
 
         No-ops with a warning when Test-SandboxIsReleaseFolder rejects the target.
 
+        -ArchiveTo MOVES everything into that folder instead of deleting it. That is
+        the only mode the harness uses: a test folder exists for troubleshooting, so
+        the logs, database, recordings and generated config of a run must never be
+        destroyed - they are moved aside only so the NEXT run starts on a pristine
+        app folder (which section 10's packaging assertions require).
+
     .EXAMPLE
-        Reset-SandboxTarget -TargetRoot $target -DevRoot $devRoot
+        Reset-SandboxTarget -TargetRoot $target -DevRoot $devRoot -ArchiveTo (Get-SandboxRunArchivePath -TargetRoot $target)
     #>
     param(
         [Parameter(Mandatory = $true)][string]$TargetRoot,
         [string]$DevRoot = '',
+        [string]$ArchiveTo = '',
         [switch]$Quiet
     )
 
@@ -1123,15 +1154,38 @@ function Reset-SandboxTarget {
 
     $paths = Get-SandboxPaths -TargetRoot $TargetRoot
 
-    $files = @(
-        $paths.ConfigFile
-        (Join-Path $TargetRoot 'config\mediamtx_headsets.yml')
-    )
-    foreach ($f in $files) {
-        if (Test-Path -LiteralPath $f) {
-            Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue
+    # Moves (archive mode) or deletes one item. $RelName is its path relative to the
+    # app root, reused under the archive folder so the archive mirrors the app layout.
+    $dispose = {
+        param([string]$Path, [string]$RelName)
+        if (-not (Test-Path -LiteralPath $Path)) { return }
+        if ($ArchiveTo) {
+            $dest = Join-Path $ArchiveTo $RelName
+            $destParent = Split-Path -Path $dest -Parent
+            if (-not (Test-Path -LiteralPath $destParent)) { [void][System.IO.Directory]::CreateDirectory($destParent) }
+            try { Move-Item -LiteralPath $Path -Destination $dest -Force -ErrorAction Stop }
+            catch {
+                # A file still locked (rare - the app is stopped first) is copied rather than lost.
+                try { Copy-Item -LiteralPath $Path -Destination $dest -Recurse -Force -ErrorAction Stop } catch { }
+                Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        } else {
+            Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
+
+    # Nothing generated yet (a just-extracted folder): nothing to move, no empty archive.
+    $leftovers = @(
+        $paths.ConfigFile, (Join-Path $TargetRoot 'config\mediamtx_headsets.yml'), $paths.DataFolder, $paths.LogsFolder
+    ) | Where-Object { Test-Path -LiteralPath $_ }
+    $generatedItems = @()
+    if (Test-Path -LiteralPath $paths.GeneratedFolder) {
+        $generatedItems = @(Get-ChildItem -LiteralPath $paths.GeneratedFolder -Force -ErrorAction SilentlyContinue)
+    }
+    if ($leftovers.Count -eq 0 -and $generatedItems.Count -eq 0) { return $true }
+
+    & $dispose $paths.ConfigFile 'config\config.json'
+    & $dispose (Join-Path $TargetRoot 'config\mediamtx_headsets.yml') 'config\mediamtx_headsets.yml'
 
     # The app's firewall / URL-ACL / Defender record survives the reset on
     # purpose. It is the app's proof that it has ALREADY registered all three
@@ -1146,11 +1200,8 @@ function Reset-SandboxTarget {
     $keep = $null
     try { $keep = Get-SandboxFwStateJson -TargetRoot $TargetRoot } catch { }
 
-    foreach ($folder in @($paths.DataFolder, $paths.LogsFolder)) {
-        if (Test-Path -LiteralPath $folder) {
-            Remove-Item -LiteralPath $folder -Recurse -Force -ErrorAction SilentlyContinue
-        }
-    }
+    & $dispose $paths.DataFolder 'data'
+    & $dispose $paths.LogsFolder 'logs'
 
     if ($null -ne $keep) {
         New-Item -ItemType Directory -Path $paths.DataFolder -Force | Out-Null
@@ -1160,13 +1211,41 @@ function Reset-SandboxTarget {
     }
 
     # Keep website\generated\ itself - only its runtime contents are ours.
-    if (Test-Path -LiteralPath $paths.GeneratedFolder) {
-        Get-ChildItem -LiteralPath $paths.GeneratedFolder -Force -ErrorAction SilentlyContinue |
-            ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+    foreach ($item in $generatedItems) {
+        & $dispose $item.FullName ('website\generated\' + $item.Name)
     }
 
     if (-not $Quiet) {
-        Write-Host '  Sandbox reset - target restored to its just-extracted state.' -ForegroundColor DarkGray
+        if ($ArchiveTo) {
+            Write-Host '  Previous run data moved aside - the app folder is back to its just-extracted state:' -ForegroundColor DarkGray
+            Write-Host ("    {0}" -f $ArchiveTo) -ForegroundColor DarkGray
+        } else {
+            Write-Host '  Sandbox reset - target restored to its just-extracted state.' -ForegroundColor DarkGray
+        }
     }
     return $true
+}
+
+function Get-SandboxRunArchivePath {
+    <#
+    .SYNOPSIS
+        Where a previous run's generated data is moved before a new run starts:
+        <parent of the app folder>\nrt_runs_<app folder name>\<timestamp>.
+
+    .DESCRIPTION
+        For the usual nested release (VR_HEADSET_MANAGER.v<x>\VR_HEADSET_MANAGER\) that
+        is VR_HEADSET_MANAGER.v<x>\nrt_runs_VR_HEADSET_MANAGER\<timestamp> - inside the
+        extracted release, beside the app folder, so the app folder itself stays
+        pristine. The name deliberately does NOT start with '<dev folder>.v', so the
+        harness's release auto-detection can never mistake an archive for a release.
+        The timestamp is the moment of archiving (= the start of the next run).
+
+    .EXAMPLE
+        Get-SandboxRunArchivePath -TargetRoot $target
+    #>
+    param([Parameter(Mandatory = $true)][string]$TargetRoot)
+    $root   = [System.IO.Path]::GetFullPath($TargetRoot).TrimEnd('\')
+    $parent = Split-Path -Path $root -Parent
+    $leaf   = Split-Path -Path $root -Leaf
+    return (Join-Path (Join-Path $parent ('nrt_runs_' + $leaf)) (Get-Date -Format 'yyyy-MM-dd_HHmmss'))
 }

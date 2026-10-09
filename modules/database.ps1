@@ -830,6 +830,27 @@ function Get-DbTableVersion {
     return [int64]$value
 }
 
+<#
+.SYNOPSIS
+    Every change counter at once, as a hashtable name -> [int64].
+.DESCRIPTION
+    One round trip instead of one per counter: the SSE pump compares several
+    counters a few times a second, and they all live in one small table.
+    Returns an empty hashtable on failure and never throws - the pump must
+    survive a transient database error rather than drop every connected client.
+.EXAMPLE
+    $map = Get-DbTableVersionMap; $map['headset_status']
+#>
+function Get-DbTableVersionMap {
+    $map = @{}
+    try {
+        foreach ($row in @(Invoke-DbQuery -Name 'meta.table_versions_all')) {
+            if ($null -ne $row.name) { $map[[string]$row.name] = [int64]$row.version }
+        }
+    } catch { }
+    return $map
+}
+
 
 # -------------------------------------------------------------------
 # Key/value store (app_kv)

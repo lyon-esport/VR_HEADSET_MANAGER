@@ -505,7 +505,12 @@ function Start-FfmpegStreamPush {
         [string]$SourceCodec = 'h264'
     )
     $names = Get-HeadsetPipeNames -SafeName $SafeName
-    $logErr = Join-Path $global:logFolder ("${SafeName}_ffmpegPush_stderr.txt")
+    # One file PER SESSION (timestamped), never overwritten: a stream that keeps dying and
+    # restarting used to leave only the LAST session's stderr, so the failing ones could not
+    # be analysed - and a still-running previous ffmpeg held the shared file open, failing
+    # the next start with "file in use". Get-LogSources' ffmpeg pattern still matches, and
+    # Remove-OldLogFiles purges them on the usual retention.
+    $logErr = Join-Path $global:logFolder ("{0}_{1}_ffmpegPush_stderr.txt" -f $SafeName, (Get-Date -Format 'yyyyMMdd_HHmmss_fff'))
     $argList = [System.Collections.Generic.List[string]]::new()
     $argList.AddRange([string[]]@('-hide_banner','-loglevel','warning'))
     # Passthrough needs the bitstream filter matching the actual stream codec
@@ -561,6 +566,16 @@ function Start-FfmpegStreamPush {
         $encParams = Get-StreamEncoderArgs -EncoderName $enc.Name -Bitrate $bw -Gop $gop
         $rtspOut = [System.Collections.Generic.List[string]]::new()
         $rtspOut.AddRange([string[]]@('-map','0:v:0'))
+        # Hardware H.264 encoders (QSV, NVENC, AMF, MF) cannot open a frame wider or taller
+        # than 4096 px. An uncapped capture (model max_size 0 with the 'fullscreen' view, i.e.
+        # no crop) is the Quest 3's full native frame, wider than that: h264_qsv refused to
+        # open ("Current resolution is unsupported"), ffmpeg exited before publishing, and
+        # the watchdog restarted scrcpy in a loop with no stream ever reaching mediamtx.
+        # HEVC encoders go to 8192, which is why only h264 failed. Scale down to fit, keeping
+        # the aspect ratio and even dimensions; a frame already within 4096 is left as is.
+        if ($enc.Name -like 'h264_*') {
+            $rtspOut.AddRange([string[]]@('-vf', 'scale=w=min(iw\,4096):h=min(ih\,4096):force_original_aspect_ratio=decrease:force_divisible_by=2'))
+        }
         $rtspOut.AddRange([string[]]$encParams)
         if ($enc.ExtraArgs -and $enc.ExtraArgs.Count -gt 0) { $rtspOut.AddRange([string[]]$enc.ExtraArgs) }
         # -flush_packets / -muxdelay / -muxpreload: tell the RTSP muxer to push
@@ -894,10 +909,13 @@ function start-screenCopy {
         }
     }
 
+    # Per-session scrcpy logs (same reason as the ffmpeg one in Start-FfmpegStreamPush): a
+    # restart must not overwrite the output of the session that just failed.
+    $sessionStamp = Get-Date -Format 'yyyyMMdd_HHmmss_fff'
     try {
         $scrcpyProc = Start-Process $scrcpy -ArgumentList $arguments -PassThru -NoNewWindow `
-			-RedirectStandardOutput (Join-Path -Path $global:logFolder -ChildPath ($displayName+"_StandardOutput.txt")) `
-			-RedirectStandardError  (Join-Path -Path $global:logFolder -ChildPath ($displayName+"_StandardError.txt"))
+			-RedirectStandardOutput (Join-Path -Path $global:logFolder -ChildPath ("{0}_{1}_StandardOutput.txt" -f $displayName, $sessionStamp)) `
+			-RedirectStandardError  (Join-Path -Path $global:logFolder -ChildPath ("{0}_{1}_StandardError.txt" -f $displayName, $sessionStamp))
 	} catch {
         Write-Log -Message ($msg.ScrcpyLaunchError -f $_.Exception.Message) -Level "ERROR"
         if ($bridgeJob) { try { Stop-Job $bridgeJob -EA SilentlyContinue; Remove-Job $bridgeJob -Force -EA SilentlyContinue } catch {} }

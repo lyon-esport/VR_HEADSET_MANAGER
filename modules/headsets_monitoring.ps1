@@ -691,12 +691,11 @@ function Start-VRMonitor {
         try { Watch-ScrcpyProcesses } catch { Write-Log ("VRMonitor: scrcpy watchdog (eager) failed: " + $_.Exception.Message) -Level WARNING }
         try { Start-WebServer }        catch { Write-Log ("VRMonitor: web server watchdog (eager) failed: " + $_.Exception.Message) -Level WARNING }
 
-        # Pre-warm the GPU encoder probe (~10 s) now, after the services are up, so the first
-        # capture started from the web UI does not pay for it. Only when ffmpeg re-encodes
-        # the stream - passthrough never asks for an encoder.
-        if ($global:mediamtxReencode -and $global:CaptureMode -ne 'LocalWindow') {
-            try { Get-GpuEncoder | Out-Null } catch { Write-Log ("VRMonitor: GPU encoder pre-warm failed: " + $_.Exception.Message) -Level WARNING }
-        }
+        # NOTE: no GPU encoder pre-warm here. It was tried and removed: the probe has no
+        # timeout and took 60 s on a fresh release (Intel QSV), holding this loop - and so
+        # the computer-monitoring snapshot, the status export and every watchdog - for that
+        # whole minute. Get-GpuEncoder now caches its result for the life of the process
+        # (utils.ps1), so only the first capture pays for the probe.
 
         while ($true) {
 

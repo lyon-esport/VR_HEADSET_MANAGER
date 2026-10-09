@@ -59,8 +59,14 @@
 
     End of run: unless -Unattended, the harness asks what to do with the app it
     started: [Enter] keep it running and close the test window (default),
-    [Q] or [K] stop it and restore the folder, [R] retry chosen sections without
-    restarting. Keeping it leaves the sandbox seed in place; -RestoreOnly cleans up.
+    [Q] or [K] stop it, [R] retry chosen sections without restarting.
+
+    Generated data is NEVER deleted. At the end of a run the test folder keeps its
+    logs\, data\ (database, recordings) and config\ for troubleshooting, and a copy
+    of every log also goes into the report folder. When a later run starts on the
+    same folder, the previous run's data is MOVED to
+    <release>\nrt_runs_<app folder>\<timestamp>\ so the app folder is pristine again
+    (section 10's packaging checks need that).
 
 .PARAMETER AutoApproveSetup
     Auto-approves the app's first-boot computer setup (firewall rules, URL ACL,
@@ -77,13 +83,13 @@
     Combine with -Unattended for a fully hands-off run.
 
 .PARAMETER RestoreOnly
-    Do not run any test. Just tear down a sandbox left behind by a crashed run.
+    Do not run any test. Stop anything a crashed run left running, then move its
+    generated data to nrt_runs_<app folder>\<timestamp>\ (never deleted).
 
 .PARAMETER KeepSandbox
-    Skip the end-of-run sandbox reset, leaving config\config.json, data\ and
-    logs\ in place for post-mortem inspection. Note that the NEXT run against
-    that same folder will then fail section 10's packaging assertions, which are
-    only meaningful on a pristine extraction.
+    Do NOT move the previous run's data aside when this run starts: the new run
+    starts on top of it. Section 10's packaging assertions will then fail, since
+    they are only meaningful on a pristine extraction.
 
 .PARAMETER Force
     Allow -TargetRoot to point at the dev folder. Dangerous: the run will
@@ -395,7 +401,8 @@ if ($RestoreOnly) {
     if (Get-Command Remove-SandboxArtifacts -ErrorAction SilentlyContinue) {
         Remove-SandboxArtifacts -TargetRoot $target
         if (-not $KeepSandbox) {
-            Reset-SandboxTarget -TargetRoot $target -DevRoot $devRoot | Out-Null
+            # Moved aside, never deleted: the data of that run stays available for troubleshooting.
+            Reset-SandboxTarget -TargetRoot $target -DevRoot $devRoot -ArchiveTo (Get-SandboxRunArchivePath -TargetRoot $target) | Out-Null
         }
         Write-Host '  Done.' -ForegroundColor Green
         exit 0
@@ -487,6 +494,20 @@ try {
         Write-Host '  NOTE: test_sandbox.ps1 not present - running harness-only sections.' -ForegroundColor Yellow
     }
 
+    # --- Start from a pristine app folder, WITHOUT losing the previous run --------
+    # A run never cleans up after itself (its logs, database, recordings and config
+    # are what a failure is analysed with). So a folder that was already tested still
+    # holds that run's data; it is MOVED to nrt_runs_<app folder>\<timestamp> beside
+    # the app folder, because section 10's packaging checks need a clean extraction.
+    # Preconditions above guarantee the app is not running, so nothing is locked.
+    if ((-not $KeepSandbox) -and (Get-Command Reset-SandboxTarget -ErrorAction SilentlyContinue)) {
+        try {
+            Reset-SandboxTarget -TargetRoot $target -DevRoot $devRoot -ArchiveTo (Get-SandboxRunArchivePath -TargetRoot $target) | Out-Null
+        } catch {
+            Write-Host ("  WARNING: could not move the previous run's data aside: {0}" -f $_.Exception.Message) -ForegroundColor Yellow
+        }
+    }
+
     # --- Run sections -------------------------------------------------------
     # The app stays up between passes (sections never start or stop it), so the
     # end-of-run prompt below can offer "retry" without a restart.
@@ -545,7 +566,7 @@ try {
         Write-Host ''
         Write-Host '  The app is still running. What now?' -ForegroundColor White
         Write-Host '    [Enter] Keep the app running and close this test window (default)'
-        Write-Host '    [Q] or [K] Close (kill) the app, restore the folder, and finish'
+        Write-Host '    [Q] or [K] Close (kill) the app and finish (all test data is kept)'
         Write-Host '    [R] Retry: run one or more sections again'
         $endChoice = Read-TestMenuChoice -Prompt '  Select' -Accept @('', 'Q', 'K', 'R') -Default ''
 
@@ -594,24 +615,27 @@ finally {
         try { Stop-SandboxApp -TargetRoot $target | Out-Null } catch { }
     }
 
-    # Preserve the app's log file as run evidence before Reset-SandboxTarget
-    # deletes logs\ entirely below.
+    # Copy the logs into the report folder as well, so the report is self-contained.
     if (Get-Command Save-SandboxLogs -ErrorAction SilentlyContinue) {
         try { Save-SandboxLogs -TargetRoot $target } catch { }
     }
 
-    # Restore the target to its just-extracted state so it can be tested again.
-    # Section 10's packaging assertions only hold on a pristine extraction, and
-    # the sandbox seed (config\config.json, data\) is what breaks them.
-    if ((-not $KeepSandbox) -and (-not $keepAppRunning) -and (Get-Command Reset-SandboxTarget -ErrorAction SilentlyContinue)) {
-        try { Reset-SandboxTarget -TargetRoot $target -DevRoot $devRoot | Out-Null } catch { }
+    # NO reset here, on purpose. The test folder exists for troubleshooting: its logs\,
+    # data\ (database, recordings) and config\ are exactly what a failure is analysed
+    # with, and wiping them at the end of the run destroyed that evidence (only the main
+    # log survived, in the report). The next run on this folder moves them aside first
+    # (see "Start from a pristine app folder" above), so nothing is ever deleted.
+    if (-not $keepAppRunning) {
+        Write-Host ''
+        Write-Host '  Everything this run generated is kept in the test folder (logs\, data\, config\):' -ForegroundColor DarkGray
+        Write-Host ("    {0}" -f $target) -ForegroundColor DarkGray
     }
 
     if ($keepAppRunning) {
         Write-Host ''
         Write-Host '  The app was left running in the test folder (the sandbox seed is still in place):' -ForegroundColor Yellow
         Write-Host ("    {0}" -f $target) -ForegroundColor DarkGray
-        Write-Host '  To stop it and restore the folder, run:' -ForegroundColor Yellow
+        Write-Host '  To stop it (its data is moved aside, never deleted), run:' -ForegroundColor Yellow
         Write-Host '    .\scripts\Invoke-NonRegressionTests.ps1 -RestoreOnly -VRHMFolder <that folder>' -ForegroundColor DarkGray
     }
 
