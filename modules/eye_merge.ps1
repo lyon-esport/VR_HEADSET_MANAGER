@@ -273,9 +273,20 @@ public static class VrhmEyeMerge {
     sealed class Ctx {
         public double[] P; public byte[] mL, mR, featherL, featherR; public float[] dL, dR;
         public bool baseRight; public int ew, eh, ox, oy;
+        // Merge depth (metres, 0 = far) and the fisheye model it goes through: focal in canvas px per
+        // radian, eye spacing in metres, optical centre (world coordinates) midway between the eyes.
+        public double depth, fpx, ipd, cx, cy;
     }
     static Ctx MakeCtx(double[] P, int[] polyL, int[] polyR, int[] box, bool baseRight, int inset, int feather) {
+        return MakeCtx(P, polyL, polyR, box, baseRight, inset, feather, 0, 0, 0);
+    }
+    static Ctx MakeCtx(double[] P, int[] polyL, int[] polyR, int[] box, bool baseRight, int inset, int feather,
+                       double depth, double fpx, double ipd) {
         var x = new Ctx(); x.P = P; x.ew = (int)P[0]; x.eh = (int)P[1]; x.ox = box[0]; x.oy = box[1]; x.baseRight = baseRight;
+        x.depth = (depth > 0 && fpx > 0 && ipd > 0) ? depth : 0; x.fpx = fpx; x.ipd = ipd;
+        // Right-eye picture centre in world coordinates: c + t + R(rel - level) q = c  ->  q = R(level - rel)(-t).
+        double a = (P[5] - P[2]) * Math.PI / 180, ca = Math.Cos(a), sa = Math.Sin(a);
+        x.cx = (ca * -P[3] - sa * -P[4]) / 2; x.cy = (sa * -P[3] + ca * -P[4]) / 2;
         x.mL = FillPolygon(polyL, x.ew, x.eh); x.mR = FillPolygon(polyR, x.ew, x.eh);
         // Both eyes get a feather ramp now: each picture darkens towards its own lens edge, so the
         // OTHER eye must not be used right up to its rim either.
@@ -291,9 +302,25 @@ public static class VrhmEyeMerge {
         }
         return o;
     }
+    // Where the OTHER eye sees what the base eye sees at world point (qx,qy), for an object at
+    // k.depth metres. The merged picture is still lens-distorted, so a sideways eye offset is not
+    // a flat shift (it bends towards the lens edges, where the blend band is): the point is turned
+    // into a viewing direction (equidistant fisheye, r = f * theta), placed at the depth, moved by
+    // the eye spacing, and projected back. Fitted on a Quest 3: f ~ 1150 px/rad predicts a near
+    // object's shift at 119,15.5 px against 118,16 measured.
+    static void Parallax(Ctx k, ref double qx, ref double qy) {
+        if (k.depth <= 0) return;
+        double dx = qx - k.cx, dy = qy - k.cy, r = Math.Sqrt(dx * dx + dy * dy), th = r / k.fpx, ph = Math.Atan2(dy, dx);
+        double side = k.baseRight ? k.ipd : -k.ipd;          // the left eye sits on the left of the right eye
+        double vx = k.depth * Math.Sin(th) * Math.Cos(ph) + side, vy = k.depth * Math.Sin(th) * Math.Sin(ph), vz = k.depth * Math.Cos(th);
+        double n = Math.Sqrt(vx * vx + vy * vy + vz * vz), th2 = Math.Acos(vz / n), ph2 = Math.Atan2(vy, vx);
+        qx = k.cx + k.fpx * th2 * Math.Cos(ph2); qy = k.cy + k.fpx * th2 * Math.Sin(ph2);
+    }
     static void Sample(Ctx k, double u, double v, out double bx, out double by, out double ox, out double oy, out int w) {
-        double qx = k.ox + u, qy = k.oy + v, lx, ly, rx, ry;
-        ToLeft(k.P, qx, qy, out lx, out ly); ToRight(k.P, qx, qy, out rx, out ry);
+        double qx = k.ox + u, qy = k.oy + v, lx, ly, rx, ry, px = qx, py = qy;
+        Parallax(k, ref px, ref py);
+        if (k.baseRight) { ToLeft(k.P, px, py, out lx, out ly); ToRight(k.P, qx, qy, out rx, out ry); }
+        else             { ToLeft(k.P, qx, qy, out lx, out ly); ToRight(k.P, px, py, out rx, out ry); }
         int ilx = (int)Math.Round(lx), ily = (int)Math.Round(ly), irx = (int)Math.Round(rx), iry = (int)Math.Round(ry);
         bool inL = ilx >= 0 && ily >= 0 && ilx < k.ew && ily < k.eh && k.mL[ily * k.ew + ilx] > 0;
         bool inR = irx >= 0 && iry >= 0 && irx < k.ew && iry < k.eh && k.mR[iry * k.ew + irx] > 0;
@@ -366,7 +393,11 @@ public static class VrhmEyeMerge {
     // The flat merged canvas (what the operator crops in the view editor), bilinear, black outside.
     public static void RenderCanvas(byte[] bgr, int fw, int fh, double[] P, int[] polyL, int[] polyR, int[] box,
                                     bool baseRight, int inset, int feather, string outPng) {
-        var k = MakeCtx(P, polyL, polyR, box, baseRight, inset, feather);
+        RenderCanvas(bgr, fw, fh, P, polyL, polyR, box, baseRight, inset, feather, 0, 0, 0, outPng);
+    }
+    public static void RenderCanvas(byte[] bgr, int fw, int fh, double[] P, int[] polyL, int[] polyR, int[] box,
+                                    bool baseRight, int inset, int feather, double depth, double fpx, double ipd, string outPng) {
+        var k = MakeCtx(P, polyL, polyR, box, baseRight, inset, feather, depth, fpx, ipd);
         int W = box[2], H = box[3]; var o = new byte[W * H * 3];
         Parallel.For(0, H, v => {
             var pb = new double[3]; var po = new double[3];
@@ -403,7 +434,12 @@ public static class VrhmEyeMerge {
     // tables, so it costs nothing at runtime.
     public static void BuildMaps(string prefix, double[] P, int[] polyL, int[] polyR, int[] box, bool baseRight,
                                  int inset, int feather, int cx, int cy, int cw, int ch, int ow, int oh) {
-        var k = MakeCtx(P, polyL, polyR, box, baseRight, inset, feather);
+        BuildMaps(prefix, P, polyL, polyR, box, baseRight, inset, feather, cx, cy, cw, ch, ow, oh, 0, 0, 0);
+    }
+    public static void BuildMaps(string prefix, double[] P, int[] polyL, int[] polyR, int[] box, bool baseRight,
+                                 int inset, int feather, int cx, int cy, int cw, int ch, int ow, int oh,
+                                 double depth, double fpx, double ipd) {
+        var k = MakeCtx(P, polyL, polyR, box, baseRight, inset, feather, depth, fpx, ipd);
         double sx = (double)cw / ow, sy = (double)ch / oh;
         int n = ow * oh; var bxm = new byte[n * 2]; var bym = new byte[n * 2]; var oxm = new byte[n * 2]; var oym = new byte[n * 2]; var wm = new byte[n];
         Parallel.For(0, oh, v => {
@@ -580,6 +616,9 @@ function Test-EyeMergeProfile {
     & $num 'level_angle'    -90 90
     & $num 'feather_px'     0 2000
     & $num 'inset_px'       0 1000
+    # Optional: the lens model of the merge depth. Absent = depth not available for this model.
+    if ($null -ne $MergeProfile.lens_focal_px) { & $num 'lens_focal_px' 100 10000 }
+    if ($null -ne $MergeProfile.ipd_m)         { & $num 'ipd_m' 0.04 0.09 }
     if ($MergeProfile.frame_width -and ([int]$MergeProfile.frame_width % 2) -ne 0) { $errors.Add('frame_width must be even (two eyes side by side)') }
     if ([string]$MergeProfile.base_eye -notin @('L','R')) { $errors.Add('base_eye must be L or R') }
     foreach ($m in 'mask_left','mask_right') {
@@ -664,12 +703,50 @@ function Get-EyeMergeGeometry {
     $polyL = ConvertFrom-EyeMergePolygon -Text ([string]$MergeProfile.mask_left)
     $polyR = ConvertFrom-EyeMergePolygon -Text ([string]$MergeProfile.mask_right)
     $box = [VrhmEyeMerge]::CanvasBox($P, $polyL, $polyR)
+    # Merge depth lens model: lens_focal_px absent = depth unavailable (Focal 0). ipd_m defaults to
+    # the average adult eye spacing (63 mm) - the depth only needs it roughly right.
+    $focal = if ($null -ne $MergeProfile.lens_focal_px) { [double]$MergeProfile.lens_focal_px } else { 0.0 }
+    $ipd = if ($null -ne $MergeProfile.ipd_m) { [double]$MergeProfile.ipd_m } else { 0.063 }
     return @{
         P = $P; PolyL = $polyL; PolyR = $polyR; Box = $box
         BaseRight = ([string]$MergeProfile.base_eye -ne 'L')
         Inset = [int]$MergeProfile.inset_px; Feather = [int]$MergeProfile.feather_px
         CanvasWidth = $box[2]; CanvasHeight = $box[3]
+        Focal = $focal; Ipd = $ipd
     }
+}
+
+
+# Merge depth of one view in metres: views.<view>.merged.depth_m, 0 = far (the calibration's own
+# alignment). Clamped to 0.3 .. 100 m. Always 0 when the model has no lens model (lens_focal_px).
+# Example: Get-EyeMergeViewDepth -Model 'Quest 3' -View 'max'
+function Get-EyeMergeViewDepth {
+    param([Parameter(Mandatory)][string]$Model, [string]$View, $MergeProfile = $null)
+    if (-not $MergeProfile) { $MergeProfile = Get-EyeMergeProfile -Model $Model -IncludeDisabled }
+    if (-not $MergeProfile -or $null -eq $MergeProfile.lens_focal_px -or -not $View) { return 0.0 }
+    $tpl = $global:scrcpyParameters.$Model
+    if (-not $tpl -or -not $tpl.views -or -not $tpl.views.$View -or -not $tpl.views.$View.merged) { return 0.0 }
+    $raw = $tpl.views.$View.merged.depth_m
+    $d = 0.0
+    if ($null -eq $raw -or -not [double]::TryParse([string]$raw, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$d)) { return 0.0 }
+    if ($d -le 0) { return 0.0 }
+    return [Math]::Min(100.0, [Math]::Max(0.3, $d))
+}
+
+
+# Main eye of one view's merge ('L' or 'R'): views.<view>.merged.base_eye when set, else the
+# calibration's base_eye, else R. The main eye gives the centre of the picture.
+# Example: Get-EyeMergeViewBaseEye -Model 'Quest 3' -View 'max'
+function Get-EyeMergeViewBaseEye {
+    param([Parameter(Mandatory)][string]$Model, [string]$View, $MergeProfile = $null)
+    if (-not $MergeProfile) { $MergeProfile = Get-EyeMergeProfile -Model $Model -IncludeDisabled }
+    $tpl = $global:scrcpyParameters.$Model
+    if ($View -and $tpl -and $tpl.views -and $tpl.views.$View -and $tpl.views.$View.merged) {
+        $e = [string]$tpl.views.$View.merged.base_eye
+        if ($e -in @('L','R')) { return $e.ToUpperInvariant() }
+    }
+    if ($MergeProfile -and [string]$MergeProfile.base_eye -eq 'L') { return 'L' }
+    return 'R'
 }
 
 
@@ -811,12 +888,14 @@ function Get-EyeMergeMaps {
             $outW = [int][Math]::Floor($outW * $scale); $outH = [int][Math]::Floor($outH * $scale)
             $outW -= $outW % 2; $outH -= $outH % 2
         }
+        $depth = Get-EyeMergeViewDepth -Model $Model -View $View -MergeProfile $p
+        $baseRight = ((Get-EyeMergeViewBaseEye -Model $Model -View $View -MergeProfile $p) -eq 'R')
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
-        [VrhmEyeMerge]::BuildMaps($prefix, $g.P, $g.PolyL, $g.PolyR, $g.Box, $g.BaseRight, $g.Inset, $g.Feather,
-                                  $crop.X, $crop.Y, $crop.W, $crop.H, $outW, $outH)
-        $meta = [ordered]@{ Model = $Model; View = $View; Width = $outW; Height = $outH; Crop = ("{0}:{1}:{2}:{3}" -f $crop.W, $crop.H, $crop.X, $crop.Y); Built = (Get-Date).ToString('s') }
+        [VrhmEyeMerge]::BuildMaps($prefix, $g.P, $g.PolyL, $g.PolyR, $g.Box, $baseRight, $g.Inset, $g.Feather,
+                                  $crop.X, $crop.Y, $crop.W, $crop.H, $outW, $outH, $depth, $g.Focal, $g.Ipd)
+        $meta = [ordered]@{ Model = $Model; View = $View; Width = $outW; Height = $outH; Crop = ("{0}:{1}:{2}:{3}" -f $crop.W, $crop.H, $crop.X, $crop.Y); DepthM = $depth; Built = (Get-Date).ToString('s') }
         Write-FileWithoutBom -Path $metaPath -Content ($meta | ConvertTo-Json -Compress)
-        Write-Log ("Eye merge: lookup tables for {0}/{1} built in {2} ms (crop {3}x{4}, output {5}x{6})" -f $Model, $View, $sw.ElapsedMilliseconds, $crop.W, $crop.H, $outW, $outH) -Level INFO
+        Write-Log ("Eye merge: lookup tables for {0}/{1} built in {2} ms (crop {3}x{4}, output {5}x{6}, depth {7})" -f $Model, $View, $sw.ElapsedMilliseconds, $crop.W, $crop.H, $outW, $outH, $(if ($depth -gt 0) { $depth.ToString([System.Globalization.CultureInfo]::InvariantCulture) + ' m' } else { 'far' })) -Level INFO
 
         # Keep the cache small: the 12 most recent table sets.
         $metas = @(Get-ChildItem -LiteralPath $dir -Filter '*.json' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)
@@ -876,10 +955,13 @@ function Get-HeadsetDisplaySize {
 
 
 # Writes the merged canvas of a raw side-by-side frame (PNG) - the picture the operator crops in the
-# view editor. Returns @{Ok;Path;Width;Height;Error}.
-# Example: New-EyeMergeCanvas -Model 'Quest 3' -FramePath $frame.Path -OutFile 'C:\tmp\merged.png'
+# view editor. -DepthM aligns the blend band on objects at that distance (0 = far, see
+# Get-EyeMergeViewDepth); -BaseEye L/R overrides the calibration's main eye.
+# Returns @{Ok;Path;Width;Height;Error}.
+# Example: New-EyeMergeCanvas -Model 'Quest 3' -FramePath $frame.Path -OutFile 'C:\tmp\merged.png' -DepthM 0.75 -BaseEye L
 function New-EyeMergeCanvas {
-    param([string]$Model, [Parameter(Mandatory)][string]$FramePath, [Parameter(Mandatory)][string]$OutFile, $MergeProfile = $null)
+    param([string]$Model, [Parameter(Mandatory)][string]$FramePath, [Parameter(Mandatory)][string]$OutFile, $MergeProfile = $null,
+          [double]$DepthM = 0, [ValidateSet('','L','R')][string]$BaseEye = '')
     $res = @{ Ok = $false; Path = $null; Width = 0; Height = 0; Error = $null }
     try {
         if (-not $MergeProfile) { $MergeProfile = Get-EyeMergeProfile -Model $Model -IncludeDisabled }
@@ -894,7 +976,9 @@ function New-EyeMergeCanvas {
         $g = Get-EyeMergeGeometry -MergeProfile $MergeProfile
         $dir = Split-Path -Path $OutFile -Parent
         if (-not (Test-Path -LiteralPath $dir)) { [void][System.IO.Directory]::CreateDirectory($dir) }
-        [VrhmEyeMerge]::RenderCanvas($bgr, $fw, $fh, $g.P, $g.PolyL, $g.PolyR, $g.Box, $g.BaseRight, $g.Inset, $g.Feather, $OutFile)
+        $baseRight = if ($BaseEye) { $BaseEye -eq 'R' } else { $g.BaseRight }
+        [VrhmEyeMerge]::RenderCanvas($bgr, $fw, $fh, $g.P, $g.PolyL, $g.PolyR, $g.Box, $baseRight, $g.Inset, $g.Feather,
+                                     $DepthM, $g.Focal, $g.Ipd, $OutFile)
         $res.Path = $OutFile; $res.Width = $g.CanvasWidth; $res.Height = $g.CanvasHeight; $res.Ok = $true
     } catch {
         $res.Error = $_.Exception.Message
@@ -989,6 +1073,10 @@ function Invoke-EyeMergeCalibration {
             calibrated_by  = [string]$CalibratedBy
             notes          = ''
         }
+        # The lens model of the merge depth is not measured here (it needs a near object at a known
+        # place): keep the existing one, as base_eye and feather_px.
+        if ($existing -and $null -ne $existing.lens_focal_px) { $cal.Insert(14, 'lens_focal_px', [double]$existing.lens_focal_px) }
+        if ($existing -and $null -ne $existing.ipd_m) { $cal.Insert(15, 'ipd_m', [double]$existing.ipd_m) }
         $pObj = [PSCustomObject]$cal
         $g = Get-EyeMergeGeometry -MergeProfile $pObj
         $pObj.canvas_width = $g.CanvasWidth; $pObj.canvas_height = $g.CanvasHeight
@@ -1085,18 +1173,50 @@ function Set-EyeMergeEnabled {
 function Set-EyeMergeViewCrop {
     param([Parameter(Mandatory)][string]$Model, [Parameter(Mandatory)][string]$View, [string]$Crop, [switch]$Reset)
     if (-not $Reset -and $Crop -notmatch '^\d+:\d+:\d+:\d+$') { Write-Log ("Set-EyeMergeViewCrop: '{0}' is not w:h:x:y." -f $Crop) -Level ERROR; return $false }
+    return (Set-EyeMergeViewField -Model $Model -View $View -Field 'crop' -Value $(if ($Reset) { $null } else { $Crop }))
+}
+
+
+# Sets the merge depth of one view: the distance (metres) at which the two eyes line up in the
+# blend band. 0 (or -Far) = far, the calibration's own alignment. Needs the model's lens model
+# (eye_merge.lens_focal_px). Takes effect at the next stream (re)start (new table key).
+# Example: Set-EyeMergeViewDepth -Model 'Quest 3' -View 'max' -DepthM 0.75
+function Set-EyeMergeViewDepth {
+    param([Parameter(Mandatory)][string]$Model, [Parameter(Mandatory)][string]$View, [double]$DepthM = 0, [switch]$Far)
+    if ($Far -or $DepthM -le 0) { return (Set-EyeMergeViewField -Model $Model -View $View -Field 'depth_m' -Value $null) }
+    if ($DepthM -lt 0.3 -or $DepthM -gt 100) { Write-Log ("Set-EyeMergeViewDepth: {0} m is outside 0.3 .. 100 m." -f $DepthM) -Level ERROR; return $false }
+    $p = Get-EyeMergeProfile -Model $Model -IncludeDisabled
+    if (-not $p -or $null -eq $p.lens_focal_px) { Write-Log ("Set-EyeMergeViewDepth: model '{0}' has no lens model (eye_merge.lens_focal_px)." -f $Model) -Level WARNING; return $false }
+    return (Set-EyeMergeViewField -Model $Model -View $View -Field 'depth_m' -Value ([Math]::Round($DepthM, 2)))
+}
+
+
+# Internal: sets ($null = removes) one field of views.<view>.merged, keeping the others, and drops
+# the merged object once it is empty.
+function Set-EyeMergeViewField {
+    param([Parameter(Mandatory)][string]$Model, [Parameter(Mandatory)][string]$View, [Parameter(Mandatory)][string]$Field, $Value)
     return (Update-EyeMergeConfig -Model $Model -Mutate {
         param($m)
         $v = $m.views.$View
         if (-not $v) { throw "View '$View' not found for model '$Model'." }
-        if ($Reset) {
-            if ($v.PSObject.Properties.Name -contains 'merged') { $v.PSObject.Properties.Remove('merged') }
-        } elseif ($v.PSObject.Properties.Name -contains 'merged') {
-            $v.merged = [PSCustomObject]@{ crop = $Crop }
-        } else {
-            $v | Add-Member -NotePropertyName 'merged' -NotePropertyValue ([PSCustomObject]@{ crop = $Crop })
-        }
+        $merged = if ($v.merged) { $v.merged } else { [PSCustomObject]@{} }
+        if ($merged.PSObject.Properties.Name -contains $Field) { $merged.PSObject.Properties.Remove($Field) }
+        if ($null -ne $Value) { $merged | Add-Member -NotePropertyName $Field -NotePropertyValue $Value }
+        if ($v.PSObject.Properties.Name -contains 'merged') { $v.PSObject.Properties.Remove('merged') }
+        if (@($merged.PSObject.Properties).Count -gt 0) { $v | Add-Member -NotePropertyName 'merged' -NotePropertyValue $merged }
     })
+}
+
+
+# Chooses the main eye of one view's merge - the eye that gives the centre of the picture (R by
+# default; the other eye only fills the sides): views.<view>.merged.base_eye. R is stored as an
+# absent field (the default), L explicitly. A merged stream of that view restarts. $true/$false.
+# Example: Set-EyeMergeBaseEye -Model 'Quest 3' -View 'max' -BaseEye L
+function Set-EyeMergeBaseEye {
+    param([Parameter(Mandatory)][string]$Model, [Parameter(Mandatory)][string]$View, [Parameter(Mandatory)][ValidateSet('L','R')][string]$BaseEye)
+    $ok = Set-EyeMergeViewField -Model $Model -View $View -Field 'base_eye' -Value $(if ($BaseEye -eq 'L') { 'L' } else { $null })
+    if ($ok) { Write-Log ("Eye merge {0}/{1}: main eye is now {2}." -f $Model, $View, $BaseEye) -Level INFO }
+    return $ok
 }
 
 
@@ -1107,14 +1227,16 @@ function Export-EyeMergeProfile {
     param([Parameter(Mandatory)][string]$Model)
     $p = Get-EyeMergeProfile -Model $Model -IncludeDisabled
     if (-not $p) { return $null }
-    $crops = [ordered]@{}
+    $crops = [ordered]@{}; $depths = [ordered]@{}; $eyes = [ordered]@{}
     $tpl = $global:scrcpyParameters.$Model
     if ($tpl.views) {
         foreach ($v in $tpl.views.PSObject.Properties) {
             if ($v.Value.merged -and $v.Value.merged.crop) { $crops[$v.Name] = [string]$v.Value.merged.crop }
+            if ($v.Value.merged -and $null -ne $v.Value.merged.depth_m) { $depths[$v.Name] = [double]$v.Value.merged.depth_m }
+            if ($v.Value.merged -and [string]$v.Value.merged.base_eye -in @('L','R')) { $eyes[$v.Name] = [string]$v.Value.merged.base_eye }
         }
     }
-    $snippet = [ordered]@{ vrhm_eye_merge = 1; model = $Model; eye_merge = $p; view_crops = $crops }
+    $snippet = [ordered]@{ vrhm_eye_merge = 1; model = $Model; eye_merge = $p; view_crops = $crops; view_depths = $depths; view_base_eyes = $eyes }
     return ($snippet | ConvertTo-Json -Depth 8)
 }
 
@@ -1145,6 +1267,16 @@ function Import-EyeMergeProfile {
                 }
             }
         }
+        if ($IncludeViewCrops -and $o.view_depths) {
+            foreach ($d in $o.view_depths.PSObject.Properties) {
+                if ($global:scrcpyParameters.$Model.views.($d.Name)) { [void](Set-EyeMergeViewDepth -Model $Model -View $d.Name -DepthM ([double]$d.Value)) }
+            }
+        }
+        if ($IncludeViewCrops -and $o.view_base_eyes) {
+            foreach ($e in $o.view_base_eyes.PSObject.Properties) {
+                if ($global:scrcpyParameters.$Model.views.($e.Name) -and [string]$e.Value -in @('L','R')) { [void](Set-EyeMergeBaseEye -Model $Model -View $e.Name -BaseEye ([string]$e.Value)) }
+            }
+        }
         $res.Ok = $true
     } catch {
         $res.Error = 'Not valid JSON: ' + $_.Exception.Message
@@ -1153,19 +1285,31 @@ function Import-EyeMergeProfile {
 }
 
 
-# Captures a headset frame and renders its merged canvas for the view editor.
+# Captures a headset frame and renders its merged canvas for the view editor. -DepthM renders it
+# with that merge depth (0 = far). -ReuseFrame skips the capture and re-renders the last raw frame
+# of this headset (headset_<id>.png): ~1 s instead of ~6 s, used when only the depth changes.
 # Returns the same shape as /api/headset-screen-frame: @{Ok;Path;Width;Height;Transport;Error}.
-# Example: Get-HeadsetMergedFrame -Headset (Get-HeadsetDiagTarget -Id 3)
+# -BaseEye L/R picks the main eye (default: the calibration's).
+# Example: Get-HeadsetMergedFrame -Headset (Get-HeadsetDiagTarget -Id 3) -DepthM 0.75 -BaseEye R -ReuseFrame
 function Get-HeadsetMergedFrame {
-    param([Parameter(Mandatory)] $Headset, [ValidateSet('Auto','USB','WiFi')] [string]$Transport = 'Auto')
+    param([Parameter(Mandatory)] $Headset, [ValidateSet('Auto','USB','WiFi')] [string]$Transport = 'Auto',
+          [double]$DepthM = 0, [ValidateSet('','L','R')][string]$BaseEye = '', [switch]$ReuseFrame)
     $res = @{ Ok = $false; Path = $null; Width = 0; Height = 0; Transport = '-'; Error = $null }
     $p = Get-EyeMergeProfile -Model ([string]$Headset.Model) -IncludeDisabled
     if (-not $p) { $res.Error = ("Model '{0}' has no eye merge calibration - calibrate it first." -f $Headset.Model); return $res }
-    $frame = Get-HeadsetScreenFrame -Headset $Headset -Transport $Transport
-    $res.Transport = $frame.Transport
-    if (-not $frame.Ok) { $res.Error = $frame.Error; return $res }
+    if ($DepthM -gt 0) { $DepthM = [Math]::Min(100.0, [Math]::Max(0.3, $DepthM)) }
+    $rawPath = Join-Path $global:ScriptPath ("website\generated\view_editor\headset_{0}.png" -f $Headset.ID)
+    if ($ReuseFrame -and (Test-Path -LiteralPath $rawPath)) {
+        $res.Transport = 'cache'
+    } else {
+        if ($ReuseFrame) { Write-Log 'Get-HeadsetMergedFrame: no previous frame to reuse, capturing one.' -Level DEBUG }
+        $frame = Get-HeadsetScreenFrame -Headset $Headset -Transport $Transport
+        $res.Transport = $frame.Transport
+        if (-not $frame.Ok) { $res.Error = $frame.Error; return $res }
+        $rawPath = $frame.Path
+    }
     $out = Join-Path $global:ScriptPath ("website\generated\view_editor\headset_{0}_merged.png" -f $Headset.ID)
-    $c = New-EyeMergeCanvas -FramePath $frame.Path -OutFile $out -MergeProfile $p
+    $c = New-EyeMergeCanvas -FramePath $rawPath -OutFile $out -MergeProfile $p -DepthM $DepthM -BaseEye $BaseEye
     if (-not $c.Ok) { $res.Error = $c.Error; return $res }
     $res.Path = $c.Path; $res.Width = $c.Width; $res.Height = $c.Height; $res.Ok = $true
     return $res

@@ -522,6 +522,31 @@ if (Test-Path -LiteralPath $script:resolveProgFile) {
     } catch { Remove-Item -LiteralPath $script:resolveProgFile -Force -ErrorAction SilentlyContinue }
 }
 
+# Background job for the stream benchmark (Invoke-StreamBenchmark, stream_benchmark.ps1).
+# A NEW PowerShell process, so it owns the test streams it starts; it writes its own
+# progress JSON (Get-StreamBenchmarkProgressPath). Test ids travel as one comma-joined string.
+$benchmarkJobBlock = {
+    param([string]$ScriptPath, [string]$ConfigFilePath, [int]$HeadsetId, [string]$TestIds, [int]$MeasureSec)
+    $progFile = [System.IO.Path]::Combine($env:TEMP, 'vrm_benchmark.json')
+    try {
+        $global:ScriptPath         = $ScriptPath
+        $global:ConfigFilePath     = $ConfigFilePath
+        $global:IsWebServerProcess = $true
+        . (Join-Path $ScriptPath 'modules\scripts_init.ps1')
+        $benchHeadset = Get-HeadsetDiagTarget -Id $HeadsetId
+        if (-not $benchHeadset) { throw ("Unknown headset id {0}" -f $HeadsetId) }
+        Invoke-StreamBenchmark -Headset $benchHeadset -TestIds ($TestIds -split ',') -MeasureSec $MeasureSec `
+            -ProgressFile (Get-StreamBenchmarkProgressPath) | Out-Null
+    } catch {
+        $err = ($_.ToString() -replace '"', "'") -replace '[^\x20-\x7E]', ''
+        try { [System.IO.File]::WriteAllText($progFile, "{`"status`":`"error`",`"error`":`"$err`"}") } catch {}
+    }
+}
+$script:benchmarkJob = $null
+# A progress file left "running" by a previous web server session is stale unless a
+# benchmark still holds the pause flag (a console run, for instance).
+$script:benchmarkProgFile = [System.IO.Path]::Combine($env:TEMP, 'vrm_benchmark.json')
+
 # Active update-versions job guard (only one at a time)
 $script:updateVersionsJob          = $null
 $script:updateVersionsProgFile     = [System.IO.Path]::Combine($env:TEMP, 'vrm_update_versions.json')
@@ -1506,13 +1531,14 @@ try {
                 if ($emProfile -and $emProfile.enabled -ne $false -and $global:scrcpyParameters.$emModel.views) {
                     foreach ($v in $global:scrcpyParameters.$emModel.views.PSObject.Properties) {
                         $c = Get-EyeMergeViewCrop -Model $emModel -View $v.Name -MergeProfile $emProfile
-                        if ($c) { $emViews[$v.Name] = @{ crop = ("{0}:{1}:{2}:{3}" -f $c.W, $c.H, $c.X, $c.Y); auto = [bool]$c.Auto } }
+                        if ($c) { $emViews[$v.Name] = @{ crop = ("{0}:{1}:{2}:{3}" -f $c.W, $c.H, $c.X, $c.Y); auto = [bool]$c.Auto; depth = (Get-EyeMergeViewDepth -Model $emModel -View $v.Name -MergeProfile $emProfile); baseEye = (Get-EyeMergeViewBaseEye -Model $emModel -View $v.Name -MergeProfile $emProfile) } }
                     }
                 }
                 Send-JsonResponse -Response $response -Body @{
                     ok = $true; model = $emModel
                     calibrated = [bool]$emProfile
                     enabled = [bool]($emProfile -and $emProfile.enabled -ne $false)
+                    depthSupported = [bool]($emProfile -and $null -ne $emProfile.lens_focal_px)
                     profile = $emProfile
                     views = $emViews
                     snippet = $(if ($emProfile) { Export-EyeMergeProfile -Model $emModel } else { $null })
@@ -1543,9 +1569,11 @@ try {
             continue
         }
 
-        # POST /api/eye-merge/frame  body {"id":3,"transport":"Auto|USB|WiFi"}
+        # POST /api/eye-merge/frame  body {"id":3,"transport":"Auto|USB|WiFi","depth":0.75,"baseEye":"R","reuse":false}
         # Same as /api/headset-screen-frame but returns the flat MERGED canvas the view editor's
-        # Merged tab draws on. Blocks this listener for a few seconds (scrcpy records ~3 s).
+        # Merged tab draws on, at merge depth "depth" (metres, 0/absent = far) with main eye
+        # "baseEye" (L/R, absent = the calibration's). Blocks this listener
+        # for a few seconds (scrcpy records ~3 s); "reuse":true re-renders the last frame (~1 s).
         # POST /api/eye-merge/calibrate  body {"id":3,"transport":"Auto","save":true}
         # Measures the calibration of the headset's model (~3 s capture + ~2 s compute).
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -in @('/api/eye-merge/frame','/api/eye-merge/calibrate')) {
@@ -1561,7 +1589,11 @@ try {
                 $emTransport = if ($json.transport) { [string]$json.transport } else { 'Auto' }
                 if (@('Auto','USB','WiFi') -notcontains $emTransport) { $emTransport = 'Auto' }
                 if ($request.Url.LocalPath -eq '/api/eye-merge/frame') {
-                    $frame = Get-HeadsetMergedFrame -Headset $emHeadset -Transport $emTransport
+                    $emDepth = 0.0
+                    if ($null -ne $json.depth) { [void][double]::TryParse([string]$json.depth, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$emDepth) }
+                    $emBase = ([string]$json.baseEye).ToUpperInvariant()
+                    if ($emBase -notin @('L','R')) { $emBase = '' }
+                    $frame = Get-HeadsetMergedFrame -Headset $emHeadset -Transport $emTransport -DepthM $emDepth -BaseEye $emBase -ReuseFrame:([bool]$json.reuse)
                     $frameUrl = if ($frame.Ok) { "/view_editor/{0}?t={1}" -f (Split-Path -Path $frame.Path -Leaf), [DateTime]::UtcNow.Ticks } else { $null }
                     Send-JsonResponse -Response $response -Body @{
                         ok = [bool]$frame.Ok; url = $frameUrl; width = $frame.Width; height = $frame.Height
@@ -2886,6 +2918,141 @@ try {
                 }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ status = 'error' }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # ---- Stream benchmark (stream_benchmark.ps1, ADR-0026) ----
+        # GET /api/benchmark/catalog?id=<n> - tests available for that headset + timing constants.
+        # Config and registry only (no ADB, no GPU probe), so it is safe on this listener.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/benchmark/catalog') {
+            try {
+                $benchId = 0
+                if (-not [int]::TryParse([string]$request.QueryString['id'], [ref]$benchId) -or $benchId -le 0) { throw "INVALID_ID" }
+                $benchHeadset = Get-HeadsetDiagTarget -Id $benchId
+                if (-not $benchHeadset) { throw "UNKNOWN_HEADSET" }
+                $benchCat = Get-StreamBenchmarkCatalog -Headset $benchHeadset
+                Send-JsonResponse -Response $response -Depth 8 -Body @{
+                    ok = $true
+                    headset = @{ id = $benchHeadset.ID; name = $benchHeadset.Name; model = $benchHeadset.Model }
+                    model = $benchCat.Model; referenceView = $benchCat.ReferenceView; sourceCodec = $benchCat.SourceCodec
+                    reencodeBitrate = $benchCat.ReencodeBitrate; mediamtxEnabled = $benchCat.MediamtxEnabled
+                    timing = $benchCat.Timing; tests = @($benchCat.Tests)
+                    running = (Test-StreamBenchmarkActive)
+                }
+            } catch {
+                $errMsg = switch -Regex ($_.Exception.Message) {
+                    'INVALID_ID'      { 'Invalid or missing headset id.' }
+                    'UNKNOWN_HEADSET' { 'This headset is not registered on this server.' }
+                    default           { $_.Exception.Message }
+                }
+                Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $errMsg }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # POST /api/benchmark/start {id, tests:[ids], measureSec} - one run at a time.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/benchmark/start') {
+            try {
+                if (($script:benchmarkJob -and $script:benchmarkJob.State -in @('Running', 'NotStarted')) -or (Test-StreamBenchmarkActive)) {
+                    Send-JsonResponse -Response $response -Body @{ ok = $false; status = 'already_running'; error = 'A benchmark is already running.' }
+                    continue
+                }
+                if ($script:benchmarkJob) {
+                    try { Remove-Job -Job $script:benchmarkJob -Force -ErrorAction SilentlyContinue } catch {}
+                    $script:benchmarkJob = $null
+                }
+                if ($request.ContentLength64 -gt 65536) { throw "BODY_TOO_LARGE" }
+                $benchBody = try { (New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)).ReadToEnd() | ConvertFrom-Json } catch { $null }
+                $benchId = 0
+                if (-not $benchBody -or -not [int]::TryParse([string]$benchBody.id, [ref]$benchId) -or $benchId -le 0) { throw "INVALID_ID" }
+                $benchHeadset = Get-HeadsetDiagTarget -Id $benchId
+                if (-not $benchHeadset) { throw "UNKNOWN_HEADSET" }
+                $benchMeasure = 20
+                [void][int]::TryParse([string]$benchBody.measureSec, [ref]$benchMeasure)
+                if (@(10, 20, 40) -notcontains $benchMeasure) { $benchMeasure = 20 }
+                $benchCat = Get-StreamBenchmarkCatalog -Headset $benchHeadset
+                $benchKnown = @($benchCat.Tests | ForEach-Object { $_.Id })
+                $benchIds = @(@($benchBody.tests) | ForEach-Object { [string]$_ } | Where-Object { $benchKnown -contains $_ } | Select-Object -Unique)
+                if ($benchIds.Count -eq 0) { throw "NO_TEST" }
+                $benchSel = @($benchCat.Tests | Where-Object { $benchIds -contains $_.Id })
+                $benchRunning = @(Get-Process -Name 'scrcpy' -ErrorAction SilentlyContinue).Count
+                $benchEta = (Get-StreamBenchmarkFixedEstimate -Tests $benchSel -RunningStreams $benchRunning) +
+                            (($benchSel | ForEach-Object { Get-StreamBenchmarkTestEstimate -Test $_ -MeasureSec $benchMeasure } | Measure-Object -Sum).Sum)
+                $cancelPath = Get-StreamBenchmarkCancelPath
+                if (Test-Path -LiteralPath $cancelPath) { Remove-Item -LiteralPath $cancelPath -Force -ErrorAction SilentlyContinue }
+                [System.IO.File]::WriteAllText($script:benchmarkProgFile, ('{{"status":"queued","etaSec":{0},"estimatedTotalSec":{0},"total":{1}}}' -f [int]$benchEta, $benchIds.Count))
+                $script:benchmarkJob = Start-Job -ScriptBlock $benchmarkJobBlock -ArgumentList $ScriptPath, $ConfigFilePath, $benchId, ($benchIds -join ','), $benchMeasure
+                Write-Log ("Web: stream benchmark started for {0} ({1} test(s), {2} s window)" -f $benchHeadset.Name, $benchIds.Count, $benchMeasure) -Level INFO
+                Send-JsonResponse -Response $response -Body @{ ok = $true; status = 'started'; etaSec = [int]$benchEta; total = $benchIds.Count }
+            } catch {
+                $errMsg = switch -Regex ($_.Exception.Message) {
+                    'INVALID_ID'      { 'Invalid or missing headset id.' }
+                    'UNKNOWN_HEADSET' { 'This headset is not registered on this server.' }
+                    'NO_TEST'         { 'No valid test selected.' }
+                    'BODY_TOO_LARGE'  { 'Request too large.' }
+                    default           { $_.Exception.Message }
+                }
+                Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $errMsg }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # GET /api/benchmark/progress - the progress JSON as written by the run.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/benchmark/progress') {
+            try {
+                $raw = '{"status":"idle"}'
+                if (Test-Path -LiteralPath $script:benchmarkProgFile) {
+                    $raw = try { [System.IO.File]::ReadAllText($script:benchmarkProgFile, [System.Text.Encoding]::UTF8) } catch { '{"status":"idle"}' }
+                    $jobAlive = ($script:benchmarkJob -and $script:benchmarkJob.State -in @('Running', 'NotStarted'))
+                    if (-not $jobAlive -and -not (Test-StreamBenchmarkActive)) {
+                        # No run of ours and no pause flag: a running/queued file is a leftover.
+                        $parsed = try { $raw | ConvertFrom-Json } catch { $null }
+                        if (-not $parsed -or $parsed.status -in @('running', 'queued')) { $raw = '{"status":"idle"}' }
+                    }
+                }
+                Send-JsonResponse -Response $response -Raw $raw
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ status = 'error' }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # POST /api/benchmark/cancel - the run stops after its current step and restores the streams.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/benchmark/cancel') {
+            try {
+                Send-JsonResponse -Response $response -Body @{ ok = [bool](Stop-StreamBenchmark) }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # GET /api/benchmark/result - the last stored run (app_kv benchmark_last), result=null when none.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/benchmark/result') {
+            try {
+                Send-JsonResponse -Response $response -Depth 12 -Body @{ ok = $true; result = (Get-StreamBenchmarkResult) }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # GET /api/benchmark/result.csv - the same run as a CSV attachment (one line per test and GPU).
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/benchmark/result.csv') {
+            try {
+                $benchRes = Get-StreamBenchmarkResult
+                if (-not $benchRes) {
+                    Send-JsonResponse -Response $response -StatusCode 404 -Body @{ ok = $false; error = 'No benchmark result yet.' }
+                } else {
+                    $csvBytes = [System.Text.Encoding]::UTF8.GetBytes((ConvertTo-StreamBenchmarkCsv -Result $benchRes))
+                    $csvName = 'vrhm_benchmark_{0}_{1}.csv' -f ($env:COMPUTERNAME -replace '[^A-Za-z0-9_-]', ''), (Get-Date -Format 'yyyyMMdd_HHmm')
+                    $response.StatusCode      = 200
+                    $response.ContentType     = 'text/csv; charset=utf-8'
+                    $response.AddHeader('Content-Disposition', ('attachment; filename="{0}"' -f $csvName))
+                    $response.ContentLength64 = $csvBytes.Length
+                    $response.OutputStream.Write($csvBytes, 0, $csvBytes.Length)
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally { $response.Close() }
             continue
         }

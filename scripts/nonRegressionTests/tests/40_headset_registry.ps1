@@ -496,6 +496,41 @@ Invoke-RegressionTest -Name 'Eye merge: lookup tables merge a synthetic frame an
     Assert-Equal 60 $r.Frames 'one output frame per input frame (2 s at 30 fps)'
 }
 
+Invoke-RegressionTest -Name 'Eye merge: a view depth moves only the other eye and changes the table key' -Test {
+    $r = Invoke-InTargetModules -TargetRoot $target -TimeoutSeconds 180 -Body {
+        $p = Get-EyeMergeProfile -Model 'Quest 3'      # also loads config once, so the in-memory edit below sticks
+        $out = [PSCustomObject]@{ HasProfile = [bool]$p; HasLens = $false; Depth = -1; KeyChanged = $false; BaseSame = $false; OtherMoved = $false; Error = $null }
+        if ($p -and $null -ne $p.lens_focal_px) {
+            $out.HasLens = $true
+            $far = Get-EyeMergeMaps -Model 'Quest 3' -View 'square'
+            # In memory only - the sandbox config.json is never written by this test.
+            $view = $global:scrcpyParameters.'Quest 3'.views.square
+            $saved = $view.merged
+            $view | Add-Member -NotePropertyName merged -NotePropertyValue ([PSCustomObject]@{ depth_m = 0.75 }) -Force
+            try {
+                $out.Depth = Get-EyeMergeViewDepth -Model 'Quest 3' -View 'square'
+                $near = Get-EyeMergeMaps -Model 'Quest 3' -View 'square'
+                $out.Error = $near.Error
+                $out.KeyChanged = ($far.Key -ne $near.Key)
+                if ($far.Ok -and $near.Ok -and $far.Width -eq $near.Width) {
+                    $out.BaseSame = [Convert]::ToBase64String([IO.File]::ReadAllBytes("$($far.Prefix).bx.raw")) -eq [Convert]::ToBase64String([IO.File]::ReadAllBytes("$($near.Prefix).bx.raw"))
+                    $out.OtherMoved = [Convert]::ToBase64String([IO.File]::ReadAllBytes("$($far.Prefix).ox.raw")) -ne [Convert]::ToBase64String([IO.File]::ReadAllBytes("$($near.Prefix).ox.raw"))
+                }
+            } finally {
+                if ($saved) { $view.merged = $saved } else { $view.PSObject.Properties.Remove('merged') }
+            }
+        }
+        $out
+    }
+    if (-not $r.HasProfile) { Skip-Test 'the sandbox config has no enabled Quest 3 eye_merge block' }
+    if (-not $r.HasLens) { Skip-Test 'the Quest 3 calibration has no lens model (lens_focal_px)' }
+    Add-TestEvidence ("depth {0} m, key changed {1}, base table same {2}, other table moved {3} {4}" -f $r.Depth, $r.KeyChanged, $r.BaseSame, $r.OtherMoved, $r.Error)
+    Assert-Equal 0.75 $r.Depth 'views.<view>.merged.depth_m is read back'
+    Assert-True $r.KeyChanged 'a depth change must give new lookup tables (and restart the stream)'
+    Assert-True $r.BaseSame   'the main eye is never moved by the depth'
+    Assert-True $r.OtherMoved 'the other eye is sampled elsewhere at a near depth'
+}
+
 Invoke-RegressionTest -Name 'Restream path names are filesystem and URL safe' -Test {
     $result = Invoke-InTargetModules -TargetRoot $target -Body {
         [PSCustomObject]@{

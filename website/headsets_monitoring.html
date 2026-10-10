@@ -359,6 +359,62 @@
     .comp-refresh-btn.spinning svg { animation: comp-spin 0.7s linear infinite; }
     @keyframes comp-spin { to { transform: rotate(360deg); } }
 
+    /* -- Stream benchmark -- */
+    .bench-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 12px; }
+    .bench-controls label { color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
+    .bench-controls select {
+      background: var(--th-bg); color: var(--text); border: 1px solid #333; border-radius: 4px;
+      padding: 4px 8px; font-size: 12px;
+    }
+    .bench-est { color: var(--text); font-variant-numeric: tabular-nums; }
+    .bench-est strong { color: #3b82f6; }
+    .bench-run-btn {
+      margin-left: auto; padding: 6px 16px; border-radius: 5px; cursor: pointer;
+      border: 1px solid rgba(59,130,246,0.6); background: rgba(59,130,246,0.15); color: #3b82f6;
+      font-size: 12px; font-weight: 800; letter-spacing: 0.06em;
+    }
+    .bench-run-btn:hover { background: rgba(59,130,246,0.28); }
+    .bench-run-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+    .bench-note { font-size: 11.5px; color: #777; line-height: 1.5; }
+    .bench-tests-wrap { max-height: 360px; overflow-y: auto; border: 1px solid var(--border); border-radius: 4px; }
+    .bench-tests-wrap .comp-workload-table th { position: sticky; top: 0; background: var(--th-bg); z-index: 1; }
+    .bench-tests-wrap td:first-child, .bench-tests-wrap th:first-child { width: 26px; text-align: center; }
+    .bench-tests-wrap td { text-align: left; }
+    .bench-tests-wrap tr.bench-na td { opacity: 0.4; }
+    .bench-tests-wrap tr.bench-grp td { border-top: 1px solid var(--border); }
+    .bench-progress { display: none; flex-direction: column; gap: 6px; }
+    .bench-progress-bar { height: 6px; background: #222; border-radius: 3px; overflow: hidden; }
+    [data-theme="light"] .bench-progress-bar { background: #ccc; }
+    .bench-progress-bar > div { height: 100%; background: #3b82f6; width: 0; transition: width 0.8s; }
+    .bench-progress-text { font-size: 12px; color: var(--text); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .bench-msg { font-size: 12px; padding: 7px 10px; border-radius: 4px; display: none; }
+    .bench-msg.err  { display: block; background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.4); color: #ef4444; }
+    .bench-msg.info { display: block; background: rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.4); color: #3b82f6; }
+    .bench-result-wrap { overflow-x: auto; }
+    .bench-result td, .bench-result th { white-space: nowrap; }
+    .bench-result td.bench-test { text-align: left; color: var(--text); max-width: 280px; white-space: normal; }
+    .bench-result tbody tr.bench-first td { border-top: 1px solid var(--border); }
+    .bench-result .bench-delta { color: #777; font-size: 11px; margin-left: 4px; }
+    .bench-status { padding: 1px 7px; border-radius: 9px; font-size: 10px; font-weight: 800; text-transform: uppercase; }
+    .bench-status.ok       { background: rgba(34,197,94,0.15);  color: #22c55e; }
+    .bench-status.fallback { background: rgba(249,115,22,0.15); color: #f97316; }
+    .bench-status.failed, .bench-status.error { background: rgba(239,68,68,0.15); color: #ef4444; }
+    .bench-status.skipped  { background: rgba(120,120,120,0.2); color: #999; }
+    .bench-modal { position: fixed; inset: 0; z-index: 9999; background: rgba(0,0,0,0.72); display: flex; align-items: center; justify-content: center; }
+    .bench-modal-box {
+      background: #1a1a1a; border: 1px solid #333; border-radius: 10px; width: 90%; max-width: 440px;
+      padding: 22px 24px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+    }
+    [data-theme="light"] .bench-modal-box { background: #fff; border-color: #d8d8d8; }
+    .bench-modal-title { font-size: 14px; font-weight: 700; color: #f97316; }
+    .bench-modal-text { font-size: 12.5px; color: #9ca3af; line-height: 1.55; }
+    .bench-modal-text strong { color: var(--text); }
+    .bench-modal-list { max-height: 140px; overflow-y: auto; padding: 7px 10px; border-radius: 6px; font-size: 12px;
+      background: rgba(249,115,22,0.07); border: 1px solid rgba(249,115,22,0.25); color: var(--text); }
+    .bench-modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+    .bench-modal-actions button { padding: 7px 16px; border-radius: 6px; border: 1px solid #333; background: transparent; color: #9ca3af; font-size: 13px; font-weight: 600; cursor: pointer; }
+    .bench-modal-actions button.go { border-color: rgba(59,130,246,0.6); background: rgba(59,130,246,0.18); color: #3b82f6; }
+
     .vqa-hdr-short { display: none; }
     @media (max-width: 1100px) {
       .vqa-hdr-full  { display: none; }
@@ -490,6 +546,60 @@
         <div style="display:flex;gap:8px;justify-content:flex-end;padding:6px 0">
           <button class="comp-refresh-btn" onclick="event.preventDefault();vqaApply('all','')">Apply all</button>
           <button class="comp-refresh-btn" onclick="event.preventDefault();vqaRestore()" style="border-color:#a06030;color:#a06030">Restore originals</button>
+        </div>
+      </div>
+    </details>
+
+    <!-- ===== Stream benchmark (stream_benchmark.ps1, ADR-0026) ===== -->
+    <details class="comp-section" id="bench-section">
+      <summary>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 14l4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg>
+        Benchmark
+        <span class="pill" id="bench-pill" style="display:none;margin-left:10px;background:#3b82f6;color:#fff">RUNNING</span>
+        <svg class="chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+      </summary>
+      <div class="comp-body" style="grid-template-columns:1fr">
+        <div class="bench-note">
+          Measures what each capture option costs this PC (CPU, every GPU, memory) and what the stream really delivers
+          (frames per second, dropped / duplicated frames). Only the selected headset is tested; it needs ADB (USB or WiFi)
+          and must be ready to cast. <strong>Every running stream is stopped during the benchmark</strong> and restarted afterwards.
+          Re-encoding tests re-encode at the capture FPS and at the configured restream bitrate (<span id="bench-reenc-bw">-</span>).
+        </div>
+        <div class="bench-controls">
+          <label for="bench-headset">Headset</label>
+          <select id="bench-headset"><option value="">Loading...</option></select>
+          <label for="bench-measure">Measure</label>
+          <select id="bench-measure">
+            <option value="10">10 s per test</option>
+            <option value="20" selected>20 s per test</option>
+            <option value="40">40 s per test</option>
+          </select>
+          <button class="comp-refresh-btn" style="margin-left:0" onclick="benchSelect('curated')">Curated</button>
+          <button class="comp-refresh-btn" style="margin-left:0" onclick="benchSelect('all')">All</button>
+          <button class="comp-refresh-btn" style="margin-left:0" onclick="benchSelect('none')">None</button>
+          <span class="bench-est" id="bench-est"></span>
+          <button class="bench-run-btn" id="bench-run-btn" disabled onclick="benchConfirm()">RUN BENCHMARK</button>
+        </div>
+        <div class="bench-msg" id="bench-msg"></div>
+        <div class="bench-progress" id="bench-progress">
+          <div class="bench-progress-bar"><div id="bench-progress-fill"></div></div>
+          <div class="bench-progress-text">
+            <span id="bench-progress-text">Starting...</span>
+            <button class="comp-refresh-btn" style="border-color:#a06030;color:#a06030" onclick="benchCancel()">Cancel</button>
+          </div>
+        </div>
+        <div class="bench-tests-wrap" id="bench-tests-wrap">
+          <table class="comp-workload-table" id="bench-tests">
+            <thead><tr><th><input type="checkbox" id="bench-check-all" title="Select / clear every available test"></th><th>Group</th><th>Test</th><th>Eye</th><th>View</th><th>FPS</th><th>Mbps</th><th>Encoding</th><th>Est.</th></tr></thead>
+            <tbody><tr><td colspan="9" style="color:#555">Select a headset.</td></tr></tbody>
+          </table>
+        </div>
+        <div class="comp-card comp-workload-card" id="bench-result-card" style="display:none">
+          <div class="comp-card-title" style="display:flex;align-items:center;gap:8px">
+            <span id="bench-result-title">Results</span>
+            <a class="comp-refresh-btn" id="bench-csv-btn" href="/api/benchmark/result.csv" style="margin-left:auto;text-decoration:none">Download CSV</a>
+          </div>
+          <div class="bench-result-wrap" id="bench-result"></div>
         </div>
       </div>
     </details>
@@ -665,6 +775,7 @@
           renderTable(items);
           applyFilter();
           reanchorBattTip();
+          if (window.benchOnStatus) benchOnStatus(items);
         })
         .catch(function() {});
     }
@@ -1290,6 +1401,334 @@
       if (e.relatedTarget && btn.contains(e.relatedTarget)) return;
       hideBattTip();
     });
+  </script>
+  <script>
+    // -- Stream benchmark (stream_benchmark.ps1, ADR-0026) --
+    // The run itself is a server-side background job; this page only picks the headset
+    // and the tests, shows a live duration estimate, follows /api/benchmark/progress and
+    // draws the result matrix. Uses esc() and barColor() from the main script above.
+    var bench = {
+      statusRows: [], headsetSig: '', catalog: null, catalogId: 0, selected: {},
+      prog: null, progAt: 0, polling: null, ticker: null, result: null
+    };
+
+    function benchFmtDur(sec) {
+      sec = Math.max(0, Math.round(sec || 0));
+      var m = Math.floor(sec / 60), s = sec % 60;
+      if (m >= 60) return Math.floor(m / 60) + ' h ' + (m % 60) + ' min';
+      return m > 0 ? (m + ' min ' + (s < 10 ? '0' : '') + s + ' s') : (s + ' s');
+    }
+    function benchMeasure() { return parseInt(document.getElementById('bench-measure').value, 10) || 20; }
+    function benchRunningStreams() { return bench.statusRows.filter(function(r) { return r.scrcpy; }); }
+    function benchIsRunning() { return !!(bench.prog && (bench.prog.status === 'running' || bench.prog.status === 'queued')); }
+    function benchShowMsg(text, kind) {
+      var el = document.getElementById('bench-msg');
+      el.className = 'bench-msg' + (text ? ' ' + (kind || 'info') : '');
+      el.textContent = text || '';
+    }
+
+    // Same formula as Get-StreamBenchmarkTestEstimate / -FixedEstimate (stream_benchmark.ps1).
+    function benchTestEst(t, measure) {
+      var tm = bench.catalog.timing;
+      if (t.Encoding === 'none') return tm.SettleSec + measure;
+      return (t.OverheadSec || 0) + tm.WarmupSec + measure + tm.SettleSec;
+    }
+    function benchSelectedTests() {
+      if (!bench.catalog) return [];
+      return bench.catalog.tests.filter(function(t) { return t.Available && bench.selected[t.Id]; });
+    }
+    function benchEstimate() {
+      var tests = benchSelectedTests();
+      if (!bench.catalog || !tests.length) return { total: 0, count: 0 };
+      var tm = bench.catalog.timing, measure = benchMeasure(), sum = 0, gpuCodecs = {};
+      tests.forEach(function(t) { sum += benchTestEst(t, measure); if (t.Encoding === 'gpu') gpuCodecs[t.Codec] = 1; });
+      var stop = Math.min(tm.StopMaxSec, benchRunningStreams().length * tm.StopPerStreamSec);
+      return { total: sum + stop + Object.keys(gpuCodecs).length * tm.EncoderProbeSec + tm.RestoreSec, count: tests.length };
+    }
+    function benchUpdateEstimate() {
+      var e = benchEstimate(), el = document.getElementById('bench-est');
+      el.innerHTML = e.count ? ('Estimated duration: <strong>' + benchFmtDur(e.total) + '</strong> (' + e.count + ' test' + (e.count > 1 ? 's' : '') + ')') : 'No test selected';
+      var sel = document.getElementById('bench-headset');
+      var opt = sel.options[sel.selectedIndex];
+      document.getElementById('bench-run-btn').disabled = benchIsRunning() || !e.count || !opt || opt.disabled || !sel.value;
+    }
+
+    // ---- Headset picker (fed by the status poll of the main script) ----
+    function benchHeadsetReady(r) { return !!(r.ping && r.adb); }
+    function benchOnStatus(items) {
+      bench.statusRows = items || [];
+      var sig = bench.statusRows.map(function(r) { return r.id + ':' + r.name + ':' + benchHeadsetReady(r); }).join('|');
+      if (sig !== bench.headsetSig) {
+        bench.headsetSig = sig;
+        var sel = document.getElementById('bench-headset'), keep = sel.value;
+        sel.innerHTML = bench.statusRows.length ? '' : '<option value="">No headset</option>';
+        bench.statusRows.forEach(function(r) {
+          var o = document.createElement('option');
+          o.value = r.id;
+          o.textContent = r.name + (benchHeadsetReady(r) ? '' : (r.ping ? ' (no ADB)' : ' (offline)'));
+          o.disabled = !benchHeadsetReady(r);
+          sel.appendChild(o);
+        });
+        var want = keep;
+        if (bench.prog && bench.prog.headset && benchIsRunning()) want = String(bench.prog.headset.id);
+        var opt = want && sel.querySelector('option[value="' + want + '"]');
+        if (!opt || (opt.disabled && !benchIsRunning())) opt = sel.querySelector('option:not([disabled])');
+        if (opt) sel.value = opt.value;
+        if (sel.value && String(bench.catalogId) !== sel.value) benchLoadCatalog(parseInt(sel.value, 10));
+      }
+      benchUpdateEstimate();
+    }
+
+    function benchLoadCatalog(id) {
+      if (!id) return;
+      bench.catalogId = id;
+      fetch('/api/benchmark/catalog?id=' + id)
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          if (!j || !j.ok) { benchShowMsg((j && j.error) || 'Could not load the test list.', 'err'); return; }
+          if (bench.catalogId !== id) return;
+          bench.catalog = j;
+          bench.selected = {};
+          j.tests.forEach(function(t) { if (t.Default && t.Available) bench.selected[t.Id] = true; });
+          document.getElementById('bench-reenc-bw').textContent = j.reencodeBitrate || '-';
+          benchRenderTests();
+        })
+        .catch(function() { benchShowMsg('Could not load the test list.', 'err'); });
+    }
+
+    function benchRenderTests() {
+      var body = document.querySelector('#bench-tests tbody');
+      if (!bench.catalog) { body.innerHTML = '<tr><td colspan="9" style="color:#555">Select a headset.</td></tr>'; return; }
+      var measure = benchMeasure(), lastGroup = '', lock = benchIsRunning();
+      body.innerHTML = bench.catalog.tests.map(function(t) {
+        var enc = t.Encoding === 'none' ? '-' : (t.Encoding === 'copy' ? 'copy (' + t.Codec + ')' : t.Encoding.toUpperCase() + ' ' + t.Codec);
+        var cls = (t.Available ? '' : 'bench-na') + (t.Group !== lastGroup ? ' bench-grp' : '');
+        lastGroup = t.Group;
+        return '<tr class="' + cls + '"' + (t.Available ? '' : ' title="' + esc(t.Reason) + '"') + '>' +
+          '<td><input type="checkbox" data-bench-id="' + esc(t.Id) + '"' + (bench.selected[t.Id] ? ' checked' : '') +
+            (t.Available && !lock ? '' : ' disabled') + '></td>' +
+          '<td>' + esc(t.Group) + '</td><td>' + esc(t.Label) + '</td>' +
+          '<td>' + esc(t.Eye || '-') + '</td><td>' + esc(t.View || '-') + '</td>' +
+          '<td>' + (t.Fps || '-') + '</td><td>' + (t.Mbps || '-') + '</td><td>' + esc(enc) + '</td>' +
+          '<td>' + benchFmtDur(benchTestEst(t, measure)) + '</td></tr>';
+      }).join('');
+      benchUpdateEstimate();
+    }
+
+    function benchSelect(mode) {
+      if (!bench.catalog || benchIsRunning()) return;
+      bench.selected = {};
+      bench.catalog.tests.forEach(function(t) {
+        if (t.Available && (mode === 'all' || (mode === 'curated' && t.Default))) bench.selected[t.Id] = true;
+      });
+      benchRenderTests();
+    }
+
+    document.getElementById('bench-tests').addEventListener('change', function(e) {
+      var cb = e.target;
+      if (cb.id === 'bench-check-all') { benchSelect(cb.checked ? 'all' : 'none'); return; }
+      if (cb.dataset && cb.dataset.benchId) {
+        if (cb.checked) bench.selected[cb.dataset.benchId] = true; else delete bench.selected[cb.dataset.benchId];
+        benchUpdateEstimate();
+      }
+    });
+    document.getElementById('bench-measure').addEventListener('change', benchRenderTests);
+    document.getElementById('bench-headset').addEventListener('change', function() {
+      var id = parseInt(this.value, 10);
+      if (id) benchLoadCatalog(id);
+      benchUpdateEstimate();
+    });
+
+    // ---- Confirm modal ----
+    function benchConfirm() {
+      var sel = document.getElementById('bench-headset');
+      var name = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].textContent : '';
+      var e = benchEstimate();
+      if (!e.count) return;
+      var streams = benchRunningStreams();
+      var listHtml = streams.length
+        ? streams.map(function(r) { return '&bull; ' + esc(r.name); }).join('<br>')
+        : 'No stream is running right now.';
+      var m = document.createElement('div');
+      m.className = 'bench-modal';
+      m.innerHTML = '<div class="bench-modal-box">' +
+        '<div class="bench-modal-title">Run the benchmark on ' + esc(name) + '?</div>' +
+        '<div class="bench-modal-text"><strong>All current streams will be disconnected during the benchmark</strong> ' +
+          '(' + streams.length + ' running). They restart automatically when it ends or is cancelled. ' +
+          'Viewers (video wall, OBS, kiosks) lose their picture meanwhile.</div>' +
+        '<div class="bench-modal-list">' + listHtml + '</div>' +
+        '<div class="bench-modal-text"><strong>' + e.count + '</strong> test' + (e.count > 1 ? 's' : '') +
+          ', ' + benchMeasure() + ' s measure each - estimated duration <strong>' + benchFmtDur(e.total) + '</strong>.<br>' +
+          'Avoid other heavy work on this PC while it runs: it would be counted in the results.</div>' +
+        '<div class="bench-modal-actions"><button data-act="no">Cancel</button><button class="go" data-act="go">Run benchmark</button></div>' +
+        '</div>';
+      m.addEventListener('click', function(ev) {
+        var act = ev.target.dataset && ev.target.dataset.act;
+        if (ev.target === m || act === 'no') { m.remove(); return; }
+        if (act === 'go') { m.remove(); benchStart(); }
+      });
+      document.body.appendChild(m);
+    }
+
+    function benchStart() {
+      var ids = benchSelectedTests().map(function(t) { return t.Id; });
+      var id = parseInt(document.getElementById('bench-headset').value, 10);
+      benchShowMsg('');
+      fetch('/api/benchmark/start', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: id, tests: ids, measureSec: benchMeasure() })
+      })
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          if (!j || !j.ok) { benchShowMsg((j && j.error) || 'The benchmark could not start.', 'err'); return; }
+          benchApplyProgress({ status: 'queued', etaSec: j.etaSec, estimatedTotalSec: j.etaSec, total: j.total, index: 0,
+                               headset: { id: id }, results: [] });
+          benchStartPolling();
+        })
+        .catch(function() { benchShowMsg('The benchmark could not start.', 'err'); });
+    }
+
+    function benchCancel() {
+      if (!confirm('Cancel the benchmark? The current test is stopped and the normal streams restart.')) return;
+      fetch('/api/benchmark/cancel', { method: 'POST' }).catch(function() {});
+      document.getElementById('bench-progress-text').textContent = 'Cancelling - stopping the current test...';
+    }
+
+    // ---- Progress ----
+    function benchStartPolling() {
+      if (!bench.polling) bench.polling = setInterval(benchPoll, 2000);
+      if (!bench.ticker)  bench.ticker  = setInterval(benchRenderProgress, 1000);
+    }
+    function benchStopPolling() {
+      if (bench.polling) { clearInterval(bench.polling); bench.polling = null; }
+      if (bench.ticker)  { clearInterval(bench.ticker);  bench.ticker = null; }
+    }
+    function benchPoll() {
+      return fetch('/api/benchmark/progress')
+        .then(function(r) { return r.json(); })
+        .then(function(p) { benchApplyProgress(p); })
+        .catch(function() {});
+    }
+    function benchApplyProgress(p) {
+      if (!p) return;
+      var wasRunning = benchIsRunning();
+      bench.prog = p; bench.progAt = Date.now();
+      var running = benchIsRunning();
+      document.getElementById('bench-pill').style.display = running ? '' : 'none';
+      document.getElementById('bench-progress').style.display = running ? 'flex' : 'none';
+      if (running) {
+        benchStartPolling();
+        if (!wasRunning) { document.getElementById('bench-section').open = true; benchRenderTests(); }
+        if (p.results && p.results.length) benchRenderResult({ Results: p.results, MeasureSec: p.measureSec, partial: true });
+        benchRenderProgress();
+      } else {
+        benchStopPolling();
+        if (wasRunning) {
+          benchRenderTests();
+          if (p.status === 'error') benchShowMsg('Benchmark failed: ' + (p.error || 'unknown error'), 'err');
+          else if (p.status === 'cancelled') benchShowMsg('Benchmark cancelled - the normal streams are restarting.', 'info');
+          else benchShowMsg('Benchmark finished - the normal streams are restarting.', 'info');
+          benchLoadResult();
+        }
+      }
+      benchUpdateEstimate();
+    }
+    function benchRenderProgress() {
+      var p = bench.prog;
+      if (!p || !benchIsRunning()) return;
+      // Count down locally between polls, from the server's own estimate.
+      var since = (Date.now() - (p.updatedAt || bench.progAt)) / 1000;
+      var eta = Math.max(0, (p.etaSec || 0) - since);
+      var elapsed = (p.elapsedSec || 0) + since;
+      var pct = (elapsed + eta) > 0 ? Math.min(100, 100 * elapsed / (elapsed + eta)) : 0;
+      document.getElementById('bench-progress-fill').style.width = pct.toFixed(1) + '%';
+      var phaseLeft = p.phaseEndsAt ? Math.max(0, Math.round((p.phaseEndsAt - Date.now()) / 1000)) : null;
+      var txt;
+      if (p.status === 'queued') txt = 'Starting the benchmark...';
+      else {
+        txt = (p.index > 0 ? 'Test ' + p.index + ' / ' + p.total + ' - ' + (p.current || '') + ' - ' : '') +
+              (p.phase || '') + (phaseLeft != null ? ' (' + phaseLeft + ' s left)' : '');
+      }
+      txt += ' - about ' + benchFmtDur(eta) + ' remaining (elapsed ' + benchFmtDur(elapsed) + ')';
+      document.getElementById('bench-progress-text').textContent = txt;
+    }
+
+    // ---- Result matrix ----
+    function benchLoadResult() {
+      fetch('/api/benchmark/result')
+        .then(function(r) { return r.json(); })
+        .then(function(j) { if (j && j.ok && j.result) benchRenderResult(j.result); })
+        .catch(function() {});
+    }
+    function benchNum(v, dec) { return (v === null || v === undefined || v === '') ? '-' : Number(v).toFixed(dec == null ? 1 : dec); }
+    function benchPct(v) { return (v === null || v === undefined) ? '-' : '<span style="color:' + barColor(Number(v)) + '">' + Number(v).toFixed(1) + '</span>'; }
+    function benchDelta(v, base, unit) {
+      if (v === null || v === undefined || base === null || base === undefined) return '';
+      var d = Number(v) - Number(base);
+      return '<span class="bench-delta">' + (d >= 0 ? '+' : '') + d.toFixed(1) + (unit || '') + '</span>';
+    }
+    function benchRenderResult(res) {
+      var card = document.getElementById('bench-result-card');
+      var results = (res && res.Results) || [];
+      if (!results.length) { card.style.display = 'none'; return; }
+      card.style.display = '';
+      document.getElementById('bench-csv-btn').style.display = res.partial ? 'none' : '';
+      document.getElementById('bench-result-title').textContent = res.partial
+        ? 'Results so far'
+        : 'Results - ' + ((res.Headset && res.Headset.Name) || '') + ' (' + ((res.Headset && res.Headset.Model) || '') + '), ' +
+          (res.Host || '') + ', ' + (res.Timestamp || '').replace('T', ' ') + ', ' + (res.MeasureSec || '') + ' s per test' +
+          (res.Status && res.Status !== 'done' ? ' - ' + res.Status : '');
+      var base = null;
+      results.forEach(function(r) { if (r.Id === 'baseline' && r.Load) base = r.Load; });
+      var head = '<thead><tr><th>Test</th><th>Status</th><th>CPU avg %</th><th>CPU peak %</th><th>GPU</th>' +
+        '<th>GPU avg %</th><th>GPU peak %</th><th>Video %</th><th>Encode %</th><th>VRAM GB</th><th>RAM GB</th>' +
+        '<th>scrcpy CPU % / MB</th><th>ffmpeg CPU % / MB</th><th>mediamtx CPU %</th><th>FPS / target</th><th>Drop / Dup</th><th>Speed</th></tr></thead>';
+      var rows = results.map(function(r) {
+        var l = r.Load || {}, gpus = (l.Gpus && l.Gpus.length) ? l.Gpus : [null], n = gpus.length;
+        var span = n > 1 ? ' rowspan="' + n + '"' : '';
+        var st = r.Stream || {}, pr = l.Procs || {};
+        var fpsCell = '-';
+        if (st.Fps !== null && st.Fps !== undefined) {
+          var ratio = st.TargetFps ? st.Fps / st.TargetFps : 1;
+          var c = ratio >= 0.9 ? '#22c55e' : (ratio >= 0.7 ? '#f97316' : '#ef4444');
+          fpsCell = '<span style="color:' + c + '">' + benchNum(st.Fps) + '</span> / ' + (st.TargetFps || '-');
+        }
+        var proc = function(p, withMem) {
+          if (!p || p.CpuAvg === null || p.CpuAvg === undefined) return '-';
+          return benchNum(p.CpuAvg) + (withMem ? ' / ' + benchNum(p.MemMB, 0) : '');
+        };
+        var gpuBase = function(g) {
+          if (!base || !base.Gpus || !g) return null;
+          var b = base.Gpus.filter(function(x) { return x.Index === g.Index; })[0];
+          return b ? b.UtilAvg : null;
+        };
+        var shared = '<td class="bench-test"' + span + ' title="' + esc(r.Message || '') + '">' + esc(r.Label) +
+            (r.Encoder && r.Encoder !== 'copy' ? '<br><span class="bench-delta">' + esc(r.Encoder) + '</span>' : '') + '</td>' +
+          '<td' + span + '><span class="bench-status ' + esc(r.Status) + '" title="' + esc(r.Message || '') + '">' + esc(r.Status) + '</span></td>' +
+          '<td' + span + '>' + benchPct(l.CpuAvg) + (r.Id !== 'baseline' && base ? benchDelta(l.CpuAvg, base.CpuAvg) : '') + '</td>' +
+          '<td' + span + '>' + benchPct(l.CpuPeak) + '</td>';
+        var tail = '<td' + span + '>' + benchNum(l.RamUsedGB) + (r.Id !== 'baseline' && base ? benchDelta(l.RamUsedGB, base.RamUsedGB) : '') + '</td>' +
+          '<td' + span + '>' + proc(pr.scrcpy, true) + '</td><td' + span + '>' + proc(pr.ffmpeg, true) + '</td><td' + span + '>' + proc(pr.mediamtx, false) + '</td>' +
+          '<td' + span + '>' + fpsCell + '</td>' +
+          '<td' + span + '>' + (st.Drop === null || st.Drop === undefined ? '-' : st.Drop) + ' / ' + (st.Dup === null || st.Dup === undefined ? '-' : st.Dup) + '</td>' +
+          '<td' + span + '>' + (st.Speed === null || st.Speed === undefined ? '-' : benchNum(st.Speed, 2) + 'x') + '</td>';
+        return gpus.map(function(g, i) {
+          var gpuCells = g
+            ? '<td title="' + esc(g.Model || '') + '">' + (n > 1 ? 'GPU ' + g.Index : esc((g.Model || 'GPU').substring(0, 22))) + '</td>' +
+              '<td>' + benchPct(g.UtilAvg) + (r.Id !== 'baseline' ? benchDelta(g.UtilAvg, gpuBase(g)) : '') + '</td>' +
+              '<td>' + benchPct(g.UtilPeak) + '</td><td>' + benchNum(g.VideoAvg) + '</td><td>' + benchNum(g.EncodeAvg) + '</td><td>' + benchNum(g.VramGB, 2) + '</td>'
+            : '<td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td>';
+          return '<tr' + (i === 0 ? ' class="bench-first"' : '') + '>' + (i === 0 ? shared : '') + gpuCells + (i === 0 ? tail : '') + '</tr>';
+        }).join('');
+      }).join('');
+      document.getElementById('bench-result').innerHTML = '<table class="comp-workload-table bench-result">' + head + '<tbody>' + rows + '</tbody></table>' +
+        '<div class="bench-note" style="margin-top:6px">Grey figures are the difference from the baseline (idle PC). ' +
+        'A test that is cheap but delivers fewer frames than its target is not a good option: check the FPS column.</div>';
+    }
+
+    // ---- Bootstrap: last result, and attach to a run already in progress (another tab, the console) ----
+    benchLoadResult();
+    benchPoll();
   </script>
   <script src="assets/app_launcher.js"></script>
 </body>

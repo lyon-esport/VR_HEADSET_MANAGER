@@ -1566,18 +1566,22 @@ function Show-SubMenu-ScrcpyOptions {
                     }
                 }
                 '8' {
-                    # Whole-view option (all eyes): console counterpart of the visual editor checkbox.
-                    if (-not $headsetModel) {
-                        Write-Host "  $($msg.EyeMerge.NoModel)" -ForegroundColor Red
-                    } elseif (-not $viewObjNow) {
-                        Write-Host ("  " + ($msg.EyeMerge.TransparentNoView -f $view, $headsetModel)) -ForegroundColor Red
-                    } elseif (Set-ViewTransparentCorners -Model $headsetModel -View $view -Enabled (-not $transpNow)) {
-                        Write-Host ("  " + ($msg.EyeMerge.TransparentToggled -f $view, $headsetModel, $(if (-not $transpNow) { 'ON' } else { 'OFF' }))) -ForegroundColor Green
+                if ($p) {
+                    $views = @()
+                    if ($global:scrcpyParameters.$model.views) { $views = @($global:scrcpyParameters.$model.views.PSObject.Properties.Name) }
+                    for ($i = 0; $i -lt $views.Count; $i++) {
+                        Write-Host ($msg.EyeMerge.DepthLine -f ($i + 1), $views[$i], (Get-EyeMergeViewBaseEye -Model $model -View $views[$i] -MergeProfile $p))
+                    }
+                    $n = Read-Host $msg.EyeMerge.ViewPrompt
+                    if ($n -match '^\d+$' -and [int]$n -ge 1 -and [int]$n -le $views.Count) {
+                        $viewName = $views[[int]$n - 1]
+                        $newEye = if ((Get-EyeMergeViewBaseEye -Model $model -View $viewName -MergeProfile $p) -eq 'L') { 'R' } else { 'L' }
+                        if (Set-EyeMergeBaseEye -Model $model -View $viewName -BaseEye $newEye) { Write-Host ($msg.EyeMerge.BaseEyeSaved -f $viewName, $newEye) -ForegroundColor Green }
                     }
                     Start-Sleep -Seconds 2
                 }
-                '0' { break }
-                default { }
+            }
+            default { }
             }
 
             if ($opt -in @('1','2','3','4','5')) {
@@ -1601,7 +1605,7 @@ function Show-SubMenu-ScrcpyOptions {
 
 # Console counterpart of the web "Eye merge" card (vrhm_config.html, Headset Profiles) for the model
 # of one headset: calibrate, enable/disable, export / import the shareable snippet, set the merged
-# crop of a view as text. Drawing the crop stays web-only (visual view editor), like the eye crops.
+# crop and the merge depth of a view as text, switch the main eye (L/R). Drawing the crop stays web-only (visual view editor), like the eye crops.
 # Example: Show-SubMenu-EyeMerge -Headset (Get-KnownHeadsets | Select-Object -First 1)
 function Show-SubMenu-EyeMerge {
     param([Parameter(Mandatory)] $Headset)
@@ -1627,7 +1631,11 @@ function Show-SubMenu-EyeMerge {
         }
         Write-Host " [4]  $($msg.EyeMerge.OptImportClipboard)"
         Write-Host " [5]  $($msg.EyeMerge.OptImportFile)"
-        if ($p) { Write-Host " [6]  $($msg.EyeMerge.OptViewCrop)" }
+        if ($p) {
+            Write-Host " [6]  $($msg.EyeMerge.OptViewCrop)"
+            if ($null -ne $p.lens_focal_px) { Write-Host " [7]  $($msg.EyeMerge.OptViewDepth)" }
+            Write-Host " [8]  $($msg.EyeMerge.OptBaseEye)"
+        }
         Write-Host " [0]  $($msg.Return)"
         $opt = Read-Host $msg.Choice
 
@@ -1702,6 +1710,37 @@ function Show-SubMenu-EyeMerge {
                     Start-Sleep -Seconds 2
                 }
             }
+            '7' {
+                if ($p -and $null -ne $p.lens_focal_px) {
+                    $views = @()
+                    if ($global:scrcpyParameters.$model.views) { $views = @($global:scrcpyParameters.$model.views.PSObject.Properties.Name) }
+                    for ($i = 0; $i -lt $views.Count; $i++) {
+                        $d = Get-EyeMergeViewDepth -Model $model -View $views[$i] -MergeProfile $p
+                        Write-Host ($msg.EyeMerge.DepthLine -f ($i + 1), $views[$i], $(if ($d -gt 0) { "$d m" } else { $msg.EyeMerge.DepthFar }))
+                    }
+                    $n = Read-Host $msg.EyeMerge.ViewPrompt
+                    if ($n -match '^\d+$' -and [int]$n -ge 1 -and [int]$n -le $views.Count) {
+                        $viewName = $views[[int]$n - 1]
+                        $val = (Read-Host $msg.EyeMerge.DepthPrompt).Trim().Replace(',', '.')
+                        $dv = 0.0
+                        $done = $false
+                        if ($val -in @('F','f','0')) { $done = Set-EyeMergeViewDepth -Model $model -View $viewName -Far }
+                        elseif ([double]::TryParse($val, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$dv) -and $dv -ge 0.3 -and $dv -le 100) {
+                            $done = Set-EyeMergeViewDepth -Model $model -View $viewName -DepthM $dv
+                        }
+                        elseif ($val) { Write-Host $msg.EyeMerge.DepthInvalid -ForegroundColor Red }
+                        if ($done) { Write-Host ($msg.EyeMerge.DepthSaved -f $viewName) -ForegroundColor Green }
+                    }
+                    Start-Sleep -Seconds 2
+                }
+            }
+            '8' {
+                if ($p) {
+                    $newEye = if ($p.base_eye -eq 'L') { 'R' } else { 'L' }
+                    if (Set-EyeMergeBaseEye -Model $model -BaseEye $newEye) { Write-Host ($msg.EyeMerge.BaseEyeSaved -f $model, $newEye) -ForegroundColor Green }
+                    Start-Sleep -Seconds 2
+                }
+            }
             default { }
         }
     } while ($opt -ne '0')
@@ -1733,12 +1772,14 @@ function Show-SubMenu-Services {
         Write-Host $msg.ServicesChoiceStopWS     -BackgroundColor DarkBlue -ForegroundColor White
         Write-Host $msg.ServicesChoiceMediaMtx   -BackgroundColor DarkMagenta -ForegroundColor White
         Write-Host $msg.ServicesChoiceStopMtx    -BackgroundColor DarkMagenta -ForegroundColor White
+        Write-Host $msg.Benchmark.MenuChoice     -BackgroundColor DarkCyan -ForegroundColor White
         Write-Host $msg.ServicesChoiceBack
 
         $choice = Read-Host $msg.EnterChoice
 
         switch ($choice.ToUpper()) {
             'V' { Show-SubMenu-VideoRecast }
+            'B' { Show-SubMenu-Benchmark }
             '1' {
                 Start-WebServer -Restart
                 Write-Log $msg.ServicesWebServerRestarted -Level SUCCESS
@@ -1763,6 +1804,111 @@ function Show-SubMenu-Services {
             }
         }
     } while ($choice -ne '0')
+}
+
+
+function Show-SubMenu-Benchmark {
+    <#
+    .SYNOPSIS
+    Console counterpart of the Benchmark section of headsets_monitoring.html (ADR-0026):
+    pick a headset, curated or all tests, the measure window, confirm, then run
+    Invoke-StreamBenchmark in the foreground (Q cancels) and print the result matrix.
+    #>
+    if (Test-StreamBenchmarkActive) {
+        Write-Host $msg.Benchmark.AlreadyRunning -ForegroundColor Yellow
+        Start-Sleep -Seconds 2
+        return
+    }
+    Show-HeadsetPickerMenu -Title ("`n  " + $msg.Benchmark.Title + "`n  " + $msg.Benchmark.Intro + "`n  " + $msg.Benchmark.PickHeadset + "`n") -OnPick {
+        param($Headset)
+
+        # Reachability from the live status (no ADB call here).
+        $live = @(Get-HeadsetInfosMerged) | Where-Object { [string]$_.ID -eq [string]$Headset.ID } | Select-Object -First 1
+        $pingOk = $live -and (ConvertTo-BoolField $live.Ping)
+        $adbOk  = $live -and (ConvertTo-BoolField $live.ADBWifi)
+        if (-not ($pingOk -and $adbOk)) {
+            Write-Host ($msg.Benchmark.NotReady -f $Headset.Name, $pingOk, $adbOk) -ForegroundColor Red
+            Read-Host $msg.PressEnterToContinue | Out-Null
+            return
+        }
+
+        $catalog = Get-StreamBenchmarkCatalog -Headset $Headset
+        $curated = @($catalog.Tests | Where-Object { $_.Available -and $_.Default })
+        $all     = @($catalog.Tests | Where-Object { $_.Available })
+        Write-Host ""
+        Write-Host ($msg.Benchmark.SetChoice -f $curated.Count, $all.Count)
+        $set = (Read-Host $msg.EnterChoice).Trim().ToUpper()
+        $tests = switch ($set) { 'C' { $curated } 'A' { $all } default { $null } }
+        if (-not $tests) { return }
+
+        Write-Host $msg.Benchmark.MeasureChoice
+        $measure = switch ((Read-Host $msg.EnterChoice).Trim()) { '1' { 10 } '3' { 40 } default { 20 } }
+
+        $running = @(Get-Process -Name 'scrcpy' -ErrorAction SilentlyContinue).Count
+        $est = (Get-StreamBenchmarkFixedEstimate -Tests $tests -RunningStreams $running) +
+               (($tests | ForEach-Object { Get-StreamBenchmarkTestEstimate -Test $_ -MeasureSec $measure } | Measure-Object -Sum).Sum)
+        Write-Host ""
+        Write-Host ($msg.Benchmark.Estimate -f $tests.Count, $Headset.Name, (Get-FormattedUptime -Seconds $est)) -ForegroundColor Cyan
+        Write-Host ($msg.Benchmark.StopWarning -f $running) -ForegroundColor Yellow
+        $answer = (Read-Host $msg.Benchmark.Confirm).Trim().ToUpper()
+        if ($answer -notin @('Y', 'O')) { return }
+
+        Write-Host $msg.Benchmark.CancelHint -ForegroundColor DarkGray
+        $global:BenchCancelAsked = $false
+        $onProgress = {
+            param($state)
+            try {
+                while ([Console]::KeyAvailable) {
+                    $k = [Console]::ReadKey($true)
+                    if ($k.Key -eq 'Q' -and -not $global:BenchCancelAsked) {
+                        $global:BenchCancelAsked = $true
+                        Stop-StreamBenchmark | Out-Null
+                        Write-Host $msg.Benchmark.Cancelling -ForegroundColor Yellow
+                    }
+                }
+            } catch { }
+            if ($state.index -gt 0 -and $state.phase -ne 'done') {
+                $line = $msg.Benchmark.Progress -f $state.index, $state.total, $state.current, $state.phase, (Get-FormattedUptime -Seconds $state.etaSec)
+                Write-Host ("`r" + $line.PadRight([Math]::Max(1, [Console]::WindowWidth - 1)).Substring(0, [Math]::Max(1, [Console]::WindowWidth - 1))) -NoNewline
+            }
+        }
+        $result = Invoke-StreamBenchmark -Headset $Headset -TestIds @($tests | ForEach-Object { $_.Id }) -MeasureSec $measure `
+            -ProgressFile (Get-StreamBenchmarkProgressPath) -OnProgress $onProgress
+        Write-Host ""
+        if ($result.Status -eq 'error') { Write-Host ($msg.Benchmark.Failed -f $result.Error) -ForegroundColor Red }
+        else { Write-Host ($msg.Benchmark.Finished -f $result.Status, @($result.Results).Count) -ForegroundColor Green }
+
+        # Matrix: one line per test and per GPU.
+        $rows = foreach ($r in @($result.Results)) {
+            $l = $r.Load
+            $gpus = if ($l -and @($l.Gpus).Count -gt 0) { @($l.Gpus) } else { @($null) }
+            foreach ($g in $gpus) {
+                [PSCustomObject]@{
+                    Test    = $r.Label
+                    Status  = $r.Status
+                    'CPU%'  = if ($l) { $l.CpuAvg } else { $null }
+                    'CPUpk' = if ($l) { $l.CpuPeak } else { $null }
+                    GPU     = if ($g) { $g.Index } else { '' }
+                    'GPU%'  = if ($g) { $g.UtilAvg } else { $null }
+                    'Video%'= if ($g) { $g.VideoAvg } else { $null }
+                    'RAMGB' = if ($l) { $l.RamUsedGB } else { $null }
+                    FPS     = if ($r.Stream.Fps) { '{0}/{1}' -f $r.Stream.Fps, $r.Stream.TargetFps } else { '' }
+                    'Drop/Dup' = if ($null -ne $r.Stream.Drop) { '{0}/{1}' -f $r.Stream.Drop, $r.Stream.Dup } else { '' }
+                }
+            }
+        }
+        if ($rows) { $rows | Format-Table -AutoSize | Out-Host } else { Write-Host $msg.Benchmark.NoResult }
+
+        if (@($result.Results).Count -gt 0) {
+            $exp = (Read-Host $msg.Benchmark.ExportPrompt).Trim().ToUpper()
+            if ($exp -in @('Y', 'O')) {
+                $csvPath = Join-Path $global:ScriptPath ("data\benchmark_{0}.csv" -f (Get-Date -Format 'yyyyMMdd_HHmmss'))
+                Write-FileWithoutBom -Path $csvPath -Content (ConvertTo-StreamBenchmarkCsv -Result $result)
+                Write-Host ($msg.Benchmark.Exported -f $csvPath) -ForegroundColor Green
+            }
+        }
+        Read-Host $msg.PressEnterToContinue | Out-Null
+    }
 }
 
 

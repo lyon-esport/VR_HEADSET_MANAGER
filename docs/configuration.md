@@ -104,15 +104,16 @@ Each supported model (`Quest 3`, `Quest 2`, `PICO 4 Ultra`) defines:
   | `frame_width` / `frame_height` | Full side-by-side frame the calibration was measured on; a headset sending another size falls back to the right eye |
   | `relative_angle`, `shift_x`, `shift_y` | Rotation (degrees) and shift (pixels) between the two eye pictures |
   | `level_angle` | Rotation that levels the merged picture (half the relative angle) |
-  | `base_eye` | `R` (default) or `L`: the eye that gives the centre of the picture |
+  | `base_eye` | `R` (default) or `L`: the main eye of views that do not choose their own (`merged.base_eye`) |
   | `feather_px` / `inset_px` | Width of the blend band at the base eye's lens edge, and its distance from the edge |
+  | `lens_focal_px` / `ipd_m` | *Optional* lens model of the **merge depth**: fisheye focal of the merged picture (pixels per radian, 1150 on a Quest 3) and eye spacing in metres (default 0.063). Without `lens_focal_px` the merge depth is not offered. Kept by a recalibration |
   | `mask_left` / `mask_right` | Lens outlines, `"x,y x,y ..."` in eye pixels |
   | `canvas_width` / `canvas_height` | Size of the merged picture the view framings are drawn on |
   | `score`, `calibrated_at`, `calibrated_by`, `notes` | Information only |
 
   Any view may also carry `"transparent_corners": true` (checkbox in the visual editor, console scrcpy options `[8]`): for every eye (L, R or Merged) the area outside the lenses is shown **transparent** in the web video pages and OBS Browser Sources. It needs the model's lens outlines, i.e. an eye merge calibration (enabled or not). An RTSP/HLS player still shows those corners black - the video itself cannot carry transparency.
 
-  Each view may then carry `"merged": { "crop": "w:h:x:y" }` — its framing of the merged picture, drawn on the **Merged** tab of the visual editor. Without it, the largest clean rectangle with the shape of the view's eye crop is used.
+  Each view may then carry `"merged": { "crop": "w:h:x:y", "depth_m": 0.75, "base_eye": "L" }` — its framing of the merged picture, drawn on the **Merged** tab of the visual editor, and its **merge depth**. Without `crop`, the largest clean rectangle with the shape of the view's eye crop is used. `depth_m` (0.3 to 100 m, absent = far) is the distance at which the two eyes line up where they are blended: far suits scenery and rooms, a near value (menus, a table, objects held close) aligns close objects but doubles far ones in the blend band. `base_eye` is the view's main eye, which gives the centre of the picture (absent = the calibration's `base_eye`, R); the depth never moves it. Keep two views (e.g. `max` far and `max_near` at 0.75 m) to switch a headset between them.
 
 The profile string assigned to each headset (`max-R-N-30-8`...) picks a view from here; format explained in [Streaming → capture profiles](streaming.md#scrcpy-capture-profiles).
 

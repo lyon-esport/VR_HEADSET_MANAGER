@@ -527,7 +527,10 @@ function Start-FfmpegStreamPush {
         [string]$SourceCodec = 'h264',
         # Lookup tables from Get-EyeMergeMaps: merges both eyes of the full frame (forces the
         # re-encode path; the recording then holds the merged image too, through one tee output).
-        [hashtable]$EyeMerge = $null
+        [hashtable]$EyeMerge = $null,
+        # Stream benchmark (stream_benchmark.ps1): ffmpeg writes frame/drop/dup/speed here once
+        # per second (-progress). Empty for a normal stream.
+        [string]$ProgressFile = ''
     )
     $names = Get-HeadsetPipeNames -SafeName $SafeName
     # One file PER SESSION (timestamped), never overwritten: a stream that keeps dying and
@@ -541,6 +544,7 @@ function Start-FfmpegStreamPush {
     # also logs its encoder setup and stream mapping, which is what a failing push needs.
     $ffLogLevel = if ($global:ffmpegLogLevel) { [string]$global:ffmpegLogLevel } else { 'warning' }
     $argList.AddRange([string[]]@('-hide_banner','-loglevel',$ffLogLevel))
+    if ($ProgressFile) { $argList.AddRange([string[]]@('-stats_period','1','-progress',$ProgressFile)) }
     # Passthrough needs the bitstream filter matching the actual stream codec
     # (mkv/AVCC -> Annex-B for RTSP). An unrecognized codec cannot be safely
     # passed through - force re-encode for this stream so it doesn't die like
@@ -827,7 +831,10 @@ function start-screenCopy {
         # WiFi explicitly only when it must not interrupt a session (never today); every other
         # caller leaves it on Auto.
         [ValidateSet('Auto','USB','WiFi')]
-        [string]$transport = 'Auto'
+        [string]$transport = 'Auto',
+
+        # Stream benchmark only: passed to Start-FfmpegStreamPush -ProgressFile.
+        [string]$ffmpegProgressFile = ''
 
     )
 
@@ -1022,7 +1029,7 @@ function start-screenCopy {
             if ($recording -and $recordFile) {
                 $ffmpegRecord = [System.IO.Path]::ChangeExtension($recordFile, '.mkv')
             }
-            $ffmpegPush = Start-FfmpegStreamPush -SafeName $displayName -RtspUrl $rtspUrl -RecordFile $ffmpegRecord -SourceCodec $sourceCodec -EyeMerge $eyeMergeMaps
+            $ffmpegPush = Start-FfmpegStreamPush -SafeName $displayName -RtspUrl $rtspUrl -RecordFile $ffmpegRecord -SourceCodec $sourceCodec -EyeMerge $eyeMergeMaps -ProgressFile $ffmpegProgressFile
             $global:HeadsetPipelines[$displayName] = @{
                 Bridge              = $bridgeJob
                 ScrcpyProcess       = $scrcpyProc
@@ -1142,6 +1149,14 @@ function Watch-ScrcpyProcesses {
         # Limit the pass to these headset IDs (the VRMonitor fast-path start trigger).
         [int[]]$HeadsetId = $null
     )
+
+    # A stream benchmark is running (stream_benchmark.ps1, ADR-0026): it owns the capture of
+    # its headset and every other stream is stopped on purpose. Starting or "correcting" any
+    # scrcpy now would kill its test stream or skew its measurements.
+    if ((Get-Command Test-StreamBenchmarkActive -ErrorAction SilentlyContinue) -and (Test-StreamBenchmarkActive)) {
+        Write-Log "Watch-ScrcpyProcesses: stream benchmark running - watchdog paused." -Level DEBUG
+        return
+    }
 
     # Step 1: Retrieve scrcpy processes running on the machine
 

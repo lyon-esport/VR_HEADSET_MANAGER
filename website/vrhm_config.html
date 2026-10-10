@@ -230,6 +230,7 @@
     #vve-canvas { display:none; cursor:crosshair; touch-action:none; }
     .vve-side { width:300px; flex-shrink:0; overflow-y:auto; padding:14px 18px; border-left:1px solid var(--card-border); display:flex; flex-direction:column; gap:12px; }
     .vve-field { display:flex; flex-direction:column; gap:5px; }
+    #vve-modal [hidden] { display:none !important; }   /* .vve-field / .cfg-input set display, which beats [hidden] */
     .vve-eye-btns { display:flex; gap:6px; }
     .vve-eye-btns button { flex:1; padding:6px 0; border-radius:6px; background:none; border:1px solid #444; color:var(--muted); font-size:12px; font-weight:600; cursor:pointer; }
     [data-theme=light] .vve-eye-btns button { border-color:#d1d5db; }
@@ -553,6 +554,30 @@
               <input type="checkbox" id="vve-transparent" style="margin-top:2px"> Transparent outside the lenses (all eyes: web pages and OBS Browser Source)
             </label>
           </div>
+          <div class="vve-field" id="vve-baseeye-field" hidden>
+            <span class="pro-gen-lbl">Main eye (gives the centre of the merged picture)</span>
+            <select id="vve-baseeye-sel" class="cfg-input" style="width:140px;min-width:140px" title="The other eye only extends the sides. Most people have a dominant right eye.">
+              <option value="R">Right eye (default)</option>
+              <option value="L">Left eye</option>
+            </select>
+          </div>
+          <div class="vve-field" id="vve-depth-field" hidden>
+            <span class="pro-gen-lbl">Merge depth (where both eyes line up in the blend band)</span>
+            <div class="vve-angle-row">
+              <select id="vve-depth-sel" class="cfg-input" style="width:140px;min-width:140px;flex:none" title="Far = scenery and rooms (the calibration's own alignment). A near depth lines up close objects (menus, a table, hands) but doubles far ones in the blend band. The centre of the picture always comes from the main eye and is never affected.">
+                <option value="0">Far (default)</option>
+                <option value="3">3 m</option>
+                <option value="2">2 m</option>
+                <option value="1.5">1.5 m</option>
+                <option value="1">1 m</option>
+                <option value="0.75">0.75 m</option>
+                <option value="0.5">0.5 m</option>
+                <option value="custom">Custom...</option>
+              </select>
+              <input type="number" id="vve-depth-num" class="cfg-input" min="0.3" max="100" step="0.05" style="width:90px" hidden title="Metres, 0.3 to 100">
+            </div>
+            <span class="vve-help" id="vve-depth-info"></span>
+          </div>
           <div class="vve-btn-row">
             <button class="pro-small-btn" id="vve-mirror" title="Copy this rectangle to the other eye, mirrored around the frame centre, with the opposite angle">Mirror to other eye</button>
             <button class="pro-small-btn" id="vve-reset" title="Clear this eye's rectangle and angle">Reset eye</button>
@@ -569,6 +594,8 @@
             The dashed outline is the area scrcpy really samples once the angle is applied.
             Merged tab: capture again on that tab to get the flat merged picture of both eyes, then
             draw the framing used by "M" profiles (no angle - the merged picture is already level).
+            Its merge depth chooses which distance lines up where the eyes are blended: far for
+            scenery, nearer for menus and close objects (the picture is merged again at once).
             After "Apply to profile", click Save in Headset Profiles to write config.json.
           </div>
         </div>
@@ -1598,7 +1625,8 @@
           + ' - angle ' + proEsc(em.relative_angle) + '&deg;, shift ' + proEsc(em.shift_x) + ',' + proEsc(em.shift_y)
           + ', score ' + proEsc(em.score) + ', merged picture ' + proEsc(em.canvas_width) + ' x ' + proEsc(em.canvas_height)
           + ', ' + proEsc(em.calibrated_at || '') + (em.calibrated_by ? ' by ' + proEsc(em.calibrated_by) : '') + '</div>'
-          + '<div id="em-views" class="vve-help">Loading merged framings...</div>';
+          + '<div class="vve-help">Framing, main eye' + (em.lens_focal_px ? ' and merge depth' : '') + ' are set per view, on the "Merged" tab of the visual editor.'
+          + (em.lens_focal_px ? '' : ' Merge depth is not available for this model (no lens model, lens_focal_px).') + '</div>';
       }
       html += '<div class="em-row"><span class="pro-gen-lbl">Calibrate with</span>'
         + '<select id="em-headset" class="cfg-input" style="width:240px"><option value="">Loading...</option></select>'
@@ -1629,15 +1657,6 @@
         sel.innerHTML = hs.length ? hs.map(function(h) { return '<option value="' + h.id + '">' + proEsc(h.name) + ' - ' + proEsc(h.adb_transport || 'WiFi') + '</option>'; }).join('')
                                   : '<option value="">No connected ' + proEsc(model) + ' headset</option>';
       }).catch(function() { if (sel) sel.innerHTML = '<option value="">Failed to load headsets</option>'; });
-      var box = document.getElementById('em-views');
-      if (!box) return;
-      fetch('/api/eye-merge?model=' + encodeURIComponent(model)).then(function(r) { return r.json(); }).then(function(j) {
-        if (_proModel !== model) return;
-        var names = Object.keys((j && j.views) || {});
-        box.innerHTML = names.length ? 'Merged framing per view: ' + names.map(function(n) {
-          return '<b>' + proEsc(n) + '</b> ' + proEsc(j.views[n].crop) + (j.views[n].auto ? ' (automatic)' : '');
-        }).join(' &middot; ') : (j && j.enabled ? 'No views.' : 'Enable the merge to see the framings.');
-      }).catch(function() { box.textContent = ''; });
     }
 
     function proReloadConfig() {
@@ -1738,6 +1757,7 @@
         + '<td class="pro-td-angle">' + (re.angle != null ? re.angle : 0) + '</td>'
         + '<td class="pro-td-actions">'
         + '<button class="pro-icon-btn" data-action="visual-edit-view" data-view="' + proEsc(vn) + '" title="Edit visually on a headset frame">&#9635;</button>'
+        + '<button class="pro-icon-btn" data-action="duplicate-view" data-view="' + proEsc(vn) + '" title="Duplicate this view (added below as ' + proEsc(vn) + '_copy)">&#10697;</button>'
         + '<button class="pro-icon-btn" data-action="edit-view" data-view="' + proEsc(vn) + '" title="Edit">&#9998;</button>'
         + '<button class="pro-icon-btn pro-icon-del" data-action="delete-view" data-view="' + proEsc(vn) + '" title="Delete">&#10005;</button>'
         + '</td></tr>';
@@ -1893,6 +1913,24 @@
           if (mDef.views[vn]) mDef.views[vn].default = true;
           _proDirty = true; renderProBody();
         }
+        return;
+      }
+      if (action === 'duplicate-view') {
+        // Copy placed right below the source. "_copy" rather than " (copy)": a view name is the first
+        // field of a headset profile (view-EYE-AUDIO-FPS-BW), which only accepts letters, digits and _.
+        var mDup = _proData[_proModel];
+        if (!mDup || !mDup.views || !mDup.views[vn]) return;
+        collectProGeneralSettings();
+        var copyName = vn + '_copy', nCopy = 2;
+        while (mDup.views[copyName]) { copyName = vn + '_copy' + nCopy++; }
+        var copyVal = JSON.parse(JSON.stringify(mDup.views[vn]));
+        delete copyVal['default'];                               // only one default view per model
+        var outDup = {};
+        Object.keys(mDup.views).forEach(function(k) { outDup[k] = mDup.views[k]; if (k === vn) outDup[copyName] = copyVal; });
+        mDup.views = outDup;
+        _proDirty = true; _proEditView = null; _proNewView = false;
+        renderProBody();
+        showToast('View "' + copyName + '" added below "' + vn + '". Click Save to write it to config.json.', 3500);
         return;
       }
       if (action === 'delete-view') {
@@ -2059,7 +2097,8 @@
       return { img: null, W: 0, H: 0, eye: 'L', model: _proModel, origModel: _proModel, origView: viewName,
                eyes: { L: { rect: null, angle: 0 }, R: { rect: null, angle: 0 }, M: { rect: null, angle: 0 } },
                frames: { raw: { img: null, W: 0, H: 0 }, M: { img: null, W: 0, H: 0 } },
-               mergeEnabled: false, drag: null, pending: null, hover: null, headsets: [] };
+               mergeEnabled: false, depth: 0, depthSupported: false, mergedFrom: 0, baseEye: 'R',
+               drag: null, pending: null, hover: null, headsets: [] };
     }
 
     function vveFrameKey(eye) { return eye === 'M' ? 'M' : 'raw'; }
@@ -2086,7 +2125,9 @@
         .then(function(j) {
           if (!_vve || _vve.model !== model) return;
           _vve.mergeEnabled = !!(j && j.ok && j.enabled);
+          _vve.depthSupported = !!(j && j.depthSupported);
           btnM.hidden = !_vve.mergeEnabled;
+          vveRefreshSide();
           if (_vve.mergeEnabled && !_vve.eyes.M.rect && _vve.origView && j.views && j.views[_vve.origView]) {
             _vve.eyes.M.rect = vveParseCrop(j.views[_vve.origView].crop);
           }
@@ -2114,9 +2155,12 @@
         _vve.eyes.R.rect  = vveParseCrop(v.right_eye && v.right_eye.crop);
         _vve.eyes.R.angle = Number(v.right_eye && v.right_eye.angle) || 0;
         _vve.eyes.M.rect  = vveParseCrop(v.merged && v.merged.crop);
+        _vve.depth        = Number(v.merged && v.merged.depth_m) || 0;
+        _vve.baseEye      = (v.merged && v.merged.base_eye === 'L') ? 'L' : 'R';
       }
       document.getElementById('vve-transparent').checked = !!(viewName && _proData[_proModel] && _proData[_proModel].views
         && _proData[_proModel].views[viewName] && _proData[_proModel].views[viewName].transparent_corners);
+      delete document.getElementById('vve-depth-num').dataset.custom;
       document.getElementById('vve-canvas').style.display = 'none';
       document.getElementById('vve-placeholder').style.display = '';
       vveSetStatus('', '');
@@ -2176,7 +2220,8 @@
       vveSetStatus(mergedTab ? 'Capturing and merging both eyes (about 6 s)...' : 'Capturing with scrcpy (about 5 s)...', '');
       fetch(mergedTab ? '/api/eye-merge/frame' : '/api/headset-screen-frame', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: id, transport: document.getElementById('vve-transport').value })
+        body: JSON.stringify(mergedTab ? { id: id, transport: document.getElementById('vve-transport').value, depth: _vve.depth, baseEye: _vve.baseEye }
+                                       : { id: id, transport: document.getElementById('vve-transport').value })
       })
         .then(function(r) { return r.json(); })
         .then(function(j) {
@@ -2188,6 +2233,7 @@
             if (!_vve) return;
             var fk = mergedTab ? 'M' : 'raw';
             _vve.frames[fk] = { img: img, W: img.naturalWidth, H: img.naturalHeight };
+            if (mergedTab) _vve.mergedFrom = id;      // a depth change re-renders this headset's frame
             if (vveFrameKey(_vve.eye) === fk) { _vve.img = img; _vve.W = img.naturalWidth; _vve.H = img.naturalHeight; }
             var saved = { img: _vve.img, W: _vve.W, H: _vve.H };
             _vve.img = img; _vve.W = img.naturalWidth; _vve.H = img.naturalHeight;   // vveNorm clamps to these
@@ -2487,6 +2533,70 @@
       document.getElementById('vve-mirror').disabled = isM || !(st.rect && _vve.W);
       var name = sanitizeViewName((document.getElementById('vve-name').value || '').trim());
       document.getElementById('vve-apply').disabled = !(name && _vve.eyes.L.rect && _vve.eyes.R.rect);
+      vveRefreshDepth();
+    }
+
+    // Merge depth (Merged tab only, models with a lens model): presets, or a custom value in metres.
+    function vveRefreshDepth() {
+      var eyeField = document.getElementById('vve-baseeye-field');
+      eyeField.hidden = !(_vve && _vve.eye === 'M');
+      if (!eyeField.hidden) document.getElementById('vve-baseeye-sel').value = _vve.baseEye === 'L' ? 'L' : 'R';
+      var field = document.getElementById('vve-depth-field');
+      field.hidden = !(_vve && _vve.eye === 'M' && _vve.depthSupported);
+      if (field.hidden) return;
+      var sel = document.getElementById('vve-depth-sel'), num = document.getElementById('vve-depth-num');
+      var d = _vve.depth || 0, preset = null;
+      for (var i = 0; i < sel.options.length; i++) { if (sel.options[i].value !== 'custom' && Number(sel.options[i].value) === d) preset = sel.options[i].value; }
+      if (document.activeElement !== num) {
+        if (preset !== null && !num.dataset.custom) { sel.value = preset; num.hidden = true; }
+        else { sel.value = 'custom'; num.hidden = false; num.value = d || ''; }
+      }
+      document.getElementById('vve-depth-info').textContent = d > 0
+        ? 'Objects about ' + d + ' m away line up; farther ones may look doubled in the blend band.'
+        : 'Scenery and rooms line up (the calibration).';
+    }
+
+    function vveSetDepth(d) {
+      if (!_vve) return;
+      d = Number(d) || 0;
+      if (d > 0) d = Math.min(100, Math.max(0.3, d));
+      if (d === _vve.depth) return;
+      _vve.depth = d;
+      vveRefreshDepth();
+      vveRemerge();
+    }
+
+    function vveSetBaseEye(e) {
+      if (!_vve) return;
+      e = e === 'L' ? 'L' : 'R';
+      if (e === _vve.baseEye) return;
+      _vve.baseEye = e;
+      vveRemerge();
+    }
+
+    // Re-renders the merged picture from the frame already captured (no new capture, about 1 s)
+    // with the current main eye and depth.
+    function vveRemerge() {
+      if (!_vve || !_vve.frames.M.img || !_vve.mergedFrom) return;
+      var d = _vve.depth, e = _vve.baseEye, want = e + '|' + d;
+      var label = (e === 'L' ? 'left' : 'right') + ' main eye, ' + (d > 0 ? d + ' m' : 'far depth');
+      vveSetStatus('Merging again (' + label + ')...', '');
+      fetch('/api/eye-merge/frame', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+             body: JSON.stringify({ id: _vve.mergedFrom, transport: 'Auto', depth: d, baseEye: e, reuse: true }) })
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          if (!_vve || (_vve.baseEye + '|' + _vve.depth) !== want) return;   // superseded by a newer choice
+          if (!j.ok) { vveSetStatus(j.error || 'Merge failed.', 'err'); return; }
+          var img = new Image();
+          img.onload = function() {
+            if (!_vve || (_vve.baseEye + '|' + _vve.depth) !== want) return;
+            _vve.frames.M = { img: img, W: img.naturalWidth, H: img.naturalHeight };
+            if (_vve.eye === 'M') { vveUseFrame(); vveDraw(); }
+            vveSetStatus('Merged picture: ' + label + '.', 'ok');
+          };
+          img.src = j.url;
+        })
+        .catch(function(err) { vveSetStatus('Server unreachable: ' + err.message, 'err'); });
     }
 
     function vveSetAngle(v) {
@@ -2543,6 +2653,10 @@
       };
       // Merged framing (eye merge): only written when drawn; absent = automatic framing.
       if (_vve.eyes.M.rect) val.merged = { crop: vveCropStr(_vve.eyes.M.rect) };
+      // Merge depth of the view (absent = far).
+      if (_vve.depth > 0) { if (!val.merged) val.merged = {}; val.merged.depth_m = _vve.depth; }
+      // Main eye of the view's merge (absent = right).
+      if (_vve.baseEye === 'L') { if (!val.merged) val.merged = {}; val.merged.base_eye = 'L'; }
       // Whole-view option (L, R and Merged alike): mask the area outside the lenses in web views.
       if (document.getElementById('vve-transparent').checked) val.transparent_corners = true;
       if (wasDefault || isFirst) val.default = true;
@@ -2576,6 +2690,13 @@
       document.getElementById('vve-eye-M').addEventListener('click', function() { vveSelectEye('M'); });
       document.getElementById('vve-angle-range').addEventListener('input', function() { vveSetAngle(this.value); });
       document.getElementById('vve-angle-num').addEventListener('input', function() { vveSetAngle(this.value); });
+      document.getElementById('vve-depth-sel').addEventListener('change', function() {
+        var num = document.getElementById('vve-depth-num');
+        if (this.value === 'custom') { num.dataset.custom = '1'; num.hidden = false; num.value = _vve && _vve.depth ? _vve.depth : ''; num.focus(); return; }
+        delete num.dataset.custom; num.hidden = true; vveSetDepth(this.value);
+      });
+      document.getElementById('vve-depth-num').addEventListener('change', function() { vveSetDepth(this.value); });
+      document.getElementById('vve-baseeye-sel').addEventListener('change', function() { vveSetBaseEye(this.value); });
       ['w', 'h', 'x', 'y'].forEach(function(f) { document.getElementById('vve-crop-' + f).addEventListener('change', vveCropFromFields); });
       document.getElementById('vve-square').addEventListener('change', function() {
         if (!_vve) return;

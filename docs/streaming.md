@@ -67,7 +67,8 @@ A single eye only sees part of the scene: the left eye sees further left, the ri
 How it works:
 
 - scrcpy sends the **full, uncropped frame** (both eyes); ffmpeg on the PC rotates, aligns and blends them using lookup tables built once from the model's **calibration**.
-- The **right eye** gives the centre of the picture and the left eye only extends the edges, so near objects (hands, controllers, floor) can show a slight double image **at the edges only**. Far and mid-distance content is seamless.
+- The **main eye** (right by default; chosen per view on the **Merged** tab of the visual editor, console `[8]`) gives the centre of the picture and the other eye only extends the edges. Where the two are blended, only one distance can line up: by default the **far** one, so scenery is seamless and near objects (hands, menus, floor) can show a double image **in the blend band only**.
+- **Merge depth** (per view, Merged tab of the visual editor, console `[7]`): choose a nearer distance (e.g. 0.75 m) when the player mostly looks at close objects - a table game, a menu, something held - and those line up instead; far content then doubles in the blend band. The picture is merged again at once in the editor so you can compare. Two views (one far, one near) let you switch a headset between both. The depth needs the model's lens model (`lens_focal_px`, shipped for the Quest 3).
 - The merged stream is always **re-encoded** (see below), whatever the re-encode setting — plan roughly 2 CPU cores per merged headset at 30 fps with a software encoder, less with a GPU encoder. Give the headset a higher bitrate: it now sends its full native frame.
 - When recording is on, the recording contains the **merged picture**.
 
@@ -106,6 +107,47 @@ More about re-encoding:
 
 > [!NOTE]
 > Re-encoding trades PC CPU/GPU for network bandwidth. Turn it **off** (passthrough) if you have few viewers and want the lowest possible CPU usage. Recordings are **always** stored with the original capture quality (`-c copy`), never re-encoded.
+
+## Benchmark: what each option costs this PC
+
+The **Benchmark** section of the Headsets Monitoring page measures the cost of each capture option on **one** headset:
+
+- one eye or merged view
+- capture FPS and bitrate
+- stream copy or re-encoding
+- GPU or CPU encoder
+- h264 or h265
+
+The console offers the same benchmark: **Services → B**.
+
+How to run it:
+
+1. Pick a headset that is on, with ADB (USB or WiFi).
+2. Tick the tests you want. A curated set of about 18 is ticked by default, and more combinations are listed below it.
+3. Choose a measure window of 10, 20 or 40 s per test.
+4. Press **RUN BENCHMARK**.
+
+The estimated duration updates as you tick tests, and while the run is in progress it is recalculated from how long each finished test actually took.
+
+> [!WARNING]
+> **Every running stream is stopped during the benchmark** (video wall, OBS and kiosks lose their picture). The streams restart automatically when it ends or is cancelled.
+
+Each test reports:
+
+- CPU, as an average and a peak
+- every GPU, one row per GPU: utilisation, video engine, encoder, VRAM
+- memory
+- the scrcpy, ffmpeg and mediamtx processes
+- what the stream really delivered: frames per second against the target, dropped and duplicated frames, and encode speed
+
+Grey figures are the difference from the **baseline** (the PC with no stream).
+
+How the test settings work:
+
+- The settings are applied only to the benchmark's own test streams. Your configuration and headset profiles are never changed.
+- Re-encoding tests re-encode at the capture FPS and at the configured restream bitrate.
+
+The last result stays on the page and can be downloaded as CSV.
 
 ## Stream URLs
 

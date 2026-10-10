@@ -663,6 +663,9 @@ function Start-VRMonitor {
         # Headset ID -> "ScrcpyProfile|Record" as last seen, so a view or recording change on
         # a running capture is applied at once (see the fast-path trigger below).
         $scrcpyCfgState  = @{}
+        # Run id of the stream benchmark this loop has paused for ('' = none). See the
+        # benchmark block at the top of the fast path (ADR-0026).
+        $benchRunId      = ''
         $infoByIp        = @{}
         $knownHeadsets   = @()
         # Registry change counter last seen by the fast path. -1 rather than 0 so
@@ -790,6 +793,28 @@ function Start-VRMonitor {
                 } else {
                     [void]$knownHeadsetsInfo.Add((New-DefaultHeadsetInfo -knownHeadset $h))
                 }
+            }
+
+            # ---- FAST PATH: stream benchmark pause (ADR-0026) ----
+            # A benchmark (stream_benchmark.ps1, another process) raises an expiring app_kv
+            # flag. This process owns the running pipelines, so IT stops them, on the flag's
+            # rising edge, then acknowledges so the benchmark can start its own test stream
+            # without the watchdog killing it. Watch-ScrcpyProcesses returns at once while the
+            # flag is set. On the falling edge the edge memory is wiped so every headset with
+            # auto-restart counts as a fresh "ready" edge below and restarts on this very tick.
+            $benchState = $null
+            if (Get-Command Get-StreamBenchmarkState -ErrorAction SilentlyContinue) { $benchState = Get-StreamBenchmarkState }
+            if ($benchState) {
+                if ($benchState.RunId -ne $benchRunId) {
+                    Write-Log ("VRMonitor: stream benchmark {0} started - stopping every stream until it ends." -f $benchState.RunId) -Level INFO
+                    try { Stop-Scrcpy | Out-Null } catch { Write-Log ("VRMonitor: stopping streams for the benchmark failed: " + $_.Exception.Message) -Level WARNING }
+                    Confirm-StreamBenchmarkPause -RunId $benchState.RunId
+                    $benchRunId = $benchState.RunId
+                }
+            } elseif ($benchRunId) {
+                Write-Log "VRMonitor: stream benchmark over - restarting the normal streams." -Level INFO
+                $benchRunId      = ''
+                $scrcpyEdgeState = @{}
             }
 
             # ---- FAST PATH: scrcpy start trigger (edge only) ----
@@ -1086,7 +1111,9 @@ function Start-VRMonitor {
                 try { Watch-ScrcpyProcesses -HeadsetInfo $infoByIp } catch { Write-Log ("VRMonitor: scrcpy watchdog failed: " + $_.Exception.Message) -Level WARNING }
                 try { Start-WebServer }        catch { Write-Log ("VRMonitor: web server watchdog failed: " + $_.Exception.Message) -Level WARNING }
 
-                Update-ComputerMonitoring
+                # Not during a stream benchmark: this snapshot is several seconds of WMI and
+                # performance-counter reads, which would land inside the benchmark's measures.
+                if (-not $benchRunId) { Update-ComputerMonitoring }
 
                 # Database housekeeping - currently the battery-history retention
                 # window. Called on every slow tick but self-throttled to
@@ -1100,7 +1127,8 @@ function Start-VRMonitor {
                     catch { Write-Log ("VRMonitor: database maintenance failed: " + $_.Exception.Message) -Level WARNING }
                 }
 
-                if ($global:VQA_Enabled -and (Get-Command Invoke-VideoQualityRecommendation -ErrorAction SilentlyContinue)) {
+                # VQA neither recommends from benchmark load nor rewrites config during a run.
+                if (-not $benchRunId -and $global:VQA_Enabled -and (Get-Command Invoke-VideoQualityRecommendation -ErrorAction SilentlyContinue)) {
                     # Tier-gated: idle=every tick (m=1), mitigation=every 2nd (m=2), max=every 5th (m=5).
                     # Increment first so the first tick always runs (counter % 1 == 0).
                     $vqrTickCounter++
