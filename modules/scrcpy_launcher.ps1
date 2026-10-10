@@ -13,7 +13,7 @@ start-screenCopy -displayName $displayName -headsetIP $ip
 # Parse a scrcpy profile string into a typed object.
 # Format: [view-]EYE-AUDIO-FPS-BW   (view defaults to 'portrait')
 #   view  = portrait | square | wide | fullscreen  (fullscreen = crop 0:0:0:0, no angle)
-#   EYE   = L | R                     (left or right eye)
+#   EYE   = L | R | M                 (left eye, right eye, or M = both eyes merged - eye_merge.ps1)
 #   AUDIO = D | N                     (audio-dup or no-audio)
 #   FPS   = integer                   (max-fps)
 #   BW    = integer Mbps              (bitrate)
@@ -26,7 +26,7 @@ function ConvertFrom-ScrcpyProfile {
     $parts = $Profile -split '-'
 
     # Backward compat: 4-part legacy format (Eye-Audio-FPS-BW) -> prepend "portrait"
-    if ($parts.Count -eq 4 -and $parts[0] -in @('L','R')) {
+    if ($parts.Count -eq 4 -and $parts[0] -in @('L','R','M')) {
         $parts = @('portrait') + $parts
     }
     if ($parts.Count -ne 5) { return $null }
@@ -50,7 +50,7 @@ function ConvertFrom-ScrcpyProfile {
 function ConvertTo-ScrcpyProfile {
     param(
         [string]$View = 'portrait',
-        [ValidateSet('L','R')]
+        [ValidateSet('L','R','M')]
         [string]$Eye = 'R',
         [bool]$AudioDup = $false,
         [int]$Fps = 45,
@@ -243,7 +243,7 @@ function ConvertTo-ScrcpyArguments {
     $parts = $scrcpyProfile -split '-'
 
     # Backward compat: 4-part legacy format (Eye-Audio-FPS-BW) -> prepend "portrait"
-    if ($parts.Count -eq 4 -and $parts[0] -in @('L','R')) {
+    if ($parts.Count -eq 4 -and $parts[0] -in @('L','R','M')) {
         $parts = @('portrait') + $parts
     }
 
@@ -253,7 +253,28 @@ function ConvertTo-ScrcpyArguments {
     }
 
     $viewName  = $parts[0].ToLower()  # e.g. portrait, square, wide
-    $eye       = $parts[1].ToUpper()  # L or R
+    $eye       = $parts[1].ToUpper()  # L, R or M (merged)
+
+    # M = both eyes merged on the PC (eye_merge.ps1): scrcpy must send the FULL frame - no crop,
+    # no angle, no max-size - and ffmpeg does the rest. When the merge cannot run (LocalWindow
+    # capture mode has no ffmpeg, or the model has no enabled calibration) the profile falls back
+    # to the RIGHT eye, the dominant eye of most people.
+    $mergeFullFrame = $false
+    if ($eye -eq 'M') {
+        $mergeUse = Resolve-EyeMergeUse -Model $headsetModel -ScrcpyProfile ($parts -join '-')
+        if ($mergeUse.Use) {
+            $mergeFullFrame = $true
+        } else {
+            $eye = 'R'
+            $warnKey = "$headsetModel|$($mergeUse.Reason)"
+            if (-not $script:EyeMergeFallbackWarned) { $script:EyeMergeFallbackWarned = @{} }
+            if (-not $script:EyeMergeFallbackWarned.ContainsKey($warnKey)) {
+                $script:EyeMergeFallbackWarned[$warnKey] = $true
+                $why = if ($mergeUse.Reason -eq 'localwindow') { 'the LocalWindow capture mode has no ffmpeg stage' } else { "model '$headsetModel' has no enabled eye merge calibration" }
+                Write-Log ("Merged view requested but {0} - using the right eye instead." -f $why) -Level WARNING
+            }
+        }
+    }
     $audioPref = $parts[2].ToUpper()  # D=audio-dup, N=no-audio
     $fps       = $parts[3]            # e.g. 45
     $bw        = $parts[4]            # e.g. 20 (Mbps)
@@ -284,14 +305,14 @@ function ConvertTo-ScrcpyArguments {
             $view = $modelTemplate.views.$firstKey
             Write-Log ($msg.ScrcpyInvalidProfile -f "view '$viewName' not found, using '$firstKey'") -Level WARNING
         }
-        if ($view) {
+        if ($view -and -not $mergeFullFrame) {
             $eyeObj = if ($eye -eq 'L') { $view.left_eye } else { $view.right_eye }
             if ($eyeObj) {
                 $crop  = $eyeObj.crop
                 $angle = $eyeObj.angle
             }
         }
-    } else {
+    } elseif (-not $mergeFullFrame) {
         # Legacy flat template (crop_left/crop_right/angle_left/angle_right)
         $crop  = if ($eye -eq 'L') { $modelTemplate.crop_left  } else { $modelTemplate.crop_right  }
         $angle = if ($eye -eq 'L') { $modelTemplate.angle_left } else { $modelTemplate.angle_right }
@@ -302,7 +323,8 @@ function ConvertTo-ScrcpyArguments {
     if ($null -ne $angle -and "$angle" -ne "" -and [int]"$angle" -ne 0) { $argParts.Add("--angle=$angle") }
     $argParts.Add("--max-fps=$fps")
     $argParts.Add("-b ${bw}M")
-    if ($modelTemplate.max_size)       { $argParts.Add("--max-size=$($modelTemplate.max_size)") }
+    # A merged view needs the native frame: the lookup tables are built for its exact size.
+    if ($modelTemplate.max_size -and -not $mergeFullFrame) { $argParts.Add("--max-size=$($modelTemplate.max_size)") }
     if ($modelTemplate.video_codec)   { $argParts.Add("--video-codec=$($modelTemplate.video_codec)") }
     if ($modelTemplate.video_encoder -and $modelTemplate.video_encoder -ne "") { $argParts.Add("--video-encoder=$($modelTemplate.video_encoder)") }
     if ($modelTemplate.video_buffer)  {
@@ -502,7 +524,10 @@ function Start-FfmpegStreamPush {
         [Parameter(Mandatory)][string]$SafeName,
         [Parameter(Mandatory)][string]$RtspUrl,
         [string]$RecordFile = '',
-        [string]$SourceCodec = 'h264'
+        [string]$SourceCodec = 'h264',
+        # Lookup tables from Get-EyeMergeMaps: merges both eyes of the full frame (forces the
+        # re-encode path; the recording then holds the merged image too, through one tee output).
+        [hashtable]$EyeMerge = $null
     )
     $names = Get-HeadsetPipeNames -SafeName $SafeName
     # One file PER SESSION (timestamped), never overwritten: a stream that keeps dying and
@@ -512,12 +537,16 @@ function Start-FfmpegStreamPush {
     # Remove-OldLogFiles purges them on the usual retention.
     $logErr = Join-Path $global:logFolder ("{0}_{1}_ffmpegPush_stderr.txt" -f $SafeName, (Get-Date -Format 'yyyyMMdd_HHmmss_fff'))
     $argList = [System.Collections.Generic.List[string]]::new()
-    $argList.AddRange([string[]]@('-hide_banner','-loglevel','warning'))
+    # Verbosity from config ffmpeg.log_level (default 'warning'). At 'info' and above ffmpeg
+    # also logs its encoder setup and stream mapping, which is what a failing push needs.
+    $ffLogLevel = if ($global:ffmpegLogLevel) { [string]$global:ffmpegLogLevel } else { 'warning' }
+    $argList.AddRange([string[]]@('-hide_banner','-loglevel',$ffLogLevel))
     # Passthrough needs the bitstream filter matching the actual stream codec
     # (mkv/AVCC -> Annex-B for RTSP). An unrecognized codec cannot be safely
     # passed through - force re-encode for this stream so it doesn't die like
     # the h265-with-h264-filter bug this branch was fixed for.
     $forceReencode = $global:mediamtxReencode
+    if ($EyeMerge) { $forceReencode = $true }   # a filtered stream cannot be passed through
     $passthroughArgs = $null
     if (-not $forceReencode) {
         $passthroughArgs = switch ($SourceCodec) {
@@ -544,6 +573,11 @@ function Start-FfmpegStreamPush {
             '-analyzeduration','100000','-probesize','32768'))
     }
     $argList.AddRange([string[]]@('-f','matroska','-i',"\\.\pipe\$($names.Out)"))
+    if ($EyeMerge) {
+        $mergeArgs = Get-EyeMergeFfmpegArgs -Maps $EyeMerge
+        $argList.AddRange([string[]]$mergeArgs.Inputs)
+        $argList.AddRange([string[]]@('-filter_complex', $mergeArgs.Graph))
+    }
     # Output 1: RTSP push into mediamtx. mediamtx remuxes this single source into
     # RTSP / HLS / WebRTC (WHEP) for downstream viewers, so re-encoding here caps
     # bandwidth on every viewer protocol (including the video_monitor web page).
@@ -565,7 +599,8 @@ function Start-FfmpegStreamPush {
         $gop = [string]$fps
         $encParams = Get-StreamEncoderArgs -EncoderName $enc.Name -Bitrate $bw -Gop $gop
         $rtspOut = [System.Collections.Generic.List[string]]::new()
-        $rtspOut.AddRange([string[]]@('-map','0:v:0'))
+        if ($EyeMerge) { $rtspOut.AddRange([string[]]@('-map','[vout]')) }
+        else           { $rtspOut.AddRange([string[]]@('-map','0:v:0')) }
         # Hardware H.264 encoders (QSV, NVENC, AMF, MF) cannot open a frame wider or taller
         # than 4096 px. An uncapped capture (model max_size 0 with the 'fullscreen' view, i.e.
         # no crop) is the Quest 3's full native frame, wider than that: h264_qsv refused to
@@ -573,16 +608,28 @@ function Start-FfmpegStreamPush {
         # the watchdog restarted scrcpy in a loop with no stream ever reaching mediamtx.
         # HEVC encoders go to 8192, which is why only h264 failed. Scale down to fit, keeping
         # the aspect ratio and even dimensions; a frame already within 4096 is left as is.
-        if ($enc.Name -like 'h264_*') {
+        # (A merged output is always narrower than 4096 and comes from -filter_complex, where an
+        # extra -vf would be rejected, so it skips this.)
+        if ($enc.Name -like 'h264_*' -and -not $EyeMerge) {
             $rtspOut.AddRange([string[]]@('-vf', 'scale=w=min(iw\,4096):h=min(ih\,4096):force_original_aspect_ratio=decrease:force_divisible_by=2'))
         }
         $rtspOut.AddRange([string[]]$encParams)
         if ($enc.ExtraArgs -and $enc.ExtraArgs.Count -gt 0) { $rtspOut.AddRange([string[]]$enc.ExtraArgs) }
         # -flush_packets / -muxdelay / -muxpreload: tell the RTSP muxer to push
         # every packet immediately and not pre-buffer any startup interval.
-        $rtspOut.AddRange([string[]]@('-r',[string]$fps,'-pix_fmt','yuv420p',
-            '-pkt_size','1316','-flush_packets','1','-muxdelay','0','-muxpreload','0',
-            '-f','rtsp','-rtsp_transport','tcp',$RtspUrl))
+        if ($EyeMerge -and $RecordFile) {
+            # One encode, two destinations: the recording is the merged image the viewers see.
+            # onfail=ignore keeps the stream alive if the disk fails. Forward slashes: the tee
+            # muxer treats a backslash as an escape character. +global_header: Matroska behind a
+            # tee needs the codec headers up front ("error writing header" without it).
+            $teeTarget = "[f=rtsp:rtsp_transport=tcp]{0}|[f=matroska:onfail=ignore]{1}" -f $RtspUrl, ($RecordFile -replace '\\', '/')
+            $rtspOut.AddRange([string[]]@('-flags','+global_header','-r',[string]$fps,'-pix_fmt','yuv420p',
+                '-flush_packets','1','-muxdelay','0','-muxpreload','0','-f','tee',$teeTarget))
+        } else {
+            $rtspOut.AddRange([string[]]@('-r',[string]$fps,'-pix_fmt','yuv420p',
+                '-pkt_size','1316','-flush_packets','1','-muxdelay','0','-muxpreload','0',
+                '-f','rtsp','-rtsp_transport','tcp',$RtspUrl))
+        }
         $argList.AddRange([string[]]$rtspOut.ToArray())
         Write-Log ("Start-FfmpegStreamPush: {0} re-encoding with {1} @ {2}fps / {3} (low-latency tuning on)" -f $SafeName, $enc.Name, $fps, $bw) -Level DEBUG
     } else {
@@ -594,7 +641,7 @@ function Start-FfmpegStreamPush {
     # Passed unquoted - manually quoted/escaped below by ConvertTo-ProcessArgument,
     # same as every other path-bearing argument in this list (e.g. the -i pipe path).
     # Manually pre-quoting here would double-quote the value.
-    if ($RecordFile) {
+    if ($RecordFile -and -not $EyeMerge) {
         # -flush_packets 1: have the muxer hand data to the OS as soon as a Matroska cluster is
         # complete instead of leaving it in ffmpeg's buffer, so a kill loses the cluster in progress
         # rather than whatever was buffered. Measured at 8 Mbps: no CPU or memory difference and
@@ -843,6 +890,32 @@ function start-screenCopy {
 
     $options = ConvertTo-ScrcpyArguments -headsetModel $headsetModel -scrcpyProfile $scrcpyProfile
 
+    # Merged view (eye M): the lookup tables are built for one exact frame size, so check the
+    # headset really sends that size, then build (or reuse) the tables. Any failure falls back to
+    # the right eye for this calibration/view (Set-EyeMergeRejected) instead of streaming garbage.
+    $eyeMergeMaps = $null
+    $eyeMergeKey  = ''
+    $mergeUse = Resolve-EyeMergeUse -Model $headsetModel -ScrcpyProfile $scrcpyProfile
+    if ($mergeUse.Use) {
+        $mergeProfile = Get-EyeMergeProfile -Model $headsetModel
+        $display = Get-HeadsetDisplaySize -Device $captureDevice
+        if ($display -and ($display.Width -ne [int]$mergeProfile.frame_width -or $display.Height -ne [int]$mergeProfile.frame_height)) {
+            Set-EyeMergeRejected -Model $headsetModel -Key $mergeUse.Key -Reason ("display is {0}x{1}, calibration expects {2}x{3}" -f $display.Width, $display.Height, $mergeProfile.frame_width, $mergeProfile.frame_height)
+        } else {
+            $eyeMergeMaps = Get-EyeMergeMaps -Model $headsetModel -View $mergeUse.View
+            if ($eyeMergeMaps.Ok) {
+                $eyeMergeKey = $mergeUse.Key
+                Write-Log ("Merged view for {0}: {1}x{2} crop {3}" -f $displayName, $eyeMergeMaps.Width, $eyeMergeMaps.Height, $eyeMergeMaps.Crop) -Level INFO
+            } else {
+                Set-EyeMergeRejected -Model $headsetModel -Key $mergeUse.Key -Reason $eyeMergeMaps.Error
+                $eyeMergeMaps = $null
+            }
+        }
+        if (-not $eyeMergeMaps) {
+            $options = ConvertTo-ScrcpyArguments -headsetModel $headsetModel -scrcpyProfile $scrcpyProfile
+        }
+    }
+
     # Check that scrcpy exists
     if (-not (Test-Path $scrcpy)) {
         Write-Log -Message ($msg.ScrcpyNotFound -f $scrcpyPath) -Level "ERROR"
@@ -887,6 +960,13 @@ function start-screenCopy {
         # do not pass the file-record option here. ffmpeg writes the recording
         # file as a second -c copy output below.
         $arguments = "-s $adb_device $options --window-title=$displayName $renderArg $pipeArgs"
+    }
+    # Verbosity from config scrcpy.log_level (default 'info' = scrcpy's own default, so no
+    # flag is added). Appended AFTER the profile options on purpose: Watch-ScrcpyProcesses
+    # finds the expected options as one contiguous run inside the command line, which an
+    # extra flag at the end cannot break.
+    if ($global:scrcpyLogLevel -and $global:scrcpyLogLevel -ne 'info') {
+        $arguments += " --verbosity=$($global:scrcpyLogLevel)"
     }
     #.\scrcpy.exe --crop 1664:1304:2260:450 --angle=-21 --max-fps 45 -b 16M --no-audio --video-buffer=100 --video-codec=h264 --video-encoder=OMX.qcom.video.encoder.avc -s $adb_device
     #.\sources\scrcpy-win64-v3.3\scrcpy.exe -s 192.168.1.243:5555 -b20m --crop=1664:1304:2260:450 --angle=-21 --max-size=800 --max-fps=30 --video-codec=h265 --no-audio --window-title=Q3_BLUE
@@ -942,7 +1022,7 @@ function start-screenCopy {
             if ($recording -and $recordFile) {
                 $ffmpegRecord = [System.IO.Path]::ChangeExtension($recordFile, '.mkv')
             }
-            $ffmpegPush = Start-FfmpegStreamPush -SafeName $displayName -RtspUrl $rtspUrl -RecordFile $ffmpegRecord -SourceCodec $sourceCodec
+            $ffmpegPush = Start-FfmpegStreamPush -SafeName $displayName -RtspUrl $rtspUrl -RecordFile $ffmpegRecord -SourceCodec $sourceCodec -EyeMerge $eyeMergeMaps
             $global:HeadsetPipelines[$displayName] = @{
                 Bridge              = $bridgeJob
                 ScrcpyProcess       = $scrcpyProc
@@ -955,6 +1035,7 @@ function start-screenCopy {
                 CaptureMode    = $captureMode
                 Recording      = [bool]$recording
                 RecordFile     = $ffmpegRecord
+                EyeMergeKey    = $eyeMergeKey
                 StartedAt      = (Get-Date)
             }
             Write-Log ("Pipe pipeline up for {0}: mode={1} rtsp={2}" -f $displayName, $captureMode, $rtspUrl) -Level SUCCESS
@@ -1124,6 +1205,18 @@ function Watch-ScrcpyProcesses {
                     if ($currentRecording -ne $expectedRecording) {
                         Write-Log ($msg.ScrcpyRecordingChanged -f $headset.Name) -Level INFO
                         $shouldRestart = $true
+                    }
+                    # Merged view: the scrcpy command line is identical to 'fullscreen' (no crop), so
+                    # a switch to/from merged, a recalibration or a new merged crop only shows in the
+                    # pipeline registry. Only compared when this process owns the pipeline entry.
+                    if (-not $shouldRestart -and $pipeline) {
+                        $wantedMerge = Resolve-EyeMergeUse -Model $headsetInfos.Model -ScrcpyProfile $headsetProfile
+                        $wantedKey   = if ($wantedMerge.Use) { $wantedMerge.Key } else { '' }
+                        $runningKey  = if ($pipeline.EyeMergeKey) { [string]$pipeline.EyeMergeKey } else { '' }
+                        if ($wantedKey -ne $runningKey) {
+                            Write-Log ("Merged view settings changed for {0} - restarting the stream." -f $headset.Name) -Level INFO
+                            $shouldRestart = $true
+                        }
                     }
                 } else {
                     $hasRecord = if ($cmdLine) { [bool]($cmdLine -match '--record=(?!\\\\\.\\pipe\\)') } else { $expectedRecording }

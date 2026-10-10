@@ -252,6 +252,7 @@
               videoEl.srcObject = evt.streams[0];
               retryCount = 0;   // a later drop starts the fast retries again
               showStatus('');
+              refreshStreamMask();   // a new stream may come with another view
             }
           };
 
@@ -320,9 +321,46 @@
 
       document.addEventListener('visibilitychange', onVisibilityChange);
 
+      // ---- Transparent outside the lenses (view option "transparent_corners") ----
+      // The stream itself cannot carry transparency (H.264/HEVC have no alpha), so the server
+      // publishes a mask PNG of the lens area (GET /api/stream-mask) and it is applied here with CSS
+      // mask-image. "contain" sizing matches the video's object-fit: contain, so the mask lands
+      // exactly on the picture; outside it (letterbox included) the page is transparent - which is
+      // what an OBS Browser Source shows. The image is preloaded first: a mask-image that has not
+      // loaded yet hides the whole element.
+      var _maskUrl = '';
+      function applyStreamMask(url) {
+        var props = url
+          ? { image: 'url("' + url + '")', size: 'contain', position: 'center', repeat: 'no-repeat' }
+          : { image: 'none', size: '', position: '', repeat: '' };
+        ['webkitMask', 'mask'].forEach(function(p) {
+          videoEl.style[p + 'Image']    = props.image;
+          videoEl.style[p + 'Size']     = props.size;
+          videoEl.style[p + 'Position'] = props.position;
+          videoEl.style[p + 'Repeat']   = props.repeat;
+        });
+        videoEl.style.background = url ? 'transparent' : '';
+      }
+      function refreshStreamMask() {
+        if (!TIMER_ID) return;
+        fetch('/api/stream-mask?id=' + encodeURIComponent(TIMER_ID) + '&_=' + Date.now())
+          .then(function(r) { return r.json(); })
+          .then(function(j) {
+            var url = (j && j.mask && j.url) ? j.url : '';
+            if (url === _maskUrl) return;
+            if (!url) { _maskUrl = ''; applyStreamMask(''); return; }
+            var img = new Image();
+            img.onload = function() { _maskUrl = url; applyStreamMask(url); };
+            img.src = url;
+          })
+          .catch(function() {});
+      }
+      setInterval(refreshStreamMask, 15000);
+
       // Start as soon as the DOM is ready
       document.addEventListener('DOMContentLoaded', function() {
         connect();
+        refreshStreamMask();
 
         var inIframe = (window.self !== window.top);
         var noOverlay = new URLSearchParams(window.location.search).get('nooverlay') === '1';

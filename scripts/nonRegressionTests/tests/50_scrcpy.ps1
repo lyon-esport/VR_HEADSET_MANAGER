@@ -233,6 +233,7 @@ if ($depth -eq 'Full') {
                       $(if ($parsed.AudioDup) { 'D' } else { 'N' }), $newFps, $parsed.BitrateMbps
         Add-TestEvidence ("profile {0} -> {1}" -f $activeProfile, $newProfile)
 
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
         $r = Invoke-VrmApi -Path '/api/updateprofile' -Method POST -Body @{ name = $nrtSafeName; profile = $newProfile }
         Assert-VrmOk -Result $r -Label 'update profile'
 
@@ -241,9 +242,16 @@ if ($depth -eq 'Full') {
         while ((Get-Date) -lt $deadline) {
             $p = Get-NrtScrcpyProcess -TargetRoot $target -Name $nrtHeadset.Name -IPAddress $nrtHeadset.IPAddress
             if ($p -and $p.Id -ne $beforePid) { $restarted = $p; break }
-            Start-Sleep -Milliseconds 1000
+            Start-Sleep -Milliseconds 500
         }
+        $sw.Stop()
         Assert-NotNull $restarted 'scrcpy must restart within 120s of a profile change'
+        # A profile (view) change is applied by the VRMonitor FAST path, not the next slow
+        # tick: the new scrcpy must be up within seconds of the API call. It used to take
+        # one refresh_timer plus the whole slow-path work.
+        Add-TestEvidence ("new scrcpy process {0:N1} s after the profile change" -f $sw.Elapsed.TotalSeconds)
+        Assert-True ($sw.Elapsed.TotalSeconds -le 15) `
+            ("scrcpy restarted {0:N1} s after the profile change - expected within 15 s" -f $sw.Elapsed.TotalSeconds)
 
         $cmdLine = Get-NrtProcessCommandLine -ProcessId $restarted.Id
         Add-TestEvidence ("new cmdline: {0}" -f $cmdLine)

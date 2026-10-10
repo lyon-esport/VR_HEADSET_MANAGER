@@ -983,6 +983,7 @@
           <select id="pm-eye">
             <option value="L">Left (L)</option>
             <option value="R">Right (R)</option>
+            <option value="M" id="pm-eye-m" hidden>Merged - both eyes (M)</option>
           </select>
         </div>
         <div class="pm-field">
@@ -2524,7 +2525,7 @@
       var raw = (document.getElementById('profile-val-' + dn).textContent || 'portrait-R-N-45-20').trim();
       var cur = raw.split('-');
       // Support legacy 4-part format (Eye-Audio-FPS-BW) -> prepend 'portrait'
-      if (cur.length === 4 && ['L','R'].indexOf(cur[0].toUpperCase()) >= 0) { cur = ['portrait'].concat(cur); }
+      if (cur.length === 4 && ['L','R','M'].indexOf(cur[0].toUpperCase()) >= 0) { cur = ['portrait'].concat(cur); }
       if (cur.length !== 5) cur = ['portrait', 'R', 'N', '45', '20'];
       document.getElementById('pm-headset').textContent = dn.replace(/_/g, ' ');
 
@@ -2549,7 +2550,28 @@
           viewSel.value = currentView;
         });
 
-      document.getElementById('pm-eye').value   = cur[1].toUpperCase();
+      // "Merged" (eye M) is offered only when this headset's model has an enabled eye merge
+      // calibration (vrhm_config.html > Headset Profiles > Eye merge). A profile already set to M
+      // on an unsupported model keeps the option visible, flagged, so the value is not lost.
+      // The label starts neutral and is only changed once the server has answered: showing the
+      // "not calibrated" warning first and correcting it a second later made the dialog flicker
+      // and resize. light=1 skips the per-view framing work this page does not need.
+      var curEye = cur[1].toUpperCase();
+      var eyeM = document.getElementById('pm-eye-m');
+      eyeM.hidden = (curEye !== 'M');
+      eyeM.textContent = 'Merged - both eyes (M)';
+      if (model) {
+        fetch('/api/eye-merge?light=1&model=' + encodeURIComponent(model))
+          .then(function(r) { return r.json(); })
+          .then(function(j) {
+            if (j && j.ok && j.enabled) { eyeM.hidden = false; }
+            else if (curEye === 'M') { eyeM.textContent = 'Merged (M) - not calibrated: right eye used'; }
+          })
+          .catch(function() {});
+      } else if (curEye === 'M') {
+        eyeM.textContent = 'Merged (M) - not calibrated: right eye used';
+      }
+      document.getElementById('pm-eye').value   = curEye;
       document.getElementById('pm-audio').value = cur[2].toUpperCase();
       document.getElementById('pm-fps').value   = cur[3];
       document.getElementById('pm-bw').value    = cur[4];

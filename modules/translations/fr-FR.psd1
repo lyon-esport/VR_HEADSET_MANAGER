@@ -166,12 +166,12 @@
     ScrcpyOptBitrateLabel = "Debit (Mbps)"
     ScrcpyOptTableHeader = "Option           : Valeur actuelle"
     ScrcpyOptionsEnterOption = "Option"
-    ScrcpyOptionsEye = "Oeil (L=Gauche / R=Droit), actuel : {0}"
+    ScrcpyOptionsEye = "Oeil (L=Gauche / R=Droit / M=Fusion des deux yeux), actuel : {0}"
     ScrcpyOptionsAudio = "Audio (D=Dupliquer / N=Pas d'audio), actuel : {0}"
     ScrcpyOptionsFPS = "FPS max (nombre), actuel : {0}"
     ScrcpyOptionsBitrate = "Debit en Mbps (nombre), actuel : {0}"
     ScrcpyOptionsSaved = "Profil sauvegarde pour {0} : {1}"
-    ScrcpyOptionsInvalidEye = "Cote d'oeil invalide. Entrez L ou R."
+    ScrcpyOptionsInvalidEye = "Cote d'oeil invalide. Entrez L, R ou M."
     ScrcpyOptionsInvalidAudio = "Mode audio invalide. Entrez D ou N."
     ScrcpyOptionsInvalidNumber = "Valeur invalide. Entrez un entier positif."
     RecordingTitle = "== GESTION DU RECORDING DES CASQUES =="
@@ -756,4 +756,44 @@
         ScrcpyCableLost   = "Cable USB retire pour {0} - la capture repasse en WiFi."
         ScrcpySwitchToUsb = "Cable USB detecte pour {0} - la capture passe du WiFi a l'USB."
     }
-}
+
+    # ==========================================
+    # Fusion des yeux : les deux lentilles assemblees en une seule vue (oeil M, ADR-0025).
+    # Groupe imbrique : la table de premier niveau est a la limite de 500 cles.
+    # ==========================================
+    EyeMerge = @{
+        EyeMergedLabel     = "Fusionne (deux yeux)"
+        NotSupported       = "Le modele '{0}' n'a pas de calibration de fusion active - l'oeil droit est utilise."
+        Title              = "Fusion des yeux - modele {0}"
+        StatusNone         = "Etat : non calibre"
+        StatusEnabled      = "Etat : calibre, ACTIVE"
+        StatusDisabled     = "Etat : calibre, desactive"
+        CalibrationLine    = "Calibration : angle {0} deg, decalage {1},{2}, score {3}, canevas {4}x{5}, {6}"
+        OptCalibrate       = "Calibrer maintenant avec ce casque"
+        OptToggle          = "Activer / desactiver la vue fusionnee pour ce modele"
+        OptExport          = "Afficher la calibration partageable (aussi copiee dans le presse-papiers)"
+        OptImportClipboard = "Importer une calibration depuis le presse-papiers"
+        OptImportFile      = "Importer une calibration depuis un fichier"
+        OptViewCrop        = "Definir ou reinitialiser le cadrage fusionne d'une vue"
+        CalibrateHint      = "Posez le casque a plat et immobile dans l'environnement d'accueil, face a un paysage lointain, sans fenetre proche des yeux."
+        CalibrateRunning   = "Capture et mesure en cours (environ 6 secondes)..."
+        CalibrateOk        = "Calibration enregistree : angle {0} deg, decalage {1},{2}, score {3}. Apercu : {4}"
+        CalibrateFailed    = "Echec de la calibration : {0}"
+        ExportCopied       = "Extrait copie dans le presse-papiers."
+        ImportOk           = "Calibration importee pour le modele '{0}' ({1} cadrage(s) de vue applique(s))."
+        ImportFailed       = "Echec de l'import : {0}"
+        ImportFilePrompt   = "Chemin du fichier de l'extrait"
+        ImportCropsPrompt  = "Appliquer aussi les cadrages fusionnes partages ? (O/N)"
+        ViewPrompt         = "Numero de la vue"
+        CropLine           = "  {0}. {1,-12} {2} {3}"
+        CropAuto           = "(automatique)"
+        CropPrompt         = "Cadrage fusionne l:h:x:y sur le canevas fusionne, A = automatique, Entree = annuler"
+        CropSaved          = "Cadrage fusionne de la vue '{0}' enregistre."
+        CropInvalid        = "Attendu l:h:x:y (quatre nombres entiers) ou A."
+        NoModel            = "Ce casque n'a pas encore de modele connu - il doit etre connecte au moins une fois."
+        Toggled            = "La vue fusionnee de '{0}' est maintenant {1}."
+        TransparentOption  = "Transparent hors des lentilles pour la vue '{0}' (pages web / OBS) : {1}"
+        TransparentToggled = "Transparent hors des lentilles pour la vue '{0}' de '{1}' : {2}."
+        TransparentNoView  = "La vue '{0}' n'est pas definie pour le modele '{1}' dans config.json - elle ne peut pas porter l'option."
+    }
+}

@@ -660,6 +660,9 @@ function Start-VRMonitor {
         # Headset ID -> "auto-restart on AND ADB up" as of the previous fast tick. A false->true
         # transition is what starts scrcpy at once instead of on the next slow tick.
         $scrcpyEdgeState = @{}
+        # Headset ID -> "ScrcpyProfile|Record" as last seen, so a view or recording change on
+        # a running capture is applied at once (see the fast-path trigger below).
+        $scrcpyCfgState  = @{}
         $infoByIp        = @{}
         $knownHeadsets   = @()
         # Registry change counter last seen by the fast path. -1 rather than 0 so
@@ -796,20 +799,31 @@ function Start-VRMonitor {
             # The registry change counter above already reloaded $knownHeadsets on this tick
             # if /api/autorestart just wrote, and the runspaces refresh ADBWifi every second.
             # Only a false->true transition fires, so the steady state costs no process scan;
-            # crash restarts, profile changes and transport switches stay on the slow tick.
+            # crash restarts and transport switches stay on the slow tick.
             $infoByIp = @{}
             foreach ($i in $knownHeadsetsInfo) { if ($i.IPAddress) { $infoByIp[[string]$i.IPAddress] = $i } }
+            #
+            # Same for a SETTING change on a headset that is already capturing: a new view
+            # (ScrcpyProfile, e.g. the view picker on the settings page) or a recording toggle
+            # (Record). Those are registry writes too, so they land here on this tick; without
+            # this the running session was only compared with its new settings on the next
+            # slow tick, after all the slow-path work. Only the IDs whose settings actually
+            # changed are passed - Watch-ScrcpyProcesses' existing comparison (options,
+            # recording, merged view) still decides whether a restart is needed.
             $scrcpyEdgeIds = @()
             foreach ($h in $knownHeadsets) {
                 $info  = $infoByIp[[string]$h.IPAddress]
                 $ready = (ConvertTo-BoolField $h.scrcpy_AutoRestart) -and -not (Test-UnknownIp $h.IPAddress) `
                          -and $info -and (ConvertTo-BoolField $info.ADBWifi)
                 $edgeKey = [string]$h.ID
-                if ($ready -and -not $scrcpyEdgeState[$edgeKey]) { $scrcpyEdgeIds += [int]$h.ID }
+                $cfgSig  = '{0}|{1}' -f $h.ScrcpyProfile, $h.Record
+                $cfgChanged = $scrcpyCfgState.ContainsKey($edgeKey) -and $scrcpyCfgState[$edgeKey] -ne $cfgSig
+                if ($ready -and (-not $scrcpyEdgeState[$edgeKey] -or $cfgChanged)) { $scrcpyEdgeIds += [int]$h.ID }
                 $scrcpyEdgeState[$edgeKey] = [bool]$ready
+                $scrcpyCfgState[$edgeKey]  = $cfgSig
             }
             if ($scrcpyEdgeIds.Count -gt 0) {
-                Write-Log ("VRMonitor: capture requested for headset id(s) {0} - starting scrcpy now" -f ($scrcpyEdgeIds -join ',')) -Level DEBUG
+                Write-Log ("VRMonitor: capture requested or settings changed for headset id(s) {0} - checking scrcpy now" -f ($scrcpyEdgeIds -join ',')) -Level DEBUG
                 # mediamtx before scrcpy (publisher ordering - see the eager block above).
                 try { Start-MediaMtx } catch { Write-Log ("VRMonitor: mediamtx watchdog (trigger) failed: " + $_.Exception.Message) -Level WARNING }
                 try { Watch-ScrcpyProcesses -HeadsetId $scrcpyEdgeIds -HeadsetInfo $infoByIp } catch { Write-Log ("VRMonitor: scrcpy start trigger failed: " + $_.Exception.Message) -Level WARNING }

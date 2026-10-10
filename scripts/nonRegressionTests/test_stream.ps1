@@ -984,7 +984,7 @@ function Start-NrtHeadsetStream {
         # hardware H.264 encoders cannot open. That made section 60 test an accident of
         # the dev registry instead of the release. Keep the sandbox default in that case.
         if ($Headset.ScrcpyProfile) {
-            $view = ([string]$Headset.ScrcpyProfile) -replace '-[LR]-[DN]-\d+-\d+$', ''
+            $view = ([string]$Headset.ScrcpyProfile) -replace '-[LRM]-[DN]-\d+-\d+$', ''
             $carry = $true
             if ($view -ne [string]$Headset.ScrcpyProfile) {
                 $sbCfg = Read-JsonFileUtf8 -Path (Get-SandboxPaths -TargetRoot $TargetRoot).ConfigFile

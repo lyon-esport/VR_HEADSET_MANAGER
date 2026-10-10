@@ -1421,14 +1421,14 @@ function Show-SubMenu-ScrcpyOptions {
             $scrcpyProfile = if ($headset.ScrcpyProfile) { $headset.ScrcpyProfile } else { "portrait-R-N-45-20" }
             $parts = $scrcpyProfile -split '-'
             # Backward compat: 4-part legacy (Eye-Audio-FPS-BW) -> prepend "portrait"
-            if ($parts.Count -eq 4 -and $parts[0] -in @('L','R')) { $parts = @('portrait') + $parts }
+            if ($parts.Count -eq 4 -and $parts[0] -in @('L','R','M')) { $parts = @('portrait') + $parts }
             if ($parts.Count -ne 5) { $parts = @('portrait','R','N','45','20') }
             $view  = $parts[0].ToLower()
             $eye   = $parts[1].ToUpper()
             $audio = $parts[2].ToUpper()
             $fps   = $parts[3]
             $bw    = $parts[4]
-            $eyeLabel   = if ($eye   -eq 'L') { 'Left'      } else { 'Right' }
+            $eyeLabel   = switch ($eye) { 'L' { 'Left' } 'M' { $msg.EyeMerge.EyeMergedLabel } default { 'Right' } }
             $audioLabel = if ($audio -eq 'D') { 'Duplicate' } else { 'No audio' }
 
             # Collect available view names for the headset model
@@ -1454,6 +1454,10 @@ function Show-SubMenu-ScrcpyOptions {
             Write-Host " [4]  $($msg.ScrcpyOptFPSLabel.PadRight(16)) : $fps"
             Write-Host " [5]  $($msg.ScrcpyOptBitrateLabel.PadRight(16)) : $bw"
             Write-Host " [6]  $($msg.Headset.ScrcpyOptSetDefaultView)"
+            Write-Host " [7]  $(($msg.EyeMerge.Title -f $(if ($headsetModel) { $headsetModel } else { '?' })))"
+            $viewObjNow = if ($headsetModel -and $global:scrcpyParameters.$headsetModel -and $global:scrcpyParameters.$headsetModel.views) { $global:scrcpyParameters.$headsetModel.views.$view } else { $null }
+            $transpNow  = [bool]($viewObjNow -and $viewObjNow.transparent_corners -eq $true)
+            Write-Host " [8]  $(($msg.EyeMerge.TransparentOption -f $view, $(if ($transpNow) { 'ON' } else { 'OFF' })))"
             Write-Host " [0]  $($msg.Return)"
 
             $opt = Read-Host $msg.ScrcpyOptionsEnterOption
@@ -1482,7 +1486,11 @@ function Show-SubMenu-ScrcpyOptions {
                 }
                 '2' {
                     $val = (Read-Host ($msg.ScrcpyOptionsEye -f $eye)).ToUpper()
-                    if ($val -in @('L','R')) {
+                    if ($val -eq 'M' -and -not (Test-EyeMergeSupported -Model $headsetModel)) {
+                        # Merged view only for models with an enabled calibration (option 7).
+                        Write-Host ($msg.EyeMerge.NotSupported -f $headsetModel) -ForegroundColor Yellow
+                        Start-Sleep -Seconds 3
+                    } elseif ($val -in @('L','R','M')) {
                         $parts[1] = $val
                     } else {
                         Write-Host $msg.ScrcpyOptionsInvalidEye -ForegroundColor Red
@@ -1549,6 +1557,25 @@ function Show-SubMenu-ScrcpyOptions {
                         }
                     }
                 }
+                '7' {
+                    if (-not $headsetModel) {
+                        Write-Host "  $($msg.EyeMerge.NoModel)" -ForegroundColor Red
+                        Start-Sleep -Seconds 2
+                    } else {
+                        Show-SubMenu-EyeMerge -Headset $headset
+                    }
+                }
+                '8' {
+                    # Whole-view option (all eyes): console counterpart of the visual editor checkbox.
+                    if (-not $headsetModel) {
+                        Write-Host "  $($msg.EyeMerge.NoModel)" -ForegroundColor Red
+                    } elseif (-not $viewObjNow) {
+                        Write-Host ("  " + ($msg.EyeMerge.TransparentNoView -f $view, $headsetModel)) -ForegroundColor Red
+                    } elseif (Set-ViewTransparentCorners -Model $headsetModel -View $view -Enabled (-not $transpNow)) {
+                        Write-Host ("  " + ($msg.EyeMerge.TransparentToggled -f $view, $headsetModel, $(if (-not $transpNow) { 'ON' } else { 'OFF' }))) -ForegroundColor Green
+                    }
+                    Start-Sleep -Seconds 2
+                }
                 '0' { break }
                 default { }
             }
@@ -1569,6 +1596,115 @@ function Show-SubMenu-ScrcpyOptions {
         $idInput = $null
 
     } while ($true)
+}
+
+
+# Console counterpart of the web "Eye merge" card (vrhm_config.html, Headset Profiles) for the model
+# of one headset: calibrate, enable/disable, export / import the shareable snippet, set the merged
+# crop of a view as text. Drawing the crop stays web-only (visual view editor), like the eye crops.
+# Example: Show-SubMenu-EyeMerge -Headset (Get-KnownHeadsets | Select-Object -First 1)
+function Show-SubMenu-EyeMerge {
+    param([Parameter(Mandatory)] $Headset)
+    $model = [string]$Headset.Model
+    if (-not $model) { Write-Host "  $($msg.EyeMerge.NoModel)" -ForegroundColor Red; Start-Sleep -Seconds 2; return }
+    do {
+        $p = Get-EyeMergeProfile -Model $model -IncludeDisabled
+        Clear-Host
+        Write-Host ($msg.EyeMerge.Title -f $model) -ForegroundColor Cyan
+        Write-Host $msg.Separator
+        if (-not $p) {
+            Write-Host $msg.EyeMerge.StatusNone -ForegroundColor Yellow
+        } else {
+            if ($p.enabled -eq $false) { Write-Host $msg.EyeMerge.StatusDisabled -ForegroundColor Yellow }
+            else { Write-Host $msg.EyeMerge.StatusEnabled -ForegroundColor Green }
+            Write-Host ($msg.EyeMerge.CalibrationLine -f $p.relative_angle, $p.shift_x, $p.shift_y, $p.score, $p.canvas_width, $p.canvas_height, $p.calibrated_at)
+        }
+        Write-Host $msg.Separator
+        Write-Host " [1]  $($msg.EyeMerge.OptCalibrate)"
+        if ($p) {
+            Write-Host " [2]  $($msg.EyeMerge.OptToggle)"
+            Write-Host " [3]  $($msg.EyeMerge.OptExport)"
+        }
+        Write-Host " [4]  $($msg.EyeMerge.OptImportClipboard)"
+        Write-Host " [5]  $($msg.EyeMerge.OptImportFile)"
+        if ($p) { Write-Host " [6]  $($msg.EyeMerge.OptViewCrop)" }
+        Write-Host " [0]  $($msg.Return)"
+        $opt = Read-Host $msg.Choice
+
+        switch ($opt) {
+            '1' {
+                Write-Host "  $($msg.EyeMerge.CalibrateHint)" -ForegroundColor Cyan
+                Write-Host "  $($msg.EyeMerge.CalibrateRunning)"
+                $cal = Invoke-EyeMergeCalibration -Headset $Headset -Save
+                if ($cal.Ok -and $cal.Saved) {
+                    Write-Host ($msg.EyeMerge.CalibrateOk -f $cal.Profile.relative_angle, $cal.Profile.shift_x, $cal.Profile.shift_y, $cal.Score, $cal.PreviewPath) -ForegroundColor Green
+                    if ($cal.PreviewPath) { Open-File -filePath $cal.PreviewPath }
+                } else {
+                    Write-Host ($msg.EyeMerge.CalibrateFailed -f $cal.Error) -ForegroundColor Red
+                }
+                Read-Host $msg.PressEnterToContinue | Out-Null
+            }
+            '2' {
+                if ($p) {
+                    $newState = ($p.enabled -eq $false)
+                    if (Set-EyeMergeEnabled -Model $model -Enabled $newState) {
+                        Write-Host ($msg.EyeMerge.Toggled -f $model, $(if ($newState) { 'ON' } else { 'OFF' })) -ForegroundColor Green
+                    }
+                    Start-Sleep -Seconds 2
+                }
+            }
+            '3' {
+                if ($p) {
+                    $snippet = Export-EyeMergeProfile -Model $model
+                    Write-Host $snippet
+                    try { Set-Clipboard -Value $snippet; Write-Host $msg.EyeMerge.ExportCopied -ForegroundColor Green } catch {}
+                    Read-Host $msg.PressEnterToContinue | Out-Null
+                }
+            }
+            { $_ -in @('4','5') } {
+                $json = $null
+                if ($opt -eq '4') {
+                    try { $json = Get-Clipboard -Raw } catch { $json = $null }
+                } else {
+                    $file = (Read-Host $msg.EyeMerge.ImportFilePrompt).Trim('"', ' ')
+                    if ($file -and (Test-Path -LiteralPath $file)) { $json = Get-Content -LiteralPath $file -Raw -Encoding UTF8 }
+                }
+                if (-not $json) {
+                    Write-Host ($msg.EyeMerge.ImportFailed -f 'empty') -ForegroundColor Red
+                } else {
+                    $withCrops = (Read-Host $msg.EyeMerge.ImportCropsPrompt).Trim().ToUpper() -in @('Y','O')
+                    # Imported into THIS headset's model, whatever model the snippet names.
+                    $imp = Import-EyeMergeProfile -Json $json -Model $model -IncludeViewCrops:$withCrops
+                    if ($imp.Ok) { Write-Host ($msg.EyeMerge.ImportOk -f $imp.Model, $imp.CropsApplied) -ForegroundColor Green }
+                    else { Write-Host ($msg.EyeMerge.ImportFailed -f $imp.Error) -ForegroundColor Red }
+                }
+                Read-Host $msg.PressEnterToContinue | Out-Null
+            }
+            '6' {
+                if ($p) {
+                    $views = @()
+                    if ($global:scrcpyParameters.$model.views) { $views = @($global:scrcpyParameters.$model.views.PSObject.Properties.Name) }
+                    for ($i = 0; $i -lt $views.Count; $i++) {
+                        $c = Get-EyeMergeViewCrop -Model $model -View $views[$i]
+                        $txt = if ($c) { "{0}:{1}:{2}:{3}" -f $c.W, $c.H, $c.X, $c.Y } else { '-' }
+                        Write-Host ($msg.EyeMerge.CropLine -f ($i + 1), $views[$i], $txt, $(if ($c -and $c.Auto) { $msg.EyeMerge.CropAuto } else { '' }))
+                    }
+                    $n = Read-Host $msg.EyeMerge.ViewPrompt
+                    if ($n -match '^\d+$' -and [int]$n -ge 1 -and [int]$n -le $views.Count) {
+                        $viewName = $views[[int]$n - 1]
+                        $val = (Read-Host $msg.EyeMerge.CropPrompt).Trim()
+                        $done = $false
+                        if ($val -eq 'A' -or $val -eq 'a') { $done = Set-EyeMergeViewCrop -Model $model -View $viewName -Reset }
+                        elseif ($val -match '^\d+:\d+:\d+:\d+$') { $done = Set-EyeMergeViewCrop -Model $model -View $viewName -Crop $val }
+                        elseif ($val) { Write-Host $msg.EyeMerge.CropInvalid -ForegroundColor Red }
+                        if ($done) { Write-Host ($msg.EyeMerge.CropSaved -f $viewName) -ForegroundColor Green }
+                    }
+                    Start-Sleep -Seconds 2
+                }
+            }
+            default { }
+        }
+    } while ($opt -ne '0')
 }
 
 

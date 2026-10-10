@@ -565,15 +565,22 @@ function Initialize-SandboxConfig {
     $config.WebServer.openBrowserOnStartup = $false
     $config.VRMonitor.showConsole          = $false
     $config.VRMonitor.refresh_timer        = 5
-    $config.Logging.debugLevelToFile       = 'DEBUG'
+    $config.Logging.debugLevelToFile       = 'DEBUG'   # max verbosity - see the log block below
     $config.Logging.debugLevelToConsole    = 'ERROR'
     $config.scrcpy.recordFolder            = $paths.RecordFolder
     $config.ComputerMonitoring.refresh_timer_sec = 15
-    # mediamtx at 'info' (the shipped default is 'error', which logs nothing useful):
-    # a test run exists to be analysed, and only 'info' says when a publisher connects,
-    # when a reader attaches, and WHY mediamtx closed a session (e.g. a read timeout
-    # on a publisher that stopped sending - the exact question a dying stream raises).
-    $config.mediamtx.log_level = 'info'
+    # Every log at DEBUG (operator standing rule): a test run exists to be analysed, and a
+    # failure that cannot be explained from the logs costs a whole extra release + run.
+    #   - app (Write-Log, every process and runspace): debugLevelToFile above
+    #   - mediamtx: publisher/reader sessions, RTSP/WebRTC exchanges, why a session closed
+    #     (the shipped default 'error' logs nothing at all)
+    #   - ffmpeg pusher: encoder setup, stream mapping, why an encoder refused to open
+    #   - scrcpy: device/encoder negotiation, recorder and demuxer errors
+    # 'debug' rather than ffmpeg 'trace' / scrcpy 'verbose': those add per-packet lines
+    # that bury the useful ones and slow the capture they are meant to observe.
+    $config.mediamtx.log_level = 'debug'
+    $config.ffmpeg | Add-Member -NotePropertyName log_level -NotePropertyValue 'debug' -Force
+    $config.scrcpy | Add-Member -NotePropertyName log_level -NotePropertyValue 'debug' -Force
 
     # VQA runs exactly as the release ships it: ENABLED, recommendations only. Only the
     # auto-apply half (VQO) rewrites config.json and scrcpy profiles underneath the

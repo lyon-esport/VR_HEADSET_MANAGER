@@ -299,6 +299,17 @@ function Get-Config {
     $global:ffmpegFolder = Join-Path -Path $sourcesPath -ChildPath $ffmpegFolder
     $global:ffmpegFilePath = Join-Path -Path $global:ffmpegFolder -ChildPath "ffmpeg.exe"
 
+    # Log verbosity of the two capture child processes (their per-session stderr files
+    # in the log folder). Validated against each tool's own level names; anything else
+    # falls back to the previous fixed behaviour (ffmpeg 'warning', scrcpy 'info').
+    # Raised to 'debug' by the non-regression harness so a failing run can be analysed.
+    $ffLevels = @('quiet','panic','fatal','error','warning','info','verbose','debug','trace')
+    $ffLevel  = if ($configContent.ffmpeg -and $configContent.ffmpeg.log_level) { ([string]$configContent.ffmpeg.log_level).ToLowerInvariant() } else { 'warning' }
+    $global:ffmpegLogLevel = if ($ffLevels -contains $ffLevel) { $ffLevel } else { 'warning' }
+    $scLevels = @('verbose','debug','info','warn','error')
+    $scLevel  = if ($configContent.scrcpy -and $configContent.scrcpy.log_level) { ([string]$configContent.scrcpy.log_level).ToLowerInvariant() } else { 'info' }
+    $global:scrcpyLogLevel = if ($scLevels -contains $scLevel) { $scLevel } else { 'info' }
+
     # Embedded SQLite database (System.Data.SQLite, x64). One folder per version under
     # sources\sqlite\ (same rule as scrcpy/mediamtx/ffmpeg). Every value has a default so a
     # config.json written before the "database" section existed still loads.

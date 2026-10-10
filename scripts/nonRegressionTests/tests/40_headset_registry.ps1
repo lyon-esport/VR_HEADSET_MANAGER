@@ -205,7 +205,7 @@ Invoke-RegressionTest -Name 'Legacy 4-part profile is normalised, not rejected' 
 
     $stored = (Get-NrtHeadsetRow -Name $nrtName).ScrcpyProfile
     Add-TestEvidence ("legacy 'R-N-45-20' stored as '{0}'" -f $stored)
-    Assert-Match $stored '^[\w]+-[LR]-[DN]-\d+-\d+$' 'normalised profile shape'
+    Assert-Match $stored '^[\w]+-[LRM]-[DN]-\d+-\d+$' 'normalised profile shape'
 }
 
 Invoke-RegressionTest -Name 'Rename moves the generated pages, and apps follow without any file work' -Test {
@@ -406,6 +406,94 @@ Invoke-RegressionTest -Name 'scrcpy arguments honour view, eye and audio' -Test 
     # fullscreen is defined as crop 0:0:0:0 / angle 0, both of which are skipped.
     Assert-True ($built.Fullscreen -notlike '*--crop*')  'fullscreen must not emit --crop'
     Assert-True ($built.Fullscreen -notlike '*--angle*') 'fullscreen must not emit --angle'
+}
+
+# ---------------------------------------------------------------------------
+# Eye merge (eye M, ADR-0025) - direct module calls on the shipped Quest 3
+# calibration, no hardware: the merge itself runs on a synthetic ffmpeg frame.
+# ---------------------------------------------------------------------------
+
+Invoke-RegressionTest -Name 'Eye merge: M profile builds a full-frame capture, falls back to the right eye' -Test {
+    $built = Invoke-InTargetModules -TargetRoot $target -Body {
+        $global:CaptureMode = 'StreamOnly'
+        $supported = Test-EyeMergeSupported -Model 'Quest 3'
+        $merged    = ConvertTo-ScrcpyArguments -headsetModel 'Quest 3' -scrcpyProfile 'square-M-N-45-20'
+        $right     = ConvertTo-ScrcpyArguments -headsetModel 'Quest 3' -scrcpyProfile 'square-R-N-45-20'
+        $global:CaptureMode = 'LocalWindow'
+        $localWin  = ConvertTo-ScrcpyArguments -headsetModel 'Quest 3' -scrcpyProfile 'square-M-N-45-20'
+        $global:CaptureMode = 'StreamOnly'
+        [PSCustomObject]@{
+            Supported   = $supported
+            Merged      = $merged
+            Right       = $right
+            LocalWindow = $localWin
+            Unsupported = ConvertTo-ScrcpyArguments -headsetModel 'Quest 2' -scrcpyProfile 'square-M-N-45-20'
+            Quest2Right = ConvertTo-ScrcpyArguments -headsetModel 'Quest 2' -scrcpyProfile 'square-R-N-45-20'
+            RoundTrip   = (ConvertTo-ScrcpyProfile -View 'square' -Eye 'M' -AudioDup $false -Fps 45 -BitrateMbps 20)
+        }
+    }
+    if (-not $built.Supported) { Skip-Test 'the sandbox config has no enabled Quest 3 eye_merge block' }
+    Add-TestEvidence ("M (stream) : {0}" -f $built.Merged)
+    Add-TestEvidence ("M (window) : {0}" -f $built.LocalWindow)
+    Assert-True ($built.Merged -notlike '*--crop*')     'a merged view needs the full frame: no --crop'
+    Assert-True ($built.Merged -notlike '*--angle*')    'a merged view needs the full frame: no --angle'
+    Assert-True ($built.Merged -notlike '*--max-size*') 'a merged view needs the native size: no --max-size'
+    Assert-Equal $built.Right $built.LocalWindow 'LocalWindow mode has no ffmpeg: M falls back to the right eye'
+    Assert-Equal $built.Quest2Right $built.Unsupported 'an uncalibrated model falls back to the right eye'
+    Assert-Equal 'square-M-N-45-20' $built.RoundTrip 'M survives ConvertTo-ScrcpyProfile'
+}
+
+Invoke-RegressionTest -Name 'Eye merge: calibration snippet validates, garbage is refused' -Test {
+    $r = Invoke-InTargetModules -TargetRoot $target -Body {
+        $p = Get-EyeMergeProfile -Model 'Quest 3'
+        $snippet = Export-EyeMergeProfile -Model 'Quest 3'
+        $parsed  = $snippet | ConvertFrom-Json
+        $broken  = $snippet | ConvertFrom-Json
+        $broken.eye_merge.mask_left = '1,2 3'
+        [PSCustomObject]@{
+            HasProfile   = [bool]$p
+            SnippetValid = (Test-EyeMergeProfile -MergeProfile $parsed.eye_merge).Ok
+            BrokenValid  = (Test-EyeMergeProfile -MergeProfile $broken.eye_merge).Ok
+            NotJson      = (Import-EyeMergeProfile -Json '{ not json').Ok
+            NotSnippet   = (Import-EyeMergeProfile -Json '{"hello":1}').Ok
+        }
+    }
+    if (-not $r.HasProfile) { Skip-Test 'the sandbox config has no enabled Quest 3 eye_merge block' }
+    Assert-True  $r.SnippetValid 'an exported snippet must validate'
+    Assert-False $r.BrokenValid  'a malformed lens outline must be refused'
+    Assert-False $r.NotJson      'invalid JSON must be refused'
+    Assert-False $r.NotSnippet   'JSON that is not an eye merge snippet must be refused'
+}
+
+Invoke-RegressionTest -Name 'Eye merge: lookup tables merge a synthetic frame and end with the input' -Test {
+    $r = Invoke-InTargetModules -TargetRoot $target -TimeoutSeconds 180 -Body {
+        $maps = Get-EyeMergeMaps -Model 'Quest 3' -View 'square'
+        $out = [PSCustomObject]@{ MapsOk = [bool]$maps.Ok; Width = $maps.Width; Height = $maps.Height; Error = $maps.Error; Frames = -1; Exit = -1 }
+        if ($maps.Ok) {
+            $p  = Get-EyeMergeProfile -Model 'Quest 3'
+            $fx = Get-EyeMergeFfmpegArgs -Maps $maps
+            # 2 s of a synthetic side-by-side frame: the graph must emit exactly the input's
+            # frames and EXIT (a looped lookup table must never keep it alive).
+            $src = "testsrc2=size={0}x{1}:rate=30:duration=2" -f $p.frame_width, $p.frame_height
+            $ffArgs = @('-hide_banner','-nostats','-f','lavfi','-i',$src) + $fx.Inputs + @('-filter_complex',$fx.Graph,'-map','[vout]','-f','null','-')
+            $psi = [System.Diagnostics.ProcessStartInfo]::new($global:ffmpegFilePath)
+            $psi.Arguments = ($ffArgs | ForEach-Object { ConvertTo-ProcessArgument $_ }) -join ' '
+            $psi.UseShellExecute = $false; $psi.RedirectStandardError = $true; $psi.CreateNoWindow = $true
+            $proc = [System.Diagnostics.Process]::Start($psi)
+            $errTask = $proc.StandardError.ReadToEndAsync()
+            if ($proc.WaitForExit(90000)) {
+                $out.Exit = $proc.ExitCode
+                $m = [regex]::Matches($errTask.GetAwaiter().GetResult(), 'frame=\s*(\d+)')
+                if ($m.Count -gt 0) { $out.Frames = [int]$m[$m.Count - 1].Groups[1].Value }
+            } else { try { $proc.Kill() } catch {} }
+        }
+        $out
+    }
+    Add-TestEvidence ("tables {0}x{1}, ffmpeg exit {2}, frames {3} {4}" -f $r.Width, $r.Height, $r.Exit, $r.Frames, $r.Error)
+    if (-not $r.MapsOk -and $r.Error -like '*no enabled eye merge*') { Skip-Test 'the sandbox config has no enabled Quest 3 eye_merge block' }
+    Assert-True $r.MapsOk 'lookup tables must build'
+    Assert-Equal 0 $r.Exit 'ffmpeg must exit cleanly when the input ends'
+    Assert-Equal 60 $r.Frames 'one output frame per input frame (2 s at 30 fps)'
 }
 
 Invoke-RegressionTest -Name 'Restream path names are filesystem and URL safe' -Test {

@@ -254,12 +254,12 @@
     ScrcpyOptBitrateLabel = "Bitrate (Mbps)"
     ScrcpyOptTableHeader = "Option           : Current value"
     ScrcpyOptionsEnterOption = "Option"
-    ScrcpyOptionsEye = "Eye side (L=Left / R=Right), current: {0}"
+    ScrcpyOptionsEye = "Eye side (L=Left / R=Right / M=Merged both eyes), current: {0}"
     ScrcpyOptionsAudio = "Audio (D=Duplicate / N=No audio), current: {0}"
     ScrcpyOptionsFPS = "Max FPS (number), current: {0}"
     ScrcpyOptionsBitrate = "Bitrate in Mbps (number), current: {0}"
     ScrcpyOptionsSaved = "Profile saved for {0}: {1}"
-    ScrcpyOptionsInvalidEye = "Invalid eye side. Enter L or R."
+    ScrcpyOptionsInvalidEye = "Invalid eye side. Enter L, R or M."
     ScrcpyOptionsInvalidAudio = "Invalid audio mode. Enter D or N."
     ScrcpyOptionsInvalidNumber = "Invalid value. Enter a positive integer."
     # SubMenu Recording
@@ -756,4 +756,44 @@
         ScrcpyCableLost   = "USB cable removed for {0} - moving the capture to WiFi."
         ScrcpySwitchToUsb = "USB cable detected for {0} - moving the capture from WiFi to USB."
     }
-}
+
+    # ==========================================
+    # Eye merge: both lenses stitched into one view (eye M, ADR-0025). Nested group:
+    # the top-level table is at the 500 key limit. Use $msg.EyeMerge.X.
+    # ==========================================
+    EyeMerge = @{
+        EyeMergedLabel     = "Merged (both eyes)"
+        NotSupported       = "Model '{0}' has no enabled eye merge calibration - the right eye is used instead."
+        Title              = "Eye merge (both eyes) - model {0}"
+        StatusNone         = "Status: not calibrated"
+        StatusEnabled      = "Status: calibrated, ENABLED"
+        StatusDisabled     = "Status: calibrated, disabled"
+        CalibrationLine    = "Calibration: angle {0} deg, shift {1},{2}, score {3}, canvas {4}x{5}, {6}"
+        OptCalibrate       = "Calibrate from this headset now"
+        OptToggle          = "Enable / disable the merged view for this model"
+        OptExport          = "Show the shareable calibration (also copied to the clipboard)"
+        OptImportClipboard = "Import a calibration from the clipboard"
+        OptImportFile      = "Import a calibration from a file"
+        OptViewCrop        = "Set or reset the merged crop of a view"
+        CalibrateHint      = "Put the headset level and steady in the Home environment, facing far scenery, no window close to the eyes."
+        CalibrateRunning   = "Capturing and measuring (about 6 seconds)..."
+        CalibrateOk        = "Calibration saved: angle {0} deg, shift {1},{2}, score {3}. Preview: {4}"
+        CalibrateFailed    = "Calibration failed: {0}"
+        ExportCopied       = "Snippet copied to the clipboard."
+        ImportOk           = "Calibration imported for model '{0}' ({1} view crop(s) applied)."
+        ImportFailed       = "Import failed: {0}"
+        ImportFilePrompt   = "Path of the snippet file"
+        ImportCropsPrompt  = "Also apply the shared views' merged crops? (Y/N)"
+        ViewPrompt         = "View number"
+        CropLine           = "  {0}. {1,-12} {2} {3}"
+        CropAuto           = "(automatic)"
+        CropPrompt         = "Merged crop w:h:x:y on the merged canvas, A = automatic, Enter = cancel"
+        CropSaved          = "Merged crop of view '{0}' saved."
+        CropInvalid        = "Expected w:h:x:y (four whole numbers) or A."
+        NoModel            = "This headset has no known model yet - it must be connected at least once."
+        Toggled            = "Merged view for '{0}' is now {1}."
+        TransparentOption  = "Transparent outside the lenses for view '{0}' (web pages / OBS): {1}"
+        TransparentToggled = "Transparent outside the lenses for view '{0}' of '{1}' is now {2}."
+        TransparentNoView  = "View '{0}' is not defined for model '{1}' in config.json - it cannot carry the option."
+    }
+}

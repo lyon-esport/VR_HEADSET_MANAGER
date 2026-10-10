@@ -42,7 +42,7 @@ view-EYE-AUDIO-FPS-BW
  │     │    │    │  └─ video bitrate in Mbps          (e.g. 8)
  │     │    │    └─── max framerate                   (e.g. 30, 45, 60)
  │     │    └──────── audio duplication: N (no) / Y   (keep audio in headset AND stream it)
- │     └───────────── eye: L or R                     (which eye to crop)
+ │     └───────────── eye: L, R or M                  (which eye to crop - M = both eyes merged)
  └─────────────────── view: max / square / portrait / wide / fullscreen
 ```
 
@@ -59,6 +59,29 @@ Available views (per model, defined in the [configuration](configuration.md#head
 | `fullscreen` | Raw both-eyes output, no crop |
 
 Profiles exist out of the box for **Quest 3**, **Quest 2**, and **PICO 4 Ultra** — you can tune the crop rectangles or add new models in the config.
+
+### Merged view: both eyes in one picture (eye `M`)
+
+A single eye only sees part of the scene: the left eye sees further left, the right eye further right. With eye **`M`** (e.g. `square-M-N-45-20`) VRHM stitches **both eyes** into one wider, level picture — about **40 % more picture** than the best single-eye view on a Quest 3.
+
+How it works:
+
+- scrcpy sends the **full, uncropped frame** (both eyes); ffmpeg on the PC rotates, aligns and blends them using lookup tables built once from the model's **calibration**.
+- The **right eye** gives the centre of the picture and the left eye only extends the edges, so near objects (hands, controllers, floor) can show a slight double image **at the edges only**. Far and mid-distance content is seamless.
+- The merged stream is always **re-encoded** (see below), whatever the re-encode setting — plan roughly 2 CPU cores per merged headset at 30 fps with a software encoder, less with a GPU encoder. Give the headset a higher bitrate: it now sends its full native frame.
+- When recording is on, the recording contains the **merged picture**.
+
+Only **calibrated models** offer the Merged option. The Quest 3 ships calibrated. For another model:
+
+1. Open **Configuration → Headset Profiles**, select the model, and in the **Eye merge** card pick a connected headset and click **Calibrate** (about 6 s). Put the headset level and steady in the Home environment, facing far scenery, with no window close to the eyes.
+2. Open the **visual editor** of a view, go to the **Merged** tab, click **Capture frame** and draw the framing. Views without a merged framing use an automatic one (largest clean rectangle with the view's shape).
+3. Save, then set the headset's profile eye to **Merged (M)**.
+
+Calibrations are shareable: **Copy JSON** in the Eye merge card gives a snippet another VRHM installation can paste into **Import JSON** (or import from the console: scrcpy options → `[7]`).
+
+**Transparent corners.** Tick *Transparent outside the lenses* in the visual editor (it applies to the whole view, L, R and Merged alike) and the black area around the lens picture becomes transparent in the web video pages and in OBS **Browser Sources** - handy to lay the headset view over a scene. The server publishes a mask of the lens area and the page applies it; the video stream itself is unchanged, so an RTSP/HLS player (VLC, an OBS *Media* Source) still shows the corners black. The lens shape comes from the eye merge calibration, so the model must have been calibrated once.
+
+The merged view falls back to the **right eye** when it cannot run: in the **LocalWindow** capture mode (no ffmpeg stage), on an uncalibrated model, or when the headset's resolution differs from the calibration.
 
 ## FFmpeg re-encoding and streaming options
 

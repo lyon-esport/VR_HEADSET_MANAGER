@@ -96,6 +96,23 @@ Each supported model (`Quest 3`, `Quest 2`, `PICO 4 Ultra`) defines:
 - `video_codec` / `video_encoder` — codec (h264) and optional specific Android encoder
 - `video_buffer` — buffering in ms (jitter smoothing vs latency)
 - `stay_awake` — keep the headset awake while captured
+- `eye_merge` — *optional*, the **eye merge calibration** that enables the Merged (`M`) eye for this model. Its presence (and `enabled: true`) is what makes a model "supported". Written by the **Calibrate** / **Import JSON** buttons, not by hand:
+
+  | Key | Meaning |
+  |---|---|
+  | `enabled` | `false` keeps the calibration but hides the Merged option |
+  | `frame_width` / `frame_height` | Full side-by-side frame the calibration was measured on; a headset sending another size falls back to the right eye |
+  | `relative_angle`, `shift_x`, `shift_y` | Rotation (degrees) and shift (pixels) between the two eye pictures |
+  | `level_angle` | Rotation that levels the merged picture (half the relative angle) |
+  | `base_eye` | `R` (default) or `L`: the eye that gives the centre of the picture |
+  | `feather_px` / `inset_px` | Width of the blend band at the base eye's lens edge, and its distance from the edge |
+  | `mask_left` / `mask_right` | Lens outlines, `"x,y x,y ..."` in eye pixels |
+  | `canvas_width` / `canvas_height` | Size of the merged picture the view framings are drawn on |
+  | `score`, `calibrated_at`, `calibrated_by`, `notes` | Information only |
+
+  Any view may also carry `"transparent_corners": true` (checkbox in the visual editor, console scrcpy options `[8]`): for every eye (L, R or Merged) the area outside the lenses is shown **transparent** in the web video pages and OBS Browser Sources. It needs the model's lens outlines, i.e. an eye merge calibration (enabled or not). An RTSP/HLS player still shows those corners black - the video itself cannot carry transparency.
+
+  Each view may then carry `"merged": { "crop": "w:h:x:y" }` — its framing of the merged picture, drawn on the **Merged** tab of the visual editor. Without it, the largest clean rectangle with the shape of the view's eye crop is used.
 
 The profile string assigned to each headset (`max-R-N-30-8`...) picks a view from here; format explained in [Streaming → capture profiles](streaming.md#scrcpy-capture-profiles).
 

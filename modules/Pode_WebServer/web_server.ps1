@@ -1484,6 +1484,129 @@ try {
             continue
         }
 
+        # ---- Eye merge (both lenses stitched into one view, ADR-0025). Logic in modules\eye_merge.ps1.
+        # GET /api/eye-merge?model=Quest%203 -> calibration status, merged crop of every view, export snippet.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/eye-merge') {
+            try {
+                $emModel = [string]$request.QueryString['model']
+                if (-not $emModel -or $emModel.Length -gt 100) { throw 'Missing or invalid model.' }
+                $emProfile = Get-EyeMergeProfile -Model $emModel -IncludeDisabled
+                # light=1: status only (headsets_settings.html). The per-view automatic framing costs
+                # ~200 ms per view and the snippet is only needed by the Headset Profiles card.
+                $emLight = ([string]$request.QueryString['light'] -eq '1')
+                if ($emLight) {
+                    Send-JsonResponse -Response $response -Body @{
+                        ok = $true; model = $emModel
+                        calibrated = [bool]$emProfile
+                        enabled = [bool]($emProfile -and $emProfile.enabled -ne $false)
+                    }
+                    continue
+                }
+                $emViews = @{}
+                if ($emProfile -and $emProfile.enabled -ne $false -and $global:scrcpyParameters.$emModel.views) {
+                    foreach ($v in $global:scrcpyParameters.$emModel.views.PSObject.Properties) {
+                        $c = Get-EyeMergeViewCrop -Model $emModel -View $v.Name -MergeProfile $emProfile
+                        if ($c) { $emViews[$v.Name] = @{ crop = ("{0}:{1}:{2}:{3}" -f $c.W, $c.H, $c.X, $c.Y); auto = [bool]$c.Auto } }
+                    }
+                }
+                Send-JsonResponse -Response $response -Body @{
+                    ok = $true; model = $emModel
+                    calibrated = [bool]$emProfile
+                    enabled = [bool]($emProfile -and $emProfile.enabled -ne $false)
+                    profile = $emProfile
+                    views = $emViews
+                    snippet = $(if ($emProfile) { Export-EyeMergeProfile -Model $emModel } else { $null })
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # GET /api/stream-mask?id=3 -> {ok,mask,url,width,height,reason}. Transparency mask of the
+        # headset's current stream when its view has "transparent_corners" (any eye, Get-StreamMask).
+        # The [video].html pages apply url with CSS mask-image; mask=false means "show the video as is".
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/stream-mask') {
+            try {
+                $smId = 0
+                if (-not [int]::TryParse([string]$request.QueryString['id'], [ref]$smId) -or $smId -le 0) { throw 'Invalid or missing headset id.' }
+                $smHeadset = Get-HeadsetDiagTarget -Id $smId
+                if (-not $smHeadset) { throw 'This headset is not registered on this server.' }
+                $sm = Get-StreamMask -Headset $smHeadset
+                Send-JsonResponse -Response $response -Body @{
+                    ok = [bool]$sm.Ok; mask = [bool]$sm.Mask; url = $sm.Url; width = $sm.Width; height = $sm.Height
+                    reason = $sm.Reason; error = $sm.Error
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; mask = $false; error = $_.Exception.Message }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # POST /api/eye-merge/frame  body {"id":3,"transport":"Auto|USB|WiFi"}
+        # Same as /api/headset-screen-frame but returns the flat MERGED canvas the view editor's
+        # Merged tab draws on. Blocks this listener for a few seconds (scrcpy records ~3 s).
+        # POST /api/eye-merge/calibrate  body {"id":3,"transport":"Auto","save":true}
+        # Measures the calibration of the headset's model (~3 s capture + ~2 s compute).
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -in @('/api/eye-merge/frame','/api/eye-merge/calibrate')) {
+            try {
+                if ($request.ContentLength64 -gt 4096) { throw 'Request body too large' }
+                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body   = $reader.ReadToEnd(); $reader.Close()
+                $json   = $body | ConvertFrom-Json
+                $emId = 0
+                if (-not [int]::TryParse([string]$json.id, [ref]$emId) -or $emId -le 0) { throw 'Invalid or missing headset id.' }
+                $emHeadset = Get-HeadsetDiagTarget -Id $emId
+                if (-not $emHeadset) { throw 'This headset is not registered on this server.' }
+                $emTransport = if ($json.transport) { [string]$json.transport } else { 'Auto' }
+                if (@('Auto','USB','WiFi') -notcontains $emTransport) { $emTransport = 'Auto' }
+                if ($request.Url.LocalPath -eq '/api/eye-merge/frame') {
+                    $frame = Get-HeadsetMergedFrame -Headset $emHeadset -Transport $emTransport
+                    $frameUrl = if ($frame.Ok) { "/view_editor/{0}?t={1}" -f (Split-Path -Path $frame.Path -Leaf), [DateTime]::UtcNow.Ticks } else { $null }
+                    Send-JsonResponse -Response $response -Body @{
+                        ok = [bool]$frame.Ok; url = $frameUrl; width = $frame.Width; height = $frame.Height
+                        transport = $frame.Transport; model = [string]$emHeadset.Model; name = [string]$emHeadset.Name
+                        error = $frame.Error
+                    }
+                } else {
+                    $cal = Invoke-EyeMergeCalibration -Headset $emHeadset -Transport $emTransport -Save:([bool]$json.save)
+                    $calUrl = if ($cal.PreviewPath) { "/eye_merge/{0}?t={1}" -f (Split-Path -Path $cal.PreviewPath -Leaf), [DateTime]::UtcNow.Ticks } else { $null }
+                    Send-JsonResponse -Response $response -Body @{
+                        ok = [bool]$cal.Ok; model = $cal.Model; score = $cal.Score; profile = $cal.Profile
+                        previewUrl = $calUrl; width = $cal.PreviewWidth; height = $cal.PreviewHeight
+                        saved = [bool]$cal.Saved; error = $cal.Error
+                    }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # POST /api/eye-merge/import  body {"json":"<snippet>","model":"optional","includeCrops":true}
+        # POST /api/eye-merge/enable  body {"model":"Quest 3","enabled":false}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -in @('/api/eye-merge/import','/api/eye-merge/enable')) {
+            try {
+                if ($request.ContentLength64 -gt 262144) { throw 'Request body too large' }
+                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body   = $reader.ReadToEnd(); $reader.Close()
+                $json   = $body | ConvertFrom-Json
+                if ($request.Url.LocalPath -eq '/api/eye-merge/import') {
+                    $emTarget = if ($json.model) { [string]$json.model } else { '' }
+                    $imp = Import-EyeMergeProfile -Json ([string]$json.json) -Model $emTarget -IncludeViewCrops:([bool]$json.includeCrops)
+                    Send-JsonResponse -Response $response -Body @{ ok = [bool]$imp.Ok; model = $imp.Model; cropsApplied = $imp.CropsApplied; error = $imp.Error }
+                } else {
+                    $emModel = [string]$json.model
+                    if (-not $emModel) { throw 'Missing model.' }
+                    $done = Set-EyeMergeEnabled -Model $emModel -Enabled ([bool]$json.enabled)
+                    Send-JsonResponse -Response $response -Body @{ ok = [bool]$done; model = $emModel; enabled = [bool]$json.enabled; error = $(if ($done) { $null } else { 'No calibration for this model.' }) }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { $response.Close() }
+            continue
+        }
+
         # API: POST /api/headset-diag/action  body {"id":3,"action":"sync_clock","args":{...}}
         # One dispatcher over a CLOSED list of actions (Invoke-HeadsetDiagActionByName refuses
         # any other name). Same LAN-trust posture as the rest of the app (ADR-0014).
@@ -2069,12 +2192,12 @@ try {
                 $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
                 if (-not $safeName) { throw "Invalid headset name" }
 
-                # Validate profile format: <viewname>-[L/R]-[D/N]-<posint>-<posint>
-                # Also accept legacy 4-part format [L/R]-[D/N]-<posint>-<posint>
-                $safeProfile = [regex]::Match($json.profile, '^[\w]+-[LR]-[DN]-\d+-\d+$').Value
+                # Validate profile format: <viewname>-[L/R/M]-[D/N]-<posint>-<posint> (M = merged eyes)
+                # Also accept legacy 4-part format [L/R/M]-[D/N]-<posint>-<posint>
+                $safeProfile = [regex]::Match($json.profile, '^[\w]+-[LRM]-[DN]-\d+-\d+$').Value
                 if (-not $safeProfile) {
                     # Try legacy format and auto-upgrade
-                    $legacy = [regex]::Match($json.profile, '^[LR]-[DN]-\d+-\d+$').Value
+                    $legacy = [regex]::Match($json.profile, '^[LRM]-[DN]-\d+-\d+$').Value
                     if ($legacy) { $safeProfile = "portrait-$legacy" } else { throw "Invalid profile format" }
                 }
                 $parts = $safeProfile -split '-'
