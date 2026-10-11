@@ -367,7 +367,7 @@
               <div class="btn-desc">Add, edit and delete scrcpy crop/view profiles per headset model</div>
             </div>
           </button>
-          <p style="font-size:11px;color:var(--muted);margin-top:12px">Record folder and streaming settings are in the <strong>Streaming &amp; Recording</strong> section below.</p>
+          <p style="font-size:11px;color:var(--muted);margin-top:12px">Streaming settings are in the <strong>Streaming</strong> section, the record folder in the <strong>Recordings</strong> section below.</p>
         </div>
       </div>
     </div>
@@ -382,11 +382,11 @@
       <div class="acc-body" id="acc-monitoring-body"></div>
     </div>
 
-    <!-- 5: Streaming & Recording -->
+    <!-- 5: Streaming -->
     <div class="acc" id="acc-streaming">
       <button class="acc-hdr" onclick="accToggle('acc-streaming')">
         <svg class="acc-hdr-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
-        Streaming &amp; Recording
+        Streaming
         <span class="acc-chevron">&#9654;</span>
       </button>
       <div class="acc-body" id="acc-streaming-body"></div>
@@ -400,6 +400,16 @@
         <span class="acc-chevron">&#9654;</span>
       </button>
       <div class="acc-body" id="acc-vqa-body"></div>
+    </div>
+
+    <!-- 8: Recordings -->
+    <div class="acc" id="acc-recordings">
+      <button class="acc-hdr" onclick="accToggle('acc-recordings')">
+        <svg class="acc-hdr-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+        Recordings
+        <span class="acc-chevron">&#9654;</span>
+      </button>
+      <div class="acc-body" id="acc-recordings-body"></div>
     </div>
 
     <!-- Services & Network -->
@@ -1011,11 +1021,6 @@
           desc: 'Automatically stop a WHEP video stream when its browser tab/window loses visibility (backgrounded tab, screen off), and reconnect automatically when it becomes visible again. Reduces mediamtx/network load per idle viewer.' },
         { path: 'VideoMonitor.pauseWhenHiddenDelay_sec', label: 'Pause Delay', type: 'number', min: 1, max: 300, unit: 's',
           desc: 'How long a stream stays hidden before it is paused. Prevents a brief tab switch from tearing down the connection.' },
-        { type: 'subgroup', label: 'Recording' },
-        { path: 'scrcpy.recordFolder', label: 'Record Folder', type: 'folder', noDefault: true, openFolderTarget: 'records',
-          desc: 'Folder where scrcpy recordings are saved. Use forward slashes, e.g. D:/DATA/Records.' },
-        { path: 'scrcpy.recordMinFreeSpaceGB', label: 'Min. Free Space', type: 'number', min: 1, max: 9999, unit: 'GB',
-          desc: 'Recording is auto-disabled on all headsets when free space drops below this value.' },
         { type: 'subgroup', label: 'Default Capture Profile' },
         { path: 'scrcpy.defaultFps', label: 'Default FPS', type: 'number', min: 1, max: 120, unit: 'fps',
           desc: 'Capture framerate assigned to a newly added headset. Existing headsets are unaffected - change their profile individually on the Headsets page.' },
@@ -1082,6 +1087,27 @@
           desc: 'How often the DIAG page re-reads its sections while auto-refresh is on. Each refresh costs a few ADB round-trips, so keep it generous with many people watching.' },
         { path: 'Diag.cable_test_passes', label: 'Cable Test Passes', type: 'number', min: 1, max: 10,
           desc: 'How many push/pull passes the USB cable throughput test runs. The ADB shell command presets are edited in config.json (Diag.command_presets).' }
+      ],
+      'acc-recordings-body': [
+        { type: 'subgroup', label: 'Recording' },
+        { path: 'scrcpy.recordFolder', label: 'Record Folder', type: 'folder', noDefault: true, openFolderTarget: 'records',
+          desc: 'Folder where scrcpy recordings are saved. Use forward slashes, e.g. D:/DATA/Records.' },
+        { path: 'scrcpy.recordMinFreeSpaceGB', label: 'Min. Free Space', type: 'number', min: 1, max: 9999, unit: 'GB',
+          desc: 'Recording is auto-disabled on all headsets when free space drops below this value.' },
+        { type: 'subgroup', label: 'Catalogue' },
+        { path: 'Recordings.rescan_interval_min', label: 'Rescan Interval', type: 'number', min: 1, max: 1440, unit: 'minutes',
+          desc: 'How often the recordings catalogue is rescanned for new files and to update metadata (size, duration, codec, resolution).' },
+        { type: 'subgroup', label: 'Playback' },
+        { path: 'Recordings.playback.max_height', label: 'Max Height', type: 'number', min: 144, max: 2160, unit: 'pixels',
+          desc: 'Maximum video height for playback streams. Recordings are re-encoded to this size.' },
+        { path: 'Recordings.playback.fps', label: 'Playback FPS', type: 'number', min: 5, max: 60, unit: 'fps',
+          desc: 'Frame rate for playback streams. Does not affect original recording quality.' },
+        { path: 'Recordings.playback.bitrate_kbps', label: 'Bitrate', type: 'number', min: 200, max: 50000, unit: 'kbps',
+          desc: 'Bitrate for playback streams. Higher values improve quality at the cost of bandwidth.' },
+        { path: 'Recordings.playback.max_sessions', label: 'Max Sessions', type: 'number', min: 1, max: 16,
+          desc: 'Maximum number of concurrent playback sessions allowed.' },
+        { path: 'Recordings.playback.idle_timeout_sec', label: 'Idle Timeout', type: 'number', min: 10, max: 3600, unit: 'seconds',
+          desc: 'Playback sessions close automatically after this idle period.' }
       ],
       'acc-vqa-body': [
         { path: 'VideoQualityAutomation.enabled', label: 'Enable VQA', type: 'boolean',

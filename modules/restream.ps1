@@ -281,8 +281,13 @@ function Sync-RestreamPaths {
     }
 
     # Remove paths for headsets that no longer exist in the known headsets list.
+    # Never remove what this sync does not own: the YAML's catch-all ('all_others', or any
+    # '~regex' path) and the recording preview paths (playback_<token>, ADR-0029), which
+    # recordings_playback.ps1 adds and removes itself. Deleting 'all_others' here made every
+    # path that is not a headset name refused with "path is not configured".
     $expectedPaths = $headsets | ForEach-Object { ConvertTo-RestreamPathName -HeadsetName $_.Name }
     foreach ($path in $currentPaths) {
+        if ($path -eq 'all_others' -or $path -eq 'all' -or $path -like '~*' -or $path -like 'playback_*') { continue }
         if ($path -notin $expectedPaths) { Remove-RestreamPath -PathName $path }
     }
 }

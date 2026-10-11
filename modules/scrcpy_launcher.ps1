@@ -421,20 +421,24 @@ function Complete-RecordingFile {
 
     if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
     try {
-        if (-not (Test-Path -LiteralPath $Path)) { return $false }
-        $len = (Get-Item -LiteralPath $Path -ErrorAction Stop).Length
-        if ($len -eq 0) {
-            Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
-            Write-Log ("Removed an empty recording left by a capture attempt that never produced video: {0}" -f $Path) -Level INFO
-            return $true
+        try {
+            if (-not (Test-Path -LiteralPath $Path)) { return $false }
+            $len = (Get-Item -LiteralPath $Path -ErrorAction Stop).Length
+            if ($len -eq 0) {
+                Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
+                Write-Log ("Removed an empty recording left by a capture attempt that never produced video: {0}" -f $Path) -Level INFO
+                return $true
+            }
+            if ($len -lt 65536) {
+                Write-Log ("Recording is very small ({0} bytes), probably without usable video: {1}" -f $len, $Path) -Level WARNING
+            }
+        } catch {
+            Write-Log ("Complete-RecordingFile could not check '{0}': {1}" -f $Path, $_.Exception.Message) -Level DEBUG
         }
-        if ($len -lt 65536) {
-            Write-Log ("Recording is very small ({0} bytes), probably without usable video: {1}" -f $len, $Path) -Level WARNING
-        }
-    } catch {
-        Write-Log ("Complete-RecordingFile could not check '{0}': {1}" -f $Path, $_.Exception.Message) -Level DEBUG
+        return $false
+    } finally {
+        if (Get-Command Complete-RecordingEntry -ErrorAction SilentlyContinue) { try { [void](Complete-RecordingEntry -Path $Path) } catch {} }
     }
-    return $false
 }
 
 function Complete-DirectRecording {
@@ -588,7 +592,18 @@ function Start-FfmpegStreamPush {
     # The optional file recording output below stays -c copy regardless, so on-disk
     # captures keep source quality.
     if ($forceReencode) {
-        $enc = Get-GpuEncoder
+        if ($EyeMerge) {
+            # A merged stream always encodes on the CPU, whatever GPU is selected. The merge (two
+            # remaps + blend) runs on the CPU anyway, and benchmarks showed a hardware encoder gave
+            # no gain there: handing the merged frames to the GPU kept the CPU just as busy (frame
+            # upload / format conversion) while loading the GPU too. Every other stream keeps the
+            # GPU encoder of Get-GpuEncoder.
+            $cpuCodec = if ($global:mediamtxCodec -eq 'h265') { 'h265' } else { 'h264' }
+            $enc = @{ Name = $(if ($cpuCodec -eq 'h265') { 'libx265' } else { 'libx264' }); Vendor = 'CPU'; ExtraArgs = @(); Codec = $cpuCodec }
+            Write-Log ("Start-FfmpegStreamPush: merged stream of {0} encoded on the CPU ({1})" -f $SafeName, $enc.Name) -Level INFO
+        } else {
+            $enc = Get-GpuEncoder
+        }
         $bw  = [string]$global:mediamtxBitrate
         # config.mediamtx.stream_bitrate is expected in "<n>M" form (see templates\config\config.json,
         # video_quality_automation.ps1's Set-VqaAutoApply/Restore-VqaOriginals writers). Guard against a
@@ -1012,6 +1027,13 @@ function start-screenCopy {
     # Windowed LocalWindow mode: scrcpy itself writes the recording. Remember the file so it can be
     # checked once the session is over (Complete-DirectRecording).
     if (-not $usePipe -and $recordFile) { $global:DirectRecordings[$displayName] = $recordFile }
+    # Recordings catalogue (ADR-0029): one row per recorded session, closed by Complete-RecordingFile.
+    if ($recordFile -and (Get-Command Register-RecordingStart -ErrorAction SilentlyContinue)) {
+        try {
+            $catalogFile = if ($usePipe) { [System.IO.Path]::ChangeExtension($recordFile, '.mkv') } else { $recordFile }
+            [void](Register-RecordingStart -Headset $knownRow -RecordFile $catalogFile -ScrcpyProfile $scrcpyProfile -CaptureMode $captureMode -EyeMerge ([bool]$eyeMergeMaps) -SafeName $displayName)
+        } catch { Write-Log ("Recordings catalogue: could not register {0}: {1}" -f $recordFile, $_.Exception.Message) -Level WARNING }
+    }
 
     if ($usePipe) {
         # Wait for scrcpy to open its record file (connect to pipe-in) and produce the first

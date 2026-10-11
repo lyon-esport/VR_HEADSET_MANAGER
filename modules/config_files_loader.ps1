@@ -140,10 +140,14 @@ function Get-Config {
             try { [System.IO.File]::WriteAllText($ConfigFilePath, ($configContent | ConvertTo-Json -Depth 20), (New-Object System.Text.UTF8Encoding($false))) } catch {}
         }
     }
-    if ($configContent.scrcpy.recordFolder -contains "\" -or "/" ) {
-        $global:scrcpyRecordFolder = $configContent.scrcpy.recordFolder
+    # Absolute (C:\...) and UNC (\\nas\...) paths are used as they are; a relative path is taken from
+    # the application folder. (The old test, `-contains "\" -or "/"`, was always true, so a relative
+    # path silently resolved against whatever the process working directory happened to be.)
+    $recordFolderCfg = [string]$configContent.scrcpy.recordFolder
+    if ([string]::IsNullOrWhiteSpace($recordFolderCfg) -or [System.IO.Path]::IsPathRooted($recordFolderCfg)) {
+        $global:scrcpyRecordFolder = $recordFolderCfg
     } else {
-        $global:scrcpyRecordFolder = Join-Path -Path $global:ScriptPath -ChildPath $configContent.scrcpy.recordFolder
+        $global:scrcpyRecordFolder = Join-Path -Path $global:ScriptPath -ChildPath $recordFolderCfg
     }
     $global:scrcpyRecordMinFreeSpaceGB = if ($null -ne $configContent.scrcpy.recordMinFreeSpaceGB) { [int]$configContent.scrcpy.recordMinFreeSpaceGB } else { 5 }
     $global:scrcpyDefaultFps = if ($null -ne $configContent.scrcpy.defaultFps) { [int]$configContent.scrcpy.defaultFps } else { 30 }
@@ -352,6 +356,17 @@ function Get-Config {
         $global:Diag_command_presets = @($diagCfg.command_presets | Where-Object { $_.name -and $_.command } |
             ForEach-Object { [PSCustomObject]@{ name = [string]$_.name; command = [string]$_.command } })
     }
+
+    # Recordings catalogue and playback (ADR-0029). Every value has a default so a config.json written
+    # before the "Recordings" section existed still loads.
+    $recCfg = $configContent.Recordings
+    $global:Recordings_rescan_interval_min    = if ($recCfg -and $null -ne $recCfg.rescan_interval_min)    { [Math]::Max(1, [int]$recCfg.rescan_interval_min)    } else { 10 }
+    $playbackCfg = if ($recCfg) { $recCfg.playback } else { $null }
+    $global:Recordings_playback_max_height    = if ($playbackCfg -and $null -ne $playbackCfg.max_height)    { [Math]::Max(144, [int]$playbackCfg.max_height)    } else { 720 }
+    $global:Recordings_playback_fps           = if ($playbackCfg -and $null -ne $playbackCfg.fps)           { [Math]::Max(5, [int]$playbackCfg.fps)           } else { 30 }
+    $global:Recordings_playback_bitrate_kbps  = if ($playbackCfg -and $null -ne $playbackCfg.bitrate_kbps)  { [Math]::Max(200, [int]$playbackCfg.bitrate_kbps)  } else { 2000 }
+    $global:Recordings_playback_max_sessions  = if ($playbackCfg -and $null -ne $playbackCfg.max_sessions)  { [Math]::Max(1, [int]$playbackCfg.max_sessions)  } else { 2 }
+    $global:Recordings_playback_idle_timeout_sec = if ($playbackCfg -and $null -ne $playbackCfg.idle_timeout_sec) { [Math]::Max(10, [int]$playbackCfg.idle_timeout_sec) } else { 30 }
 
     # Web server
     $global:WebServer_enabled = if ($null -ne $configContent.WebServer.enabled) { [bool]$configContent.WebServer.enabled } else { $false }

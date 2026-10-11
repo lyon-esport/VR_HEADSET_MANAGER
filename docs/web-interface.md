@@ -91,7 +91,7 @@ Edit the whole application configuration from the browser. Changes are saved aut
 
 ![App Configuration](pics/web_app_config.png)
 
-Sections: General, WiFi Networks, Headset Capture Profiles, Headsets Monitoring & Alerts, Streaming & Recording, Video Quality Automation, Services & Network, Advanced/Internal. The **Edit config.json** button opens the raw file, and **Reset to Template** restores defaults. See the [Configuration reference](configuration.md).
+Sections: General, WiFi Networks, Headset Capture Profiles, Headsets Monitoring & Alerts, Streaming, Video Quality Automation, Recordings (record folder, free-space limit, catalogue rescan, preview playback), Services & Network, Advanced/Internal. The **Edit config.json** button opens the raw file, and **Reset to Template** restores defaults. See the [Configuration reference](configuration.md).
 
 ### Headsets Apps (Application Manager)
 

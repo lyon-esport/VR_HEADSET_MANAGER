@@ -69,7 +69,7 @@ How it works:
 - scrcpy sends the **full, uncropped frame** (both eyes); ffmpeg on the PC rotates, aligns and blends them using lookup tables built once from the model's **calibration**.
 - The **main eye** (right by default; chosen per view on the **Merged** tab of the visual editor, console `[8]`) gives the centre of the picture and the other eye only extends the edges. Where the two are blended, only one distance can line up: by default the **far** one, so scenery is seamless and near objects (hands, menus, floor) can show a double image **in the blend band only**.
 - **Merge depth** (per view, Merged tab of the visual editor, console `[7]`): choose a nearer distance (e.g. 0.75 m) when the player mostly looks at close objects - a table game, a menu, something held - and those line up instead; far content then doubles in the blend band. The picture is merged again at once in the editor so you can compare. Two views (one far, one near) let you switch a headset between both. The depth needs the model's lens model (`lens_focal_px`, shipped for the Quest 3).
-- The merged stream is always **re-encoded** (see below), whatever the re-encode setting — plan roughly 2 CPU cores per merged headset at 30 fps with a software encoder, less with a GPU encoder. Give the headset a higher bitrate: it now sends its full native frame.
+- The merged stream is always **re-encoded** (see below), whatever the re-encode setting — and always encoded on the **CPU** (libx264, or libx265 with the h265 codec), even when a GPU is selected: the merge itself runs on the CPU, and a hardware encoder gave no gain there (the CPU stayed just as busy feeding it). Plan roughly 2 CPU cores per merged headset at 30 fps. Every other stream keeps the selected GPU. Give the headset a higher bitrate: it now sends its full native frame.
 - When recording is on, the recording contains the **merged picture**.
 
 Only **calibrated models** offer the Merged option. The Quest 3 ships calibrated. For another model:
@@ -86,7 +86,7 @@ The merged view falls back to the **right eye** when it cannot run: in the **Loc
 
 ## FFmpeg re-encoding and streaming options
 
-After scrcpy captures the headset, ffmpeg publishes the video to MediaMTX. How it does that is controlled by the **Streaming** options in **Config → App Configuration → Streaming & Recording**:
+After scrcpy captures the headset, ffmpeg publishes the video to MediaMTX. How it does that is controlled by the **Streaming** options in **Config → App Configuration → Streaming**:
 
 ![Streaming options in the App Configuration page](pics/web_vrhm_config_streamingEncoding.png)
 

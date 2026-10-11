@@ -1150,6 +1150,9 @@ function Start-VRMonitor {
                     catch { Write-Log ("VRMonitor: database maintenance failed: " + $_.Exception.Message) -Level WARNING }
                 }
 
+                # Recordings catalogue: sweep for stale records and missing files. Self-throttles.
+                if (Get-Command Sync-RecordingCatalog -ErrorAction SilentlyContinue) { try { [void](Sync-RecordingCatalog) } catch {} }
+
                 # VQA neither recommends from benchmark load nor rewrites config during a run.
                 if (-not $benchRunId -and $global:VQA_Enabled -and (Get-Command Invoke-VideoQualityRecommendation -ErrorAction SilentlyContinue)) {
                     # Tier-gated: idle=every tick (m=1), mitigation=every 2nd (m=2), max=every 5th (m=5).

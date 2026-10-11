@@ -239,6 +239,12 @@ if (Get-Command Initialize-Database -ErrorAction SilentlyContinue) {
             # monitor republishes it within its first slow tick.
             try { Set-DbKeyValue -Key 'usb_devices' -Value '[]' }
             catch { Write-Log ("Could not clear the published USB device set: " + $_.Exception.Message) -Level WARNING }
+
+            # Recordings catalogue (ADR-0029): bring the database in line with the record folder at every start -
+            # imports new files, closes sessions a crash left open, drops rows whose file was deleted.
+            if (Get-Command Sync-RecordingCatalog -ErrorAction SilentlyContinue) {
+                try { [void](Sync-RecordingCatalog -Force) } catch { Write-Log ("Recordings catalogue sync failed: {0}" -f $_.Exception.Message) -Level WARNING }
+            }
         }
     } catch {
         $dbError = (Get-MessageString -Key 'Database.InitFailed') -f $_.Exception.Message

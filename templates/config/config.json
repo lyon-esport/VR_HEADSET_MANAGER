@@ -333,6 +333,16 @@
                                          }
                                      ]
              },
+    "Recordings":  {
+                      "rescan_interval_min":  10,
+                      "playback":  {
+                                       "max_height":  720,
+                                       "fps":  30,
+                                       "bitrate_kbps":  2000,
+                                       "max_sessions":  2,
+                                       "idle_timeout_sec":  30
+                                   }
+                  },
     "WebServer":  {
                       "enabled":  true,
                       "port":  8080,
