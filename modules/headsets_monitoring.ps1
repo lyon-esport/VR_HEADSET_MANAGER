@@ -666,6 +666,13 @@ function Start-VRMonitor {
         # Run id of the stream benchmark this loop has paused for ('' = none). See the
         # benchmark block at the top of the fast path (ADR-0026).
         $benchRunId      = ''
+        # Last stream restart request handled (Request-StreamRestart, ADR-0027). Seeded with
+        # the one already stored so a request older than this process is never replayed.
+        $restartReqId    = ''
+        if (Get-Command Get-StreamRestartRequest -ErrorAction SilentlyContinue) {
+            $seedReq = Get-StreamRestartRequest
+            if ($seedReq) { $restartReqId = [string]$seedReq.id }
+        }
         $infoByIp        = @{}
         $knownHeadsets   = @()
         # Registry change counter last seen by the fast path. -1 rather than 0 so
@@ -815,6 +822,22 @@ function Start-VRMonitor {
                 Write-Log "VRMonitor: stream benchmark over - restarting the normal streams." -Level INFO
                 $benchRunId      = ''
                 $scrcpyEdgeState = @{}
+            }
+
+            # ---- FAST PATH: stream restart request (ADR-0027) ----
+            # Another process changed config that a running stream would not pick up (e.g. the
+            # re-encode settings of an applied benchmark recommendation). This process owns the
+            # pipelines, so it restarts them: reload config, stop every stream, and wipe the
+            # edge memory so the watchdog trigger below restarts them on this same tick.
+            if (-not $benchState -and (Get-Command Get-StreamRestartRequest -ErrorAction SilentlyContinue)) {
+                $restartReq = Get-StreamRestartRequest
+                if ($restartReq -and [string]$restartReq.id -and [string]$restartReq.id -ne $restartReqId) {
+                    $restartReqId = [string]$restartReq.id
+                    Write-Log ("VRMonitor: stream restart requested ({0}) - reloading config and restarting every stream." -f $restartReq.reason) -Level INFO
+                    try { Get-Config -ConfigFilePath $global:ConfigFilePath | Out-Null } catch { Write-Log ("VRMonitor: config reload failed: " + $_.Exception.Message) -Level WARNING }
+                    try { Stop-Scrcpy | Out-Null } catch { Write-Log ("VRMonitor: stopping streams for the restart failed: " + $_.Exception.Message) -Level WARNING }
+                    $scrcpyEdgeState = @{}
+                }
             }
 
             # ---- FAST PATH: scrcpy start trigger (edge only) ----

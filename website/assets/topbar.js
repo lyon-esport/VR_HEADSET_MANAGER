@@ -420,6 +420,12 @@
               '</svg>' +
               'Help &amp; Diagnostics' +
             '</a>' +
+            '<a class="drop-item" href="/benchmark.html">' +
+              '<svg class="drop-item-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+                '<path d="M12 14l4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>' +
+              '</svg>' +
+              'Benchmark' +
+            '</a>' +
             '<a class="drop-item" href="/vrhm_config.html">' +
               '<svg class="drop-item-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
                 '<circle cx="12" cy="12" r="3"/>' +

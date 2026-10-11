@@ -872,6 +872,8 @@ function Get-EyeMergeMaps {
             $allThere = @('bx','by','ox','oy','w' | Where-Object { -not (Test-Path -LiteralPath "$prefix.$_.raw") }).Count -eq 0
             if ($allThere) {
                 $res.Width = [int]$meta.Width; $res.Height = [int]$meta.Height; $res.Crop = $meta.Crop; $res.Ok = $true
+                # Table sets cached before the YUV merge existed get their chroma tables now.
+                [void](New-EyeMergeChromaMaps -Prefix $prefix -Width $res.Width -Height $res.Height)
                 return $res
             }
         }
@@ -895,13 +897,14 @@ function Get-EyeMergeMaps {
                                   $crop.X, $crop.Y, $crop.W, $crop.H, $outW, $outH, $depth, $g.Focal, $g.Ipd)
         $meta = [ordered]@{ Model = $Model; View = $View; Width = $outW; Height = $outH; Crop = ("{0}:{1}:{2}:{3}" -f $crop.W, $crop.H, $crop.X, $crop.Y); DepthM = $depth; Built = (Get-Date).ToString('s') }
         Write-FileWithoutBom -Path $metaPath -Content ($meta | ConvertTo-Json -Compress)
+        [void](New-EyeMergeChromaMaps -Prefix $prefix -Width $outW -Height $outH)
         Write-Log ("Eye merge: lookup tables for {0}/{1} built in {2} ms (crop {3}x{4}, output {5}x{6}, depth {7})" -f $Model, $View, $sw.ElapsedMilliseconds, $crop.W, $crop.H, $outW, $outH, $(if ($depth -gt 0) { $depth.ToString([System.Globalization.CultureInfo]::InvariantCulture) + ' m' } else { 'far' })) -Level INFO
 
         # Keep the cache small: the 12 most recent table sets.
         $metas = @(Get-ChildItem -LiteralPath $dir -Filter '*.json' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)
         foreach ($old in ($metas | Select-Object -Skip 12)) {
             $oldPrefix = $old.FullName.Substring(0, $old.FullName.Length - 5)
-            foreach ($ext in 'bx','by','ox','oy','w') { Remove-Item -LiteralPath "$oldPrefix.$ext.raw" -Force -ErrorAction SilentlyContinue }
+            foreach ($ext in 'bx','by','ox','oy','w','bx.h','by.h','ox.h','oy.h') { Remove-Item -LiteralPath "$oldPrefix.$ext.raw" -Force -ErrorAction SilentlyContinue }
             Remove-Item -LiteralPath $old.FullName -Force -ErrorAction SilentlyContinue
         }
         $res.Width = $outW; $res.Height = $outH; $res.Crop = $meta.Crop; $res.Ok = $true
@@ -913,29 +916,115 @@ function Get-EyeMergeMaps {
 }
 
 
-# ffmpeg arguments for the merge: the extra -i inputs (indexes 1..5, after the pipe input 0) and
-# the -filter_complex graph whose output label is [vout].
+# Frame rate of a merged (eye M) stream: 30 fps by default, because the merge costs CPU in
+# proportion to the frame rate (about 5 % of a 20-thread PC per stream at 30 fps, 8 % at 45,
+# measured on a Quest 3). More is allowed, with a warning. Returns @{Merged;Fps;DefaultFps;Warn;Message}.
+# Example: Get-EyeMergeFpsAdvice -ScrcpyProfile 'square-M-N-45-20'
+$script:EyeMergeDefaultFps = 30
+function Get-EyeMergeFpsAdvice {
+    param([string]$ScrcpyProfile)
+    $res = @{ Merged = $false; Fps = 0; DefaultFps = $script:EyeMergeDefaultFps; Warn = $false; Message = '' }
+    $p = ConvertFrom-ScrcpyProfile -Profile $ScrcpyProfile
+    if (-not $p -or $p.Eye -ne 'M') { return $res }
+    $res.Merged = $true; $res.Fps = [int]$p.Fps
+    if ($res.Fps -gt $script:EyeMergeDefaultFps) {
+        $res.Warn = $true
+        $res.Message = ('Merged view at {0} fps: merging both eyes costs CPU in proportion to the frame rate ({0} fps is about {1:n0}% more than {2} fps, per headset). {2} fps is recommended for merged views.' -f $res.Fps, (($res.Fps / [double]$script:EyeMergeDefaultFps - 1) * 100), $script:EyeMergeDefaultFps)
+    }
+    return $res
+}
+
+
+# Half-resolution lookup tables for the CHROMA planes of the YUV 4:2:0 merge: <prefix>.<t>.h.raw
+# for t = bx, by, ox, oy (gray16le, (Width/2) x (Height/2)), derived from the full tables by
+# ffmpeg itself - nearest-neighbour downscale, values halved (a chroma sample covers 2x2 frame
+# pixels). The 65535 "outside" marker becomes 32767, still outside the chroma plane, so the
+# unmapped-pixel fill keeps working. Built once and cached next to the full tables; returns
+# $true when the four files exist. Never throws: without them the RGB graph is used.
+# Example: New-EyeMergeChromaMaps -Prefix $maps.Prefix -Width $maps.Width -Height $maps.Height
+function New-EyeMergeChromaMaps {
+    param([Parameter(Mandatory)][string]$Prefix, [int]$Width, [int]$Height)
+    try {
+        if ($Width -le 0 -or $Height -le 0 -or ($Width % 2) -or ($Height % 2)) { return $false }
+        $ff = $global:ffmpegFilePath
+        if (-not $ff -or -not (Test-Path -LiteralPath $ff)) { return $false }
+        $hw = [int]($Width / 2); $hh = [int]($Height / 2)
+        foreach ($t in 'bx','by','ox','oy') {
+            $src = "$Prefix.$t.raw"; $dst = "$Prefix.$t.h.raw"
+            if ((Test-Path -LiteralPath $dst) -and ((Get-Item -LiteralPath $dst).Length -eq ($hw * $hh * 2))) { continue }
+            if (-not (Test-Path -LiteralPath $src)) { return $false }
+            $tmp = "$dst.tmp"
+            $null = & $ff -hide_banner -loglevel error -y -f rawvideo -pix_fmt gray16le -video_size ("{0}x{1}" -f $Width, $Height) -i $src `
+                -vf ("scale={0}:{1}:flags=neighbor,lut=c0=val/2" -f $hw, $hh) -f rawvideo -pix_fmt gray16le $tmp 2>&1
+            if (-not (Test-Path -LiteralPath $tmp) -or (Get-Item -LiteralPath $tmp).Length -ne ($hw * $hh * 2)) {
+                Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+                Write-Log ("Eye merge: chroma table {0} could not be built - the merge keeps the RGB pipeline." -f $t) -Level WARNING
+                return $false
+            }
+            Move-Item -LiteralPath $tmp -Destination $dst -Force
+        }
+        return $true
+    } catch {
+        Write-Log ("New-EyeMergeChromaMaps failed: " + $_.Exception.Message) -Level WARNING
+        return $false
+    }
+}
+
+
+# ffmpeg arguments for the merge: the extra -i inputs (after the pipe input 0) and the
+# -filter_complex graph whose output label is [vout].
+#
+# YUV 4:2:0 merge (used whenever the chroma tables of New-EyeMergeChromaMaps exist): the frame is
+# split into its Y, U, V planes, Y is remapped with the full tables and U / V with the
+# half-resolution ones, each eye is put back together as yuv420p and the two are blended in
+# yuv420. Inputs 1..9 = bx, by, ox, oy, w, bx.h, by.h, ox.h, oy.h.
+# It replaces an RGB pipeline (inputs 1..5) that converted the whole native frame to planar RGB,
+# remapped three full-resolution planes per eye and converted back: measured on a Quest 3 frame
+# (4128x2208 -> 1700x1700) at 45 fps on a 20-thread laptop, 18.7 % of the PC, of which the GPU
+# encode was 0.3 % - the merge itself, not the encoder, is the cost. The RGB graph remains the
+# fallback when the chroma tables are missing.
 # Example: $fx = Get-EyeMergeFfmpegArgs -Maps (Get-EyeMergeMaps -Model 'Quest 3' -View 'square')
 function Get-EyeMergeFfmpegArgs {
-    param([Parameter(Mandatory)] $Maps)
+    param([Parameter(Mandatory)] $Maps, [switch]$Rgb)
     $size = "{0}x{1}" -f $Maps.Width, $Maps.Height
     $inputs = [System.Collections.Generic.List[string]]::new()
     foreach ($p in @(@('bx','gray16le'), @('by','gray16le'), @('ox','gray16le'), @('oy','gray16le'), @('w','gray'))) {
         $inputs.AddRange([string[]]@('-f','rawvideo','-pix_fmt',$p[1],'-video_size',$size,'-i',("{0}.{1}.raw" -f $Maps.Prefix, $p[0])))
     }
+    $half = @('bx','by','ox','oy' | ForEach-Object { "{0}.{1}.h.raw" -f $Maps.Prefix, $_ })
+    $useYuv = -not $Rgb -and @($half | Where-Object { -not (Test-Path -LiteralPath $_) }).Count -eq 0
     # The tables are single frames repeated by loop=-1. The blend is an OVERLAY (base eye, with the
     # feather weight as alpha, over the other eye) and not maskedmerge on purpose: overlay takes its
     # timing from its main input - the live video - and shortest=1 ends the graph with it.
     # maskedmerge syncs on all inputs alike: it emitted frames at the looped tables' 25 fps and
     # never ended once scrcpy stopped (measured: 18000 frames from 3 s of input), which would
-    # leave a recording unfinalised. gbrp keeps colour and brightness blended alike.
+    # leave a recording unfinalised.
+    if ($useYuv) {
+        $hsize = "{0}x{1}" -f [int]($Maps.Width / 2), [int]($Maps.Height / 2)
+        foreach ($f in $half) { $inputs.AddRange([string[]]@('-f','rawvideo','-pix_fmt','gray16le','-video_size',$hsize,'-i',$f)) }
+        # Unmapped pixels: luma 16 and chroma 128 = video black (a chroma plane filled with 0 is green).
+        $graph = '[0:v]setpts=PTS-STARTPTS,format=yuv420p,extractplanes=y+u+v[y][u][v];' +
+                 '[y]split=2[y1][y2];[u]split=2[u1][u2];[v]split=2[v1][v2];' +
+                 '[1:v]loop=-1:1:0[bx];[2:v]loop=-1:1:0[by];[3:v]loop=-1:1:0[ox];[4:v]loop=-1:1:0[oy];' +
+                 '[5:v]loop=-1:1:0,format=gray[w];' +
+                 '[6:v]loop=-1:1:0,split=2[bxh1][bxh2];[7:v]loop=-1:1:0,split=2[byh1][byh2];' +
+                 '[8:v]loop=-1:1:0,split=2[oxh1][oxh2];[9:v]loop=-1:1:0,split=2[oyh1][oyh2];' +
+                 '[y1][bx][by]remap=format=gray:fill=0x101010[By];[u1][bxh1][byh1]remap=format=gray:fill=0x808080[Bu];[v1][bxh2][byh2]remap=format=gray:fill=0x808080[Bv];' +
+                 '[y2][ox][oy]remap=format=gray:fill=0x101010[Oy];[u2][oxh1][oyh1]remap=format=gray:fill=0x808080[Ou];[v2][oxh2][oyh2]remap=format=gray:fill=0x808080[Ov];' +
+                 '[By][Bu][Bv]mergeplanes=map1s=1:map2s=2:format=yuv420p[B];' +
+                 '[Oy][Ou][Ov]mergeplanes=map1s=1:map2s=2:format=yuv420p[O];' +
+                 '[B][w]alphamerge[Bw];' +
+                 '[O][Bw]overlay=format=yuv420:shortest=1:eof_action=endall,format=yuv420p[vout]'
+        return @{ Inputs = $inputs.ToArray(); Graph = $graph; Mode = 'yuv420' }
+    }
+    # RGB fallback: gbrp keeps colour and brightness blended alike.
     $graph = '[0:v]setpts=PTS-STARTPTS,format=gbrp,split=2[s1][s2];' +
              '[1:v]loop=-1:1:0[bx];[2:v]loop=-1:1:0[by];[3:v]loop=-1:1:0[ox];[4:v]loop=-1:1:0[oy];' +
              '[5:v]loop=-1:1:0,format=gray[w];' +
              '[s1][bx][by]remap=fill=black,format=gbrap[B];[s2][ox][oy]remap=fill=black[O];' +
              '[B][w]alphamerge[Bw];' +
              '[O][Bw]overlay=format=gbrp:shortest=1:eof_action=endall,format=yuv420p[vout]'
-    return @{ Inputs = $inputs.ToArray(); Graph = $graph }
+    return @{ Inputs = $inputs.ToArray(); Graph = $graph; Mode = 'rgb' }
 }
 
 

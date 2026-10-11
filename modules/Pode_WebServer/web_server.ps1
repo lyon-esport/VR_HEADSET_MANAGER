@@ -524,9 +524,9 @@ if (Test-Path -LiteralPath $script:resolveProgFile) {
 
 # Background job for the stream benchmark (Invoke-StreamBenchmark, stream_benchmark.ps1).
 # A NEW PowerShell process, so it owns the test streams it starts; it writes its own
-# progress JSON (Get-StreamBenchmarkProgressPath). Test ids travel as one comma-joined string.
+# progress JSON (Get-StreamBenchmarkProgressPath). The planned tests travel as one JSON string.
 $benchmarkJobBlock = {
-    param([string]$ScriptPath, [string]$ConfigFilePath, [int]$HeadsetId, [string]$TestIds, [int]$MeasureSec)
+    param([string]$ScriptPath, [string]$ConfigFilePath, [int]$HeadsetId, [string]$TestsJson, [int]$MeasureSec)
     $progFile = [System.IO.Path]::Combine($env:TEMP, 'vrm_benchmark.json')
     try {
         $global:ScriptPath         = $ScriptPath
@@ -535,7 +535,36 @@ $benchmarkJobBlock = {
         . (Join-Path $ScriptPath 'modules\scripts_init.ps1')
         $benchHeadset = Get-HeadsetDiagTarget -Id $HeadsetId
         if (-not $benchHeadset) { throw ("Unknown headset id {0}" -f $HeadsetId) }
-        Invoke-StreamBenchmark -Headset $benchHeadset -TestIds ($TestIds -split ',') -MeasureSec $MeasureSec `
+        # Assign BEFORE wrapping: in PS 5.1 ConvertFrom-Json emits a JSON array as ONE Object[], so
+        # @($TestsJson | ConvertFrom-Json) is a one-element array holding the whole list.
+        $benchTests = $TestsJson | ConvertFrom-Json
+        Invoke-StreamBenchmark -Headset $benchHeadset -Tests @($benchTests) -MeasureSec $MeasureSec `
+            -ProgressFile (Get-StreamBenchmarkProgressPath) | Out-Null
+    } catch {
+        $err = ($_.ToString() -replace '"', "'") -replace '[^\x20-\x7E]', ''
+        try { [System.IO.File]::WriteAllText($progFile, "{`"status`":`"error`",`"error`":`"$err`"}") } catch {}
+    }
+}
+# Parallel check (Invoke-StreamBenchmarkParallel): the same settings streamed on several headsets at
+# once. Same process model and progress file as the benchmark; ids travel as a comma string.
+$benchmarkParallelJobBlock = {
+    param([string]$ScriptPath, [string]$ConfigFilePath, [string]$IdsCsv, [string]$SettingsJson, [int]$MeasureSec)
+    $progFile = [System.IO.Path]::Combine($env:TEMP, 'vrm_benchmark.json')
+    try {
+        $global:ScriptPath         = $ScriptPath
+        $global:ConfigFilePath     = $ConfigFilePath
+        $global:IsWebServerProcess = $true
+        . (Join-Path $ScriptPath 'modules\scripts_init.ps1')
+        $benchRows = @()
+        foreach ($idText in ($IdsCsv -split ',')) {
+            if ([string]::IsNullOrWhiteSpace($idText)) { continue }
+            $row = Get-HeadsetDiagTarget -Id ([int]$idText)
+            if (-not $row) { throw ("Unknown headset id {0}" -f $idText) }
+            $benchRows += $row
+        }
+        # Assign BEFORE any wrapping (PS 5.1 ConvertFrom-Json trap, see $benchmarkJobBlock).
+        $benchSet = $SettingsJson | ConvertFrom-Json
+        Invoke-StreamBenchmarkParallel -Headsets @($benchRows) -Settings $benchSet -MeasureSec $MeasureSec `
             -ProgressFile (Get-StreamBenchmarkProgressPath) | Out-Null
     } catch {
         $err = ($_.ToString() -replace '"', "'") -replace '[^\x20-\x7E]', ''
@@ -2239,7 +2268,9 @@ try {
                 $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
                 if ($headset) {
                     Update-HeadsetField -headsets $rows -ID ([int]$headset.ID) -Field "ScrcpyProfile" -NewValue $safeProfile
-                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                    # A merged view above 30 fps is saved, but the answer carries the CPU warning.
+                    $fpsAdvice = Get-EyeMergeFpsAdvice -ScrcpyProfile $safeProfile
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes((@{ ok = $true; warning = $(if ($fpsAdvice.Warn) { $fpsAdvice.Message } else { $null }) } | ConvertTo-Json -Compress))
                 } else {
                     $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"not found"}')
                 }
@@ -2923,21 +2954,19 @@ try {
         }
 
         # ---- Stream benchmark (stream_benchmark.ps1, ADR-0026) ----
-        # GET /api/benchmark/catalog?id=<n> - tests available for that headset + timing constants.
+        # GET /api/benchmark/options?id=<n> - what can be benchmarked on that headset + timing constants.
         # Config and registry only (no ADB, no GPU probe), so it is safe on this listener.
-        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/benchmark/catalog') {
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/benchmark/options') {
             try {
                 $benchId = 0
                 if (-not [int]::TryParse([string]$request.QueryString['id'], [ref]$benchId) -or $benchId -le 0) { throw "INVALID_ID" }
                 $benchHeadset = Get-HeadsetDiagTarget -Id $benchId
                 if (-not $benchHeadset) { throw "UNKNOWN_HEADSET" }
-                $benchCat = Get-StreamBenchmarkCatalog -Headset $benchHeadset
-                Send-JsonResponse -Response $response -Depth 8 -Body @{
+                $benchOpts = Get-StreamBenchmarkOptions -Headset $benchHeadset
+                Send-JsonResponse -Response $response -Depth 10 -Body @{
                     ok = $true
                     headset = @{ id = $benchHeadset.ID; name = $benchHeadset.Name; model = $benchHeadset.Model }
-                    model = $benchCat.Model; referenceView = $benchCat.ReferenceView; sourceCodec = $benchCat.SourceCodec
-                    reencodeBitrate = $benchCat.ReencodeBitrate; mediamtxEnabled = $benchCat.MediamtxEnabled
-                    timing = $benchCat.Timing; tests = @($benchCat.Tests)
+                    options = $benchOpts
                     running = (Test-StreamBenchmarkActive)
                 }
             } catch {
@@ -2951,7 +2980,43 @@ try {
             continue
         }
 
-        # POST /api/benchmark/start {id, tests:[ids], measureSec} - one run at a time.
+        # POST /api/benchmark/plan {id, selection, measureSec} - the tests a selection expands to + the time estimate.
+        # Pure computation (config and registry), nothing is started.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/benchmark/plan') {
+            try {
+                if ($request.ContentLength64 -gt 65536) { throw "BODY_TOO_LARGE" }
+                $benchBody = try { (New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)).ReadToEnd() | ConvertFrom-Json } catch { $null }
+                $benchId = 0
+                if (-not $benchBody -or -not [int]::TryParse([string]$benchBody.id, [ref]$benchId) -or $benchId -le 0) { throw "INVALID_ID" }
+                $benchHeadset = Get-HeadsetDiagTarget -Id $benchId
+                if (-not $benchHeadset) { throw "UNKNOWN_HEADSET" }
+                $benchMeasure = 20
+                [void][int]::TryParse([string]$benchBody.measureSec, [ref]$benchMeasure)
+                if (@(10, 20, 40) -notcontains $benchMeasure) { $benchMeasure = 20 }
+                $benchRunning = @(Get-Process -Name 'scrcpy' -ErrorAction SilentlyContinue).Count
+                $benchPlan = New-StreamBenchmarkPlan -Headset $benchHeadset -Selection $benchBody.selection -MeasureSec $benchMeasure -RunningStreams $benchRunning
+                Send-JsonResponse -Response $response -Depth 10 -Body @{
+                    ok          = [bool]$benchPlan.Ok
+                    error       = $benchPlan.Error
+                    count       = $benchPlan.Count
+                    estimateSec = $benchPlan.EstimateSec
+                    fixedSec    = $benchPlan.FixedSec
+                    selection   = $benchPlan.Selection
+                    tests       = @($benchPlan.Tests)
+                }
+            } catch {
+                $errMsg = switch -Regex ($_.Exception.Message) {
+                    'INVALID_ID'      { 'Invalid or missing headset id.' }
+                    'UNKNOWN_HEADSET' { 'This headset is not registered on this server.' }
+                    'BODY_TOO_LARGE'  { 'Request too large.' }
+                    default           { $_.Exception.Message }
+                }
+                Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $errMsg }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # POST /api/benchmark/start {id, selection, measureSec} - one run at a time.
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/benchmark/start') {
             try {
                 if (($script:benchmarkJob -and $script:benchmarkJob.State -in @('Running', 'NotStarted')) -or (Test-StreamBenchmarkActive)) {
@@ -2971,22 +3036,23 @@ try {
                 $benchMeasure = 20
                 [void][int]::TryParse([string]$benchBody.measureSec, [ref]$benchMeasure)
                 if (@(10, 20, 40) -notcontains $benchMeasure) { $benchMeasure = 20 }
-                $benchCat = Get-StreamBenchmarkCatalog -Headset $benchHeadset
-                $benchKnown = @($benchCat.Tests | ForEach-Object { $_.Id })
-                $benchIds = @(@($benchBody.tests) | ForEach-Object { [string]$_ } | Where-Object { $benchKnown -contains $_ } | Select-Object -Unique)
-                if ($benchIds.Count -eq 0) { throw "NO_TEST" }
-                $benchSel = @($benchCat.Tests | Where-Object { $benchIds -contains $_.Id })
                 $benchRunning = @(Get-Process -Name 'scrcpy' -ErrorAction SilentlyContinue).Count
-                $benchEta = (Get-StreamBenchmarkFixedEstimate -Tests $benchSel -RunningStreams $benchRunning) +
-                            (($benchSel | ForEach-Object { Get-StreamBenchmarkTestEstimate -Test $_ -MeasureSec $benchMeasure } | Measure-Object -Sum).Sum)
+                $benchPlan = New-StreamBenchmarkPlan -Headset $benchHeadset -Selection $benchBody.selection -MeasureSec $benchMeasure -RunningStreams $benchRunning
+                if (-not $benchPlan.Ok) { throw ("PLAN:" + $benchPlan.Error) }
+                $benchTests = @($benchPlan.Tests)
+                if ($benchTests.Count -eq 0) { throw "NO_TEST" }
+                $benchEta = [int]$benchPlan.EstimateSec
                 $cancelPath = Get-StreamBenchmarkCancelPath
                 if (Test-Path -LiteralPath $cancelPath) { Remove-Item -LiteralPath $cancelPath -Force -ErrorAction SilentlyContinue }
-                [System.IO.File]::WriteAllText($script:benchmarkProgFile, ('{{"status":"queued","etaSec":{0},"estimatedTotalSec":{0},"total":{1}}}' -f [int]$benchEta, $benchIds.Count))
-                $script:benchmarkJob = Start-Job -ScriptBlock $benchmarkJobBlock -ArgumentList $ScriptPath, $ConfigFilePath, $benchId, ($benchIds -join ','), $benchMeasure
-                Write-Log ("Web: stream benchmark started for {0} ({1} test(s), {2} s window)" -f $benchHeadset.Name, $benchIds.Count, $benchMeasure) -Level INFO
-                Send-JsonResponse -Response $response -Body @{ ok = $true; status = 'started'; etaSec = [int]$benchEta; total = $benchIds.Count }
+                [System.IO.File]::WriteAllText($script:benchmarkProgFile, ('{{"status":"queued","etaSec":{0},"estimatedTotalSec":{0},"total":{1}}}' -f [int]$benchEta, $benchTests.Count))
+                $benchTestsJson = ($benchTests | ConvertTo-Json -Depth 6 -Compress)
+                if ($benchTests.Count -eq 1 -and $benchTestsJson -notmatch '^\[') { $benchTestsJson = '[' + $benchTestsJson + ']' }
+                $script:benchmarkJob = Start-Job -ScriptBlock $benchmarkJobBlock -ArgumentList $ScriptPath, $ConfigFilePath, $benchId, $benchTestsJson, $benchMeasure
+                Write-Log ("Web: stream benchmark started for {0} ({1} test(s), {2} s window)" -f $benchHeadset.Name, $benchTests.Count, $benchMeasure) -Level INFO
+                Send-JsonResponse -Response $response -Body @{ ok = $true; status = 'started'; etaSec = [int]$benchEta; total = $benchTests.Count }
             } catch {
                 $errMsg = switch -Regex ($_.Exception.Message) {
+                    '^PLAN:'          { [string]$benchPlan.Error }
                     'INVALID_ID'      { 'Invalid or missing headset id.' }
                     'UNKNOWN_HEADSET' { 'This headset is not registered on this server.' }
                     'NO_TEST'         { 'No valid test selected.' }
@@ -2994,6 +3060,69 @@ try {
                     default           { $_.Exception.Message }
                 }
                 Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $errMsg }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # POST /api/benchmark/parallel {ids:[int], settings:{...}, measureSec} - same settings on several
+        # headsets at once. Shares the single-flight slot with /start.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/benchmark/parallel') {
+            try {
+                if (($script:benchmarkJob -and $script:benchmarkJob.State -in @('Running', 'NotStarted')) -or (Test-StreamBenchmarkActive)) {
+                    Send-JsonResponse -Response $response -Body @{ ok = $false; status = 'already_running'; error = 'A benchmark is already running.' }
+                    continue
+                }
+                if ($script:benchmarkJob) {
+                    try { Remove-Job -Job $script:benchmarkJob -Force -ErrorAction SilentlyContinue } catch {}
+                    $script:benchmarkJob = $null
+                }
+                if ($request.ContentLength64 -gt 8192) { throw "BODY_TOO_LARGE" }
+                $parBody = try { (New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)).ReadToEnd() | ConvertFrom-Json } catch { $null }
+                if (-not $parBody -or -not $parBody.settings -or $parBody.settings -isnot [System.Management.Automation.PSCustomObject]) { throw "INVALID_SETTINGS" }
+                $parIds = @()
+                foreach ($rawId in @($parBody.ids)) {
+                    $parId = 0
+                    if (-not [int]::TryParse([string]$rawId, [ref]$parId) -or $parId -le 0) { throw "INVALID_ID" }
+                    if ($parIds -notcontains $parId) { $parIds += $parId }
+                }
+                if ($parIds.Count -eq 0) { throw "INVALID_ID" }
+                if ($parIds.Count -gt 32) { throw "TOO_MANY" }
+                $parNames = @()
+                foreach ($parId in $parIds) {
+                    $parHeadset = Get-HeadsetDiagTarget -Id $parId
+                    if (-not $parHeadset) { throw "UNKNOWN_HEADSET" }
+                    $parNames += $parHeadset.Name
+                }
+                $parMeasure = 20
+                [void][int]::TryParse([string]$parBody.measureSec, [ref]$parMeasure)
+                if (@(10, 20, 40) -notcontains $parMeasure) { $parMeasure = 20 }
+                $cancelPath = Get-StreamBenchmarkCancelPath
+                if (Test-Path -LiteralPath $cancelPath) { Remove-Item -LiteralPath $cancelPath -Force -ErrorAction SilentlyContinue }
+                [System.IO.File]::WriteAllText($script:benchmarkProgFile, ('{{"status":"queued","kind":"parallel","total":{0}}}' -f $parIds.Count))
+                $parSettingsJson = ($parBody.settings | ConvertTo-Json -Depth 5 -Compress)
+                $script:benchmarkJob = Start-Job -ScriptBlock $benchmarkParallelJobBlock -ArgumentList $ScriptPath, $ConfigFilePath, ($parIds -join ','), $parSettingsJson, $parMeasure
+                Write-Log ("Web: parallel stream check started on {0} headset(s) ({1}), {2} s window" -f $parIds.Count, ($parNames -join ', '), $parMeasure) -Level INFO
+                Send-JsonResponse -Response $response -Body @{ ok = $true; status = 'started'; total = $parIds.Count }
+            } catch {
+                $errMsg = switch -Regex ($_.Exception.Message) {
+                    'INVALID_ID'       { 'Invalid or missing headset id.' }
+                    'INVALID_SETTINGS' { 'Missing settings.' }
+                    'TOO_MANY'         { 'Too many headsets (maximum 32).' }
+                    'UNKNOWN_HEADSET'  { 'A headset is not registered on this server.' }
+                    'BODY_TOO_LARGE'   { 'Request too large.' }
+                    default            { $_.Exception.Message }
+                }
+                Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $errMsg }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # GET /api/benchmark/parallel/result - the last stored parallel check, result=null when none.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/benchmark/parallel/result') {
+            try {
+                Send-JsonResponse -Response $response -Depth 10 -Body @{ ok = $true; result = (Get-StreamBenchmarkParallelResult) }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally { $response.Close() }
             continue
         }
@@ -3026,10 +3155,14 @@ try {
             continue
         }
 
-        # GET /api/benchmark/result - the last stored run (app_kv benchmark_last), result=null when none.
+        # GET /api/benchmark/result[?model=<m>] - the accumulated result of that model (default: the last
+        # benchmarked one), result=null when none.
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/benchmark/result') {
             try {
-                Send-JsonResponse -Response $response -Depth 12 -Body @{ ok = $true; result = (Get-StreamBenchmarkResult) }
+                $benchModel = [string]$request.QueryString['model']
+                if ($benchModel.Length -gt 100) { $benchModel = $benchModel.Substring(0, 100) }
+                $benchRes = if ($benchModel) { Get-StreamBenchmarkResult -Model $benchModel } else { Get-StreamBenchmarkResult }
+                Send-JsonResponse -Response $response -Depth 12 -Body @{ ok = $true; result = $benchRes }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally { $response.Close() }
@@ -3039,7 +3172,9 @@ try {
         # GET /api/benchmark/result.csv - the same run as a CSV attachment (one line per test and GPU).
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/benchmark/result.csv') {
             try {
-                $benchRes = Get-StreamBenchmarkResult
+                $benchModel = [string]$request.QueryString['model']
+                if ($benchModel.Length -gt 100) { $benchModel = $benchModel.Substring(0, 100) }
+                $benchRes = if ($benchModel) { Get-StreamBenchmarkResult -Model $benchModel } else { Get-StreamBenchmarkResult }
                 if (-not $benchRes) {
                     Send-JsonResponse -Response $response -StatusCode 404 -Body @{ ok = $false; error = 'No benchmark result yet.' }
                 } else {
@@ -3053,6 +3188,83 @@ try {
                 }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # POST /api/benchmark/clear {model} - forgets the accumulated result of one model.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/benchmark/clear') {
+            try {
+                if ($request.ContentLength64 -gt 4096) { throw "BODY_TOO_LARGE" }
+                $benchBody = try { (New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)).ReadToEnd() | ConvertFrom-Json } catch { $null }
+                $benchModel = if ($benchBody) { [string]$benchBody.model } else { '' }
+                if ([string]::IsNullOrWhiteSpace($benchModel) -or $benchModel.Length -gt 100) { throw "INVALID_MODEL" }
+                Send-JsonResponse -Response $response -Body @{ ok = [bool](Clear-StreamBenchmarkResult -Model $benchModel) }
+            } catch {
+                $errMsg = switch -Regex ($_.Exception.Message) {
+                    'INVALID_MODEL'   { 'Invalid or missing model.' }
+                    'BODY_TOO_LARGE'  { 'Request too large.' }
+                    default           { $_.Exception.Message }
+                }
+                Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $errMsg }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # POST /api/benchmark/recommend {model, headsets, settings, maxCpu, maxGpu} - capacity estimate and
+        # up to 3 proposals computed from the stored result. Pure computation, no ADB.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/benchmark/recommend') {
+            try {
+                if ($request.ContentLength64 -gt 16384) { throw "BODY_TOO_LARGE" }
+                $benchBody = try { (New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)).ReadToEnd() | ConvertFrom-Json } catch { $null }
+                if (-not $benchBody) { throw "INVALID_BODY" }
+                $benchModel = [string]$benchBody.model
+                if ($benchModel.Length -gt 100) { throw "INVALID_MODEL" }
+                $benchRes = if ($benchModel) { Get-StreamBenchmarkResult -Model $benchModel } else { Get-StreamBenchmarkResult }
+                $benchHeadsets = 1
+                [void][int]::TryParse([string]$benchBody.headsets, [ref]$benchHeadsets)
+                $benchHeadsets = [Math]::Max(1, [Math]::Min(64, $benchHeadsets))
+                $benchMaxCpu = 0; [void][int]::TryParse([string]$benchBody.maxCpu, [ref]$benchMaxCpu)
+                $benchMaxGpu = 0; [void][int]::TryParse([string]$benchBody.maxGpu, [ref]$benchMaxGpu)
+                $benchRecArgs = @{ Result = $benchRes; Headsets = $benchHeadsets; MaxCpu = $benchMaxCpu; MaxGpu = $benchMaxGpu }
+                if ($benchBody.settings) { $benchRecArgs.Settings = $benchBody.settings }
+                Send-JsonResponse -Response $response -Depth 10 -Body @{ ok = $true; recommendation = (Get-StreamBenchmarkRecommendation @benchRecArgs) }
+            } catch {
+                $errMsg = switch -Regex ($_.Exception.Message) {
+                    'INVALID_BODY'    { 'Invalid request.' }
+                    'INVALID_MODEL'   { 'Invalid model.' }
+                    'BODY_TOO_LARGE'  { 'Request too large.' }
+                    default           { $_.Exception.Message }
+                }
+                Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $errMsg }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # POST /api/benchmark/apply {model, settings, headsetIds:[int], preview} - writes a proposal into the
+        # profile of the chosen headsets (preview:true only lists what would change).
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/benchmark/apply') {
+            try {
+                if ($request.ContentLength64 -gt 4096) { throw "BODY_TOO_LARGE" }
+                $benchBody = try { (New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)).ReadToEnd() | ConvertFrom-Json } catch { $null }
+                if (-not $benchBody -or -not $benchBody.settings) { throw "INVALID_BODY" }
+                $benchModel = [string]$benchBody.model
+                if ([string]::IsNullOrWhiteSpace($benchModel) -or $benchModel.Length -gt 100) { throw "INVALID_MODEL" }
+                # No headset ticked is allowed: the restream settings in config.json are still applied.
+                $benchIds = [int[]]@(@($benchBody.headsetIds) | Where-Object { $null -ne $_ } | ForEach-Object { [int]$_ })
+                $benchPreview = [bool]$benchBody.preview
+                $benchApply = Set-StreamBenchmarkRecommendation -Model $benchModel -Settings $benchBody.settings -HeadsetIds $benchIds -Preview:$benchPreview
+                Send-JsonResponse -Response $response -Depth 6 -Body @{
+                    ok = [bool]$benchApply.Ok; changes = @($benchApply.Changes); error = $benchApply.Error; preview = $benchPreview
+                }
+            } catch {
+                $errMsg = switch -Regex ($_.Exception.Message) {
+                    'INVALID_BODY'    { 'Invalid request.' }
+                    'INVALID_MODEL'   { 'Invalid or missing model.' }
+                    'BODY_TOO_LARGE'  { 'Request too large.' }
+                    default           { $_.Exception.Message }
+                }
+                Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $errMsg }
             } finally { $response.Close() }
             continue
         }

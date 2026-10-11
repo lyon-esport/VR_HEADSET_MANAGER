@@ -110,45 +110,89 @@ More about re-encoding:
 
 ## Benchmark: what each option costs this PC
 
-The **Benchmark** section of the Headsets Monitoring page measures the cost of each capture option on **one** headset:
+The **Benchmark** page (top bar → configuration menu → **Benchmark**) measures what each capture option costs this PC on **one** headset. The console has the same feature under **Services → B**.
 
-- one eye or merged view
-- capture FPS and bitrate
-- stream copy or re-encoding
-- GPU or CPU encoder
-- h264 or h265
+### Tests selection
 
-The console offers the same benchmark: **Services → B**.
+Pick a headset that is on, with ADB (USB or WiFi), then switch option buttons on (green) or off (grey):
 
-How to run it:
+| Row | Options |
+|---|---|
+| Encoding | CPU (software), and one button per GPU of this PC |
+| Codec | H264, H265 |
+| Capture bitrate | 5 / 10 / 20 / 40 Mb/s, plus custom values |
+| FPS | 15 / 30 / 45 / 60, plus custom values |
+| View + eye | One view of the model, single eye and/or merged view |
 
-1. Pick a headset that is on, with ADB (USB or WiFi).
-2. Tick the tests you want. A curated set of about 18 is ticked by default, and more combinations are listed below it.
-3. Choose a measure window of 10, 20 or 40 s per test.
-4. Press **RUN BENCHMARK**.
+Re-encode bitrate and max capture size follow your configuration unless you force another value. Merged tests always use the full frame, so max capture size does not apply to them.
 
-The estimated duration updates as you tick tests, and while the run is in progress it is recalculated from how long each finished test actually took.
+The benchmark runs a baseline (the idle PC) plus **every combination** of the selected options. The defaults give a single reference test: single eye, 45 fps, 10 Mb/s, best GPU, H264.
+
+**Quick selection** buttons fill the rows for you:
+
+| Button | What it runs |
+|---|---|
+| Reset to default | The reference test only |
+| Full tests | Every encoder, both codecs, every listed bitrate and FPS, single eye and merged. It is a very long run. |
+| **Typical tests** *(recommended)* | One change at a time from the reference, for every encoder × codec, plus a few bitrate, re-encode and merged-view tests (about 40 tests) |
+| Typical (quick) | The same with only the CPU and the best GPU (about 28 tests, about 15 min) |
+
+With a typical preset, the page learns a **load model** and can then estimate **any** combination of settings, including views, sizes and frame rates that were never tested.
+
+The number of tests and the estimated duration update on every click. During the run, the remaining time is recalculated from how long the finished tests actually took.
 
 > [!WARNING]
 > **Every running stream is stopped during the benchmark** (video wall, OBS and kiosks lose their picture). The streams restart automatically when it ends or is cancelled.
 
-Each test reports:
+### Results
 
-- CPU, as an average and a peak
-- every GPU, one row per GPU: utilisation, video engine, encoder, VRAM
-- memory
-- the scrcpy, ffmpeg and mediamtx processes
-- what the stream really delivered: frames per second against the target, dropped and duplicated frames, and encode speed
+Each test is one row. The figures are grouped in columns:
 
-Grey figures are the difference from the **baseline** (the PC with no stream).
+- status
+- CPU: the **stream CPU**, which is the processes of the capture chain (adb, scrcpy, the pipe bridge, ffmpeg, mediamtx), and the whole-PC CPU
+- one group per GPU
+- RAM
+- the capture-chain processes, one by one
+- the stream: frames per second actually delivered against the target, dropped and duplicated frames, encode speed
 
-How the test settings work:
+An idle measure is taken at the start and at the end of a long run. Their average is the baseline.
 
-- The settings are applied only to the benchmark's own test streams. Your configuration and headset profiles are never changed.
-- Re-encoding tests re-encode at the capture FPS and at the configured restream bitrate.
+Each group shows its main value. Click **+** in a group header to see its details, or click a row to see every figure of that test.
 
-The last result stays on the page and can be downloaded as CSV.
+Grey figures are the difference from the baseline. The header stays visible while scrolling, and the grid scrolls sideways when it is wider than the window.
 
+Results **add up across runs** for the same headset model: a test run again replaces its previous result. They can be downloaded as CSV or cleared.
+
+### Recommendations
+
+Choose how many headsets will stream in parallel and the settings to evaluate. The page then estimates the CPU and GPU load:
+
+- **How it estimates:** baseline + N x the cost of one stream, plus a 10% safety margin.
+- **Limits:** the maximum accepted load defaults to the Video Quality Automation max thresholds, and two sliders can change it.
+- **Model mode** (after a typical run, shown by a green "Model" badge): every setting can be chosen freely.
+  - The cost of one stream comes from a model fitted on the tests: load grows with *pixels × frame rate*, separately for each encoder and codec.
+  - Each figure shows a **± band** (the model's measured error).
+  - Settings far outside what was tested are flagged as *extrapolated*.
+  - On a GeForce card the **NVENC limit of 8 simultaneous streams** is applied.
+- **Measured mode** (without a typical run): only the tested values are offered. FPS and bitrate are interpolated between tested ones and never guessed outside them.
+
+**Parallel check.** At the bottom of the section, **Run parallel check** streams the chosen settings on several connected headsets at once. It then compares the real load with the prediction. A ratio close to 1.0 confirms that N headsets really cost N times one stream.
+
+The page also shows:
+
+- the maximum number of headsets at these settings;
+- the total WiFi bandwidth;
+- up to three tested configurations that fit, each with an **Apply** button.
+
+**Apply** first lists the exact changes, then on confirmation writes them:
+
+- the restream settings: re-encoding, frame rate, bitrate, codec, GPU;
+- the model's max capture size;
+- the profile of the selected headsets.
+
+Running streams then restart with the new settings.
+
+The benchmark itself never changes your configuration. Only **Apply** does.
 ## Stream URLs
 
 Every headset stream is published under a path derived from its name (e.g. `Q3 BLUE` → `q3_blue`), on three protocols:

@@ -2584,6 +2584,11 @@
       _editingProfileDn = null;
     }
 
+    // Choosing the merged view sets 30 fps: the merge's CPU cost follows the frame rate.
+    document.getElementById('pm-eye').addEventListener('change', function() {
+      var fpsEl = document.getElementById('pm-fps');
+      if (this.value === 'M' && (parseInt(fpsEl.value, 10) || 0) > 30) { fpsEl.value = 30; }
+    });
     document.getElementById('pm-cancel').addEventListener('click', closeProfileModal);
     document.getElementById('profile-modal').addEventListener('click', function(e) {
       if (e.target === this) closeProfileModal();
@@ -2600,6 +2605,9 @@
       var fps   = parseInt(document.getElementById('pm-fps').value, 10);
       var bw    = parseInt(document.getElementById('pm-bw').value, 10);
       if (isNaN(fps) || fps < 1 || isNaN(bw) || bw < 1) { return; }
+      // Merged view above 30 fps: merging both eyes costs CPU in proportion to the frame rate.
+      if (eye === 'M' && fps > 30 && !confirm('Merged view at ' + fps + ' fps.\n\nMerging both eyes costs CPU in proportion to the frame rate, for every headset streaming a merged view (' +
+          fps + ' fps is about ' + Math.round((fps / 30 - 1) * 100) + '% more CPU than 30 fps). 30 fps is recommended.\n\nKeep ' + fps + ' fps anyway?')) { return; }
       var newProfile = view + '-' + eye + '-' + audio + '-' + fps + '-' + bw;
       var saveBtn = document.getElementById('pm-save');
       saveBtn.disabled = true;
