@@ -268,6 +268,13 @@ Enable **Recording** on a headset's card in **Headset Settings** to save its cap
 - **A new file for each capture session.** Unplugging a cable or restarting a capture starts a new timestamped `.mkv`; the previous one is finalised when its session ends. Recordings are Matroska (`.mkv`) on purpose, because the format stays readable even if a capture is cut abruptly.
 - **No empty files.** A capture attempt that never produced video (for example a relaunch while the cable is half unplugged) would leave a 0-byte file; the app deletes those automatically when the session ends, and logs a warning for any file under 64 KB, which it keeps.
 - **If a recording was cut abruptly** (ffmpeg had to be force-stopped after 15 s, which the log reports with the file name), the file still plays in VLC and decodes in ffmpeg, but its duration and seek index are missing. Repair it with `ffmpeg -i broken.mkv -c copy fixed.mkv`.
+- **Files are organised** as `<record folder>\<yyyy-MM-dd>\<headset>\<headset>_<yyyyMMdd_HHmmss>.mkv`.
+
+### Recordings page
+
+Every session is also listed in the app's database with its start and end time, size, codec, picture size and the capture settings it was made with (profile, fps, bitrate, capture mode, eye merge). The **Recordings** page (**Config → Recordings**) uses it to show a timeline per headset, watch a recording in the browser (live low-resolution re-encode, the file is never modified), download the original file, protect a recording from deletion and delete old ones. See [Web interface → Recordings](web-interface.md#recordings).
+
+The database follows the record folder: at every start, and every `Recordings.rescan_interval_min` minutes (default 10), the app imports files that appeared in the folder, drops the entries of files deleted outside the app, and closes sessions that a crash or power cut left open (shown as **interrupted**). If the record folder cannot be reached (drive unplugged), nothing is removed - a warning is written to the log instead.
 
 ---
 

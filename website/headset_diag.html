@@ -283,7 +283,7 @@
       b.className = 'dg-badge ' + (t === 'USB' ? 'usb' : (t === 'WiFi' ? 'wifi' : ''));
       var w = $('wifi-warn'); if (w) { w.style.display = t === 'WiFi' ? 'block' : 'none'; }
     }
-    function tempClass(v, kind) { var b = thr[kind] || thr.base; return v === null || v === undefined ? '' : (v >= b.crit ? 'bad' : (v >= b.warn ? 'warn' : '')); }
+    function tempClass(v, kind) { var b = thr[kind] || thr.base; return v === null || v === undefined ? '' : (v >= b.crit ? 'bad' : (v >= b.warn ? 'warn' : 'good')); }
     function tile(label, text, cls, href) {
       var inner = '<div class="k">' + esc(label) + '</div><div class="v">' + text + '</div>';
       return href ? '<a class="dg-tile ' + (cls || '') + '" href="' + href + '">' + inner + '</a>'
@@ -378,7 +378,17 @@
       }
       rows.push(kv('Updater', d.UpdaterDisabled ? badge('disabled', 'warn') : badge('enabled', '')));
       rows.push(kv('Private DNS', val(d.PrivateDns) + (d.PrivateDnsHost ? ' (' + esc(d.PrivateDnsHost) + ')' : '')));
+      if (d.UpdateNotice) {
+        var un = d.UpdateNotice;
+        var untilTxt = un.DeferUntil ? String(un.DeferUntil).slice(0, 10) : '';
+        rows.push(kv('Update notice',
+          badge(un.Release || 'update', un.Tag === 'CRITICAL' ? 'warn' : '') +
+          (un.Status === 'DEFER' && untilTxt ? ' ' + esc('deferred by Meta until ' + untilTxt) : (un.Status ? ' ' + esc(un.Status) : ''))));
+      }
       var html = kvBlock(rows);
+      html += '<div class="dg-row"><button class="dg-btn" type="button" id="btn-open-update"' +
+        ' title="Meta does not allow forcing an update over ADB. This opens the headset\'s own Software Update screen, which has its Update now button.">' +
+        'Open software update screen in headset</button></div>';
       if (d.PendingOtaUri) {
         html += '<h3 class="dg-h">Pending update</h3><div style="word-break:break-all">' + esc(d.PendingOtaUri) + '</div>';
       }
@@ -408,7 +418,7 @@
       tiles += tile('Battery', t.Battery == null ? none() : fixed(t.Battery, 1) + ' C', tempClass(t.Battery), histLink('temp'));
       var b = d.Battery || {};
       if (b.Level !== null && b.Level !== undefined) {
-        tiles += tile('Battery level', esc(b.Level) + ' %', b.Level <= thr.batt.crit ? 'bad' : (b.Level < thr.batt.warn ? 'warn' : 'good'), null);
+        tiles += tile('Battery level', esc(b.Level) + ' %', b.Level <= thr.batt.crit ? 'bad' : (b.Level < thr.batt.warn ? 'warn' : 'good'), histLink('battery'));
       }
       if (b.HealthPct !== null && b.HealthPct !== undefined) {
         tiles += tile('Battery health', esc(b.HealthPct) + ' %', b.HealthPct < 70 ? 'bad' : (b.HealthPct < 85 ? 'warn' : 'good'), null);
@@ -719,6 +729,7 @@
       $('btn-tls-connect').addEventListener('click', function () {
         if (lastTls && lastTls.MdnsPort) { act('tls_connect', { port: lastTls.MdnsPort }).then(checkTls); }
       });
+      document.addEventListener('click', function (e) { if (e.target && e.target.id === 'btn-open-update') { act('updater_open_settings', {}); } });
       document.addEventListener('click', function (e) { if (e.target && e.target.id === 'btn-cable') { runCable(); } });
       document.addEventListener('click', function (e) { if (e.target && e.target.id === 'btn-wifi-speed') { runWifiSpeed(); } });
       bindWifi();

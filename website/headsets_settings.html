@@ -1063,6 +1063,24 @@
           </div>
 
           <div class="adv-field">
+            <label for="adv-refresh-rate">Refresh Rate <span class="adv-note">(session only - above 120 Hz is Quest 3 only)</span></label>
+            <div style="display:flex;gap:6px;flex-wrap:nowrap;align-items:center;">
+              <select id="adv-refresh-rate" style="font-size:.8rem;">
+                <option value="72">72 Hz</option>
+                <option value="80">80 Hz</option>
+                <option value="90">90 Hz</option>
+                <option value="96">96 Hz</option>
+                <option value="100">100 Hz</option>
+                <option value="120">120 Hz</option>
+                <option value="144">144 Hz (Quest 3)</option>
+                <option value="180">180 Hz (Quest 3)</option>
+                <option value="200">200 Hz (Quest 3)</option>
+              </select>
+              <button class="hs-adv-btn" id="adv-refresh-rate-apply" style="font-size:.8rem;">Apply</button>
+            </div>
+          </div>
+
+          <div class="adv-field">
             <label>Capture Display Size</label>
             <button class="hs-adv-btn" id="adv-display-reset" style="font-size:.8rem;">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -2661,6 +2679,23 @@
           var bv = (j.brightness !== undefined && j.brightness !== null) ? parseInt(j.brightness, 10) : 50;
           document.getElementById('adv-brightness').value = bv;
           document.getElementById('adv-brightness-val').textContent = bv + '%';
+          var rrSel = document.getElementById('adv-refresh-rate');
+          if (rrSel) {
+            if (Array.isArray(j.refreshRates) && j.refreshRates.length) {
+              rrSel.innerHTML = j.refreshRates.map(function(hz) {
+                return '<option value="' + hz + '">' + hz + ' Hz</option>';
+              }).join('');
+            }
+            if (j.refreshRate) {
+              if (!rrSel.querySelector('option[value="' + j.refreshRate + '"]')) {
+                var o = document.createElement('option');
+                o.value = j.refreshRate;
+                o.textContent = j.refreshRate + ' Hz';
+                rrSel.appendChild(o);
+              }
+              rrSel.value = String(j.refreshRate);
+            }
+          }
           var updBtn = document.getElementById('adv-updates-toggle');
           var updLabel = document.getElementById('adv-updates-toggle-label');
           if (updBtn && updLabel) {
@@ -2714,6 +2749,8 @@
       if (proxRow) proxRow.style.display = isPico ? 'none' : '';
       var updRow = document.getElementById('adv-updates-toggle').closest('.adv-field');
       if (updRow) updRow.style.display = isPico ? 'none' : '';
+      var rrRow = document.getElementById('adv-refresh-rate').closest('.adv-field');
+      if (rrRow) rrRow.style.display = isPico ? 'none' : '';
       var sleepRow = document.getElementById('adv-sleep-timeout').closest('.adv-field');
       if (sleepRow) sleepRow.style.display = isPico ? 'none' : '';
     }
@@ -2808,6 +2845,24 @@
           else { btn.disabled = false; }
         })
         .catch(function() { btn.disabled = false; });
+    });
+
+    document.getElementById('adv-refresh-rate-apply').addEventListener('click', function() {
+      var btn = this;
+      var dn = _advDn;
+      if (!dn) return;
+      var hz = parseInt(document.getElementById('adv-refresh-rate').value, 10);
+      if (!hz) return;
+      btn.disabled = true;
+      btn.classList.remove('toggle-btn', 'on');
+      fetch('/api/headset-settings/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: dn, settings: { refreshRate: hz } })
+      }).then(function(r) { return r.json(); })
+        .then(function(j) { if (j.ok) btn.classList.add('toggle-btn', 'on'); })
+        .catch(function() {})
+        .finally(function() { btn.disabled = false; });
     });
 
     document.getElementById('adv-display-reset').addEventListener('click', function() {

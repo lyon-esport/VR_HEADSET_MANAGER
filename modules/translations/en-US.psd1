@@ -403,6 +403,14 @@
         FrameCapturing    = "Capturing one full frame of '{0}' with scrcpy (a few seconds)..."
         FrameSaved        = "Frame saved: {0} ({1} x {2} px, over {3}). Crop values (w:h:x:y) are in these pixels."
         FrameFailed       = "Frame capture failed: {0}"
+
+        # --- Forced display refresh rate (console + POST /api/headset-settings/apply) ---
+        RefreshMenuEntry   = "9. Force the display refresh rate of a headset (Meta Quest)"
+        RefreshPickHeadset = "Headset ID (0 to go back)"
+        RefreshCurrent     = "Current forced refresh rate of {0}: {1}"
+        RefreshPickRate    = "Choose a refresh rate (number, 0 to go back)"
+        RefreshApplied     = "Refresh rate of {0} forced to {1} Hz (until the next reboot)."
+        RefreshFailed      = "Could not set the refresh rate: {0}"
     }
 
     # ==========================================

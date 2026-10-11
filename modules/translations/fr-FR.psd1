@@ -402,6 +402,14 @@
         FrameCapturing    = "Capture d'une image complete de '{0}' avec scrcpy (quelques secondes)..."
         FrameSaved        = "Image enregistree : {0} ({1} x {2} px, via {3}). Les valeurs de crop (l:h:x:y) sont dans ces pixels."
         FrameFailed       = "Echec de la capture d'image : {0}"
+
+        # --- Frequence d'affichage forcee (console + POST /api/headset-settings/apply) ---
+        RefreshMenuEntry   = "9. Forcer la frequence d'affichage d'un casque (Meta Quest)"
+        RefreshPickHeadset = "ID du casque (0 pour revenir)"
+        RefreshCurrent     = "Frequence forcee actuelle de {0} : {1}"
+        RefreshPickRate    = "Choisissez une frequence (numero, 0 pour revenir)"
+        RefreshApplied     = "Frequence de {0} forcee a {1} Hz (jusqu'au prochain redemarrage)."
+        RefreshFailed      = "Impossible de regler la frequence : {0}"
     }
 
     # ==========================================

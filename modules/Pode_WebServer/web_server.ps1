@@ -1445,6 +1445,7 @@ try {
                 $soundLevel       = Get-HeadsetSoundLevel       -Device $device -adb $adbPath
                 $brightness       = Get-HeadsetBrightness       -Device $device -adb $adbPath -Brand $brand
                 $blockUpdates     = Get-HeadsetUpdateBlockStatus -Device $device -adb $adbPath -Brand $brand
+                $refreshRate      = if ($brand -eq 'Pico') { $null } else { Get-HeadsetRefreshRate -Device $device -adb $adbPath }
 
                 Send-JsonResponse -Response $response -Body @{
                     ok               = $true
@@ -1453,6 +1454,8 @@ try {
                     soundLevel       = $soundLevel
                     brightness       = $brightness
                     blockUpdates     = $blockUpdates
+                    refreshRate      = $refreshRate
+                    refreshRates     = @(Get-HeadsetRefreshRateChoices)
                 }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
@@ -2253,6 +2256,13 @@ try {
 
                 if ($null -ne $s.blockUpdates) {
                     Set-HeadsetUpdateBlocked -Device $device -Block ([bool]$s.blockUpdates) -adb $adbPath -Brand $brand | Out-Null
+                }
+
+                if ($null -ne $s.refreshRate) {
+                    $hz = 0
+                    if (-not [int]::TryParse([string]$s.refreshRate, [ref]$hz) -or $hz -notin @(Get-HeadsetRefreshRateChoices)) { throw "Invalid refresh rate" }
+                    if ($brand -eq 'Pico') { throw "Refresh rate is only supported on Meta Quest headsets" }
+                    if (-not (Set-HeadsetRefreshRate -Device $device -Hz $hz -adb $adbPath)) { throw "Could not set refresh rate" }
                 }
 
                 Send-JsonResponse -Response $response -Body @{ ok = $true }

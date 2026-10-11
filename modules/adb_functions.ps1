@@ -3925,6 +3925,65 @@ function Set-HeadsetProximitySensorOverride {
     catch { Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR; return $false }
 }
 
+function Get-HeadsetRefreshRateChoices {
+    <#
+    .SYNOPSIS
+    Refresh rates (Hz) offered for a forced Meta Quest display rate. Shared by the web
+    Configure modal and the console menu. From Meta's display-frequency documentation:
+    72/80/90/96/100/120 Hz on Quest 2 / 3 / 3S (Quest Pro: up to 90), and 144/180/200 Hz
+    on Quest 3 only. Capped at 200 Hz on purpose: 240 Hz does not work well in practice.
+    .EXAMPLE
+    Get-HeadsetRefreshRateChoices
+    #>
+    return @(72, 80, 90, 96, 100, 120, 144, 180, 200)
+}
+
+function Get-HeadsetRefreshRate {
+    <#
+    .SYNOPSIS
+    Forced display refresh rate of a Meta Quest (debug.oculus.refreshRate), as [int] Hz,
+    or $null when not forced / unreadable.
+    .EXAMPLE
+    Get-HeadsetRefreshRate -Device $device
+    #>
+    param (
+        [Parameter(Mandatory=$true)][PSCustomObject]$Device,
+        [string]$adb = $global:adbPath
+    )
+    if (-not $Device) { return $null }
+    try {
+        $out = Invoke-AdbCmd -Device $Device -Command "shell getprop debug.oculus.refreshRate" -adb $adb
+        if (-not $out) { return $null }
+        $hz = 0
+        if ([int]::TryParse((@($out) -join '').Trim(), [ref]$hz) -and $hz -gt 0) { return $hz }
+        return $null
+    }
+    catch { Write-Log ($msg.ErrorOccurred -f $_) -Level WARNING; return $null }
+}
+
+function Set-HeadsetRefreshRate {
+    <#
+    .SYNOPSIS
+    Forces the display refresh rate of a Meta Quest (setprop debug.oculus.refreshRate).
+    Session only - a reboot clears it. Returns $true/$false.
+    .EXAMPLE
+    Set-HeadsetRefreshRate -Device $device -Hz 90
+    #>
+    param (
+        [Parameter(Mandatory=$true)][PSCustomObject]$Device,
+        [Parameter(Mandatory=$true)][ValidateRange(72, 200)][int]$Hz,
+        [string]$adb = $global:adbPath
+    )
+    if (-not $Device) { Write-Log ($msg.ErrorOccurred -f 'No device') -Level ERROR; return $false }
+    try {
+        Write-Log "Forcing display refresh rate to $Hz Hz on $($Device.DeviceId)" -Level INFO
+        Invoke-AdbCmd -Device $Device -Command "shell setprop debug.oculus.refreshRate $Hz" -adb $adb | Out-Null
+        Write-Log ($msg.HeadsetSettingApplied -f $Device.DeviceId) -Level SUCCESS
+        return $true
+    }
+    catch { Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR; return $false }
+}
+
 function Reset-HeadsetDisplaySize {
     param (
         [Parameter(Mandatory=$true)][PSCustomObject]$Device,

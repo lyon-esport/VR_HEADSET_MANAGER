@@ -146,7 +146,8 @@ function Get-HeadsetDiagFirmware {
 
     Returns [PSCustomObject]@{ Ok; Brand; OsDisplay; FirmwareVersion; Environment; Build;
     Components; PendingOtaUri; OtaProgressPct; UpdaterDisabled; PrivateDns;
-    PrivateDnsHost; OldFirmwareWarning; Error }.
+    PrivateDnsHost; OldFirmwareWarning; UpdateNotice (@{Build;Release;Tag;DeferUntil;Status}
+    of the update Meta is holding back, $null when none); Error }.
 
     .EXAMPLE
     $dev = Resolve-HeadsetAdbDevice -Headset $headset
@@ -162,7 +163,7 @@ function Get-HeadsetDiagFirmware {
         Ok = $false; Brand = $Brand; OsDisplay = $null; FirmwareVersion = $null
         Environment = $null; Build = $null; Components = @(); PendingOtaUri = $null
         OtaProgressPct = $null; UpdaterDisabled = $null; PrivateDns = $null
-        PrivateDnsHost = $null; OldFirmwareWarning = $false; Error = $null
+        PrivateDnsHost = $null; OldFirmwareWarning = $false; UpdateNotice = $null; Error = $null
     }
 
     try {
@@ -229,6 +230,18 @@ function Get-HeadsetDiagFirmware {
             }
         }
         $r.Components = $components
+
+        # Update notice table ("Last N update notices"): | build | release | tag | timestamp | deferral | status |.
+        # The first row not yet UPDATED is the notice Meta is holding back; its deferral is the date the
+        # headset installs it by itself.
+        foreach ($line in @($seg[6])) {
+            if ($line -notmatch '^\s*\|\s*\d{10,}\s*\|') { continue }
+            $c = @($line.Trim().Trim('|').Split('|') | ForEach-Object { $_.Trim() })
+            if ($c.Count -lt 6) { continue }
+            if ($c[5] -ieq 'UPDATED') { continue }
+            $r.UpdateNotice = [PSCustomObject]@{ Build = $c[0]; Release = $c[1]; Tag = $c[2]; DeferUntil = $c[4]; Status = $c[5] }
+            break
+        }
 
         # OTA progress: the last logcat line that carries a percentage.
         $prog = @($seg[8]) | Where-Object { $_ -match '(\d{1,3})\s*%|progress\D{0,12}(\d{1,3})' } | Select-Object -Last 1
@@ -1006,6 +1019,19 @@ function Open-HeadsetBluetoothSettings {
     return Invoke-HeadsetDiagAction -Device $Device -Script 'am start -a android.settings.BLUETOOTH_SETTINGS'
 }
 
+function Open-HeadsetUpdateSettings {
+    <#
+    .SYNOPSIS
+    Opens the Software Update screen inside the headset. ADB cannot force an OTA (the updater
+    exposes no trigger and the update engine is system-only), so this puts the headset's own
+    "Update now" / "Schedule" buttons in front of the operator. Returns @{ Ok; Output; Error }.
+    .EXAMPLE
+    Open-HeadsetUpdateSettings -Device $d
+    #>
+    param([Parameter(Mandatory=$true)] $Device)
+    return Invoke-HeadsetDiagAction -Device $Device -Script 'am start -a android.settings.SYSTEM_UPDATE_SETTINGS'
+}
+
 
 function ConvertTo-IanaTimeZone {
     <#
@@ -1474,7 +1500,7 @@ function Invoke-HeadsetDiagActionByName {
     action, because these change the state of a live headset.
 
     Actions: bluetooth_on, bluetooth_off, bluetooth_settings, sync_clock (arg setTimeZone),
-    reset_dns, updater_disable, updater_enable, app_enable / app_disable (arg package),
+    reset_dns, updater_disable, updater_enable, updater_open_settings, app_enable / app_disable (arg package),
     player_message (args title, text), send_text (arg text), recover_wake, recover_home,
     recover_restart_shell, recover_restart_systemux, cable_test (arg passes), tls_enable,
     tls_connect (arg port), command (arg command - the custom shell command panel).
@@ -1494,7 +1520,7 @@ function Invoke-HeadsetDiagActionByName {
 
     $res = [PSCustomObject]@{ ok = $false; action = $Action; transport = '-'; message = $null; result = $null }
     $arg = { param($n) if ($null -eq $Arguments) { return $null }; if ($Arguments -is [System.Collections.IDictionary]) { return $Arguments[$n] }; $p = $Arguments.PSObject.Properties[$n]; if ($p) { return $p.Value } else { return $null } }
-    $known = @('bluetooth_on','bluetooth_off','bluetooth_settings','sync_clock','reset_dns','updater_disable','updater_enable',
+    $known = @('bluetooth_on','bluetooth_off','bluetooth_settings','sync_clock','reset_dns','updater_disable','updater_enable','updater_open_settings',
                'app_enable','app_disable','player_message','send_text','recover_wake','recover_home','recover_restart_shell',
                'recover_restart_systemux','cable_test','wifi_speed_test','tls_enable','tls_disable','tls_connect','command','wifi_scan','wifi_switch')
     if ($known -notcontains $Action) { $res.message = ('Unknown action: ' + $Action); return $res }
@@ -1529,6 +1555,7 @@ function Invoke-HeadsetDiagActionByName {
             'reset_dns'                { Reset-HeadsetPrivateDns -Device $device }
             'updater_disable'          { Set-HeadsetUpdaterDisabled -Device $device -Brand $brand -Disabled $true }
             'updater_enable'           { Set-HeadsetUpdaterDisabled -Device $device -Brand $brand -Disabled $false }
+            'updater_open_settings'    { Open-HeadsetUpdateSettings -Device $device }
             'app_enable'               { Set-HeadsetAppEnabled -Device $device -Package ([string](& $arg 'package')) -Enable $true }
             'app_disable'              { Set-HeadsetAppEnabled -Device $device -Package ([string](& $arg 'package')) -Enable $false }
             'player_message'           { Send-HeadsetPlayerMessage -Device $device -Title ([string](& $arg 'title')) -Text ([string](& $arg 'text')) }

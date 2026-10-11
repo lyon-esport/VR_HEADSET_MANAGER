@@ -83,7 +83,7 @@ Each scrcpy version lives in its own folder under `sources\scrcpy\`, so several 
 | Key | Default | Description |
 |---|---|---|
 | `folder` | `scrcpy\scrcpy-win64-v...` | Same value as `ADB.folder` above |
-| `recordFolder` | `C:\DATA\MEDIA\VR_Records` | Where recordings are written |
+| `recordFolder` | `C:\DATA\MEDIA\VR_Records` | Where recordings are written. An absolute or network (`\\server\share`) path is used as is; a relative path is taken from the application folder. Shown in the **Recordings** section of App Configuration |
 | `recordMinFreeSpaceGB` | `5` | Below this free space, recording is disabled automatically |
 | `usb_switch_mode` | `stable` | What a RUNNING capture does when its headset gets cabled: `stable` (switch after the delay below, never while recording), `immediate`, or `next_start` (never interrupt, use USB at the next start). A capture on USB always falls back to WiFi when the cable is removed |
 | `usb_switch_stable_sec` | `10` | How long the cable must stay connected before `stable` mode moves a capture to USB |
@@ -141,6 +141,23 @@ Settings of the headset DIAG page (see [Web interface](web-interface.md#headset-
 | `auto_refresh_sec` | `30` | How often the page re-reads its sections while auto-refresh is on |
 | `cable_test_passes` | `3` | Push/pull passes run by the USB cable throughput test and the WiFi throughput test |
 | `command_presets` | 4 presets | List of `{ "name", "command" }` shown in the ADB shell panel. Edited in `config.json` (the config page has no editor for it) |
+
+### `Recordings`
+
+Settings of the [Recordings page](web-interface.md#recordings). The record folder and the free-space floor themselves are `scrcpy.recordFolder` / `scrcpy.recordMinFreeSpaceGB` (see above); App Configuration shows all of them together in its **Recordings** section:
+
+![Recordings section of App Configuration](pics/web_config_recordings.png)
+
+| Key | Default | Description |
+|---|---|---|
+| `rescan_interval_min` | `10` | How often (minutes) the recordings database is reconciled with the record folder. It is also done at every start |
+| `playback.max_height` | `720` | Maximum picture height of the browser preview (pixels) |
+| `playback.fps` | `30` | Frame rate of the browser preview |
+| `playback.bitrate_kbps` | `2000` | Bitrate of the browser preview (h264) |
+| `playback.max_sessions` | `2` | Previews allowed at the same time - each one is a live encode on this PC |
+| `playback.idle_timeout_sec` | `30` | A preview whose browser tab stopped responding is stopped after this delay |
+
+The `playback` values only affect the browser preview; recording files are never re-encoded. Changes apply to the next preview started.
 
 ### `mediamtx`
 

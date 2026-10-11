@@ -7,3 +7,15 @@
 2026-10-08 19:15:19 [DEBUG] mDNS: Joined multicast group on interface 192.168.1.37
 2026-10-08 19:15:19 [DEBUG] mDNS: Joined multicast group on interface 172.24.0.1
 2026-10-08 19:15:19 [ERROR] mDNS: Fatal socket error: Exception lors de l'appel de « Send » avec « 3 » argument(s) : « Une opération a été tentée sur un hôte impossible à atteindre »
+2026-10-11 23:39:37 [DEBUG] mDNS: Joined multicast group on interface 192.168.1.37
+2026-10-11 23:39:37 [DEBUG] mDNS: Joined multicast group on interface 172.24.144.1
+2026-10-11 23:39:37 [DEBUG] mDNS: Query sent for service type [_adb-tls-connect._tcp]
+2026-10-11 23:39:37 [INFO] mDNS: Listening for responses (3000ms)...
+2026-10-11 23:39:52 [DEBUG] mDNS: Joined multicast group on interface 192.168.1.37
+2026-10-11 23:39:52 [DEBUG] mDNS: Joined multicast group on interface 172.24.144.1
+2026-10-11 23:39:52 [DEBUG] mDNS: Query sent for service type [_adb-tls-connect._tcp]
+2026-10-11 23:39:52 [INFO] mDNS: Listening for responses (3000ms)...
+2026-10-11 23:45:12 [DEBUG] mDNS: Joined multicast group on interface 192.168.1.37
+2026-10-11 23:45:12 [DEBUG] mDNS: Joined multicast group on interface 172.24.144.1
+2026-10-11 23:45:12 [DEBUG] mDNS: Query sent for service type [_adb-tls-connect._tcp]
+2026-10-11 23:45:12 [INFO] mDNS: Listening for responses (3000ms)...

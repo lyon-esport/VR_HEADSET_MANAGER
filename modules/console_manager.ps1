@@ -1109,6 +1109,7 @@ function Show-SubMenu-ManageHeadset { #CHOICE 4
     Write-Host $msg.UninstallApp
     Write-Host $msg.Headset.WifiMenuEntry
     Write-Host $msg.Headset.FrameMenuEntry
+    Write-Host $msg.Headset.RefreshMenuEntry
 
     Write-Host $msg.ReturnPreviousMenu
     $userInput = $(Read-Host $msg.YourChoice).ToUpper() #ToUpper = Convert user input to uppercase for case-insensitive comparison
@@ -1127,6 +1128,9 @@ function Show-SubMenu-ManageHeadset { #CHOICE 4
     }
     elseif ($userInput -eq '8') {
         Show-SubMenu-CaptureHeadsetFrame
+    }
+    elseif ($userInput -eq '9') {
+        Show-SubMenu-HeadsetRefreshRate
     }
     elseif ($userInput -in ('3','4','5','6')) {
         Write-Host $msg.AppManager
@@ -1208,6 +1212,64 @@ function Show-SubMenu-PushHeadsetWifi {
         }
     } else {
         Write-Log ($msg.Headset.WifiPushFailed -f $result.Error) -Level ERROR
+    }
+    Start-Sleep -Seconds 3
+}
+
+function Show-SubMenu-HeadsetRefreshRate {
+    <#
+    .SYNOPSIS
+    Console counterpart of the "Refresh Rate" row of the web Configure modal: forces the
+    display refresh rate of a Meta Quest (Set-HeadsetRefreshRate). Session only.
+
+    .EXAMPLE
+    Show-SubMenu-HeadsetRefreshRate
+    #>
+    $headsets = @(Get-KnownHeadsets)
+    if ($headsets.Count -eq 0) {
+        Write-Host $msg.NoHeadsetInFile -ForegroundColor Yellow
+        Start-Sleep -Seconds 2
+        return
+    }
+
+    Show-HeadsetsTable
+    Write-Host ""
+    $headsetChoice = Read-Host $msg.Headset.RefreshPickHeadset
+    if ($headsetChoice -eq '0' -or -not $headsetChoice) { return }
+
+    $headset = $headsets | Where-Object { [string]$_.ID -eq [string]$headsetChoice } | Select-Object -First 1
+    if (-not $headset) {
+        Write-Log $msg.UnrecognizedOption -Level ERROR
+        Start-Sleep -Seconds 2
+        return
+    }
+
+    $device = Get-BestAdbDevice -Headset $headset
+    if (-not $device) {
+        Write-Log ($msg.Headset.RefreshFailed -f 'ADB connection') -Level ERROR
+        Start-Sleep -Seconds 3
+        return
+    }
+
+    $current = Get-HeadsetRefreshRate -Device $device
+    $currentText = if ($current) { "$current Hz" } else { '-' }
+    Write-Log ($msg.Headset.RefreshCurrent -f $headset.Name, $currentText) -Level INFO
+
+    $rates = @(Get-HeadsetRefreshRateChoices)
+    Write-Host ""
+    for ($i = 0; $i -lt $rates.Count; $i++) {
+        Write-Host ("{0}. {1} Hz" -f ($i + 1), $rates[$i])
+    }
+    Write-Host ""
+    $rateChoice = Read-Host $msg.Headset.RefreshPickRate
+    $rateIndex = 0
+    if (-not [int]::TryParse($rateChoice, [ref]$rateIndex) -or $rateIndex -lt 1 -or $rateIndex -gt $rates.Count) { return }
+    $hz = [int]$rates[$rateIndex - 1]
+
+    if (Set-HeadsetRefreshRate -Device $device -Hz $hz) {
+        Write-Log ($msg.Headset.RefreshApplied -f $headset.Name, $hz) -Level SUCCESS
+    } else {
+        Write-Log ($msg.Headset.RefreshFailed -f $headset.Name) -Level ERROR
     }
     Start-Sleep -Seconds 3
 }

@@ -124,3 +124,43 @@ A dedicated page to drive all session timers at once; the same functions are exp
 ### Kiosk Screens
 
 Remote-control browser displays on the LAN (lobby TVs, showroom monitors) — push a URL, cast a headset's live feed to a screen, or kill its browser. See the dedicated [Kiosk screens](kiosk-screens.md) page.
+
+### Benchmark
+
+Measures what each capture option costs this PC (CPU, GPU, encoder, network) and recommends settings for your number of headsets. Every running stream is stopped while it runs. See [Streaming → Benchmark](streaming.md#benchmark-what-each-option-costs-this-pc).
+
+### Recordings
+
+Browse, watch, download and clean up the recorded capture sessions (**Config → Recordings**). Recording itself is switched on per headset in **Headset Settings**; see [Streaming → Recording](streaming.md#recording).
+
+![Recordings page: all headsets on one day, timeline and list](pics/web_recordings.png)
+
+- **Filters**: pick a headset, a date (only days that hold recordings are listed) and an hour range. **All headsets** shows one timeline lane per headset. The filters are kept in the page address, so a view can be bookmarked or shared.
+- **Timeline**: one bar per recorded session. Blue = finished, red pulsing = still recording, amber = interrupted (the app or PC stopped in the middle of a session). A lock marks a protected recording. Click a point of a bar to play from that exact moment; click a gap to jump to the next recording.
+- **List**: start, end, duration, size, status, codec and picture size, capture profile (view / eye / fps / bitrate), capture mode and eye merge. **Click a row to play it.** Each row also has:
+  - **Download** - the original `.mkv`, byte for byte (the file is never modified)
+  - **Lock / Locked** - "do not delete": a locked recording can be neither deleted nor wiped. You can add a short note when locking it (shown as a tooltip).
+  - **Delete** - removes the file and its entry after a confirmation. Not available on a locked recording or one still being recorded.
+- **Rescan folder** re-reads the record folder now (the app also does it at every start and every 10 minutes): files copied in by hand appear, files deleted outside the app disappear.
+
+#### Watching a recording
+
+![Recording preview playing, with the playhead on the timeline](pics/web_recordings_player.png)
+
+The browser cannot play the recorded `.mkv` directly, so the server re-encodes it **live** into a lighter h264 stream (720p, 30 fps by default) and plays it with the same low-latency technology as the Video Monitor. The recording files themselves are never touched.
+
+- **Play / Pause**, the **Space** key, or a **single click on the picture** toggle playback. While paused, the last image stays on screen.
+- **Double-click the picture**, or the button in its bottom-right corner, for full screen.
+- Drag the **seek bar**, or click the timeline, to jump; **1x / 2x / 4x** sets the speed. The clock shows the real date and time of the image on screen, and the green line follows it on the timeline.
+- At the end of a recording the next one of the same headset starts automatically.
+
+The preview needs the streaming server (MediaMTX) running in a streaming capture mode; in **LocalWindow** mode the page says so and the list, timeline and downloads still work. At most 2 previews run at once (configurable), and a preview stops by itself about 30 s after its browser tab is closed. Preview settings are in **App Configuration → Recordings** ([reference](configuration.md#recordings)).
+
+> [!NOTE]
+> The preview shows exactly what was recorded. A recording made while the headset was asleep is black, and a recording made at 10 fps stays at 10 fps - the preview cannot add frames.
+
+#### Deleting old recordings
+
+![Delete old recordings dialog with its preview](pics/web_recordings_wipe.png)
+
+**Delete old recordings...** frees disk space in bulk: recordings **older than N days**, or all recordings of **one date**, for the selected headset or all of them. **Preview** first shows how many recordings and how much space would go and how many are kept because they are locked; the **Delete** button only unlocks after you type `DELETE`. Locked recordings, sessions still recording and files written in the last minute are never deleted, and empty date/headset folders are removed afterwards.
