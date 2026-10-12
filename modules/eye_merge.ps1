@@ -1222,6 +1222,12 @@ function Update-EyeMergeConfig {
         return $false
     }
     Get-Config
+    # A running merged stream no longer matches a changed calibration / crop / depth / main eye:
+    # have the monitor compare and restart it now instead of on its next slow tick. -NoMark: most
+    # captures (L/R views, other models) need nothing, the watchdog announces the real restarts.
+    if (Get-Command Request-ScrcpyCheck -ErrorAction SilentlyContinue) {
+        [void](Request-ScrcpyCheck -All -NoMark -Reason 'eye merge settings changed')
+    }
     return $true
 }
 

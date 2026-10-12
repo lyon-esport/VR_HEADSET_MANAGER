@@ -673,6 +673,13 @@ function Start-VRMonitor {
             $seedReq = Get-StreamRestartRequest
             if ($seedReq) { $restartReqId = [string]$seedReq.id }
         }
+        # Last scrcpy "check now" request handled (Request-ScrcpyCheck): seeded the same way, so a
+        # request older than this process is never replayed.
+        $checkReqId      = ''
+        if (Get-Command Get-ScrcpyCheckRequest -ErrorAction SilentlyContinue) {
+            $seedCheck = Get-ScrcpyCheckRequest
+            if ($seedCheck) { $checkReqId = [string]$seedCheck.id }
+        }
         $infoByIp        = @{}
         $knownHeadsets   = @()
         # Registry change counter last seen by the fast path. -1 rather than 0 so
@@ -869,6 +876,27 @@ function Start-VRMonitor {
                 if ($ready -and (-not $scrcpyEdgeState[$edgeKey] -or $cfgChanged)) { $scrcpyEdgeIds += [int]$h.ID }
                 $scrcpyEdgeState[$edgeKey] = [bool]$ready
                 $scrcpyCfgState[$edgeKey]  = $cfgSig
+            }
+
+            # An explicit "check these headsets now" (Request-ScrcpyCheck): the kill button, a
+            # profile / recording / capture-mode / view / calibration change made by another
+            # process. Those leave the registry untouched or change it in a way the edge above
+            # cannot see (the capture is simply gone, or its options changed in config.json), so
+            # they used to wait for the slow tick. Config is reloaded first: the running session
+            # is compared with the NEW view definitions. Watch-ScrcpyProcesses then decides
+            # (start / restart / nothing) and clears the "starting" mark when nothing is needed.
+            if (-not $benchState -and (Get-Command Get-ScrcpyCheckRequest -ErrorAction SilentlyContinue)) {
+                $checkReq = Get-ScrcpyCheckRequest
+                if ($checkReq -and [string]$checkReq.id -and [string]$checkReq.id -ne $checkReqId) {
+                    $checkReqId = [string]$checkReq.id
+                    $knownIds = @($knownHeadsets | ForEach-Object { [int]$_.ID })
+                    $checkIds = @($checkReq.ids | ForEach-Object { [int]$_ } | Where-Object { $knownIds -contains $_ })
+                    if ($checkIds.Count -gt 0) {
+                        Write-Log ("VRMonitor: capture check requested ({0}) for headset id(s) {1}" -f $checkReq.reason, ($checkIds -join ',')) -Level DEBUG
+                        try { Get-Config -ConfigFilePath $global:ConfigFilePath | Out-Null } catch { Write-Log ("VRMonitor: config reload failed: " + $_.Exception.Message) -Level WARNING }
+                        $scrcpyEdgeIds = @($scrcpyEdgeIds + $checkIds | Select-Object -Unique)
+                    }
+                }
             }
             if ($scrcpyEdgeIds.Count -gt 0) {
                 Write-Log ("VRMonitor: capture requested or settings changed for headset id(s) {0} - checking scrcpy now" -f ($scrcpyEdgeIds -join ',')) -Level DEBUG

@@ -46,6 +46,7 @@ One card per headset with every day-to-day control:
 - Live status dots (PING / ADB / SCRCPY) and running app, with launch button. The ADB label shows the transport in use (`ADB USB` when the headset is cabled to this PC, `ADB WiFi` otherwise)
 - **IP address**, model, **serial number**, and the assigned [capture profile](streaming.md#scrcpy-capture-profiles) — all editable
 - **Auto-restart scrcpy** — keep the capture running automatically
+- **Capture starting** — whenever a capture is (re)started - the stop button, a profile or recording change, a view or calibration edit, auto-restart switched ON - the SCRCPY dot turns **amber and pulses** with a "Starting" chip, the video wall shows a "Capture starting..." tile instead of making the headset vanish, and the video page says "Capture starting..." until the picture is back. With auto-restart ON the restart is requested immediately, not on the monitor's next cycle.
 - **Recording** — record the capture to disk ([details](streaming.md#recording))
 - **Timer** — set and start a session countdown
 - **Advanced Settings** (Configure) — brightness, guardian, proximity sensor, OTA update blocking, firmware info...

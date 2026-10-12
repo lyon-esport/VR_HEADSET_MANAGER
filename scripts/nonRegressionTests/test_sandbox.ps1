@@ -877,7 +877,11 @@ $json = $result | ConvertTo-Json -Depth 12 -Compress
 [System.IO.File]::WriteAllText($OutFile, $json, (New-Object System.Text.UTF8Encoding($false)))
 '@
 
-    $runnerText = $runnerText -replace '__BODY__', $Body.ToString()
+    # Literal Replace, NOT -replace: in a regex replacement `$_`, `$&`, `$'` and `$1` are
+    # substitution patterns, so any body using `$_` (ForEach-Object / Where-Object) was silently
+    # rewritten with the whole runner text - ffmpeg got garbage arguments (exit -22) or the child
+    # failed to parse and "produced no output".
+    $runnerText = $runnerText.Replace('__BODY__', $Body.ToString())
     Write-TextFileNoBom -Path $runner -Content $runnerText
 
     try {

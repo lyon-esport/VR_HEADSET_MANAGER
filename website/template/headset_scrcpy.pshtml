@@ -37,6 +37,21 @@
         pointer-events: none;
         display: none;
       }
+      /* Capture starting / restarting: amber text with a spinner, so it reads as "coming" and not
+         as an error. */
+      #status.starting { color: #f59e0b; }
+      #status.starting::before {
+        content: '';
+        display: inline-block;
+        width: 16px; height: 16px;
+        margin-right: 10px;
+        vertical-align: -2px;
+        border-radius: 50%;
+        border: 3px solid rgba(245, 158, 11, 0.35);
+        border-top-color: #f59e0b;
+        animation: status-spin 0.8s linear infinite;
+      }
+      @keyframes status-spin { to { transform: rotate(360deg); } }
 
       /* Hover action buttons */
       #actions-left {
@@ -208,14 +223,69 @@
       var pc = null;
       var retryTimer = null;
 
-      function showStatus(msg) {
+      function showStatus(msg, starting) {
         if (msg) {
           statusEl.textContent = msg;
+          statusEl.className = starting ? 'starting' : '';
           statusEl.style.display = 'block';
         } else {
           statusEl.style.display = 'none';
           statusEl.textContent = '';
+          statusEl.className = '';
         }
+      }
+
+      // ---- Capture state: "starting" is not "unavailable" ----
+      // While there is no picture the page used to say "Stream unavailable - retrying..." whether
+      // the capture was being (re)started or had been stopped, so a kill / profile change looked
+      // like a failure until the logo came back. The server knows (scrcpy_starting, set by the
+      // process that starts the capture): the page asks for it while it has no picture, and a
+      // little more slowly otherwise to notice a restart that is about to drop the stream.
+      var CAPTURE_ID = '<%= $headset_id %>';
+      var capture = { starting: false, scrcpy: true, autoRestart: false, known: false };
+      var capturePollTimer = null;
+      var hasPicture = false;
+
+      function noPictureMessage() {
+        if (capture.starting) { return ['Capture starting...', true]; }
+        if (capture.known && !capture.scrcpy && !capture.autoRestart) { return ['Capture stopped', false]; }
+        return ['Stream unavailable - retrying...', false];
+      }
+
+      function pollCaptureState() {
+        if (capturePollTimer) { clearTimeout(capturePollTimer); capturePollTimer = null; }
+        if (!CAPTURE_ID) { return; }
+        // Hidden tab (stream paused on purpose): nothing to show, do not poll at the fast rate.
+        if (pausedForVisibility) { capturePollTimer = setTimeout(pollCaptureState, 4000); return; }
+        fetch('/api/headset-status?id=' + encodeURIComponent(CAPTURE_ID) + '&_=' + Date.now(), { cache: 'no-store' })
+          .then(function(r) { return r.ok ? r.json() : null; })
+          .then(function(j) {
+            if (!j) { return; }
+            var wasStarting = capture.starting;
+            capture.starting    = !!j.scrcpy_starting;
+            capture.scrcpy      = j.scrcpy !== false;
+            capture.autoRestart = !!j.scrcpy_auto_restart;
+            capture.known       = true;
+            if (document.hidden && pausedForVisibility) { return; }
+            if (capture.starting && hasPicture) {
+              // The stream is about to be replaced: say so over the frozen last picture.
+              showStatus('Capture restarting...', true);
+            } else if (!capture.starting && wasStarting && hasPicture) {
+              // The restart is over. A session that mediamtx terminated stays "connected" in the
+              // browser; make the stall watch decide within ~2 s instead of 8 s.
+              showStatus('');
+              stallLastChange = Math.min(stallLastChange, Date.now() - STALL_MS + 2000);
+            } else if (!hasPicture) {
+              var m = noPictureMessage();
+              showStatus(m[0], m[1]);
+              // The capture just came up: do not sit out the retry delay.
+              if (wasStarting && !capture.starting && capture.scrcpy) { connect(); }
+            }
+          })
+          .catch(function() {})
+          .finally(function() {
+            capturePollTimer = setTimeout(pollCaptureState, (hasPicture && !capture.starting) ? 4000 : 1000);
+          });
       }
 
       function cleanup() {
@@ -232,7 +302,9 @@
 
       function scheduleRetry() {
         cleanup();
-        showStatus('Stream unavailable - retrying...');
+        hasPicture = false;
+        var m = noPictureMessage();
+        showStatus(m[0], m[1]);
         var delay = RETRY_DELAYS_MS[Math.min(retryCount, RETRY_DELAYS_MS.length - 1)];
         retryCount++;
         retryTimer = setTimeout(connect, delay);
@@ -240,7 +312,9 @@
 
       async function connect() {
         cleanup();
-        showStatus('Connecting...');
+        hasPicture = false;
+        if (capture.starting) { var ms = noPictureMessage(); showStatus(ms[0], ms[1]); }
+        else { showStatus('Connecting...'); }
         try {
           pc = new RTCPeerConnection();
 
@@ -253,6 +327,7 @@
             if (evt.streams && evt.streams[0]) {
               videoEl.srcObject = evt.streams[0];
               retryCount = 0;   // a later drop starts the fast retries again
+              hasPicture = true;
               showStatus('');
               refreshStreamMask();   // a new stream may come with another view
               startStallWatch();
@@ -339,7 +414,9 @@
             var now = Date.now();
             if (packets !== stallLastPackets) { stallLastPackets = packets; stallLastChange = now; return; }
             if (now - stallLastChange >= STALL_MS) {
-              showStatus('Stream interrupted - reconnecting...');
+              hasPicture = false;
+              if (capture.starting) { var mi = noPictureMessage(); showStatus(mi[0], mi[1]); }
+              else { showStatus('Stream interrupted - reconnecting...'); }
               connect();
             }
           }).catch(function() {});
@@ -409,6 +486,7 @@
 
       // Start as soon as the DOM is ready
       document.addEventListener('DOMContentLoaded', function() {
+        pollCaptureState();
         connect();
         refreshStreamMask();
 

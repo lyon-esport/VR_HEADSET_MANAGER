@@ -185,6 +185,23 @@
     .scrcpy-kill-btn:disabled { opacity: 0.5; cursor: default; }
     .scrcpy-kill-btn.hidden { display: none !important; }
 
+    /* Capture starting: amber pulsing dot + a chip where the stop button sits when running. */
+    .dot-starting { background: #f59e0b; animation: scrcpy-pulse 1s ease-in-out infinite; }
+    @keyframes scrcpy-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.7); } }
+    .scrcpy-starting-chip {
+      display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
+      font-size: 11px; font-weight: 600; letter-spacing: .03em; color: #f59e0b;
+      background: rgba(245,158,11,0.12); border: 1px solid rgba(245,158,11,0.35);
+      border-radius: 10px; padding: 1px 8px;
+    }
+    .scrcpy-starting-chip.hidden { display: none !important; }
+    .scrcpy-starting-chip .spin {
+      width: 9px; height: 9px; border-radius: 50%;
+      border: 2px solid rgba(245,158,11,0.35); border-top-color: #f59e0b;
+      animation: scrcpy-spin .8s linear infinite;
+    }
+    @keyframes scrcpy-spin { to { transform: rotate(360deg); } }
+
     /* Inline IP editor */
     .card-row-edit-btn {
       display: inline-flex; align-items: center; justify-content: center;
@@ -1448,6 +1465,9 @@
               '</svg>' +
               'Auto-restart scrcpy' +
             '</span>' +
+            '<span class="scrcpy-starting-chip hidden" data-starting-chip="' + dn + '" title="The capture is being (re)started - the stream appears in a few seconds">' +
+              '<span class="spin"></span>Starting' +
+            '</span>' +
             '<button class="scrcpy-kill-btn hidden" data-kill-headset="' + dn + '" title="Stop scrcpy">' +
               '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
                 '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 0 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>' +
@@ -1781,8 +1801,13 @@
           // 1-3 s) stop request runs, and hold that state until the monitor reports it - the
           // status lags the kill by a second or two, which used to bring the button back.
           var wasScrcpy = headsetStatus[dn] ? headsetStatus[dn].scrcpy : true;
+          // Auto-restart ON: the server restarts the capture right after the kill, so show it as
+          // "starting" immediately instead of a grey dot until the logo comes back.
+          var arBtnKill = document.querySelector('[data-ar-headset="' + dn + '"]');
+          var willRestart = !!(arBtnKill && arBtnKill.classList.contains('on'));
           _scrcpyExpect[dn] = { value: false, hold: true, until: Date.now() + 15000 };
-          if (headsetStatus[dn]) { headsetStatus[dn].scrcpy = false; }
+          if (willRestart) { _startingHint[dn] = { until: Date.now() + 8000 }; }
+          if (headsetStatus[dn]) { headsetStatus[dn].scrcpy = false; headsetStatus[dn].starting = willRestart; }
           if (cardsBuilt) { updateStatusDots(); }
           fetch('/api/stop-scrcpy', {
             method: 'POST',
@@ -1791,20 +1816,23 @@
           })
           .then(function(r) { return r.json(); })
           .then(function(j) {
-            if (j && j.ok) {
+            // ok:false with restarting:true = it was already gone, and the server is bringing it back.
+            if (j && (j.ok || j.restarting)) {
               // The endpoint is synchronous, so ok:true means scrcpy is already dead.
               ensureFastStatus();
             } else {
               // Not stopped: drop the optimistic state and show the real one again.
               delete _scrcpyExpect[dn];
-              if (headsetStatus[dn]) { headsetStatus[dn].scrcpy = wasScrcpy; }
+              delete _startingHint[dn];
+              if (headsetStatus[dn]) { headsetStatus[dn].scrcpy = wasScrcpy; headsetStatus[dn].starting = false; }
               if (cardsBuilt) { updateStatusDots(); }
               pollHeadsetsStatus();
             }
           })
           .catch(function() {
             delete _scrcpyExpect[dn];
-            if (headsetStatus[dn]) { headsetStatus[dn].scrcpy = wasScrcpy; }
+            delete _startingHint[dn];
+            if (headsetStatus[dn]) { headsetStatus[dn].scrcpy = wasScrcpy; headsetStatus[dn].starting = false; }
             if (cardsBuilt) { updateStatusDots(); }
           })
           .finally(function() { killBtn.disabled = false; });
@@ -1827,7 +1855,18 @@
             if (!j.ok) { btn.classList.toggle('on', !newVal); btn.textContent = !newVal ? 'ON' : 'OFF'; return; }
             // Capture requested: the monitor starts scrcpy within about a second, so poll
             // fast until the blue dot can show instead of waiting for the next slow poll.
-            if (newVal) { delete _pendingSince[dn]; expectScrcpy(dn, true, false, FAST_STATUS_MAX_MS); }
+            if (newVal) {
+              delete _pendingSince[dn];
+              // Show "starting" at once (the server marks it too): only when ADB is up, otherwise
+              // nothing can start and the dot must not promise it.
+              var stNow = headsetStatus[dn];
+              if (stNow && stNow.adb && !stNow.scrcpy) {
+                _startingHint[dn] = { until: Date.now() + 8000 };
+                stNow.starting = true;
+                if (cardsBuilt) { updateStatusDots(); }
+              }
+              expectScrcpy(dn, true, false, FAST_STATUS_MAX_MS);
+            }
           })
           .catch(function() { btn.classList.toggle('on', !newVal); btn.textContent = !newVal ? 'ON' : 'OFF'; });
           return;
@@ -1856,6 +1895,9 @@
             }
           })
           .catch(function() { recBtn.classList.toggle('on', !newVal); recBtn.textContent = !newVal ? 'ON' : 'OFF'; });
+          // Toggling recording restarts a running capture: follow it as "starting".
+          ensureFastStatus();
+          setTimeout(pollHeadsetsStatus, 400);
           return;
         }
         // Timer mode toggle
@@ -2087,8 +2129,18 @@
           adbLabel.parentNode.title = tr ? 'ADB over ' + tr : 'ADB';
         }
 
+        // Capture starting (server flag, or the short hint after the operator's own action): amber
+        // pulsing dot + "Starting" chip, so a kill / profile change / start is never a silent gap.
+        var startingNow = !!s.starting && !s.scrcpy;
         var scrcpyDot = document.querySelector('[data-dot-scrcpy="' + dn + '"] .dot');
-        if (scrcpyDot) { scrcpyDot.className = 'dot ' + (s.scrcpy ? 'dot-blue' : 'dot-grey'); }
+        if (scrcpyDot) { scrcpyDot.className = 'dot ' + (s.scrcpy ? 'dot-blue' : (startingNow ? 'dot-starting' : 'dot-grey')); }
+        var scrcpyLbl = document.querySelector('[data-dot-scrcpy="' + dn + '"] .status-dot-label');
+        if (scrcpyLbl) {
+          scrcpyLbl.textContent = startingNow ? 'STARTING' : 'SCRCPY';
+          scrcpyLbl.parentNode.title = startingNow ? 'SCRCPY - capture starting...' : 'SCRCPY';
+        }
+        var startChip = document.querySelector('[data-starting-chip="' + dn + '"]');
+        if (startChip) { startChip.classList.toggle('hidden', !startingNow); }
 
         var killBtn = document.querySelector('[data-kill-headset="' + dn + '"]');
         if (killBtn) { killBtn.classList.toggle('hidden', !s.scrcpy); }
@@ -2180,7 +2232,8 @@
     //   hold = false -> only poll fast, never fake it (ON: blue only once scrcpy really runs)
     var FAST_STATUS_MS     = 1000;
     var FAST_STATUS_MAX_MS = 60000;
-    var _scrcpyExpect      = {};   // dn -> { value: bool, hold: bool, until: ms }
+    var _scrcpyExpect      = {};   // dn -> { value: bool, hold: bool, until: ms, sawStarting: bool }
+    var _startingHint      = {};   // dn -> { until: ms }: "starting" shown right after the operator's own action
     var _scrcpyRaw         = {};   // dn -> scrcpy as last reported by the server
     var _pendingSince      = {};   // dn -> ms the "auto-restart ON, ADB up, no scrcpy" state began
     var _fastStatusTimer   = null;
@@ -2196,6 +2249,10 @@
         var ex = _scrcpyExpect[dn];
         if (now > ex.until || _scrcpyRaw[dn] === ex.value) { delete _scrcpyExpect[dn]; return; }
         pending = true;
+      });
+      // A capture the server says is starting: poll fast until it is up (or the mark expires).
+      Object.keys(headsetStatus).forEach(function(dn) {
+        if (headsetStatus[dn] && headsetStatus[dn].starting) pending = true;
       });
       // Capture starting on its own (ADB just came up on a headset with auto-restart ON).
       Object.keys(headsetStatus).forEach(function(dn) {
@@ -2228,14 +2285,25 @@
             var dn = item.display_name || toDisplayName(item.name || '');
             if (!dn) return;
             var scrcpy = !!item.scrcpy;
+            var srvStarting = !!item.scrcpy_starting;
             _scrcpyRaw[dn] = scrcpy;
             var ex = _scrcpyExpect[dn];
+            if (ex) {
+              // The kill hold must not outlive the restart it triggered: once the server has
+              // announced the start and then finished it, the real state is shown again (a restart
+              // faster than the poll would otherwise leave the dot grey for the whole hold).
+              if (srvStarting) ex.sawStarting = true;
+              else if (ex.sawStarting && scrcpy) { delete _scrcpyExpect[dn]; ex = null; }
+            }
             if (ex && ex.hold && now <= ex.until && scrcpy !== ex.value) { scrcpy = ex.value; }
+            var hint = _startingHint[dn];
+            if (hint && (now > hint.until || scrcpy)) { delete _startingHint[dn]; hint = null; }
             headsetStatus[dn] = {
               ping:           !!item.ping,
               adb:            !!item.adb,
               transport:      item.adb_transport || '',
               scrcpy:         scrcpy,
+              starting:       !scrcpy && (srvStarting || !!hint),
               model:          item.model || '',
               runningApp:     item.running_app     || '',
               runningAppIcon: item.running_app_icon || ''
@@ -2639,6 +2707,10 @@
         if (j.ok) {
           document.getElementById('profile-val-' + dn).textContent = newProfile;
           closeProfileModal();
+          // The server restarts the running capture with the new profile right away: follow it
+          // (fast poll + "starting" until it is back) instead of a silent gap.
+          var stP = headsetStatus[dn], arP = document.querySelector('[data-ar-headset="' + dn + '"]');
+          if (stP && stP.scrcpy && arP && arP.classList.contains('on')) { ensureFastStatus(); pollHeadsetsStatus(); }
         }
       })
       .catch(function() {})
@@ -3236,6 +3308,9 @@
     if (window.LiveEvents) {
       LiveEvents.subscribe('headset_status', pollHeadsetsStatus);
       LiveEvents.subscribe('headsets',       pollHeadsetsCsv);
+      // The "capture starting" mark lives in app_kv (written by whichever process starts or
+      // restarts the capture): react to it as soon as it is set or cleared.
+      LiveEvents.subscribe('app_kv',         pollHeadsetsStatus);
     }
 
     // Timer helpers

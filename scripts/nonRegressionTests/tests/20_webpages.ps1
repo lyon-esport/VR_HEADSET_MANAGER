@@ -246,8 +246,51 @@ Invoke-RegressionTest -Name '/api/headsets-status returns one entry per headset'
     Assert-Equal $stored.Count $api.Count 'status row count'
 
     if ($api.Count -gt 0) {
-        foreach ($field in @('display_name', 'ip_address', 'ping', 'adb', 'scrcpy', 'battery')) {
+        foreach ($field in @('display_name', 'ip_address', 'ping', 'adb', 'scrcpy', 'battery', 'scrcpy_starting')) {
             Assert-Contains $api[0].PSObject.Properties.Name $field 'status object fields'
+        }
+    }
+}
+
+Invoke-RegressionTest -Name 'capture "starting" mark: status endpoints expose it, it expires and clears' -Test {
+    # The mark is an app_kv row the page reads through /api/headsets-status and /api/headset-status
+    # (Set-ScrcpyStartingState / Get-ScrcpyStartingIds, set by whichever process starts a capture).
+    $stored = @(Get-SandboxHeadsets -TargetRoot $target)
+    if ($stored.Count -eq 0) { Skip-Test 'the sandbox registry holds no headset' }
+    $id = [int]$stored[0].ID
+    # The body runs in a child PowerShell as TEXT, so the id is substituted into it.
+    $bodyText = @'
+$out = [ordered]@{ Marked = $false; Cleared = $false; Expired = $false; Held = $false }
+Set-ScrcpyStartingState -HeadsetId __ID__
+$out.Marked = (@(Get-ScrcpyStartingIds) -contains __ID__)
+Set-ScrcpyStartingState -HeadsetId __ID__ -Clear
+$out.Cleared = -not (@(Get-ScrcpyStartingIds) -contains __ID__)
+# A mark whose time has passed (a crashed start) must not count.
+Set-DbKeyValue -Key 'scrcpy_starting' -Value @{ '__ID__' = ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - 5) }
+$script:ScrcpyStartingMemo = $null
+$out.Expired = -not (@(Get-ScrcpyStartingIds) -contains __ID__)
+# Marked = "starting" (scrcpy not up: the status endpoints force scrcpy=false for it).
+Set-ScrcpyStartingState -HeadsetId __ID__
+$st1 = Get-ScrcpyCaptureState
+# Clearing with a hold = "settling": still announced, but no longer "not up".
+Set-ScrcpyStartingState -HeadsetId __ID__ -Clear -HoldSec 30
+$st2 = Get-ScrcpyCaptureState
+$out.Held = ((@($st1.Starting) -contains __ID__) -and -not (@($st1.Settling) -contains __ID__) -and
+             (@($st2.Settling) -contains __ID__) -and (@($st2.Announcing) -contains __ID__) -and -not (@($st2.Starting) -contains __ID__) -and
+             (@(Get-ScrcpyStartingIds) -contains __ID__))
+Set-ScrcpyStartingState -HeadsetId __ID__ -Clear
+[PSCustomObject]$out
+'@
+    $r = Invoke-InTargetModules -TargetRoot $target -Body ([scriptblock]::Create($bodyText.Replace('__ID__', [string]$id)))
+    Assert-True $r.Marked  'a marked capture is reported as starting'
+    Assert-True $r.Cleared 'clearing the mark ends it'
+    Assert-True $r.Expired 'an expired mark is ignored'
+    Assert-True $r.Held    'a start in progress is "starting"; cleared with a hold it becomes "settling" and stays announced'
+
+    $s = Invoke-VrmApi -Path ('/api/headset-status?id=' + $id)
+    if ($s.StatusCode -eq 200) {
+        foreach ($field in @('scrcpy', 'scrcpy_starting', 'scrcpy_auto_restart')) {
+            Assert-Contains $s.Json.PSObject.Properties.Name $field '/api/headset-status capture fields'
         }
     }
 }

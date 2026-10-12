@@ -782,7 +782,11 @@ function Set-CaptureMode {
     # Local registry cleanup (web/main may both hold dead entries after a kill)
     foreach ($key in @($global:HeadsetPipelines.Keys)) { Stop-HeadsetPipeline -SafeName $key }
 
-    Write-Log ("CaptureMode set to {0} (was {1}); VRMonitor will respawn on next cycle" -f $Mode, $previous) -Level SUCCESS
+    # Do not wait for the slow tick: ask VRMonitor to respawn the captures now (and show them as
+    # "starting" meanwhile). It reloads config first, so it starts them in the new mode.
+    [void](Request-ScrcpyCheck -All -Reason 'capture mode changed')
+
+    Write-Log ("CaptureMode set to {0} (was {1}); VRMonitor respawns the captures now" -f $Mode, $previous) -Level SUCCESS
     return $true
 }
 
@@ -807,13 +811,16 @@ function Stop-HeadsetPipeline {
                 # 15 s, not 5: finalising the recording (index, flush of a multi-GB file on a disk that
                 # OBS may be writing to at the same time) can legitimately take longer than 5 s, and a
                 # kill in that window is what leaves a recording without its index.
-                if (-not $ff.WaitForExit(15000)) {
+                # Without a recording there is nothing to finalise, so waiting buys nothing and only
+                # delays the next start (a restart waits here before launching scrcpy again): 2 s.
+                $graceMs = if ($entry.RecordFile) { 15000 } else { 2000 }
+                if (-not $ff.WaitForExit($graceMs)) {
                     $forcedKill = $true
                     if ($entry.RecordFile) {
                         Write-Log ("Stop-HeadsetPipeline: ffmpeg for {0} did not exit gracefully within 15 s - forcing kill. The recording '{1}' lacks its index; it stays playable and is repaired automatically in the background (Recordings catalogue)." -f $SafeName, $entry.RecordFile) -Level WARNING
                     } else {
                         # Nothing is lost: no recording on this stream, the live stream was being stopped anyway.
-                        Write-Log ("Stop-HeadsetPipeline: ffmpeg for {0} did not exit within 15 s after 'q' - forcing kill (no recording on this stream)." -f $SafeName) -Level INFO
+                        Write-Log ("Stop-HeadsetPipeline: ffmpeg for {0} did not exit within {1} s after 'q' - forcing kill (no recording on this stream)." -f $SafeName, [int]($graceMs / 1000)) -Level INFO
                     }
                     try { Stop-Process -Id $ff.Id -Force -ErrorAction SilentlyContinue } catch {}
                     try { [void]$ff.WaitForExit(3000) } catch {}
@@ -883,6 +890,17 @@ function start-screenCopy {
     # (Get-AdbWifiDevice does both) and costs no adb.exe at all for the USB case.
     $knownRow = @(Get-KnownHeadsets) | Where-Object { $_.IPAddress -eq $headsetIP } | Select-Object -First 1
     if (-not $knownRow) { $knownRow = [PSCustomObject]@{ Name = $displayName; IPAddress = $headsetIP; SerialNumber = '' } }
+
+    # Tell every page this capture is starting (app_kv, cross-process). The mark is cleared in the
+    # finally below on EVERY exit - a failed start must not keep announcing one - and on success
+    # it is held a few more seconds: the stream reaches mediamtx about a second after the pipeline
+    # is up, and the indicator must not vanish before the picture appears.
+    $startingId = 0
+    if ($knownRow.PSObject.Properties['ID']) { [void][int]::TryParse([string]$knownRow.ID, [ref]$startingId) }
+    if ($startingId -gt 0) { Set-ScrcpyStartingState -HeadsetId $startingId }
+    $startHoldSec = 0
+    try {
+
     $captureDevice = $null
     try {
         Write-Log -Message ($msg.ScrcpyCheckingAdb -f "$headsetIP`:$adbPort") -Level "INFO"
@@ -1033,6 +1051,9 @@ function start-screenCopy {
 		return
     }
 
+    # scrcpy is launched. LocalWindow has no pipeline to wait for: its window is the result.
+    if (-not $usePipe) { $startHoldSec = 2 }
+
     # Windowed LocalWindow mode: scrcpy itself writes the recording. Remember the file so it can be
     # checked once the session is over (Complete-DirectRecording).
     if (-not $usePipe -and $recordFile) { $global:DirectRecordings[$displayName] = $recordFile }
@@ -1077,10 +1098,20 @@ function start-screenCopy {
                 StartedAt      = (Get-Date)
             }
             Write-Log ("Pipe pipeline up for {0}: mode={1} rtsp={2}" -f $displayName, $captureMode, $rtspUrl) -Level SUCCESS
+            $startHoldSec = 4
         } catch {
             Write-Log ("Failed to start ffmpeg push for {0}: {1}" -f $displayName, $_.Exception.Message) -Level "ERROR"
             try { Stop-Process -Id $scrcpyProc.Id -Force -EA SilentlyContinue } catch {}
             if ($bridgeJob) { try { Stop-Job $bridgeJob -EA SilentlyContinue; Remove-Job $bridgeJob -Force -EA SilentlyContinue } catch {} }
+        }
+    }
+
+    } finally {
+        # Every exit path ends here: success holds the "starting" mark a few seconds, anything
+        # else (ADB unreachable, scrcpy missing, ffmpeg failed to start) clears it at once.
+        if ($startingId -gt 0) {
+            if ($startHoldSec -gt 0) { Set-ScrcpyStartingState -HeadsetId $startingId -Clear -HoldSec $startHoldSec }
+            else                     { Set-ScrcpyStartingState -HeadsetId $startingId -Clear }
         }
     }
 }
@@ -1166,6 +1197,179 @@ function Get-ScrcpyTransportDecision {
         }
     }
     return $d
+}
+
+
+# ---------------------------------------------------------------------------------------------
+# "Capture starting" state and "check now" requests (cross-process, app_kv).
+#
+# The web pages could only guess that a capture was starting (auto-restart ON, ADB up, no scrcpy),
+# and after a kill or a settings change the restart waited for the monitor's slow tick. Two
+# app_kv rows fix both, readable and writable from any process:
+#   scrcpy_starting       { "<headsetId>": <+expiry = starting | -expiry = up, picture arriving> }
+#       set when a start was requested (or the restart began), cleared when the stream is up, the
+#       start failed or nothing needed doing. Expires by itself (TTL), so a crash cannot leave a
+#       headset "starting" forever. Exposed by /api/headsets-status and /api/headset-status.
+#   scrcpy_check_request  { id; at; ids; reason }
+#       "look at these headsets NOW": VRMonitor's 500 ms fast path reloads config and runs
+#       Watch-ScrcpyProcesses for them instead of waiting for the slow tick (same channel idea as
+#       ADR-0027's stream restart request, but per headset and without stopping anything).
+# ---------------------------------------------------------------------------------------------
+$script:ScrcpyStartingKey    = 'scrcpy_starting'
+$script:ScrcpyCheckKey       = 'scrcpy_check_request'
+$script:ScrcpyStartingTtlSec = 45
+$script:ScrcpyOverrideExtraSec = 11   # settling lasts HoldSec + this: see Get-ScrcpyCaptureState
+$script:ScrcpyStartingMemo   = $null
+
+function Get-ScrcpyCaptureState {
+    <#
+    .SYNOPSIS
+    The captures that are starting, as @{ Starting; Settling; Announcing } (int[] each). Memoised
+    for 0.7 s per process: the status endpoints are polled by every open page. Never throws.
+
+    .DESCRIPTION
+    The scrcpy_starting kv row holds one number per headset. A positive one is the expiry of a
+    start in progress; a NEGATIVE one the expiry of a capture that is UP:
+      Starting    scrcpy is not up yet. The status endpoints report scrcpy = false for it
+                  whatever the monitor's SCRCPY flag says: that flag lags reality by several
+                  seconds in BOTH directions (measured ~7 s), so right after a kill it still
+                  reads "ok" - which made the page show a running capture and revert.
+      Settling    the pipeline is up. scrcpy is reported TRUE for it, for up to 15 s: the flag
+                  is still stale-false for a while after the start, and without this the page
+                  saw the capture "crash" again right after its picture appeared.
+      Announcing  the first seconds of Settling: the page still says "starting" (the picture is
+                  arriving) although scrcpy is already true.
+
+    .EXAMPLE
+    $st = Get-ScrcpyCaptureState
+    if ($st.Starting -contains [int]$headset.ID) { 'not up yet' }
+    #>
+    try {
+        $m = $script:ScrcpyStartingMemo
+        if ($m -and (([DateTime]::UtcNow - $m.At).TotalMilliseconds -lt 700)) { return $m }
+        $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+        $starting  = [System.Collections.Generic.List[int]]::new()
+        $settling  = [System.Collections.Generic.List[int]]::new()
+        $announcing = [System.Collections.Generic.List[int]]::new()
+        $cur = Get-DbKeyValue -Key $script:ScrcpyStartingKey
+        if ($cur) {
+            foreach ($p in $cur.PSObject.Properties) {
+                $v = 0L
+                if (-not [int64]::TryParse([string]$p.Value, [ref]$v)) { continue }
+                if ([Math]::Abs($v) -le $now) { continue }
+                if ($v -gt 0) { $starting.Add([int]$p.Name); continue }
+                $settling.Add([int]$p.Name)
+                if (([Math]::Abs($v) - $script:ScrcpyOverrideExtraSec) -gt $now) { $announcing.Add([int]$p.Name) }
+            }
+        }
+        $script:ScrcpyStartingMemo = @{ At = [DateTime]::UtcNow; Starting = $starting.ToArray(); Settling = $settling.ToArray(); Announcing = $announcing.ToArray() }
+        return $script:ScrcpyStartingMemo
+    } catch {
+        return @{ At = [DateTime]::UtcNow; Starting = @(); Settling = @(); Announcing = @() }
+    }
+}
+
+function Get-ScrcpyStartingIds {
+    <#
+    .SYNOPSIS
+    Every headset id the pages announce as "starting" (Starting + Announcing, see
+    Get-ScrcpyCaptureState). Never throws; wrap in @().
+
+    .EXAMPLE
+    if (@(Get-ScrcpyStartingIds) -contains [int]$headset.ID) { 'starting' }
+    #>
+    $s = Get-ScrcpyCaptureState
+    return @($s.Starting) + @($s.Announcing)
+}
+
+function Set-ScrcpyStartingState {
+    <#
+    .SYNOPSIS
+    Marks headsets as "capture starting" (default), or clears the mark (-Clear). -HoldSec with
+    -Clear means "the pipeline is up": the capture is announced for that many more seconds (the
+    stream reaches mediamtx about a second after the pipeline) and is reported as running for
+    HoldSec + 11 s regardless of the monitor's lagging flag (Settling, see
+    Get-ScrcpyCaptureState). Clearing a headset that is not marked costs one read and no write.
+    Never throws.
+
+    .EXAMPLE
+    Set-ScrcpyStartingState -HeadsetId 3
+    Set-ScrcpyStartingState -HeadsetId 3 -Clear -HoldSec 4
+    #>
+    param(
+        [Parameter(Mandatory = $true)][int[]]$HeadsetId,
+        [switch]$Clear,
+        [int]$HoldSec = 0
+    )
+    try {
+        if ($Clear -and $HoldSec -le 0) {
+            $active = @(Get-ScrcpyCaptureState | ForEach-Object { @($_.Starting) + @($_.Settling) })
+            if (-not @($HeadsetId | Where-Object { $active -contains $_ })) { return }
+        }
+        $now   = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+        # Negative = up (settling); positive = starting (not up yet).
+        $value = if ($Clear) { -($now + [Math]::Max(0, $HoldSec) + $script:ScrcpyOverrideExtraSec) } else { $now + $script:ScrcpyStartingTtlSec }
+        Invoke-DbTransaction -Script {
+            $cur = Get-DbKeyValue -Key $script:ScrcpyStartingKey
+            $map = [ordered]@{}
+            if ($cur) {
+                foreach ($p in $cur.PSObject.Properties) {
+                    $v = 0L
+                    if ([int64]::TryParse([string]$p.Value, [ref]$v) -and [Math]::Abs($v) -gt $now) { $map[[string]$p.Name] = $v }
+                }
+            }
+            foreach ($id in $HeadsetId) {
+                if ($Clear -and $HoldSec -le 0) { $map.Remove([string]$id) } else { $map[[string]$id] = $value }
+            }
+            Set-DbKeyValue -Key $script:ScrcpyStartingKey -Value $map
+        } | Out-Null
+        $script:ScrcpyStartingMemo = $null
+    } catch {
+        Write-Log ("Set-ScrcpyStartingState failed: {0}" -f $_.Exception.Message) -Level DEBUG
+    }
+}
+function Request-ScrcpyCheck {
+    <#
+    .SYNOPSIS
+    Asks VRMonitor to look at these headsets right now (-HeadsetId, or -All) and marks them
+    "starting". Call it after anything that kills a capture or changes what it must be:
+    the kill button, a profile / recording / capture-mode / view / calibration change.
+    Only headsets with auto-restart ON and a known address are concerned - for the others
+    nothing would start. VRMonitor does the real work (it owns the pipelines): reload config,
+    Watch-ScrcpyProcesses for these ids (restart if the running session no longer matches,
+    start if none runs). Returns the ids that were requested ($null-safe empty array). Never throws.
+
+    -NoMark: only nudge, do not announce "starting". For a change that MAY need no restart at all
+    (view definitions, calibration): the watchdog marks a headset itself when it really restarts
+    one, whereas marking them all first would flash "starting" on captures that never stop.
+
+    .EXAMPLE
+    [void](Request-ScrcpyCheck -HeadsetId $headset.ID -Reason 'profile changed')
+    [void](Request-ScrcpyCheck -All -NoMark -Reason 'view definitions changed')
+    #>
+    param([int[]]$HeadsetId = @(), [switch]$All, [switch]$NoMark, [string]$Reason = '')
+    try {
+        $targets = @(Get-KnownHeadsets | Where-Object {
+            (ConvertTo-BoolField $_.scrcpy_AutoRestart) -and -not (Test-UnknownIp $_.IPAddress) -and
+            ($All -or ($HeadsetId -contains [int]$_.ID))
+        })
+        $ids = @($targets | ForEach-Object { [int]$_.ID })
+        if ($ids.Count -eq 0) { return @() }
+        if (-not $NoMark) { Set-ScrcpyStartingState -HeadsetId $ids }
+        Set-DbKeyValue -Key $script:ScrcpyCheckKey -Value @{
+            id = [guid]::NewGuid().ToString('N'); at = (Get-Date).ToUniversalTime().ToString('o'); ids = $ids; reason = $Reason
+        }
+        return $ids
+    } catch {
+        Write-Log ("Request-ScrcpyCheck failed: {0}" -f $_.Exception.Message) -Level DEBUG
+        return @()
+    }
+}
+
+function Get-ScrcpyCheckRequest {
+    <# The pending check request @{id;at;ids;reason}, or $null. Read by VRMonitor's fast path. #>
+    param()
+    try { return (Get-DbKeyValue -Key $script:ScrcpyCheckKey) } catch { return $null }
 }
 
 
@@ -1310,6 +1514,9 @@ function Watch-ScrcpyProcesses {
                 }
 
                 if ($shouldRestart) {
+                    # Announce the restart now: closing the old session can take seconds and the
+                    # operator must see "starting", not a dead stream.
+                    Set-ScrcpyStartingState -HeadsetId ([int]$headset.ID)
                     Write-Log ($msg.ScrcpyRestarting -f $headset.Name) -Level INFO
                     # Send WM_CLOSE so scrcpy can finalise any recording file before exiting
                     # Same rule as Stop-Scrcpy: only a scrcpy that HAS a window can be closed politely, and
@@ -1326,8 +1533,15 @@ function Watch-ScrcpyProcesses {
                     }
                     Complete-DirectRecording -SafeName (Convert-Displayname $headset.Name)
                     start-screenCopy -displayName $headset.Name -headsetIP $headset.IPAddress -recording $expectedRecording -scrcpyProfile $headsetProfile
+                } else {
+                    # The running session already matches: a "starting" mark set by
+                    # Request-ScrcpyCheck for this headset would otherwise linger until it expires.
+                    Set-ScrcpyStartingState -HeadsetId ([int]$headset.ID) -Clear
                 }
             }
+        } else {
+            # ADB is down: nothing can start, so stop announcing a capture that cannot.
+            Set-ScrcpyStartingState -HeadsetId ([int]$headset.ID) -Clear
         }
     }
 }

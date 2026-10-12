@@ -1085,7 +1085,11 @@ try {
                         }
                     }
 
+                    $recordChanged = (([string]$headset.Record -eq 'True') -ne ($newVal -eq 'True'))
                     Update-HeadsetField -headsets $rows -ID ([int]$headset.ID) -Field "Record" -NewValue $newVal
+                    # Turning recording on/off restarts the capture (the recording is a second
+                    # output of the same ffmpeg): mark it starting and apply it now.
+                    if ($recordChanged) { [void](Request-ScrcpyCheck -HeadsetId ([int]$headset.ID) -Reason 'recording toggled') }
                     $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
                 } else {
                     $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"not found"}')
@@ -1398,8 +1402,10 @@ try {
                     continue
                 }
 
+                $capSt = Get-ScrcpyCaptureState
+
                 # Parse raw CSV strings into typed values for the JS consumer
-                $battery    = if ($row.Battery -and $row.Battery -ne '-') { [int]($row.Battery -replace '\s*%','') } else { $null }
+                $battery    =if ($row.Battery -and $row.Battery -ne '-') { [int]($row.Battery -replace '\s*%','') } else { $null }
                 $battLeft   = if ($row.BatteryControllerLeft  -and $row.BatteryControllerLeft  -ne '-') { [int]($row.BatteryControllerLeft  -replace '\s*%','') } else { $null }
                 $battRight  = if ($row.BatteryControllerRight -and $row.BatteryControllerRight -ne '-') { [int]($row.BatteryControllerRight -replace '\s*%','') } else { $null }
                 $temp       = if ($row.Temp -and $row.Temp -ne '-') { [int]($row.Temp -replace ',','.') } else { $null }
@@ -1418,6 +1424,12 @@ try {
                     time_remaining_min   = $timeMin
                     running_app          = if ($row.RunningApp)     { $row.RunningApp }     else { '' }
                     running_app_icon     = if ($row.RunningAppIcon) { $row.RunningAppIcon } else { '' }
+                    # Capture state, for the video pages: running, starting right now (a mark set
+                    # by start-screenCopy / Request-ScrcpyCheck), and whether it will be restarted
+                    # by itself (auto-restart) - which tells "starting" from "stopped".
+                    scrcpy               = $(if ($capSt.Starting -contains [int]$headsetRow.ID) { $false } elseif ($capSt.Settling -contains [int]$headsetRow.ID) { $true } else { [bool]($row.SCRCPY -eq 'ok') })
+                    scrcpy_starting      = [bool](($capSt.Starting -contains [int]$headsetRow.ID) -or ($capSt.Announcing -contains [int]$headsetRow.ID))
+                    scrcpy_auto_restart  = [bool]($headsetRow.scrcpy_AutoRestart -eq 'True')
                 }
                 Send-JsonResponse -Response $response -Body $result
             } catch {
@@ -2300,7 +2312,11 @@ try {
                 $rows = Get-KnownHeadsets
                 $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
                 if ($headset) {
+                    $profileChanged = ([string]$headset.ScrcpyProfile -ne $safeProfile)
                     Update-HeadsetField -headsets $rows -ID ([int]$headset.ID) -Field "ScrcpyProfile" -NewValue $safeProfile
+                    # A new profile restarts the running capture: mark it "starting" now and have the
+                    # monitor apply it at once (registry edge + this request), not on the slow tick.
+                    if ($profileChanged) { [void](Request-ScrcpyCheck -HeadsetId ([int]$headset.ID) -Reason 'profile changed') }
                     # A merged view above 30 fps is saved, but the answer carries the CPU warning.
                     $fpsAdvice = Get-EyeMergeFpsAdvice -ScrcpyProfile $safeProfile
                     $respBytes = [System.Text.Encoding]::UTF8.GetBytes((@{ ok = $true; warning = $(if ($fpsAdvice.Warn) { $fpsAdvice.Message } else { $null }) } | ConvertTo-Json -Compress))
@@ -2377,6 +2393,9 @@ try {
                 if ($headset) {
                     $newVal = if ([string]$json.value -eq 'True' -or [string]$json.value -eq 'true') { 'True' } else { 'False' }
                     Update-HeadsetField -headsets $rows -ID ([int]$headset.ID) -Field "scrcpy_AutoRestart" -NewValue $newVal
+                    # Turned ON: mark it starting right away (the monitor's registry edge starts it
+                    # within ~0.5 s, but the page should not wait for that to show it).
+                    if ($newVal -eq 'True') { [void](Request-ScrcpyCheck -HeadsetId ([int]$headset.ID) -Reason 'auto-restart enabled') }
                     $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
                 } else {
                     $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"not found"}')
@@ -2411,15 +2430,49 @@ try {
                 if (-not $safeName) { throw "Invalid headset name" }
                 $rows    = Get-KnownHeadsets
                 $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                # NOTE: Send-JsonResponse takes an OBJECT (or -Raw text). Handing it a byte[] made it
+                # JSON-encode the bytes, so the page received [123,34,...] instead of {"ok":true},
+                # saw no "ok", and reverted its state as if the stop had failed (the "Starting"
+                # indicator vanishing after ~1 s and the stop button coming back).
                 if ($headset) {
-                    $ok        = Stop-Scrcpy -HeadsetName $headset.Name -HeadsetIP $headset.IPAddress
-                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":' + ($ok.ToString().ToLower()) + '}')
+                    # Who asked: a stop always restarts a capture that has auto-restart ON, so an
+                    # unexpected restart must be attributable (client address + the page it came from).
+                    $stopFrom = try { [string]$request.RemoteEndPoint.Address } catch { '?' }
+                    $stopPage = try { if ($request.UrlReferrer) { [string]$request.UrlReferrer.AbsolutePath } else { '-' } } catch { '-' }
+                    Write-Log ("Stop scrcpy requested for {0} by {1} (page {2})" -f $headset.Name, $stopFrom, $stopPage) -Level INFO
+                    $stopped   = [bool](Stop-Scrcpy -HeadsetName $headset.Name -HeadsetIP $headset.IPAddress)
+                    $stopSafe  = Convert-Displayname $headset.Name
+
+                    # A stop that arrives while a start is IN FLIGHT (a restart just triggered by a
+                    # profile change, a toggle...) finds no process yet - and the capture would come
+                    # up right after it, so the stop would silently do nothing. Wait for that start
+                    # (at most 12 s: it is marked "starting"), then stop what it produced.
+                    if (-not $stopped) {
+                        $deadline = (Get-Date).AddSeconds(12)
+                        while ((Get-Date) -lt $deadline) {
+                            $st = Get-ScrcpyCaptureState
+                            if (Get-ScrcpyProcess -displayName $stopSafe -headsetIP $headset.IPAddress -headsetSerial $headset.SerialNumber) {
+                                $stopped = [bool](Stop-Scrcpy -HeadsetName $headset.Name -HeadsetIP $headset.IPAddress)
+                                Write-Log ("Stop scrcpy: {0} was starting - stopped it once it was up" -f $headset.Name) -Level INFO
+                                break
+                            }
+                            if (@($st.Starting) -notcontains [int]$headset.ID) { break }
+                            Start-Sleep -Milliseconds 400
+                        }
+                    }
+
+                    # Auto-restart ON means the capture comes back: do not leave that to the slow
+                    # tick. Mark it "starting" and have VRMonitor restart it as soon as it can.
+                    $restarting = @(Request-ScrcpyCheck -HeadsetId ([int]$headset.ID) -Reason 'capture stopped').Count -gt 0
+                    # ok = nothing is running for this headset any more (a stop of an already-stopped
+                    # capture is a success, not an error); stopped = something WAS running and was killed.
+                    $stillUp = [bool](Get-ScrcpyProcess -displayName $stopSafe -headsetIP $headset.IPAddress -headsetSerial $headset.SerialNumber)
+                    Send-JsonResponse -Response $response -Body @{ ok = (-not $stillUp); stopped = $stopped; restarting = $restarting } -StatusCode 200
                 } else {
-                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"not found"}')
+                    Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'not found' } -StatusCode 200
                 }
-                Send-JsonResponse -Response $response -Body $respBytes -StatusCode 200
             } catch {
-                try { Send-JsonResponse -Response $response -Body ([System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')) -StatusCode 500 } catch {}
+                try { Send-JsonResponse -Response $response -Raw '{"ok":false,"error":"server error"}' -StatusCode 500 } catch {}
             } finally {
                 $response.Close()
             }
@@ -2433,6 +2486,7 @@ try {
                 foreach ($row in $rows) {
                     Update-HeadsetField -Id $row.ID -Field 'scrcpy_AutoRestart' -NewValue 'True'
                 }
+                [void](Request-ScrcpyCheck -All -Reason 'start all captures')
                 Send-JsonResponse -Response $response -Raw '{"ok":true}'
             } catch {
                 try { Send-JsonResponse -Response $response -Raw '{"ok":false,"error":"server error"}' -StatusCode 500 } catch {}
@@ -2504,6 +2558,15 @@ try {
             try {
                 # Live status, ID-keyed (ADR-0016). Shared mtime cache with /api/headset-status.
                 $infosCache = Get-HeadsetInfosCache
+                # Captures that are starting right now (scrcpy_starting kv row, see
+                # Get-ScrcpyCaptureState): pages show "starting" instead of a dead stream. While a
+                # capture is Starting, scrcpy is reported false whatever the monitor's SCRCPY flag
+                # says - that flag lags reality by several seconds, which made a just-killed
+                # capture look alive (and a started one look dead).
+                $capState     = Get-ScrcpyCaptureState
+                $startingSet  = @($capState.Starting)
+                $settlingSet  = @($capState.Settling)
+                $announceSet  = @($capState.Announcing)
 
                 # Build response: one entry per known headset (in CSV order) joined with live infos
                 $items = @(Get-KnownHeadsetsCached |
@@ -2516,7 +2579,8 @@ try {
                             id                    = [int]$h.ID
                             ip_address            = if ($h.IPAddress) { $h.IPAddress } else { '' }
                             ping                  = [bool]($info.Ping    -eq 'True')
-                            scrcpy                = [bool]($info.SCRCPY  -eq 'ok')
+                            scrcpy                = $(if ($startingSet -contains [int]$h.ID) { $false } elseif ($settlingSet -contains [int]$h.ID) { $true } else { [bool]($info.SCRCPY -eq 'ok') })
+                            scrcpy_starting       = [bool](($startingSet -contains [int]$h.ID) -or ($announceSet -contains [int]$h.ID))
                             adb                   = [bool]($info.ADBWifi -eq 'True')
                             charging              = [bool]($info.Charging -eq 'True')
                             charging_wattage      = if ($info.ChargingWattage -and $info.ChargingWattage -ne '-') { $info.ChargingWattage } else { '' }
@@ -5763,8 +5827,24 @@ try {
                 if ($newCfg -and $newCfg.Performance) { $newCaptureMode = $newCfg.Performance.Capture_Mode }
                 $captureModeChanged = $newCaptureMode -and ($newCaptureMode -ne $oldCaptureMode) -and ($newCaptureMode -in @('StreamOnly','StreamAndLocalWindow','LocalWindow'))
 
+                # Snapshot of the capture settings (scrcpy section: view crops/angles, codec, buffers,
+                # eye merge calibration) before and after: a running capture is built from them, and
+                # the monitor would only notice a change on its next slow tick.
+                $oldCaptureSig = ''
+                try {
+                    $oldCfgObj = Get-Content -LiteralPath $cfgFile -Raw -Encoding UTF8 | ConvertFrom-Json
+                    if ($oldCfgObj -and $oldCfgObj.scrcpy) { $oldCaptureSig = ($oldCfgObj.scrcpy | ConvertTo-Json -Depth 20 -Compress) }
+                } catch {}
+                $newCaptureSig = if ($newCfg -and $newCfg.scrcpy) { ($newCfg.scrcpy | ConvertTo-Json -Depth 20 -Compress) } else { '' }
+
                 $utf8NoBom = New-Object System.Text.UTF8Encoding $false
                 [System.IO.File]::WriteAllText($cfgFile, $body, $utf8NoBom)
+
+                if ($oldCaptureSig -ne $newCaptureSig) {
+                    # -NoMark: most of these edits (another model's view, a new view) restart nothing;
+                    # the watchdog marks a capture "starting" itself when it really restarts one.
+                    [void](Request-ScrcpyCheck -All -NoMark -Reason 'capture settings changed')
+                }
 
                 $restarted = @{ mediamtx = $false; scrcpy = @(); pending = $false; captureMode = $false }
                 if ($streamingChanged) {

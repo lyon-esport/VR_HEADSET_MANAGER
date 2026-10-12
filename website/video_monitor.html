@@ -339,6 +339,36 @@
     /* In no-stream mode the OFFLINE label sits behind the monitoring frame */
     .cell.no-stream .offline-overlay { z-index: 5; }
 
+    /* Capture starting: spinner + label over the cell until the stream is back */
+    .starting-overlay {
+      position: absolute;
+      left: 50%; bottom: 8px;
+      transform: translateX(-50%);
+      z-index: 30;
+      display: none;
+      align-items: center;
+      gap: 7px;
+      padding: 4px 11px;
+      border-radius: 14px;
+      background: rgba(0,0,0,0.72);
+      border: 1px solid rgba(245,158,11,0.55);
+      color: #f59e0b;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+    .starting-overlay .spin {
+      width: 11px; height: 11px;
+      border-radius: 50%;
+      border: 2px solid rgba(245,158,11,0.35);
+      border-top-color: #f59e0b;
+      animation: vm-spin 0.8s linear infinite;
+    }
+    @keyframes vm-spin { to { transform: rotate(360deg); } }
+    .cell.starting .starting-overlay { display: flex; }
+
     /* Local-only capture mode banner */
     .local-mode-banner {
       display: flex;
@@ -633,7 +663,9 @@
         var stat = headsetStatus[dn] || { ping: false, scrcpy: false };
         var show = true;
         if (f === 'online')  show = stat.ping;
-        if (f === 'scrcpy')  show = stat.scrcpy;
+        // A capture that is starting stays on the wall (as a tile with the "starting" spinner):
+        // it used to vanish at the kill and reappear only when the picture was back.
+        if (f === 'scrcpy')  show = stat.scrcpy || !!stat.starting;
         if (f === 'offline') show = !stat.ping;
         setHeadsetVisible(dn, show);
       });
@@ -963,7 +995,7 @@
       var now = Date.now(), fast = false;
       Object.keys(autoRestartState).forEach(function(dn) {
         var st = headsetStatus[dn];
-        var pending = autoRestartState[dn] && st && st.adb && !st.scrcpy;
+        var pending = (autoRestartState[dn] && st && st.adb && !st.scrcpy) || (st && st.starting);
         if (!pending) { delete _pendingSince[dn]; return; }
         if (!_pendingSince[dn]) _pendingSince[dn] = now;
         if (now - _pendingSince[dn] < FAST_STATUS_MAX_MS) fast = true;
@@ -1000,6 +1032,7 @@
             newStatus[item.display_name] = {
               ping:       item.ping,
               scrcpy:     item.scrcpy,
+              starting:   !!item.scrcpy_starting && !item.scrcpy,
               adb:        item.adb,
               runningApp: item.running_app || ''
             };
@@ -1090,6 +1123,9 @@
         var streaming = stat.scrcpy;
 
         cell.classList.toggle('offline',   !stat.ping);
+        // Capture starting (server flag): spinner on the tile, whether it is still the compact
+        // tile or already the expanded cell waiting for its first picture.
+        cell.classList.toggle('starting',  !!stat.starting && !streaming);
         if (wasStream !== streaming) scaleNeeded = true;
         cell.classList.toggle('no-stream', !streaming);
         if (!streaming) cell.style.width = ''; // clear layout width for compact offline tile
@@ -1550,7 +1586,8 @@
             '<path d="M5 2h14M5 22h14M7 2v5l5 5-5 5v5M17 2v5l-5 5 5 5v5"/>' +
           '</svg>' +
         '</button>' +
-        '<div class="offline-overlay">OFFLINE</div>';
+        '<div class="offline-overlay">OFFLINE</div>' +
+        '<div class="starting-overlay"><span class="spin"></span>Capture starting...</div>';
       return cell;
     }
 
@@ -1669,6 +1706,9 @@
         if (window.LiveEvents) {
           LiveEvents.subscribe('headset_status', function() { pollHeadsetsStatus(); });
           LiveEvents.subscribe('headsets',       function() { pollHeadsetsStatus(); });
+          // The "capture starting" mark is an app_kv row (set/cleared by the process that
+          // starts the capture): show or drop the spinner as soon as it changes.
+          LiveEvents.subscribe('app_kv',         function() { pollHeadsetsStatus(); });
         }
         document.querySelectorAll('#grid .cell').forEach(function(cell) {
           var dn = cell.dataset.display;
