@@ -46,10 +46,13 @@
 
 # --- Sources: explicitly included subfolders ---
 /sources/ADB Wireless activator/
-# ffmpeg is REQUIRED at startup when mediamtx is enabled (Test-RequiredBinaries). It must match
-# ffmpeg.folder in templates\config\config.json, otherwise the extracted release stops at
-# "CRITICAL: required program files are missing" (CLAUDE.md rule 7).
-/sources/ffmpeg/ffmpeg-9.0.1/
+# ffmpeg is NEVER part of a release (about 100 MB). Do not add a /sources/ffmpeg line here:
+# a fresh install gets it from the first-run wizard (Invoke-FfmpegDownload, option 1) or from
+# Configuration > Advanced, and Create-ZipRelease.ps1 refuses to pack sources\ffmpeg* anyway.
 /sources/MediaMTX/mediamtx_v1.20.1_windows_amd64/
 /sources/scrcpy/scrcpy-win64-v5.0.1/
 /sources/sqlite/System.Data.SQLite-1.0.119/
+
+# --- ffmpeg is never shipped (exclusions win over any include above) ---
+!/sources/ffmpeg/
+!/sources/ffmpeg*

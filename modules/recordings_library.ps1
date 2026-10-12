@@ -25,6 +25,13 @@ $script:RecordingOpenWindowSec = 60
 # Maximum ffmpeg media probes per catalogue sync pass (~0.1 s each), see Sync-RecordingCatalog.
 $script:RecordingProbeBudget = 30
 
+# Background repair of interrupted recordings (Update-RecordingRepair): the one remux running in
+# THIS process, and the files that failed to repair in it (not retried until the next start).
+if (-not (Get-Variable -Name RecordingRepair -Scope Script -ErrorAction SilentlyContinue)) { $script:RecordingRepair = $null }
+if (-not (Get-Variable -Name RecordingRepairFailed -Scope Script -ErrorAction SilentlyContinue)) { $script:RecordingRepairFailed = @{} }
+# A remux is disk-bound (a few seconds per GB); one stuck longer than this is killed.
+$script:RecordingRepairTimeoutMin = 30
+
 # --------------------------------------------------------------------
 # Private helpers
 # --------------------------------------------------------------------
@@ -444,12 +451,14 @@ function Complete-RecordingEntry {
         Closes the catalogue row of a recording whose session ended (or deletes it when the file is empty).
     .DESCRIPTION
         Missing or 0-byte file: the row is deleted. Otherwise ended_at = file LastWriteTime, size and
-        media info are stored and status becomes 'done'. A file with no row yet (session started before
-        this feature) is imported first. Never throws; $true when the catalogue was updated.
+        media info are stored and status becomes 'done' - or 'interrupted' with -Interrupted (the
+        writer was killed, so the file has no index and a wrong duration: Update-RecordingRepair
+        remuxes it later). A file with no row yet (session started before this feature) is imported
+        first. Never throws; $true when the catalogue was updated.
     .EXAMPLE
-        Complete-RecordingEntry -Path $recordFile
+        Complete-RecordingEntry -Path $recordFile -Interrupted
     #>
-    param([Parameter(Mandatory = $true)][string]$Path)
+    param([Parameter(Mandatory = $true)][string]$Path, [switch]$Interrupted)
     try {
         $row = @(Invoke-DbQuery -Name 'recordings.get_by_path' -Parameters @{ file_path = $Path }) | Select-Object -First 1
 
@@ -488,9 +497,9 @@ function Complete-RecordingEntry {
             codec        = $(if ($info.Codec) { [string]$info.Codec } else { '' })
             width        = $(if ($null -ne $info.Width) { [int]$info.Width } else { $null })
             height       = $(if ($null -ne $info.Height) { [int]$info.Height } else { $null })
-            status       = 'done'
+            status       = $(if ($Interrupted) { 'interrupted' } else { 'done' })
         } | Out-Null
-        Write-Log ("Recording completed: {0}" -f (Get-RecordingRelativePath -Path $Path)) -Level DEBUG
+        Write-Log ("Recording completed{1}: {0}" -f (Get-RecordingRelativePath -Path $Path), $(if ($Interrupted) { ' (interrupted, repair queued)' } else { '' })) -Level DEBUG
         return $true
     }
     catch {
@@ -661,6 +670,108 @@ function Sync-RecordingCatalog {
         Write-Log ("Recordings catalogue sync failed: {0}" -f $_.Exception.Message) -Level WARNING
     }
     return $res
+}
+
+function Update-RecordingRepair {
+    <#
+    .SYNOPSIS
+        One non-blocking step of the background repair of interrupted recordings.
+    .DESCRIPTION
+        A recording whose ffmpeg was killed (Stop-HeadsetPipeline after its 15 s grace) or left open
+        by a crash has no index (cues) and a WRONG header duration: measured, a file killed after
+        6 s announced 15 s. It plays in VLC but seeks badly. A stream copy (ffmpeg -i f -map 0 -c copy)
+        rewrites it complete, without re-encoding.
+        Each call does at most one thing, so it can run on every VRMonitor slow tick:
+          - a remux is running: when it has ended, the repaired file REPLACES the original (only when
+            ffmpeg exited 0 and the copy holds at least 90 % of the bytes) and the row becomes 'done'
+            with its real duration; otherwise the copy is deleted, the original kept untouched, and
+            the file is not retried in this process;
+          - nothing running: starts ONE remux (hidden, below-normal priority) for the oldest
+            'interrupted' row whose file exists, is not being written, and fits in the free space.
+        The copy is written next to the original as <file>.repair.tmp (never *.mkv, so the catalogue
+        sync does not import it). Never throws. Returns 'idle', 'started', 'running', 'repaired',
+        'failed' or 'skipped'.
+    .EXAMPLE
+        Update-RecordingRepair
+    #>
+    try {
+        $ffmpeg = [string]$global:ffmpegFilePath
+        if (-not $ffmpeg -or -not [System.IO.File]::Exists($ffmpeg)) { return 'skipped' }
+
+        $job = $script:RecordingRepair
+        if ($job) {
+            $proc = $job.Proc
+            if (-not $proc.HasExited) {
+                if (((Get-Date) - $job.Started).TotalMinutes -lt $script:RecordingRepairTimeoutMin) { return 'running' }
+                try { $proc.Kill() } catch { }
+                try { [void]$proc.WaitForExit(3000) } catch { }
+                Write-Log ("Recording repair timed out after {0} min, original kept: {1}" -f $script:RecordingRepairTimeoutMin, (Get-RecordingRelativePath -Path $job.Path)) -Level WARNING
+            }
+            $script:RecordingRepair = $null
+            $code = -1; try { $code = $proc.ExitCode } catch { }
+            try { $proc.Dispose() } catch { }
+            $ok = $false
+            if ($code -eq 0 -and [System.IO.File]::Exists($job.Tmp) -and [System.IO.File]::Exists($job.Path)) {
+                $origLen = ([System.IO.FileInfo]::new($job.Path)).Length
+                $newLen = ([System.IO.FileInfo]::new($job.Tmp)).Length
+                if ($newLen -ge [math]::Floor($origLen * 0.9)) {
+                    try {
+                        # [NullString]: a plain $null reaches .NET as '' here, an "illegal path".
+                        [System.IO.File]::Replace($job.Tmp, $job.Path, [NullString]::Value)
+                        $ok = $true
+                    } catch {
+                        # Original open elsewhere (being played back): try again on a later tick.
+                        try { [System.IO.File]::Delete($job.Tmp) } catch { }
+                        Write-Log ("Recording repair postponed, the file could not be replaced ({1}): {0}" -f (Get-RecordingRelativePath -Path $job.Path), $_.Exception.Message) -Level INFO
+                        return 'skipped'
+                    }
+                }
+            }
+            if ($ok) {
+                [void](Complete-RecordingEntry -Path $job.Path)
+                Write-Log ("Recording repaired (index and duration rewritten, nothing re-encoded) in {0:n0} s: {1}" -f ((Get-Date) - $job.Started).TotalSeconds, (Get-RecordingRelativePath -Path $job.Path)) -Level SUCCESS
+                return 'repaired'
+            }
+            if ([System.IO.File]::Exists($job.Tmp)) { try { [System.IO.File]::Delete($job.Tmp) } catch { } }
+            $script:RecordingRepairFailed[$job.Path] = $true
+            Write-Log ("Recording repair failed (ffmpeg exit {0}), original kept as it was - it still plays in VLC: {1}" -f $code, (Get-RecordingRelativePath -Path $job.Path)) -Level WARNING
+            return 'failed'
+        }
+
+        foreach ($row in @(Invoke-DbQuery -Name 'recordings.interrupted' -Parameters @{ limit = 20 })) {
+            $path = [string]$row.file_path
+            if ($script:RecordingRepairFailed.ContainsKey($path) -or -not [System.IO.File]::Exists($path)) { continue }
+            $fi = [System.IO.FileInfo]::new($path)
+            if ($fi.Length -le 0) { continue }
+            if (((Get-Date) - $fi.LastWriteTime).TotalSeconds -lt $script:RecordingOpenWindowSec) { continue }   # still being written
+            $tmp = $path + '.repair.tmp'
+            if ([System.IO.File]::Exists($tmp)) { try { [System.IO.File]::Delete($tmp) } catch { continue } }   # left by a crash
+            # The copy needs as much room as the original on the same drive.
+            try {
+                $drive = [System.IO.DriveInfo]::new([System.IO.Path]::GetPathRoot($path))
+                if ($drive.AvailableFreeSpace -lt ($fi.Length + 256MB)) {
+                    $script:RecordingRepairFailed[$path] = $true
+                    Write-Log ("Recording not repaired, not enough free space for the copy ({0:n1} GB needed): {1}" -f ($fi.Length / 1GB), (Get-RecordingRelativePath -Path $path)) -Level WARNING
+                    continue
+                }
+            } catch { }
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = $ffmpeg
+            $psi.Arguments = '-hide_banner -nostdin -v error -y -i "' + $path + '" -map 0 -c copy -f matroska "' + $tmp + '"'
+            $psi.UseShellExecute = $false
+            $psi.CreateNoWindow = $true
+            $proc = [System.Diagnostics.Process]::Start($psi)
+            try { $proc.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal } catch { }
+            $script:RecordingRepair = @{ Path = $path; Tmp = $tmp; Proc = $proc; Started = (Get-Date) }
+            Write-Log ("Recording repair started ({0:n1} GB): {1}" -f ($fi.Length / 1GB), (Get-RecordingRelativePath -Path $path)) -Level INFO
+            return 'started'
+        }
+        return 'idle'
+    }
+    catch {
+        Write-Log ("Recording repair step failed: {0}" -f $_.Exception.Message) -Level WARNING
+        return 'skipped'
+    }
 }
 
 # --------------------------------------------------------------------

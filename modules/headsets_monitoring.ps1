@@ -1152,6 +1152,9 @@ function Start-VRMonitor {
 
                 # Recordings catalogue: sweep for stale records and missing files. Self-throttles.
                 if (Get-Command Sync-RecordingCatalog -ErrorAction SilentlyContinue) { try { [void](Sync-RecordingCatalog) } catch {} }
+                # Interrupted recordings (writer killed, app crash): one background remux at a time,
+                # never blocking this loop (Update-RecordingRepair only starts or collects it).
+                if (Get-Command Update-RecordingRepair -ErrorAction SilentlyContinue) { try { [void](Update-RecordingRepair) } catch {} }
 
                 # VQA neither recommends from benchmark load nor rewrites config during a run.
                 if (-not $benchRunId -and $global:VQA_Enabled -and (Get-Command Invoke-VideoQualityRecommendation -ErrorAction SilentlyContinue)) {

@@ -220,8 +220,10 @@
 
       function cleanup() {
         if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+        stopStallWatch();
         if (pc) {
           pc.oniceconnectionstatechange = null;
+          pc.onconnectionstatechange = null;
           pc.ontrack = null;
           try { pc.close(); } catch (_) {}
           pc = null;
@@ -253,12 +255,20 @@
               retryCount = 0;   // a later drop starts the fast retries again
               showStatus('');
               refreshStreamMask();   // a new stream may come with another view
+              startStallWatch();
             }
           };
 
           // Reconnect automatically if the ICE connection drops
           pc.oniceconnectionstatechange = function() {
             var s = pc.iceConnectionState;
+            if (s === 'failed' || s === 'disconnected' || s === 'closed') {
+              scheduleRetry();
+            }
+          };
+          // Same for the overall (DTLS) connection state, which a server-side close can reach first.
+          pc.onconnectionstatechange = function() {
+            var s = pc.connectionState;
             if (s === 'failed' || s === 'disconnected' || s === 'closed') {
               scheduleRetry();
             }
@@ -294,6 +304,46 @@
         } catch (err) {
           scheduleRetry();
         }
+      }
+
+      // ---- Stall watch: reconnect when no video arrives any more ----
+      // When the stream restarts on the server (recording toggled, profile changed, watchdog
+      // restart), mediamtx terminates this viewer session from ITS side ("closed: terminated").
+      // Seen live: the browser kept both connection states at "connected", no retry ever fired and
+      // the page stayed frozen on its last picture until reloaded. So the incoming RTP is checked
+      // every 2 s (getStats): no new packet for STALL_MS -> reconnect. A live stream never goes that
+      // long without a packet, even on a still picture: a re-encoded one keeps a constant frame rate
+      // and scrcpy itself repeats the last frame (~every 100 ms) when the screen does not change.
+      var STALL_MS = 8000;
+      var stallTimer = null;
+      var stallLastPackets = -1;
+      var stallLastChange = 0;
+
+      function stopStallWatch() {
+        if (stallTimer) { clearInterval(stallTimer); stallTimer = null; }
+        stallLastPackets = -1;
+      }
+
+      function startStallWatch() {
+        stopStallWatch();
+        stallLastChange = Date.now();
+        var watched = pc;
+        stallTimer = setInterval(function() {
+          if (!pc || pc !== watched) { stopStallWatch(); return; }
+          pc.getStats().then(function(stats) {
+            if (pc !== watched) { return; }
+            var packets = 0;
+            stats.forEach(function(r) {
+              if (r.type === 'inbound-rtp' && (r.kind === 'video' || r.mediaType === 'video')) { packets += (r.packetsReceived || 0); }
+            });
+            var now = Date.now();
+            if (packets !== stallLastPackets) { stallLastPackets = packets; stallLastChange = now; return; }
+            if (now - stallLastChange >= STALL_MS) {
+              showStatus('Stream interrupted - reconnecting...');
+              connect();
+            }
+          }).catch(function() {});
+        }, 2000);
       }
 
       // ---- Pause the stream when the browser tab/window is hidden ----

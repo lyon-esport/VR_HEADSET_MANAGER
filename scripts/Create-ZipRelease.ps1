@@ -153,6 +153,11 @@ function Test-FileIncluded {
     $topSegment = ($rel -split '\\')[0]
     if ($topSegment.StartsWith('.')) { return $false }
 
+    # Always exclude: ffmpeg (~100 MB). It is NEVER part of a release, whatever .releaseinclude says:
+    # a fresh install downloads it (first-run wizard, Configuration > Advanced). Hard-coded so a
+    # re-added include line cannot ship it.
+    if ($rel -match '^sources\\ffmpeg') { return $false }
+
     # Check include patterns
     $included = $false
     foreach ($rx in $includeRegexes) {

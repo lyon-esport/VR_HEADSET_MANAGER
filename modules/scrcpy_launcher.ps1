@@ -413,11 +413,13 @@ function Complete-RecordingFile {
     flagged, because it might hold the only footage of something; the 64 KB threshold is far below
     a second of video at any bitrate this app uses, so it is a header with no usable picture.
     Never throws: this runs while sessions are being torn down.
+    -Interrupted: the writer was force-killed - the catalogue row is marked 'interrupted' so the
+    background repair (Update-RecordingRepair) rewrites its index and duration.
 
     .EXAMPLE
-    Complete-RecordingFile -Path 'D:\Records\2026-10-05\Q3_BLUE\Q3_BLUE_20261005_101500.mkv'
+    Complete-RecordingFile -Path 'D:\Records\2026-10-05\Q3_BLUE\Q3_BLUE_20261005_101500.mkv' -Interrupted
     #>
-    param([string]$Path)
+    param([string]$Path, [switch]$Interrupted)
 
     if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
     try {
@@ -437,7 +439,7 @@ function Complete-RecordingFile {
         }
         return $false
     } finally {
-        if (Get-Command Complete-RecordingEntry -ErrorAction SilentlyContinue) { try { [void](Complete-RecordingEntry -Path $Path) } catch {} }
+        if (Get-Command Complete-RecordingEntry -ErrorAction SilentlyContinue) { try { [void](Complete-RecordingEntry -Path $Path -Interrupted:$Interrupted) } catch {} }
     }
 }
 
@@ -789,6 +791,7 @@ function Stop-HeadsetPipeline {
     param([Parameter(Mandatory)][string]$SafeName)
     $entry = $global:HeadsetPipelines[$SafeName]
     if (-not $entry) { return }
+    $forcedKill = $false
     if ($entry.FfmpegProcess) {
         $ff = $entry.FfmpegProcess
         try {
@@ -805,7 +808,13 @@ function Stop-HeadsetPipeline {
                 # OBS may be writing to at the same time) can legitimately take longer than 5 s, and a
                 # kill in that window is what leaves a recording without its index.
                 if (-not $ff.WaitForExit(15000)) {
-                    Write-Log ("Stop-HeadsetPipeline: ffmpeg for {0} did not exit gracefully within 15 s - forcing kill. The recording '{1}' may lack its index: it stays playable in VLC / ffmpeg, and can be repaired with: ffmpeg -i <file> -c copy <fixed>.mkv" -f $SafeName, $entry.RecordFile) -Level WARNING
+                    $forcedKill = $true
+                    if ($entry.RecordFile) {
+                        Write-Log ("Stop-HeadsetPipeline: ffmpeg for {0} did not exit gracefully within 15 s - forcing kill. The recording '{1}' lacks its index; it stays playable and is repaired automatically in the background (Recordings catalogue)." -f $SafeName, $entry.RecordFile) -Level WARNING
+                    } else {
+                        # Nothing is lost: no recording on this stream, the live stream was being stopped anyway.
+                        Write-Log ("Stop-HeadsetPipeline: ffmpeg for {0} did not exit within 15 s after 'q' - forcing kill (no recording on this stream)." -f $SafeName) -Level INFO
+                    }
                     try { Stop-Process -Id $ff.Id -Force -ErrorAction SilentlyContinue } catch {}
                     try { [void]$ff.WaitForExit(3000) } catch {}
                 }
@@ -814,7 +823,7 @@ function Stop-HeadsetPipeline {
         try { $ff.CancelErrorRead() } catch {}
     }
     # ffmpeg is gone: check what it left behind (empty file from an attempt that never got video).
-    if ($entry.RecordFile) { [void](Complete-RecordingFile -Path $entry.RecordFile) }
+    if ($entry.RecordFile) { [void](Complete-RecordingFile -Path $entry.RecordFile -Interrupted:$forcedKill) }
     if ($entry.FfmpegErrorSubId) {
         try { Unregister-Event -SubscriptionId $entry.FfmpegErrorSubId -ErrorAction SilentlyContinue } catch {}
     }

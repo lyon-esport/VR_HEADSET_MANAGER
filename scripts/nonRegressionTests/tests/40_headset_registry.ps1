@@ -468,7 +468,7 @@ Invoke-RegressionTest -Name 'Eye merge: calibration snippet validates, garbage i
 Invoke-RegressionTest -Name 'Eye merge: lookup tables merge a synthetic frame and end with the input' -Test {
     $r = Invoke-InTargetModules -TargetRoot $target -TimeoutSeconds 180 -Body {
         $maps = Get-EyeMergeMaps -Model 'Quest 3' -View 'square'
-        $out = [PSCustomObject]@{ MapsOk = [bool]$maps.Ok; Width = $maps.Width; Height = $maps.Height; Error = $maps.Error; Frames = -1; Exit = -1 }
+        $out = [PSCustomObject]@{ MapsOk = [bool]$maps.Ok; Width = $maps.Width; Height = $maps.Height; Error = $maps.Error; Frames = -1; Exit = -1; Mode = ''; StderrTail = '' }
         if ($maps.Ok) {
             $p  = Get-EyeMergeProfile -Model 'Quest 3'
             $fx = Get-EyeMergeFfmpegArgs -Maps $maps
@@ -481,15 +481,22 @@ Invoke-RegressionTest -Name 'Eye merge: lookup tables merge a synthetic frame an
             $psi.UseShellExecute = $false; $psi.RedirectStandardError = $true; $psi.CreateNoWindow = $true
             $proc = [System.Diagnostics.Process]::Start($psi)
             $errTask = $proc.StandardError.ReadToEndAsync()
+            $out.Mode = [string]$fx.Mode
             if ($proc.WaitForExit(90000)) {
                 $out.Exit = $proc.ExitCode
-                $m = [regex]::Matches($errTask.GetAwaiter().GetResult(), 'frame=\s*(\d+)')
+                $stderr = $errTask.GetAwaiter().GetResult()
+                $m = [regex]::Matches($stderr, 'frame=\s*(\d+)')
                 if ($m.Count -gt 0) { $out.Frames = [int]$m[$m.Count - 1].Groups[1].Value }
-            } else { try { $proc.Kill() } catch {} }
+                # On a failure, keep ffmpeg's own last words (the input listing is noise).
+                if ($out.Exit -ne 0) {
+                    $out.StderrTail = (@($stderr -split "`r?`n" | Where-Object { $_ -and $_ -notmatch '^\s+(Stream|Metadata|encoder|Duration)|^Input #|Estimating duration' }) | Select-Object -Last 8) -join ' | '
+                }
+            } else { try { $proc.Kill() } catch {}; $out.StderrTail = 'timed out after 90 s' }
         }
         $out
     }
-    Add-TestEvidence ("tables {0}x{1}, ffmpeg exit {2}, frames {3} {4}" -f $r.Width, $r.Height, $r.Exit, $r.Frames, $r.Error)
+    Add-TestEvidence ("tables {0}x{1} ({5} graph), ffmpeg exit {2}, frames {3} {4}" -f $r.Width, $r.Height, $r.Exit, $r.Frames, $r.Error, $r.Mode)
+    if ($r.StderrTail) { Add-TestEvidence ("ffmpeg: {0}" -f $r.StderrTail) }
     if (-not $r.MapsOk -and $r.Error -like '*no enabled eye merge*') { Skip-Test 'the sandbox config has no enabled Quest 3 eye_merge block' }
     Assert-True $r.MapsOk 'lookup tables must build'
     Assert-Equal 0 $r.Exit 'ffmpeg must exit cleanly when the input ends'
