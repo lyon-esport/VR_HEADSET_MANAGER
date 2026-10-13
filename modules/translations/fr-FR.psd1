@@ -814,6 +814,14 @@
         FpsSetTo30         = "Vue fusionnee : frequence reglee a 30 i/s (fusionner les deux yeux coute du CPU proportionnellement a la frequence)."
         FpsWarning         = "Vue fusionnee a {0} i/s : fusionner les deux yeux coute du CPU proportionnellement a la frequence, par casque. 30 i/s est recommande."
         FpsConfirm         = "Garder cette frequence malgre tout ? (O/N)"
+        IpdLine            = "Position des lentilles : travail sur {0} mm (le casque est a {1} mm, {2})"
+        OptIpd             = "Position des lentilles (IPD) : choisir la position a calibrer / regler, ou la detecter a nouveau"
+        IpdCurrent         = "Position des lentilles du casque : {0} mm ({1})"
+        IpdPrompt          = "Numero de position a imposer, A = detecter depuis le casque, Entree = annuler"
+        IpdSet             = "Position des lentilles reglee sur {0} mm (maintenue jusqu au prochain deplacement des lentilles)."
+        IpdAutoOk          = "Position des lentilles detectee depuis le casque : {0} mm."
+        IpdAutoFailed      = "Impossible de lire la position des lentilles du casque ({0})."
+        CalibrateFramesPrompt = "Images a capturer, 1 a 5 (3 est ideal : regardez doucement en haut, en bas, a gauche, a droite entre elles ; Entree = 1)"
     }
     # Menu console du benchmark de flux (stream_benchmark.ps1, Show-SubMenu-Benchmark).
     # Groupe imbrique : la table de premier niveau est a la limite de 500 cles. Utiliser $msg.Benchmark.X.

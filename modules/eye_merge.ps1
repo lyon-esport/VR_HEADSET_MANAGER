@@ -593,6 +593,40 @@ function ConvertTo-EyeMergePolygon {
 }
 
 
+# Convex hull of a lens outline (flat x,y int[] -> flat x,y int[], counter-clockwise). A lens picture
+# is convex, and scene content can only ever make the measured outline SMALLER (a dark shadow touching
+# the lens rim is flood-filled as "outside" and bites a notch into it - measured on a Quest 2 Home
+# scene: a 750x650 px block of picture masked as transparent). Bridging such a notch with the chord
+# between the valid points on both sides stays inside the true edge, so it is always safe.
+# Example: $poly = ConvertTo-EyeMergeConvexOutline -Points $poly
+function ConvertTo-EyeMergeConvexOutline {
+    param([Parameter(Mandatory)][int[]]$Points)
+    $n = [int]($Points.Count / 2)
+    if ($n -lt 4) { return $Points }
+    $pts = for ($i = 0; $i -lt $n; $i++) { [PSCustomObject]@{ X = $Points[$i * 2]; Y = $Points[$i * 2 + 1] } }
+    $pts = @($pts | Sort-Object X, Y -Unique)
+    if ($pts.Count -lt 4) { return $Points }
+    $cross = { param($o, $a, $b) (($a.X - $o.X) * ($b.Y - $o.Y)) - (($a.Y - $o.Y) * ($b.X - $o.X)) }
+    $lower = [System.Collections.Generic.List[object]]::new()
+    foreach ($p in $pts) {
+        while ($lower.Count -ge 2 -and (& $cross $lower[$lower.Count - 2] $lower[$lower.Count - 1] $p) -le 0) { $lower.RemoveAt($lower.Count - 1) }
+        $lower.Add($p)
+    }
+    $upper = [System.Collections.Generic.List[object]]::new()
+    for ($i = $pts.Count - 1; $i -ge 0; $i--) {
+        $p = $pts[$i]
+        while ($upper.Count -ge 2 -and (& $cross $upper[$upper.Count - 2] $upper[$upper.Count - 1] $p) -le 0) { $upper.RemoveAt($upper.Count - 1) }
+        $upper.Add($p)
+    }
+    $lower.RemoveAt($lower.Count - 1); $upper.RemoveAt($upper.Count - 1)
+    $hull = @($lower) + @($upper)
+    if ($hull.Count -lt 8) { return $Points }
+    $out = [int[]]::new($hull.Count * 2)
+    for ($i = 0; $i -lt $hull.Count; $i++) { $out[$i * 2] = [int]$hull[$i].X; $out[$i * 2 + 1] = [int]$hull[$i].Y }
+    return $out
+}
+
+
 # Validates an eye_merge block (PSCustomObject or hashtable from JSON). Returns @{Ok;Errors}.
 # Example: (Test-EyeMergeProfile -MergeProfile $global:scrcpyParameters.'Quest 3'.eye_merge).Ok
 function Test-EyeMergeProfile {
@@ -658,23 +692,91 @@ function Update-EyeMergeParameters {
 }
 
 
-# The eye_merge block of a model when it is present, enabled and valid; $null otherwise.
-# Example: $p = Get-EyeMergeProfile -Model 'Quest 3'
-function Get-EyeMergeProfile {
-    param([string]$Model, [switch]$IncludeDisabled)
+# The model template (scrcpy.parameters.<Model>) as it applies at one lens position (IPD, ADR-0030).
+# Without -Ipd, or at the model's default position, or for a model with no `ipd` block, this IS the
+# configured template (same object, so every caller behaves exactly as before). At another position
+# it returns a memoised clone in which, per view:
+#   - views.<v>.ipd.<pos>.{left_eye,right_eye} replace the base eye definitions when present,
+#     otherwise the base crops are shifted by the measured movement of the lens picture
+#     (ipd.lens_cx.<pos>.{L,R} minus the same for the default position, in eye-local pixels);
+#   - views.<v>.ipd.<pos>.merged fields override the base merged fields;
+# and eye_merge is replaced by eye_merge_ipd.<pos> when that block exists.
+# Example: (Get-ModelTemplateForIpd -Model 'Quest 2' -Ipd '68').views.square.right_eye.crop
+function Get-ModelTemplateForIpd {
+    param([string]$Model, [string]$Ipd = '')
     Update-EyeMergeParameters
     if (-not $Model -or -not $global:scrcpyParameters) { return $null }
     $tpl = $global:scrcpyParameters.$Model
+    if (-not $tpl -or $tpl -is [string]) { return $tpl }
+    if (-not $Ipd -or -not $tpl.ipd -or [string]$Ipd -eq [string]$tpl.ipd.default) { return $tpl }
+    if (-not $script:IpdTemplateMemo) { $script:IpdTemplateMemo = @{} }
+    $memoKey = "$Model|$Ipd"
+    $memo = $script:IpdTemplateMemo[$memoKey]
+    if ($memo -and [object]::ReferenceEquals($memo.Src, $tpl)) { return $memo.Obj }
+
+    $clone = $tpl | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $def = [string]$tpl.ipd.default
+    $cx = $tpl.ipd.lens_cx
+    $dxL = 0; $dxR = 0
+    if ($cx -and $cx.$Ipd -and $cx.$def) {
+        $dxL = [int][Math]::Round(([double]$cx.$Ipd.L) - ([double]$cx.$def.L))
+        $dxR = [int][Math]::Round(([double]$cx.$Ipd.R) - ([double]$cx.$def.R))
+    }
+    $fw = 0
+    if ($clone.eye_merge -and $clone.eye_merge.frame_width) { $fw = [int]$clone.eye_merge.frame_width }
+    if ($clone.views) {
+        foreach ($vp in @($clone.views.PSObject.Properties)) {
+            $v = $vp.Value
+            $var = if ($v.ipd) { $v.ipd.$Ipd } else { $null }
+            foreach ($pair in @(@('left_eye', $dxL), @('right_eye', $dxR))) {
+                $eyeName = $pair[0]
+                if ($var -and $var.$eyeName) {
+                    if ($v.PSObject.Properties.Name -contains $eyeName) { $v.$eyeName = $var.$eyeName }
+                    else { $v | Add-Member -NotePropertyName $eyeName -NotePropertyValue $var.$eyeName }
+                    continue
+                }
+                $e = $v.$eyeName
+                if ($e -and [string]$e.crop -match '^(\d+):(\d+):(\d+):(\d+)$' -and [int]$Matches[1] -gt 0 -and $pair[1] -ne 0) {
+                    $w = [int]$Matches[1]; $h = [int]$Matches[2]; $x = [int]$Matches[3] + [int]$pair[1]; $y = [int]$Matches[4]
+                    if ($x -lt 0) { $x = 0 }
+                    if ($fw -gt 0 -and ($x + $w) -gt $fw) { $x = $fw - $w }
+                    $e.crop = ('{0}:{1}:{2}:{3}' -f $w, $h, $x, $y)
+                }
+            }
+            if ($var -and $var.merged) {
+                if (-not $v.merged) { $v | Add-Member -NotePropertyName 'merged' -NotePropertyValue ([PSCustomObject]@{}) }
+                foreach ($mp in @($var.merged.PSObject.Properties)) {
+                    if ($v.merged.PSObject.Properties.Name -contains $mp.Name) { $v.merged.($mp.Name) = $mp.Value }
+                    else { $v.merged | Add-Member -NotePropertyName $mp.Name -NotePropertyValue $mp.Value }
+                }
+            }
+        }
+    }
+    if ($clone.eye_merge_ipd -and $clone.eye_merge_ipd.$Ipd) { $clone.eye_merge = $clone.eye_merge_ipd.$Ipd }
+    $script:IpdTemplateMemo[$memoKey] = @{ Src = $tpl; Obj = $clone }
+    return $clone
+}
+
+
+# The eye_merge block of a model when it is present, enabled and valid; $null otherwise.
+# -Ipd selects the calibration of that lens position (eye_merge_ipd.<pos>, else the default block).
+# Example: $p = Get-EyeMergeProfile -Model 'Quest 3'
+function Get-EyeMergeProfile {
+    param([string]$Model, [switch]$IncludeDisabled, [string]$Ipd = '')
+    Update-EyeMergeParameters
+    if (-not $Model -or -not $global:scrcpyParameters) { return $null }
+    $tpl = Get-ModelTemplateForIpd -Model $Model -Ipd $Ipd
     if (-not $tpl -or $tpl -is [string] -or -not $tpl.eye_merge) { return $null }
     $p = $tpl.eye_merge
     if (-not $IncludeDisabled -and $p.enabled -eq $false) { return $null }
     # Validation (two 256-point outlines) costs ~6 ms and this runs in the scrcpy watchdog for every
     # headset: remember the result for this exact object - a config reload creates a new one.
     if (-not $script:EyeMergeValidated) { $script:EyeMergeValidated = @{} }
-    $memo = $script:EyeMergeValidated[$Model]
+    $vKey = "$Model|$Ipd"
+    $memo = $script:EyeMergeValidated[$vKey]
     if ($memo -and [object]::ReferenceEquals($memo.Obj, $p)) { if ($memo.Ok) { return $p } else { return $null } }
     $t = Test-EyeMergeProfile -MergeProfile $p
-    $script:EyeMergeValidated[$Model] = @{ Obj = $p; Ok = $t.Ok }
+    $script:EyeMergeValidated[$vKey] = @{ Obj = $p; Ok = $t.Ok }
     if (-not $t.Ok) {
         Write-Log ("Eye merge profile of '{0}' is invalid: {1}" -f $Model, ($t.Errors -join '; ')) -Level WARNING
         return $null
@@ -686,8 +788,8 @@ function Get-EyeMergeProfile {
 # $true when the model has an enabled, valid eye_merge calibration (the "supported" flag).
 # Example: if (Test-EyeMergeSupported -Model 'Quest 2') { ... }
 function Test-EyeMergeSupported {
-    param([string]$Model)
-    return ($null -ne (Get-EyeMergeProfile -Model $Model))
+    param([string]$Model, [string]$Ipd = '')
+    return ($null -ne (Get-EyeMergeProfile -Model $Model -Ipd $Ipd))
 }
 
 
@@ -721,10 +823,10 @@ function Get-EyeMergeGeometry {
 # alignment). Clamped to 0.3 .. 100 m. Always 0 when the model has no lens model (lens_focal_px).
 # Example: Get-EyeMergeViewDepth -Model 'Quest 3' -View 'max'
 function Get-EyeMergeViewDepth {
-    param([Parameter(Mandatory)][string]$Model, [string]$View, $MergeProfile = $null)
-    if (-not $MergeProfile) { $MergeProfile = Get-EyeMergeProfile -Model $Model -IncludeDisabled }
+    param([Parameter(Mandatory)][string]$Model, [string]$View, $MergeProfile = $null, [string]$Ipd = '')
+    if (-not $MergeProfile) { $MergeProfile = Get-EyeMergeProfile -Model $Model -IncludeDisabled -Ipd $Ipd }
     if (-not $MergeProfile -or $null -eq $MergeProfile.lens_focal_px -or -not $View) { return 0.0 }
-    $tpl = $global:scrcpyParameters.$Model
+    $tpl = Get-ModelTemplateForIpd -Model $Model -Ipd $Ipd
     if (-not $tpl -or -not $tpl.views -or -not $tpl.views.$View -or -not $tpl.views.$View.merged) { return 0.0 }
     $raw = $tpl.views.$View.merged.depth_m
     $d = 0.0
@@ -738,9 +840,9 @@ function Get-EyeMergeViewDepth {
 # calibration's base_eye, else R. The main eye gives the centre of the picture.
 # Example: Get-EyeMergeViewBaseEye -Model 'Quest 3' -View 'max'
 function Get-EyeMergeViewBaseEye {
-    param([Parameter(Mandatory)][string]$Model, [string]$View, $MergeProfile = $null)
-    if (-not $MergeProfile) { $MergeProfile = Get-EyeMergeProfile -Model $Model -IncludeDisabled }
-    $tpl = $global:scrcpyParameters.$Model
+    param([Parameter(Mandatory)][string]$Model, [string]$View, $MergeProfile = $null, [string]$Ipd = '')
+    if (-not $MergeProfile) { $MergeProfile = Get-EyeMergeProfile -Model $Model -IncludeDisabled -Ipd $Ipd }
+    $tpl = Get-ModelTemplateForIpd -Model $Model -Ipd $Ipd
     if ($View -and $tpl -and $tpl.views -and $tpl.views.$View -and $tpl.views.$View.merged) {
         $e = [string]$tpl.views.$View.merged.base_eye
         if ($e -in @('L','R')) { return $e.ToUpperInvariant() }
@@ -755,13 +857,13 @@ function Get-EyeMergeViewBaseEye {
 # ('fullscreen' / 0:0:0:0 = the whole canvas). Returns @{W;H;X;Y;Auto} or $null.
 # Example: Get-EyeMergeViewCrop -Model 'Quest 3' -View 'square'
 function Get-EyeMergeViewCrop {
-    param([Parameter(Mandatory)][string]$Model, [string]$View, $MergeProfile = $null)
-    if (-not $MergeProfile) { $MergeProfile = Get-EyeMergeProfile -Model $Model }
+    param([Parameter(Mandatory)][string]$Model, [string]$View, $MergeProfile = $null, [string]$Ipd = '')
+    if (-not $MergeProfile) { $MergeProfile = Get-EyeMergeProfile -Model $Model -Ipd $Ipd }
     if (-not $MergeProfile -or -not (Initialize-EyeMergeType)) { return $null }
     $g = Get-EyeMergeGeometry -MergeProfile $MergeProfile
     $cw = $g.CanvasWidth; $ch = $g.CanvasHeight
     $viewObj = $null
-    $tpl = $global:scrcpyParameters.$Model
+    $tpl = Get-ModelTemplateForIpd -Model $Model -Ipd $Ipd
     if ($View -and $tpl -and $tpl.views) { $viewObj = $tpl.views.$View }
 
     $crop = if ($viewObj -and $viewObj.merged) { [string]$viewObj.merged.crop } else { '' }
@@ -793,11 +895,11 @@ function Get-EyeMergeViewCrop {
 # the view crop changes. Cheap enough for the scrcpy watchdog. '' when merge is not usable.
 # Example: Get-EyeMergeViewKey -Model 'Quest 3' -View 'square'
 function Get-EyeMergeViewKey {
-    param([Parameter(Mandatory)][string]$Model, [string]$View)
-    $p = Get-EyeMergeProfile -Model $Model
+    param([Parameter(Mandatory)][string]$Model, [string]$View, [string]$Ipd = '')
+    $p = Get-EyeMergeProfile -Model $Model -Ipd $Ipd
     if (-not $p) { return '' }
     $viewObj = $null
-    $tpl = $global:scrcpyParameters.$Model
+    $tpl = Get-ModelTemplateForIpd -Model $Model -Ipd $Ipd
     if ($View -and $tpl.views) { $viewObj = $tpl.views.$View }
     $viewPart = if ($viewObj) { ($viewObj | ConvertTo-Json -Depth 6 -Compress) } else { $View }
     # The model max_size caps the merged output too (Get-EyeMergeMaps), so it is part of the identity.
@@ -818,15 +920,15 @@ function Get-EyeMergeViewKey {
 # In every Use=$false case with an M profile the stream falls back to the RIGHT eye.
 # Example: (Resolve-EyeMergeUse -Model 'Quest 3' -ScrcpyProfile 'square-M-N-45-20').Use
 function Resolve-EyeMergeUse {
-    param([string]$Model, [string]$ScrcpyProfile)
+    param([string]$Model, [string]$ScrcpyProfile, [string]$Ipd = '')
     $r = @{ Use = $false; View = ''; Key = ''; Reason = '' }
     $parsed = ConvertFrom-ScrcpyProfile -Profile $ScrcpyProfile
     if (-not $parsed -or $parsed.Eye -ne 'M') { return $r }
     $r.View = $parsed.View
     $mode = if ($global:CaptureMode) { [string]$global:CaptureMode } else { 'StreamOnly' }
     if ($mode -eq 'LocalWindow') { $r.Reason = 'localwindow'; return $r }
-    if (-not (Test-EyeMergeSupported -Model $Model)) { $r.Reason = 'unsupported'; return $r }
-    $r.Key = Get-EyeMergeViewKey -Model $Model -View $parsed.View
+    if (-not (Test-EyeMergeSupported -Model $Model -Ipd $Ipd)) { $r.Reason = 'unsupported'; return $r }
+    $r.Key = Get-EyeMergeViewKey -Model $Model -View $parsed.View -Ipd $Ipd
     $r.Use = [bool]$r.Key
     if (-not $r.Use) { $r.Reason = 'unsupported'; return $r }
     # start-screenCopy refused this exact calibration/view for this process (display size mismatch,
@@ -853,13 +955,13 @@ function Set-EyeMergeRejected {
 # (gray16le) and .w.raw (gray8), Width x Height.
 # Example: $maps = Get-EyeMergeMaps -Model 'Quest 3' -View 'square'
 function Get-EyeMergeMaps {
-    param([Parameter(Mandatory)][string]$Model, [string]$View)
+    param([Parameter(Mandatory)][string]$Model, [string]$View, [string]$Ipd = '')
     $res = @{ Ok = $false; Key = ''; Prefix = ''; Width = 0; Height = 0; Crop = $null; Error = $null }
     try {
-        $p = Get-EyeMergeProfile -Model $Model
+        $p = Get-EyeMergeProfile -Model $Model -Ipd $Ipd
         if (-not $p) { $res.Error = "Model '$Model' has no enabled eye merge calibration."; return $res }
         if (-not (Initialize-EyeMergeType)) { $res.Error = 'Image helper unavailable.'; return $res }
-        $key = Get-EyeMergeViewKey -Model $Model -View $View
+        $key = Get-EyeMergeViewKey -Model $Model -View $View -Ipd $Ipd
         $dir = Join-Path $global:ScriptPath 'data\eye_merge'
         if (-not (Test-Path -LiteralPath $dir)) { [void][System.IO.Directory]::CreateDirectory($dir) }
         $safeModel = ($Model -replace '[^A-Za-z0-9]+', '_')
@@ -878,7 +980,7 @@ function Get-EyeMergeMaps {
             }
         }
 
-        $crop = Get-EyeMergeViewCrop -Model $Model -View $View -MergeProfile $p
+        $crop = Get-EyeMergeViewCrop -Model $Model -View $View -MergeProfile $p -Ipd $Ipd
         if (-not $crop) { $res.Error = 'Could not resolve the merged crop.'; return $res }
         $g = Get-EyeMergeGeometry -MergeProfile $p
         # scrcpy cannot apply the model max_size to a merged view (it needs the native frame), so the
@@ -890,8 +992,8 @@ function Get-EyeMergeMaps {
             $outW = [int][Math]::Floor($outW * $scale); $outH = [int][Math]::Floor($outH * $scale)
             $outW -= $outW % 2; $outH -= $outH % 2
         }
-        $depth = Get-EyeMergeViewDepth -Model $Model -View $View -MergeProfile $p
-        $baseRight = ((Get-EyeMergeViewBaseEye -Model $Model -View $View -MergeProfile $p) -eq 'R')
+        $depth = Get-EyeMergeViewDepth -Model $Model -View $View -MergeProfile $p -Ipd $Ipd
+        $baseRight = ((Get-EyeMergeViewBaseEye -Model $Model -View $View -MergeProfile $p -Ipd $Ipd) -eq 'R')
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
         [VrhmEyeMerge]::BuildMaps($prefix, $g.P, $g.PolyL, $g.PolyR, $g.Box, $baseRight, $g.Inset, $g.Feather,
                                   $crop.X, $crop.Y, $crop.W, $crop.H, $outW, $outH, $depth, $g.Focal, $g.Ipd)
@@ -1090,20 +1192,43 @@ function Invoke-EyeMergeCalibration {
         [ValidateSet('Auto','USB','WiFi')] [string]$Transport = 'Auto',
         [switch]$Save,
         [string]$CalibratedBy = $env:COMPUTERNAME,
-        [double]$MinScore = 0.35
+        [double]$MinScore = 0.35,
+        # Lens position (IPD, mm) this frame was taken at, for a model with an `ipd` block: the result
+        # is stored as eye_merge_ipd.<Ipd> (or eye_merge at the default position) together with the
+        # lens picture centres that drive the crop shift of the L/R views. Default: the headset's own.
+        [string]$Ipd = '',
+        # Brightness (0-255) under which a pixel is "outside the lens". Default: the model's stored
+        # lens_threshold, else 14. A dark scene (a Quest 2 Home ceiling) is cut by 14: use 4-6.
+        [int]$LensThreshold = 0,
+        # Further raw frames taken at the SAME lens position and another head pose: the lens outline is
+        # the union of every frame's lens area, because a dark part of the scene (ceiling, shadow) at a
+        # lens corner would otherwise cut that corner off the outline and the transparency mask would
+        # then hide real picture. -FramePath / the first captured frame stays the registration frame.
+        [string[]]$ExtraFramePath = @(),
+        # With -Headset: how many frames to capture (look around slowly meanwhile), 1 to 5.
+        [ValidateRange(1, 5)] [int]$Frames = 1
     )
-    $res = @{ Ok = $false; Score = 0; Profile = $null; Model = $Model; PreviewPath = $null; PreviewWidth = 0; PreviewHeight = 0; Saved = $false; Error = $null }
+    $res = @{ Ok = $false; Score = 0; Profile = $null; Model = $Model; PreviewPath = $null; PreviewWidth = 0; PreviewHeight = 0; Saved = $false; Error = $null; Ipd = ''; LensCx = $null }
     try {
         if (-not $Model -and $Headset) { $Model = [string]$Headset.Model }
+        if (-not $Ipd -and $Headset) { $Ipd = Get-HeadsetIpdValue -Headset $Headset }
+        $modelTpl = if ($Model) { $global:scrcpyParameters.$Model } else { $null }
+        if (-not ($modelTpl -and $modelTpl.ipd)) { $Ipd = '' }
+        $res.Ipd = $Ipd
         if (-not $Model) { $res.Error = 'Headset model unknown - connect the headset once so its model is detected.'; return $res }
         $res.Model = $Model
         if (-not (Initialize-EyeMergeType)) { $res.Error = 'Image helper unavailable.'; return $res }
 
         if (-not $FramePath) {
             if (-not $Headset) { $res.Error = 'A headset or a frame is required.'; return $res }
-            $frame = Get-HeadsetScreenFrame -Headset $Headset -Transport $Transport
-            if (-not $frame.Ok) { $res.Error = $frame.Error; return $res }
-            $FramePath = $frame.Path
+            $extras = [System.Collections.Generic.List[string]]::new()
+            for ($i = 1; $i -le $Frames; $i++) {
+                $outFile = if ($i -eq 1) { $null } else { Join-Path $global:ScriptPath ("website\generated\view_editor\headset_{0}_cal{1}.png" -f $Headset.ID, $i) }
+                $frame = if ($outFile) { Get-HeadsetScreenFrame -Headset $Headset -Transport $Transport -OutFile $outFile } else { Get-HeadsetScreenFrame -Headset $Headset -Transport $Transport }
+                if (-not $frame.Ok) { if ($i -eq 1) { $res.Error = $frame.Error; return $res } else { continue } }
+                if ($i -eq 1) { $FramePath = $frame.Path } else { $extras.Add($frame.Path) }
+            }
+            $ExtraFramePath = @($extras)
         }
         $fw = 0; $fh = 0
         $bgr = [VrhmEyeMerge]::LoadBgr($FramePath, [ref]$fw, [ref]$fh)
@@ -1111,11 +1236,27 @@ function Invoke-EyeMergeCalibration {
         $ew = $fw / 2
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
-        $mL = [VrhmEyeMerge]::LensMask($bgr, $fw, $fh, 0, $ew, 14)
-        $mR = [VrhmEyeMerge]::LensMask($bgr, $fw, $fh, $ew, $ew, 14)
+        $prior = Get-EyeMergeProfile -Model $Model -IncludeDisabled
+        $thr = if ($LensThreshold -gt 0) { $LensThreshold } elseif ($prior -and [int]$prior.lens_threshold -gt 0) { [int]$prior.lens_threshold } else { 14 }
+        $mL = [VrhmEyeMerge]::LensMask($bgr, $fw, $fh, 0, $ew, $thr)
+        $mR = [VrhmEyeMerge]::LensMask($bgr, $fw, $fh, $ew, $ew, $thr)
+        $unionCount = 1
+        foreach ($extra in @($ExtraFramePath | Where-Object { $_ -and (Test-Path -LiteralPath $_) })) {
+            $w2 = 0; $h2 = 0
+            $b2 = [VrhmEyeMerge]::LoadBgr($extra, [ref]$w2, [ref]$h2)
+            if ($w2 -ne $fw -or $h2 -ne $fh) { continue }
+            $m2L = [VrhmEyeMerge]::LensMask($b2, $fw, $fh, 0, $ew, $thr)
+            $m2R = [VrhmEyeMerge]::LensMask($b2, $fw, $fh, $ew, $ew, $thr)
+            for ($k = 0; $k -lt $mL.Length; $k++) { if ($m2L[$k] -ne 0) { $mL[$k] = 255 }; if ($m2R[$k] -ne 0) { $mR[$k] = 255 } }
+            $unionCount++
+        }
+        if ($unionCount -gt 1) { Write-Log ("Eye merge calibration of {0}: lens outline from {1} frames" -f $Model, $unionCount) -Level INFO }
         $polyL = [VrhmEyeMerge]::MaskPolygon($mL, $ew, $fh, 256)
         $polyR = [VrhmEyeMerge]::MaskPolygon($mR, $ew, $fh, 256)
         if ($polyL.Count -lt 16 -or $polyR.Count -lt 16) { $res.Error = 'No lens picture found in the frame (is the headset display on?).'; return $res }
+        # Lens pictures are convex: bridge any notch a dark scene detail bit into the outline.
+        $polyL = ConvertTo-EyeMergeConvexOutline -Points $polyL
+        $polyR = ConvertTo-EyeMergeConvexOutline -Points $polyR
 
         # Search around the relative angle the model's eye views already encode (left angle - right
         # angle, 43 for a Quest 3), then everywhere if that finds nothing convincing.
@@ -1139,7 +1280,16 @@ function Invoke-EyeMergeCalibration {
         }
 
         $ic = [System.Globalization.CultureInfo]::InvariantCulture
+        # Non-lens settings (focal, main eye, feather) always come from the default-position block.
         $existing = Get-EyeMergeProfile -Model $Model -IncludeDisabled
+        # Centres of the two lens pictures (bounding-box middle of each outline, eye-local px).
+        $lensCx = @{}
+        foreach ($side in @(@('L', $polyL), @('R', $polyR))) {
+            $xs = for ($k = 0; $k -lt $side[1].Count; $k += 2) { $side[1][$k] }
+            $mm = $xs | Measure-Object -Minimum -Maximum
+            $lensCx[$side[0]] = [Math]::Round(($mm.Minimum + $mm.Maximum) / 2.0, 1)
+        }
+        $res.LensCx = $lensCx
         $cal = [ordered]@{
             schema         = 1
             enabled        = $true
@@ -1166,6 +1316,12 @@ function Invoke-EyeMergeCalibration {
         # place): keep the existing one, as base_eye and feather_px.
         if ($existing -and $null -ne $existing.lens_focal_px) { $cal.Insert(14, 'lens_focal_px', [double]$existing.lens_focal_px) }
         if ($existing -and $null -ne $existing.ipd_m) { $cal.Insert(15, 'ipd_m', [double]$existing.ipd_m) }
+        # At a measured lens position the eye spacing of the depth model is that position.
+        $ipdNum = 0
+        if ($Ipd -and [int]::TryParse($Ipd, [ref]$ipdNum) -and $ipdNum -ge 40 -and $ipdNum -le 90 -and $cal.Contains('lens_focal_px')) {
+            $cal['ipd_m'] = [Math]::Round($ipdNum / 1000.0, 3)
+        }
+        if ($thr -ne 14) { $cal['lens_threshold'] = $thr }
         $pObj = [PSCustomObject]$cal
         $g = Get-EyeMergeGeometry -MergeProfile $pObj
         $pObj.canvas_width = $g.CanvasWidth; $pObj.canvas_height = $g.CanvasHeight
@@ -1174,7 +1330,7 @@ function Invoke-EyeMergeCalibration {
         # inside it (soft dark band and dark blob in the seam otherwise). +10 px of margin, clamped.
         $rim = [VrhmEyeMerge]::MeasureFalloff($bgr, $fw, $fh, $g.P, $g.PolyL, $g.PolyR, $g.Box, 0.92)
         if ($rim -ge 0) {
-            $pObj.inset_px = [int][Math]::Min(300, [Math]::Max(20, $rim + 10))
+            $pObj.inset_px = [int][Math]::Min(100, [Math]::Max(20, $rim + 10))
             Write-Log ("Eye merge calibration of {0}: darkened lens rim ~{1} px -> inset {2} px" -f $Model, $rim, $pObj.inset_px) -Level INFO
         } else {
             Write-Log ("Eye merge calibration of {0}: lens rim not measurable on this frame, inset kept at {1} px" -f $Model, $pObj.inset_px) -Level INFO
@@ -1188,11 +1344,67 @@ function Invoke-EyeMergeCalibration {
 
         $res.Profile = $pObj
         $res.Ok = $true
-        if ($Save) { $res.Saved = Save-EyeMergeProfile -Model $Model -MergeProfile $pObj }
+        if ($Save) { $res.Saved = Save-EyeMergeProfile -Model $Model -MergeProfile $pObj -Ipd $Ipd -LensCx $lensCx }
     } catch {
         $res.Error = $_.Exception.Message
         Write-Log ("Invoke-EyeMergeCalibration failed: {0}" -f $_.Exception.Message) -Level ERROR
         Write-Log ("Invoke-EyeMergeCalibration stack: {0}" -f $_.ScriptStackTrace) -Level DEBUG
+    }
+    return $res
+}
+
+
+# Lens position of a headset from ONE captured frame: the centres of the two lens pictures
+# (bounding-box middle of each outline, eye-local px) compared with the calibrated
+# scrcpy.parameters.<Model>.ipd.lens_cx table. The fallback for when the headset log no longer holds
+# the "Ipd changed" line (the log is a 256 KiB ring that busy firmware overwrites in minutes, and a
+# fresh app start finds nothing). Costs a scrcpy capture (~4 s), so it is operator-triggered
+# (web / console "detect"), never polled. -FramePath tests from an existing raw frame.
+# Returns @{Ok;Ipd;Distance;Margin;Centres;Error}; Ok only when one position is clearly nearest.
+# Example: Find-HeadsetIpdFromFrame -Headset (Get-HeadsetDiagTarget -Id 3)
+function Find-HeadsetIpdFromFrame {
+    param($Headset = $null, [string]$Model = '', [string]$FramePath = '', [ValidateSet('Auto','USB','WiFi')][string]$Transport = 'Auto')
+    $res = @{ Ok = $false; Ipd = ''; Distance = $null; Margin = $null; Centres = $null; Error = $null }
+    try {
+        if (-not $Model -and $Headset) { $Model = [string]$Headset.Model }
+        $cfg = if ($Model -and $global:scrcpyParameters.$Model) { $global:scrcpyParameters.$Model.ipd } else { $null }
+        if (-not $cfg -or -not $cfg.lens_cx) { $res.Error = "Model '$Model' has no calibrated lens positions (ipd.lens_cx) - calibrate each position first."; return $res }
+        if (-not (Initialize-EyeMergeType)) { $res.Error = 'Image helper unavailable.'; return $res }
+        if (-not $FramePath) {
+            if (-not $Headset) { $res.Error = 'A headset or a frame is required.'; return $res }
+            $frame = Get-HeadsetScreenFrame -Headset $Headset -Transport $Transport
+            if (-not $frame.Ok) { $res.Error = $frame.Error; return $res }
+            $FramePath = $frame.Path
+        }
+        $fw = 0; $fh = 0
+        $bgr = [VrhmEyeMerge]::LoadBgr($FramePath, [ref]$fw, [ref]$fh)
+        if ($fw % 2 -ne 0 -or $fw -lt $fh) { $res.Error = ("Frame {0}x{1} does not look like two eyes side by side." -f $fw, $fh); return $res }
+        $ew = $fw / 2
+        $prior = Get-EyeMergeProfile -Model $Model -IncludeDisabled
+        $thr = if ($prior -and [int]$prior.lens_threshold -gt 0) { [int]$prior.lens_threshold } else { 14 }
+        $c = @{}
+        foreach ($side in @(@('L', 0), @('R', $ew))) {
+            $m = [VrhmEyeMerge]::LensMask($bgr, $fw, $fh, $side[1], $ew, $thr)
+            $poly = [VrhmEyeMerge]::MaskPolygon($m, $ew, $fh, 256)
+            if ($poly.Count -lt 16) { $res.Error = 'No lens picture in the frame - the headset display is off or the capture is blocked (protected content on screen).'; return $res }
+            $xs = for ($k = 0; $k -lt $poly.Count; $k += 2) { $poly[$k] }
+            $mm = $xs | Measure-Object -Minimum -Maximum
+            $c[$side[0]] = ($mm.Minimum + $mm.Maximum) / 2.0
+        }
+        $res.Centres = $c
+        $best = $null; $bestD = [double]::MaxValue; $second = [double]::MaxValue
+        foreach ($p in @($cfg.lens_cx.PSObject.Properties)) {
+            $d = [Math]::Abs($c.L - [double]$p.Value.L) + [Math]::Abs($c.R - [double]$p.Value.R)
+            if ($d -lt $bestD) { $second = $bestD; $bestD = $d; $best = [string]$p.Name } elseif ($d -lt $second) { $second = $d }
+        }
+        $res.Ipd = $best; $res.Distance = [Math]::Round($bestD, 1)
+        $res.Margin = if ($second -lt [double]::MaxValue) { [Math]::Round($second - $bestD, 1) } else { $null }
+        # Accept only a clear match: close to a calibrated position AND well separated from the next.
+        if ($bestD -gt 40) { $res.Error = ("Lens pictures at {0:N0} / {1:N0} px match no calibrated position (nearest {2}, off by {3:N0} px)." -f $c.L, $c.R, $best, $bestD); return $res }
+        if ($null -ne $res.Margin -and $res.Margin -lt $bestD) { $res.Error = ("Ambiguous between lens positions (nearest {0}, margin {1:N0} px)." -f $best, $res.Margin); return $res }
+        $res.Ok = $true
+    } catch {
+        $res.Error = $_.Exception.Message
     }
     return $res
 }
@@ -1235,13 +1447,26 @@ function Update-EyeMergeConfig {
 # Saves an eye_merge block for a model into config.json. Returns $true/$false.
 # Example: Save-EyeMergeProfile -Model 'Quest 3' -MergeProfile $cal.Profile
 function Save-EyeMergeProfile {
-    param([Parameter(Mandatory)][string]$Model, [Parameter(Mandatory)] $MergeProfile, [switch]$CreateModel)
+    param([Parameter(Mandatory)][string]$Model, [Parameter(Mandatory)] $MergeProfile, [switch]$CreateModel,
+          # Lens position of this calibration: a non-default one is stored under eye_merge_ipd.<Ipd>.
+          [string]$Ipd = '', $LensCx = $null)
     $t = Test-EyeMergeProfile -MergeProfile $MergeProfile
     if (-not $t.Ok) { Write-Log ("Save-EyeMergeProfile: invalid profile: {0}" -f ($t.Errors -join '; ')) -Level ERROR; return $false }
     $ok = Update-EyeMergeConfig -Model $Model -CreateModel:$CreateModel -Mutate {
         param($m)
-        if ($m.PSObject.Properties.Name -contains 'eye_merge') { $m.eye_merge = $MergeProfile }
+        $isVariant = ($Ipd -and $m.ipd -and [string]$Ipd -ne [string]$m.ipd.default)
+        if ($isVariant) {
+            if (-not ($m.PSObject.Properties.Name -contains 'eye_merge_ipd')) { $m | Add-Member -NotePropertyName 'eye_merge_ipd' -NotePropertyValue ([PSCustomObject]@{}) }
+            if ($m.eye_merge_ipd.PSObject.Properties.Name -contains $Ipd) { $m.eye_merge_ipd.$Ipd = $MergeProfile }
+            else { $m.eye_merge_ipd | Add-Member -NotePropertyName $Ipd -NotePropertyValue $MergeProfile }
+        } elseif ($m.PSObject.Properties.Name -contains 'eye_merge') { $m.eye_merge = $MergeProfile }
         else { $m | Add-Member -NotePropertyName 'eye_merge' -NotePropertyValue $MergeProfile }
+        if ($Ipd -and $m.ipd -and $LensCx) {
+            if (-not ($m.ipd.PSObject.Properties.Name -contains 'lens_cx')) { $m.ipd | Add-Member -NotePropertyName 'lens_cx' -NotePropertyValue ([PSCustomObject]@{}) }
+            $entry = [PSCustomObject]@{ L = [double]$LensCx.L; R = [double]$LensCx.R }
+            if ($m.ipd.lens_cx.PSObject.Properties.Name -contains $Ipd) { $m.ipd.lens_cx.$Ipd = $entry }
+            else { $m.ipd.lens_cx | Add-Member -NotePropertyName $Ipd -NotePropertyValue $entry }
+        }
     }
     if ($ok) { Write-Log ("Eye merge calibration saved for model '{0}'." -f $Model) -Level SUCCESS }
     return $ok
@@ -1266,9 +1491,9 @@ function Set-EyeMergeEnabled {
 # Sets (w:h:x:y on the merged canvas) or clears (-Reset = automatic) the merged crop of one view.
 # Example: Set-EyeMergeViewCrop -Model 'Quest 3' -View 'square' -Crop '1720:1720:640:420'
 function Set-EyeMergeViewCrop {
-    param([Parameter(Mandatory)][string]$Model, [Parameter(Mandatory)][string]$View, [string]$Crop, [switch]$Reset)
+    param([Parameter(Mandatory)][string]$Model, [Parameter(Mandatory)][string]$View, [string]$Crop, [switch]$Reset, [string]$Ipd = '')
     if (-not $Reset -and $Crop -notmatch '^\d+:\d+:\d+:\d+$') { Write-Log ("Set-EyeMergeViewCrop: '{0}' is not w:h:x:y." -f $Crop) -Level ERROR; return $false }
-    return (Set-EyeMergeViewField -Model $Model -View $View -Field 'crop' -Value $(if ($Reset) { $null } else { $Crop }))
+    return (Set-EyeMergeViewField -Model $Model -View $View -Field 'crop' -Value $(if ($Reset) { $null } else { $Crop }) -Ipd $Ipd)
 }
 
 
@@ -1277,23 +1502,30 @@ function Set-EyeMergeViewCrop {
 # (eye_merge.lens_focal_px). Takes effect at the next stream (re)start (new table key).
 # Example: Set-EyeMergeViewDepth -Model 'Quest 3' -View 'max' -DepthM 0.75
 function Set-EyeMergeViewDepth {
-    param([Parameter(Mandatory)][string]$Model, [Parameter(Mandatory)][string]$View, [double]$DepthM = 0, [switch]$Far)
-    if ($Far -or $DepthM -le 0) { return (Set-EyeMergeViewField -Model $Model -View $View -Field 'depth_m' -Value $null) }
+    param([Parameter(Mandatory)][string]$Model, [Parameter(Mandatory)][string]$View, [double]$DepthM = 0, [switch]$Far, [string]$Ipd = '')
+    if ($Far -or $DepthM -le 0) { return (Set-EyeMergeViewField -Model $Model -View $View -Field 'depth_m' -Value $null -Ipd $Ipd) }
     if ($DepthM -lt 0.3 -or $DepthM -gt 100) { Write-Log ("Set-EyeMergeViewDepth: {0} m is outside 0.3 .. 100 m." -f $DepthM) -Level ERROR; return $false }
     $p = Get-EyeMergeProfile -Model $Model -IncludeDisabled
     if (-not $p -or $null -eq $p.lens_focal_px) { Write-Log ("Set-EyeMergeViewDepth: model '{0}' has no lens model (eye_merge.lens_focal_px)." -f $Model) -Level WARNING; return $false }
-    return (Set-EyeMergeViewField -Model $Model -View $View -Field 'depth_m' -Value ([Math]::Round($DepthM, 2)))
+    return (Set-EyeMergeViewField -Model $Model -View $View -Field 'depth_m' -Value ([Math]::Round($DepthM, 2)) -Ipd $Ipd)
 }
 
 
 # Internal: sets ($null = removes) one field of views.<view>.merged, keeping the others, and drops
 # the merged object once it is empty.
 function Set-EyeMergeViewField {
-    param([Parameter(Mandatory)][string]$Model, [Parameter(Mandatory)][string]$View, [Parameter(Mandatory)][string]$Field, $Value)
+    # -Ipd: a lens position other than the model's default writes the field into that position's
+    # variant (views.<view>.ipd.<Ipd>.merged), so one position can be tuned without touching the others.
+    param([Parameter(Mandatory)][string]$Model, [Parameter(Mandatory)][string]$View, [Parameter(Mandatory)][string]$Field, $Value, [string]$Ipd = '')
     return (Update-EyeMergeConfig -Model $Model -Mutate {
         param($m)
         $v = $m.views.$View
         if (-not $v) { throw "View '$View' not found for model '$Model'." }
+        if ($Ipd -and $m.ipd -and [string]$Ipd -ne [string]$m.ipd.default) {
+            if (-not ($v.PSObject.Properties.Name -contains 'ipd')) { $v | Add-Member -NotePropertyName 'ipd' -NotePropertyValue ([PSCustomObject]@{}) }
+            if (-not ($v.ipd.PSObject.Properties.Name -contains $Ipd)) { $v.ipd | Add-Member -NotePropertyName $Ipd -NotePropertyValue ([PSCustomObject]@{}) }
+            $v = $v.ipd.$Ipd
+        }
         $merged = if ($v.merged) { $v.merged } else { [PSCustomObject]@{} }
         if ($merged.PSObject.Properties.Name -contains $Field) { $merged.PSObject.Properties.Remove($Field) }
         if ($null -ne $Value) { $merged | Add-Member -NotePropertyName $Field -NotePropertyValue $Value }
@@ -1308,8 +1540,8 @@ function Set-EyeMergeViewField {
 # absent field (the default), L explicitly. A merged stream of that view restarts. $true/$false.
 # Example: Set-EyeMergeBaseEye -Model 'Quest 3' -View 'max' -BaseEye L
 function Set-EyeMergeBaseEye {
-    param([Parameter(Mandatory)][string]$Model, [Parameter(Mandatory)][string]$View, [Parameter(Mandatory)][ValidateSet('L','R')][string]$BaseEye)
-    $ok = Set-EyeMergeViewField -Model $Model -View $View -Field 'base_eye' -Value $(if ($BaseEye -eq 'L') { 'L' } else { $null })
+    param([Parameter(Mandatory)][string]$Model, [Parameter(Mandatory)][string]$View, [Parameter(Mandatory)][ValidateSet('L','R')][string]$BaseEye, [string]$Ipd = '')
+    $ok = Set-EyeMergeViewField -Model $Model -View $View -Field 'base_eye' -Value $(if ($BaseEye -eq 'L') { 'L' } else { $null }) -Ipd $Ipd
     if ($ok) { Write-Log ("Eye merge {0}/{1}: main eye is now {2}." -f $Model, $View, $BaseEye) -Level INFO }
     return $ok
 }
@@ -1388,9 +1620,10 @@ function Import-EyeMergeProfile {
 # Example: Get-HeadsetMergedFrame -Headset (Get-HeadsetDiagTarget -Id 3) -DepthM 0.75 -BaseEye R -ReuseFrame
 function Get-HeadsetMergedFrame {
     param([Parameter(Mandatory)] $Headset, [ValidateSet('Auto','USB','WiFi')] [string]$Transport = 'Auto',
-          [double]$DepthM = 0, [ValidateSet('','L','R')][string]$BaseEye = '', [switch]$ReuseFrame)
+          [double]$DepthM = 0, [ValidateSet('','L','R')][string]$BaseEye = '', [switch]$ReuseFrame, [string]$Ipd = '')
     $res = @{ Ok = $false; Path = $null; Width = 0; Height = 0; Transport = '-'; Error = $null }
-    $p = Get-EyeMergeProfile -Model ([string]$Headset.Model) -IncludeDisabled
+    if (-not $Ipd) { $Ipd = Get-HeadsetIpdValue -Headset $Headset }
+    $p = Get-EyeMergeProfile -Model ([string]$Headset.Model) -IncludeDisabled -Ipd $Ipd
     if (-not $p) { $res.Error = ("Model '{0}' has no eye merge calibration - calibrate it first." -f $Headset.Model); return $res }
     if ($DepthM -gt 0) { $DepthM = [Math]::Min(100.0, [Math]::Max(0.3, $DepthM)) }
     $rawPath = Join-Path $global:ScriptPath ("website\generated\view_editor\headset_{0}.png" -f $Headset.ID)
@@ -1427,21 +1660,22 @@ function Get-StreamMask {
     try {
         Update-EyeMergeParameters
         $model = [string]$Headset.Model
+        $ipd = Get-HeadsetIpdValue -Headset $Headset
         $parsed = ConvertFrom-ScrcpyProfile -Profile ([string]$Headset.ScrcpyProfile)
-        $tpl = if ($model) { $global:scrcpyParameters.$model } else { $null }
+        $tpl = if ($model) { Get-ModelTemplateForIpd -Model $model -Ipd $ipd } else { $null }
         if (-not $parsed -or -not $tpl -or $tpl -is [string] -or -not $tpl.views) { $res.Reason = 'no view'; return $res }
         $view = $tpl.views.($parsed.View)
         if (-not $view -or $view.transparent_corners -ne $true) { $res.Reason = 'option off'; return $res }
         if (-not (Initialize-EyeMergeType)) { $res.Ok = $false; $res.Error = 'Image helper unavailable.'; return $res }
 
-        $cal = Get-EyeMergeProfile -Model $model -IncludeDisabled
+        $cal = Get-EyeMergeProfile -Model $model -IncludeDisabled -Ipd $ipd
         $inset = if ($cal -and $cal.inset_px) { [Math]::Min(40, [int]$cal.inset_px) } else { 8 }
         $dir = Join-Path $global:ScriptPath 'website\generated\stream_mask'
         if (-not (Test-Path -LiteralPath $dir)) { [void][System.IO.Directory]::CreateDirectory($dir) }
 
-        $merge = Resolve-EyeMergeUse -Model $model -ScrcpyProfile ([string]$Headset.ScrcpyProfile)
+        $merge = Resolve-EyeMergeUse -Model $model -ScrcpyProfile ([string]$Headset.ScrcpyProfile) -Ipd $ipd
         if ($merge.Use) {
-            $maps = Get-EyeMergeMaps -Model $model -View $merge.View
+            $maps = Get-EyeMergeMaps -Model $model -View $merge.View -Ipd $ipd
             if (-not $maps.Ok) { $res.Reason = $maps.Error; return $res }
             $key = Get-StreamMaskHash -Text ("M|{0}|{1}|{2}|{3}|v2" -f $maps.Key, $maps.Width, $maps.Height, $Feather)
             $out = Join-Path $dir "$key.png"

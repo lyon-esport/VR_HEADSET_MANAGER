@@ -236,7 +236,9 @@ function ConvertTo-ScrcpyArguments {
     param(
         [string]$headsetModel,
         [string]$scrcpyProfile = "portrait-R-N-45-20",
-        $modelTemplate = $null
+        $modelTemplate = $null,
+        # Lens position of the headset (IPD, mm) for a model with an `ipd` block; '' = the default one.
+        [string]$ipd = ''
     )
 
     if ([string]::IsNullOrWhiteSpace($scrcpyProfile)) { $scrcpyProfile = "portrait-R-N-45-20" }
@@ -261,7 +263,7 @@ function ConvertTo-ScrcpyArguments {
     # to the RIGHT eye, the dominant eye of most people.
     $mergeFullFrame = $false
     if ($eye -eq 'M') {
-        $mergeUse = Resolve-EyeMergeUse -Model $headsetModel -ScrcpyProfile ($parts -join '-')
+        $mergeUse = Resolve-EyeMergeUse -Model $headsetModel -ScrcpyProfile ($parts -join '-') -Ipd $ipd
         if ($mergeUse.Use) {
             $mergeFullFrame = $true
         } else {
@@ -280,7 +282,7 @@ function ConvertTo-ScrcpyArguments {
     $bw        = $parts[4]            # e.g. 20 (Mbps)
 
     if ($null -eq $modelTemplate) {
-        $modelTemplate = $global:scrcpyParameters.$headsetModel
+        $modelTemplate = Get-ModelTemplateForIpd -Model $headsetModel -Ipd $ipd
     }
 
     $audioArg = if ($audioPref -eq 'D') { "--audio-dup" } else { "--no-audio" }
@@ -937,21 +939,23 @@ function start-screenCopy {
 
 
 
-    $options = ConvertTo-ScrcpyArguments -headsetModel $headsetModel -scrcpyProfile $scrcpyProfile
+    # Lens position (IPD) of this headset: the views and the merge calibration follow it (ADR-0030).
+    $lensIpd = if ($startingId -gt 0) { Get-HeadsetIpdValue -HeadsetId $startingId -Model $headsetModel } else { '' }
+    $options = ConvertTo-ScrcpyArguments -headsetModel $headsetModel -scrcpyProfile $scrcpyProfile -ipd $lensIpd
 
     # Merged view (eye M): the lookup tables are built for one exact frame size, so check the
     # headset really sends that size, then build (or reuse) the tables. Any failure falls back to
     # the right eye for this calibration/view (Set-EyeMergeRejected) instead of streaming garbage.
     $eyeMergeMaps = $null
     $eyeMergeKey  = ''
-    $mergeUse = Resolve-EyeMergeUse -Model $headsetModel -ScrcpyProfile $scrcpyProfile
+    $mergeUse = Resolve-EyeMergeUse -Model $headsetModel -ScrcpyProfile $scrcpyProfile -Ipd $lensIpd
     if ($mergeUse.Use) {
-        $mergeProfile = Get-EyeMergeProfile -Model $headsetModel
+        $mergeProfile = Get-EyeMergeProfile -Model $headsetModel -Ipd $lensIpd
         $display = Get-HeadsetDisplaySize -Device $captureDevice
         if ($display -and ($display.Width -ne [int]$mergeProfile.frame_width -or $display.Height -ne [int]$mergeProfile.frame_height)) {
             Set-EyeMergeRejected -Model $headsetModel -Key $mergeUse.Key -Reason ("display is {0}x{1}, calibration expects {2}x{3}" -f $display.Width, $display.Height, $mergeProfile.frame_width, $mergeProfile.frame_height)
         } else {
-            $eyeMergeMaps = Get-EyeMergeMaps -Model $headsetModel -View $mergeUse.View
+            $eyeMergeMaps = Get-EyeMergeMaps -Model $headsetModel -View $mergeUse.View -Ipd $lensIpd
             if ($eyeMergeMaps.Ok) {
                 $eyeMergeKey = $mergeUse.Key
                 Write-Log ("Merged view for {0}: {1}x{2} crop {3}" -f $displayName, $eyeMergeMaps.Width, $eyeMergeMaps.Height, $eyeMergeMaps.Crop) -Level INFO
@@ -961,7 +965,7 @@ function start-screenCopy {
             }
         }
         if (-not $eyeMergeMaps) {
-            $options = ConvertTo-ScrcpyArguments -headsetModel $headsetModel -scrcpyProfile $scrcpyProfile
+            $options = ConvertTo-ScrcpyArguments -headsetModel $headsetModel -scrcpyProfile $scrcpyProfile -ipd $lensIpd
         }
     }
 
@@ -991,6 +995,13 @@ function start-screenCopy {
     #   StreamOnly          -> --no-window + record-to-pipe + ffmpeg push to RTSP
     #   StreamAndLocalWindow-> visible window + record-to-pipe + ffmpeg push to RTSP (no GDI)
     #   LocalWindow         -> visible window only, no streaming pipeline (file recording via scrcpy)
+    # Re-read the device id: a USB transport failure inside Get-HeadsetModel /
+    # Get-HeadsetDisplaySize makes Invoke-AdbCmd switch $captureDevice to WiFi IN PLACE
+    # (ADR-0024), and launching scrcpy with the dead serial costs a failed start + restart.
+    if ($captureDevice.DeviceId -and $captureDevice.DeviceId -ne $adb_device) {
+        Write-Log ("scrcpy capture for {0} moved to {1} ({2}) after a transport failure" -f $displayName, $captureDevice.ConnectionType, $captureDevice.DeviceId) -Level INFO
+        $adb_device = $captureDevice.DeviceId
+    }
     $captureMode = if ($global:CaptureMode) { $global:CaptureMode } else { 'StreamOnly' }
     $usePipe = ($captureMode -in @('StreamOnly','StreamAndLocalWindow'))
 
@@ -1460,7 +1471,7 @@ function Watch-ScrcpyProcesses {
                     # a switch to/from merged, a recalibration or a new merged crop only shows in the
                     # pipeline registry. Only compared when this process owns the pipeline entry.
                     if (-not $shouldRestart -and $pipeline) {
-                        $wantedMerge = Resolve-EyeMergeUse -Model $headsetInfos.Model -ScrcpyProfile $headsetProfile
+                        $wantedMerge = Resolve-EyeMergeUse -Model $headsetInfos.Model -ScrcpyProfile $headsetProfile -Ipd (Get-HeadsetIpdValue -HeadsetId ([int]$headset.ID) -Model ([string]$headsetInfos.Model))
                         $wantedKey   = if ($wantedMerge.Use) { $wantedMerge.Key } else { '' }
                         $runningKey  = if ($pipeline.EyeMergeKey) { [string]$pipeline.EyeMergeKey } else { '' }
                         if ($wantedKey -ne $runningKey) {
@@ -1479,7 +1490,7 @@ function Watch-ScrcpyProcesses {
                 # Check scrcpy options and profile mismatch
                 if (-not $shouldRestart) {
                     $headsetModel = $headsetInfos.Model
-                    $expectedOptions = ConvertTo-ScrcpyArguments -headsetModel $headsetModel -scrcpyProfile $headsetProfile
+                    $expectedOptions = ConvertTo-ScrcpyArguments -headsetModel $headsetModel -scrcpyProfile $headsetProfile -ipd (Get-HeadsetIpdValue -HeadsetId ([int]$headset.ID) -Model ([string]$headsetModel))
                     if ($expectedOptions -ne "") {
                         # Strip pipe-mode args (added by start-screenCopy on top of ConvertTo-ScrcpyArguments
                         # output) from the cmdline before comparison, otherwise the watchdog will see them as

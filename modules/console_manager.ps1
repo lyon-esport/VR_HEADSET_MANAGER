@@ -1685,10 +1685,18 @@ function Show-SubMenu-EyeMerge {
     param([Parameter(Mandatory)] $Headset)
     $model = [string]$Headset.Model
     if (-not $model) { Write-Host "  $($msg.EyeMerge.NoModel)" -ForegroundColor Red; Start-Sleep -Seconds 2; return }
+    # Models with lens positions (Quest 2: 58 / 63 / 68 mm): every action below applies to the
+    # selected position, which starts at the one the headset is at (ADR-0030).
+    $ipdCfg = Get-ModelIpdConfig -Model $model
+    $selIpd = if ($ipdCfg) { Get-HeadsetIpdValue -Headset $Headset } else { '' }
     do {
-        $p = Get-EyeMergeProfile -Model $model -IncludeDisabled
+        $p = Get-EyeMergeProfile -Model $model -IncludeDisabled -Ipd $selIpd
         Clear-Host
         Write-Host ($msg.EyeMerge.Title -f $model) -ForegroundColor Cyan
+        if ($ipdCfg) {
+            $ipdInfo = Get-HeadsetIpdInfo -Headset $Headset
+            Write-Host ($msg.EyeMerge.IpdLine -f $selIpd, $ipdInfo.Ipd, $ipdInfo.Source) -ForegroundColor Cyan
+        }
         Write-Host $msg.Separator
         if (-not $p) {
             Write-Host $msg.EyeMerge.StatusNone -ForegroundColor Yellow
@@ -1710,14 +1718,18 @@ function Show-SubMenu-EyeMerge {
             if ($null -ne $p.lens_focal_px) { Write-Host " [7]  $($msg.EyeMerge.OptViewDepth)" }
             Write-Host " [8]  $($msg.EyeMerge.OptBaseEye)"
         }
+        if ($ipdCfg) { Write-Host " [9]  $($msg.EyeMerge.OptIpd)" }
         Write-Host " [0]  $($msg.Return)"
         $opt = Read-Host $msg.Choice
 
         switch ($opt) {
             '1' {
                 Write-Host "  $($msg.EyeMerge.CalibrateHint)" -ForegroundColor Cyan
+                $nFrames = 1
+                $ansF = (Read-Host $msg.EyeMerge.CalibrateFramesPrompt).Trim()
+                if ($ansF -match '^[1-5]$') { $nFrames = [int]$ansF }
                 Write-Host "  $($msg.EyeMerge.CalibrateRunning)"
-                $cal = Invoke-EyeMergeCalibration -Headset $Headset -Save
+                $cal = Invoke-EyeMergeCalibration -Headset $Headset -Save -Ipd $selIpd -Frames $nFrames
                 if ($cal.Ok -and $cal.Saved) {
                     Write-Host ($msg.EyeMerge.CalibrateOk -f $cal.Profile.relative_angle, $cal.Profile.shift_x, $cal.Profile.shift_y, $cal.Score, $cal.PreviewPath) -ForegroundColor Green
                     if ($cal.PreviewPath) { Open-File -filePath $cal.PreviewPath }
@@ -1767,7 +1779,7 @@ function Show-SubMenu-EyeMerge {
                     $views = @()
                     if ($global:scrcpyParameters.$model.views) { $views = @($global:scrcpyParameters.$model.views.PSObject.Properties.Name) }
                     for ($i = 0; $i -lt $views.Count; $i++) {
-                        $c = Get-EyeMergeViewCrop -Model $model -View $views[$i]
+                        $c = Get-EyeMergeViewCrop -Model $model -View $views[$i] -Ipd $selIpd
                         $txt = if ($c) { "{0}:{1}:{2}:{3}" -f $c.W, $c.H, $c.X, $c.Y } else { '-' }
                         Write-Host ($msg.EyeMerge.CropLine -f ($i + 1), $views[$i], $txt, $(if ($c -and $c.Auto) { $msg.EyeMerge.CropAuto } else { '' }))
                     }
@@ -1776,8 +1788,8 @@ function Show-SubMenu-EyeMerge {
                         $viewName = $views[[int]$n - 1]
                         $val = (Read-Host $msg.EyeMerge.CropPrompt).Trim()
                         $done = $false
-                        if ($val -eq 'A' -or $val -eq 'a') { $done = Set-EyeMergeViewCrop -Model $model -View $viewName -Reset }
-                        elseif ($val -match '^\d+:\d+:\d+:\d+$') { $done = Set-EyeMergeViewCrop -Model $model -View $viewName -Crop $val }
+                        if ($val -eq 'A' -or $val -eq 'a') { $done = Set-EyeMergeViewCrop -Model $model -View $viewName -Reset -Ipd $selIpd }
+                        elseif ($val -match '^\d+:\d+:\d+:\d+$') { $done = Set-EyeMergeViewCrop -Model $model -View $viewName -Crop $val -Ipd $selIpd }
                         elseif ($val) { Write-Host $msg.EyeMerge.CropInvalid -ForegroundColor Red }
                         if ($done) { Write-Host ($msg.EyeMerge.CropSaved -f $viewName) -ForegroundColor Green }
                     }
@@ -1789,7 +1801,7 @@ function Show-SubMenu-EyeMerge {
                     $views = @()
                     if ($global:scrcpyParameters.$model.views) { $views = @($global:scrcpyParameters.$model.views.PSObject.Properties.Name) }
                     for ($i = 0; $i -lt $views.Count; $i++) {
-                        $d = Get-EyeMergeViewDepth -Model $model -View $views[$i] -MergeProfile $p
+                        $d = Get-EyeMergeViewDepth -Model $model -View $views[$i] -MergeProfile $p -Ipd $selIpd
                         Write-Host ($msg.EyeMerge.DepthLine -f ($i + 1), $views[$i], $(if ($d -gt 0) { "$d m" } else { $msg.EyeMerge.DepthFar }))
                     }
                     $n = Read-Host $msg.EyeMerge.ViewPrompt
@@ -1798,9 +1810,9 @@ function Show-SubMenu-EyeMerge {
                         $val = (Read-Host $msg.EyeMerge.DepthPrompt).Trim().Replace(',', '.')
                         $dv = 0.0
                         $done = $false
-                        if ($val -in @('F','f','0')) { $done = Set-EyeMergeViewDepth -Model $model -View $viewName -Far }
+                        if ($val -in @('F','f','0')) { $done = Set-EyeMergeViewDepth -Model $model -View $viewName -Far -Ipd $selIpd }
                         elseif ([double]::TryParse($val, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$dv) -and $dv -ge 0.3 -and $dv -le 100) {
-                            $done = Set-EyeMergeViewDepth -Model $model -View $viewName -DepthM $dv
+                            $done = Set-EyeMergeViewDepth -Model $model -View $viewName -DepthM $dv -Ipd $selIpd
                         }
                         elseif ($val) { Write-Host $msg.EyeMerge.DepthInvalid -ForegroundColor Red }
                         if ($done) { Write-Host ($msg.EyeMerge.DepthSaved -f $viewName) -ForegroundColor Green }
@@ -1813,6 +1825,35 @@ function Show-SubMenu-EyeMerge {
                     $newEye = if ($p.base_eye -eq 'L') { 'R' } else { 'L' }
                     if (Set-EyeMergeBaseEye -Model $model -BaseEye $newEye) { Write-Host ($msg.EyeMerge.BaseEyeSaved -f $model, $newEye) -ForegroundColor Green }
                     Start-Sleep -Seconds 2
+                }
+            }
+            '9' {
+                if ($ipdCfg) {
+                    $positions = @($ipdCfg.positions | ForEach-Object { [string]$_ })
+                    Write-Host ($msg.EyeMerge.IpdCurrent -f $ipdInfo.Ipd, $ipdInfo.Source)
+                    for ($i = 0; $i -lt $positions.Count; $i++) { Write-Host (" [{0}] {1} mm" -f ($i + 1), $positions[$i]) }
+                    $ans = (Read-Host $msg.EyeMerge.IpdPrompt).Trim()
+                    if ($ans -in @('A','a')) {
+                        $dev = Resolve-HeadsetAdbDevice -Headset $Headset
+                        try { Remove-DbKeyValue -Key ("headset_ipd_{0}" -f [int]$Headset.ID) } catch { }
+                        if ($script:HeadsetIpdMemo) { $script:HeadsetIpdMemo.Remove([int]$Headset.ID) }
+                        $upd = if ($dev) { Update-HeadsetIpd -Headset $Headset -Device $dev } else { @{ Ipd = ''; Reason = 'unreachable' } }
+                        if ($dev -and -not $upd.Ipd) {
+                            # No lens event left in the headset log: measure the lens pictures (about 4 s).
+                            $ff = Find-HeadsetIpdFromFrame -Headset $Headset
+                            if ($ff.Ok) { [void](Set-HeadsetIpd -HeadsetId ([int]$Headset.ID) -Ipd $ff.Ipd -Source auto); $upd = @{ Ipd = $ff.Ipd; Reason = '' } }
+                            else { $upd = @{ Ipd = ''; Reason = $ff.Error } }
+                        }
+                        if ($upd.Ipd) { $selIpd = [string]$upd.Ipd; Write-Host ($msg.EyeMerge.IpdAutoOk -f $selIpd) -ForegroundColor Green }
+                        else { Write-Host ($msg.EyeMerge.IpdAutoFailed -f $upd.Reason) -ForegroundColor Red }
+                        Start-Sleep -Seconds 2
+                    } elseif ($ans -match '^\d+$' -and [int]$ans -ge 1 -and [int]$ans -le $positions.Count) {
+                        $selIpd = $positions[[int]$ans - 1]
+                        $dev = Resolve-HeadsetAdbDevice -Headset $Headset
+                        [void](Set-HeadsetIpd -HeadsetId ([int]$Headset.ID) -Ipd $selIpd -Source manual -Device $dev)
+                        Write-Host ($msg.EyeMerge.IpdSet -f $selIpd) -ForegroundColor Green
+                        Start-Sleep -Seconds 2
+                    }
                 }
             }
             default { }

@@ -303,6 +303,8 @@
       padding: 8px 14px;
       border-top: 1px solid var(--card-border);
     }
+    .card-ipd-row { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 0; }
+    .ipd-select { background: var(--surface-2, #1e1e1e); color: inherit; border: 1px solid var(--border, #444); border-radius: 6px; padding: 3px 6px; font-size: 12px; }
     .hs-adv-btn {
       display: inline-flex; align-items: center; gap: 6px;
       font-size: .78rem; padding: 5px 13px; border-radius: 6px;
@@ -1520,6 +1522,10 @@
               '<button class="hs-adv-btn" data-adv-settings="' + dn + '" data-adv-brand="' + esc(cfg.Brand || '') + '">Configure</button>' +
             '</span>' +
           '</div>' +
+          '<div class="card-ipd-row" data-ipd-row="' + dn + '" style="display:none">' +
+            '<span class="power-label" title="Lens position of the headset. Detected from the headset itself; the capture views follow it.">Lens position (IPD)</span>' +
+            '<select class="ipd-select" data-ipd-select="' + dn + '" title="Auto follows the lenses; a position is held until the lenses are moved again."></select>' +
+          '</div>' +
           '<div class="card-power-row">' +
             '<span class="power-label">' +
               '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
@@ -2110,6 +2116,53 @@
     }
 
     // â"€â"€ Status dots update â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+    // ---- Lens position (IPD, ADR-0030): shown only for models that report one (Quest 2). ----
+    var _ipdPositions = {};   // headset id -> ['58','63','68'], loaded once per headset
+    var _ipdSource    = {};   // dn -> 'auto' | 'manual' | 'default'
+    function updateIpdRows() {
+      Object.keys(headsetStatus).forEach(function(dn) {
+        var st  = headsetStatus[dn];
+        var row = document.querySelector('[data-ipd-row="' + dn + '"]');
+        var sel = row ? row.querySelector('select') : null;
+        if (!row || !sel) return;
+        if (!st.ipd) { row.style.display = 'none'; return; }
+        row.style.display = '';
+        var id = st.id;
+        function fill() {
+          var pos = _ipdPositions[id] || [];
+          if (document.activeElement === sel) return;      // never rebuild while the operator is choosing
+          var src = _ipdSource[dn] || '';
+          var html = '<option value="auto">Auto' + (src === 'auto' ? ' (' + esc(st.ipd) + ' mm)' : '') + '</option>';
+          pos.forEach(function(p) { html += '<option value="' + esc(p) + '">' + esc(p) + ' mm</option>'; });
+          if (sel.getAttribute('data-sig') !== html) { sel.innerHTML = html; sel.setAttribute('data-sig', html); }
+          sel.value = (src === 'manual') ? st.ipd : 'auto';
+        }
+        if (_ipdPositions[id]) { fill(); return; }
+        _ipdPositions[id] = [];                              // in flight
+        fetch('/api/headset-ipd?id=' + encodeURIComponent(id))
+          .then(function(r) { return r.json(); })
+          .then(function(j) { if (j && j.ok) { _ipdPositions[id] = j.positions || []; _ipdSource[dn] = j.source || ''; } fill(); })
+          .catch(function() { delete _ipdPositions[id]; });
+      });
+    }
+    document.addEventListener('change', function(ev) {
+      var sel = ev.target && ev.target.closest ? ev.target.closest('select[data-ipd-select]') : null;
+      if (!sel) return;
+      var dn = sel.getAttribute('data-ipd-select');
+      var st = headsetStatus[dn];
+      if (!st || !st.id) return;
+      sel.disabled = true;
+      fetch('/api/headset-ipd', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                 body: JSON.stringify({ id: st.id, ipd: sel.value }) })
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          if (j && j.ok) { _ipdSource[dn] = j.source || ''; st.ipd = j.ipd || st.ipd; }
+          else { alert('Lens position: ' + ((j && j.error) || 'failed')); }
+        })
+        .catch(function() { alert('Lens position: request failed'); })
+        .finally(function() { sel.disabled = false; sel.removeAttribute('data-sig'); updateIpdRows(); });
+    });
+
     function updateStatusDots() {
       Object.keys(headsetStatus).forEach(function(dn) {
         var s = headsetStatus[dn];
@@ -2306,10 +2359,12 @@
               starting:       !scrcpy && (srvStarting || !!hint),
               model:          item.model || '',
               runningApp:     item.running_app     || '',
-              runningAppIcon: item.running_app_icon || ''
+              runningAppIcon: item.running_app_icon || '',
+              ipd:            item.ipd || '',
+              id:             item.id
             };
           });
-          if (cardsBuilt) updateStatusDots();
+          if (cardsBuilt) { updateStatusDots(); updateIpdRows(); }
         })
         .catch(function() {})
         .finally(ensureFastStatus);

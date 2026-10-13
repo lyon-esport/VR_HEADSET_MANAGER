@@ -1582,7 +1582,10 @@ try {
             try {
                 $emModel = [string]$request.QueryString['model']
                 if (-not $emModel -or $emModel.Length -gt 100) { throw 'Missing or invalid model.' }
-                $emProfile = Get-EyeMergeProfile -Model $emModel -IncludeDisabled
+                # ?ipd=58 : the lens position the calibration / views are read at (models with an `ipd` block).
+                $emIpd = [string]$request.QueryString['ipd']
+                if ($emIpd -notmatch '^\d{1,3}$') { $emIpd = '' }
+                $emProfile = Get-EyeMergeProfile -Model $emModel -IncludeDisabled -Ipd $emIpd
                 # light=1: status only (headsets_settings.html). The per-view automatic framing costs
                 # ~200 ms per view and the snippet is only needed by the Headset Profiles card.
                 $emLight = ([string]$request.QueryString['light'] -eq '1')
@@ -1597,12 +1600,22 @@ try {
                 $emViews = @{}
                 if ($emProfile -and $emProfile.enabled -ne $false -and $global:scrcpyParameters.$emModel.views) {
                     foreach ($v in $global:scrcpyParameters.$emModel.views.PSObject.Properties) {
-                        $c = Get-EyeMergeViewCrop -Model $emModel -View $v.Name -MergeProfile $emProfile
-                        if ($c) { $emViews[$v.Name] = @{ crop = ("{0}:{1}:{2}:{3}" -f $c.W, $c.H, $c.X, $c.Y); auto = [bool]$c.Auto; depth = (Get-EyeMergeViewDepth -Model $emModel -View $v.Name -MergeProfile $emProfile); baseEye = (Get-EyeMergeViewBaseEye -Model $emModel -View $v.Name -MergeProfile $emProfile) } }
+                        $c = Get-EyeMergeViewCrop -Model $emModel -View $v.Name -MergeProfile $emProfile -Ipd $emIpd
+                        if ($c) { $emViews[$v.Name] = @{ crop = ("{0}:{1}:{2}:{3}" -f $c.W, $c.H, $c.X, $c.Y); auto = [bool]$c.Auto; depth = (Get-EyeMergeViewDepth -Model $emModel -View $v.Name -MergeProfile $emProfile -Ipd $emIpd); baseEye = (Get-EyeMergeViewBaseEye -Model $emModel -View $v.Name -MergeProfile $emProfile -Ipd $emIpd) } }
                     }
+                }
+                $emIpdCfg = Get-ModelIpdConfig -Model $emModel
+                $emIpdInfo = $null
+                if ($emIpdCfg) {
+                    $emCalibrated = @{}
+                    foreach ($pos in @($emIpdCfg.positions | ForEach-Object { [string]$_ })) {
+                        $emCalibrated[$pos] = [bool]($pos -eq [string]$emIpdCfg.default -and $global:scrcpyParameters.$emModel.eye_merge) -or [bool]($global:scrcpyParameters.$emModel.eye_merge_ipd -and $global:scrcpyParameters.$emModel.eye_merge_ipd.$pos)
+                    }
+                    $emIpdInfo = @{ positions = @($emIpdCfg.positions | ForEach-Object { [string]$_ }); default = [string]$emIpdCfg.default; autoDetect = ($emIpdCfg.auto_detect -ne $false); selected = $(if ($emIpd) { $emIpd } else { [string]$emIpdCfg.default }); calibrated = $emCalibrated }
                 }
                 Send-JsonResponse -Response $response -Body @{
                     ok = $true; model = $emModel
+                    ipd = $emIpdInfo
                     calibrated = [bool]$emProfile
                     enabled = [bool]($emProfile -and $emProfile.enabled -ne $false)
                     depthSupported = [bool]($emProfile -and $null -ne $emProfile.lens_focal_px)
@@ -1660,7 +1673,9 @@ try {
                     if ($null -ne $json.depth) { [void][double]::TryParse([string]$json.depth, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$emDepth) }
                     $emBase = ([string]$json.baseEye).ToUpperInvariant()
                     if ($emBase -notin @('L','R')) { $emBase = '' }
-                    $frame = Get-HeadsetMergedFrame -Headset $emHeadset -Transport $emTransport -DepthM $emDepth -BaseEye $emBase -ReuseFrame:([bool]$json.reuse)
+                    $emIpd = [string]$json.ipd
+                    if ($emIpd -notmatch '^\d{1,3}$') { $emIpd = '' }
+                    $frame = Get-HeadsetMergedFrame -Headset $emHeadset -Transport $emTransport -DepthM $emDepth -BaseEye $emBase -ReuseFrame:([bool]$json.reuse) -Ipd $emIpd
                     $frameUrl = if ($frame.Ok) { "/view_editor/{0}?t={1}" -f (Split-Path -Path $frame.Path -Leaf), [DateTime]::UtcNow.Ticks } else { $null }
                     Send-JsonResponse -Response $response -Body @{
                         ok = [bool]$frame.Ok; url = $frameUrl; width = $frame.Width; height = $frame.Height
@@ -1668,12 +1683,18 @@ try {
                         error = $frame.Error
                     }
                 } else {
-                    $cal = Invoke-EyeMergeCalibration -Headset $emHeadset -Transport $emTransport -Save:([bool]$json.save)
+                    $emIpd = [string]$json.ipd
+                    if ($emIpd -notmatch '^\d{1,3}$') { $emIpd = '' }
+                    $emThr = 0
+                    if ($null -ne $json.lensThreshold) { [void][int]::TryParse([string]$json.lensThreshold, [ref]$emThr); if ($emThr -lt 1 -or $emThr -gt 60) { $emThr = 0 } }
+                    $emFrames = 1
+                    if ($null -ne $json.frames) { [void][int]::TryParse([string]$json.frames, [ref]$emFrames); if ($emFrames -lt 1 -or $emFrames -gt 5) { $emFrames = 1 } }
+                    $cal = Invoke-EyeMergeCalibration -Headset $emHeadset -Transport $emTransport -Save:([bool]$json.save) -Ipd $emIpd -LensThreshold $emThr -Frames $emFrames
                     $calUrl = if ($cal.PreviewPath) { "/eye_merge/{0}?t={1}" -f (Split-Path -Path $cal.PreviewPath -Leaf), [DateTime]::UtcNow.Ticks } else { $null }
                     Send-JsonResponse -Response $response -Body @{
                         ok = [bool]$cal.Ok; model = $cal.Model; score = $cal.Score; profile = $cal.Profile
                         previewUrl = $calUrl; width = $cal.PreviewWidth; height = $cal.PreviewHeight
-                        saved = [bool]$cal.Saved; error = $cal.Error
+                        saved = [bool]$cal.Saved; ipd = $cal.Ipd; error = $cal.Error
                     }
                 }
             } catch {
@@ -1699,6 +1720,60 @@ try {
                     if (-not $emModel) { throw 'Missing model.' }
                     $done = Set-EyeMergeEnabled -Model $emModel -Enabled ([bool]$json.enabled)
                     Send-JsonResponse -Response $response -Body @{ ok = [bool]$done; model = $emModel; enabled = [bool]$json.enabled; error = $(if ($done) { $null } else { 'No calibration for this model.' }) }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { $response.Close() }
+            continue
+        }
+
+        # ---- Lens position (IPD) of a headset, ADR-0030. Logic in headset_diag.ps1 (Get-HeadsetIpdInfo,
+        # Set-HeadsetIpd, Update-HeadsetIpd); the console counterpart is Show-SubMenu-HeadsetIpd.
+        # GET  /api/headset-ipd?id=3 -> {ok,supported,ipd,source,iadM,at,positions,default,autoDetect}
+        # POST /api/headset-ipd body {"id":3,"ipd":"58"|"auto","detect":false}
+        #   ipd = a configured position sets a MANUAL override (held until the lens is moved again);
+        #   ipd = "auto" (or detect:true) reads the headset's own lens log now and follows it.
+        if ($request.Url.LocalPath -eq '/api/headset-ipd' -and $request.HttpMethod -in @('GET','POST')) {
+            try {
+                $ipdId = 0; $ipdWant = ''; $ipdDetect = $false
+                if ($request.HttpMethod -eq 'GET') {
+                    [void][int]::TryParse([string]$request.QueryString['id'], [ref]$ipdId)
+                } else {
+                    if ($request.ContentLength64 -gt 4096) { throw 'Request body too large' }
+                    $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                    $body   = $reader.ReadToEnd(); $reader.Close()
+                    $json   = $body | ConvertFrom-Json
+                    [void][int]::TryParse([string]$json.id, [ref]$ipdId)
+                    $ipdWant = [string]$json.ipd
+                    $ipdDetect = ([bool]$json.detect) -or ($ipdWant -eq 'auto')
+                }
+                if ($ipdId -le 0) { throw 'Invalid or missing headset id.' }
+                $ipdHeadset = Get-HeadsetDiagTarget -Id $ipdId
+                if (-not $ipdHeadset) { throw 'This headset is not registered on this server.' }
+                $ipdCfg = Get-ModelIpdConfig -Model ([string]$ipdHeadset.Model)
+                if ($request.HttpMethod -eq 'POST' -and $ipdCfg) {
+                    $ipdDev = Resolve-HeadsetAdbDevice -Headset $ipdHeadset
+                    if ($ipdDetect) {
+                        if (-not $ipdDev) { throw 'The headset is not reachable over ADB.' }
+                        # "auto": drop a manual hold first so the log value is applied now.
+                        try { Remove-DbKeyValue -Key ("headset_ipd_{0}" -f $ipdId) } catch { }
+                        if ($script:HeadsetIpdMemo) { $script:HeadsetIpdMemo.Remove($ipdId) }
+                        $upd = Update-HeadsetIpd -Headset $ipdHeadset -Device $ipdDev
+                        if (-not $upd.Ipd) {
+                            # The headset log no longer holds the lens event: measure the lens pictures instead.
+                            $fromFrame = Find-HeadsetIpdFromFrame -Headset $ipdHeadset
+                            if (-not $fromFrame.Ok) { throw ("No lens position in the headset log ({0}) and the frame check failed: {1}" -f $upd.Reason, $fromFrame.Error) }
+                            [void](Set-HeadsetIpd -HeadsetId $ipdId -Ipd $fromFrame.Ipd -Source auto)
+                        }
+                    } else {
+                        if (@($ipdCfg.positions | ForEach-Object { [string]$_ }) -notcontains $ipdWant) { throw 'Unknown lens position.' }
+                        [void](Set-HeadsetIpd -HeadsetId $ipdId -Ipd $ipdWant -Source manual -Device $ipdDev)
+                    }
+                }
+                $info = Get-HeadsetIpdInfo -Headset $ipdHeadset
+                Send-JsonResponse -Response $response -Body @{
+                    ok = $true; supported = [bool]$info.Supported; ipd = $info.Ipd; source = $info.Source; iadM = $info.IadM
+                    at = $info.At; positions = @($info.Positions); default = $info.Default; autoDetect = [bool]$info.AutoDetect
                 }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $_.Exception.Message }
@@ -2592,6 +2667,7 @@ try {
                             temp                  = if ($info.Temp -and $info.Temp -ne '-') { $info.Temp } else { '-' }
                             cpu_temp              = if ($info.CpuTemp -and $info.CpuTemp -ne '-') { $info.CpuTemp } else { '-' }
                             adb_transport         = if ($info.AdbTransport -and $info.AdbTransport -ne '-') { $info.AdbTransport } else { '' }
+                            ipd                   = (Get-HeadsetIpdValue -Headset $h)
                             running_app           = if ($info.RunningApp)     { $info.RunningApp }     else { '' }
                             running_app_icon      = if ($info.RunningAppIcon) { $info.RunningAppIcon } else { '' }
                             model                 = if ($h.Model -and $h.Model -ne '-') { $h.Model } else { '' }

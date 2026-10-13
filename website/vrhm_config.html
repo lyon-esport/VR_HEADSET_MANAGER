@@ -1654,9 +1654,28 @@
           + '<div class="vve-help">Framing, main eye' + (em.lens_focal_px ? ' and merge depth' : '') + ' are set per view, on the "Merged" tab of the visual editor.'
           + (em.lens_focal_px ? '' : ' Merge depth is not available for this model (no lens model, lens_focal_px).') + '</div>';
       }
+      // Models with lens positions (Quest 2: 58 / 63 / 68 mm): each position has its own calibration
+      // (ADR-0030). The selector says which one a Calibrate writes; the default is the position the
+      // headset is at right now.
+      var ipdCfg = model.ipd || null;
+      if (ipdCfg && ipdCfg.positions) {
+        var done = {};
+        if (em) done[String(ipdCfg['default'])] = true;
+        Object.keys(model.eye_merge_ipd || {}).forEach(function(k) { done[k] = true; });
+        html += '<div class="vve-help">Lens positions: ' + ipdCfg.positions.map(function(p) {
+          return proEsc(p) + ' mm ' + (done[String(p)] ? '(calibrated)' : '(not calibrated)');
+        }).join(', ') + '. The views follow the headset\'s lens position automatically'
+          + (ipdCfg.auto_detect === false ? ' (auto-detect is OFF)' : '') + '.</div>';
+      }
       html += '<div class="em-row"><span class="pro-gen-lbl">Calibrate with</span>'
-        + '<select id="em-headset" class="cfg-input" style="width:240px"><option value="">Loading...</option></select>'
-        + '<button class="cfg-save-btn" data-action="em-calibrate">' + (em ? 'Recalibrate' : 'Calibrate') + '</button>';
+        + '<select id="em-headset" class="cfg-input" style="width:240px"><option value="">Loading...</option></select>';
+      if (ipdCfg && ipdCfg.positions) {
+        html += '<select id="em-ipd" class="cfg-input" style="width:190px" title="Lens position this calibration is stored for">'
+          + '<option value="">Position the headset is at</option>'
+          + ipdCfg.positions.map(function(p) { return '<option value="' + proEsc(p) + '">' + proEsc(p) + ' mm</option>'; }).join('')
+          + '</select>';
+      }
+      html += '<button class="cfg-save-btn" data-action="em-calibrate">' + (em ? 'Recalibrate' : 'Calibrate') + '</button>';
       if (em) {
         html += '<button class="pro-small-btn" data-action="em-toggle">' + (em.enabled === false ? 'Enable' : 'Disable') + '</button>'
           + '<button class="pro-small-btn" data-action="em-copy" title="Copy the shareable calibration (JSON) to the clipboard">Copy JSON</button>';
@@ -1731,9 +1750,10 @@
       if (action === 'em-calibrate') {
         var id = parseInt(document.getElementById('em-headset').value, 10);
         if (!id) { showToast('Connect a ' + model + ' headset (USB or WiFi ADB) first.', 3000); return; }
-        btn.disabled = true; out.innerHTML = '<div class="vve-help">Capturing and measuring both eyes (about 6 s)...</div>';
+        btn.disabled = true; out.innerHTML = '<div class="vve-help">Capturing 3 frames and measuring both eyes (about 20 s) - look slowly up, down, left and right meanwhile...</div>';
         fetch('/api/eye-merge/calibrate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-               body: JSON.stringify({ id: id, transport: 'Auto', save: true }) })
+               body: JSON.stringify({ id: id, transport: 'Auto', save: true, frames: 3,
+                                      ipd: (document.getElementById('em-ipd') ? document.getElementById('em-ipd').value : '') }) })
           .then(function(r) { return r.json(); })
           .then(function(j) {
             btn.disabled = false;
@@ -1977,10 +1997,12 @@
         var wasDefault = !!(m2.views[oldVn] && m2.views[oldVn].default);
         var keptMerged = m2.views[oldVn] && m2.views[oldVn].merged;   // eye merge framing is not in this row
         var keptTransp = !!(m2.views[oldVn] && m2.views[oldVn].transparent_corners);   // nor the transparency option
+        var keptIpd = m2.views[oldVn] && m2.views[oldVn].ipd;   // nor the per-lens-position variants (ADR-0030)
         if (oldVn !== newVn) delete m2.views[oldVn];
         m2.views[newVn] = { left_eye: { crop: leCrop, angle: leAng }, right_eye: { crop: reCrop, angle: reAng } };
         if (keptMerged) m2.views[newVn].merged = keptMerged;
         if (keptTransp) m2.views[newVn].transparent_corners = true;
+        if (keptIpd) m2.views[newVn].ipd = keptIpd;
         if (wasDefault) m2.views[newVn].default = true;
         _proDirty = true; _proEditView = null; renderProBody(); doSaveToDisk(false); return;
       }
@@ -2042,10 +2064,12 @@
           var wasDefault2 = !!(m22.views[oldVn2] && m22.views[oldVn2].default);
           var keptMerged2 = m22.views[oldVn2] && m22.views[oldVn2].merged;
           var keptTransp2 = !!(m22.views[oldVn2] && m22.views[oldVn2].transparent_corners);
+          var keptIpd2 = m22.views[oldVn2] && m22.views[oldVn2].ipd;
           if (oldVn2 !== newVn2) delete m22.views[oldVn2];
           m22.views[newVn2] = { left_eye: { crop: leCrop2, angle: leAng2 }, right_eye: { crop: reCrop2, angle: reAng2 } };
           if (keptMerged2) m22.views[newVn2].merged = keptMerged2;
           if (keptTransp2) m22.views[newVn2].transparent_corners = true;
+          if (keptIpd2) m22.views[newVn2].ipd = keptIpd2;
           if (wasDefault2) m22.views[newVn2].default = true;
           _proDirty = true;
         }
@@ -2686,6 +2710,9 @@
       // Whole-view option (L, R and Merged alike): mask the area outside the lenses in web views.
       if (document.getElementById('vve-transparent').checked) val.transparent_corners = true;
       if (wasDefault || isFirst) val.default = true;
+      // Per-lens-position variants (ADR-0030) are not drawn here: an edited view keeps them.
+      var prevView = (editing && mdl.views[editing]) || mdl.views[name];
+      if (prevView && prevView.ipd) val.ipd = prevView.ipd;
       // Rebuild the views object so an edited view keeps its position (the order is the display order).
       var out = {}, oldKey = editing || name;
       Object.keys(mdl.views).forEach(function(k) {

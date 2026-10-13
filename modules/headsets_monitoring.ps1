@@ -382,6 +382,7 @@ function Start-VRMonitor {
             # Firmware version is read over ADB far less often than battery: it only changes
             # on an OTA, so a 10 minute cadence is plenty and keeps it off the hot cycle.
             $nextFirmwareAt   = [datetime]::MinValue
+            $nextIpdAt        = [datetime]::MinValue
             # The serial this runspace learned from the headset itself. $headset was captured
             # at startup, so a row added from an IP alone has no serial in it - without this
             # the USB-first transport could not tell the headset is cabled.
@@ -433,6 +434,15 @@ function Start-VRMonitor {
                                     $nextFirmwareAt = [datetime]::Now.AddMinutes(10)
                                     if (Get-Command Update-HeadsetFirmwareHistory -ErrorAction SilentlyContinue) {
                                         try { Update-HeadsetFirmwareHistory -Device $device -HeadsetId ([int]$headset.ID) -Brand $workingInfo.Brand | Out-Null } catch { }
+                                    }
+                                }
+
+                                # --- Lens position (IPD, ADR-0030): models with an `ipd` block only,
+                                # one filtered logcat read, at most every 10 s ---
+                                if ([datetime]::Now -ge $nextIpdAt) {
+                                    $nextIpdAt = [datetime]::Now.AddSeconds(10)
+                                    if (Get-Command Update-HeadsetIpd -ErrorAction SilentlyContinue) {
+                                        try { Update-HeadsetIpd -Headset $liveHeadset -Device $device -Model ([string]$workingInfo.Model) | Out-Null } catch { }
                                     }
                                 }
 

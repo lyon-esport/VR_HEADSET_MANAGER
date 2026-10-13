@@ -814,6 +814,14 @@
         FpsSetTo30         = "Merged view: frame rate set to 30 fps (merging both eyes costs CPU in proportion to the frame rate)."
         FpsWarning         = "Merged view at {0} fps: merging both eyes costs CPU in proportion to the frame rate, per headset. 30 fps is recommended."
         FpsConfirm         = "Keep this frame rate anyway? (Y/N)"
+        IpdLine            = "Lens position: working on {0} mm (headset is at {1} mm, {2})"
+        OptIpd             = "Lens position (IPD): choose the position to calibrate / tune, or detect it again"
+        IpdCurrent         = "Headset lens position: {0} mm ({1})"
+        IpdPrompt          = "Position number to set manually, A = detect from the headset, Enter = cancel"
+        IpdSet             = "Lens position set to {0} mm (held until the lenses are moved again)."
+        IpdAutoOk          = "Lens position detected from the headset: {0} mm."
+        IpdAutoFailed      = "Could not read the lens position from the headset ({0})."
+        CalibrateFramesPrompt = "Frames to capture, 1 to 5 (3 is best: look slowly up, down, left and right between them; Enter = 1)"
     }
     # Stream benchmark console menu (stream_benchmark.ps1, Show-SubMenu-Benchmark).
     # Nested group: the top-level table is at the 500 key limit. Use $msg.Benchmark.X.

@@ -1893,3 +1893,185 @@ function Get-HeadsetWifiOverview {
     $scan  = Get-HeadsetWifiScan -Device $Device -SavedSsids @($saved | ForEach-Object { $_.Ssid })
     return [PSCustomObject]@{ Ok = $scan.Ok; Supported = $scan.Supported; Networks = @($scan.Networks); Saved = $saved; Error = $scan.Error }
 }
+
+
+# ---------------------------------------------------------------------------------------------
+# Lens position (IPD) of a headset - ADR-0030. Quest 2 has three lens positions (58 / 63 / 68 mm)
+# and the firmware logs every change ("IpdNotifier: Ipd changed to 0.068000 (debounced)"), which is
+# the only place the position is exposed (no property, setting or dumpsys value carries it). The
+# per-headset state lives in the app_kv row headset_ipd_<id> (one row per headset, so poll runspaces
+# of different headsets never race on a shared document):
+#   { ipd: "68", iadM: 0.0677, source: "auto"|"manual", logAt: "10-13 02:19:45.670", at: "<iso>" }
+# Only models with an `ipd` block in scrcpy.parameters.<Model> take part; every function below
+# answers "not supported" ('' / $null) for the others, so a Quest 3 behaves exactly as before.
+# ---------------------------------------------------------------------------------------------
+
+# Internal: the ipd block of a model template, or $null.
+function Get-ModelIpdConfig {
+    param([string]$Model)
+    if (-not $Model -or -not $global:scrcpyParameters) { return $null }
+    $tpl = $global:scrcpyParameters.$Model
+    if (-not $tpl -or $tpl -is [string] -or -not $tpl.ipd) { return $null }
+    return $tpl.ipd
+}
+
+# The stored IPD state of one headset ($null when none), memoised 2 s per process so a burst of
+# stream-path calls costs one database read. Never throws.
+# Example: Get-HeadsetIpdState -HeadsetId 7
+function Get-HeadsetIpdState {
+    param([Parameter(Mandatory)][int]$HeadsetId, [switch]$NoMemo)
+    if ($HeadsetId -le 0) { return $null }
+    if (-not $script:HeadsetIpdMemo) { $script:HeadsetIpdMemo = @{} }
+    $m = $script:HeadsetIpdMemo[$HeadsetId]
+    if (-not $NoMemo -and $m -and ([datetime]::UtcNow - $m.At).TotalSeconds -lt 2) { return $m.Val }
+    $val = $null
+    try { $val = Get-DbKeyValue -Key ("headset_ipd_{0}" -f $HeadsetId) } catch { $val = $null }
+    $script:HeadsetIpdMemo[$HeadsetId] = @{ At = [datetime]::UtcNow; Val = $val }
+    return $val
+}
+
+# The lens position the headset is at, as a configured position string ("58"), or '' for a model
+# without an `ipd` block. Falls back to the model's default position when nothing is known yet or the
+# stored value is no longer a configured position. Accepts a registry row or an id + model.
+# Example: Get-HeadsetIpdValue -Headset $row
+function Get-HeadsetIpdValue {
+    param($Headset = $null, [int]$HeadsetId = 0, [string]$Model = '')
+    if ($Headset) {
+        if ($HeadsetId -le 0) { [void][int]::TryParse([string]$Headset.ID, [ref]$HeadsetId) }
+        if (-not $Model) { $Model = [string]$Headset.Model }
+    }
+    $cfg = Get-ModelIpdConfig -Model $Model
+    if (-not $cfg) { return '' }
+    $st = Get-HeadsetIpdState -HeadsetId $HeadsetId
+    if ($st -and $st.ipd -and (@($cfg.positions | ForEach-Object { [string]$_ }) -contains [string]$st.ipd)) { return [string]$st.ipd }
+    return [string]$cfg.default
+}
+
+# Parses the headset log lines of the lens position. Returns @{IpdMm;IadM;At} or $null when the
+# firmware logged nothing (log buffer rotated, or a model that does not log it). IpdMm comes from the
+# last "Ipd changed to" line (the debounced, final value), IadM from the last SetLensPositions line,
+# At is that "Ipd changed" line's timestamp, used as the identity of the event.
+# Example: Read-HeadsetIpdLog -Device $device
+function Read-HeadsetIpdLog {
+    param([Parameter(Mandatory)] $Device)
+    try {
+        $script = "logcat -d -v time -s IpdNotifier:I Distortion_HmdConfig:I | grep -E 'Ipd changed|SetLensPositions' | tail -40"
+        $lines = @(Invoke-AdbCmd -Device $Device -Command $script -ShellScript -TimeoutSeconds 10 -SilentOnFail)
+        if (-not $lines -or $lines[0] -is [bool]) { return $null }
+        $inv = [System.Globalization.CultureInfo]::InvariantCulture
+        $ipdMm = $null; $at = ''; $iad = $null
+        foreach ($l in $lines) {
+            $t = [string]$l
+            if ($t -match '^(\d\d-\d\d \d\d:\d\d:\d\d\.\d+)\s+\w/IpdNotifier.*Ipd changed to ([0-9]+(?:\.[0-9]+)?)') {
+                $v = 0.0
+                if ([double]::TryParse($Matches[2], [System.Globalization.NumberStyles]::Float, $inv, [ref]$v)) { $ipdMm = $v * 1000.0; $at = $Matches[1] }
+            } elseif ($t -match 'SetLensPositions - iad=([0-9]+(?:\.[0-9]+)?)') {
+                $v = 0.0
+                if ([double]::TryParse($Matches[1], [System.Globalization.NumberStyles]::Float, $inv, [ref]$v)) { $iad = $v }
+            }
+        }
+        if ($null -eq $ipdMm) { return $null }
+        return @{ IpdMm = [Math]::Round($ipdMm, 1); IadM = $iad; At = $at }
+    } catch {
+        return $null
+    }
+}
+
+# Stores the lens position of a headset and, when it CHANGED, asks VRMonitor to look at that headset
+# now so a running stream follows (the L/R crop or the merge key differs, so the watchdog restarts
+# it). Writes only on a change. -Source manual records the newest lens event seen on the headset
+# (-Device, or the previous one), so the override holds until the lens is moved again.
+# Returns $true when the stored position changed.
+# Example: Set-HeadsetIpd -HeadsetId 7 -Ipd '58' -Source manual -Device $device
+function Set-HeadsetIpd {
+    param([Parameter(Mandatory)][int]$HeadsetId, [Parameter(Mandatory)][string]$Ipd,
+          [ValidateSet('auto','manual')][string]$Source = 'auto', $IadM = $null, [string]$LogAt = '', $Device = $null)
+    try {
+        $prev = Get-HeadsetIpdState -HeadsetId $HeadsetId -NoMemo
+        if ($Source -eq 'manual' -and -not $LogAt) {
+            if ($Device) { $lg = Read-HeadsetIpdLog -Device $Device; if ($lg) { $LogAt = [string]$lg.At } }
+            if (-not $LogAt -and $prev -and $prev.logAt) { $LogAt = [string]$prev.logAt }
+        }
+        $changed = (-not $prev) -or ([string]$prev.ipd -ne $Ipd)
+        if (-not $changed -and $prev.source -eq $Source -and ([string]$prev.logAt -eq $LogAt -or -not $LogAt)) { return $false }
+        $val = [ordered]@{
+            ipd = $Ipd
+            iadM = $(if ($null -ne $IadM) { [double]$IadM } elseif ($prev -and $null -ne $prev.iadM) { [double]$prev.iadM } else { $null })
+            source = $Source
+            logAt = $(if ($LogAt) { $LogAt } elseif ($prev) { [string]$prev.logAt } else { '' })
+            at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [System.Globalization.CultureInfo]::InvariantCulture)
+        }
+        Set-DbKeyValue -Key ("headset_ipd_{0}" -f $HeadsetId) -Value $val
+        if ($script:HeadsetIpdMemo) { $script:HeadsetIpdMemo.Remove($HeadsetId) }
+        if ($changed) {
+            Write-Log ("Lens position of headset {0}: {1} mm ({2})" -f $HeadsetId, $Ipd, $Source) -Level INFO
+            if (Get-Command Request-ScrcpyCheck -ErrorAction SilentlyContinue) {
+                [void](Request-ScrcpyCheck -HeadsetId $HeadsetId -NoMark -Reason 'lens position changed')
+            }
+        }
+        return $changed
+    } catch {
+        Write-Log ("Set-HeadsetIpd failed for headset {0}: {1}" -f $HeadsetId, $_.Exception.Message) -Level WARNING
+        return $false
+    }
+}
+
+# One detection step for a headset: read the log, map the debounced value to the nearest configured
+# position and store it. Called by the per-headset poll runspace on a slow cadence (one adb call,
+# ~340 ms), never by the VRMonitor main loop. Does nothing for a model without `ipd` or with
+# ipd.auto_detect false, and holds a manual override until the lens is moved again.
+# Returns @{Supported;Changed;Ipd;Reason}. Never throws.
+# Example: Update-HeadsetIpd -Headset $row -Device $device
+function Update-HeadsetIpd {
+    param([Parameter(Mandatory)] $Headset, [Parameter(Mandatory)] $Device, [string]$Model = '')
+    $r = @{ Supported = $false; Changed = $false; Ipd = ''; Reason = '' }
+    try {
+        if (-not $Model) { $Model = [string]$Headset.Model }
+        $cfg = Get-ModelIpdConfig -Model $Model
+        if (-not $cfg) { $r.Reason = 'no-ipd-block'; return $r }
+        $r.Supported = $true
+        $id = 0; [void][int]::TryParse([string]$Headset.ID, [ref]$id)
+        if ($id -le 0) { $r.Reason = 'no-id'; return $r }
+        if ($cfg.auto_detect -eq $false) { $r.Reason = 'auto-detect-off'; return $r }
+        $lg = Read-HeadsetIpdLog -Device $Device
+        if (-not $lg) { $r.Reason = 'no-log'; return $r }
+        $best = $null; $bestD = 1000.0
+        foreach ($p in @($cfg.positions)) {
+            $n = 0.0
+            if ([double]::TryParse([string]$p, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$n)) {
+                $d = [Math]::Abs($n - $lg.IpdMm)
+                if ($d -lt $bestD) { $bestD = $d; $best = [string]$p }
+            }
+        }
+        if ($null -eq $best -or $bestD -gt 3.0) { $r.Reason = 'position-not-configured'; return $r }
+        $r.Ipd = $best
+        $st = Get-HeadsetIpdState -HeadsetId $id -NoMemo
+        if ($st -and $st.source -eq 'manual' -and [string]$st.logAt -eq [string]$lg.At) { $r.Reason = 'manual-override'; $r.Ipd = [string]$st.ipd; return $r }
+        $r.Changed = Set-HeadsetIpd -HeadsetId $id -Ipd $best -Source auto -IadM $lg.IadM -LogAt ([string]$lg.At)
+    } catch {
+        $r.Reason = $_.Exception.Message
+    }
+    return $r
+}
+
+# What the web page / console shows about a headset's lens position:
+# @{Supported;Ipd;Source;IadM;At;Positions;Default;AutoDetect}. Supported = $false for a model
+# without an `ipd` block.
+# Example: Get-HeadsetIpdInfo -Headset $row
+function Get-HeadsetIpdInfo {
+    param([Parameter(Mandatory)] $Headset)
+    $cfg = Get-ModelIpdConfig -Model ([string]$Headset.Model)
+    if (-not $cfg) { return @{ Supported = $false; Ipd = ''; Source = ''; IadM = $null; At = ''; Positions = @(); Default = ''; AutoDetect = $false } }
+    $id = 0; [void][int]::TryParse([string]$Headset.ID, [ref]$id)
+    $st = Get-HeadsetIpdState -HeadsetId $id
+    return @{
+        Supported = $true
+        Ipd = (Get-HeadsetIpdValue -Headset $Headset)
+        Source = $(if ($st -and $st.source) { [string]$st.source } else { 'default' })
+        IadM = $(if ($st) { $st.iadM } else { $null })
+        At = $(if ($st -and $st.at) { [string]$st.at } else { '' })
+        Positions = @($cfg.positions | ForEach-Object { [string]$_ })
+        Default = [string]$cfg.default
+        AutoDetect = ($cfg.auto_detect -ne $false)
+    }
+}
