@@ -72,6 +72,14 @@ VRHM detects it and offers to: use the next free port (saved to the config autom
 
 The recording drive is under the free-space floor (`recordMinFreeSpaceGB`, default 5 GB). Free some space or point `recordFolder` to another drive — see [Configuration](configuration.md#headset-capture-profiles-scrcpy).
 
+### The recording preview does not start, or shows a black picture
+
+- **"Preview needs ..." message instead of a player**: the preview goes through MediaMTX. Make sure MediaMTX is enabled and running (**Help & Diagnostics → Restart MediaMTX**) and that the capture mode is not **LocalWindow**. The list, timeline and downloads work in any case.
+- **"Too many previews running"**: close the player in another tab, or raise `Recordings.playback.max_sessions`. An abandoned tab frees its preview by itself after `idle_timeout_sec` (30 s).
+- **Black picture although the player runs**: check the recording itself - download it and open it in VLC. A headset that was asleep or showing nothing was recorded as black, and the preview faithfully shows it.
+- **Choppy preview**: the preview never drops frames; it shows the frame rate the recording was made at. A recording made while the PC or headset was overloaded (or with a low-fps profile, or after [Video Quality Automation](vqa.md) lowered the fps) stays choppy.
+- **A recording is missing from the list**: click **Rescan folder**. Files are only listed when they are in `<record folder>\<yyyy-MM-dd>\<headset>\`.
+
 ### My config.json is broken
 
 At startup VRHM detects invalid JSON and offers **[R]** retry (after you fix it), **[T]** restore the template, or **[Q]** quit. From the web UI you can also use **Config → App Configuration → Reset to Template**.

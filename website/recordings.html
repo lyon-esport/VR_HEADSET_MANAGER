@@ -1,0 +1,911 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Recordings - VR Headset Manager</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+  <link rel="stylesheet" href="assets/topbar.css">
+  <script src="assets/topbar.js"></script>
+  <style>
+    :root {
+      --bg:        #111;
+      --muted:     #444;
+      --text:      #ccc;
+      --panel-bg:  #1a1a1a;
+      --border:    #222;
+      --accent:    #3b82f6;
+      --rec-done:  #3b82f6;
+      --rec-live:  #ef4444;
+      --rec-int:   #f59e0b;
+      --lane-bg:   #141414;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      background: var(--bg);
+      min-height: 100vh;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      color: var(--text);
+      overflow-x: hidden;
+    }
+    .page { padding: 24px; max-width: 1400px; margin: 0 auto; }
+
+    .rc-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 16px; }
+    .rc-controls .lbl { font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; color: #777; }
+    .rc-controls select, .rc-controls input[type=date], .rc-input {
+      background: var(--panel-bg); border: 1px solid var(--border); color: var(--text);
+      border-radius: 5px; padding: 6px 10px; font-size: 13px; font-family: inherit;
+    }
+    .rc-controls select { min-width: 110px; }
+    .rc-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
+    .rc-btn {
+      background: var(--panel-bg); border: 1px solid var(--border); color: #aaa;
+      border-radius: 5px; padding: 6px 14px; font-size: 12px; font-family: inherit; font-weight: 600; cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+    }
+    .rc-btn:hover:not(:disabled) { background: rgba(59,130,246,0.10); border-color: rgba(59,130,246,0.5); color: var(--accent); }
+    .rc-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .rc-btn.danger { color: #f87171; }
+    .rc-btn.danger:hover:not(:disabled) { background: rgba(239,68,68,0.12); border-color: rgba(239,68,68,0.5); color: #f87171; }
+    .rc-spacer { margin-left: auto; display: flex; gap: 8px; }
+
+    .rc-panel { border: 1px solid var(--border); border-radius: 6px; background: var(--panel-bg); padding: 16px; margin-bottom: 16px; }
+    .rc-msg { font-size: 13px; padding: 10px 14px; border-radius: 5px; margin-bottom: 12px; display: none; }
+    .rc-msg.err { display: block; background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.4); color: #f87171; }
+    .rc-empty { text-align: center; color: #666; font-size: 13px; padding: 24px; }
+
+    /* Timeline */
+    .tl-wrap { display: flex; }
+    .tl-labels { width: 130px; flex: none; padding-top: 24px; }
+    .tl-labels div { height: 34px; line-height: 34px; font-size: 12px; color: #999; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 4px; padding-right: 8px; }
+    .tl-main { flex: 1; position: relative; min-width: 0; }
+    .tl-axis { position: relative; height: 24px; }
+    .tl-tick { position: absolute; top: 0; font-size: 10px; color: #777; transform: translateX(-50%); }
+    .tl-lanes { position: relative; }
+    .tl-lane {
+      position: relative; height: 34px; margin-bottom: 4px; background: var(--lane-bg);
+      border: 1px solid var(--border); border-radius: 4px; cursor: pointer; overflow: hidden;
+    }
+    .tl-grid { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(128,128,128,0.15); pointer-events: none; }
+    .tl-bar {
+      position: absolute; top: 4px; bottom: 4px; min-width: 2px; border-radius: 3px;
+      background: var(--rec-done); opacity: 0.85; font-size: 11px; color: #fff; line-height: 24px;
+      padding-left: 4px; overflow: hidden; white-space: nowrap;
+    }
+    .tl-bar.done { background: var(--rec-done); }
+    .tl-bar.recording { background: var(--rec-live); animation: rcPulse 1.2s ease-in-out infinite; }
+    .tl-bar.interrupted { background: var(--rec-int); }
+    .tl-bar.selected { outline: 2px solid #fff; opacity: 1; }
+    @keyframes rcPulse { 0%,100% { opacity: 0.95; } 50% { opacity: 0.45; } }
+    .tl-playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: #22c55e; pointer-events: none; display: none; z-index: 3; }
+    .tl-tip {
+      position: fixed; z-index: 50; background: #000; color: #eee; border: 1px solid #444; border-radius: 4px;
+      padding: 6px 9px; font-size: 12px; line-height: 1.5; pointer-events: none; display: none; max-width: 320px;
+    }
+
+    /* Player */
+    .pl-stage { position: relative; background: #000; border-radius: 6px; overflow: hidden; aspect-ratio: 16 / 9; max-height: 60vh; margin: 0 auto; }
+    .pl-stage video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+    /* Last frame kept on screen while paused (the stream itself is closed on pause). */
+    .pl-stage canvas.pl-freeze { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+    .pl-stage canvas.pl-freeze.hidden { display: none; }
+    /* Paused: a small badge instead of the full dimming cover, so the frozen frame stays readable. */
+    .pl-stage { cursor: pointer; }
+    .pl-stage:fullscreen { max-height: none; aspect-ratio: auto; width: 100%; height: 100%; border-radius: 0; }
+    .pl-stage:-webkit-full-screen { max-height: none; aspect-ratio: auto; width: 100%; height: 100%; border-radius: 0; }
+    .pl-fs { position: absolute; right: 10px; bottom: 10px; width: 34px; height: 34px; padding: 0; border: 0; border-radius: 6px;
+             background: rgba(0,0,0,0.55); color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center;
+             opacity: 0.75; z-index: 2; }
+    .pl-fs:hover { opacity: 1; background: rgba(0,0,0,0.8); }
+    .pl-overlay { pointer-events: none; }
+    .pl-overlay.badge { inset: auto; top: 10px; left: 10px; padding: 4px 10px; border-radius: 4px; font-size: 12px; background: rgba(0,0,0,0.6); }
+    .pl-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #ddd; font-size: 14px; text-align: center; padding: 16px; background: rgba(0,0,0,0.55); }
+    .pl-overlay.hidden { display: none; }
+    .pl-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 10px; }
+    .pl-bar input[type=range] { flex: 1; min-width: 160px; }
+    .pl-clock { font-variant-numeric: tabular-nums; font-size: 13px; color: #aaa; min-width: 200px; }
+    .pl-bar select { background: var(--panel-bg); border: 1px solid var(--border); color: var(--text); border-radius: 5px; padding: 5px 8px; font-size: 12px; }
+
+    /* Table */
+    .rc-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .rc-table th { text-align: left; font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; color: #777; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+    .rc-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; font-variant-numeric: tabular-nums; }
+    .rc-table tbody tr.playable { cursor: pointer; }
+    .rc-table tbody tr.playable:hover td { background: rgba(59,130,246,0.07); }
+    .rc-table tbody tr td.act { cursor: default; }
+    .rc-table tr.selected td, .rc-table tr.selected:hover td { background: rgba(59,130,246,0.14); }
+    .rc-table td.act { white-space: nowrap; }
+    .rc-table td.act .rc-btn, .rc-table td.act a.rc-btn { padding: 3px 9px; font-size: 11px; text-decoration: none; display: inline-block; margin-right: 4px; }
+    .st { display: inline-block; padding: 1px 8px; border-radius: 9px; font-size: 11px; font-weight: 600; color: #fff; }
+    .st.done { background: var(--rec-done); }
+    .st.recording { background: var(--rec-live); animation: rcPulse 1.2s ease-in-out infinite; }
+    .st.interrupted { background: var(--rec-int); }
+    .lock-on { color: #f59e0b; }
+
+    /* Modal */
+    .rc-modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100; display: none; align-items: center; justify-content: center; }
+    .rc-modal-bg.open { display: flex; }
+    .rc-modal { background: var(--panel-bg); border: 1px solid #444; border-radius: 8px; padding: 20px; width: 520px; max-width: 94vw; max-height: 90vh; overflow: auto; }
+    .rc-modal h3 { font-size: 15px; margin-bottom: 14px; color: var(--text); }
+    .rc-modal .row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 13px; flex-wrap: wrap; }
+    .rc-modal .rc-input { width: 90px; }
+    .rc-modal .result { font-size: 13px; margin: 10px 0; line-height: 1.6; }
+    .rc-modal .result.bad { color: #f87171; }
+    .rc-modal .foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+
+    .rc-toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #222; color: #eee; border: 1px solid #555; border-radius: 6px; padding: 9px 16px; font-size: 13px; z-index: 200; display: none; }
+
+    /* Light mode */
+    [data-theme="light"] {
+      --bg: #f0f0f0; --muted: #999; --text: #222; --panel-bg: #fff; --border: #d8d8d8; --lane-bg: #f6f6f6;
+    }
+    [data-theme="light"] .rc-controls .lbl, [data-theme="light"] .rc-table th { color: #6b7280; }
+    [data-theme="light"] .rc-btn { background: #e8e8e8; border-color: #c8c8c8; color: #555; }
+    [data-theme="light"] .tl-labels div { color: #555; }
+    [data-theme="light"] .tl-tick { color: #666; }
+    [data-theme="light"] .rc-modal { border-color: #ccc; }
+    [data-theme="light"] .pl-clock { color: #555; }
+  </style>
+</head>
+<body>
+
+  <header class="topbar">
+    <script>document.write(TopBar.brandHTML)</script>
+    <div class="v-sep"></div>
+    <script>document.write(TopBar.compactDropdownHTML)</script>
+    <span class="topbar-title">Recordings</span>
+
+    <div class="topbar-right">
+      <script>document.write(TopBar.monitoringBtnHTML)</script>
+      <script>document.write(TopBar.manageDevicesBtnHTML)</script>
+      <script>document.write(TopBar.configMenuHTML)</script>
+    </div>
+  </header>
+
+  <div class="page">
+    <div class="rc-controls">
+      <span class="lbl">Headset</span>
+      <select id="sel-headset"><option value="">Loading...</option></select>
+      <label class="rc-check"><input type="checkbox" id="chk-all"> All headsets</label>
+      <span class="lbl">Date</span>
+      <select id="sel-date"></select>
+      <span class="lbl">From</span>
+      <select id="sel-from"></select>
+      <span class="lbl">To</span>
+      <select id="sel-to"></select>
+      <div class="rc-spacer">
+        <button class="rc-btn" id="btn-rescan">Rescan folder</button>
+        <button class="rc-btn danger" id="btn-wipe">Delete old recordings...</button>
+      </div>
+    </div>
+
+    <div class="rc-msg" id="msg"></div>
+
+    <div class="rc-panel" id="player-panel" style="display:none">
+      <div class="pl-stage">
+        <video id="vid" autoplay muted playsinline></video>
+        <canvas class="pl-freeze hidden" id="pl-freeze"></canvas>
+        <div class="pl-overlay hidden" id="pl-overlay">Preparing...</div>
+        <button class="pl-fs" id="pl-fs" type="button" title="Full screen (double-click the video)">
+          <svg id="pl-fs-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+        </button>
+      </div>
+      <div class="pl-bar">
+        <button class="rc-btn" id="pl-toggle">Pause</button>
+        <input type="range" id="pl-seek" min="0" max="1" step="1" value="0">
+        <select id="pl-speed" title="Playback speed">
+          <option value="1">1x</option><option value="2">2x</option><option value="4">4x</option>
+        </select>
+        <span class="pl-clock" id="pl-clock">--:--:--</span>
+        <button class="rc-btn" id="pl-close">Close</button>
+      </div>
+      <div class="pl-bar" style="margin-top:4px"><span id="pl-title" style="font-size:12px;color:#888"></span></div>
+    </div>
+
+    <div class="rc-panel">
+      <div class="tl-wrap">
+        <div class="tl-labels" id="tl-labels"></div>
+        <div class="tl-main">
+          <div class="tl-axis" id="tl-axis"></div>
+          <div class="tl-lanes" id="tl-lanes"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="rc-panel">
+      <div style="overflow-x:auto">
+        <table class="rc-table">
+          <thead><tr>
+            <th id="th-headset">Headset</th><th>Start</th><th>End</th><th>Duration</th><th>Size</th><th>Status</th>
+            <th>Codec</th><th>Profile</th><th>Capture</th><th>Eye merge</th><th>Actions</th>
+          </tr></thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+      <div class="rc-empty" id="empty" style="display:none">No recordings for this selection.</div>
+    </div>
+  </div>
+
+  <div class="rc-tip tl-tip" id="tip"></div>
+  <div class="rc-toast" id="toast"></div>
+
+  <div class="rc-modal-bg" id="wipe-bg">
+    <div class="rc-modal">
+      <h3>Delete old recordings</h3>
+      <div class="row">
+        <label><input type="radio" name="w-mode" value="older" checked> Older than</label>
+        <input type="number" class="rc-input" id="w-days" min="0" value="1"> days
+      </div>
+      <div class="row">
+        <label><input type="radio" name="w-mode" value="date"> Specific date</label>
+        <input type="date" class="rc-input" id="w-date" style="width:150px">
+      </div>
+      <div class="row">
+        <label><input type="radio" name="w-scope" value="this" checked> This headset</label>
+        <label><input type="radio" name="w-scope" value="all"> All headsets</label>
+      </div>
+      <div class="row"><button class="rc-btn" id="w-preview">Preview</button></div>
+      <div class="result" id="w-result"></div>
+      <div class="row" id="w-confirm-row" style="display:none">
+        Type <b>DELETE</b> to confirm:
+        <input type="text" class="rc-input" id="w-confirm" style="width:110px" autocomplete="off">
+      </div>
+      <div class="foot">
+        <button class="rc-btn" id="w-cancel">Close</button>
+        <button class="rc-btn danger" id="w-delete" disabled>Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="assets/whep_player.js"></script>
+  <script src="assets/live_events.js"></script>
+  <script>
+    'use strict';
+
+    // -- Helpers --------------------------------------------------------------
+    function $(id) { return document.getElementById(id); }
+    function esc(s) {
+      return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+    function pad2(n) { return (n < 10 ? '0' : '') + n; }
+    // 'yyyy-MM-ddTHH:mm:ss' without zone is parsed as LOCAL time, which is what the catalogue stores.
+    function toDate(s) { return s ? new Date(s) : null; }
+    function fmtTime(d) { return pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds()); }
+    function fmtDur(sec) {
+      if (sec == null || isNaN(sec)) return '-';
+      sec = Math.max(0, Math.round(sec));
+      var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+      return h + ':' + pad2(m) + ':' + pad2(s);
+    }
+    function fmtSize(b) {
+      if (b == null) return '-';
+      if (b >= 1073741824) return (b / 1073741824).toFixed(2) + ' GB';
+      return (b / 1048576).toFixed(1) + ' MB';
+    }
+    function toast(text) {
+      var t = $('toast'); t.textContent = text; t.style.display = 'block';
+      clearTimeout(toast._t); toast._t = setTimeout(function () { t.style.display = 'none'; }, 3500);
+    }
+    function showError(text) { var m = $('msg'); m.className = 'rc-msg err'; m.textContent = text; }
+    function clearError() { var m = $('msg'); m.className = 'rc-msg'; m.textContent = ''; }
+
+    // fetch JSON; always resolves to an object with ok (never rejects, never silent).
+    function api(url, body) {
+      var opt = body === undefined ? {} : {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+      };
+      return fetch(url, opt)
+        .then(function (r) {
+          return r.json().catch(function () { return { ok: false, error: 'Bad response (HTTP ' + r.status + ')' }; });
+        })
+        .then(function (j) {
+          if (!j || typeof j !== 'object') j = { ok: false, error: 'Empty response' };
+          if (j.ok === false && !j.error) j.error = 'Request failed';
+          return j;
+        })
+        .catch(function (e) { return { ok: false, error: 'Network error: ' + e.message }; });
+    }
+
+    // -- State ----------------------------------------------------------------
+    var state = { safe: '', date: '', from: 0, to: 24, all: false };
+    var headsets = [];
+    var recs = [];
+    var playbackInfo = { ok: true, reason: '' };
+    var selectedId = 0;
+    var laneKeys = [];
+
+    function syncUrl() {
+      var q = '?safe=' + encodeURIComponent(state.safe) + '&date=' + encodeURIComponent(state.date) +
+              '&from=' + state.from + '&to=' + state.to + '&all=' + (state.all ? 1 : 0);
+      try { history.replaceState(null, '', location.pathname + q); } catch (e) {}
+    }
+    (function readUrl() {
+      var p = new URLSearchParams(location.search);
+      state.safe = p.get('safe') || '';
+      state.date = p.get('date') || '';
+      var f = parseInt(p.get('from'), 10), t = parseInt(p.get('to'), 10);
+      state.from = (f >= 0 && f <= 23) ? f : 0;
+      state.to = (t >= 1 && t <= 24 && t > state.from) ? t : 24;
+      state.all = p.get('all') === '1';
+    })();
+
+    // -- Controls -------------------------------------------------------------
+    function fillHourSelects() {
+      var a = '', b = '', i;
+      for (i = 0; i <= 23; i++) a += '<option value="' + i + '"' + (i === state.from ? ' selected' : '') + '>' + pad2(i) + ':00</option>';
+      for (i = 1; i <= 24; i++) b += '<option value="' + i + '"' + (i === state.to ? ' selected' : '') + '>' + pad2(i) + ':00</option>';
+      $('sel-from').innerHTML = a; $('sel-to').innerHTML = b;
+    }
+
+    function loadHeadsets() {
+      return api('/api/recordings/headsets').then(function (j) {
+        if (!j.ok) { showError('Could not load headsets: ' + j.error); return; }
+        headsets = j.headsets || [];
+        if (!state.safe || !headsets.some(function (h) { return h.safeName === state.safe; })) {
+          state.safe = headsets.length ? headsets[0].safeName : '';
+        }
+        $('sel-headset').innerHTML = headsets.map(function (h) {
+          return '<option value="' + esc(h.safeName) + '"' + (h.safeName === state.safe ? ' selected' : '') + '>' +
+                 esc(h.name || h.safeName) + (h.inRegistry ? '' : ' (not in registry)') + ' (' + h.count + ')</option>';
+        }).join('') || '<option value="">No recordings</option>';
+        $('chk-all').checked = state.all;
+        $('sel-headset').disabled = state.all;
+      });
+    }
+
+    function loadDates() {
+      var q = state.all ? '' : state.safe;
+      return api('/api/recordings/dates?safeName=' + encodeURIComponent(q)).then(function (j) {
+        if (!j.ok) { showError('Could not load dates: ' + j.error); return; }
+        var dates = j.dates || [];
+        if (!state.date || dates.indexOf(state.date) === -1) state.date = dates.length ? dates[0] : '';
+        $('sel-date').innerHTML = dates.map(function (d) {
+          return '<option value="' + esc(d) + '"' + (d === state.date ? ' selected' : '') + '>' + esc(d) + '</option>';
+        }).join('') || '<option value="">No dates</option>';
+      });
+    }
+
+    function wipeOpen() { return $('wipe-bg').classList.contains('open'); }
+
+    function loadList() {
+      if (!state.date || (!state.all && !state.safe)) { recs = []; renderAll(); return Promise.resolve(); }
+      var url = '/api/recordings/list?safeName=' + encodeURIComponent(state.safe) +
+                '&date=' + encodeURIComponent(state.date) + '&from=' + state.from + '&to=' + state.to +
+                (state.all ? '&all=1' : '');
+      return api(url).then(function (j) {
+        if (!j.ok) { showError('Could not load recordings: ' + j.error); return; }
+        clearError();
+        recs = j.recordings || [];
+        playbackInfo = j.playback || { ok: true, reason: '' };
+        renderAll();
+      });
+    }
+
+    function reloadFull() {
+      return loadHeadsets().then(loadDates).then(function () { syncUrl(); return loadList(); });
+    }
+
+    $('sel-headset').addEventListener('change', function (e) {
+      state.safe = e.target.value; state.date = ''; syncUrl(); loadDates().then(function () { syncUrl(); loadList(); });
+    });
+    $('chk-all').addEventListener('change', function (e) {
+      state.all = e.target.checked; $('sel-headset').disabled = state.all; state.date = '';
+      syncUrl(); loadDates().then(function () { syncUrl(); loadList(); });
+    });
+    $('sel-date').addEventListener('change', function (e) { state.date = e.target.value; syncUrl(); loadList(); });
+    $('sel-from').addEventListener('change', function (e) {
+      state.from = parseInt(e.target.value, 10);
+      if (state.to <= state.from) { state.to = Math.min(24, state.from + 1); $('sel-to').value = String(state.to); }
+      syncUrl(); loadList();
+    });
+    $('sel-to').addEventListener('change', function (e) {
+      state.to = parseInt(e.target.value, 10);
+      if (state.from >= state.to) { state.from = Math.max(0, state.to - 1); $('sel-from').value = String(state.from); }
+      syncUrl(); loadList();
+    });
+    $('btn-rescan').addEventListener('click', function () {
+      var b = $('btn-rescan'); b.disabled = true;
+      api('/api/recordings/rescan', {}).then(function (j) {
+        b.disabled = false;
+        if (!j.ok) { showError('Rescan failed: ' + j.error); return; }
+        toast('Rescan: ' + (j.added || 0) + ' added, ' + (j.closed || 0) + ' closed, ' + (j.removed || 0) + ' removed');
+        reloadFull();
+      });
+    });
+
+    // -- Timeline -------------------------------------------------------------
+    function windowBounds() {
+      var d0 = new Date(state.date + 'T00:00:00');
+      var t0 = d0.getTime() + state.from * 3600000;
+      return { t0: t0, t1: d0.getTime() + state.to * 3600000 };
+    }
+    function recStartMs(r) { return toDate(r.start).getTime(); }
+    function recEndMs(r) { return r.end ? toDate(r.end).getTime() : Date.now(); }
+    function recDurSec(r) {
+      if (r.durationSec != null) return r.durationSec;
+      return (recEndMs(r) - recStartMs(r)) / 1000;
+    }
+    function pct(ms, b) { return Math.max(0, Math.min(100, (ms - b.t0) / (b.t1 - b.t0) * 100)); }
+
+    function renderTimeline() {
+      var labels = $('tl-labels'), axis = $('tl-axis'), lanes = $('tl-lanes');
+      if (!state.date) { labels.innerHTML = ''; axis.innerHTML = ''; lanes.innerHTML = ''; return; }
+      var b = windowBounds();
+      var span = state.to - state.from;
+      var step = span > 12 ? 2 : 1;
+      var ticks = '', grid = '', h;
+      for (h = state.from; h <= state.to; h += step) {
+        var left = (h - state.from) / span * 100;
+        ticks += '<span class="tl-tick" style="left:' + left + '%">' + pad2(h % 24) + ':00</span>';
+        grid += '<div class="tl-grid" style="left:' + left + '%"></div>';
+      }
+      axis.innerHTML = ticks;
+
+      laneKeys = [];
+      if (state.all) {
+        recs.forEach(function (r) { if (laneKeys.indexOf(r.safeName) === -1) laneKeys.push(r.safeName); });
+      } else {
+        laneKeys = [state.safe];
+      }
+      labels.innerHTML = laneKeys.map(function (k) {
+        var r = recs.filter(function (x) { return x.safeName === k; })[0];
+        var nm = r ? (r.headsetName || k) : (state.all ? k : ((headsets.filter(function (x) { return x.safeName === k; })[0] || {}).name || k));
+        return '<div title="' + esc(nm) + '">' + esc(nm) + '</div>';
+      }).join('');
+
+      var html = '';
+      laneKeys.forEach(function (k, li) {
+        html += '<div class="tl-lane" data-lane="' + li + '">' + grid;
+        recs.filter(function (r) { return r.safeName === k; }).forEach(function (r) {
+          var l = pct(recStartMs(r), b), rt = pct(recEndMs(r), b);
+          var w = Math.max(rt - l, 0.15);
+          html += '<div class="tl-bar ' + esc(r.status) + (r.id === selectedId ? ' selected' : '') + '" data-id="' + r.id +
+                  '" style="left:' + l + '%;width:' + w + '%">' + (r.keep ? '&#128274;' : '') + '</div>';
+        });
+        html += '</div>';
+      });
+      html += '<div class="tl-playhead" id="playhead"></div>';
+      lanes.innerHTML = html;
+      updatePlayhead();
+    }
+
+    function findRec(id) { for (var i = 0; i < recs.length; i++) if (recs[i].id === id) return recs[i]; return null; }
+
+    function tipHtml(r) {
+      var s = toDate(r.start), e = r.end ? toDate(r.end) : null;
+      return '<b>' + fmtTime(s) + ' - ' + (e ? fmtTime(e) : 'now') + '</b><br>Duration ' + fmtDur(recDurSec(r)) +
+        '<br>Profile ' + esc(r.profile || '-') + '<br>' + esc(r.codec || '-') + ' ' +
+        (r.width && r.height ? r.width + 'x' + r.height : '') + (r.keep ? '<br>Do not delete' : '');
+    }
+
+    $('tl-lanes').addEventListener('mousemove', function (e) {
+      var bar = e.target.closest ? e.target.closest('.tl-bar') : null;
+      var tip = $('tip');
+      if (!bar) { tip.style.display = 'none'; return; }
+      var r = findRec(parseInt(bar.dataset.id, 10));
+      if (!r) { tip.style.display = 'none'; return; }
+      tip.innerHTML = tipHtml(r);
+      tip.style.display = 'block';
+      tip.style.left = Math.min(e.clientX + 14, window.innerWidth - 340) + 'px';
+      tip.style.top = (e.clientY + 16) + 'px';
+    });
+    $('tl-lanes').addEventListener('mouseleave', function () { $('tip').style.display = 'none'; });
+
+    $('tl-lanes').addEventListener('click', function (e) {
+      var lane = e.target.closest ? e.target.closest('.tl-lane') : null;
+      if (!lane) return;
+      var rect = lane.getBoundingClientRect();
+      var b = windowBounds();
+      var T = b.t0 + (e.clientX - rect.left) / rect.width * (b.t1 - b.t0);
+      var key = laneKeys[parseInt(lane.dataset.lane, 10)];
+      var laneRecs = recs.filter(function (r) { return r.safeName === key; })
+                         .sort(function (a, c) { return recStartMs(a) - recStartMs(c); });
+      var hit = null, next = null;
+      laneRecs.forEach(function (r) {
+        if (!hit && recStartMs(r) <= T && T <= recEndMs(r)) hit = r;
+        if (!next && recStartMs(r) > T) next = r;
+      });
+      if (hit) startPlayback(hit, Math.max(0, (T - recStartMs(hit)) / 1000));
+      else if (next) startPlayback(next, 0);
+    });
+
+    // -- Table ----------------------------------------------------------------
+    function renderTable() {
+      $('th-headset').style.display = state.all ? '' : 'none';
+      $('empty').style.display = recs.length ? 'none' : 'block';
+      $('tbody').innerHTML = recs.map(function (r) {
+        var canPlay = playbackInfo.ok && r.fileExists;
+        var why = !playbackInfo.ok ? (playbackInfo.reason || 'Playback unavailable') : (!r.fileExists ? 'File is missing on disk' : '');
+        var prof = [r.view, r.eye, r.fps ? r.fps + ' fps' : '', r.bitrateMbps ? r.bitrateMbps + ' Mbps' : '']
+                     .filter(function (x) { return x; }).join(' / ') || esc(r.profile || '-');
+        var cls = (r.id === selectedId ? 'selected ' : '') + (canPlay ? 'playable' : 'unplayable');
+        return '<tr data-id="' + r.id + '" class="' + cls + '" title="' + esc(canPlay ? 'Click to play this recording' : why) + '">' +
+          '<td style="' + (state.all ? '' : 'display:none') + '">' + esc(r.headsetName || r.safeName) + '</td>' +
+          '<td>' + esc(fmtTime(toDate(r.start))) + '</td>' +
+          '<td>' + (r.end ? esc(fmtTime(toDate(r.end))) : 'now') + '</td>' +
+          '<td>' + fmtDur(recDurSec(r)) + '</td>' +
+          '<td>' + fmtSize(r.sizeBytes) + '</td>' +
+          '<td><span class="st ' + esc(r.status) + '">' + esc(r.status) + '</span></td>' +
+          '<td>' + esc(r.codec || '-') + (r.width && r.height ? ' ' + r.width + 'x' + r.height : '') + '</td>' +
+          '<td>' + esc(prof) + '</td>' +
+          '<td>' + esc(r.captureMode || '-') + '</td>' +
+          '<td>' + (r.eyeMerge ? 'Yes' : 'No') + '</td>' +
+          '<td class="act">' +
+            '<a class="rc-btn" href="/api/recordings/download?id=' + r.id + '"' + (r.fileExists ? '' : ' style="opacity:.4;pointer-events:none"') + '>Download</a>' +
+            '<button class="rc-btn' + (r.keep ? ' lock-on' : '') + '" data-act="keep" data-id="' + r.id + '" title="' +
+              (r.keep ? esc(r.note ? 'Do not delete: ' + r.note : 'Do not delete (click to unlock)') : 'Protect from deletion') + '">' +
+              (r.keep ? '&#128274; Locked' : '&#128275; Lock') + '</button>' +
+            (function () {
+              var noDel = r.keep ? 'Locked recordings cannot be deleted. Unlock it first.'
+                        : (r.status === 'recording' ? 'Still recording.' : '');
+              return '<button class="rc-btn danger" data-act="delete" data-id="' + r.id + '"' +
+                (noDel ? ' disabled title="' + esc(noDel) + '"' : ' title="Delete this recording (file and entry)"') + '>Delete</button>';
+            })() +
+          '</td></tr>';
+      }).join('');
+    }
+
+    $('tbody').addEventListener('click', function (e) {
+      if (!e.target.closest) return;
+      // Clicking a row plays it; the action cell (Download / Lock / Delete) never does.
+      if (e.target.closest('td.act')) {
+        var btn = e.target.closest('button[data-act]');
+        if (!btn || btn.disabled) return;
+        var rb = findRec(parseInt(btn.dataset.id, 10));
+        if (!rb) return;
+        if (btn.dataset.act === 'keep') toggleKeep(rb);
+        else if (btn.dataset.act === 'delete') deleteRec(rb);
+        return;
+      }
+      var tr = e.target.closest('tr[data-id]');
+      if (!tr || tr.classList.contains('unplayable')) return;
+      var r = findRec(parseInt(tr.dataset.id, 10));
+      if (!r) return;
+      if (cur && cur.rec && cur.rec.id === r.id) return;   // already loaded: use the player controls
+      startPlayback(r, 0);
+    });
+
+    function deleteRec(r) {
+      if (r.keep || r.status === 'recording') return;
+      var what = (r.headsetName || r.safeName) + ' - ' + r.fileName + ' (' + fmtSize(r.sizeBytes) + ')';
+      if (!confirm('Delete this recording permanently?\n\n' + what + '\n\nThe video file is removed from disk. This cannot be undone.')) return;
+      // Stop the preview first if it is this recording: ffmpeg holds the file open.
+      var p = (cur && cur.rec && cur.rec.id === r.id) ? (closePlayer(), new Promise(function (ok) { setTimeout(ok, 500); })) : Promise.resolve();
+      p.then(function () { return api('/api/recordings/delete', { id: r.id }); }).then(function (j) {
+        if (!j.ok) { showError('Could not delete the recording: ' + j.error); return; }
+        toast('Recording deleted');
+        if (selectedId === r.id) selectedId = null;
+        loadList();
+      });
+    }
+
+    function toggleKeep(r) {
+      var keep = !r.keep, note = r.note || '';
+      if (keep) {
+        var n = prompt('Optional note for this protected recording:', note);
+        if (n === null) return;
+        note = n;
+      } else { note = ''; }
+      api('/api/recordings/keep', { id: r.id, keep: keep, note: note }).then(function (j) {
+        if (!j.ok) { showError('Could not change protection: ' + j.error); return; }
+        toast(keep ? 'Recording protected' : 'Protection removed');
+        loadList();
+      });
+    }
+
+    function renderAll() { renderTimeline(); renderTable(); updatePlayerUi(); }
+
+    // -- Player ---------------------------------------------------------------
+    var cur = null;  // { rec, token, offset, speed, handle, playing, paused, pos }
+    var vid = $('vid');
+    var pingTimer = null, clockTimer = null;
+
+    function setOverlay(text, asBadge) {
+      var o = $('pl-overlay');
+      o.classList.toggle('badge', !!asBadge);
+      if (text) { o.textContent = text; o.classList.remove('hidden'); } else { o.classList.add('hidden'); }
+    }
+
+    // Copies the current video frame onto the freeze canvas and shows it. Called before the
+    // stream is torn down (pause, seek, speed change), so the picture does not go black.
+    function freezeFrame() {
+      var c = $('pl-freeze');
+      try {
+        if (!vid.videoWidth || !vid.videoHeight || vid.readyState < 2) return false;
+        c.width = vid.videoWidth; c.height = vid.videoHeight;
+        c.getContext('2d').drawImage(vid, 0, 0, c.width, c.height);
+        c.classList.remove('hidden');
+        return true;
+      } catch (e) { return false; }
+    }
+    function unfreezeFrame() { $('pl-freeze').classList.add('hidden'); }
+
+    function curPos() {
+      // Position in the recording, seconds.
+      if (!cur) return 0;
+      if (cur.paused || !cur.playing) return cur.pos || 0;
+      return cur.offset + (vid.currentTime || 0) * cur.speed;
+    }
+
+    function updatePlayhead() {
+      var ph = $('playhead');
+      if (!ph) return;
+      if (!cur || !state.date) { ph.style.display = 'none'; return; }
+      var b = windowBounds();
+      var t = recStartMs(cur.rec) + curPos() * 1000;
+      if (t < b.t0 || t > b.t1) { ph.style.display = 'none'; return; }
+      // Lanes area is the positioned parent; the playhead spans all lanes.
+      ph.style.left = pct(t, b) + '%';
+      ph.style.display = 'block';
+    }
+
+    function updatePlayerUi() {
+      var panel = $('player-panel');
+      if (!cur) { panel.style.display = 'none'; return; }
+      panel.style.display = 'block';
+      var dur = Math.max(1, Math.floor(recDurSec(cur.rec)));
+      var seek = $('pl-seek');
+      seek.max = String(dur);
+      if (document.activeElement !== seek) seek.value = String(Math.min(dur, Math.floor(curPos())));
+      var wall = new Date(recStartMs(cur.rec) + curPos() * 1000);
+      $('pl-clock').textContent = wall.getFullYear() + '-' + pad2(wall.getMonth() + 1) + '-' + pad2(wall.getDate()) + ' ' + fmtTime(wall);
+      $('pl-toggle').textContent = cur.paused ? 'Play' : 'Pause';
+      $('pl-speed').value = String(cur.speed);
+      $('pl-title').textContent = (cur.rec.headsetName || cur.rec.safeName) + ' - ' + cur.rec.fileName;
+      updatePlayhead();
+    }
+
+    function teardownStream() {
+      if (!cur) return Promise.resolve();
+      var token = cur.token, handle = cur.handle;
+      cur.token = null; cur.handle = null; cur.playing = false;
+      if (handle) WhepPlayer.close(handle);
+      try { vid.pause(); vid.srcObject = null; } catch (e) {}
+      if (token) return api('/api/recordings/play-stop', { token: token });
+      return Promise.resolve();
+    }
+
+    function startPlayback(rec, offset, speed) {
+      if (!playbackInfo.ok) { showError('Playback unavailable: ' + (playbackInfo.reason || 'unknown reason')); return; }
+      if (!rec.fileExists) { showError('The file of this recording is missing on disk.'); return; }
+      clearError();
+      var spd = speed || (cur ? cur.speed : 1) || 1;
+      var seq = ++startPlayback.seq;
+      // Same recording (resume, seek, speed): keep the last picture on screen until the new
+      // stream plays. Another recording: the old picture would be misleading, drop it.
+      var sameRec = !!(cur && cur.rec && cur.rec.id === rec.id);
+      if (sameRec) { if (!cur.paused) freezeFrame(); } else { unfreezeFrame(); }
+      var prev = teardownStream();
+      selectedId = rec.id;
+      cur = { rec: rec, token: null, offset: offset, speed: spd, handle: null, playing: false, paused: false, pos: offset };
+      setOverlay('Preparing...', sameRec);
+      renderAll();
+      prev.then(function () {
+        if (seq !== startPlayback.seq) return;
+        return api('/api/recordings/play', { id: rec.id, offset: offset, speed: spd });
+      }).then(function (j) {
+        if (!j || seq !== startPlayback.seq) return;
+        if (!j.ok) { setOverlay('Playback failed: ' + j.error); showError('Playback failed: ' + j.error); return; }
+        cur.token = j.token;
+        cur.offset = (j.offsetSec != null) ? j.offsetSec : offset;
+        var p = WhepPlayer.connect(vid, j.whepUrl);
+        cur.handle = p.handle;
+        return p.then(function () {
+          if (seq !== startPlayback.seq) return;
+          var pr = vid.play(); if (pr && pr.catch) pr.catch(function () {});
+        });
+      }).catch(function (err) {
+        if (seq !== startPlayback.seq) return;
+        setOverlay('Could not connect to the playback stream: ' + err.message);
+        showError('Could not connect to the playback stream: ' + err.message);
+      });
+    }
+    startPlayback.seq = 0;
+
+    vid.addEventListener('playing', function () {
+      if (cur && !cur.paused) { cur.playing = true; setOverlay(''); unfreezeFrame(); }
+    });
+
+    function pausePlayback() {
+      if (!cur || cur.paused) return;
+      cur.pos = curPos();
+      cur.paused = true;
+      startPlayback.seq++;
+      var frozen = freezeFrame();
+      teardownStream();
+      setOverlay('Paused', frozen);
+      updatePlayerUi();
+    }
+    function resumePlayback() {
+      if (!cur || !cur.paused) return;
+      startPlayback(cur.rec, cur.pos, cur.speed);
+    }
+    function closePlayer() {
+      startPlayback.seq++;
+      teardownStream();
+      cur = null;
+      if (fsElement()) toggleFullscreen();
+      setOverlay('');
+      unfreezeFrame();
+      renderAll();
+    }
+
+    function togglePlayback() { if (cur && cur.paused) resumePlayback(); else pausePlayback(); }
+    $('pl-toggle').addEventListener('click', togglePlayback);
+
+    // Full screen on the whole stage (video + frozen frame + badges), not the bare <video>,
+    // so the paused picture and the status badge stay visible in full screen too.
+    var stage = document.querySelector('.pl-stage');
+    function fsElement() { return document.fullscreenElement || document.webkitFullscreenElement || null; }
+    function toggleFullscreen() {
+      try {
+        if (fsElement()) { (document.exitFullscreen || document.webkitExitFullscreen).call(document); }
+        else { (stage.requestFullscreen || stage.webkitRequestFullscreen).call(stage); }
+      } catch (e) {}
+    }
+    function updateFsIcon() {
+      var on = !!fsElement();
+      $('pl-fs').title = on ? 'Exit full screen (double-click the video)' : 'Full screen (double-click the video)';
+      $('pl-fs-icon').innerHTML = on
+        ? '<polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/>'
+        : '<polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>';
+    }
+    document.addEventListener('fullscreenchange', updateFsIcon);
+    document.addEventListener('webkitfullscreenchange', updateFsIcon);
+    $('pl-fs').addEventListener('click', function (e) { e.stopPropagation(); toggleFullscreen(); });
+    $('pl-fs').addEventListener('dblclick', function (e) { e.stopPropagation(); });
+
+    // Single click = play/pause, double click = full screen. The single click waits a moment
+    // so a double click does not also pause and resume the stream (each toggle restarts it).
+    var clickTimer = null;
+    stage.addEventListener('click', function () {
+      if (!cur) return;
+      if (clickTimer) return;
+      clickTimer = setTimeout(function () { clickTimer = null; togglePlayback(); }, 250);
+    });
+    stage.addEventListener('dblclick', function (e) {
+      e.preventDefault();
+      if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
+      toggleFullscreen();
+    });
+
+    // Space = play/pause, like any video player. Ignored while typing in a field, while a
+    // modal is open, and when no recording is loaded (then Space keeps its normal page scroll).
+    document.addEventListener('keydown', function (e) {
+      if (e.code !== 'Space' && e.key !== ' ') return;
+      if (!cur || e.ctrlKey || e.altKey || e.metaKey || e.repeat) return;
+      var t = e.target, tag = t && t.tagName ? t.tagName.toUpperCase() : '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (t && t.isContentEditable)) return;
+      if ($('wipe-bg').classList.contains('open')) return;
+      e.preventDefault();
+      // A focused button would also "click" on Space; drop focus so the toggle runs once.
+      if (tag === 'BUTTON' && t.blur) t.blur();
+      togglePlayback();
+    });
+    $('pl-close').addEventListener('click', closePlayer);
+    $('pl-speed').addEventListener('change', function (e) {
+      if (!cur) return;
+      var s = parseInt(e.target.value, 10) || 1;
+      if (cur.paused) { cur.speed = s; return; }
+      startPlayback(cur.rec, curPos(), s);
+    });
+    $('pl-seek').addEventListener('change', function (e) {
+      if (!cur) return;
+      var off = parseFloat(e.target.value) || 0;
+      if (cur.paused) { cur.pos = off; updatePlayerUi(); return; }
+      startPlayback(cur.rec, off, cur.speed);
+    });
+
+    function nextRecInLane(rec) {
+      var lane = recs.filter(function (r) { return r.safeName === rec.safeName && recStartMs(r) > recStartMs(rec); })
+                     .sort(function (a, c) { return recStartMs(a) - recStartMs(c); });
+      return lane.length ? lane[0] : null;
+    }
+
+    pingTimer = setInterval(function () {
+      if (!cur || !cur.token || cur.paused) return;
+      var tok = cur.token, rec = cur.rec;
+      api('/api/recordings/play-ping', { token: tok }).then(function (j) {
+        if (!cur || cur.token !== tok) return;
+        if (j.ok === false && j.error) { showError('Playback keep-alive failed: ' + j.error); return; }
+        if (j.alive === false) {
+          var near = curPos() >= recDurSec(rec) - 5;
+          var nx = near ? nextRecInLane(rec) : null;
+          if (nx && playbackInfo.ok && nx.fileExists) startPlayback(nx, 0, cur.speed);
+          else { cur.playing = false; cur.paused = true; cur.pos = curPos(); setOverlay(near ? 'End of recording' : 'Playback ended'); updatePlayerUi(); }
+        }
+      });
+    }, 10000);
+
+    clockTimer = setInterval(updatePlayerUi, 500);
+
+    window.addEventListener('pagehide', function () {
+      if (cur && cur.token) {
+        try {
+          navigator.sendBeacon('/api/recordings/play-stop', new Blob([JSON.stringify({ token: cur.token })], { type: 'application/json' }));
+        } catch (e) {}
+      }
+    });
+
+    // -- Wipe modal -----------------------------------------------------------
+    var wipeReq = null;
+    function wipeBody(preview) {
+      var mode = document.querySelector('input[name=w-mode]:checked').value;
+      var scope = document.querySelector('input[name=w-scope]:checked').value;
+      return {
+        mode: mode,
+        days: Math.max(0, parseInt($('w-days').value, 10) || 0),
+        date: $('w-date').value || '',
+        safeName: scope === 'all' ? '' : state.safe,
+        preview: preview
+      };
+    }
+    function wipeReset() {
+      wipeReq = null;
+      $('w-result').textContent = ''; $('w-result').className = 'result';
+      $('w-confirm').value = ''; $('w-confirm-row').style.display = 'none'; $('w-delete').disabled = true;
+    }
+    $('btn-wipe').addEventListener('click', function () {
+      $('w-date').value = state.date || '';
+      wipeReset();
+      $('wipe-bg').classList.add('open');
+    });
+    $('w-cancel').addEventListener('click', function () { $('wipe-bg').classList.remove('open'); });
+    ['w-days', 'w-date'].forEach(function (id) { $(id).addEventListener('input', wipeReset); });
+    Array.prototype.forEach.call(document.querySelectorAll('input[name=w-mode], input[name=w-scope]'), function (el) {
+      el.addEventListener('change', wipeReset);
+    });
+    $('w-preview').addEventListener('click', function () {
+      var body = wipeBody(true);
+      if (body.mode === 'date' && !body.date) { $('w-result').className = 'result bad'; $('w-result').textContent = 'Pick a date first.'; return; }
+      api('/api/recordings/wipe', body).then(function (j) {
+        var r = $('w-result');
+        if (!j.ok) { r.className = 'result bad'; r.textContent = 'Preview failed: ' + j.error; return; }
+        r.className = 'result';
+        r.textContent = (j.count || 0) + ' recordings, ' + ((j.bytes || 0) / 1073741824).toFixed(2) + ' GB will be deleted. ' +
+                        (j.kept || 0) + ' protected by Do not delete are kept.';
+        wipeReq = body;
+        $('w-confirm-row').style.display = (j.count > 0) ? 'flex' : 'none';
+        $('w-confirm').value = ''; $('w-delete').disabled = true;
+      });
+    });
+    $('w-confirm').addEventListener('input', function () {
+      $('w-delete').disabled = !(wipeReq && $('w-confirm').value === 'DELETE');
+    });
+    $('w-delete').addEventListener('click', function () {
+      if (!wipeReq || $('w-confirm').value !== 'DELETE') return;
+      var body = {}; for (var k in wipeReq) body[k] = wipeReq[k];
+      body.preview = false;
+      $('w-delete').disabled = true;
+      api('/api/recordings/wipe', body).then(function (j) {
+        var r = $('w-result');
+        if (!j.ok) { r.className = 'result bad'; r.textContent = 'Delete failed: ' + j.error; return; }
+        var failed = j.failed || [];
+        var txt = (j.deleted || 0) + ' recordings deleted.';
+        if (failed.length) {
+          r.className = 'result bad';
+          txt += ' ' + failed.length + ' failed: ' + failed.map(function (f) { return (f.file || f.id) + ' (' + f.error + ')'; }).join('; ');
+        } else { r.className = 'result'; }
+        r.textContent = txt;
+        wipeReq = null; $('w-confirm-row').style.display = 'none';
+        reloadFull();
+      });
+    });
+
+    // -- Refresh --------------------------------------------------------------
+    function tick() {
+      var connected = false;
+      try { connected = window.LiveEvents && LiveEvents.isConnected(); } catch (e) {}
+      if (!wipeOpen()) loadList();
+      setTimeout(tick, connected ? 60000 : 30000);
+    }
+    try {
+      if (window.LiveEvents) LiveEvents.subscribe('recordings', function () { if (!wipeOpen()) loadList(); });
+    } catch (e) {}
+
+    // -- Boot -----------------------------------------------------------------
+    fillHourSelects();
+    reloadFull().then(function () { setTimeout(tick, 30000); });
+  </script>
+</body>
+</html>

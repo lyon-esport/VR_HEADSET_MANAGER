@@ -27,6 +27,7 @@ scrcpy_manualScripts/
 # dumps saved per run) - local to the machine that ran the harness
 scripts/nonRegressionTests/reports/
 scripts/dbTests/reports/
+scripts/perf_reports/
 
 # ignore large sources
 /sources/ffmpeg-8.1-essentials_build.zip
@@ -70,3 +71,9 @@ auto.crt
 auto.key
 /null
 /-
+
+# BEGIN vrhm-managed scrcpy (Sync-DevBinaryTracking)
+# only the active version is tracked; older folders under sources are ignored
+/sources/scrcpy/*
+!/sources/scrcpy/scrcpy-win64-v5.0.1/
+# END vrhm-managed scrcpy

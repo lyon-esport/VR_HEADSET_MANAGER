@@ -8,6 +8,7 @@
       - Get-OperatorVerdict   : Manual-mode verdict override after each test
       - Confirm-TestStep      : yes/no question, auto-answers in Auto mode
       - Wait-OperatorAction   : blocking "do this physical thing" prompt
+      - Read-OperatorObservation : "look and tell me" prompt -> Yes / No / Skip
       - Read-TestMenuChoice   : single-choice menu reader for the launch screen
 
     The distinction that matters: Confirm-TestStep is advisory and is skipped
@@ -106,6 +107,52 @@ function Wait-OperatorAction {
         return $false
     }
     return $true
+}
+
+function Read-OperatorObservation {
+    <#
+    .SYNOPSIS
+        Asks the operator to LOOK at something and report what they see.
+        Returns 'Yes', 'No' or 'Skip'. Prompts in BOTH Auto and Manual mode.
+
+    .DESCRIPTION
+        Wait-OperatorAction is for "do this physical thing, then press Enter" and can
+        only answer done or skip, so it cannot express "I looked and it is NOT there".
+        This one is for questions about what is visible on a headset or a screen.
+
+        There is deliberately NO default on Enter: an observation that a stray keypress
+        can confirm is worthless, so the prompt keeps asking until the operator types
+        Y, N or S.
+
+        The caller decides what the answers mean. Typically:
+          Skip -> Skip-Test (not a regression, the operator could not check)
+          No   -> a FAIL, via an assertion
+          Yes  -> carry on
+
+    .EXAMPLE
+        $answer = Read-OperatorObservation -Message "Is the notification listed on headset 'Q3 RED'?"
+        if ($answer -eq 'Skip') { Skip-Test 'operator skipped' }
+        Assert-Equal 'Yes' $answer 'the notification is listed'
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Message,
+        [string]$Hint = ''
+    )
+
+    Write-Host ''
+    Write-Host '  +---------------------------------------------------------------+' -ForegroundColor Yellow
+    Write-Host '  | OPERATOR OBSERVATION REQUIRED                                 |' -ForegroundColor Yellow
+    Write-Host '  +---------------------------------------------------------------+' -ForegroundColor Yellow
+    Write-Host ("  {0}" -f $Message) -ForegroundColor White
+    if ($Hint) { Write-Host ("  {0}" -f $Hint) -ForegroundColor DarkGray }
+    Write-Host ''
+
+    $choice = Read-TestMenuChoice -Prompt '  [Y] yes, it works   [N] no, it does NOT   [S] skip this test' -Accept @('Y', 'N', 'S')
+    switch ($choice) {
+        'Y' { return 'Yes' }
+        'N' { return 'No' }
+        default { Write-Host '  Skipped by operator.' -ForegroundColor DarkGray; return 'Skip' }
+    }
 }
 
 function Get-OperatorVerdict {

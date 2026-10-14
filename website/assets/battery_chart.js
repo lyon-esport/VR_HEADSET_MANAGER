@@ -36,7 +36,7 @@
 
   /* The metric registry. Mirrors Get-HeadsetMetricDefinition in
    * modules\headsets_monitoring.ps1 and the trg_status_*_sample triggers in
-   * migrations 006/007 - all three change together when a metric is added.
+   * migration 006 - all three change together when a metric is added.
    *
    *   dir   'low-bad'  a LOW value is the problem (battery, controllers)
    *         'high-bad' a HIGH value is the problem (temperature)
@@ -72,18 +72,19 @@
     wattage: {
       label: 'Charging power', unit: 'W', dir: 'neutral', scale: 'auto', dp: 1
     },
-    /* Migration 007: hottest sensor of each type from dumpsys thermalservice.
-     * Skin temperature lives in the same range as the battery one, so it shares
-     * the operator's temperature bands. CPU and GPU run 30+ degrees hotter in
-     * normal use - the battery bands would paint every sample red - so they keep
-     * fixed bands with no config key until an operator asks for one. */
+    // CPU / GPU / skin temperatures from thermalservice (migration 007). Skin reuses the
+    // battery-temperature bands on purpose: one operator setting, one meaning of "hot".
+    // CPU and GPU have bands of their own: they run 20+ C hotter than the battery under load, so
+    // the battery bands painted normal operation red.
     cpu_temp: {
       label: 'CPU temperature', unit: 'C', dir: 'high-bad', scale: 'auto', dp: 1,
-      warn: 75, crit: 90
+      cfgWarn: 'cpu_temperature_warningLevel', cfgCrit: 'cpu_temperature_highLevel',
+      warn: 75, crit: 85
     },
     gpu_temp: {
       label: 'GPU temperature', unit: 'C', dir: 'high-bad', scale: 'auto', dp: 1,
-      warn: 75, crit: 90
+      cfgWarn: 'gpu_temperature_warningLevel', cfgCrit: 'gpu_temperature_highLevel',
+      warn: 75, crit: 85
     },
     skin_temp: {
       label: 'Skin temperature', unit: 'C', dir: 'high-bad', scale: 'auto', dp: 1,

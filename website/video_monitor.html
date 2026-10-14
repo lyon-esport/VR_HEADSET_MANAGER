@@ -8,6 +8,7 @@
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
   <link rel="stylesheet" href="assets/topbar.css">
   <script src="assets/topbar.js"></script>
+  <script src="assets/live_events.js"></script>
   <style>
     /* --------- Configuration --------------------------------------------------------------------------------------------------------------------------------------------------------------------- */
     :root {
@@ -338,6 +339,36 @@
     /* In no-stream mode the OFFLINE label sits behind the monitoring frame */
     .cell.no-stream .offline-overlay { z-index: 5; }
 
+    /* Capture starting: spinner + label over the cell until the stream is back */
+    .starting-overlay {
+      position: absolute;
+      left: 50%; bottom: 8px;
+      transform: translateX(-50%);
+      z-index: 30;
+      display: none;
+      align-items: center;
+      gap: 7px;
+      padding: 4px 11px;
+      border-radius: 14px;
+      background: rgba(0,0,0,0.72);
+      border: 1px solid rgba(245,158,11,0.55);
+      color: #f59e0b;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+    .starting-overlay .spin {
+      width: 11px; height: 11px;
+      border-radius: 50%;
+      border: 2px solid rgba(245,158,11,0.35);
+      border-top-color: #f59e0b;
+      animation: vm-spin 0.8s linear infinite;
+    }
+    @keyframes vm-spin { to { transform: rotate(360deg); } }
+    .cell.starting .starting-overlay { display: flex; }
+
     /* Local-only capture mode banner */
     .local-mode-banner {
       display: flex;
@@ -632,7 +663,9 @@
         var stat = headsetStatus[dn] || { ping: false, scrcpy: false };
         var show = true;
         if (f === 'online')  show = stat.ping;
-        if (f === 'scrcpy')  show = stat.scrcpy;
+        // A capture that is starting stays on the wall (as a tile with the "starting" spinner):
+        // it used to vanish at the kill and reappear only when the picture was back.
+        if (f === 'scrcpy')  show = stat.scrcpy || !!stat.starting;
         if (f === 'offline') show = !stat.ping;
         setHeadsetVisible(dn, show);
       });
@@ -934,8 +967,49 @@
         body: JSON.stringify({ name: dn, value: newVal })
       })
       .then(function(r) { return r.json(); })
-      .then(function(j) { if (!j.ok) { autoRestartState[dn] = !newVal; updateAutoRestartButtons(); } })
+      .then(function(j) {
+        if (!j.ok) { autoRestartState[dn] = !newVal; updateAutoRestartButtons(); return; }
+        // Capture was just requested: VRMonitor starts scrcpy within ~1 s, so poll now
+        // and keep polling fast until the stream shows (see captureStarting()).
+        if (newVal) { delete _pendingSince[dn]; kickStatusLoop(); }
+      })
       .catch(function() { autoRestartState[dn] = !newVal; updateAutoRestartButtons(); });
+    }
+
+    // ------ Fast status polling while a capture is starting -----------------------------------
+    // A cell only loads its [video].html once the status poll reports scrcpy=true. The normal
+    // cadence is refresh_timer x load multiplier (5 s, up to 25 s under load), which was most of
+    // the delay between "capture started" and "video on screen". While a headset has auto-restart
+    // ON, ADB up and no stream yet, poll every FAST_STATUS_MS instead - for at most
+    // FAST_STATUS_MAX_MS per headset, so a headset whose capture keeps failing does not keep the
+    // page on a 1 s poll forever.
+    var FAST_STATUS_MS     = 1000;
+    var FAST_STATUS_MAX_MS = 60000;
+    var _pendingSince      = {};    // display name -> ms timestamp the pending state was first seen
+    var _statusTimer       = null;
+    var _statusInFlight    = false;
+    var _statusKick        = false;
+    var _statusLoopFn      = null;  // set once the status loop is bootstrapped
+
+    function captureStarting() {
+      var now = Date.now(), fast = false;
+      Object.keys(autoRestartState).forEach(function(dn) {
+        var st = headsetStatus[dn];
+        var pending = (autoRestartState[dn] && st && st.adb && !st.scrcpy) || (st && st.starting);
+        if (!pending) { delete _pendingSince[dn]; return; }
+        if (!_pendingSince[dn]) _pendingSince[dn] = now;
+        if (now - _pendingSince[dn] < FAST_STATUS_MAX_MS) fast = true;
+      });
+      return fast;
+    }
+
+    // Run the status loop now instead of waiting for its timer. If a poll is already in flight,
+    // flag it so that poll reschedules immediately - never start a second polling chain.
+    function kickStatusLoop() {
+      if (!_statusLoopFn) return;
+      if (_statusInFlight) { _statusKick = true; return; }
+      if (_statusTimer) { clearTimeout(_statusTimer); _statusTimer = null; }
+      _statusLoopFn();
     }
 
 
@@ -958,6 +1032,7 @@
             newStatus[item.display_name] = {
               ping:       item.ping,
               scrcpy:     item.scrcpy,
+              starting:   !!item.scrcpy_starting && !item.scrcpy,
               adb:        item.adb,
               runningApp: item.running_app || ''
             };
@@ -1048,6 +1123,9 @@
         var streaming = stat.scrcpy;
 
         cell.classList.toggle('offline',   !stat.ping);
+        // Capture starting (server flag): spinner on the tile, whether it is still the compact
+        // tile or already the expanded cell waiting for its first picture.
+        cell.classList.toggle('starting',  !!stat.starting && !streaming);
         if (wasStream !== streaming) scaleNeeded = true;
         cell.classList.toggle('no-stream', !streaming);
         if (!streaming) cell.style.width = ''; // clear layout width for compact offline tile
@@ -1508,7 +1586,8 @@
             '<path d="M5 2h14M5 22h14M7 2v5l5 5-5 5v5M17 2v5l-5 5 5 5v5"/>' +
           '</svg>' +
         '</button>' +
-        '<div class="offline-overlay">OFFLINE</div>';
+        '<div class="offline-overlay">OFFLINE</div>' +
+        '<div class="starting-overlay"><span class="spin"></span>Capture starting...</div>';
       return cell;
     }
 
@@ -1611,11 +1690,26 @@
         // After every poll completion, refresh the tier in parallel and re-schedule using
         // setTimeout (not setInterval) so each tick re-reads the current multiplier.
         function statusLoop() {
+          _statusInFlight = true;
           Promise.all([pollHeadsetsStatus(), refreshLoadTier(), refreshCaptureMode()]).finally(function() {
-            setTimeout(statusLoop, nextStatusDelay());
+            _statusInFlight = false;
+            var delay = _statusKick ? 0 : (captureStarting() ? FAST_STATUS_MS : nextStatusDelay());
+            _statusKick = false;
+            _statusTimer = setTimeout(statusLoop, delay);
           });
         }
+        _statusLoopFn = statusLoop;
         refreshLoadTier().finally(statusLoop);
+        // Push (ADR-0020): a status write (scrcpy started/stopped, ADB up/down) re-runs the
+        // status fetch at once, so a cell loads its video as soon as scrcpy runs. The loop
+        // above stays as the fallback when the push channel is unavailable.
+        if (window.LiveEvents) {
+          LiveEvents.subscribe('headset_status', function() { pollHeadsetsStatus(); });
+          LiveEvents.subscribe('headsets',       function() { pollHeadsetsStatus(); });
+          // The "capture starting" mark is an app_kv row (set/cleared by the process that
+          // starts the capture): show or drop the spinner as soon as it changes.
+          LiveEvents.subscribe('app_kv',         function() { pollHeadsetsStatus(); });
+        }
         document.querySelectorAll('#grid .cell').forEach(function(cell) {
           var dn = cell.dataset.display;
           if (!dn) return;

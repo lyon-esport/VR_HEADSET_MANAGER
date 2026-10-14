@@ -246,8 +246,51 @@ Invoke-RegressionTest -Name '/api/headsets-status returns one entry per headset'
     Assert-Equal $stored.Count $api.Count 'status row count'
 
     if ($api.Count -gt 0) {
-        foreach ($field in @('display_name', 'ip_address', 'ping', 'adb', 'scrcpy', 'battery')) {
+        foreach ($field in @('display_name', 'ip_address', 'ping', 'adb', 'scrcpy', 'battery', 'scrcpy_starting')) {
             Assert-Contains $api[0].PSObject.Properties.Name $field 'status object fields'
+        }
+    }
+}
+
+Invoke-RegressionTest -Name 'capture "starting" mark: status endpoints expose it, it expires and clears' -Test {
+    # The mark is an app_kv row the page reads through /api/headsets-status and /api/headset-status
+    # (Set-ScrcpyStartingState / Get-ScrcpyStartingIds, set by whichever process starts a capture).
+    $stored = @(Get-SandboxHeadsets -TargetRoot $target)
+    if ($stored.Count -eq 0) { Skip-Test 'the sandbox registry holds no headset' }
+    $id = [int]$stored[0].ID
+    # The body runs in a child PowerShell as TEXT, so the id is substituted into it.
+    $bodyText = @'
+$out = [ordered]@{ Marked = $false; Cleared = $false; Expired = $false; Held = $false }
+Set-ScrcpyStartingState -HeadsetId __ID__
+$out.Marked = (@(Get-ScrcpyStartingIds) -contains __ID__)
+Set-ScrcpyStartingState -HeadsetId __ID__ -Clear
+$out.Cleared = -not (@(Get-ScrcpyStartingIds) -contains __ID__)
+# A mark whose time has passed (a crashed start) must not count.
+Set-DbKeyValue -Key 'scrcpy_starting' -Value @{ '__ID__' = ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - 5) }
+$script:ScrcpyStartingMemo = $null
+$out.Expired = -not (@(Get-ScrcpyStartingIds) -contains __ID__)
+# Marked = "starting" (scrcpy not up: the status endpoints force scrcpy=false for it).
+Set-ScrcpyStartingState -HeadsetId __ID__
+$st1 = Get-ScrcpyCaptureState
+# Clearing with a hold = "settling": still announced, but no longer "not up".
+Set-ScrcpyStartingState -HeadsetId __ID__ -Clear -HoldSec 30
+$st2 = Get-ScrcpyCaptureState
+$out.Held = ((@($st1.Starting) -contains __ID__) -and -not (@($st1.Settling) -contains __ID__) -and
+             (@($st2.Settling) -contains __ID__) -and (@($st2.Announcing) -contains __ID__) -and -not (@($st2.Starting) -contains __ID__) -and
+             (@(Get-ScrcpyStartingIds) -contains __ID__))
+Set-ScrcpyStartingState -HeadsetId __ID__ -Clear
+[PSCustomObject]$out
+'@
+    $r = Invoke-InTargetModules -TargetRoot $target -Body ([scriptblock]::Create($bodyText.Replace('__ID__', [string]$id)))
+    Assert-True $r.Marked  'a marked capture is reported as starting'
+    Assert-True $r.Cleared 'clearing the mark ends it'
+    Assert-True $r.Expired 'an expired mark is ignored'
+    Assert-True $r.Held    'a start in progress is "starting"; cleared with a hold it becomes "settling" and stays announced'
+
+    $s = Invoke-VrmApi -Path ('/api/headset-status?id=' + $id)
+    if ($s.StatusCode -eq 200) {
+        foreach ($field in @('scrcpy', 'scrcpy_starting', 'scrcpy_auto_restart')) {
+            Assert-Contains $s.Json.PSObject.Properties.Name $field '/api/headset-status capture fields'
         }
     }
 }
@@ -344,6 +387,26 @@ Invoke-RegressionTest -Name '/api/vqa/status reflects the sandbox setting' -Test
     Assert-Equal ([bool]$cfg.VideoQualityAutomation.enabled) ([bool]$r.Json.enabled) 'VQA enabled flag'
 }
 
+Invoke-RegressionTest -Name 'VQA ships enabled in recommendation-only mode' -Test {
+    # The release default (templates\config\config.json): VQA on, so the operator gets
+    # recommendations, but NOTHING applied automatically - an auto-apply flag that slipped
+    # to true would rewrite profiles and the mediamtx settings on a live show.
+    $tpl = Read-JsonFileUtf8 -Path $paths.TemplateConfig
+    $v = $tpl.VideoQualityAutomation
+    Add-TestEvidence ("template: enabled={0} auto_apply profiles={1} headsets={2} mediamtx={3}" -f $v.enabled, $v.auto_apply_profiles, $v.auto_apply_headsets, $v.auto_apply_mediamtx)
+    Assert-True ([bool]$v.enabled) 'templates\config\config.json: VideoQualityAutomation.enabled must be true'
+    Assert-False ([bool]$v.auto_apply_profiles) 'template auto_apply_profiles must be false'
+    Assert-False ([bool]$v.auto_apply_headsets) 'template auto_apply_headsets must be false'
+    Assert-False ([bool]$v.auto_apply_mediamtx) 'template auto_apply_mediamtx must be false'
+
+    # And the running app agrees: VQA loaded, VQO (auto-apply) off.
+    $r = Invoke-VrmApi -Path '/api/vqa/status'
+    Assert-Equal 200 $r.StatusCode 'GET /api/vqa/status'
+    Add-TestEvidence ("running app: enabled={0} enabled_vqo={1}" -f $r.Json.enabled, $r.Json.enabled_vqo)
+    Assert-True ([bool]$r.Json.enabled) 'the running app reports VQA disabled'
+    Assert-False ([bool]$r.Json.enabled_vqo) 'the running app reports an auto-apply (VQO) flag on'
+}
+
 Invoke-RegressionTest -Name 'Deprecated /api/vqa/toggle-vqo still reports as deprecated' -Test {
     $r = Invoke-VrmApi -Path '/api/vqa/toggle-vqo' -Method POST
     Add-TestEvidence ("POST /api/vqa/toggle-vqo -> HTTP {0}: {1}" -f $r.StatusCode, (Get-VrmApiExcerpt $r.Raw 120))
@@ -388,10 +451,211 @@ Invoke-RegressionTest -Name '/api/logs serves a selected log file' -Test {
     Assert-True (($fallback -join '') -notmatch '"WebServer"') 'traversal attempt leaked config.json'
 }
 
+# ---------------------------------------------------------------------------
+# Push channel (SSE, ADR-0020)
+#
+# /api/events holds a connection open for good. The first attempt at this feature
+# (commit 7e52019) was reverted because the web server "broke": these tests pin the
+# properties whose absence looks exactly like that - the stream starts, a change is
+# pushed, and above all ORDINARY requests keep answering while many streams are open.
+# Raw sockets are used because Invoke-WebRequest waits for a body that never ends.
+# ---------------------------------------------------------------------------
+
+function Open-NrtEventStream {
+    $u = [uri](Get-VrmApiBase)
+    $client = New-Object System.Net.Sockets.TcpClient($u.Host, $u.Port)
+    $stream = $client.GetStream()
+    $req = [System.Text.Encoding]::ASCII.GetBytes(("GET /api/events HTTP/1.1`r`nHost: {0}:{1}`r`nAccept: text/event-stream`r`n`r`n" -f $u.Host, $u.Port))
+    $stream.Write($req, 0, $req.Length)
+    return [PSCustomObject]@{ Client = $client; Stream = $stream; Text = '' }
+}
+
+# Reads until $Pattern matches the text received AFTER $FromIndex, or the timeout.
+# Returns the elapsed ms, or -1 on timeout.
+function Read-NrtEventStream {
+    param($Es, [string]$Pattern, [int]$TimeoutMs = 5000, [int]$FromIndex = 0)
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $buf = New-Object byte[] 8192
+    while ($sw.ElapsedMilliseconds -lt $TimeoutMs) {
+        if ($Es.Text.Length -gt $FromIndex -and $Es.Text.Substring($FromIndex) -match $Pattern) { return [int]$sw.ElapsedMilliseconds }
+        try {
+            if ($Es.Stream.DataAvailable) {
+                $n = $Es.Stream.Read($buf, 0, $buf.Length)
+                if ($n -le 0) { return -1 }
+                $Es.Text += [System.Text.Encoding]::UTF8.GetString($buf, 0, $n)
+            } else { Start-Sleep -Milliseconds 25 }
+        } catch { return -1 }
+    }
+    return -1
+}
+
+function Close-NrtEventStream { param($Es) try { $Es.Client.Close() } catch { } }
+
+function Test-NrtSseEnabled {
+    $cfg = Read-JsonFileUtf8 -Path $paths.ConfigFile
+    return -not ($cfg.WebServer.sse -and $null -ne $cfg.WebServer.sse.enabled -and -not [bool]$cfg.WebServer.sse.enabled)
+}
+
+Invoke-RegressionTest -Name 'Push channel: live_events.js is served' -Test {
+    Assert-VrmPageServed -Path '/assets/live_events.js' -ExpectContentType 'javascript' -MustContain 'LiveEvents' -MinLength 500 | Out-Null
+}
+
+Invoke-RegressionTest -Name 'Push channel: /api/events opens a stream with a baseline frame' -Test {
+    if (-not (Test-NrtSseEnabled)) { Skip-Test 'WebServer.sse.enabled is false in the sandbox config' }
+    $es = Open-NrtEventStream
+    try {
+        $ms = Read-NrtEventStream -Es $es -Pattern 'data: \{"v":\{' -TimeoutMs 5000
+        $head = ($es.Text -split "`r`n")[0]
+        Add-TestEvidence ("status line: {0}" -f $head)
+        Add-TestEvidence ("baseline frame after {0} ms" -f $ms)
+        Assert-Match $head '^HTTP/1\.1 200' '/api/events status'
+        Assert-Match $es.Text '(?i)content-type: text/event-stream' '/api/events content type'
+        Assert-True ($ms -ge 0) 'no baseline frame within 5 s'
+        Assert-Match $es.Text '"headset_status":\d+' 'baseline frame carries the headset_status counter'
+    } finally { Close-NrtEventStream $es }
+}
+
+Invoke-RegressionTest -Name 'Push channel: web server keeps answering with 10 streams open' -Test {
+    if (-not (Test-NrtSseEnabled)) { Skip-Test 'WebServer.sse.enabled is false in the sandbox config' }
+    $streams = @()
+    try {
+        for ($i = 0; $i -lt 10; $i++) { $streams += Open-NrtEventStream }
+        $opened = @($streams | Where-Object { (Read-NrtEventStream -Es $_ -Pattern 'data: \{"v":\{' -TimeoutMs 5000) -ge 0 }).Count
+        Add-TestEvidence ("{0}/10 streams received their baseline frame" -f $opened)
+        Assert-Equal 10 $opened 'streams with a baseline frame'
+
+        foreach ($path in @('/api/version', '/api/headsets-status', '/api/headsets', '/headsets_settings.html', '/api/load-tier')) {
+            $r = Invoke-VrmApi -Path $path -TimeoutSec 10
+            Add-TestEvidence ("{0} -> HTTP {1} in {2} ms" -f $path, $r.StatusCode, [int]$r.Elapsed.TotalMilliseconds)
+            Assert-True $r.Ok ("{0} failed while streams are open: HTTP {1} {2}" -f $path, $r.StatusCode, $r.Error)
+            Assert-True ($r.Elapsed.TotalMilliseconds -lt 3000) ("{0} took {1} ms with streams open" -f $path, [int]$r.Elapsed.TotalMilliseconds)
+        }
+    } finally {
+        foreach ($s in $streams) { Close-NrtEventStream $s }
+    }
+    # And after the clients are gone (dropped without a clean close), still fine.
+    Start-Sleep -Seconds 1
+    $r2 = Invoke-VrmApi -Path '/api/headsets-status' -TimeoutSec 10
+    Add-TestEvidence ("after closing: /api/headsets-status -> HTTP {0} in {1} ms" -f $r2.StatusCode, [int]$r2.Elapsed.TotalMilliseconds)
+    Assert-True $r2.Ok 'status endpoint after the streams were closed'
+}
+
+Invoke-RegressionTest -Name 'Push channel: a database change is pushed within 2 s' -Test {
+    if (-not (Test-NrtSseEnabled)) { Skip-Test 'WebServer.sse.enabled is false in the sandbox config' }
+    # A kiosk row on a TEST-NET address (RFC 5737, never routed) is the most harmless
+    # write available: it bumps the 'kiosks' counter and is removed right after.
+    $probeIp = '192.0.2.250'
+    $es = Open-NrtEventStream
+    $kioskId = $null
+    try {
+        Assert-True ((Read-NrtEventStream -Es $es -Pattern 'data: \{"v":\{' -TimeoutMs 5000) -ge 0) 'no baseline frame'
+        $before = [int64]([regex]::Match($es.Text, '"kiosks":(\d+)').Groups[1].Value)
+        $mark = $es.Text.Length
+
+        $add = Invoke-VrmApi -Path '/api/kiosks/add-manual' -Method POST -Body @{ ip = $probeIp; name = 'NRT SSE probe'; port = 9222 }
+        Assert-VrmOk -Result $add -Label 'POST /api/kiosks/add-manual'
+        # Other counters (live status written by the monitor) may push frames first, still
+        # carrying the old kiosks value - wait for the frame where kiosks actually moved.
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $after = $before
+        while ($sw.ElapsedMilliseconds -lt 2000 -and $after -le $before) {
+            [void](Read-NrtEventStream -Es $es -Pattern '"kiosks":\d+' -TimeoutMs 200 -FromIndex $mark)
+            foreach ($m in [regex]::Matches($es.Text.Substring($mark), '"kiosks":(\d+)')) {
+                if ([int64]$m.Groups[1].Value -gt $after) { $after = [int64]$m.Groups[1].Value }
+            }
+        }
+        Add-TestEvidence ("kiosks counter {0} -> {1}, pushed after {2} ms" -f $before, $after, $sw.ElapsedMilliseconds)
+        Assert-True ($after -gt $before) 'no frame with the new kiosks counter was pushed within 2 s of the database write'
+    } finally {
+        Close-NrtEventStream $es
+        $list = Invoke-VrmApi -Path '/api/kiosks'
+        foreach ($k in @($list.Json.kiosks) + @($list.Json)) {
+            if ($k -and $k.IPAddress -eq $probeIp -and $k.ID) { $kioskId = $k.ID }
+        }
+        if ($kioskId) {
+            $rm = Invoke-VrmApi -Path '/api/kiosks/remove' -Method POST -Body @{ id = [int]$kioskId }
+            Add-TestEvidence ("probe kiosk id {0} removed: HTTP {1}" -f $kioskId, $rm.StatusCode)
+        }
+    }
+}
+
 Invoke-RegressionTest -Name '/api/appnames returns the known-apps catalog' -Test {
     $r = Invoke-VrmApi -Path '/api/appnames'
     Assert-Equal 200 $r.StatusCode 'GET /api/appnames'
     $apps = @($r.Json.apps)
     Add-TestEvidence ("catalog holds {0} app(s)" -f $apps.Count)
     Assert-True ($apps.Count -gt 0) 'known-apps catalog is empty - templates\data\known_apps.csv may not be shipped'
+}
+
+# ---------------------------------------------------------------------------
+# Route census (S0-3): every literal /api/... the shipped pages and templates
+# call must still be routed. A 400/405 proves the route exists; only 404 fails.
+# Routes that ACT on a GET (shutdown, reboot, ...) are skipped, one list, here.
+# ---------------------------------------------------------------------------
+$script:NrtCensusSkip = @(
+    'shutdown', 'reboot', 'app-restart', 'host-shutdown', 'restartwebserver',
+    'kill-browser', 'install', 'update', 'wipe', 'delete', 'push-wifi',
+    'power', 'browse-folder', 'openfolder', 'openconfig',
+    # Streams and downloads never answer-and-close (SSE has its own tests above).
+    '/api/events', 'adb-tools', 'adb-wifi-apk', 'result.csv', 'recordings/download',
+    # Capture a frame / block the single-threaded listener for seconds.
+    'screen-frame', 'eye-merge/frame', 'eye-merge/calibrate', 'recordings/play'
+)
+
+function Get-NrtCensusRoute {
+    param([Parameter(Mandatory = $true)][string]$Root)
+    $web   = Join-Path $Root 'website'
+    $files = @()
+    $files += @(Get-ChildItem -LiteralPath $web -Filter '*.html' -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -notmatch '\\(generated|vendor)\\' })
+    $files += @(Get-ChildItem -LiteralPath (Join-Path $web 'assets') -Filter '*.js' -File -ErrorAction SilentlyContinue)
+    $files += @(Get-ChildItem -LiteralPath (Join-Path $web 'template') -Filter '*.pshtml' -File -ErrorAction SilentlyContinue)
+    $set = @{}
+    foreach ($f in $files) {
+        $text = [System.IO.File]::ReadAllText($f.FullName, [System.Text.Encoding]::UTF8)
+        foreach ($m in [regex]::Matches($text, '[''"](/api/[A-Za-z0-9_\-/\.]+)')) {
+            $p = $m.Groups[1].Value
+            if ($p.EndsWith('/')) { continue }
+            $set[$p] = $true
+        }
+    }
+    return @($set.Keys | Sort-Object)
+}
+
+Invoke-RegressionTest -Name 'Route census: every /api route the pages call is routed' -Test {
+    $routes  = @(Get-NrtCensusRoute -Root $global:TestRun.TargetRoot)
+    Assert-True ($routes.Count -gt 0) 'no /api literal found under website\ - extraction is broken'
+    $routerText = ''
+    foreach ($rf in @('web_server.ps1', 'web_routes.ps1')) {
+        $rp = Join-Path (Join-Path $global:TestRun.TargetRoot 'modules\Pode_WebServer') $rf
+        if (Test-Path -LiteralPath $rp) { $routerText += [System.IO.File]::ReadAllText($rp, [System.Text.Encoding]::UTF8) }
+    }
+    Assert-True ($routerText.Length -gt 0) 'web server source not found under modules\Pode_WebServer'
+    $tested  = 0
+    $skipped = @()
+    $missing = @()
+    $slow    = @()
+    foreach ($p in $routes) {
+        $hit = $script:NrtCensusSkip | Where-Object { $p -like ('*' + $_ + '*') } | Select-Object -First 1
+        if ($hit) { $skipped += ("{0} (acts: {1})" -f $p, $hit); continue }
+        $tested++
+        # The router is method-gated and has no 405: a POST-only route answers a
+        # GET with 404, and a GET route with no data yet also answers 404. So a
+        # live 404 alone proves nothing. A route is "routed" when the web server
+        # source carries its literal path; only a path with no branch AND a live
+        # 404 is a real orphan. Nothing is POSTed (those routes act).
+        if ($routerText -and $routerText.Contains("'" + $p + "'")) { continue }
+        $r = Invoke-VrmApi -Path $p -Method GET -TimeoutSec 5
+        # A route that is routed but slow is not a 404: a timeout without a status is not a failure here.
+        if ($r.StatusCode -eq 404) {
+            $missing += ("{0} -> 404" -f $p)
+        }
+        elseif (-not $r.StatusCode) {
+            $slow += ("{0} (no answer in 5 s)" -f $p)
+        }
+    }
+    Add-TestEvidence ("census: {0} routes found, {1} tested, {2} skipped" -f $routes.Count, $tested, $skipped.Count)
+    foreach ($s in $skipped) { Add-TestEvidence ("skipped: {0}" -f $s) }
+    foreach ($s in $slow) { Add-TestEvidence ("slow: {0}" -f $s) }
+    Assert-True ($missing.Count -eq 0) ("{0} route(s) not answered: {1}" -f $missing.Count, ($missing -join '; '))
 }

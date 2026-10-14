@@ -92,6 +92,7 @@ function Initialize-TestRun {
         # Sections 50/60 read these. Declared here because $global:TestRun is a
         # PSCustomObject - assigning an undeclared property to one throws.
         Unattended       = $false
+        AutoApproveSetup = $false
         DevRoot          = ''
     }
     return $global:TestRun

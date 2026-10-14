@@ -13,7 +13,7 @@
     - Replace Register-DiscoveredHeadset with Add-Headset from headsets_monitoring.ps1
 #>
 
-# ─── Constants ────────────────────────────────────────────────────────────────
+# --- Constants ----------------------------------------------------------------
 
 $MDNS_MULTICAST_ADDRESS = "224.0.0.251"
 $MDNS_PORT              = 5353
@@ -25,7 +25,7 @@ $ADB_SERVICE_TYPES = @(
     "_adb._tcp"
 )
 
-# ─── Standalone Logger ────────────────────────────────────────────────────────
+# --- Standalone Logger --------------------------------------------------------
 
 <#
     Minimal logger - replace with Write-Log from logging.ps1 if integrated
@@ -55,10 +55,10 @@ function Write-MdnsLog {
 
     # Append to a local log file next to this script
     $logFile = Join-Path -Path $PSScriptRoot -ChildPath "mdns_scanner.log"
-    Add-Content -Path $logFile -Value $logEntry -Encoding UTF8
+    [System.IO.File]::AppendAllText($logFile, [string]$logEntry + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))
 }
 
-# ─── DNS Packet Parser ────────────────────────────────────────────────────────
+# --- DNS Packet Parser --------------------------------------------------------
 
 <#
     Parses a raw mDNS/DNS label sequence from a byte array.
@@ -185,7 +185,7 @@ function Read-MdnsPacket {
     return $records
 }
 
-# ─── mDNS Query Builder ───────────────────────────────────────────────────────
+# --- mDNS Query Builder -------------------------------------------------------
 
 <#
     Builds a raw mDNS PTR query packet for a given service type.
@@ -211,7 +211,7 @@ function New-MdnsQuery {
     return $header + $question.ToArray()
 }
 
-# ─── Network Interface Helper ─────────────────────────────────────────────────
+# --- Network Interface Helper -------------------------------------------------
 
 <#
     Returns all active non-loopback IPv4 network interfaces.
@@ -231,7 +231,7 @@ function Get-ActiveIPv4Interfaces {
         Where-Object { $_ -ne $null }
 }
 
-# ─── Core Discovery Function ──────────────────────────────────────────────────
+# --- Core Discovery Function --------------------------------------------------
 
 <#
 .SYNOPSIS
@@ -356,7 +356,7 @@ function Find-QuestHeadsetsMdns {
     return @($discovered.Values)
 }
 
-# ─── Result Display Helper ────────────────────────────────────────────────────
+# --- Result Display Helper ----------------------------------------------------
 
 <#
     Formats and displays discovered headsets in a readable table.
@@ -389,7 +389,7 @@ function Show-DiscoveredHeadsets {
     Write-Host "$separator`n" -ForegroundColor DarkGray
 }
 
-# ─── Optional: Register Discovered Headsets ───────────────────────────────────
+# --- Optional: Register Discovered Headsets -----------------------------------
 
 <#
     Minimal standalone headset registration into a CSV file.
@@ -424,12 +424,12 @@ function Register-DiscoveredHeadset {
     }
 
     $existing += $newEntry
-    $existing | Export-Csv -Path $CsvPath -Delimiter ";" -NoTypeInformation -Encoding UTF8
+    [System.IO.File]::WriteAllText($CsvPath, (($existing | ConvertTo-Csv -Delimiter ";" -NoTypeInformation) -join [Environment]::NewLine) + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))
 
     Write-MdnsLog "Register: [$($Device.DeviceName)] saved to $CsvPath" -Level SUCCESS
 }
 
-# ─── Main Entry Point ─────────────────────────────────────────────────────────
+# --- Main Entry Point ---------------------------------------------------------
 
 <#
 .SYNOPSIS
@@ -472,7 +472,7 @@ function Invoke-MdnsHeadsetScan {
     return $devices
 }
 
-# ─── Direct Execution Guard ───────────────────────────────────────────────────
+# --- Direct Execution Guard ---------------------------------------------------
 # Run automatically only when the script is executed directly, not dot-sourced.
 
 if ($MyInvocation.InvocationName -ne '.') {

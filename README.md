@@ -28,7 +28,7 @@ It is built for **VR labs, showrooms, gaming exhibitions, training centers, and 
 - **Health monitoring**: headset and controller battery, charge status, temperature — with per-headset HTML overlays ready to drop into OBS
 - **Session timers** per headset (limit play sessions), controllable from the web page or any external tool via a [REST API](docs/docs_timer_api.md) (Stream Deck, OBS, curl...)
 - **Applications manager**: install (sideload), uninstall, and launch apps on any headset remotely — the player never has to touch a menu
-- **Recording** of any capture session to disk
+- **Recording** of any capture session to disk, with a **Recordings page**: timeline per headset, in-browser preview, download of the original file, "do not delete" lock and bulk clean-up of old recordings
 - **Automatic WiFi-ADB activation** when a known headset is plugged in over USB
 - **Video Quality Automation**: monitors your PC's CPU/GPU load and recommends (or applies) resolution/framerate/bitrate reductions to keep the machine responsive
 
@@ -49,7 +49,7 @@ Full details: [Installation](docs/installation.md) → [Getting started](docs/ge
 | [Installation](docs/installation.md) | Prerequisites, first run, firewall/Defender setup, updating |
 | [Getting started](docs/getting-started.md) | Add your first headset and start streaming (web interface) |
 | [Web interface tour](docs/web-interface.md) | Every page of the web UI explained |
-| [Streaming & OBS](docs/streaming.md) | Capture pipeline, stream URLs, re-encoding, OBS integration, recording |
+| [Streaming & OBS](docs/streaming.md) | Capture pipeline, stream URLs, re-encoding, benchmark, OBS integration, recording |
 | [Applications manager](docs/apps-manager.md) | Launch, sideload, uninstall and update apps on headsets |
 | [Kiosk screens](docs/kiosk-screens.md) | Remote-control browser displays (lobby TVs, showroom monitors): push URLs, cast a headset's live feed |
 | [Configuration reference](docs/configuration.md) | Every `config.json` setting, ports, WiFi credentials |

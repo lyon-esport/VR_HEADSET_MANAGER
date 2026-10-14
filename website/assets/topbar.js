@@ -384,6 +384,13 @@
               '</svg>' +
               'Kiosk Screens' +
             '</a>' +
+            '<a class="drop-item" href="/recordings.html">' +
+              '<svg class="drop-item-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+                '<rect x="2" y="4" width="20" height="16" rx="2"/><line x1="7" y1="4" x2="7" y2="20"/><line x1="17" y1="4" x2="17" y2="20"/>' +
+                '<line x1="2" y1="9" x2="7" y2="9"/><line x1="2" y1="15" x2="7" y2="15"/><line x1="17" y1="9" x2="22" y2="9"/><line x1="17" y1="15" x2="22" y2="15"/>' +
+              '</svg>' +
+              'Recordings' +
+            '</a>' +
           '</div>' +
 
           '<div class="drop-section">' +
@@ -419,6 +426,12 @@
                 '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>' +
               '</svg>' +
               'Help &amp; Diagnostics' +
+            '</a>' +
+            '<a class="drop-item" href="/benchmark.html">' +
+              '<svg class="drop-item-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+                '<path d="M12 14l4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>' +
+              '</svg>' +
+              'Benchmark' +
             '</a>' +
             '<a class="drop-item" href="/vrhm_config.html">' +
               '<svg class="drop-item-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +

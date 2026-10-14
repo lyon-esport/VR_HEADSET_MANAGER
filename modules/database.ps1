@@ -124,6 +124,13 @@ function Import-DatabaseAssembly {
                Where-Object { $_.GetName().Name -eq 'System.Data.SQLite' } |
                Select-Object -First 1
     if ($already) {
+        # The engine version is read back by callers (and by the Unit layer) from this global.
+        # It used to be set only on the load path below, so a process that found the assembly
+        # already loaded - any second dot-source cycle, or a test run that executes several
+        # layers in one process - left it undefined.
+        if (-not $global:databaseEngineVersion) {
+            try { $global:databaseEngineVersion = [System.Data.SQLite.SQLiteConnection]::SQLiteVersion } catch { }
+        }
         $script:DbAssemblyLoaded = $true
         return $true
     }
@@ -823,6 +830,27 @@ function Get-DbTableVersion {
     return [int64]$value
 }
 
+<#
+.SYNOPSIS
+    Every change counter at once, as a hashtable name -> [int64].
+.DESCRIPTION
+    One round trip instead of one per counter: the SSE pump compares several
+    counters a few times a second, and they all live in one small table.
+    Returns an empty hashtable on failure and never throws - the pump must
+    survive a transient database error rather than drop every connected client.
+.EXAMPLE
+    $map = Get-DbTableVersionMap; $map['headset_status']
+#>
+function Get-DbTableVersionMap {
+    $map = @{}
+    try {
+        foreach ($row in @(Invoke-DbQuery -Name 'meta.table_versions_all')) {
+            if ($null -ne $row.name) { $map[[string]$row.name] = [int64]$row.version }
+        }
+    } catch { }
+    return $map
+}
+
 
 # -------------------------------------------------------------------
 # Key/value store (app_kv)
@@ -1426,10 +1454,14 @@ function Import-LegacyDataFiles {
                 Charging               = [string](Get-LegacyField $r 'Charging' '-')
                 ChargingWattage        = [string](Get-LegacyField $r 'ChargingWattage' '-')
                 Temp                   = [string](Get-LegacyField $r 'Temp' '-')
+                CpuTemp                = [string](Get-LegacyField $r 'CpuTemp' '-')
+                GpuTemp                = [string](Get-LegacyField $r 'GpuTemp' '-')
+                SkinTemp               = [string](Get-LegacyField $r 'SkinTemp' '-')
                 BatteryControllerLeft  = [string](Get-LegacyField $r 'BatteryControllerLeft' '-')
                 BatteryControllerRight = [string](Get-LegacyField $r 'BatteryControllerRight' '-')
                 PowerState             = [string](Get-LegacyField $r 'PowerState' '-')
                 TimeRemainingMin       = [string](Get-LegacyField $r 'TimeRemainingMin' '-')
+                AdbTransport           = [string](Get-LegacyField $r 'AdbTransport' '-')
                 SCRCPY                 = [string](Get-LegacyField $r 'SCRCPY' '-')
                 RunningApp             = [string](Get-LegacyField $r 'RunningApp' '-')
                 RunningAppIcon         = [string](Get-LegacyField $r 'RunningAppIcon' '')

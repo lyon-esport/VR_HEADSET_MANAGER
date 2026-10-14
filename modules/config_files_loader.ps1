@@ -88,8 +88,6 @@ function Get-Config {
         [string]$ConfigFilePath
     )
     
-    Write-Host "DEBUG ConfigFilePath = $ConfigFilePath" -ForegroundColor Magenta
-    
     # Check whether the file exists
     if (-not (Test-Path $ConfigFilePath)) {
         Write-Host "Configuration file does not exist..." -ForegroundColor Red
@@ -103,9 +101,13 @@ function Get-Config {
 
     # Load mandatory global variables from the JSON file
     $global:SelectedLanguage = $configContent.language
-    Write-Host "Config: SelectedLanguage = $($global:SelectedLanguage)"
     $global:knownHeadsetsFile = $configContent.Paths.knownHeadsetsFile
-    Write-Host "Config: knownHeadsetsFile = $($global:knownHeadsetsFile)"
+    # Was three Write-Host lines on every call. Get-Config runs on every VRMonitor slow tick,
+    # and inside a background job Write-Host records pile up in the parent process. Logged
+    # at DEBUG once logging is set up (a later call); silent on the first load.
+    if ($global:logFile -and $global:debugLevelToFile -and (Get-Command Write-Log -ErrorAction SilentlyContinue)) {
+        Write-Log ("Config: {0} (language {1}, headsets file {2})" -f $ConfigFilePath, $global:SelectedLanguage, $global:knownHeadsetsFile) -Level DEBUG
+    }
     
     $global:knownHeadsetsFilePath       = Join-Path -Path $(Join-Path -Path $global:ScriptPath -ChildPath "data") -ChildPath $global:knownHeadsetsFile
     $global:knownHeadsetsInfosFilePath  = Join-Path -Path $(Join-Path -Path $global:ScriptPath -ChildPath "data") -ChildPath $($global:knownHeadsetsFile).Replace(".csv","_infos.csv")
@@ -121,7 +123,7 @@ function Get-Config {
             Rename-Item -LiteralPath $global:AppCacheFilePath -NewName (Split-Path $newPath -Leaf) -ErrorAction SilentlyContinue
         }
         $configContent.Paths.AppCacheFileName = 'known_apps.csv'
-        try { $configContent | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $ConfigFilePath -Encoding UTF8 } catch {}
+        try { [System.IO.File]::WriteAllText($ConfigFilePath, ($configContent | ConvertTo-Json -Depth 20), (New-Object System.Text.UTF8Encoding($false))) } catch {}
         $global:AppCacheFileName = 'known_apps.csv'
         $global:AppCacheFilePath = $newPath
         Write-Host "Config: migrated app_names.csv to known_apps.csv"
@@ -137,17 +139,28 @@ function Get-Config {
         if ($repairedRecordFolder -ne $configContent.scrcpy.recordFolder) {
             Write-Log ("Repaired mojibake in scrcpy.recordFolder: '{0}' -> '{1}'" -f $configContent.scrcpy.recordFolder, $repairedRecordFolder) -Level WARNING
             $configContent.scrcpy.recordFolder = $repairedRecordFolder
-            try { $configContent | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $ConfigFilePath -Encoding UTF8 } catch {}
+            try { [System.IO.File]::WriteAllText($ConfigFilePath, ($configContent | ConvertTo-Json -Depth 20), (New-Object System.Text.UTF8Encoding($false))) } catch {}
         }
     }
-    if ($configContent.scrcpy.recordFolder -contains "\" -or "/" ) {
-        $global:scrcpyRecordFolder = $configContent.scrcpy.recordFolder
+    # Absolute (C:\...) and UNC (\\nas\...) paths are used as they are; a relative path is taken from
+    # the application folder. (The old test, `-contains "\" -or "/"`, was always true, so a relative
+    # path silently resolved against whatever the process working directory happened to be.)
+    $recordFolderCfg = [string]$configContent.scrcpy.recordFolder
+    if ([string]::IsNullOrWhiteSpace($recordFolderCfg) -or [System.IO.Path]::IsPathRooted($recordFolderCfg)) {
+        $global:scrcpyRecordFolder = $recordFolderCfg
     } else {
-        $global:scrcpyRecordFolder = Join-Path -Path $global:ScriptPath -ChildPath $configContent.scrcpy.recordFolder
+        $global:scrcpyRecordFolder = Join-Path -Path $global:ScriptPath -ChildPath $recordFolderCfg
     }
     $global:scrcpyRecordMinFreeSpaceGB = if ($null -ne $configContent.scrcpy.recordMinFreeSpaceGB) { [int]$configContent.scrcpy.recordMinFreeSpaceGB } else { 5 }
     $global:scrcpyDefaultFps = if ($null -ne $configContent.scrcpy.defaultFps) { [int]$configContent.scrcpy.defaultFps } else { 30 }
     $global:scrcpyDefaultBitrateMbps = if ($null -ne $configContent.scrcpy.defaultBitrateMbps) { [int]$configContent.scrcpy.defaultBitrateMbps } else { 8 }
+    # How a RUNNING scrcpy session moves to USB once the headset is cabled: 'stable' waits
+    # usb_switch_stable_sec of continuous presence (and no recording), 'immediate' switches on
+    # detection, 'next_start' never interrupts a session. Anything else falls back to 'stable'.
+    $usbSwitchMode = if ($configContent.scrcpy.usb_switch_mode) { ([string]$configContent.scrcpy.usb_switch_mode).ToLowerInvariant() } else { 'stable' }
+    if (@('stable','immediate','next_start') -notcontains $usbSwitchMode) { $usbSwitchMode = 'stable' }
+    $global:scrcpyUsbSwitchMode      = $usbSwitchMode
+    $global:scrcpyUsbSwitchStableSec = if ($null -ne $configContent.scrcpy.usb_switch_stable_sec) { [Math]::Max(1, [int]$configContent.scrcpy.usb_switch_stable_sec) } else { 10 }
 
 
     $global:ADBWirelessActivatorAPK = Join-Path -Path $(Join-Path -Path $sourcesPath -ChildPath $configContent.apk.adbWirelessActivatorFolder) -ChildPath $configContent.apk.adbWirelessActivatorApk
@@ -216,20 +229,9 @@ function Get-Config {
     $global:adbFolder = Join-Path -Path $sourcesPath -ChildPath $configContent.ADB.folder
     $global:adbPath = Join-Path -Path $global:adbFolder -ChildPath "adb.exe"
     $global:adbPort_default = $configContent.ADB.adbPort_default
-
-    # USB-first transport (ADR-0024, proposed). Every key defaults when absent so a
-    # config.json written before these existed keeps loading untouched.
-    $global:ADB_PreferUsb = if ($null -ne $configContent.ADB.prefer_usb) { ConvertTo-BoolField $configContent.ADB.prefer_usb } else { $true }
-    $switchMode = if ($configContent.scrcpy.usb_switch_mode) { ([string]$configContent.scrcpy.usb_switch_mode).Trim().ToLowerInvariant() } else { 'stable' }
-    if (@('stable','immediate','next_start') -notcontains $switchMode) { $switchMode = 'stable' }
-    $global:Scrcpy_UsbSwitchMode      = $switchMode
-    $global:Scrcpy_UsbSwitchStableSec = if ($null -ne $configContent.scrcpy.usb_switch_stable_sec) { [Math]::Max(0, [int]$configContent.scrcpy.usb_switch_stable_sec) } else { 10 }
-
-    # Headset DIAG page (website\headset_diag.html).
-    $diagCfg = $configContent.Diag
-    $global:Diag_AutoRefreshSec   = if ($diagCfg -and $null -ne $diagCfg.auto_refresh_sec)  { [Math]::Max(5, [int]$diagCfg.auto_refresh_sec) } else { 30 }
-    $global:Diag_CableTestPasses  = if ($diagCfg -and $null -ne $diagCfg.cable_test_passes) { [Math]::Min(10, [Math]::Max(1, [int]$diagCfg.cable_test_passes)) } else { 3 }
-    $global:Diag_CommandPresets   = if ($diagCfg -and $diagCfg.command_presets) { @($diagCfg.command_presets) } else { @() }
+    # USB-first transport: when a known headset is cabled to THIS PC, every ADB call and the
+    # scrcpy capture prefer the USB transport and fall back to WiFi when the cable drops.
+    $global:ADB_prefer_usb = if ($null -ne $configContent.ADB.prefer_usb) { [bool]$configContent.ADB.prefer_usb } else { $true }
 
 
     $global:Monitoring_headsetTemplate = Join-Path -Path $global:ScriptPath -ChildPath ("\website\template\"+$configContent.Monitoring.HeadsetTemplate)
@@ -241,6 +243,13 @@ function Get-Config {
     # script down, from one absent config value.
     $global:Monitoring_temperature_highLevel            = if ($null -ne $configContent.Monitoring.thresholds.temperature_highLevel)            { [int]$configContent.Monitoring.thresholds.temperature_highLevel            } else { 50 }
     $global:Monitoring_temperature_warningLevel         = if ($null -ne $configContent.Monitoring.thresholds.temperature_warningLevel)         { [int]$configContent.Monitoring.thresholds.temperature_warningLevel         } else { 42 }
+    # CPU and GPU run much hotter than the battery under load (a Quest 3 sits at 60-65 C while
+    # streaming), so they have bands of their own. Reusing the battery bands painted a perfectly
+    # normal 65 C red. Skin and battery keep using temperature_*Level above.
+    $global:Monitoring_cpu_temperature_highLevel        = if ($null -ne $configContent.Monitoring.thresholds.cpu_temperature_highLevel)        { [int]$configContent.Monitoring.thresholds.cpu_temperature_highLevel        } else { 85 }
+    $global:Monitoring_cpu_temperature_warningLevel     = if ($null -ne $configContent.Monitoring.thresholds.cpu_temperature_warningLevel)     { [int]$configContent.Monitoring.thresholds.cpu_temperature_warningLevel     } else { 75 }
+    $global:Monitoring_gpu_temperature_highLevel        = if ($null -ne $configContent.Monitoring.thresholds.gpu_temperature_highLevel)        { [int]$configContent.Monitoring.thresholds.gpu_temperature_highLevel        } else { 85 }
+    $global:Monitoring_gpu_temperature_warningLevel     = if ($null -ne $configContent.Monitoring.thresholds.gpu_temperature_warningLevel)     { [int]$configContent.Monitoring.thresholds.gpu_temperature_warningLevel     } else { 75 }
     $global:Monitoring_headset_battery_warningLevel      = if ($null -ne $configContent.Monitoring.thresholds.headset_battery_warningLevel)      { [int]$configContent.Monitoring.thresholds.headset_battery_warningLevel      } else { 40 }
     $global:Monitoring_headset_battery_criticalLevel     = if ($null -ne $configContent.Monitoring.thresholds.headset_battery_criticalLevel)     { [int]$configContent.Monitoring.thresholds.headset_battery_criticalLevel     } else { 30 }
     $global:Monitoring_controllers_battery_warningLevel  = if ($null -ne $configContent.Monitoring.thresholds.controllers_battery_warningLevel)  { [int]$configContent.Monitoring.thresholds.controllers_battery_warningLevel  } else { 30 }
@@ -296,6 +305,17 @@ function Get-Config {
     $global:ffmpegFolder = Join-Path -Path $sourcesPath -ChildPath $ffmpegFolder
     $global:ffmpegFilePath = Join-Path -Path $global:ffmpegFolder -ChildPath "ffmpeg.exe"
 
+    # Log verbosity of the two capture child processes (their per-session stderr files
+    # in the log folder). Validated against each tool's own level names; anything else
+    # falls back to the previous fixed behaviour (ffmpeg 'warning', scrcpy 'info').
+    # Raised to 'debug' by the non-regression harness so a failing run can be analysed.
+    $ffLevels = @('quiet','panic','fatal','error','warning','info','verbose','debug','trace')
+    $ffLevel  = if ($configContent.ffmpeg -and $configContent.ffmpeg.log_level) { ([string]$configContent.ffmpeg.log_level).ToLowerInvariant() } else { 'warning' }
+    $global:ffmpegLogLevel = if ($ffLevels -contains $ffLevel) { $ffLevel } else { 'warning' }
+    $scLevels = @('verbose','debug','info','warn','error')
+    $scLevel  = if ($configContent.scrcpy -and $configContent.scrcpy.log_level) { ([string]$configContent.scrcpy.log_level).ToLowerInvariant() } else { 'info' }
+    $global:scrcpyLogLevel = if ($scLevels -contains $scLevel) { $scLevel } else { 'info' }
+
     # Embedded SQLite database (System.Data.SQLite, x64). One folder per version under
     # sources\sqlite\ (same rule as scrcpy/mediamtx/ffmpeg). Every value has a default so a
     # config.json written before the "database" section existed still loads.
@@ -327,10 +347,43 @@ function Get-Config {
     $global:databaseBackupKeep    = if ($dbCfg -and $dbCfg.backup -and $null -ne $dbCfg.backup.keep) { [int]$dbCfg.backup.keep } else { 5 }
     $global:databaseBackupOnStartup = if ($dbCfg -and $dbCfg.backup -and $null -ne $dbCfg.backup.on_startup) { [bool]$dbCfg.backup.on_startup } else { $true }
 
+    # Headset DIAG page (headset_diag.html). Every value has a default so a config.json written
+    # before the "Diag" section existed still loads. command_presets is kept as an array of
+    # @{ name; command } objects exactly as the page renders them.
+    $diagCfg = $configContent.Diag
+    $global:Diag_auto_refresh_sec  = if ($diagCfg -and $null -ne $diagCfg.auto_refresh_sec)  { [Math]::Max(5, [int]$diagCfg.auto_refresh_sec) } else { 30 }
+    $global:Diag_cable_test_passes = if ($diagCfg -and $null -ne $diagCfg.cable_test_passes) { [Math]::Min(10, [Math]::Max(1, [int]$diagCfg.cable_test_passes)) } else { 3 }
+    $global:Diag_command_presets   = @()
+    if ($diagCfg -and $diagCfg.command_presets) {
+        $global:Diag_command_presets = @($diagCfg.command_presets | Where-Object { $_.name -and $_.command } |
+            ForEach-Object { [PSCustomObject]@{ name = [string]$_.name; command = [string]$_.command } })
+    }
+
+    # Recordings catalogue and playback (ADR-0029). Every value has a default so a config.json written
+    # before the "Recordings" section existed still loads.
+    $recCfg = $configContent.Recordings
+    $global:Recordings_rescan_interval_min    = if ($recCfg -and $null -ne $recCfg.rescan_interval_min)    { [Math]::Max(1, [int]$recCfg.rescan_interval_min)    } else { 10 }
+    $playbackCfg = if ($recCfg) { $recCfg.playback } else { $null }
+    $global:Recordings_playback_max_height    = if ($playbackCfg -and $null -ne $playbackCfg.max_height)    { [Math]::Max(144, [int]$playbackCfg.max_height)    } else { 720 }
+    $global:Recordings_playback_fps           = if ($playbackCfg -and $null -ne $playbackCfg.fps)           { [Math]::Max(5, [int]$playbackCfg.fps)           } else { 30 }
+    $global:Recordings_playback_bitrate_kbps  = if ($playbackCfg -and $null -ne $playbackCfg.bitrate_kbps)  { [Math]::Max(200, [int]$playbackCfg.bitrate_kbps)  } else { 2000 }
+    $global:Recordings_playback_max_sessions  = if ($playbackCfg -and $null -ne $playbackCfg.max_sessions)  { [Math]::Max(1, [int]$playbackCfg.max_sessions)  } else { 2 }
+    $global:Recordings_playback_idle_timeout_sec = if ($playbackCfg -and $null -ne $playbackCfg.idle_timeout_sec) { [Math]::Max(10, [int]$playbackCfg.idle_timeout_sec) } else { 30 }
+
     # Web server
     $global:WebServer_enabled = if ($null -ne $configContent.WebServer.enabled) { [bool]$configContent.WebServer.enabled } else { $false }
     $global:WebServer_port    = if ($configContent.WebServer.port)               { [int]$configContent.WebServer.port }    else { 8080 }
     $global:WebServer_openBrowserOnStartup = if ($null -ne $configContent.WebServer.openBrowserOnStartup) { [bool]$configContent.WebServer.openBrowserOnStartup } else { $true }
+    # SSE push channel (ADR-0020). The web server's pump compares the database change
+    # counters and nudges connected browsers, so a page re-fetches on a real change
+    # instead of waiting for its poll timer. Disabled -> /api/events answers 404, the
+    # signal live_events.js uses to stay on the old polling cadence.
+    # poll_ms has a 100 ms floor clamped HERE, not only in the UI: the pump is a
+    # database read loop, and a value like 5 would spin a runspace for no benefit.
+    $global:WebServer_sse_enabled       = if ($null -ne $configContent.WebServer.sse.enabled) { [bool]$configContent.WebServer.sse.enabled } else { $true }
+    $global:WebServer_sse_poll_ms       = if ($configContent.WebServer.sse.poll_ms)       { [Math]::Max(100, [int]$configContent.WebServer.sse.poll_ms) } else { 250 }
+    $global:WebServer_sse_max_clients   = if ($configContent.WebServer.sse.max_clients)   { [Math]::Max(1, [int]$configContent.WebServer.sse.max_clients) } else { 32 }
+    $global:WebServer_sse_heartbeat_sec = if ($configContent.WebServer.sse.heartbeat_sec) { [Math]::Max(5, [int]$configContent.WebServer.sse.heartbeat_sec) } else { 15 }
 
     # mDNS responder
     $mdnsEnabledRaw = if ($null -ne $configContent.MdnsResponder.enabled) { $configContent.MdnsResponder.enabled } else { $false }
@@ -433,8 +486,8 @@ function Get-Config {
         $global:GPU_Acceleration       = if ($null -ne $perf.GPU_Acceleration) { [bool]$perf.GPU_Acceleration } else { $true }
         $global:GPU_Index              = if ($null -ne $perf.GPU_Index) { [int]$perf.GPU_Index } else { 0 }
         $validCaptureModes             = @('StreamOnly','StreamAndLocalWindow','LocalWindow','Headless','WindowHeadless','WindowOnly','LocalOnly')
-        $cm                            = if ($perf.Capture_Mode) { [string]$perf.Capture_Mode } else { 'StreamAndLocalWindow' }
-        if ($cm -notin $validCaptureModes) { $cm = 'StreamAndLocalWindow' }
+        $cm                            = if ($perf.Capture_Mode) { [string]$perf.Capture_Mode } else { 'StreamOnly' }
+        if ($cm -notin $validCaptureModes) { $cm = 'StreamOnly' }
         $cm                            = switch ($cm) {
             'Headless'       { 'StreamOnly' }
             'WindowHeadless' { 'StreamAndLocalWindow' }
@@ -447,11 +500,17 @@ function Get-Config {
     } else {
         $global:GPU_Acceleration           = $true
         $global:GPU_Index                  = 0
-        $global:CaptureMode                = 'StreamAndLocalWindow'
+        $global:CaptureMode                = 'StreamOnly'
         $global:AdaptiveMonitoring_Enabled = $true
     }
     # Session cache for the resolved GPU encoder, populated lazily by Get-GpuEncoder.
-    $global:GpuEncoder = $null
+    # Created once, NEVER reset here: VRMonitor re-runs Get-Config on every slow tick, and
+    # wiping the cache made every scrcpy start re-probe the encoders (~11 s before the
+    # stream could publish). Get-GpuEncoder invalidates it itself when codec / GPU /
+    # acceleration / ffmpeg binary change.
+    if (-not (Get-Variable -Name GpuEncoder -Scope Global -ErrorAction SilentlyContinue)) {
+        $global:GpuEncoder = $null
+    }
 
     # GLOBAL VARIABLES FOR SCRCPY PROCESS TRACKING AND AUTO-RESTART
     $global:scrcpyProcesses = @() #will keep track of launched scrcpy processes

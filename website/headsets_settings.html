@@ -7,6 +7,7 @@
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
   <link rel="stylesheet" href="assets/topbar.css">
   <script src="assets/topbar.js"></script>
+  <script src="assets/live_events.js"></script>
   <style>
     :root {
       --bg:                #111;
@@ -184,6 +185,23 @@
     .scrcpy-kill-btn:disabled { opacity: 0.5; cursor: default; }
     .scrcpy-kill-btn.hidden { display: none !important; }
 
+    /* Capture starting: amber pulsing dot + a chip where the stop button sits when running. */
+    .dot-starting { background: #f59e0b; animation: scrcpy-pulse 1s ease-in-out infinite; }
+    @keyframes scrcpy-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.7); } }
+    .scrcpy-starting-chip {
+      display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
+      font-size: 11px; font-weight: 600; letter-spacing: .03em; color: #f59e0b;
+      background: rgba(245,158,11,0.12); border: 1px solid rgba(245,158,11,0.35);
+      border-radius: 10px; padding: 1px 8px;
+    }
+    .scrcpy-starting-chip.hidden { display: none !important; }
+    .scrcpy-starting-chip .spin {
+      width: 9px; height: 9px; border-radius: 50%;
+      border: 2px solid rgba(245,158,11,0.35); border-top-color: #f59e0b;
+      animation: scrcpy-spin .8s linear infinite;
+    }
+    @keyframes scrcpy-spin { to { transform: rotate(360deg); } }
+
     /* Inline IP editor */
     .card-row-edit-btn {
       display: inline-flex; align-items: center; justify-content: center;
@@ -285,6 +303,8 @@
       padding: 8px 14px;
       border-top: 1px solid var(--card-border);
     }
+    .card-ipd-row { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 0; }
+    .ipd-select { background: var(--surface-2, #1e1e1e); color: inherit; border: 1px solid var(--border, #444); border-radius: 6px; padding: 3px 6px; font-size: 12px; }
     .hs-adv-btn {
       display: inline-flex; align-items: center; gap: 6px;
       font-size: .78rem; padding: 5px 13px; border-radius: 6px;
@@ -293,8 +313,6 @@
       transition: opacity .12s, border-color .12s;
     }
     .hs-adv-btn:hover { opacity: 1; border-color: var(--accent, #22c55e); }
-    a.hs-adv-btn { text-decoration: none; }
-    .hs-adv-actions { display: inline-flex; gap: 6px; }
     /* Advanced settings modal */
     .advsettings-modal {
       position: fixed; inset: 0; background: rgba(0,0,0,0.72);
@@ -984,6 +1002,7 @@
           <select id="pm-eye">
             <option value="L">Left (L)</option>
             <option value="R">Right (R)</option>
+            <option value="M" id="pm-eye-m" hidden>Merged - both eyes (M)</option>
           </select>
         </div>
         <div class="pm-field">
@@ -1060,6 +1079,24 @@
               </svg>
               Keep awake (this session)
             </button>
+          </div>
+
+          <div class="adv-field">
+            <label for="adv-refresh-rate">Refresh Rate <span class="adv-note">(session only - above 120 Hz is Quest 3 only)</span></label>
+            <div style="display:flex;gap:6px;flex-wrap:nowrap;align-items:center;">
+              <select id="adv-refresh-rate" style="font-size:.8rem;">
+                <option value="72">72 Hz</option>
+                <option value="80">80 Hz</option>
+                <option value="90">90 Hz</option>
+                <option value="96">96 Hz</option>
+                <option value="100">100 Hz</option>
+                <option value="120">120 Hz</option>
+                <option value="144">144 Hz (Quest 3)</option>
+                <option value="180">180 Hz (Quest 3)</option>
+                <option value="200">200 Hz (Quest 3)</option>
+              </select>
+              <button class="hs-adv-btn" id="adv-refresh-rate-apply" style="font-size:.8rem;">Apply</button>
+            </div>
           </div>
 
           <div class="adv-field">
@@ -1430,6 +1467,9 @@
               '</svg>' +
               'Auto-restart scrcpy' +
             '</span>' +
+            '<span class="scrcpy-starting-chip hidden" data-starting-chip="' + dn + '" title="The capture is being (re)started - the stream appears in a few seconds">' +
+              '<span class="spin"></span>Starting' +
+            '</span>' +
             '<button class="scrcpy-kill-btn hidden" data-kill-headset="' + dn + '" title="Stop scrcpy">' +
               '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
                 '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 0 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>' +
@@ -1477,10 +1517,14 @@
               '</svg>' +
               'Advanced Settings' +
             '</span>' +
-            '<span class="hs-adv-actions">' +
-              '<a class="hs-adv-btn" href="headset_diag.html?id=' + encodeURIComponent(cfg.ID) + '" title="Diagnostics: firmware, health, wireless, USB cable, operator actions">DIAG</a>' +
+            '<span style="display:inline-flex;gap:6px">' +
+              '<a class="hs-adv-btn" href="headset_diag.html?id=' + encodeURIComponent(cfg.ID) + '" title="Diagnostics for this headset" style="text-decoration:none;display:inline-block">DIAG</a>' +
               '<button class="hs-adv-btn" data-adv-settings="' + dn + '" data-adv-brand="' + esc(cfg.Brand || '') + '">Configure</button>' +
             '</span>' +
+          '</div>' +
+          '<div class="card-ipd-row" data-ipd-row="' + dn + '" style="display:none">' +
+            '<span class="power-label" title="Lens position of the headset. Detected from the headset itself; the capture views follow it.">Lens position (IPD)</span>' +
+            '<select class="ipd-select" data-ipd-select="' + dn + '" title="Auto follows the lenses; a position is held until the lenses are moved again."></select>' +
           '</div>' +
           '<div class="card-power-row">' +
             '<span class="power-label">' +
@@ -1759,6 +1803,18 @@
         if (killBtn) {
           var dn = killBtn.dataset.killHeadset;
           killBtn.disabled = true;
+          // Show the result at once: hide the button and grey the dot while the (synchronous,
+          // 1-3 s) stop request runs, and hold that state until the monitor reports it - the
+          // status lags the kill by a second or two, which used to bring the button back.
+          var wasScrcpy = headsetStatus[dn] ? headsetStatus[dn].scrcpy : true;
+          // Auto-restart ON: the server restarts the capture right after the kill, so show it as
+          // "starting" immediately instead of a grey dot until the logo comes back.
+          var arBtnKill = document.querySelector('[data-ar-headset="' + dn + '"]');
+          var willRestart = !!(arBtnKill && arBtnKill.classList.contains('on'));
+          _scrcpyExpect[dn] = { value: false, hold: true, until: Date.now() + 15000 };
+          if (willRestart) { _startingHint[dn] = { until: Date.now() + 8000 }; }
+          if (headsetStatus[dn]) { headsetStatus[dn].scrcpy = false; headsetStatus[dn].starting = willRestart; }
+          if (cardsBuilt) { updateStatusDots(); }
           fetch('/api/stop-scrcpy', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1766,15 +1822,25 @@
           })
           .then(function(r) { return r.json(); })
           .then(function(j) {
-            if (j && j.ok) {
+            // ok:false with restarting:true = it was already gone, and the server is bringing it back.
+            if (j && (j.ok || j.restarting)) {
               // The endpoint is synchronous, so ok:true means scrcpy is already dead.
-              if (headsetStatus[dn]) { headsetStatus[dn].scrcpy = false; }
+              ensureFastStatus();
+            } else {
+              // Not stopped: drop the optimistic state and show the real one again.
+              delete _scrcpyExpect[dn];
+              delete _startingHint[dn];
+              if (headsetStatus[dn]) { headsetStatus[dn].scrcpy = wasScrcpy; headsetStatus[dn].starting = false; }
               if (cardsBuilt) { updateStatusDots(); }
-              // Confirm against the CSV once the backend has re-polled and rewritten it.
-              setTimeout(pollHeadsetsStatus, 1500);
+              pollHeadsetsStatus();
             }
           })
-          .catch(function() { return {}; })
+          .catch(function() {
+            delete _scrcpyExpect[dn];
+            delete _startingHint[dn];
+            if (headsetStatus[dn]) { headsetStatus[dn].scrcpy = wasScrcpy; headsetStatus[dn].starting = false; }
+            if (cardsBuilt) { updateStatusDots(); }
+          })
           .finally(function() { killBtn.disabled = false; });
           return;
         }
@@ -1792,7 +1858,21 @@
           })
           .then(function(r) { return r.json(); })
           .then(function(j) {
-            if (!j.ok) { btn.classList.toggle('on', !newVal); btn.textContent = !newVal ? 'ON' : 'OFF'; }
+            if (!j.ok) { btn.classList.toggle('on', !newVal); btn.textContent = !newVal ? 'ON' : 'OFF'; return; }
+            // Capture requested: the monitor starts scrcpy within about a second, so poll
+            // fast until the blue dot can show instead of waiting for the next slow poll.
+            if (newVal) {
+              delete _pendingSince[dn];
+              // Show "starting" at once (the server marks it too): only when ADB is up, otherwise
+              // nothing can start and the dot must not promise it.
+              var stNow = headsetStatus[dn];
+              if (stNow && stNow.adb && !stNow.scrcpy) {
+                _startingHint[dn] = { until: Date.now() + 8000 };
+                stNow.starting = true;
+                if (cardsBuilt) { updateStatusDots(); }
+              }
+              expectScrcpy(dn, true, false, FAST_STATUS_MAX_MS);
+            }
           })
           .catch(function() { btn.classList.toggle('on', !newVal); btn.textContent = !newVal ? 'ON' : 'OFF'; });
           return;
@@ -1821,6 +1901,9 @@
             }
           })
           .catch(function() { recBtn.classList.toggle('on', !newVal); recBtn.textContent = !newVal ? 'ON' : 'OFF'; });
+          // Toggling recording restarts a running capture: follow it as "starting".
+          ensureFastStatus();
+          setTimeout(pollHeadsetsStatus, 400);
           return;
         }
         // Timer mode toggle
@@ -2033,6 +2116,53 @@
     }
 
     // â"€â"€ Status dots update â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+    // ---- Lens position (IPD, ADR-0030): shown only for models that report one (Quest 2). ----
+    var _ipdPositions = {};   // headset id -> ['58','63','68'], loaded once per headset
+    var _ipdSource    = {};   // dn -> 'auto' | 'manual' | 'default'
+    function updateIpdRows() {
+      Object.keys(headsetStatus).forEach(function(dn) {
+        var st  = headsetStatus[dn];
+        var row = document.querySelector('[data-ipd-row="' + dn + '"]');
+        var sel = row ? row.querySelector('select') : null;
+        if (!row || !sel) return;
+        if (!st.ipd) { row.style.display = 'none'; return; }
+        row.style.display = '';
+        var id = st.id;
+        function fill() {
+          var pos = _ipdPositions[id] || [];
+          if (document.activeElement === sel) return;      // never rebuild while the operator is choosing
+          var src = _ipdSource[dn] || '';
+          var html = '<option value="auto">Auto' + (src === 'auto' ? ' (' + esc(st.ipd) + ' mm)' : '') + '</option>';
+          pos.forEach(function(p) { html += '<option value="' + esc(p) + '">' + esc(p) + ' mm</option>'; });
+          if (sel.getAttribute('data-sig') !== html) { sel.innerHTML = html; sel.setAttribute('data-sig', html); }
+          sel.value = (src === 'manual') ? st.ipd : 'auto';
+        }
+        if (_ipdPositions[id]) { fill(); return; }
+        _ipdPositions[id] = [];                              // in flight
+        fetch('/api/headset-ipd?id=' + encodeURIComponent(id))
+          .then(function(r) { return r.json(); })
+          .then(function(j) { if (j && j.ok) { _ipdPositions[id] = j.positions || []; _ipdSource[dn] = j.source || ''; } fill(); })
+          .catch(function() { delete _ipdPositions[id]; });
+      });
+    }
+    document.addEventListener('change', function(ev) {
+      var sel = ev.target && ev.target.closest ? ev.target.closest('select[data-ipd-select]') : null;
+      if (!sel) return;
+      var dn = sel.getAttribute('data-ipd-select');
+      var st = headsetStatus[dn];
+      if (!st || !st.id) return;
+      sel.disabled = true;
+      fetch('/api/headset-ipd', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                 body: JSON.stringify({ id: st.id, ipd: sel.value }) })
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          if (j && j.ok) { _ipdSource[dn] = j.source || ''; st.ipd = j.ipd || st.ipd; }
+          else { alert('Lens position: ' + ((j && j.error) || 'failed')); }
+        })
+        .catch(function() { alert('Lens position: request failed'); })
+        .finally(function() { sel.disabled = false; sel.removeAttribute('data-sig'); updateIpdRows(); });
+    });
+
     function updateStatusDots() {
       Object.keys(headsetStatus).forEach(function(dn) {
         var s = headsetStatus[dn];
@@ -2042,17 +2172,28 @@
 
         var adbDot = document.querySelector('[data-dot-adb="' + dn + '"] .dot');
         if (adbDot) { adbDot.className = 'dot ' + (s.adb ? 'dot-green' : 'dot-grey'); }
-        // Transport badge (ADR-0024, proposed): which link ADB and scrcpy use right now.
-        var adbWrap  = document.querySelector('[data-dot-adb="' + dn + '"]');
-        var adbLabel = adbWrap ? adbWrap.querySelector('.status-dot-label') : null;
+
+        // Which ADB transport the monitor is really using (USB when the headset is cabled to
+        // this PC, WiFi otherwise) - shown next to the dot so a cabled headset visibly is.
+        var adbLabel = document.querySelector('[data-dot-adb="' + dn + '"] .status-dot-label');
         if (adbLabel) {
-          var tr = (s.adb && s.transport) ? s.transport : '';
+          var tr = s.adb && s.transport ? s.transport : '';
           adbLabel.textContent = tr ? 'ADB ' + tr : 'ADB';
-          adbWrap.title = tr ? 'ADB over ' + tr : 'ADB';
+          adbLabel.parentNode.title = tr ? 'ADB over ' + tr : 'ADB';
         }
 
+        // Capture starting (server flag, or the short hint after the operator's own action): amber
+        // pulsing dot + "Starting" chip, so a kill / profile change / start is never a silent gap.
+        var startingNow = !!s.starting && !s.scrcpy;
         var scrcpyDot = document.querySelector('[data-dot-scrcpy="' + dn + '"] .dot');
-        if (scrcpyDot) { scrcpyDot.className = 'dot ' + (s.scrcpy ? 'dot-blue' : 'dot-grey'); }
+        if (scrcpyDot) { scrcpyDot.className = 'dot ' + (s.scrcpy ? 'dot-blue' : (startingNow ? 'dot-starting' : 'dot-grey')); }
+        var scrcpyLbl = document.querySelector('[data-dot-scrcpy="' + dn + '"] .status-dot-label');
+        if (scrcpyLbl) {
+          scrcpyLbl.textContent = startingNow ? 'STARTING' : 'SCRCPY';
+          scrcpyLbl.parentNode.title = startingNow ? 'SCRCPY - capture starting...' : 'SCRCPY';
+        }
+        var startChip = document.querySelector('[data-starting-chip="' + dn + '"]');
+        if (startChip) { startChip.classList.toggle('hidden', !startingNow); }
 
         var killBtn = document.querySelector('[data-kill-headset="' + dn + '"]');
         if (killBtn) { killBtn.classList.toggle('hidden', !s.scrcpy); }
@@ -2134,26 +2275,99 @@
         .catch(function() {});
     }
 
+    // -- Expected scrcpy state + fast status polling ---------------------------------------
+    // The normal cadence (pollAll, refresh_timer x load multiplier: 5 s, up to 25 s) made a
+    // click on auto-restart ON wait that long for the blue dot, and a kill showed the button
+    // again when the 1.5 s re-check still read the old status. After an operator action the
+    // page now remembers what it expects and polls /api/headsets-status every
+    // FAST_STATUS_MS until the server agrees (or the expectation expires).
+    //   hold = true  -> show the expected value meanwhile (kill: the session IS gone)
+    //   hold = false -> only poll fast, never fake it (ON: blue only once scrcpy really runs)
+    var FAST_STATUS_MS     = 1000;
+    var FAST_STATUS_MAX_MS = 60000;
+    var _scrcpyExpect      = {};   // dn -> { value: bool, hold: bool, until: ms, sawStarting: bool }
+    var _startingHint      = {};   // dn -> { until: ms }: "starting" shown right after the operator's own action
+    var _scrcpyRaw         = {};   // dn -> scrcpy as last reported by the server
+    var _pendingSince      = {};   // dn -> ms the "auto-restart ON, ADB up, no scrcpy" state began
+    var _fastStatusTimer   = null;
+
+    function expectScrcpy(dn, value, hold, ms) {
+      _scrcpyExpect[dn] = { value: value, hold: hold, until: Date.now() + ms };
+      ensureFastStatus();
+    }
+
+    function statusPending() {
+      var now = Date.now(), pending = false;
+      Object.keys(_scrcpyExpect).forEach(function(dn) {
+        var ex = _scrcpyExpect[dn];
+        if (now > ex.until || _scrcpyRaw[dn] === ex.value) { delete _scrcpyExpect[dn]; return; }
+        pending = true;
+      });
+      // A capture the server says is starting: poll fast until it is up (or the mark expires).
+      Object.keys(headsetStatus).forEach(function(dn) {
+        if (headsetStatus[dn] && headsetStatus[dn].starting) pending = true;
+      });
+      // Capture starting on its own (ADB just came up on a headset with auto-restart ON).
+      Object.keys(headsetStatus).forEach(function(dn) {
+        var arBtn = document.querySelector('[data-ar-headset="' + dn + '"]');
+        var st = headsetStatus[dn];
+        if (!(arBtn && arBtn.classList.contains('on') && st.adb && !_scrcpyRaw[dn])) { delete _pendingSince[dn]; return; }
+        if (!_pendingSince[dn]) _pendingSince[dn] = now;
+        if (now - _pendingSince[dn] < FAST_STATUS_MAX_MS) pending = true;
+      });
+      return pending;
+    }
+
+    // At most one fast chain: only schedules when none is waiting.
+    function ensureFastStatus() {
+      // With push connected the server announces the change itself - no need to poll.
+      if (window.LiveEvents && LiveEvents.isConnected()) return;
+      if (_fastStatusTimer || !statusPending()) return;
+      _fastStatusTimer = setTimeout(function() {
+        _fastStatusTimer = null;
+        pollHeadsetsStatus();   // re-arms through ensureFastStatus() once it lands
+      }, FAST_STATUS_MS);
+    }
+
     function pollHeadsetsStatus() {
       return fetch('/api/headsets-status')
         .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
         .then(function(items) {
+          var now = Date.now();
           items.forEach(function(item) {
             var dn = item.display_name || toDisplayName(item.name || '');
             if (!dn) return;
+            var scrcpy = !!item.scrcpy;
+            var srvStarting = !!item.scrcpy_starting;
+            _scrcpyRaw[dn] = scrcpy;
+            var ex = _scrcpyExpect[dn];
+            if (ex) {
+              // The kill hold must not outlive the restart it triggered: once the server has
+              // announced the start and then finished it, the real state is shown again (a restart
+              // faster than the poll would otherwise leave the dot grey for the whole hold).
+              if (srvStarting) ex.sawStarting = true;
+              else if (ex.sawStarting && scrcpy) { delete _scrcpyExpect[dn]; ex = null; }
+            }
+            if (ex && ex.hold && now <= ex.until && scrcpy !== ex.value) { scrcpy = ex.value; }
+            var hint = _startingHint[dn];
+            if (hint && (now > hint.until || scrcpy)) { delete _startingHint[dn]; hint = null; }
             headsetStatus[dn] = {
               ping:           !!item.ping,
               adb:            !!item.adb,
-              scrcpy:         !!item.scrcpy,
+              transport:      item.adb_transport || '',
+              scrcpy:         scrcpy,
+              starting:       !scrcpy && (srvStarting || !!hint),
               model:          item.model || '',
               runningApp:     item.running_app     || '',
               runningAppIcon: item.running_app_icon || '',
-              transport:      item.adb_transport   || ''
+              ipd:            item.ipd || '',
+              id:             item.id
             };
           });
-          if (cardsBuilt) updateStatusDots();
+          if (cardsBuilt) { updateStatusDots(); updateIpdRows(); }
         })
-        .catch(function() {});
+        .catch(function() {})
+        .finally(ensureFastStatus);
     }
 
     async function pollForNewUsbHeadset() {
@@ -2452,7 +2666,7 @@
       var raw = (document.getElementById('profile-val-' + dn).textContent || 'portrait-R-N-45-20').trim();
       var cur = raw.split('-');
       // Support legacy 4-part format (Eye-Audio-FPS-BW) -> prepend 'portrait'
-      if (cur.length === 4 && ['L','R'].indexOf(cur[0].toUpperCase()) >= 0) { cur = ['portrait'].concat(cur); }
+      if (cur.length === 4 && ['L','R','M'].indexOf(cur[0].toUpperCase()) >= 0) { cur = ['portrait'].concat(cur); }
       if (cur.length !== 5) cur = ['portrait', 'R', 'N', '45', '20'];
       document.getElementById('pm-headset').textContent = dn.replace(/_/g, ' ');
 
@@ -2477,7 +2691,28 @@
           viewSel.value = currentView;
         });
 
-      document.getElementById('pm-eye').value   = cur[1].toUpperCase();
+      // "Merged" (eye M) is offered only when this headset's model has an enabled eye merge
+      // calibration (vrhm_config.html > Headset Profiles > Eye merge). A profile already set to M
+      // on an unsupported model keeps the option visible, flagged, so the value is not lost.
+      // The label starts neutral and is only changed once the server has answered: showing the
+      // "not calibrated" warning first and correcting it a second later made the dialog flicker
+      // and resize. light=1 skips the per-view framing work this page does not need.
+      var curEye = cur[1].toUpperCase();
+      var eyeM = document.getElementById('pm-eye-m');
+      eyeM.hidden = (curEye !== 'M');
+      eyeM.textContent = 'Merged - both eyes (M)';
+      if (model) {
+        fetch('/api/eye-merge?light=1&model=' + encodeURIComponent(model))
+          .then(function(r) { return r.json(); })
+          .then(function(j) {
+            if (j && j.ok && j.enabled) { eyeM.hidden = false; }
+            else if (curEye === 'M') { eyeM.textContent = 'Merged (M) - not calibrated: right eye used'; }
+          })
+          .catch(function() {});
+      } else if (curEye === 'M') {
+        eyeM.textContent = 'Merged (M) - not calibrated: right eye used';
+      }
+      document.getElementById('pm-eye').value   = curEye;
       document.getElementById('pm-audio').value = cur[2].toUpperCase();
       document.getElementById('pm-fps').value   = cur[3];
       document.getElementById('pm-bw').value    = cur[4];
@@ -2490,6 +2725,11 @@
       _editingProfileDn = null;
     }
 
+    // Choosing the merged view sets 30 fps: the merge's CPU cost follows the frame rate.
+    document.getElementById('pm-eye').addEventListener('change', function() {
+      var fpsEl = document.getElementById('pm-fps');
+      if (this.value === 'M' && (parseInt(fpsEl.value, 10) || 0) > 30) { fpsEl.value = 30; }
+    });
     document.getElementById('pm-cancel').addEventListener('click', closeProfileModal);
     document.getElementById('profile-modal').addEventListener('click', function(e) {
       if (e.target === this) closeProfileModal();
@@ -2506,6 +2746,9 @@
       var fps   = parseInt(document.getElementById('pm-fps').value, 10);
       var bw    = parseInt(document.getElementById('pm-bw').value, 10);
       if (isNaN(fps) || fps < 1 || isNaN(bw) || bw < 1) { return; }
+      // Merged view above 30 fps: merging both eyes costs CPU in proportion to the frame rate.
+      if (eye === 'M' && fps > 30 && !confirm('Merged view at ' + fps + ' fps.\n\nMerging both eyes costs CPU in proportion to the frame rate, for every headset streaming a merged view (' +
+          fps + ' fps is about ' + Math.round((fps / 30 - 1) * 100) + '% more CPU than 30 fps). 30 fps is recommended.\n\nKeep ' + fps + ' fps anyway?')) { return; }
       var newProfile = view + '-' + eye + '-' + audio + '-' + fps + '-' + bw;
       var saveBtn = document.getElementById('pm-save');
       saveBtn.disabled = true;
@@ -2519,6 +2762,10 @@
         if (j.ok) {
           document.getElementById('profile-val-' + dn).textContent = newProfile;
           closeProfileModal();
+          // The server restarts the running capture with the new profile right away: follow it
+          // (fast poll + "starting" until it is back) instead of a silent gap.
+          var stP = headsetStatus[dn], arP = document.querySelector('[data-ar-headset="' + dn + '"]');
+          if (stP && stP.scrcpy && arP && arP.classList.contains('on')) { ensureFastStatus(); pollHeadsetsStatus(); }
         }
       })
       .catch(function() {})
@@ -2559,6 +2806,23 @@
           var bv = (j.brightness !== undefined && j.brightness !== null) ? parseInt(j.brightness, 10) : 50;
           document.getElementById('adv-brightness').value = bv;
           document.getElementById('adv-brightness-val').textContent = bv + '%';
+          var rrSel = document.getElementById('adv-refresh-rate');
+          if (rrSel) {
+            if (Array.isArray(j.refreshRates) && j.refreshRates.length) {
+              rrSel.innerHTML = j.refreshRates.map(function(hz) {
+                return '<option value="' + hz + '">' + hz + ' Hz</option>';
+              }).join('');
+            }
+            if (j.refreshRate) {
+              if (!rrSel.querySelector('option[value="' + j.refreshRate + '"]')) {
+                var o = document.createElement('option');
+                o.value = j.refreshRate;
+                o.textContent = j.refreshRate + ' Hz';
+                rrSel.appendChild(o);
+              }
+              rrSel.value = String(j.refreshRate);
+            }
+          }
           var updBtn = document.getElementById('adv-updates-toggle');
           var updLabel = document.getElementById('adv-updates-toggle-label');
           if (updBtn && updLabel) {
@@ -2612,6 +2876,8 @@
       if (proxRow) proxRow.style.display = isPico ? 'none' : '';
       var updRow = document.getElementById('adv-updates-toggle').closest('.adv-field');
       if (updRow) updRow.style.display = isPico ? 'none' : '';
+      var rrRow = document.getElementById('adv-refresh-rate').closest('.adv-field');
+      if (rrRow) rrRow.style.display = isPico ? 'none' : '';
       var sleepRow = document.getElementById('adv-sleep-timeout').closest('.adv-field');
       if (sleepRow) sleepRow.style.display = isPico ? 'none' : '';
     }
@@ -2706,6 +2972,24 @@
           else { btn.disabled = false; }
         })
         .catch(function() { btn.disabled = false; });
+    });
+
+    document.getElementById('adv-refresh-rate-apply').addEventListener('click', function() {
+      var btn = this;
+      var dn = _advDn;
+      if (!dn) return;
+      var hz = parseInt(document.getElementById('adv-refresh-rate').value, 10);
+      if (!hz) return;
+      btn.disabled = true;
+      btn.classList.remove('toggle-btn', 'on');
+      fetch('/api/headset-settings/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: dn, settings: { refreshRate: hz } })
+      }).then(function(r) { return r.json(); })
+        .then(function(j) { if (j.ok) btn.classList.add('toggle-btn', 'on'); })
+        .catch(function() {})
+        .finally(function() { btn.disabled = false; });
     });
 
     document.getElementById('adv-display-reset').addEventListener('click', function() {
@@ -3073,6 +3357,16 @@
       ]).finally(function() { setTimeout(pollAll, nextStatusDelay()); });
     }
     refreshLoadTier().finally(pollAll);
+    // Push (ADR-0020): status dots (scrcpy blue dot, ADB, ping) and the registry fields
+    // (auto-restart / record buttons) refresh as soon as the server writes them. pollAll
+    // stays as the fallback when the push channel is unavailable.
+    if (window.LiveEvents) {
+      LiveEvents.subscribe('headset_status', pollHeadsetsStatus);
+      LiveEvents.subscribe('headsets',       pollHeadsetsCsv);
+      // The "capture starting" mark lives in app_kv (written by whichever process starts or
+      // restarts the capture): react to it as soon as it is set or cleared.
+      LiveEvents.subscribe('app_kv',         pollHeadsetsStatus);
+    }
 
     // Timer helpers
 

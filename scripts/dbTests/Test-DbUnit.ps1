@@ -128,10 +128,10 @@ Invoke-RegressionTest -Name 'Initialize-Database -Role Main creates the full sch
         Assert-True ($result.SchemaVersion -ge 1) 'schema version is at least 1'
 
         $expected = @(
-            'schema_version','db_versions','headsets','headset_status','metric_history',
+            'schema_version','db_versions','headsets','headset_status','metric_history','firmware_history',
             'kiosks','kiosk_status','kiosk_agent_reports','kiosk_commands','kiosk_autoadd_ignore',
             'discovered_headsets','headset_discovery_ignore','app_catalog','headset_installed_apps',
-            'headset_favorite_apps','headset_timers','vqa_history','app_kv','firmware_history'
+            'headset_favorite_apps','headset_timers','vqa_history','app_kv'
         )
         $actual = @(Invoke-DbQuery -Sql "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;" | ForEach-Object { $_.name })
         Add-TestEvidence ("tables: {0}" -f ($actual -join ', '))
@@ -505,6 +505,71 @@ Invoke-RegressionTest -Name 'temperature is sampled at 0.1 C, comma decimal incl
     }
 }
 
+Invoke-RegressionTest -Name 'CPU, GPU and skin temperatures are sampled from their own columns (migration 007)' -Test {
+    $sandbox = New-TempDatabaseRoot -Name 'thermal'
+    try {
+        Initialize-Database -Role Main -SkipBackup | Out-Null
+        Invoke-DbNonQuery -Sql "INSERT INTO headsets(id,name,ip_address) VALUES (1,'A','10.0.0.1'); INSERT INTO headset_status(headset_id) VALUES (1);" | Out-Null
+
+        # A fresh row carries the placeholder, and a placeholder is not a reading.
+        $before = [int](Invoke-DbScalar -Sql "SELECT COUNT(*) FROM metric_history WHERE metric IN ('cpu_temp','gpu_temp','skin_temp');")
+        Assert-Equal 0 $before 'no sample exists before the first reading'
+
+        Invoke-DbNonQuery -Sql "UPDATE headset_status SET cpu_temp = '45.5', gpu_temp = '40,25', skin_temp = '33.4' WHERE headset_id = 1;" | Out-Null
+        foreach ($pair in @(@('cpu_temp',45.5), @('gpu_temp',40.25), @('skin_temp',33.4))) {
+            $v = [double](Invoke-DbScalar -Sql ("SELECT value FROM metric_history WHERE headset_id = 1 AND metric = '{0}' ORDER BY ts DESC LIMIT 1;" -f $pair[0]))
+            Add-TestEvidence ("{0} stored as {1}" -f $pair[0], $v)
+            Assert-Equal ([double]$pair[1]) $v ("{0} sampled from its own column, comma decimal included" -f $pair[0])
+        }
+
+        # An unreachable headset resets the columns to a dash: that must not be recorded.
+        Invoke-DbNonQuery -Sql "UPDATE headset_status SET cpu_temp = '-', gpu_temp = '-', skin_temp = '-' WHERE headset_id = 1;" | Out-Null
+        $after = [int](Invoke-DbScalar -Sql "SELECT COUNT(*) FROM metric_history WHERE metric IN ('cpu_temp','gpu_temp','skin_temp');")
+        Assert-Equal 3 $after 'the dash reset added no sample'
+
+        # The view exposes all four new columns under their PascalCase names.
+        $row = @(Invoke-DbQuery -Name 'status.list')[0]
+        foreach ($col in @('CpuTemp','GpuTemp','SkinTemp','AdbTransport')) {
+            Assert-Contains @($row.PSObject.Properties.Name) $col ("status.list exposes {0}" -f $col)
+        }
+        Assert-Equal '-' ([string]$row.AdbTransport) 'adb_transport defaults to a dash'
+    } finally {
+        Remove-TempDatabaseRoot -Sandbox $sandbox | Out-Null
+    }
+}
+
+Invoke-RegressionTest -Name 'firmware history records changes, and the fleet query returns the newest per headset' -Test {
+    $sandbox = New-TempDatabaseRoot -Name 'firmware'
+    try {
+        Initialize-Database -Role Main -SkipBackup | Out-Null
+        Invoke-DbNonQuery -Sql "INSERT INTO headsets(id,name,ip_address,model) VALUES (1,'A','10.0.0.1','Quest 3'),(2,'B','10.0.0.2','Quest 3');" | Out-Null
+
+        Invoke-DbNonQuery -Name 'firmware.insert' -Parameters @{ headset_id = 1; firmware_version = '76.0.0.1'; environment = 'e1' } | Out-Null
+        Start-Sleep -Milliseconds 1100   # ts has one-second resolution; two rows in the same second collapse by design
+        Invoke-DbNonQuery -Name 'firmware.insert' -Parameters @{ headset_id = 1; firmware_version = '77.0.0.2'; environment = 'e2' } | Out-Null
+        Invoke-DbNonQuery -Name 'firmware.insert' -Parameters @{ headset_id = 2; firmware_version = '76.0.0.1'; environment = 'e1' } | Out-Null
+
+        $latest = @(Invoke-DbQuery -Name 'firmware.latest' -Parameters @{ headset_id = 1 })
+        Assert-Equal 1 $latest.Count 'one newest row per headset'
+        Assert-Equal '77.0.0.2' ([string]$latest[0].firmware_version) 'the newest version wins'
+
+        $hist = @(Invoke-DbQuery -Name 'firmware.history' -Parameters @{ headset_id = 1; limit = 10 })
+        Assert-Equal 2 $hist.Count 'both changes are in the history'
+        Assert-Equal '77.0.0.2' ([string]$hist[0].firmware_version) 'history is newest first'
+
+        $fleet = @(Invoke-DbQuery -Name 'firmware.fleet')
+        Add-TestEvidence ("fleet rows: {0}" -f (($fleet | ForEach-Object { '{0}={1}' -f $_.Name, $_.FirmwareVersion }) -join ', '))
+        Assert-Equal 2 $fleet.Count 'one row per headset that reported'
+        Assert-Equal '77.0.0.2' ([string](@($fleet | Where-Object { $_.Name -eq 'A' })[0].FirmwareVersion)) 'headset A is on the newer firmware'
+
+        # Removing a headset removes its history, like every other per-headset table.
+        Invoke-DbNonQuery -Sql 'DELETE FROM headsets WHERE id = 1;' | Out-Null
+        Assert-Equal 0 ([int](Invoke-DbScalar -Sql 'SELECT COUNT(*) FROM firmware_history WHERE headset_id = 1;')) 'history cascades away with the headset'
+    } finally {
+        Remove-TempDatabaseRoot -Sandbox $sandbox | Out-Null
+    }
+}
+
 Invoke-RegressionTest -Name 'metric.prune removes only samples past the cutoff' -Test {
     $sandbox = New-TempDatabaseRoot -Name 'prune'
     try {
@@ -526,78 +591,6 @@ Invoke-RegressionTest -Name 'metric.prune removes only samples past the cutoff' 
 
         $left = [int](Invoke-DbScalar -Sql 'SELECT COUNT(*) FROM metric_history;')
         Assert-Equal 8 $left 'the eight fresh rows survived'
-    } finally {
-        Remove-TempDatabaseRoot -Sandbox $sandbox | Out-Null
-    }
-}
-
-Invoke-RegressionTest -Name 'migration 007: thermal temperatures are sampled, the transport is not' -Test {
-    $sandbox = New-TempDatabaseRoot -Name 'thermal'
-    try {
-        Initialize-Database -Role Main -SkipBackup | Out-Null
-        Invoke-DbNonQuery -Sql "INSERT INTO headsets(id,name,ip_address) VALUES (1,'A','10.0.0.1'); INSERT INTO headset_status(headset_id) VALUES (1);" | Out-Null
-
-        # New columns exist with the '-' placeholder, so an old row reads cleanly.
-        $row = @(Invoke-DbQuery -Name 'status.get' -Parameters @{ headset_id = 1 })[0]
-        foreach ($c in @('CpuTemp','GpuTemp','SkinTemp','AdbTransport')) {
-            Assert-Equal '-' ([string]$row.$c) ("{0} defaults to the dash placeholder" -f $c)
-        }
-
-        # Each temperature column feeds its own metric; comma decimals survive.
-        Invoke-DbNonQuery -Sql "UPDATE headset_status SET cpu_temp = '61.3', gpu_temp = '58,9', skin_temp = '34.0', adb_transport = 'USB' WHERE headset_id = 1;" | Out-Null
-        foreach ($pair in @(@('cpu_temp',61.3), @('gpu_temp',58.9), @('skin_temp',34.0))) {
-            $v = [double](Invoke-DbScalar -Sql ("SELECT value FROM metric_history WHERE headset_id = 1 AND metric = '{0}' ORDER BY ts DESC LIMIT 1;" -f $pair[0]))
-            Add-TestEvidence ("{0} stored as {1}" -f $pair[0], $v)
-            Assert-Equal ([double]$pair[1]) $v ("{0} sampled from its own column" -f $pair[0])
-        }
-
-        # adb_transport is a state, not a reading: it has no metric.
-        $n = [int](Invoke-DbScalar -Sql "SELECT COUNT(*) FROM metric_history WHERE metric NOT IN ('cpu_temp','gpu_temp','skin_temp');")
-        Assert-Equal 0 $n 'the transport column records no metric sample'
-
-        # '-' (a PICO with no thermal HAL, or an offline headset) is never sampled.
-        $before = [int](Invoke-DbScalar -Sql "SELECT COUNT(*) FROM metric_history WHERE metric = 'cpu_temp';")
-        Invoke-DbNonQuery -Sql "UPDATE headset_status SET cpu_temp = '-' WHERE headset_id = 1;" | Out-Null
-        $after = [int](Invoke-DbScalar -Sql "SELECT COUNT(*) FROM metric_history WHERE metric = 'cpu_temp';")
-        Assert-Equal $before $after 'the dash placeholder is not recorded'
-
-        # The views expose the new columns to every status reader.
-        $merged = @(Invoke-DbQuery -Name 'status.merged')
-        Assert-Equal 'USB' ([string]$merged[0].AdbTransport) 'status.merged carries AdbTransport'
-    } finally {
-        Remove-TempDatabaseRoot -Sandbox $sandbox | Out-Null
-    }
-}
-
-Invoke-RegressionTest -Name 'migration 007: firmware_history records changes only' -Test {
-    $sandbox = New-TempDatabaseRoot -Name 'firmware'
-    try {
-        Initialize-Database -Role Main -SkipBackup | Out-Null
-        Invoke-DbNonQuery -Sql "INSERT INTO headsets(id,name,ip_address,model) VALUES (1,'A','10.0.0.1','Quest 3'),(2,'B','10.0.0.2','Quest 3');" | Out-Null
-
-        $p = @{ headset_id = 1; firmware_version = '76.0'; environment = '52083180032000520' }
-        Invoke-DbNonQuery -Name 'firmware.insert' -Parameters $p | Out-Null
-        Invoke-DbNonQuery -Name 'firmware.insert' -Parameters $p | Out-Null
-        $n = [int](Invoke-DbScalar -Sql 'SELECT COUNT(*) FROM firmware_history WHERE headset_id = 1;')
-        Assert-Equal 1 $n 'an unchanged reading is not stored twice'
-
-        # A different reading is a change. Back-date the first row so the two
-        # land on distinct timestamps without sleeping a second.
-        Invoke-DbNonQuery -Sql "UPDATE firmware_history SET ts = '2026-01-01T00:00:00Z' WHERE headset_id = 1;" | Out-Null
-        Invoke-DbNonQuery -Name 'firmware.insert' -Parameters @{ headset_id = 1; firmware_version = '77.0'; environment = '53083180032000520' } | Out-Null
-        $hist = @(Invoke-DbQuery -Name 'firmware.history' -Parameters @{ headset_id = 1 })
-        Add-TestEvidence ("history: {0}" -f (($hist | ForEach-Object { $_.firmware_version }) -join ' <- '))
-        Assert-Equal 2 $hist.Count 'the update was recorded'
-        Assert-Equal '77.0' ([string]$hist[0].firmware_version) 'newest first'
-
-        Invoke-DbNonQuery -Name 'firmware.insert' -Parameters @{ headset_id = 2; firmware_version = '76.0'; environment = '52083180032000520' } | Out-Null
-        $latest = @(Invoke-DbQuery -Name 'firmware.latest')
-        Assert-Equal 2 $latest.Count 'one newest row per headset for the fleet view'
-        Assert-Equal '77.0' ([string](@($latest | Where-Object { [string]$_.ID -eq '1' })[0].firmware_version)) 'headset 1 reports its newest version'
-
-        # Removing a headset removes its history.
-        Invoke-DbNonQuery -Sql 'DELETE FROM headsets WHERE id = 1;' | Out-Null
-        Assert-Equal 0 ([int](Invoke-DbScalar -Sql 'SELECT COUNT(*) FROM firmware_history WHERE headset_id = 1;')) 'history cascades with the headset'
     } finally {
         Remove-TempDatabaseRoot -Sandbox $sandbox | Out-Null
     }

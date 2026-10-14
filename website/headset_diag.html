@@ -9,98 +9,71 @@
   <script src="assets/topbar.js"></script>
   <style>
     :root {
-      --bg:        #111;
-      --text:      #ccc;
-      --muted:     #777;
-      --card-bg:   #161616;
-      --card-border: #252525;
-      --accent:    #22c55e;
-      --warn:      #f97316;
-      --crit:      #ef4444;
-      --info:      #3b82f6;
+      --bg: #111; --muted: #777; --text: #ccc; --panel-bg: #1a1a1a; --border: #252525;
+      --accent: #3b82f6; --ok: #22c55e; --warn: #f59e0b; --bad: #ef4444; --input-bg: #101010;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body {
-      background: var(--bg); min-height: 100vh; color: var(--text);
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; overflow-x: hidden;
-    }
+    html, body { background: var(--bg); min-height: 100vh; color: var(--text); overflow-x: hidden;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
     .page { padding: 24px; max-width: 1400px; margin: 0 auto; }
 
-    .dg-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 16px; }
-    .dg-controls .lbl { font-size: .8rem; color: var(--muted); }
-    select, input[type=text], input[type=number], textarea {
-      background: #0d0d0d; color: var(--text); border: 1px solid var(--card-border);
-      border-radius: 6px; padding: 6px 9px; font-family: inherit; font-size: .85rem;
-    }
-    textarea { font-family: Consolas, monospace; width: 100%; resize: vertical; }
-    .btn {
-      display: inline-flex; align-items: center; gap: 6px; font-size: .8rem; padding: 6px 12px;
-      border-radius: 6px; border: 1px solid var(--card-border); background: transparent;
-      color: inherit; cursor: pointer; font-family: inherit; text-decoration: none;
-    }
-    .btn:hover { border-color: var(--accent); }
-    .btn:disabled { opacity: .4; cursor: default; }
-    .btn.danger:hover { border-color: var(--crit); color: var(--crit); }
-    .btn.primary { border-color: var(--accent); color: var(--accent); }
-    .toggle { display: inline-flex; align-items: center; gap: 6px; font-size: .8rem; cursor: pointer; }
+    .dg-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 18px; }
+    .dg-controls .lbl { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+    select, input[type=text], input[type=password], input[type=number] { background: var(--input-bg); color: var(--text);
+      border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; font-size: 13px; font-family: inherit; }
+    input[type=text], input[type=password] { min-width: 0; }
+    .dg-btn { background: var(--panel-bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+      padding: 7px 12px; font-size: 12.5px; cursor: pointer; font-family: inherit; }
+    .dg-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .dg-btn:disabled { opacity: .45; cursor: default; border-color: var(--border); color: var(--text); }
+    .dg-btn.danger:hover { border-color: var(--bad); color: var(--bad); }
+    .dg-btn.primary { background: rgba(59,130,246,.15); border-color: rgba(59,130,246,.6); color: var(--accent); }
+    .dg-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); }
+    .dg-badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 700;
+      letter-spacing: .04em; border: 1px solid var(--border); color: var(--muted); }
+    .dg-badge.usb { color: var(--ok); border-color: rgba(34,197,94,.6); background: rgba(34,197,94,.1); }
+    .dg-badge.wifi { color: var(--accent); border-color: rgba(59,130,246,.6); background: rgba(59,130,246,.1); }
+    .dg-badge.warn { color: var(--warn); border-color: rgba(245,158,11,.6); background: rgba(245,158,11,.1); }
+    .dg-badge.bad { color: var(--bad); border-color: rgba(239,68,68,.6); background: rgba(239,68,68,.1); }
+    .dg-badge.good { color: var(--ok); border-color: rgba(34,197,94,.6); background: rgba(34,197,94,.1); }
+    .dg-badge.exp { color: #c084fc; border-color: rgba(192,132,252,.6); background: rgba(192,132,252,.1); }
+    .dg-updated { font-size: 11.5px; color: var(--muted); margin-left: auto; }
 
-    .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: .72rem; font-weight: 700; letter-spacing: .03em; }
-    .b-usb  { background: rgba(59,130,246,.18); color: #60a5fa; }
-    .b-wifi { background: rgba(34,197,94,.15); color: #4ade80; }
-    .b-exp  { background: rgba(249,115,22,.18); color: #fb923c; }
-    .b-warn { background: rgba(249,115,22,.18); color: #fb923c; }
-    .b-crit { background: rgba(239,68,68,.18); color: #f87171; }
-    .b-ok   { background: rgba(34,197,94,.15); color: #4ade80; }
-    .b-dim  { background: #222; color: #888; }
+    #dg-banner { margin-bottom: 14px; }
+    .dg-banner-msg { padding: 10px 14px; border-radius: 8px; font-size: 13px; border: 1px solid rgba(239,68,68,.5);
+      background: rgba(239,68,68,.08); color: var(--bad); }
+    #dg-toast { position: fixed; right: 18px; bottom: 18px; max-width: 420px; padding: 11px 15px; border-radius: 8px;
+      font-size: 13px; display: none; z-index: 50; background: var(--panel-bg); border: 1px solid var(--border); }
+    #dg-toast.ok { border-color: rgba(34,197,94,.6); } #dg-toast.err { border-color: rgba(239,68,68,.6); color: var(--bad); }
 
-    .head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; margin-bottom: 14px; }
-    .head h1 { font-size: 1.25rem; }
-    .head .sub { color: var(--muted); font-size: .82rem; }
-    .stamp { color: var(--muted); font-size: .75rem; margin-left: auto; }
-
-    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 14px; }
-    .card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 8px; overflow: hidden; }
-    .card.wide { grid-column: 1 / -1; }
-    .card-h { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--card-border); }
-    .card-h h2 { font-size: .92rem; font-weight: 700; }
-    .card-h .right { margin-left: auto; display: flex; gap: 6px; align-items: center; }
-    .card-b { padding: 12px 14px; font-size: .84rem; }
-    .card-b .loading { color: var(--muted); }
-    .card-b .err { color: var(--crit); }
-
-    table.kv { width: 100%; border-collapse: collapse; }
-    table.kv td { padding: 3px 0; vertical-align: top; }
-    table.kv td:first-child { color: var(--muted); width: 42%; padding-right: 10px; }
-    table.list { width: 100%; border-collapse: collapse; font-size: .8rem; margin-top: 6px; }
-    table.list th { text-align: left; color: var(--muted); font-weight: 600; padding: 3px 6px; border-bottom: 1px solid var(--card-border); }
-    table.list td { padding: 3px 6px; border-bottom: 1px solid #1d1d1d; }
-    .mono { font-family: Consolas, monospace; font-size: .78rem; }
-    .muted { color: var(--muted); }
-    .tiles { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
-    .tile { flex: 1 1 90px; min-width: 90px; background: #0f0f0f; border: 1px solid var(--card-border); border-radius: 6px; padding: 8px; text-decoration: none; color: inherit; }
-    a.tile:hover { border-color: var(--accent); }
-    .tile .t-l { font-size: .7rem; color: var(--muted); }
-    .tile .t-v { font-size: 1.15rem; font-weight: 700; margin-top: 2px; }
-    .sect-t { font-size: .74rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 12px 0 4px; }
-    .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0; }
-    pre.out { background: #0a0a0a; border: 1px solid var(--card-border); border-radius: 6px; padding: 8px; max-height: 360px; overflow: auto; white-space: pre-wrap; word-break: break-all; font-family: Consolas, monospace; font-size: .75rem; margin-top: 8px; }
-    .note { font-size: .74rem; color: var(--muted); margin-top: 6px; }
-
-    #confirm-modal { position: fixed; inset: 0; background: rgba(0,0,0,.72); display: none; align-items: center; justify-content: center; z-index: 300; }
-    #confirm-modal .box { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 10px; padding: 22px 24px; max-width: 460px; width: 92%; }
-    #confirm-modal .box h3 { font-size: 1rem; margin-bottom: 8px; }
-    #confirm-modal .box p { font-size: .85rem; color: var(--muted); margin-bottom: 16px; white-space: pre-wrap; }
-    #confirm-modal .actions { display: flex; justify-content: flex-end; gap: 8px; }
-
-    [data-theme="light"] { --bg: #f4f4f5; --text: #222; --muted: #777; --card-bg: #fff; --card-border: #ddd; }
-    [data-theme="light"] select, [data-theme="light"] input[type=text], [data-theme="light"] input[type=number], [data-theme="light"] textarea { background: #fff; }
-    [data-theme="light"] .tile, [data-theme="light"] pre.out { background: #fafafa; }
-    [data-theme="light"] table.list td { border-bottom-color: #eee; }
-
-    @media (max-width: 520px) {
-      .page { padding: 14px; }
-      .grid { grid-template-columns: 1fr; }
-    }
+    .dg-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; align-items: start; }
+    .dg-card { background: var(--panel-bg); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+    .dg-card.wide { grid-column: 1 / -1; }
+    .dg-card h2 { font-size: 13px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 12px 16px;
+      border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
+    .dg-card h2 .sub { margin-left: auto; font-weight: 400; text-transform: none; letter-spacing: 0; font-size: 11.5px; color: var(--muted); }
+    .dg-body { padding: 14px 16px; font-size: 13px; }
+    .dg-muted { color: var(--muted); }
+    .dg-kv { display: grid; grid-template-columns: 160px 1fr; gap: 5px 12px; margin-bottom: 8px; }
+    .dg-kv .k { color: var(--muted); } .dg-kv .v { word-break: break-word; }
+    .dg-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 10px; margin-bottom: 12px; }
+    .dg-tile { display: block; text-decoration: none; color: inherit; border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px; }
+    a.dg-tile:hover { border-color: var(--accent); }
+    .dg-tile .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+    .dg-tile .v { font-size: 21px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .dg-tile.warn .v { color: var(--warn); } .dg-tile.bad .v { color: var(--bad); } .dg-tile.good .v { color: var(--ok); }
+    table.dg-t { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-bottom: 8px; }
+    table.dg-t th { text-align: left; color: var(--muted); font-weight: 600; padding: 4px 8px 4px 0; border-bottom: 1px solid var(--border); }
+    table.dg-t td { padding: 4px 8px 4px 0; border-bottom: 1px solid var(--border); word-break: break-word; }
+    h3.dg-h { font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 12px 0 6px; }
+    .dg-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+    .dg-row .grow { flex: 1 1 160px; }
+    .dg-bar { height: 8px; border-radius: 4px; background: var(--border); overflow: hidden; margin: 6px 0; }
+    .dg-bar > i { display: block; height: 100%; background: var(--accent); }
+    pre.dg-out { background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px; font-size: 12px;
+      max-height: 340px; overflow: auto; white-space: pre-wrap; word-break: break-all; min-height: 44px; }
+    [data-theme="light"] { --bg: #f5f5f5; --muted: #6b7280; --text: #222; --panel-bg: #fff; --border: #e0e0e0; --input-bg: #fafafa; }
+    @media (max-width: 560px) { .page { padding: 14px; } .dg-grid { grid-template-columns: 1fr; } .dg-kv { grid-template-columns: 120px 1fr; } }
   </style>
 </head>
 <body>
@@ -110,6 +83,7 @@
     <div class="v-sep"></div>
     <script>document.write(TopBar.compactDropdownHTML)</script>
     <span class="topbar-title">Headset DIAG</span>
+
     <div class="topbar-right">
       <script>document.write(TopBar.monitoringBtnHTML)</script>
       <script>document.write(TopBar.manageDevicesBtnHTML)</script>
@@ -121,543 +95,702 @@
     <div class="dg-controls">
       <span class="lbl">Headset</span>
       <select id="headset-select"><option value="">Loading...</option></select>
-      <button class="btn primary" id="refresh-btn" title="Reload every section">&#8635; Refresh</button>
-      <label class="toggle"><input type="checkbox" id="auto-refresh" checked> Auto-refresh every <span id="auto-sec">30</span> s</label>
-      <a class="btn" href="headsets_settings.html">&#8592; Headset Settings</a>
+      <button class="dg-btn primary" id="btn-refresh" type="button">Refresh</button>
+      <label class="dg-check"><input type="checkbox" id="auto-refresh" checked> <span id="auto-label">Auto-refresh</span></label>
+      <span class="lbl">Link</span>
+      <select id="transport-select" title="Which ADB transport to try first. The other one stays the fallback, so WiFi first tests a cabled headset's WiFi link."><option value="Auto">Auto</option><option value="USB">USB first</option><option value="WiFi">WiFi first</option></select>
+      <span class="dg-badge" id="transport-badge" title="ADB transport used for the last read">-</span>
+      <span class="dg-updated" id="updated"></span>
     </div>
+    <div id="dg-banner"></div>
 
-    <div class="head">
-      <h1 id="hs-name">-</h1>
-      <span id="hs-transport" class="badge b-dim">-</span>
-      <span class="sub" id="hs-sub"></span>
-      <span class="stamp" id="stamp"></span>
-    </div>
+    <div class="dg-grid">
+      <section class="dg-card" id="card-firmware">
+        <h2>Firmware <span class="sub" id="sub-firmware"></span></h2>
+        <div class="dg-body" id="body-firmware"><span class="dg-muted">Waiting...</span></div>
+      </section>
 
-    <div class="grid">
-      <div class="card" id="card-firmware">
-        <div class="card-h"><h2>Firmware</h2><span class="right"><span class="badge b-dim" data-tr></span></span></div>
-        <div class="card-b"><span class="loading">Waiting...</span></div>
-      </div>
-      <div class="card" id="card-fleet">
-        <div class="card-h"><h2>Fleet firmware</h2><span class="right"><span class="muted" style="font-size:.72rem">from history, no internet lookup</span></span></div>
-        <div class="card-b"><span class="loading">Waiting...</span></div>
-      </div>
-      <div class="card wide" id="card-health">
-        <div class="card-h"><h2>Health</h2><span class="right"><span class="badge b-dim" data-tr></span></span></div>
-        <div class="card-b"><span class="loading">Waiting...</span></div>
-      </div>
-      <div class="card" id="card-wireless">
-        <div class="card-h"><h2>Wireless (WiFi + Bluetooth)</h2><span class="right"><span class="badge b-dim" data-tr></span></span></div>
-        <div class="card-b"><span class="loading">Waiting...</span></div>
-      </div>
-      <div class="card" id="card-usb">
-        <div class="card-h"><h2>USB / cable</h2></div>
-        <div class="card-b"><span class="loading">Waiting...</span></div>
-      </div>
-      <div class="card" id="card-actions">
-        <div class="card-h"><h2>Operator actions</h2></div>
-        <div class="card-b">
-          <div class="sect-t">Bluetooth</div>
-          <div class="row">
-            <button class="btn" data-act="bluetooth" data-args='{"enable":true}'>BT on</button>
-            <button class="btn danger" data-act="bluetooth" data-args='{"enable":false}' data-confirm="Turn Bluetooth OFF on this headset? Paired haptic vests and accessories disconnect.">BT off</button>
-            <button class="btn" data-act="bluetooth_settings" title="Opens the Bluetooth screen inside the headset so the player can pair bHaptics, ProTube...">Open BT settings in headset</button>
+      <section class="dg-card" id="card-health">
+        <h2>Health <span class="sub" id="sub-health"></span></h2>
+        <div class="dg-body" id="body-health"><span class="dg-muted">Waiting...</span></div>
+      </section>
+
+      <section class="dg-card" id="card-wireless">
+        <h2>Wireless <span class="sub" id="sub-wireless"></span></h2>
+        <div class="dg-body" id="body-wireless"><span class="dg-muted">Waiting...</span></div>
+      </section>
+
+      <section class="dg-card" id="card-wifi">
+        <h2>WiFi networks <span class="sub" id="sub-wifi"></span></h2>
+        <div class="dg-body">
+          <div id="tls-warn" class="dg-banner-msg" style="display:none;margin-bottom:10px">
+            <strong>ADB over TLS (Wireless debugging) is ON for this headset.</strong>
+            It runs a second encrypted connection and mDNS traffic next to the normal WiFi ADB and can reduce the bandwidth available to the video stream.
+            <button class="dg-btn" type="button" id="btn-tls-warn-off" style="margin-left:8px">Turn it off</button>
           </div>
-          <div class="sect-t">Clock and network</div>
-          <div class="row">
-            <button class="btn" id="clock-btn">Sync clock (+ this browser's time zone)</button>
-            <button class="btn danger" data-act="private_dns_reset" data-confirm="Turn Private DNS off on this headset?">Reset private DNS</button>
+          <div id="wifi-warn" class="dg-muted" style="display:none;margin-bottom:10px;color:var(--warn)">This headset is reached over WiFi: switching network drops the connection, so the result cannot be confirmed here. Plug the cable in first for a confirmed switch.</div>
+          <div class="dg-row">
+            <button class="dg-btn" type="button" id="btn-wifi-scan">Scan available networks</button>
+            <span class="dg-muted" id="wifi-scan-note">Scans from the headset radio, not from this PC.</span>
           </div>
-          <div class="sect-t">Updates and apps</div>
-          <div class="row">
-            <button class="btn danger" data-act="updater_disabled" data-args='{"disable":true}' data-confirm="Disable the system updater package(s)? This is on top of the existing update block and can be undone with Enable updater.">Disable updater</button>
-            <button class="btn" data-act="updater_disabled" data-args='{"disable":false}'>Enable updater</button>
-            <button class="btn" data-act="list_disabled">List disabled packages</button>
+          <div id="wifi-scan-result"></div>
+          <h3 class="dg-h">Connect to a network</h3>
+          <div class="dg-row">
+            <input type="text" id="wifi-ssid" class="grow" maxlength="32" placeholder="Network name (SSID)" autocomplete="off">
+            <input type="password" id="wifi-pwd" class="grow" maxlength="63" placeholder="Password (empty = use the one stored on the server)" autocomplete="new-password">
           </div>
-          <div class="row">
-            <input type="text" id="pkg-input" placeholder="com.example.package" style="flex:1;min-width:180px">
-            <button class="btn danger" id="pkg-disable">Disable app</button>
-            <button class="btn" id="pkg-enable">Enable app</button>
+          <div class="dg-row">
+            <label class="dg-muted"><input type="checkbox" id="wifi-save"> Save this password on the server</label>
+            <button class="dg-btn" type="button" id="btn-wifi-connect">Connect headset</button>
           </div>
-          <div class="sect-t">Player <span class="badge b-exp">experimental</span></div>
-          <div class="row">
-            <input type="text" id="msg-title" value="VRHM" maxlength="60" style="width:110px">
-            <input type="text" id="msg-text" placeholder="Message shown to the player" maxlength="300" style="flex:1;min-width:180px">
-            <button class="btn" id="msg-send">Send message</button>
+          <h3 class="dg-h">WiFi throughput test</h3>
+          <div class="dg-row">
+            <button class="dg-btn" type="button" id="btn-wifi-speed">Run WiFi test</button>
+            <span class="dg-muted" id="wifi-speed-note">Pushes and pulls a test file over WiFi (PC to headset, not internet).</span>
           </div>
-          <div class="row">
-            <input type="text" id="input-text" placeholder="Text typed into the focused field (ASCII)" maxlength="500" style="flex:1;min-width:180px">
-            <button class="btn" id="input-send">Type text</button>
-          </div>
-          <div class="sect-t">Recovery</div>
-          <div class="row">
-            <button class="btn" data-act="recovery" data-args='{"what":"Wake"}'>Wake display</button>
-            <button class="btn" data-act="recovery" data-args='{"what":"Home"}'>Go Home</button>
-            <button class="btn danger" data-act="recovery" data-args='{"what":"RestartShell"}' data-confirm="Restart the VR shell? The running app is closed.">Restart shell</button>
-            <button class="btn danger" data-act="recovery" data-args='{"what":"RestartSystemUX"}' data-confirm="Restart SystemUX? Menus disappear for a few seconds.">Restart SystemUX</button>
-          </div>
-          <pre class="out" id="action-out" style="display:none"></pre>
+          <div id="wifi-speed-result"></div>
+          <div class="dg-muted" style="font-size:11.5px">The headset only joins a network it can see. Passwords go to the headset over ADB and are never logged or shown again.</div>
         </div>
-      </div>
-      <div class="card" id="card-adb">
-        <div class="card-h"><h2>ADB shell</h2><span class="right"><span class="muted" style="font-size:.72rem">shell only, every run is logged</span></span></div>
-        <div class="card-b">
-          <div class="row">
-            <select id="preset-select" style="flex:1;min-width:180px"><option value="">Presets...</option></select>
+      </section>
+
+      <section class="dg-card" id="card-usb" style="display:none">
+        <h2>USB / cable <span class="sub" id="sub-usb"></span></h2>
+        <div class="dg-body" id="body-usb"></div>
+      </section>
+
+      <section class="dg-card" id="card-actions">
+        <h2>Operator actions</h2>
+        <div class="dg-body">
+          <h3 class="dg-h" style="margin-top:0">Bluetooth</h3>
+          <div class="dg-row">
+            <button class="dg-btn" type="button" data-act="bluetooth_on">Enable</button>
+            <button class="dg-btn" type="button" data-act="bluetooth_off" data-confirm="Disable Bluetooth on this headset? Paired accessories will disconnect.">Disable</button>
+            <button class="dg-btn" type="button" data-act="bluetooth_settings">Open pairing screen in headset</button>
           </div>
-          <textarea id="cmd-input" rows="3" placeholder="getprop ro.product.model   (no 'adb shell' prefix needed; use single quotes)"></textarea>
-          <div class="row">
-            <button class="btn primary" id="cmd-run">Run</button>
-            <span class="note">Blocked: bootloader, recovery, wipe, fastboot, rm -rf /. 20 s timeout, 64 KB output.</span>
+          <h3 class="dg-h">Clock and network</h3>
+          <div class="dg-row">
+            <button class="dg-btn" type="button" id="btn-sync-clock">Sync clock</button>
+            <label class="dg-check"><input type="checkbox" id="sync-tz"> also set time zone to this PC</label>
+            <button class="dg-btn" type="button" data-act="reset_dns" data-confirm="Turn private DNS off on this headset?">Reset private DNS</button>
           </div>
-          <pre class="out" id="cmd-out" style="display:none"></pre>
+          <h3 class="dg-h">Updates</h3>
+          <div class="dg-row">
+            <button class="dg-btn" type="button" data-act="updater_disable" data-confirm="Disable the updater packages on this headset?">Disable updater</button>
+            <button class="dg-btn" type="button" data-act="updater_enable">Re-enable updater</button>
+          </div>
+          <h3 class="dg-h">Application enable / disable</h3>
+          <div class="dg-row">
+            <input type="text" id="app-package" class="grow" placeholder="com.example.app" autocomplete="off">
+            <button class="dg-btn" type="button" id="btn-app-disable">Disable</button>
+            <button class="dg-btn" type="button" id="btn-app-enable">Enable</button>
+          </div>
+          <h3 class="dg-h">Message to the player <span class="dg-badge exp">Experimental</span></h3>
+          <div class="dg-row">
+            <input type="text" id="msg-title" style="width:140px" placeholder="Title" maxlength="60" value="Operator">
+            <input type="text" id="msg-text" class="grow" placeholder="Message shown on the headset" maxlength="300">
+            <button class="dg-btn" type="button" id="btn-msg">Send</button>
+          </div>
+          <div class="dg-muted" style="font-size:11.5px;margin:-4px 0 10px">Lands in the headset notification center only - it is NOT shown over what the player sees. An on-screen overlay is planned for the companion app.</div>
+          <h3 class="dg-h">Type text into the headset</h3>
+          <div class="dg-row">
+            <input type="text" id="send-text" class="grow" placeholder="Text for the focused field" maxlength="200" autocomplete="off">
+            <button class="dg-btn" type="button" id="btn-send-text">Type</button>
+          </div>
+          <h3 class="dg-h">Recovery</h3>
+          <div class="dg-row">
+            <button class="dg-btn" type="button" data-act="recover_wake">Wake</button>
+            <button class="dg-btn" type="button" data-act="recover_home">Home</button>
+            <button class="dg-btn danger" type="button" data-act="recover_restart_shell" data-confirm="Restart the headset shell? The player will drop to a loading screen.">Restart shell</button>
+            <button class="dg-btn danger" type="button" data-act="recover_restart_systemux" data-confirm="Restart System UX? The player will drop to a loading screen.">Restart System UX</button>
+          </div>
         </div>
-      </div>
-      <div class="card" id="card-tls">
-        <div class="card-h"><h2>ADB over TLS</h2><span class="right"><span class="badge b-exp">experimental</span></span></div>
-        <div class="card-b">
-          <div class="note" style="margin-top:0">Investigation only: can Android wireless debugging (mDNS, TLS) replace re-enabling port 5555 after every reboot? The normal WiFi ADB setup is not changed by anything here.</div>
-          <div class="row">
-            <button class="btn" id="tls-status">Check status</button>
-            <button class="btn" data-act="tls_enable" data-confirm="Turn on Android wireless debugging (adb_wifi_enabled = 1)? Experimental.">Enable wireless debugging</button>
-            <button class="btn" id="tls-connect" disabled>Connect to TLS port</button>
+      </section>
+
+      <section class="dg-card" id="card-shell">
+        <h2>ADB shell</h2>
+        <div class="dg-body">
+          <div class="dg-row">
+            <select id="shell-preset" class="grow"><option value="">Presets...</option></select>
           </div>
-          <div id="tls-body" class="note"></div>
+          <div class="dg-row">
+            <input type="text" id="shell-cmd" class="grow" placeholder="Shell command (runs inside adb shell)" autocomplete="off" spellcheck="false">
+            <button class="dg-btn primary" type="button" id="btn-shell">Run</button>
+          </div>
+          <pre class="dg-out" id="shell-out"></pre>
+          <div class="dg-muted" style="font-size:11.5px;margin-top:6px">Shell only. 20 s timeout, output capped at 64 KB. Every command is written to the log.</div>
         </div>
-      </div>
+      </section>
+
+      <section class="dg-card" id="card-tls">
+        <h2>ADB over TLS <span class="dg-badge exp">Experimental</span></h2>
+        <div class="dg-body">
+          <div class="dg-muted" style="margin-bottom:10px">Evidence only: tests whether Wireless debugging could one day replace re-enabling tcpip after a reboot. It does not change how headsets are onboarded.</div>
+          <div class="dg-row">
+            <button class="dg-btn" type="button" id="btn-tls-status">Check status</button>
+            <button class="dg-btn" type="button" id="btn-tls-enable" data-confirm="Turn Wireless debugging on for this headset?">Enable on headset</button>
+            <button class="dg-btn" type="button" id="btn-tls-disable">Disable on headset</button>
+            <button class="dg-btn" type="button" id="btn-tls-connect" disabled>Connect to mDNS port</button>
+          </div>
+          <div id="tls-result" class="dg-muted"></div>
+        </div>
+      </section>
     </div>
   </div>
-
-  <div id="confirm-modal">
-    <div class="box">
-      <h3 id="cm-title">Confirm</h3>
-      <p id="cm-text"></p>
-      <div class="actions">
-        <button class="btn" id="cm-cancel">Cancel</button>
-        <button class="btn primary" id="cm-ok">Confirm</button>
-      </div>
-    </div>
-  </div>
+  <div id="dg-toast"></div>
 
   <script>
+  (function () {
     'use strict';
 
-    var params    = new URLSearchParams(location.search);
-    var headsetId = parseInt(params.get('id'), 10) || 0;
-    var summary   = null;
-    var autoSec   = 30;
-    var timer     = null;
-    var loading   = false;
-    var tlsPort   = null;
+    var headsetId = 0, headsets = [], busy = false, loadToken = 0, refreshTimer = null, toastTimer = null;
+    var cfg = { autoRefreshSec: 30, cablePasses: 3, presets: [] };
+    var thr = { base: { warn: 42, crit: 50 }, cpu: { warn: 75, crit: 85 }, gpu: { warn: 75, crit: 85 }, batt: { warn: 40, crit: 30 } };
+    var lastTls = null;
 
+    function $(id) { return document.getElementById(id); }
     function esc(s) {
-      return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
-        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
-      });
+      return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
-    function v(x, unit) { return (x === null || x === undefined || x === '') ? '<span class="muted">-</span>' : esc(x) + (unit ? ' ' + unit : ''); }
-    function kv(rows) {
-      return '<table class="kv">' + rows.map(function (r) { return '<tr><td>' + esc(r[0]) + '</td><td>' + r[1] + '</td></tr>'; }).join('') + '</table>';
-    }
-    function trBadge(t) {
-      if (t === 'USB')  return '<span class="badge b-usb">USB</span>';
-      if (t === 'WiFi') return '<span class="badge b-wifi">WiFi</span>';
-      return '<span class="badge b-dim">-</span>';
-    }
-    function setTransport(cardId, t) {
-      var el = document.querySelector('#' + cardId + ' [data-tr]');
-      if (el) el.outerHTML = trBadge(t).replace('<span class="badge', '<span data-tr class="badge');
-    }
-    function cardBody(id) { return document.querySelector('#' + id + ' .card-b'); }
-    function tempLevel(c, warn, crit) {
-      if (c === null || c === undefined) return '';
-      return c >= crit ? 'color:var(--crit)' : (c >= warn ? 'color:var(--warn)' : '');
-    }
+    function arr(x) { return Array.isArray(x) ? x : (x ? [x] : []); }
+    function none() { return '<span class="dg-muted">-</span>'; }
+    function val(v, unit) { return (v === null || v === undefined || v === '') ? none() : esc(v) + (unit ? ' ' + unit : ''); }
+    function kv(k, html) { return '<div class="k">' + esc(k) + '</div><div class="v">' + html + '</div>'; }
+    function kvBlock(rows) { return '<div class="dg-kv">' + rows.join('') + '</div>'; }
+    function badge(text, cls) { return '<span class="dg-badge ' + (cls || '') + '">' + esc(text) + '</span>'; }
+    function fixed(v, dp) { return (v === null || v === undefined) ? null : Number(v).toFixed(dp); }
+    function when(iso) { return iso ? esc(String(iso).replace('T', ' ').replace('Z', ' UTC')) : none(); }
 
     function api(url, opts) {
-      return fetch(url, opts).then(function (r) {
-        return r.json().catch(function () { return { ok: false, error: 'HTTP ' + r.status }; });
-      });
+      return fetch(url, opts || {})
+        .then(function (r) { return r.json(); })
+        .then(null, function () { return { ok: false, error: 'Server unreachable or bad response.' }; });
     }
     function post(url, body) {
       return api(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     }
 
-    // ---- Confirmation for destructive actions -------------------------------
-    var pendingConfirm = null;
-    function confirmThen(text, fn) {
-      if (!text) { fn(); return; }
-      pendingConfirm = fn;
-      document.getElementById('cm-text').textContent = text;
-      document.getElementById('confirm-modal').style.display = 'flex';
+    function toast(msg, ok) {
+      var t = $('dg-toast');
+      t.textContent = msg; t.className = ok ? 'ok' : 'err'; t.style.display = 'block';
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(function () { t.style.display = 'none'; }, ok ? 4000 : 9000);
     }
-    document.getElementById('cm-cancel').onclick = function () { pendingConfirm = null; document.getElementById('confirm-modal').style.display = 'none'; };
-    document.getElementById('cm-ok').onclick = function () {
-      var fn = pendingConfirm; pendingConfirm = null;
-      document.getElementById('confirm-modal').style.display = 'none';
-      if (fn) fn();
-    };
+    function banner(msg) { $('dg-banner').innerHTML = msg ? '<div class="dg-banner-msg">' + esc(msg) + '</div>' : ''; }
+    function setSub(name, txt) { var e = $('sub-' + name); if (e) e.textContent = txt || ''; }
+    function setTransport(t) {
+      var b = $('transport-badge');
+      b.textContent = t || '-';
+      b.className = 'dg-badge ' + (t === 'USB' ? 'usb' : (t === 'WiFi' ? 'wifi' : ''));
+      var w = $('wifi-warn'); if (w) { w.style.display = t === 'WiFi' ? 'block' : 'none'; }
+    }
+    function tempClass(v, kind) { var b = thr[kind] || thr.base; return v === null || v === undefined ? '' : (v >= b.crit ? 'bad' : (v >= b.warn ? 'warn' : 'good')); }
+    function tile(label, text, cls, href) {
+      var inner = '<div class="k">' + esc(label) + '</div><div class="v">' + text + '</div>';
+      return href ? '<a class="dg-tile ' + (cls || '') + '" href="' + href + '">' + inner + '</a>'
+                  : '<div class="dg-tile ' + (cls || '') + '">' + inner + '</div>';
+    }
+    function transportParam() { return $('transport-select').value || 'Auto'; }
+    function histLink(metric) { return 'metric_history.html?id=' + encodeURIComponent(headsetId) + '&metric=' + metric; }
 
-    // ---- Section renderers ----------------------------------------------------
+    // One ADB section = one combined adb shell call on a single-threaded server, so the sections
+    // are loaded strictly one after the other, never in parallel.
+    function loadSection(name, render) {
+      var token = loadToken;
+      setSub(name, 'reading...');
+      return api('/api/headset-diag?id=' + encodeURIComponent(headsetId) + '&section=' + name + '&transport=' + transportParam()).then(function (res) {
+        if (token !== loadToken) { return null; }
+        if (res.transport && res.transport !== '-') { setTransport(res.transport); }
+        if (!res.ok) {
+          $('body-' + name).innerHTML = '<div class="dg-banner-msg">' + esc(res.error || 'Failed.') + '</div>';
+          setSub(name, '');
+          return res;
+        }
+        $('body-' + name).innerHTML = render(res.data, res);
+        setSub(name, res.transport && res.transport !== '-' ? 'read over ' + res.transport : '');
+        return res;
+      });
+    }
+
+    function loadUsb() {
+      var token = loadToken;
+      return api('/api/headset-diag?id=' + encodeURIComponent(headsetId) + '&section=usb&transport=' + transportParam()).then(function (res) {
+        if (token !== loadToken) { return null; }
+        var card = $('card-usb');
+        if (!res.ok || !res.data || !res.data.OnUsb) { card.style.display = 'none'; return res; }
+        card.style.display = '';
+        $('body-usb').innerHTML = renderUsb(res.data);
+        return res;
+      });
+    }
+
+    function skipped(name) {
+      $('body-' + name).innerHTML = '<span class="dg-muted">Skipped - the headset is not reachable.</span>';
+      setSub(name, '');
+    }
+
+    function loadAll() {
+      if (!headsetId || busy) { return Promise.resolve(); }
+      busy = true; $('btn-refresh').disabled = true;
+      var token = ++loadToken;
+      banner('');
+      var reachable = true;
+      return loadSection('firmware', renderFirmware).then(function (r) {
+        if (r && !r.ok && /not reachable/i.test(r.error || '')) { reachable = false; banner(r.error); }
+        if (!reachable) { skipped('health'); skipped('wireless'); return null; }
+        return loadSection('health', renderHealth).then(function () { return loadSection('wireless', renderWireless); });
+      }).then(function () { return loadUsb(); }).then(function () {
+        if (token === loadToken) { $('updated').textContent = 'Updated ' + new Date().toLocaleTimeString(); }
+        busy = false; $('btn-refresh').disabled = false;
+      });
+    }
+
+    function schedule() {
+      clearTimeout(refreshTimer);
+      if (!$('auto-refresh').checked) { return; }
+      refreshTimer = setTimeout(function () {
+        if (document.hidden) { schedule(); return; }
+        loadAll().then(schedule);
+      }, cfg.autoRefreshSec * 1000);
+    }
+
+    function resetAll() {
+      loadToken++; busy = false; $('btn-refresh').disabled = false;
+      setTransport('-'); banner(''); $('updated').textContent = '';
+      ['firmware', 'health', 'wireless'].forEach(function (n) { $('body-' + n).innerHTML = '<span class="dg-muted">Waiting...</span>'; setSub(n, ''); });
+      $('card-usb').style.display = 'none';
+      $('shell-out').textContent = ''; $('tls-result').textContent = ''; lastTls = null; $('btn-tls-connect').disabled = true;
+    }
+
+    // ---------- renderers ----------
     function renderFirmware(d) {
-      setTransport('card-firmware', d.Transport);
-      var rows = [
-        ['OS version', v(d.OsDisplay)],
-        ['Firmware (system UI)', v(d.FirmwareVersion) + (d.OldFirmwareWarning ? ' <span class="badge b-warn">older than v71</span>' : '')],
-        ['Build', '<span class="mono">' + v(d.Build) + '</span>'],
-        ['Environment', '<span class="mono">' + v(d.EnvironmentRaw) + '</span>'],
-        ['Product', v(d.ProductName)],
-        ['Pending OTA', d.PendingOta ? '<span class="badge b-warn">pending</span> <span class="mono">' + esc(d.PendingOta) + '</span>' : '<span class="muted">none seen</span>'],
-        ['OTA progress', d.OtaProgress != null ? esc(d.OtaProgress) + ' %' : '<span class="muted">-</span>'],
-        ['Updater package', d.UpdaterDisabled === true ? '<span class="badge b-ok">disabled</span>' : (d.UpdaterDisabled === false ? 'enabled' : '<span class="muted">-</span>')],
-        ['Private DNS', v(d.PrivateDnsMode) + (d.PrivateDnsHost ? ' <span class="mono">' + esc(d.PrivateDnsHost) + '</span>' : '')]
-      ];
-      var html = kv(rows);
-      if (d.Components && d.Components.length) {
-        html += '<div class="sect-t">Components</div><table class="list"><tr><th>Component</th><th>Version</th></tr>' +
-          d.Components.map(function (c) { return '<tr><td>' + esc(c.Name) + '</td><td class="mono">' + v(c.Version) + '</td></tr>'; }).join('') + '</table>';
+      var rows = [];
+      rows.push(kv('OS version', val(d.OsDisplay)));
+      rows.push(kv('Firmware', val(d.FirmwareVersion) + (d.OldFirmwareWarning ? ' ' + badge('very old (before v71)', 'warn') : '')));
+      rows.push(kv('Build', val(d.Build)));
+      rows.push(kv('Environment', val(d.Environment)));
+      if (d.Fleet) {
+        var f = d.Fleet;
+        rows.push(kv('Fleet comparison',
+          (f.Behind ? badge('behind ' + f.NewestForModel, 'bad') : badge('newest of its model', 'good')) +
+          (f.Mismatch ? ' ' + badge('mixed versions', 'warn') : '')));
+      } else {
+        rows.push(kv('Fleet comparison', '<span class="dg-muted">not recorded yet</span>'));
       }
-      if (d.History && d.History.length) {
-        html += '<div class="sect-t">History (changes only)</div><table class="list"><tr><th>Seen</th><th>Version</th><th>Environment</th></tr>' +
-          d.History.slice(0, 10).map(function (h) { return '<tr><td>' + esc(h.ts) + '</td><td>' + esc(h.version) + '</td><td class="mono">' + esc(h.environment) + '</td></tr>'; }).join('') + '</table>';
+      rows.push(kv('Updater', d.UpdaterDisabled ? badge('disabled', 'warn') : badge('enabled', '')));
+      rows.push(kv('Private DNS', val(d.PrivateDns) + (d.PrivateDnsHost ? ' (' + esc(d.PrivateDnsHost) + ')' : '')));
+      if (d.UpdateNotice) {
+        var un = d.UpdateNotice;
+        var untilTxt = un.DeferUntil ? String(un.DeferUntil).slice(0, 10) : '';
+        rows.push(kv('Update notice',
+          badge(un.Release || 'update', un.Tag === 'CRITICAL' ? 'warn' : '') +
+          (un.Status === 'DEFER' && untilTxt ? ' ' + esc('deferred by Meta until ' + untilTxt) : (un.Status ? ' ' + esc(un.Status) : ''))));
       }
-      if (d.OtaLog && d.OtaLog.length) html += '<pre class="out">' + esc(d.OtaLog.join('\n')) + '</pre>';
+      var html = kvBlock(rows);
+      html += '<div class="dg-row"><button class="dg-btn" type="button" id="btn-open-update"' +
+        ' title="Meta does not allow forcing an update over ADB. This opens the headset\'s own Software Update screen, which has its Update now button.">' +
+        'Open software update screen in headset</button></div>';
+      if (d.PendingOtaUri) {
+        html += '<h3 class="dg-h">Pending update</h3><div style="word-break:break-all">' + esc(d.PendingOtaUri) + '</div>';
+      }
+      if (d.OtaProgressPct !== null && d.OtaProgressPct !== undefined) {
+        html += '<div class="dg-bar"><i style="width:' + Math.max(0, Math.min(100, d.OtaProgressPct)) + '%"></i></div>' +
+                '<div class="dg-muted">Update progress ' + esc(d.OtaProgressPct) + ' %</div>';
+      }
+      var comps = arr(d.Components);
+      if (comps.length) {
+        html += '<h3 class="dg-h">Components</h3><table class="dg-t"><tr><th>Component</th><th>Version</th></tr>' +
+          comps.map(function (c) { return '<tr><td>' + esc(c.Name) + '</td><td>' + esc(c.Version) + '</td></tr>'; }).join('') + '</table>';
+      }
+      var hist = arr(d.History);
+      if (hist.length) {
+        html += '<h3 class="dg-h">Firmware history</h3><table class="dg-t"><tr><th>Seen</th><th>Version</th></tr>' +
+          hist.map(function (h) { return '<tr><td>' + when(h.ts) + '</td><td>' + esc(h.firmware_version) + '</td></tr>'; }).join('') + '</table>';
+      }
       return html;
-    }
-
-    function renderFleet(d) {
-      var items = d.items || [];
-      if (!items.length) return '<span class="muted">No headset registered.</span>';
-      return '<table class="list"><tr><th>Headset</th><th>Model</th><th>Version</th><th>Newest on model</th><th></th></tr>' +
-        items.map(function (i) {
-          var flag = !i.version ? '<span class="badge b-dim">not sampled yet</span>'
-                   : i.behind ? '<span class="badge b-warn">behind</span>'
-                   : i.mismatch ? '<span class="badge b-ok">newest</span>' : '<span class="badge b-ok">ok</span>';
-          return '<tr' + (i.current ? ' style="font-weight:700"' : '') + '><td>' + esc(i.name) + '</td><td>' + esc(i.model) + '</td><td>' + v(i.version) + '</td><td>' + v(i.newest) + '</td><td>' + flag + '</td></tr>';
-        }).join('') + '</table>' +
-        '<div class="note">The monitor records a headset\'s firmware every 10 minutes while it is reachable, and keeps a row only when it changes.</div>';
     }
 
     function renderHealth(d) {
-      setTransport('card-health', d.Transport);
-      var t = d.Temperatures || {};
-      var id = headsetId;
-      function tile(label, val, metric, warn, crit) {
-        var inner = '<div class="t-l">' + esc(label) + '</div><div class="t-v" style="' + tempLevel(val, warn, crit) + '">' + (val == null ? '-' : esc(val) + ' C') + '</div>';
-        return metric ? '<a class="tile" title="Open history" href="metric_history.html?id=' + id + '&metric=' + metric + '">' + inner + '</a>' : '<div class="tile">' + inner + '</div>';
-      }
-      var html = '<div class="tiles">' +
-        tile('CPU', t.Cpu, 'cpu_temp', 75, 90) +
-        tile('GPU', t.Gpu, 'gpu_temp', 75, 90) +
-        tile('Skin', t.Skin, 'skin_temp', 42, 50) +
-        tile('Battery', t.Battery, 'temp', 42, 50) +
-        tile('USB port', t.Usb, null, 50, 60) +
-        '</div>';
-      if (t.Throttling) html += '<div class="row"><span class="badge b-crit">thermal throttling reported (status ' + esc(t.Status) + ')</span></div>';
-
+      var t = d.Temps || {};
+      var tiles = '';
+      tiles += tile('CPU', t.Cpu == null ? none() : fixed(t.Cpu, 1) + ' C', tempClass(t.Cpu, 'cpu'), histLink('cpu_temp'));
+      tiles += tile('GPU', t.Gpu == null ? none() : fixed(t.Gpu, 1) + ' C', tempClass(t.Gpu, 'gpu'), histLink('gpu_temp'));
+      tiles += tile('Skin', t.Skin == null ? none() : fixed(t.Skin, 1) + ' C', tempClass(t.Skin), histLink('skin_temp'));
+      tiles += tile('Battery', t.Battery == null ? none() : fixed(t.Battery, 1) + ' C', tempClass(t.Battery), histLink('temp'));
       var b = d.Battery || {};
-      var m = d.Memory || {};
-      var f = d.Fan || {};
-      var drift = d.ClockDriftSec;
-      var driftHtml = drift == null ? '<span class="muted">-</span>' :
-        (Math.abs(drift) > 5 ? '<span class="badge b-warn">' + esc(drift) + ' s</span>' : esc(drift) + ' s');
-      html += '<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px">' +
-        '<div>' + kv([
-          ['Battery level', v(b.Level, '%')],
-          ['Battery health', b.HealthPercent != null ? esc(b.HealthPercent) + ' % <span class="muted">(' + esc(b.LearnedMah) + ' / ' + esc(b.DesignMah) + ' mAh)</span>' : '<span class="muted">not reported</span>'],
-          ['Battery state', v(b.Status) + (b.Health ? ' / ' + esc(b.Health) : '')],
-          ['Battery temp / voltage', v(b.TempC, 'C') + ' / ' + v(b.VoltageMv, 'mV')],
-          ['CPU / GPU level', v(d.CpuLevel) + ' / ' + v(d.GpuLevel)],
-          ['Fan', (f.Rpm != null ? esc(f.Rpm) + ' rpm' : '<span class="muted">-</span>') + (f.Pwm != null ? ' / PWM ' + esc(f.Pwm) : '') + (f.Status ? ' / ' + esc(f.Status) : '')]
-        ]) + '</div>' +
-        '<div>' + kv([
-          ['Boot stage', d.BootStage === 'ready' ? '<span class="badge b-ok">ready</span>' : '<span class="badge b-warn">' + esc(d.BootStage) + '</span>'],
-          ['Clock drift vs PC', driftHtml],
-          ['Time zone', v(d.Timezone)],
-          ['Network time', d.AutoTime ? 'on' : '<span class="badge b-warn">off</span>'],
-          ['Memory available', m.AvailableMb != null ? esc(m.AvailableMb) + ' / ' + esc(m.TotalMb) + ' MB' : '<span class="muted">-</span>'],
-          ['Camera frame timeouts', d.CameraErrors > 0 ? '<span class="badge b-warn">' + esc(d.CameraErrors) + ' in recent log</span>' : '0']
-        ]) + '</div></div>';
-
-      var c = d.Controllers || [];
-      html += '<div class="sect-t">Controllers</div>';
-      html += c.length ? '<table class="list"><tr><th>Model</th><th>Type</th><th>Battery</th><th>Firmware</th><th>HW rev</th><th>Attached</th><th>Status</th></tr>' +
-        c.map(function (x) { return '<tr><td>' + v(x.Model) + '</td><td>' + v(x.Type) + '</td><td>' + v(x.Battery) + '</td><td class="mono">' + v(x.Firmware) + '</td><td>' + v(x.HardwareRev) + '</td><td>' + v(x.IsAttached) + '</td><td>' + v(x.Status) + '</td></tr>'; }).join('') + '</table>'
-        : '<span class="muted">No paired controller reported.</span>';
-
-      var p = d.TopProcesses || [];
-      if (p.length) {
-        html += '<div class="sect-t">Top processes</div><table class="list"><tr><th>PID</th><th>CPU %</th><th>MEM %</th><th>Process</th></tr>' +
-          p.map(function (x) { return '<tr><td>' + esc(x.Pid) + '</td><td>' + esc(x.Cpu) + '</td><td>' + esc(x.Mem) + '</td><td class="mono">' + esc(x.Name) + '</td></tr>'; }).join('') + '</table>';
+      if (b.Level !== null && b.Level !== undefined) {
+        tiles += tile('Battery level', esc(b.Level) + ' %', b.Level <= thr.batt.crit ? 'bad' : (b.Level < thr.batt.warn ? 'warn' : 'good'), histLink('battery'));
       }
-      if (f.Raw && f.Raw.length && f.Rpm == null) html += '<div class="sect-t">Fan service</div><pre class="out">' + esc(f.Raw.join('\n')) + '</pre>';
+      if (b.HealthPct !== null && b.HealthPct !== undefined) {
+        tiles += tile('Battery health', esc(b.HealthPct) + ' %', b.HealthPct < 70 ? 'bad' : (b.HealthPct < 85 ? 'warn' : 'good'), null);
+      }
+      var rows = [];
+      rows.push(kv('Throttling', t.ThrottlingLabel ? badge(t.ThrottlingLabel, t.ThrottlingStatus > 1 ? 'bad' : (t.ThrottlingStatus === 1 ? 'warn' : 'good')) : none()));
+      if (d.Fan) { rows.push(kv('Fan', [d.Fan.Status ? esc(d.Fan.Status) : '', d.Fan.Speed != null ? esc(d.Fan.Speed) + ' rpm' : '', d.Fan.Pwm != null ? 'PWM ' + esc(d.Fan.Pwm) : ''].filter(Boolean).join(' / ') || none())); }
+      rows.push(kv('CPU / GPU level', (d.CpuLevel || d.GpuLevel) ? val(d.CpuLevel) + ' / ' + val(d.GpuLevel) : none()));
+      rows.push(kv('Battery', b.Level != null ? esc(b.Level) + ' % (' + esc(b.Plugged || '-') + (b.VoltageMv != null ? ', ' + esc(b.VoltageMv) + ' mV' : '') + ')' : none()));
+      if (b.DesignMah != null) { rows.push(kv('Capacity', esc(b.LearnedMah != null ? b.LearnedMah : '?') + ' / ' + esc(b.DesignMah) + ' mAh')); }
+      if (d.Memory) { rows.push(kv('Memory', esc(d.Memory.UsedMb != null ? d.Memory.UsedMb : '?') + ' / ' + esc(d.Memory.TotalMb) + ' MB used')); }
+      rows.push(kv('Boot stage', d.BootStage ? badge(d.BootStage, d.BootStage === 'Booted' ? 'good' : 'warn') : none()));
+      var drift = d.ClockDriftSec;
+      rows.push(kv('Clock drift', drift == null ? none() : (Math.abs(drift) > 5 ? badge(drift + ' s', 'bad') : badge(drift + ' s', 'good'))));
+      rows.push(kv('Time zone', val(d.TimeZone) + (d.AutoTime === false ? ' ' + badge('auto time off', 'warn') : '')));
+      rows.push(kv('Camera errors', d.CameraErrors > 0 ? badge(d.CameraErrors + ' recent', 'bad') : badge('none', 'good')));
+      var html = '<div class="dg-tiles">' + tiles + '</div>' + kvBlock(rows);
+      var ctl = arr(d.Controllers);
+      if (ctl.length) {
+        html += '<h3 class="dg-h">Controllers</h3><table class="dg-t"><tr><th>Type</th><th>Model</th><th>HW</th><th>FW</th><th>Batt</th><th>Status</th></tr>' +
+          ctl.map(function (c) {
+            return '<tr><td>' + val(c.Type) + '</td><td>' + val(c.Model) + '</td><td>' + val(c.HardwareRev) + '</td><td>' + val(c.Firmware) +
+                   '</td><td>' + val(c.Battery) + '</td><td>' + val(c.Status || c.IsAttached) + '</td></tr>';
+          }).join('') + '</table>';
+      }
+      var procs = arr(d.TopProcesses);
+      if (procs.length) {
+        html += '<h3 class="dg-h">Busiest processes</h3><table class="dg-t"><tr><th>CPU %</th><th>Mem %</th><th>Process</th></tr>' +
+          procs.map(function (p) { return '<tr><td>' + val(p.CpuPct) + '</td><td>' + val(p.MemPct) + '</td><td>' + esc(p.Name) + '</td></tr>'; }).join('') + '</table>';
+      }
       return html;
     }
 
+    function rssiText(r) {
+      if (r === null || r === undefined) { return none(); }
+      var q = r >= -55 ? ['excellent', 'good'] : (r >= -67 ? ['good', 'good'] : (r >= -75 ? ['weak', 'warn'] : ['very weak', 'bad']));
+      return esc(r) + ' dBm ' + badge(q[0], q[1]);
+    }
+
+    var lastWifiSpeedHtml = '';
+
+    function renderWifiSpeed(r) {
+      if (!r) { return ''; }
+      var html = '';
+      var rowsData = arr(r.Passes);
+      if (rowsData.length) {
+        html += '<table class="dg-t"><tr><th>Pass</th><th>Push MB/s</th><th>Pull MB/s</th></tr>' +
+          rowsData.map(function (p) { return '<tr><td>' + esc(p.Pass) + '</td><td>' + esc(p.PushMBps) + '</td><td>' + esc(p.PullMBps) + '</td></tr>'; }).join('') + '</table>';
+        var avg = Math.min(r.AvgPullMBps == null ? 1e9 : r.AvgPullMBps, r.AvgPushMBps == null ? 1e9 : r.AvgPushMBps);
+        var verdict = avg >= 25 ? badge('good for streaming', 'good') : (avg >= 10 ? badge('usable, limited headroom', 'warn') : badge('weak - check signal, band and access point', 'bad'));
+        html += '<div>Average push ' + val(r.AvgPushMBps, 'MB/s') + ', pull ' + val(r.AvgPullMBps, 'MB/s') + ' ' + verdict + '</div>';
+      }
+      return html;
+    }
+
+    function runWifiSpeed() {
+      var btn = $('btn-wifi-speed'); if (!btn) { return; }
+      btn.disabled = true; $('wifi-speed-note').textContent = 'Testing - this takes about a minute...'; $('wifi-speed-result').innerHTML = '';
+      lastWifiSpeedHtml = '';
+      busy = true;
+      post('/api/headset-diag/action', { id: headsetId, action: 'wifi_speed_test', args: { passes: cfg.cablePasses }, transport: 'WiFi' }).then(function (res) {
+        busy = false;
+        var b2 = $('btn-wifi-speed'); if (b2) { b2.disabled = false; }
+        var note = $('wifi-speed-note');
+        if (note) { note.textContent = res.ok ? 'Done.' : (res.message || res.error || 'The test failed.'); }
+        lastWifiSpeedHtml = renderWifiSpeed(res.result);
+        var out = $('wifi-speed-result'); if (out) { out.innerHTML = lastWifiSpeedHtml; }
+      });
+    }
+
+    function setTlsWarning(on) {
+      var w = $('tls-warn'); if (w) { w.style.display = on === true ? 'block' : 'none'; }
+    }
+
+    function tlsOff() {
+      return act('tls_disable', {}, 'Turn Wireless debugging (ADB over TLS) off on this headset? The normal WiFi ADB used by this app is not affected.').then(function (res) {
+        if (res && res.ok) { setTlsWarning(false); if ($('tls-result')) { checkTls(); } }
+        return res;
+      });
+    }
+
     function renderWireless(d) {
-      setTransport('card-wireless', d.Transport);
-      var w = d.Wifi || {};
-      var bt = d.Bluetooth || {};
-      var ms = d.MetaServers || {};
-      var rssi = w.Rssi;
-      var rssiHtml = rssi == null ? '<span class="muted">-</span>' :
-        '<span style="' + (rssi <= -75 ? 'color:var(--crit)' : (rssi <= -65 ? 'color:var(--warn)' : '')) + '">' + esc(rssi) + ' dBm</span>';
-      var html = kv([
-        ['WiFi', w.Enabled === false ? '<span class="badge b-crit">off</span>' : (w.Enabled ? 'on' : '<span class="muted">-</span>')],
-        ['SSID / BSSID', v(w.Ssid) + ' <span class="mono muted">' + esc(w.Bssid || '') + '</span>'],
-        ['Signal', rssiHtml],
-        ['Band / frequency', v(w.Band) + (w.FrequencyMhz ? ' <span class="muted">(' + esc(w.FrequencyMhz) + ' MHz)</span>' : '')],
-        ['Standard', v(w.Standard)],
-        ['Link speed tx / rx', v(w.TxMbps != null ? w.TxMbps : w.LinkMbps) + ' / ' + v(w.RxMbps) + ' Mbps'],
-        ['IP', '<span class="mono">' + v(w.Ip) + '</span>'],
-        ['Meta servers', ms.Reachable ? '<span class="badge b-ok">reachable</span>' + (ms.AvgMs != null ? ' ' + esc(ms.AvgMs) + ' ms' : '') : '<span class="badge b-warn">unreachable</span>' + (ms.LossPercent != null ? ' ' + esc(ms.LossPercent) + ' % loss' : '')],
-        ['Bluetooth', bt.Enabled === true ? 'on' + (bt.State ? ' (' + esc(bt.State) + ')' : '') : (bt.Enabled === false ? '<span class="badge b-dim">off</span>' : '<span class="muted">-</span>')]
+      var rows = [];
+      rows.push(kv('WiFi', d.WifiEnabled === false ? badge('off', 'warn') : (d.WifiEnabled ? badge('on', 'good') : none())));
+      rows.push(kv('SSID', val(d.Ssid)));
+      rows.push(kv('BSSID', val(d.Bssid)));
+      rows.push(kv('Band / standard', (d.Band || d.Standard) ? val(d.Band) + ' / ' + val(d.Standard) : none()));
+      rows.push(kv('Signal', rssiText(d.RssiDbm)));
+      rows.push(kv('Link speed', d.LinkSpeedMbps != null ? esc(d.LinkSpeedMbps) + ' Mbps (tx ' + val(d.TxSpeedMbps) + ' / rx ' + val(d.RxSpeedMbps) + ')' : none()));
+      rows.push(kv('IP address', val(d.Ip)));
+      rows.push(kv('ADB over TLS', d.AdbTlsEnabled === true ? badge('on', 'warn') : (d.AdbTlsEnabled === false ? badge('off', '') : none())));
+      setTlsWarning(d.AdbTlsEnabled);
+      rows.push(kv('Meta servers', d.MetaReachable == null ? none() : (d.MetaReachable ? badge('reachable', 'good') + (d.MetaLatencyMs != null ? ' ' + esc(d.MetaLatencyMs) + ' ms' : '') : badge('unreachable', 'bad'))));
+      var html = kvBlock(rows);
+      var saved = arr(d.SavedNetworks);
+      lastSaved = saved;
+      if (saved.length) {
+        html += '<h3 class="dg-h">Saved networks</h3><table class="dg-t"><tr><th>SSID</th><th>Security</th><th></th></tr>' +
+          saved.map(function (n, i) { return '<tr><td>' + esc(n.Ssid) + (n.Ssid === d.Ssid ? ' ' + badge('connected', 'good') : '') + '</td><td>' + esc(n.Security) + '</td><td>' + (n.Ssid === d.Ssid ? '' : '<button class="dg-btn" type="button" data-wifi-switch="' + i + '">Switch</button>') + '</td></tr>'; }).join('') + '</table>';
+      }
+      html += '<h3 class="dg-h">Bluetooth</h3>' + kvBlock([
+        kv('Radio', d.BluetoothEnabled === null || d.BluetoothEnabled === undefined ? none() : (d.BluetoothEnabled ? badge('on', 'good') : badge('off', 'warn')) + (d.BluetoothState ? ' ' + esc(d.BluetoothState) : ''))
       ]);
-      var bonded = bt.Bonded || [];
-      html += '<div class="sect-t">Bonded Bluetooth devices</div>' + (bonded.length
-        ? '<table class="list">' + bonded.map(function (x) { return '<tr><td>' + v(x.Name) + '</td><td class="mono">' + esc(x.Address) + '</td></tr>'; }).join('') + '</table>'
-        : '<span class="muted">None.</span>');
-      var saved = d.SavedNetworks || [];
-      html += '<div class="sect-t">Saved WiFi networks</div>' + (saved.length
-        ? '<table class="list">' + saved.map(function (x) { return '<tr><td>' + esc(x.Ssid) + '</td><td class="muted">' + esc(x.Security) + '</td></tr>'; }).join('') + '</table>'
-        : '<span class="muted">None reported.</span>');
+      var bonded = arr(d.BondedDevices);
+      if (bonded.length) {
+        html += '<table class="dg-t"><tr><th>Bonded device</th><th>Address</th></tr>' +
+          bonded.map(function (x) { return '<tr><td>' + (x.Name ? esc(x.Name) : none()) + '</td><td>' + esc(x.Address) + '</td></tr>'; }).join('') + '</table>';
+      }
       return html;
     }
 
     function renderUsb(d) {
-      if (!d.OnUsb) return '<span class="muted">This headset is not connected by USB right now. Plug it in to see link speed, Windows USB events and run the cable test.</span>';
-      var html = kv([
-        ['Serial', '<span class="mono">' + esc(d.Serial) + '</span>'],
-        ['Connected since', v(d.Since)],
-        ['Link', v(d.UsbSpeed)],
-        ['USB busy', d.UsbBusy ? '<span class="badge b-warn">operator action running</span>' : 'no']
-      ]);
-      html += '<div class="row"><button class="btn" id="cable-btn">Run cable test (' + esc((summary && summary.cableTestPasses) || 3) + ' x 32 MB)</button></div><div id="cable-out"></div>';
-      var pr = d.ProblemDevices || [];
-      if (pr.length) {
-        html += '<div class="sect-t">Windows reports a problem</div><table class="list">' +
-          pr.map(function (x) { return '<tr><td>' + esc(x.Name) + '</td><td><span class="badge b-crit">' + esc(x.Status) + '</span></td></tr>'; }).join('') + '</table>';
+      var rows = [];
+      rows.push(kv('Cabled since', when(d.Since)));
+      rows.push(kv('Link speed', d.Speed ? badge(d.Speed, /3/.test(d.Speed) ? 'good' : 'warn') : none()));
+      var html = kvBlock(rows);
+      var probs = arr(d.ProblemDevices);
+      if (probs.length) {
+        html += '<h3 class="dg-h">Devices flagged by Windows</h3><table class="dg-t"><tr><th>Device</th><th>Error code</th></tr>' +
+          probs.map(function (p) { return '<tr><td>' + esc(p.Name) + '</td><td>' + esc(p.ErrorCode) + '</td></tr>'; }).join('') + '</table>';
       }
-      var ev = d.Events || [];
-      html += '<div class="sect-t">Windows USB events, last 24 h (Meta / PICO)</div>' + (ev.length
-        ? '<table class="list"><tr><th>Time</th><th>Id</th><th>Event</th></tr>' + ev.map(function (x) { return '<tr><td class="mono">' + esc(x.Time) + '</td><td>' + esc(x.Id) + '</td><td>' + esc(x.Summary) + '</td></tr>'; }).join('') + '</table>'
-        : '<span class="muted">None found (the logs may be disabled on this PC).</span>');
+      html += '<h3 class="dg-h">Cable throughput test</h3>' +
+        '<div class="dg-row"><button class="dg-btn" type="button" id="btn-cable">Run cable test</button>' +
+        '<span class="dg-muted" id="cable-note">Pushes and pulls a test file ' + esc(cfg.cablePasses) + ' times over USB.</span></div>' +
+        '<div id="cable-result"></div>';
+      var ev = arr(d.Events);
+      if (ev.length) {
+        html += '<h3 class="dg-h">Recent connect / disconnect events</h3><table class="dg-t"><tr><th>Time</th><th>Id</th><th>Message</th></tr>' +
+          ev.map(function (e) { return '<tr><td>' + when(e.Time) + '</td><td>' + esc(e.Id) + '</td><td>' + esc(e.Message) + '</td></tr>'; }).join('') + '</table>';
+      }
       return html;
     }
 
-    var SECTIONS = [
-      { key: 'firmware', card: 'card-firmware', render: renderFirmware },
-      { key: 'health',   card: 'card-health',   render: renderHealth },
-      { key: 'wireless', card: 'card-wireless', render: renderWireless },
-      { key: 'usb',      card: 'card-usb',      render: renderUsb },
-      { key: 'fleet',    card: 'card-fleet',    render: renderFleet }
-    ];
-
-    // One request at a time: the web server is single-threaded, and each section
-    // is one adb call. Firing them together would only queue them server-side
-    // while blocking every other page's requests behind the whole batch.
-    function loadSection(i) {
-      if (i >= SECTIONS.length) {
-        loading = false;
-        document.getElementById('stamp').textContent = 'Updated ' + new Date().toLocaleTimeString();
-        document.getElementById('refresh-btn').disabled = false;
-        return Promise.resolve();
+    function renderCable(r) {
+      if (!r) { return ''; }
+      var html = '';
+      var rowsData = arr(r.Passes);
+      if (rowsData.length) {
+        html += '<table class="dg-t"><tr><th>Pass</th><th>Push MB/s</th><th>Pull MB/s</th></tr>' +
+          rowsData.map(function (p) { return '<tr><td>' + esc(p.Pass) + '</td><td>' + esc(p.PushMBps) + '</td><td>' + esc(p.PullMBps) + '</td></tr>'; }).join('') + '</table>';
+        var avg = r.AvgPullMBps;
+        var verdict = avg == null ? '' : (avg >= 150 ? badge('USB 3 class', 'good') : (avg >= 25 ? badge('USB 2 class', 'warn') : badge('very slow - check the cable', 'bad')));
+        html += '<div>Average push ' + val(r.AvgPushMBps, 'MB/s') + ', pull ' + val(r.AvgPullMBps, 'MB/s') + ' ' + verdict + '</div>';
       }
-      var s = SECTIONS[i];
-      var body = cardBody(s.card);
-      if (!body.dataset.loaded) body.innerHTML = '<span class="loading">Loading...</span>';
-      return api('/api/headset-diag?id=' + headsetId + '&section=' + s.key)
-        .then(function (res) {
-          if (!res || !res.ok) throw new Error((res && res.error) || 'request failed');
-          body.innerHTML = s.render(res.data || {});
-          body.dataset.loaded = '1';
-          if (s.key === 'usb') wireCableButton();
-        })
-        .catch(function (e) { body.innerHTML = '<span class="err">' + esc(e.message || e) + '</span>'; })
-        .then(function () { return loadSection(i + 1); });
+      return html;
     }
 
-    function refreshAll() {
-      if (!headsetId || loading) return;
-      loading = true;
-      document.getElementById('refresh-btn').disabled = true;
-      api('/api/headset-diag?id=' + headsetId + '&section=summary').then(function (res) {
-        if (res && res.ok) {
-          summary = res.data;
-          document.getElementById('hs-name').textContent = summary.name;
-          document.getElementById('hs-sub').textContent = [summary.model, summary.brand, summary.ip, summary.serial].filter(Boolean).join('  |  ');
-          document.getElementById('hs-transport').outerHTML = trBadge(summary.transport).replace('<span class="badge', '<span id="hs-transport" class="badge');
-          document.title = summary.name + ' - DIAG';
-          if (summary.autoRefreshSec && summary.autoRefreshSec !== autoSec) { autoSec = summary.autoRefreshSec; document.getElementById('auto-sec').textContent = autoSec; armTimer(); }
-        }
-        return loadSection(0);
-      }).catch(function () { loading = false; document.getElementById('refresh-btn').disabled = false; });
+    // ---------- actions ----------
+    function act(action, args, confirmText) {
+      if (!headsetId) { return Promise.resolve(); }
+      if (confirmText && !window.confirm(confirmText)) { return Promise.resolve(); }
+      return post('/api/headset-diag/action', { id: headsetId, action: action, args: args || {}, transport: transportParam() }).then(function (res) {
+        var ok = !!res.ok;
+        var msg = ok ? 'Done (' + (res.transport || '-') + ').' : (res.message || res.error || 'The action failed.');
+        if (ok && action === 'sync_clock' && res.result && res.result.TimeZone && !res.result.TimeZoneSet) { msg += ' Time zone not set.'; }
+        toast(msg, ok);
+        return res;
+      });
     }
 
-    function armTimer() {
-      if (timer) { clearInterval(timer); timer = null; }
-      if (document.getElementById('auto-refresh').checked) {
-        timer = setInterval(function () { if (!document.hidden) refreshAll(); }, autoSec * 1000);
-      }
+    function runCable() {
+      var btn = $('btn-cable'); if (!btn) { return; }
+      btn.disabled = true; $('cable-note').textContent = 'Testing - this takes a minute...'; $('cable-result').innerHTML = '';
+      busy = true;
+      post('/api/headset-diag/action', { id: headsetId, action: 'cable_test', args: { passes: cfg.cablePasses }, transport: transportParam() }).then(function (res) {
+        busy = false;
+        var b2 = $('btn-cable'); if (b2) { b2.disabled = false; }
+        var note = $('cable-note');
+        if (note) { note.textContent = res.ok ? 'Done.' : (res.message || res.error || 'The test failed.'); }
+        var out = $('cable-result'); if (out) { out.innerHTML = renderCable(res.result); }
+      });
     }
 
-    // ---- Actions --------------------------------------------------------------
-    function showOut(id, text, isErr) {
-      var el = document.getElementById(id);
-      el.style.display = '';
-      el.style.color = isErr ? 'var(--crit)' : '';
-      el.textContent = text;
+    function runShell() {
+      var cmd = $('shell-cmd').value.trim();
+      if (!cmd) { toast('Type a command first.', false); return; }
+      var out = $('shell-out'); var btn = $('btn-shell');
+      btn.disabled = true; out.textContent = 'Running...';
+      post('/api/headset-diag/command', { id: headsetId, command: cmd, transport: transportParam() }).then(function (res) {
+        btn.disabled = false;
+        var text = res.output || '';
+        if (!res.ok) { text = (res.blocked ? 'REFUSED: ' : 'ERROR: ') + (res.message || 'The command failed.') + (text ? '\n\n' + text : ''); }
+        if (res.truncated) { text += '\n\n[output truncated at 64 KB]'; }
+        out.textContent = text || '(no output)';
+      });
     }
-    function runAction(action, args, outId) {
-      outId = outId || 'action-out';
-      showOut(outId, 'Running ' + action + '...');
-      return post('/api/headset-diag/action', { id: headsetId, action: action, args: args || {} }).then(function (res) {
-        if (!res || !res.ok) { showOut(outId, 'Error: ' + ((res && res.error) || 'request failed'), true); return null; }
+
+    function checkTls() {
+      $('tls-result').textContent = 'Checking...';
+      api('/api/headset-diag?id=' + encodeURIComponent(headsetId) + '&section=tls&transport=' + transportParam()).then(function (res) {
+        if (!res.ok) { $('tls-result').innerHTML = '<span style="color:var(--bad)">' + esc(res.error || 'Failed.') + '</span>'; return; }
+        lastTls = res.data;
+        $('tls-result').innerHTML = kvBlock([
+          kv('Wireless debugging', res.data.Enabled ? badge('on', 'good') : badge('off', '')),
+          kv('mDNS connect port', res.data.MdnsPort ? esc(res.data.MdnsPort) : '<span class="dg-muted">not advertised</span>')
+        ]);
+        $('btn-tls-connect').disabled = !res.data.MdnsPort;
+      });
+    }
+
+    // ---------- WiFi switch / scan ----------
+    var lastSaved = [], lastScan = [];
+
+    function fillWifiForm(ssid, focusPwd) {
+      $('wifi-ssid').value = ssid || '';
+      if (focusPwd) { $('wifi-pwd').focus(); }
+    }
+
+    function wifiSwitch(ssid, password, save, security) {
+      if (!ssid) { toast('Choose or type a network name first.', false); return Promise.resolve(); }
+      var onWifi = $('transport-badge').textContent === 'WiFi';
+      var q = 'Move this headset to "' + ssid + '"?' + (onWifi ? '\n\nThe headset is on WiFi: the connection will drop and the result cannot be confirmed from here.' : '');
+      if (!window.confirm(q)) { return Promise.resolve(); }
+      $('btn-wifi-connect').disabled = true;
+      return act('wifi_switch', { ssid: ssid, password: password || '', save: !!save, security: security || '' }).then(function (res) {
+        $('btn-wifi-connect').disabled = false;
+        $('wifi-pwd').value = '';
+        if (!res) { return; }
         var r = res.result || {};
-        var lines = [action + ': ' + (r.Ok === false ? 'FAILED' : 'done') + (r.Transport ? '  (' + r.Transport + ')' : '') + (r.Experimental ? '  [experimental]' : '')];
-        if (r.Packages) lines.push(r.Packages.length ? r.Packages.join('\n') : '(no disabled package)');
-        if (r.Output) lines.push(r.Output);
-        showOut(outId, lines.join('\n'), r.Ok === false);
-        return r;
+        if (r.PasswordRequired) { fillWifiForm(ssid, true); }
+        if (r.Message) { toast(r.Message + (r.Saved ? ' Password saved on the server.' : ''), !!res.ok); }
+        if (res.ok) { setTimeout(function () { loadAll(); }, 8000); }
       });
     }
-    document.querySelectorAll('[data-act]').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        var args = btn.dataset.args ? JSON.parse(btn.dataset.args) : {};
-        confirmThen(btn.dataset.confirm, function () {
-          runAction(btn.dataset.act, args, btn.closest('#card-tls') ? null : 'action-out');
-        });
-      });
-    });
-    document.getElementById('clock-btn').onclick = function () {
-      var tz = '';
-      try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) {}
-      runAction('clock_sync', { timezone: tz });
-    };
-    function pkgAction(enable) {
-      var pkg = document.getElementById('pkg-input').value.trim();
-      if (!pkg) return;
-      confirmThen(enable ? '' : 'Disable ' + pkg + ' on this headset? It disappears from the library until enabled again.', function () {
-        runAction('app_enabled', { package: pkg, enable: enable });
-      });
-    }
-    document.getElementById('pkg-disable').onclick = function () { pkgAction(false); };
-    document.getElementById('pkg-enable').onclick  = function () { pkgAction(true); };
-    document.getElementById('msg-send').onclick = function () {
-      var text = document.getElementById('msg-text').value.trim();
-      if (!text) return;
-      runAction('player_message', { title: document.getElementById('msg-title').value, text: text });
-    };
-    document.getElementById('input-send').onclick = function () {
-      var text = document.getElementById('input-text').value;
-      if (!text) return;
-      runAction('input_text', { text: text });
-    };
 
-    function wireCableButton() {
-      var b = document.getElementById('cable-btn');
-      if (!b) return;
-      b.onclick = function () {
-        b.disabled = true;
-        var out = document.getElementById('cable-out');
-        out.innerHTML = '<span class="loading">Pushing and pulling 32 MB over USB, this takes a few seconds per pass...</span>';
-        post('/api/headset-diag/action', { id: headsetId, action: 'cable_test', args: {} }).then(function (res) {
-          b.disabled = false;
-          if (!res || !res.ok) { out.innerHTML = '<span class="err">' + esc((res && res.error) || 'request failed') + '</span>'; return; }
-          var r = res.result || {};
-          if (!r.Passes || !r.Passes.length) { out.innerHTML = '<span class="err">' + esc(r.Error || 'refused') + '</span>'; return; }
-          out.innerHTML = '<table class="list"><tr><th>Pass</th><th>Push MB/s</th><th>Pull MB/s</th><th></th></tr>' +
-            r.Passes.map(function (p) { return '<tr><td>' + esc(p.Pass) + '</td><td>' + v(p.PushMBps) + '</td><td>' + v(p.PullMBps) + '</td><td class="err">' + esc(p.Error || '') + '</td></tr>'; }).join('') +
-            '</table><div class="note">Average: push ' + v(r.AvgPushMBps) + ' MB/s, pull ' + v(r.AvgPullMBps) + ' MB/s on ' + v(r.UsbSpeed) +
-            '. A USB 3 cable typically reaches well above 40 MB/s; around 20-35 MB/s points to a USB 2 link or cable.</div>';
-        });
-      };
+    function renderWifiScan(list) {
+      var out = $('wifi-scan-result');
+      lastScan = list || [];
+      if (!lastScan.length) { out.innerHTML = '<div class="dg-muted">No network in range.</div>'; return; }
+      out.innerHTML = '<table class="dg-t"><tr><th>SSID</th><th>Band</th><th>Signal</th><th>Security</th><th></th></tr>' +
+        lastScan.map(function (n, i) {
+          var tags = (n.SavedOnHeadset ? ' ' + badge('saved on headset', '') : '') + (n.InServerStore ? ' ' + badge('password on server', 'good') : '');
+          var unsupported = n.Security === 'enterprise' || n.Security === 'unsupported';
+          return '<tr><td>' + esc(n.Ssid) + tags + '</td><td>' + val(n.Band) + '</td><td>' + rssiText(n.RssiDbm) + '</td><td>' + esc(n.Security) + '</td><td>' +
+            (unsupported ? '<span class="dg-muted">join on the headset</span>' : '<button class="dg-btn" type="button" data-wifi-pick="' + i + '">Select</button>') + '</td></tr>';
+        }).join('') + '</table>';
     }
 
-    // ---- ADB panel ------------------------------------------------------------
-    api('/api/headset-diag/presets').then(function (res) {
-      var sel = document.getElementById('preset-select');
-      (res && res.presets || []).forEach(function (p) {
-        var o = document.createElement('option');
-        o.value = p.command; o.textContent = p.name + '  -  ' + p.command;
-        sel.appendChild(o);
+    function scanWifi() {
+      var btn = $('btn-wifi-scan');
+      btn.disabled = true; $('wifi-scan-note').textContent = 'Scanning - a few seconds...';
+      post('/api/headset-diag/action', { id: headsetId, action: 'wifi_scan', args: {}, transport: transportParam() }).then(function (res) {
+        btn.disabled = false;
+        var r = res.result || {};
+        if (!res.ok || !r.Ok) {
+          $('wifi-scan-note').textContent = r.Error || res.message || 'The scan failed.';
+          $('wifi-scan-result').innerHTML = '';
+          return;
+        }
+        $('wifi-scan-note').textContent = 'Scanned over ' + (res.transport || '-') + '.';
+        renderWifiScan(r.Networks && r.Networks.length === undefined ? [r.Networks] : r.Networks);
       });
-      sel.onchange = function () { if (sel.value) document.getElementById('cmd-input').value = sel.value; };
-    });
-    document.getElementById('cmd-run').onclick = function () {
-      var cmd = document.getElementById('cmd-input').value.trim();
-      if (!cmd || !headsetId) return;
-      confirmThen('Run on ' + ((summary && summary.name) || 'this headset') + ':\n\n' + cmd, function () {
-        var btn = document.getElementById('cmd-run');
-        btn.disabled = true;
-        showOut('cmd-out', 'Running...');
-        post('/api/headset-diag/command', { id: headsetId, command: cmd }).then(function (res) {
-          btn.disabled = false;
-          if (!res || !res.ok) { showOut('cmd-out', 'Error: ' + ((res && res.error) || 'request failed'), true); return; }
-          var r = res.result || {};
-          if (r.Blocked) { showOut('cmd-out', 'Refused: ' + r.Error, true); return; }
-          var head = '# exit ' + r.ExitCode + ' | ' + r.DurationMs + ' ms | ' + (r.Transport || '') + (r.Truncated ? ' | output truncated to 64 KB' : '') + (r.Error ? ' | ' + r.Error : '');
-          showOut('cmd-out', head + '\n' + (r.Output || ''), r.Ok === false);
+    }
+
+    function bindWifi() {
+      $('btn-wifi-scan').addEventListener('click', scanWifi);
+      $('btn-wifi-connect').addEventListener('click', function () {
+        var ssid = $('wifi-ssid').value.trim();
+        var pw = $('wifi-pwd').value;
+        var sec = '';
+        for (var i = 0; i < lastScan.length; i++) { if (lastScan[i].Ssid === ssid) { sec = lastScan[i].Security; } }
+        wifiSwitch(ssid, pw, $('wifi-save').checked && !!pw, sec);
+      });
+      $('wifi-scan-result').addEventListener('click', function (e) {
+        var i = e.target && e.target.getAttribute ? e.target.getAttribute('data-wifi-pick') : null;
+        if (i === null || i === undefined) { return; }
+        var n = lastScan[parseInt(i, 10)]; if (!n) { return; }
+        fillWifiForm(n.Ssid, !n.InServerStore && n.Security !== 'open' && n.Security !== 'owe');
+      });
+      $('body-wireless').addEventListener('click', function (e) {
+        var i = e.target && e.target.getAttribute ? e.target.getAttribute('data-wifi-switch') : null;
+        if (i === null || i === undefined) { return; }
+        var n = lastSaved[parseInt(i, 10)]; if (!n) { return; }
+        fillWifiForm(n.Ssid, false);
+        wifiSwitch(n.Ssid, '', false, '');
+      });
+    }
+
+    function bindActions() {
+      var buttons = document.querySelectorAll('[data-act]');
+      Array.prototype.forEach.call(buttons, function (b) {
+        b.addEventListener('click', function () { act(b.getAttribute('data-act'), {}, b.getAttribute('data-confirm')); });
+      });
+      $('btn-sync-clock').addEventListener('click', function () { act('sync_clock', { setTimeZone: $('sync-tz').checked }); });
+      $('btn-app-disable').addEventListener('click', function () {
+        var p = $('app-package').value.trim(); if (!p) { toast('Enter a package name.', false); return; }
+        act('app_disable', { package: p }, 'Disable ' + p + ' on this headset?');
+      });
+      $('btn-app-enable').addEventListener('click', function () {
+        var p = $('app-package').value.trim(); if (!p) { toast('Enter a package name.', false); return; }
+        act('app_enable', { package: p });
+      });
+      $('btn-msg').addEventListener('click', function () {
+        var t = $('msg-text').value.trim(); if (!t) { toast('Type a message first.', false); return; }
+        act('player_message', { title: $('msg-title').value, text: t });
+      });
+      $('btn-send-text').addEventListener('click', function () {
+        var t = $('send-text').value; if (!t) { toast('Type some text first.', false); return; }
+        act('send_text', { text: t });
+      });
+      $('btn-shell').addEventListener('click', runShell);
+      $('shell-cmd').addEventListener('keydown', function (e) { if (e.key === 'Enter') { runShell(); } });
+      $('shell-preset').addEventListener('change', function () { if (this.value) { $('shell-cmd').value = this.value; } });
+      $('btn-tls-status').addEventListener('click', checkTls);
+      $('btn-tls-disable').addEventListener('click', tlsOff);
+      $('btn-tls-warn-off').addEventListener('click', tlsOff);
+      $('btn-tls-enable').addEventListener('click', function () { act('tls_enable', {}, $('btn-tls-enable').getAttribute('data-confirm')).then(function (res) { if (res && res.ok) { setTlsWarning(true); } }); });
+      $('btn-tls-connect').addEventListener('click', function () {
+        if (lastTls && lastTls.MdnsPort) { act('tls_connect', { port: lastTls.MdnsPort }).then(checkTls); }
+      });
+      document.addEventListener('click', function (e) { if (e.target && e.target.id === 'btn-open-update') { act('updater_open_settings', {}); } });
+      document.addEventListener('click', function (e) { if (e.target && e.target.id === 'btn-cable') { runCable(); } });
+      document.addEventListener('click', function (e) { if (e.target && e.target.id === 'btn-wifi-speed') { runWifiSpeed(); } });
+      bindWifi();
+    }
+
+    // ---------- boot ----------
+    function syncUrl() {
+      try { history.replaceState(null, '', 'headset_diag.html?id=' + encodeURIComponent(headsetId)); } catch (e) { /* file:// or old browser */ }
+    }
+
+    function loadHeadsets() {
+      return api('/api/headsets-status').then(function (items) {
+        headsets = (Array.isArray(items) ? items : []).map(function (r) { return { id: String(r.id), name: r.name }; });
+        var fromUrl = new URLSearchParams(location.search).get('id');
+        if (fromUrl) { headsetId = String(fromUrl); }
+        var known = headsets.some(function (h) { return h.id === headsetId; });
+        if (!known && headsets.length) { headsetId = headsets[0].id; }
+        $('headset-select').innerHTML = headsets.map(function (h) {
+          return '<option value="' + esc(h.id) + '"' + (h.id === headsetId ? ' selected' : '') + '>' + esc(h.name) + '</option>';
+        }).join('') || '<option value="">No headsets</option>';
+        syncUrl();
+      });
+    }
+
+    function loadSettings() {
+      return Promise.all([api('/api/headset-diag/presets'), api('/api/config')]).then(function (r) {
+        var p = r[0] || {}, c = r[1] || {};
+        if (p.ok) {
+          cfg.autoRefreshSec = p.autoRefreshSec > 0 ? p.autoRefreshSec : 30;
+          cfg.cablePasses = p.cablePasses > 0 ? p.cablePasses : 3;
+          cfg.presets = arr(p.presets);
+        }
+        var t = c && c.Monitoring && c.Monitoring.thresholds;
+        if (t) {
+          if (t.temperature_warningLevel != null) { thr.base.warn = Number(t.temperature_warningLevel); }
+          if (t.temperature_highLevel != null) { thr.base.crit = Number(t.temperature_highLevel); }
+          if (t.cpu_temperature_warningLevel != null) { thr.cpu.warn = Number(t.cpu_temperature_warningLevel); }
+          if (t.cpu_temperature_highLevel != null) { thr.cpu.crit = Number(t.cpu_temperature_highLevel); }
+          if (t.gpu_temperature_warningLevel != null) { thr.gpu.warn = Number(t.gpu_temperature_warningLevel); }
+          if (t.gpu_temperature_highLevel != null) { thr.gpu.crit = Number(t.gpu_temperature_highLevel); }
+          if (t.headset_battery_warningLevel != null) { thr.batt.warn = Number(t.headset_battery_warningLevel); }
+          if (t.headset_battery_criticalLevel != null) { thr.batt.crit = Number(t.headset_battery_criticalLevel); }
+        }
+        $('auto-label').textContent = 'Auto-refresh (' + cfg.autoRefreshSec + ' s)';
+        var sel = $('shell-preset');
+        cfg.presets.forEach(function (pr) {
+          var o = document.createElement('option'); o.value = pr.command; o.textContent = pr.name; sel.appendChild(o);
         });
       });
-    };
+    }
 
-    // ---- TLS (experimental) ---------------------------------------------------
-    document.getElementById('tls-status').onclick = function () {
-      var body = document.getElementById('tls-body');
-      body.textContent = 'Checking (mDNS listens for a few seconds)...';
-      api('/api/headset-diag?id=' + headsetId + '&section=tls').then(function (res) {
-        if (!res || !res.ok) { body.textContent = 'Error: ' + ((res && res.error) || 'request failed'); return; }
-        var d = res.data || {};
-        tlsPort = d.MdnsPort || null;
-        document.getElementById('tls-connect').disabled = !tlsPort;
-        body.innerHTML = kv([
-          ['Wireless debugging', d.AdbWifiEnabled ? 'on' : 'off'],
-          ['TLS port (mDNS)', v(d.MdnsPort)],
-          ['TLS port (property)', v(d.TlsPortProp)]
-        ]) + '<div class="note">Record whether it is still on after a reboot: that is the question this experiment answers.</div>';
-      });
-    };
-    document.getElementById('tls-connect').onclick = function () {
-      if (!tlsPort) return;
-      var body = document.getElementById('tls-body');
-      post('/api/headset-diag/action', { id: headsetId, action: 'tls_connect', args: { port: tlsPort } }).then(function (res) {
-        var r = (res && res.result) || {};
-        body.innerHTML += '<pre class="out">' + esc((res && res.ok) ? ((r.Connected ? 'connected: ' : 'not connected: ') + r.Output) : ('Error: ' + ((res && res.error) || 'request failed'))) + '</pre>';
-      });
-    };
-
-    // ---- Headset selector + boot ------------------------------------------------
-    document.getElementById('refresh-btn').onclick = refreshAll;
-    document.getElementById('auto-refresh').onchange = function () {
-      try { localStorage.setItem('vrhm_diag_auto', this.checked ? '1' : '0'); } catch (e) {}
-      armTimer();
-    };
-    try { if (localStorage.getItem('vrhm_diag_auto') === '0') document.getElementById('auto-refresh').checked = false; } catch (e) {}
-
-    api('/api/headsets-status').then(function (items) {
-      var sel = document.getElementById('headset-select');
-      sel.innerHTML = '';
-      (Array.isArray(items) ? items : []).forEach(function (h) {
-        var o = document.createElement('option');
-        o.value = h.id;
-        o.textContent = h.name + (h.adb ? '' : '  (offline)');
-        sel.appendChild(o);
-      });
-      if (!headsetId && sel.options.length) headsetId = parseInt(sel.options[0].value, 10) || 0;
-      sel.value = String(headsetId);
-      sel.onchange = function () {
-        headsetId = parseInt(sel.value, 10) || 0;
-        history.replaceState(null, '', 'headset_diag.html?id=' + headsetId);
-        document.querySelectorAll('.card-b').forEach(function (b) { delete b.dataset.loaded; });
-        ['action-out', 'cmd-out'].forEach(function (id) { document.getElementById(id).style.display = 'none'; });
-        document.getElementById('tls-body').textContent = '';
-        tlsPort = null; document.getElementById('tls-connect').disabled = true;
-        refreshAll();
-      };
-      if (headsetId) { refreshAll(); armTimer(); }
-      else { document.getElementById('hs-name').textContent = 'No headset registered'; }
+    $('btn-refresh').addEventListener('click', function () { clearTimeout(refreshTimer); loadAll().then(schedule); });
+    $('auto-refresh').addEventListener('change', schedule);
+    $('transport-select').addEventListener('change', function () { clearTimeout(refreshTimer); loadAll().then(schedule); });
+    $('headset-select').addEventListener('change', function () {
+      headsetId = this.value; syncUrl(); resetAll(); clearTimeout(refreshTimer); loadAll().then(schedule);
     });
+    bindActions();
+
+    loadSettings().then(loadHeadsets).then(function () { return loadAll(); }).then(schedule);
+  })();
   </script>
 </body>
 </html>

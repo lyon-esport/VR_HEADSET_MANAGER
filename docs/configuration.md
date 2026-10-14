@@ -74,7 +74,7 @@ All thresholds and switches of the automatic quality mitigation — explained in
 |---|---|---|
 | `folder` | `scrcpy\scrcpy-win64-v...` | scrcpy/ADB binaries folder inside `sources\` (the scrcpy release bundles `adb.exe`, so this always holds the same value as `scrcpy.folder`) |
 | `adbPort_default` | `5555` | Default ADB WiFi port |
-| `prefer_usb` | `true` | When a known headset is plugged in by USB, every ADB command and the scrcpy capture use the cable; if it is pulled, commands fall back to WiFi ADB on their own |
+| `prefer_usb` | `true` | When a known headset is cabled to this PC, use USB for every ADB call and for the scrcpy capture, and fall back to WiFi when the cable drops. `false` keeps everything on WiFi. Takes effect after an application restart |
 
 Each scrcpy version lives in its own folder under `sources\scrcpy\`, so several can coexist; this key selects the active one. Switch versions from the web UI (Configuration -> Advanced) rather than editing it by hand.
 
@@ -83,10 +83,10 @@ Each scrcpy version lives in its own folder under `sources\scrcpy\`, so several 
 | Key | Default | Description |
 |---|---|---|
 | `folder` | `scrcpy\scrcpy-win64-v...` | Same value as `ADB.folder` above |
-| `recordFolder` | `C:\DATA\MEDIA\VR_Records` | Where recordings are written |
+| `recordFolder` | `C:\DATA\MEDIA\VR_Records` | Where recordings are written. An absolute or network (`\\server\share`) path is used as is; a relative path is taken from the application folder. Shown in the **Recordings** section of App Configuration |
 | `recordMinFreeSpaceGB` | `5` | Below this free space, recording is disabled automatically |
-| `usb_switch_mode` | `stable` | What a running WiFi capture does when its headset is plugged in by USB: `stable` (restart on USB once the cable has been connected for `usb_switch_stable_sec`, never while recording), `immediate`, or `next_start` (never interrupt). A pulled cable always restarts the capture on WiFi |
-| `usb_switch_stable_sec` | `10` | Cable-connected delay used by `stable` |
+| `usb_switch_mode` | `stable` | What a RUNNING capture does when its headset gets cabled: `stable` (switch after the delay below, never while recording), `immediate`, or `next_start` (never interrupt, use USB at the next start). A capture on USB always falls back to WiFi when the cable is removed |
+| `usb_switch_stable_sec` | `10` | How long the cable must stay connected before `stable` mode moves a capture to USB |
 | `parameters.<Model>` | — | Per-model capture profiles (see below) |
 
 Each supported model (`Quest 3`, `Quest 2`, `PICO 4 Ultra`) defines:
@@ -96,6 +96,24 @@ Each supported model (`Quest 3`, `Quest 2`, `PICO 4 Ultra`) defines:
 - `video_codec` / `video_encoder` — codec (h264) and optional specific Android encoder
 - `video_buffer` — buffering in ms (jitter smoothing vs latency)
 - `stay_awake` — keep the headset awake while captured
+- `eye_merge` — *optional*, the **eye merge calibration** that enables the Merged (`M`) eye for this model. Its presence (and `enabled: true`) is what makes a model "supported". Written by the **Calibrate** / **Import JSON** buttons, not by hand:
+
+  | Key | Meaning |
+  |---|---|
+  | `enabled` | `false` keeps the calibration but hides the Merged option |
+  | `frame_width` / `frame_height` | Full side-by-side frame the calibration was measured on; a headset sending another size falls back to the right eye |
+  | `relative_angle`, `shift_x`, `shift_y` | Rotation (degrees) and shift (pixels) between the two eye pictures |
+  | `level_angle` | Rotation that levels the merged picture (half the relative angle) |
+  | `base_eye` | `R` (default) or `L`: the main eye of views that do not choose their own (`merged.base_eye`) |
+  | `feather_px` / `inset_px` | Width of the blend band at the base eye's lens edge, and its distance from the edge |
+  | `lens_focal_px` / `ipd_m` | *Optional* lens model of the **merge depth**: fisheye focal of the merged picture (pixels per radian, 1150 on a Quest 3) and eye spacing in metres (default 0.063). Without `lens_focal_px` the merge depth is not offered. Kept by a recalibration |
+  | `mask_left` / `mask_right` | Lens outlines, `"x,y x,y ..."` in eye pixels |
+  | `canvas_width` / `canvas_height` | Size of the merged picture the view framings are drawn on |
+  | `score`, `calibrated_at`, `calibrated_by`, `notes` | Information only |
+
+  Any view may also carry `"transparent_corners": true` (checkbox in the visual editor, console scrcpy options `[8]`): for every eye (L, R or Merged) the area outside the lenses is shown **transparent** in the web video pages and OBS Browser Sources. It needs the model's lens outlines, i.e. an eye merge calibration (enabled or not). An RTSP/HLS player still shows those corners black - the video itself cannot carry transparency.
+
+  Each view may then carry `"merged": { "crop": "w:h:x:y", "depth_m": 0.75, "base_eye": "L" }` — its framing of the merged picture, drawn on the **Merged** tab of the visual editor, and its **merge depth**. Without `crop`, the largest clean rectangle with the shape of the view's eye crop is used. `depth_m` (0.3 to 100 m, absent = far) is the distance at which the two eyes line up where they are blended: far suits scenery and rooms, a near value (menus, a table, objects held close) aligns close objects but doubles far ones in the blend band. `base_eye` is the view's main eye, which gives the centre of the picture (absent = the calibration's `base_eye`, R); the depth never moves it. Keep two views (e.g. `max` far and `max_near` at 0.75 m) to switch a headset between them.
 
 The profile string assigned to each headset (`max-R-N-30-8`...) picks a view from here; format explained in [Streaming → capture profiles](streaming.md#scrcpy-capture-profiles).
 
@@ -108,6 +126,38 @@ Alert thresholds used by the web UI and the OBS overlays:
 | `headset_battery_warningLevel` / `criticalLevel` | 40 / 30 % |
 | `controllers_battery_warningLevel` / `criticalLevel` | 30 / 15 % |
 | `temperature_highLevel` | 50 °C |
+| `temperature_warningLevel` | 42 °C |
+| `cpu_temperature_warningLevel` / `cpu_temperature_highLevel` | 75 / 85 °C |
+| `gpu_temperature_warningLevel` / `gpu_temperature_highLevel` | 75 / 85 °C |
+
+CPU and GPU have their own bands because they run far hotter than the battery under load (a Quest 3 sits around 60-65 °C while streaming). Battery and skin temperatures use `temperature_*Level`. The bands colour the DIAG page tiles and the metric-history graphs.
+
+### `Diag`
+
+Settings of the headset DIAG page (see [Web interface](web-interface.md#headset-diag)):
+
+| Key | Default | Description |
+|---|---|---|
+| `auto_refresh_sec` | `30` | How often the page re-reads its sections while auto-refresh is on |
+| `cable_test_passes` | `3` | Push/pull passes run by the USB cable throughput test and the WiFi throughput test |
+| `command_presets` | 4 presets | List of `{ "name", "command" }` shown in the ADB shell panel. Edited in `config.json` (the config page has no editor for it) |
+
+### `Recordings`
+
+Settings of the [Recordings page](web-interface.md#recordings). The record folder and the free-space floor themselves are `scrcpy.recordFolder` / `scrcpy.recordMinFreeSpaceGB` (see above); App Configuration shows all of them together in its **Recordings** section:
+
+![Recordings section of App Configuration](pics/web_config_recordings.png)
+
+| Key | Default | Description |
+|---|---|---|
+| `rescan_interval_min` | `10` | How often (minutes) the recordings database is reconciled with the record folder. It is also done at every start |
+| `playback.max_height` | `720` | Maximum picture height of the browser preview (pixels) |
+| `playback.fps` | `30` | Frame rate of the browser preview |
+| `playback.bitrate_kbps` | `2000` | Bitrate of the browser preview (h264) |
+| `playback.max_sessions` | `2` | Previews allowed at the same time - each one is a live encode on this PC |
+| `playback.idle_timeout_sec` | `30` | A preview whose browser tab stopped responding is stopped after this delay |
+
+The `playback` values only affect the browser preview; recording files are never re-encoded. Changes apply to the next preview started.
 
 ### `mediamtx`
 
@@ -137,16 +187,6 @@ Browser-side behavior of the video wall: pause hidden streams after `pauseWhenHi
 
 Optional mDNS responder so the web UI is reachable at `http://vrhm.local` instead of an IP. Disabled by default (mDNS resolution works from computers, but most mobile devices ignore it).
 
-### `Diag`
-
-Settings of the per-headset [DIAG page](web-interface.md#headset-diag).
-
-| Key | Default | Description |
-|---|---|---|
-| `auto_refresh_sec` | `30` | Auto-refresh interval of the DIAG page (minimum 5) |
-| `cable_test_passes` | `3` | Number of 32 MB push/pull passes of the USB cable test (1-10) |
-| `command_presets` | 5 presets | `[{ "name", "command" }]` shown in the ADB shell panel. Shell commands only, without the `adb shell` prefix; double quotes are not supported |
-
 ### `Battery`
 
 `headset_charging_power_W` (default 13) — expected charger wattage, used to flag slow charging.
@@ -157,7 +197,7 @@ Settings of the per-headset [DIAG page](web-interface.md#headset-diag).
 |---|---|---|
 | `GPU_Acceleration` | `true` | Use the GPU for video work |
 | `GPU_Index` | `0` | Which GPU to use (see GPU list on the Monitoring page) |
-| `Capture_Mode` | `StreamAndLocalWindow` | Whether captures show a local window in addition to streaming |
+| `Capture_Mode` | `StreamOnly` | Whether captures show a local window in addition to streaming |
 | `Adaptive_Monitoring.enabled` | `true` | Slow down polling of unreachable headsets |
 
 ## WiFi credentials (not in config.json)

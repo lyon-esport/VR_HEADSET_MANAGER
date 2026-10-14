@@ -38,7 +38,6 @@
 # --- Documentation (exclude scratch/test files) ---
 /docs/
 !/docs/adr/
-!/docs/plans/
 !/docs/improvement_plan
 !/docs/test.ps1
 !/docs/test_invoke_usb.ps1
@@ -47,6 +46,13 @@
 
 # --- Sources: explicitly included subfolders ---
 /sources/ADB Wireless activator/
+# ffmpeg is NEVER part of a release (about 100 MB). Do not add a /sources/ffmpeg line here:
+# a fresh install gets it from the first-run wizard (Invoke-FfmpegDownload, option 1) or from
+# Configuration > Advanced, and Create-ZipRelease.ps1 refuses to pack sources\ffmpeg* anyway.
 /sources/MediaMTX/mediamtx_v1.20.1_windows_amd64/
-/sources/scrcpy/scrcpy-win64-v4.1/
+/sources/scrcpy/scrcpy-win64-v5.0.1/
 /sources/sqlite/System.Data.SQLite-1.0.119/
+
+# --- ffmpeg is never shipped (exclusions win over any include above) ---
+!/sources/ffmpeg/
+!/sources/ffmpeg*

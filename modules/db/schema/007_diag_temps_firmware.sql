@@ -1,36 +1,44 @@
 -- ==================================================================
--- VR HEADSET MANAGER - DIAG page: temperatures, transport, firmware (007)
+-- VR HEADSET MANAGER - DIAG page support (migration 007)
 --
--- Three things the headset DIAG page and the metric graph need:
+-- Three things the headset DIAG page and the USB-first transport need from
+-- the database, none of which is derivable from what 006 left behind:
 --
---   1. headset_status grows cpu_temp / gpu_temp / skin_temp. They are the
---      hottest sensor of each type in "dumpsys thermalservice", read by the
---      poll runspace at most every 30 s. Each one gets a sampling trigger into
---      metric_history exactly like migration 006's - adding a metric costs one
---      column, one trigger and one registry entry (ADR-0018).
+--   1. cpu_temp / gpu_temp / skin_temp on headset_status, so the three
+--      thermalservice readings land in the SAME metric-history graph as the
+--      battery temperature. Same shape as migration 006: one column, one
+--      sampling trigger each, one registry entry per metric
+--      (Get-HeadsetMetricDefinition + METRICS in battery_chart.js). Adding a
+--      metric costs those three things and nothing else - which is exactly the
+--      point of 006.
 --
---   2. headset_status grows adb_transport ('USB' / 'WiFi' / '-'): which
---      transport the poll loop actually used. Shown as a badge in the UI. Not
---      sampled - it is a state, not a reading.
+--   2. adb_transport on headset_status (USB, WiFi or a dash): which transport
+--      the monitor is currently talking to the headset over. The UI shows it
+--      as a badge so an operator can see at a glance that a cabled headset is
+--      really using the cable.
 --
---   3. firmware_history: one row per firmware CHANGE per headset. The insert
---      query skips a row equal to the newest one, so the monitor can call it
---      on a timer. The DIAG page compares the fleet from this table only (no
---      internet lookup).
+--   3. firmware_history: one row each time a headset firmware version
+--      CHANGES. The fleet comparison (this headset is behind the newest
+--      firmware of its model) needs more than the current value, and an
+--      operator asking when a headset was updated has no other source.
+--      Written by the monitor, never by a trigger - the version is read over
+--      ADB at a slow cadence, not carried on the status row.
 --
--- Both views that expose headset_status are rebuilt: a view lists its columns
--- explicitly, so a new column is invisible until the view is recreated.
+-- The three sampling triggers copy 006 deliberately, including the two things
+-- that already cost this project a debugging session each:
 --
--- Kept from 006: the GLOB guard (never sample '-'), REPLACE(',', '.') for FR
--- decimal commas, update-then-insert inside the trigger (never INSERT OR
--- REPLACE - see 003), and no prune in the trigger (see 005).
+--   * update-then-insert, never INSERT OR REPLACE (a conflict clause inside a
+--     trigger body is ignored; the policy of the firing statement wins).
+--   * REPLACE(x, ',', '.'): the values are formatted with .ToString("0.0"),
+--     which gives 36,4 under a FR locale, and CAST of that text AS REAL is 36.
+--
+-- The views are dropped first because SQLite refuses to alter a column set a
+-- view still references (same dance as migration 005).
 --
 -- ASCII only.
 -- ==================================================================
 
 -- ---- 1. new live-status columns ----------------------------------
--- NOT NULL with a default is allowed by ALTER TABLE ADD COLUMN, and existing
--- rows read the default immediately.
 
 DROP VIEW IF EXISTS v_headset_full;
 DROP VIEW IF EXISTS v_headset_status;
@@ -48,17 +56,17 @@ SELECT CAST(headset_id AS TEXT)                     AS ID,
        charging                                     AS Charging,
        charging_wattage                             AS ChargingWattage,
        temp                                         AS Temp,
+       cpu_temp                                     AS CpuTemp,
+       gpu_temp                                     AS GpuTemp,
+       skin_temp                                    AS SkinTemp,
        battery_controller_left                      AS BatteryControllerLeft,
        battery_controller_right                     AS BatteryControllerRight,
        power_state                                  AS PowerState,
        time_remaining_min                           AS TimeRemainingMin,
+       adb_transport                                AS AdbTransport,
        scrcpy                                       AS SCRCPY,
        running_app                                  AS RunningApp,
        running_app_icon                             AS RunningAppIcon,
-       cpu_temp                                     AS CpuTemp,
-       gpu_temp                                     AS GpuTemp,
-       skin_temp                                    AS SkinTemp,
-       adb_transport                                AS AdbTransport,
        updated_at                                   AS UpdatedAt
 FROM headset_status;
 
@@ -66,13 +74,15 @@ CREATE VIEW v_headset_full AS
 SELECT h.ID, h.Name, h.IPAddress, h.scrcpy_AutoRestart, h.Record, h.ScrcpyProfile,
        h.Brand, h.Model, h.SerialNumber, h.SortOrder,
        s.Ping, s.ADBWifi, s.Battery, s.Charging, s.ChargingWattage, s.Temp,
+       s.CpuTemp, s.GpuTemp, s.SkinTemp,
        s.BatteryControllerLeft, s.BatteryControllerRight, s.PowerState,
-       s.TimeRemainingMin, s.SCRCPY, s.RunningApp, s.RunningAppIcon,
-       s.CpuTemp, s.GpuTemp, s.SkinTemp, s.AdbTransport
+       s.TimeRemainingMin, s.AdbTransport, s.SCRCPY, s.RunningApp, s.RunningAppIcon
 FROM v_headsets h
 JOIN v_headset_status s ON s.ID = h.ID;
 
--- ---- 2. one sampling trigger per temperature ---------------------
+-- ---- 2. one sampling trigger per new metric ----------------------
+-- The GLOB guard keeps the dash out: an unreachable headset has these columns
+-- reset to a dash, and that must not be recorded as a reading.
 
 CREATE TRIGGER trg_status_cpu_temp_sample
 AFTER UPDATE OF cpu_temp ON headset_status
@@ -126,6 +136,9 @@ BEGIN
 END;
 
 -- ---- 3. firmware history -----------------------------------------
+-- One row per CHANGE of the firmware version (the monitor compares before it
+-- inserts). ON DELETE CASCADE: removing a headset removes its history, like
+-- every other per-headset table, so a removal needs no file or table work.
 
 CREATE TABLE IF NOT EXISTS firmware_history (
     headset_id       INTEGER NOT NULL REFERENCES headsets(id) ON DELETE CASCADE,

@@ -217,6 +217,49 @@
     .pro-table tr.pro-drag-over > td { background:rgba(59,130,246,.13); }
     [data-theme=light] .pro-table tr.pro-drag-over > td { background:rgba(59,130,246,.09); }
 
+    /* Visual view editor (opens above the profiles modal) */
+    #vve-modal { z-index:1100; }
+    .vve-panel { max-width:1440px; height:92vh; max-height:92vh; }
+    .vve-toolbar { display:flex; align-items:center; gap:8px; padding:10px 22px; border-bottom:1px solid var(--card-border); flex-wrap:wrap; flex-shrink:0; }
+    .vve-status { font-size:12px; color:var(--muted); }
+    .vve-status.err { color:#ef4444; }
+    .vve-status.ok  { color:#22c55e; }
+    .vve-body { flex:1; display:flex; min-height:0; }
+    .vve-stage { flex:1; min-width:0; position:relative; display:flex; align-items:center; justify-content:center; background:#0b0b0b; padding:10px; overflow:hidden; }
+    [data-theme=light] .vve-stage { background:#e5e7eb; }
+    #vve-canvas { display:none; cursor:crosshair; touch-action:none; }
+    .vve-side { width:300px; flex-shrink:0; overflow-y:auto; padding:14px 18px; border-left:1px solid var(--card-border); display:flex; flex-direction:column; gap:12px; }
+    .vve-field { display:flex; flex-direction:column; gap:5px; }
+    #vve-modal [hidden] { display:none !important; }   /* .vve-field / .cfg-input set display, which beats [hidden] */
+    .vve-eye-btns { display:flex; gap:6px; }
+    .vve-eye-btns button { flex:1; padding:6px 0; border-radius:6px; background:none; border:1px solid #444; color:var(--muted); font-size:12px; font-weight:600; cursor:pointer; }
+    [data-theme=light] .vve-eye-btns button { border-color:#d1d5db; }
+    .vve-eye-btns button.active { color:#fff; border-color:transparent; }
+    .vve-eye-btns button.active.eye-L { background:#3b82f6; }
+    .vve-eye-btns button.active.eye-R { background:#f59e0b; }
+    .vve-eye-btns button.active.eye-M { background:#10b981; }
+    .em-card { margin:0 22px 14px; padding:10px 12px; border:1px solid var(--card-border); border-radius:8px; display:flex; flex-direction:column; gap:8px; font-size:12px; }
+    .em-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    .em-status-on  { color:#22c55e; font-weight:600; }
+    .em-status-off { color:var(--muted); font-weight:600; }
+    .em-card textarea { width:100%; min-height:90px; font-family:'Consolas',monospace; font-size:11px; box-sizing:border-box; }
+    .em-card img { max-width:100%; max-height:260px; border-radius:6px; border:1px solid var(--card-border); align-self:flex-start; }
+    .vve-angle-row { display:flex; align-items:center; gap:8px; }
+    .vve-angle-row input[type=range] { flex:1; accent-color:var(--accent); }
+    .vve-angle-row .cfg-input { width:70px; }
+    .vve-crop-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px 8px; }
+    .vve-crop-grid label { font-size:10px; color:var(--muted); display:flex; flex-direction:column; gap:3px; }
+    .vve-crop-str { font-family:'Consolas',monospace; font-size:12px; color:var(--text); }
+    .vve-btn-row { display:flex; gap:6px; flex-wrap:wrap; }
+    #vve-preview { display:block; background:#000; border:1px solid var(--card-border); border-radius:6px; margin:0 auto; }
+    .vve-help { font-size:11px; color:var(--muted); line-height:1.5; }
+    .vve-note { font-size:11px; color:#fbbf24; }
+    @media (max-width:820px) {
+      .vve-body { flex-direction:column; overflow-y:auto; }
+      .vve-stage { min-height:260px; }
+      .vve-side { width:auto; border-left:none; border-top:1px solid var(--card-border); }
+    }
+
     /* Advanced section */
     .adv-note { font-size:12px; color:var(--muted); padding:14px 20px 10px; border-bottom:1px solid var(--card-border); font-style:italic; }
     .adv-btn-row { padding:16px 20px; border-top:1px solid var(--card-border); }
@@ -324,7 +367,7 @@
               <div class="btn-desc">Add, edit and delete scrcpy crop/view profiles per headset model</div>
             </div>
           </button>
-          <p style="font-size:11px;color:var(--muted);margin-top:12px">Record folder and streaming settings are in the <strong>Streaming &amp; Recording</strong> section below.</p>
+          <p style="font-size:11px;color:var(--muted);margin-top:12px">Streaming settings are in the <strong>Streaming</strong> section, the record folder in the <strong>Recordings</strong> section below.</p>
         </div>
       </div>
     </div>
@@ -339,11 +382,11 @@
       <div class="acc-body" id="acc-monitoring-body"></div>
     </div>
 
-    <!-- 5: Streaming & Recording -->
+    <!-- 5: Streaming -->
     <div class="acc" id="acc-streaming">
       <button class="acc-hdr" onclick="accToggle('acc-streaming')">
         <svg class="acc-hdr-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
-        Streaming &amp; Recording
+        Streaming
         <span class="acc-chevron">&#9654;</span>
       </button>
       <div class="acc-body" id="acc-streaming-body"></div>
@@ -357,6 +400,16 @@
         <span class="acc-chevron">&#9654;</span>
       </button>
       <div class="acc-body" id="acc-vqa-body"></div>
+    </div>
+
+    <!-- 8: Recordings -->
+    <div class="acc" id="acc-recordings">
+      <button class="acc-hdr" onclick="accToggle('acc-recordings')">
+        <svg class="acc-hdr-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+        Recordings
+        <span class="acc-chevron">&#9654;</span>
+      </button>
+      <div class="acc-body" id="acc-recordings-body"></div>
     </div>
 
     <!-- Services & Network -->
@@ -439,6 +492,123 @@
       </div>
       <div class="pro-panel-body" id="pro-body">
         <div class="pro-empty">Loading...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Visual view editor (opened from the Headset Profiles modal) -->
+  <div id="vve-modal" class="cfg-overlay" style="display:none" role="dialog" aria-modal="true">
+    <div class="pro-panel vve-panel">
+      <div class="pro-panel-head">
+        <div class="pro-panel-title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="5" width="20" height="14" rx="2"/><rect x="5" y="8" width="6" height="8" stroke-dasharray="2 2"/><rect x="13" y="8" width="6" height="8" stroke-dasharray="2 2"/>
+          </svg>
+          Visual View Editor
+          <span id="vve-model-lbl" style="font-size:12px;font-weight:500;color:var(--muted)"></span>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="cfg-save-btn" id="vve-apply" disabled>Apply to profile</button>
+          <button class="cfg-cancel-btn" id="vve-close">Cancel</button>
+        </div>
+      </div>
+      <div class="vve-toolbar">
+        <span class="pro-gen-lbl">Headset</span>
+        <select id="vve-headset" class="cfg-input" style="width:260px"></select>
+        <button class="pro-small-btn" id="vve-refresh" title="Refresh the list of connected headsets">&#8635;</button>
+        <span class="pro-gen-lbl">Link</span>
+        <select id="vve-transport" class="cfg-input" style="width:110px">
+          <option value="Auto">Auto</option><option value="USB">USB</option><option value="WiFi">WiFi</option>
+        </select>
+        <button class="cfg-save-btn" id="vve-capture">Capture frame</button>
+        <span id="vve-status" class="vve-status"></span>
+      </div>
+      <div class="vve-body">
+        <div class="vve-stage" id="vve-stage">
+          <canvas id="vve-canvas"></canvas>
+          <div id="vve-placeholder" class="pro-empty">Select a connected headset and click "Capture frame".<br>The full, uncropped screen is captured with scrcpy (a few seconds).</div>
+        </div>
+        <div class="vve-side">
+          <div class="vve-field">
+            <span class="pro-gen-lbl">View name</span>
+            <input type="text" id="vve-name" class="cfg-input" placeholder="e.g. wide">
+          </div>
+          <div class="vve-field">
+            <span class="pro-gen-lbl">Eye</span>
+            <div class="vve-eye-btns">
+              <button id="vve-eye-L" class="eye-L active" data-eye="L">Left eye</button>
+              <button id="vve-eye-R" class="eye-R" data-eye="R">Right eye</button>
+              <button id="vve-eye-M" class="eye-M" data-eye="M" hidden title="Both eyes merged into one level picture (eye merge calibration of this model)">Merged</button>
+            </div>
+          </div>
+          <div class="vve-field">
+            <span class="pro-gen-lbl">Angle (degrees, clockwise)</span>
+            <div class="vve-angle-row">
+              <input type="range" id="vve-angle-range" min="-45" max="45" step="1" value="0">
+              <input type="number" id="vve-angle-num" class="cfg-input" min="-180" max="180" step="1" value="0">
+            </div>
+          </div>
+          <div class="vve-field">
+            <span class="pro-gen-lbl">Capture rectangle (pixels)</span>
+            <div class="vve-crop-grid">
+              <label>Width<input type="number" id="vve-crop-w" class="cfg-input" min="2" step="2"></label>
+              <label>Height<input type="number" id="vve-crop-h" class="cfg-input" min="2" step="2"></label>
+              <label>X<input type="number" id="vve-crop-x" class="cfg-input" min="0"></label>
+              <label>Y<input type="number" id="vve-crop-y" class="cfg-input" min="0"></label>
+            </div>
+            <div>crop: <span class="vve-crop-str" id="vve-crop-str">-</span></div>
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text)"><input type="checkbox" id="vve-square"> Lock square</label>
+          </div>
+          <div class="vve-field">
+            <label style="display:flex;align-items:flex-start;gap:6px;font-size:12px;color:var(--text)" title="Applies to the whole view, whatever the eye (L, R or Merged). The area outside the lenses (black corners) is shown transparent in the web video pages and OBS Browser Sources. An RTSP/HLS player still shows it black: the video itself cannot carry transparency.">
+              <input type="checkbox" id="vve-transparent" style="margin-top:2px"> Transparent outside the lenses (all eyes: web pages and OBS Browser Source)
+            </label>
+          </div>
+          <div class="vve-field" id="vve-baseeye-field" hidden>
+            <span class="pro-gen-lbl">Main eye (gives the centre of the merged picture)</span>
+            <select id="vve-baseeye-sel" class="cfg-input" style="width:140px;min-width:140px" title="The other eye only extends the sides. Most people have a dominant right eye.">
+              <option value="R">Right eye (default)</option>
+              <option value="L">Left eye</option>
+            </select>
+          </div>
+          <div class="vve-field" id="vve-depth-field" hidden>
+            <span class="pro-gen-lbl">Merge depth (where both eyes line up in the blend band)</span>
+            <div class="vve-angle-row">
+              <select id="vve-depth-sel" class="cfg-input" style="width:140px;min-width:140px;flex:none" title="Far = scenery and rooms (the calibration's own alignment). A near depth lines up close objects (menus, a table, hands) but doubles far ones in the blend band. The centre of the picture always comes from the main eye and is never affected.">
+                <option value="0">Far (default)</option>
+                <option value="3">3 m</option>
+                <option value="2">2 m</option>
+                <option value="1.5">1.5 m</option>
+                <option value="1">1 m</option>
+                <option value="0.75">0.75 m</option>
+                <option value="0.5">0.5 m</option>
+                <option value="custom">Custom...</option>
+              </select>
+              <input type="number" id="vve-depth-num" class="cfg-input" min="0.3" max="100" step="0.05" style="width:90px" hidden title="Metres, 0.3 to 100">
+            </div>
+            <span class="vve-help" id="vve-depth-info"></span>
+          </div>
+          <div class="vve-btn-row">
+            <button class="pro-small-btn" id="vve-mirror" title="Copy this rectangle to the other eye, mirrored around the frame centre, with the opposite angle">Mirror to other eye</button>
+            <button class="pro-small-btn" id="vve-reset" title="Clear this eye's rectangle and angle">Reset eye</button>
+          </div>
+          <div class="vve-field">
+            <span class="pro-gen-lbl">Preview (scrcpy output for this eye)</span>
+            <canvas id="vve-preview" width="260" height="160"></canvas>
+            <span class="vve-help" id="vve-preview-info"></span>
+          </div>
+          <div id="vve-note" class="vve-note"></div>
+          <div class="vve-help">
+            Drag on the image to draw the rectangle of the selected eye, or click two opposite corners.
+            Drag inside it to move it, drag a handle to resize it, arrow keys nudge it (Shift = 10 px).
+            The dashed outline is the area scrcpy really samples once the angle is applied.
+            Merged tab: capture again on that tab to get the flat merged picture of both eyes, then
+            draw the framing used by "M" profiles (no angle - the merged picture is already level).
+            Its merge depth chooses which distance lines up where the eyes are blended: far for
+            scenery, nearer for menus and close objects (the picture is merged again at once).
+            After "Apply to profile", click Save in Headset Profiles to write config.json.
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -806,14 +976,20 @@
         { type: 'subgroup', label: 'ADB' },
         { path: 'ADB.adbPort_default', label: 'Default ADB Port', type: 'number', min: 1, max: 65535,
           desc: 'Default TCP port for WiFi ADB connections. Usually 5555.' },
-        { path: 'ADB.prefer_usb', label: 'Prefer USB When Cabled', type: 'boolean',
-          desc: 'When a known headset is plugged in by USB, every ADB command and the scrcpy capture use the cable instead of WiFi. If the cable is pulled, commands fall back to WiFi ADB automatically. Takes effect without restarting.' },
+        { path: 'ADB.prefer_usb', label: 'Prefer USB', type: 'boolean',
+          desc: 'When a known headset is cabled to this PC, use the USB transport for every ADB call and for the scrcpy capture, and fall back to WiFi automatically when the cable drops. Disable to always use WiFi. Requires restart.' },
         { type: 'subgroup', label: 'MediaMTX (Restreaming)' },
         { path: 'mediamtx.enabled', label: 'Enabled', type: 'boolean',
           desc: 'Enable MediaMTX for RTSP / HLS / WebRTC restreaming.' },
         { path: 'mediamtx.log_level', label: 'Log Level', type: 'select',
           options: ['error','warn','info','debug'],
           desc: 'MediaMTX log verbosity. debug is very verbose; error is recommended for normal use.' },
+        { path: 'ffmpeg.log_level', label: 'FFmpeg push log level', type: 'select',
+          options: ['error','warning','info','verbose','debug'],
+          desc: 'Verbosity of the ffmpeg stream pusher (one <headset>_<time>_ffmpegPush_stderr.txt per capture session in the log folder). warning is recommended; debug for troubleshooting. Applies to the next capture start.' },
+        { path: 'scrcpy.log_level', label: 'scrcpy log level', type: 'select',
+          options: ['error','warn','info','debug','verbose'],
+          desc: 'Verbosity of scrcpy (one <headset>_<time>_StandardError.txt per capture session). info is recommended; debug for troubleshooting. Applies to the next capture start.' },
         { path: 'mediamtx.rtsp_port', label: 'RTSP Port', type: 'number', min: 1, max: 65535,
           desc: 'Port for RTSP streams. Default: 8554.' },
         { path: 'mediamtx.hls_port', label: 'HLS Port', type: 'number', min: 1, max: 65535,
@@ -845,26 +1021,17 @@
           desc: 'Automatically stop a WHEP video stream when its browser tab/window loses visibility (backgrounded tab, screen off), and reconnect automatically when it becomes visible again. Reduces mediamtx/network load per idle viewer.' },
         { path: 'VideoMonitor.pauseWhenHiddenDelay_sec', label: 'Pause Delay', type: 'number', min: 1, max: 300, unit: 's',
           desc: 'How long a stream stays hidden before it is paused. Prevents a brief tab switch from tearing down the connection.' },
-        { type: 'subgroup', label: 'USB Capture' },
-        { path: 'scrcpy.usb_switch_mode', label: 'Switch Running Capture to USB', type: 'select',
-          options: [
-            { value: 'stable',     label: 'When the cable is stable (default)' },
-            { value: 'immediate',  label: 'Immediately' },
-            { value: 'next_start', label: 'Only at the next start' }
-          ],
-          desc: 'What a running WiFi capture does when its headset is plugged in by USB (ADB > Prefer USB must be ON). Stable: restart on USB once the cable has been connected for the delay below, and never while the headset is recording. Immediately: restart on USB as soon as the cable is seen. Next start: never interrupt; USB is used the next time the capture starts. A pulled cable always restarts the capture on WiFi.' },
-        { path: 'scrcpy.usb_switch_stable_sec', label: 'Stable Cable Delay', type: 'number', min: 0, max: 600, unit: 'seconds',
-          desc: 'How long the cable must stay connected before a running capture moves to USB in Stable mode.' },
-        { type: 'subgroup', label: 'Recording' },
-        { path: 'scrcpy.recordFolder', label: 'Record Folder', type: 'folder', noDefault: true, openFolderTarget: 'records',
-          desc: 'Folder where scrcpy recordings are saved. Use forward slashes, e.g. D:/DATA/Records.' },
-        { path: 'scrcpy.recordMinFreeSpaceGB', label: 'Min. Free Space', type: 'number', min: 1, max: 9999, unit: 'GB',
-          desc: 'Recording is auto-disabled on all headsets when free space drops below this value.' },
         { type: 'subgroup', label: 'Default Capture Profile' },
         { path: 'scrcpy.defaultFps', label: 'Default FPS', type: 'number', min: 1, max: 120, unit: 'fps',
           desc: 'Capture framerate assigned to a newly added headset. Existing headsets are unaffected - change their profile individually on the Headsets page.' },
         { path: 'scrcpy.defaultBitrateMbps', label: 'Default Bandwidth', type: 'number', min: 1, max: 200, unit: 'Mbps',
           desc: 'Capture bitrate assigned to a newly added headset. Existing headsets are unaffected - change their profile individually on the Headsets page. The starred view (Manage Headset Profiles) sets which crop template is used.' },
+        { type: 'subgroup', label: 'USB Transport' },
+        { path: 'scrcpy.usb_switch_mode', label: 'Switch to USB', type: 'select',
+          options: ['stable','immediate','next_start'],
+          desc: 'What a RUNNING capture does when its headset gets cabled. stable: switch after the cable has been present for the delay below, and never while recording. immediate: switch as soon as the cable is seen. next_start: never interrupt a running capture - use USB the next time it starts. A capture on USB always falls back to WiFi when the cable is removed.' },
+        { path: 'scrcpy.usb_switch_stable_sec', label: 'Stable Delay', type: 'number', min: 1, max: 600, unit: 's',
+          desc: 'How long the cable must stay connected before a capture moves to USB in stable mode. Keeps a loose cable from bouncing the stream.' },
         { type: 'subgroup', label: 'Performance' },
         { path: 'Performance.GPU_Acceleration', label: 'GPU Acceleration', type: 'boolean',
           desc: 'Use GPU hardware acceleration where available.' },
@@ -884,11 +1051,6 @@
         { path: 'VRMonitor.networkDiscovery.interval_sec', label: 'Discovery Interval', type: 'number', min: 10, max: 3600, unit: 'seconds',
           desc: 'Delay between two network scans. A new scan only starts once the previous one has finished, so a '
               + 'sweep is never interrupted. Minimum 10 seconds.' },
-        { type: 'subgroup', label: 'Headset DIAG Page' },
-        { path: 'Diag.auto_refresh_sec', label: 'Auto-Refresh Interval', type: 'number', min: 5, max: 600, unit: 'seconds',
-          desc: 'How often the DIAG page reloads its sections when auto-refresh is on. Each refresh runs one ADB call per section, so keep this above 15 s with many headsets.' },
-        { path: 'Diag.cable_test_passes', label: 'USB Cable Test Passes', type: 'number', min: 1, max: 10,
-          desc: 'Number of 32 MB push/pull passes run by the USB cable test on the DIAG page. The ADB command presets of the DIAG page are edited in config.json (Diag.command_presets).' },
         { type: 'subgroup', label: 'Battery Thresholds' },
         { path: 'Monitoring.thresholds.headset_battery_warningLevel', label: 'Headset Warning', type: 'number', min: 0, max: 100, unit: '%',
           desc: 'Headset battery % at which a warning colour is shown on the overlay.' },
@@ -906,11 +1068,46 @@
           desc: 'Headset temperature at which the history graph turns amber. Should sit below the high threshold.' },
         { path: 'Monitoring.thresholds.temperature_highLevel', label: 'High Temperature', type: 'number', min: 30, max: 80, unit: 'C',
           desc: 'Headset temperature at which a heat warning is shown on the overlay, and the history graph turns red.' },
+        { type: 'subgroup', label: 'CPU / GPU Temperature' },
+        { path: 'Monitoring.thresholds.cpu_temperature_warningLevel', label: 'CPU Warning', type: 'number', min: 40, max: 120, unit: 'C',
+          desc: 'CPU temperature at which the DIAG tile and the CPU history graph turn amber. The CPU runs far hotter than the battery under load, so it has its own bands. Should sit below the high threshold.' },
+        { path: 'Monitoring.thresholds.cpu_temperature_highLevel', label: 'CPU High', type: 'number', min: 40, max: 120, unit: 'C',
+          desc: 'CPU temperature at which the DIAG tile and the CPU history graph turn red.' },
+        { path: 'Monitoring.thresholds.gpu_temperature_warningLevel', label: 'GPU Warning', type: 'number', min: 40, max: 120, unit: 'C',
+          desc: 'GPU temperature at which the DIAG tile and the GPU history graph turn amber. Should sit below the high threshold.' },
+        { path: 'Monitoring.thresholds.gpu_temperature_highLevel', label: 'GPU High', type: 'number', min: 40, max: 120, unit: 'C',
+          desc: 'GPU temperature at which the DIAG tile and the GPU history graph turn red.' },
         { type: 'subgroup', label: 'History' },
         { path: 'database.metric_history_hours', label: 'History Retention', type: 'number', min: 1, max: 8760, unit: 'hours',
           desc: 'How long per-headset samples (battery, temperature, controllers, charging power) are kept before '
               + 'being swept. Applies on the next maintenance pass, which runs at most once an hour. Set above 24 '
-              + 'to get an "All records" window on the Metric History page.' }
+              + 'to get an "All records" window on the Metric History page.' },
+        { type: 'subgroup', label: 'Headset DIAG Page' },
+        { path: 'Diag.auto_refresh_sec', label: 'Auto-Refresh', type: 'number', min: 5, max: 600, unit: 'seconds',
+          desc: 'How often the DIAG page re-reads its sections while auto-refresh is on. Each refresh costs a few ADB round-trips, so keep it generous with many people watching.' },
+        { path: 'Diag.cable_test_passes', label: 'Cable Test Passes', type: 'number', min: 1, max: 10,
+          desc: 'How many push/pull passes the USB cable throughput test runs. The ADB shell command presets are edited in config.json (Diag.command_presets).' }
+      ],
+      'acc-recordings-body': [
+        { type: 'subgroup', label: 'Recording' },
+        { path: 'scrcpy.recordFolder', label: 'Record Folder', type: 'folder', noDefault: true, openFolderTarget: 'records',
+          desc: 'Folder where scrcpy recordings are saved. Use forward slashes, e.g. D:/DATA/Records.' },
+        { path: 'scrcpy.recordMinFreeSpaceGB', label: 'Min. Free Space', type: 'number', min: 1, max: 9999, unit: 'GB',
+          desc: 'Recording is auto-disabled on all headsets when free space drops below this value.' },
+        { type: 'subgroup', label: 'Catalogue' },
+        { path: 'Recordings.rescan_interval_min', label: 'Rescan Interval', type: 'number', min: 1, max: 1440, unit: 'minutes',
+          desc: 'How often the recordings catalogue is reconciled with the record folder: new files are imported, files deleted outside the app are dropped, interrupted sessions are closed. Also done at every application start.' },
+        { type: 'subgroup', label: 'Playback' },
+        { path: 'Recordings.playback.max_height', label: 'Max Height', type: 'number', min: 144, max: 2160, unit: 'pixels',
+          desc: 'Maximum picture height of the browser preview on the Recordings page. Only the preview is re-encoded - recording files are never changed.' },
+        { path: 'Recordings.playback.fps', label: 'Playback FPS', type: 'number', min: 5, max: 60, unit: 'fps',
+          desc: 'Frame rate of the browser preview. A recording made at a lower rate is not made smoother by a higher value here.' },
+        { path: 'Recordings.playback.bitrate_kbps', label: 'Bitrate', type: 'number', min: 200, max: 50000, unit: 'kbps',
+          desc: 'Bitrate of the browser preview (h264). Higher values look better and use more network and encoder load.' },
+        { path: 'Recordings.playback.max_sessions', label: 'Max Sessions', type: 'number', min: 1, max: 16,
+          desc: 'Maximum number of previews running at the same time. Each one is a live encode on this PC.' },
+        { path: 'Recordings.playback.idle_timeout_sec', label: 'Idle Timeout', type: 'number', min: 10, max: 3600, unit: 'seconds',
+          desc: 'A preview whose browser tab stopped responding is stopped after this delay.' }
       ],
       'acc-vqa-body': [
         { path: 'VideoQualityAutomation.enabled', label: 'Enable VQA', type: 'boolean',
@@ -1413,7 +1610,8 @@
         + '<input type="text" id="pro-video-encoder" class="cfg-input" value="' + proEsc(model.video_encoder || '') + '" placeholder="Leave empty to use the default encoder"></div>';
 
       html += '<div class="pro-section-hd"><span>Views</span>'
-        + '<button data-action="add-view">+ Add View</button></div>'
+        + '<span style="display:flex;gap:6px"><button data-action="visual-new-view" title="Capture a headset frame and draw the crop rectangles">&#9635; Visual editor</button>'
+        + '<button data-action="add-view">+ Add View</button></span></div>'
         + '<p style="font-size:11px;color:var(--muted);margin:0 22px 8px">The starred view is used as the capture profile for a newly added headset of this model.</p>'
         + '<div class="pro-table-wrap"><table class="pro-table"><thead><tr>'
         + '<th class="pro-th-drag"></th><th class="pro-th-star" title="Default view for new headsets"></th><th>View Name</th><th class="pro-th-crop">Left Eye Crop</th><th class="pro-th-angle">L Angle</th>'
@@ -1432,8 +1630,162 @@
       if (vnames.length === 0 && !_proNewView) html += '<div class="pro-empty">No views defined. Click "+ Add View" to create one.</div>';
       html += '</div>';
 
+      html += proEyeMergeCard(model);
+
       document.getElementById('pro-body').innerHTML = html;
       initProDragDrop();
+      proLoadEyeMerge();
+    }
+
+    // ---- Eye merge card (both eyes stitched into one level picture, eye "M" in profiles) ----
+    // The calibration is written SERVER-side (calibrate / import / enable), so these actions refuse
+    // to run over unsaved modal edits and reload config.json afterwards: saving a stale copy of the
+    // whole config from this modal would otherwise overwrite the calibration just written.
+    function proEyeMergeCard(model) {
+      var em = model.eye_merge || null;
+      var html = '<div class="pro-section-hd"><span>Eye merge (both eyes in one picture)</span></div><div class="em-card">';
+      if (!em) {
+        html += '<div><span class="em-status-off">Not calibrated</span> - the "Merged (M)" eye is not available for this model.</div>';
+      } else {
+        html += '<div><span class="' + (em.enabled === false ? 'em-status-off">Disabled' : 'em-status-on">Enabled') + '</span>'
+          + ' - angle ' + proEsc(em.relative_angle) + '&deg;, shift ' + proEsc(em.shift_x) + ',' + proEsc(em.shift_y)
+          + ', score ' + proEsc(em.score) + ', merged picture ' + proEsc(em.canvas_width) + ' x ' + proEsc(em.canvas_height)
+          + ', ' + proEsc(em.calibrated_at || '') + (em.calibrated_by ? ' by ' + proEsc(em.calibrated_by) : '') + '</div>'
+          + '<div class="vve-help">Framing, main eye' + (em.lens_focal_px ? ' and merge depth' : '') + ' are set per view, on the "Merged" tab of the visual editor.'
+          + (em.lens_focal_px ? '' : ' Merge depth is not available for this model (no lens model, lens_focal_px).') + '</div>';
+      }
+      // Models with lens positions (Quest 2: 58 / 63 / 68 mm): each position has its own calibration
+      // (ADR-0030). The selector says which one a Calibrate writes; the default is the position the
+      // headset is at right now.
+      var ipdCfg = model.ipd || null;
+      if (ipdCfg && ipdCfg.positions) {
+        var done = {};
+        if (em) done[String(ipdCfg['default'])] = true;
+        Object.keys(model.eye_merge_ipd || {}).forEach(function(k) { done[k] = true; });
+        html += '<div class="vve-help">Lens positions: ' + ipdCfg.positions.map(function(p) {
+          return proEsc(p) + ' mm ' + (done[String(p)] ? '(calibrated)' : '(not calibrated)');
+        }).join(', ') + '. The views follow the headset\'s lens position automatically'
+          + (ipdCfg.auto_detect === false ? ' (auto-detect is OFF)' : '') + '.</div>';
+      }
+      html += '<div class="em-row"><span class="pro-gen-lbl">Calibrate with</span>'
+        + '<select id="em-headset" class="cfg-input" style="width:240px"><option value="">Loading...</option></select>';
+      if (ipdCfg && ipdCfg.positions) {
+        html += '<select id="em-ipd" class="cfg-input" style="width:190px" title="Lens position this calibration is stored for">'
+          + '<option value="">Position the headset is at</option>'
+          + ipdCfg.positions.map(function(p) { return '<option value="' + proEsc(p) + '">' + proEsc(p) + ' mm</option>'; }).join('')
+          + '</select>';
+      }
+      html += '<button class="cfg-save-btn" data-action="em-calibrate">' + (em ? 'Recalibrate' : 'Calibrate') + '</button>';
+      if (em) {
+        html += '<button class="pro-small-btn" data-action="em-toggle">' + (em.enabled === false ? 'Enable' : 'Disable') + '</button>'
+          + '<button class="pro-small-btn" data-action="em-copy" title="Copy the shareable calibration (JSON) to the clipboard">Copy JSON</button>';
+      }
+      html += '<button class="pro-small-btn" data-action="em-show-import">Import JSON</button></div>'
+        + '<div class="vve-help">Calibration: headset level and steady in the Home environment, facing far scenery, no window close to the eyes (about 6 s).'
+        + ' Then draw the framing of each view on the "Merged" tab of the visual editor.</div>'
+        + '<div id="em-result"></div>'
+        + '<div id="em-import" style="display:none;flex-direction:column;gap:6px">'
+        + '<textarea id="em-import-text" class="cfg-input" placeholder="Paste a calibration snippet shared from another VR Headset Manager"></textarea>'
+        + '<div class="em-row"><label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="em-import-crops" checked> Also take the shared merged framings of the views</label>'
+        + '<button class="cfg-save-btn" data-action="em-import">Import into ' + proEsc(_proModel) + '</button></div></div>'
+        + '</div>';
+      return html;
+    }
+
+    function proLoadEyeMerge() {
+      var model = _proModel;
+      var sel = document.getElementById('em-headset');
+      fetch('/api/headsets-status').then(function(r) { return r.json(); }).then(function(list) {
+        if (_proModel !== model || !sel) return;
+        if (!Array.isArray(list)) list = list ? [list] : [];
+        var hs = list.filter(function(h) { return (h.adb_transport || h.adb) && h.model === model; });
+        sel.innerHTML = hs.length ? hs.map(function(h) { return '<option value="' + h.id + '">' + proEsc(h.name) + ' - ' + proEsc(h.adb_transport || 'WiFi') + '</option>'; }).join('')
+                                  : '<option value="">No connected ' + proEsc(model) + ' headset</option>';
+      }).catch(function() { if (sel) sel.innerHTML = '<option value="">Failed to load headsets</option>'; });
+    }
+
+    function proReloadConfig() {
+      return fetch('/api/config').then(function(r) { return r.json(); }).then(function(cfg) {
+        _proCfg = cfg;
+        if (!cfg.scrcpy) cfg.scrcpy = {};
+        if (!cfg.scrcpy.parameters) cfg.scrcpy.parameters = {};
+        _proData = cfg.scrcpy.parameters;
+        if (_cfg) _cfg.scrcpy = cfg.scrcpy;
+        _proDirty = false;
+        if (!_proData[_proModel]) { var ms = Object.keys(_proData); _proModel = ms.length ? ms[0] : null; }
+        renderProTabs(); renderProBody();
+      });
+    }
+
+    function proCopyText(text) {
+      if (navigator.clipboard && window.isSecureContext) { return navigator.clipboard.writeText(text); }
+      return new Promise(function(resolve, reject) {
+        var ta = document.createElement('textarea');
+        ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.focus(); ta.select();
+        try { document.execCommand('copy') ? resolve() : reject(new Error('copy refused')); } catch (e) { reject(e); }
+        document.body.removeChild(ta);
+      });
+    }
+
+    function proEyeMergeAction(action, btn) {
+      var model = _proModel;
+      if (['em-calibrate', 'em-toggle', 'em-import'].indexOf(action) >= 0 && _proDirty) {
+        showToast('Save (or close without saving) your profile changes first - this action writes config.json itself.', 4500); return;
+      }
+      var out = document.getElementById('em-result');
+      if (action === 'em-show-import') {
+        var imp = document.getElementById('em-import');
+        imp.style.display = imp.style.display === 'none' ? 'flex' : 'none'; return;
+      }
+      if (action === 'em-copy') {
+        fetch('/api/eye-merge?model=' + encodeURIComponent(model)).then(function(r) { return r.json(); }).then(function(j) {
+          if (!j.snippet) { showToast('No calibration to copy.', 2500); return; }
+          proCopyText(j.snippet).then(function() { showToast('Calibration copied to the clipboard.', 2500); })
+            .catch(function() {
+              out.innerHTML = '<textarea class="cfg-input" readonly>' + proEsc(j.snippet) + '</textarea><div class="vve-help">Copy failed - select the text above.</div>';
+            });
+        }); return;
+      }
+      if (action === 'em-calibrate') {
+        var id = parseInt(document.getElementById('em-headset').value, 10);
+        if (!id) { showToast('Connect a ' + model + ' headset (USB or WiFi ADB) first.', 3000); return; }
+        btn.disabled = true; out.innerHTML = '<div class="vve-help">Capturing 3 frames and measuring both eyes (about 20 s) - look slowly up, down, left and right meanwhile...</div>';
+        fetch('/api/eye-merge/calibrate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+               body: JSON.stringify({ id: id, transport: 'Auto', save: true, frames: 3,
+                                      ipd: (document.getElementById('em-ipd') ? document.getElementById('em-ipd').value : '') }) })
+          .then(function(r) { return r.json(); })
+          .then(function(j) {
+            btn.disabled = false;
+            if (!j.ok) { out.innerHTML = '<div style="color:#ef4444">' + proEsc(j.error || 'Calibration failed.') + '</div>'; return; }
+            var preview = j.previewUrl ? '<img src="' + proEsc(j.previewUrl) + '" alt="merged picture">' : '';
+            proReloadConfig().then(function() {
+              var o2 = document.getElementById('em-result');
+              if (o2) o2.innerHTML = '<div class="em-status-on">Calibrated (score ' + proEsc(j.score) + ')' + (j.saved ? ' and saved.' : ' - NOT saved.') + '</div>' + preview;
+            });
+          })
+          .catch(function(e) { btn.disabled = false; out.textContent = 'Server unreachable: ' + e.message; });
+        return;
+      }
+      if (action === 'em-toggle') {
+        var em = (_proData[model] && _proData[model].eye_merge) || {};
+        fetch('/api/eye-merge/enable', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+               body: JSON.stringify({ model: model, enabled: em.enabled === false }) })
+          .then(function(r) { return r.json(); })
+          .then(function(j) { if (!j.ok) { showToast(j.error || 'Failed', 3000); return; } proReloadConfig(); });
+        return;
+      }
+      if (action === 'em-import') {
+        var txt = (document.getElementById('em-import-text').value || '').trim();
+        if (!txt) { showToast('Paste a calibration snippet first.', 2500); return; }
+        fetch('/api/eye-merge/import', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+               body: JSON.stringify({ json: txt, model: model, includeCrops: document.getElementById('em-import-crops').checked }) })
+          .then(function(r) { return r.json(); })
+          .then(function(j) {
+            if (!j.ok) { showToast('Import failed: ' + (j.error || 'error'), 5000); return; }
+            proReloadConfig().then(function() { showToast('Calibration imported into ' + j.model + ' (' + (j.cropsApplied || 0) + ' framing(s)).', 3500); });
+          });
+      }
     }
 
     function proViewReadRow(vn, le, re, isDefault) {
@@ -1442,12 +1794,16 @@
         + '<td class="pro-td-star"><button class="pro-star-btn' + (isDefault ? ' active' : '') + '" data-action="toggle-default-view" data-view="' + proEsc(vn) + '" title="' + (isDefault ? 'Default view for new headsets' : 'Set as default view for new headsets') + '">'
         + '<svg width="13" height="13" viewBox="0 0 24 24" fill="' + (isDefault ? 'currentColor' : 'none') + '" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>'
         + '</button></td>'
-        + '<td class="pro-td-name">' + proEsc(vn) + '</td>'
+        + '<td class="pro-td-name">' + proEsc(vn)
+        + (_proData[_proModel] && _proData[_proModel].views && _proData[_proModel].views[vn] && _proData[_proModel].views[vn].transparent_corners ? ' <span title="Transparent outside the lenses in web views" style="color:var(--muted)">&#9680;</span>' : '')
+        + '</td>'
         + '<td class="pro-td-crop">' + proEsc(le.crop || '') + '</td>'
         + '<td class="pro-td-angle">' + (le.angle != null ? le.angle : 0) + '</td>'
         + '<td class="pro-td-crop">' + proEsc(re.crop || '') + '</td>'
         + '<td class="pro-td-angle">' + (re.angle != null ? re.angle : 0) + '</td>'
         + '<td class="pro-td-actions">'
+        + '<button class="pro-icon-btn" data-action="visual-edit-view" data-view="' + proEsc(vn) + '" title="Edit visually on a headset frame">&#9635;</button>'
+        + '<button class="pro-icon-btn" data-action="duplicate-view" data-view="' + proEsc(vn) + '" title="Duplicate this view (added below as ' + proEsc(vn) + '_copy)">&#10697;</button>'
         + '<button class="pro-icon-btn" data-action="edit-view" data-view="' + proEsc(vn) + '" title="Edit">&#9998;</button>'
         + '<button class="pro-icon-btn pro-icon-del" data-action="delete-view" data-view="' + proEsc(vn) + '" title="Delete">&#10005;</button>'
         + '</td></tr>';
@@ -1538,6 +1894,7 @@
       var action = btn.dataset.action;
       var vn     = btn.dataset.view;
 
+      if (action.indexOf('em-') === 0) { proEyeMergeAction(action, btn); return; }
       if (action === 'select-model') {
         collectProGeneralSettings();
         _proModel = btn.dataset.model; _proEditView = null; _proNewView = false;
@@ -1585,6 +1942,12 @@
         collectProGeneralSettings(); _proNewView = true; _proEditView = null;
         renderProBody(); var ni = document.getElementById('nv-name'); if (ni) ni.focus(); return;
       }
+      if (action === 'visual-new-view') {
+        collectProGeneralSettings(); openVveModal(null); return;
+      }
+      if (action === 'visual-edit-view') {
+        collectProGeneralSettings(); openVveModal(vn); return;
+      }
       if (action === 'edit-view') {
         collectProGeneralSettings(); _proEditView = vn; _proNewView = false;
         renderProBody(); var ei = document.getElementById('ev-name'); if (ei) ei.focus(); return;
@@ -1596,6 +1959,24 @@
           if (mDef.views[vn]) mDef.views[vn].default = true;
           _proDirty = true; renderProBody();
         }
+        return;
+      }
+      if (action === 'duplicate-view') {
+        // Copy placed right below the source. "_copy" rather than " (copy)": a view name is the first
+        // field of a headset profile (view-EYE-AUDIO-FPS-BW), which only accepts letters, digits and _.
+        var mDup = _proData[_proModel];
+        if (!mDup || !mDup.views || !mDup.views[vn]) return;
+        collectProGeneralSettings();
+        var copyName = vn + '_copy', nCopy = 2;
+        while (mDup.views[copyName]) { copyName = vn + '_copy' + nCopy++; }
+        var copyVal = JSON.parse(JSON.stringify(mDup.views[vn]));
+        delete copyVal['default'];                               // only one default view per model
+        var outDup = {};
+        Object.keys(mDup.views).forEach(function(k) { outDup[k] = mDup.views[k]; if (k === vn) outDup[copyName] = copyVal; });
+        mDup.views = outDup;
+        _proDirty = true; _proEditView = null; _proNewView = false;
+        renderProBody();
+        showToast('View "' + copyName + '" added below "' + vn + '". Click Save to write it to config.json.', 3500);
         return;
       }
       if (action === 'delete-view') {
@@ -1613,8 +1994,16 @@
         var reAng  = parseFloat(document.getElementById('ev-re-angle').value) || 0;
         var m2 = _proData[_proModel];
         if (!m2.views) m2.views = {};
+        var wasDefault = !!(m2.views[oldVn] && m2.views[oldVn].default);
+        var keptMerged = m2.views[oldVn] && m2.views[oldVn].merged;   // eye merge framing is not in this row
+        var keptTransp = !!(m2.views[oldVn] && m2.views[oldVn].transparent_corners);   // nor the transparency option
+        var keptIpd = m2.views[oldVn] && m2.views[oldVn].ipd;   // nor the per-lens-position variants (ADR-0030)
         if (oldVn !== newVn) delete m2.views[oldVn];
         m2.views[newVn] = { left_eye: { crop: leCrop, angle: leAng }, right_eye: { crop: reCrop, angle: reAng } };
+        if (keptMerged) m2.views[newVn].merged = keptMerged;
+        if (keptTransp) m2.views[newVn].transparent_corners = true;
+        if (keptIpd) m2.views[newVn].ipd = keptIpd;
+        if (wasDefault) m2.views[newVn].default = true;
         _proDirty = true; _proEditView = null; renderProBody(); doSaveToDisk(false); return;
       }
       if (action === 'cancel-edit-view') { _proEditView = null; renderProBody(); return; }
@@ -1672,8 +2061,16 @@
           var reAng2  = parseFloat(document.getElementById('ev-re-angle').value) || 0;
           var m22 = _proData[_proModel];
           if (!m22.views) m22.views = {};
+          var wasDefault2 = !!(m22.views[oldVn2] && m22.views[oldVn2].default);
+          var keptMerged2 = m22.views[oldVn2] && m22.views[oldVn2].merged;
+          var keptTransp2 = !!(m22.views[oldVn2] && m22.views[oldVn2].transparent_corners);
+          var keptIpd2 = m22.views[oldVn2] && m22.views[oldVn2].ipd;
           if (oldVn2 !== newVn2) delete m22.views[oldVn2];
           m22.views[newVn2] = { left_eye: { crop: leCrop2, angle: leAng2 }, right_eye: { crop: reCrop2, angle: reAng2 } };
+          if (keptMerged2) m22.views[newVn2].merged = keptMerged2;
+          if (keptTransp2) m22.views[newVn2].transparent_corners = true;
+          if (keptIpd2) m22.views[newVn2].ipd = keptIpd2;
+          if (wasDefault2) m22.views[newVn2].default = true;
           _proDirty = true;
         }
         _proEditView = null;
@@ -1729,8 +2126,660 @@
     document.getElementById('pro-save-top').addEventListener('click', saveProfiles);
     document.getElementById('pro-close-top').addEventListener('click', closeProModal);
     document.addEventListener('keydown', function(e) {
-      if (e.key === 'Escape' && document.getElementById('pro-modal').style.display !== 'none') closeProModal();
+      if (e.key !== 'Escape') return;
+      if (document.getElementById('vve-modal').style.display !== 'none') { closeVveModal(); return; }
+      if (document.getElementById('pro-modal').style.display !== 'none') closeProModal();
     });
+
+    // ── Visual view editor ───────────────────────────────────────────────────
+    // Draws each eye's scrcpy capture rectangle on ONE full, uncropped headset frame
+    // (POST /api/headset-screen-frame -> Get-HeadsetScreenFrame). Every rectangle is kept in
+    // FRAME pixels, which are exactly the units of scrcpy --crop w:h:x:y. scrcpy crops first,
+    // then rotates the cropped content CLOCKWISE by --angle around its centre, keeping the crop
+    // size: the preview reproduces that, and the dashed outline is the source area it samples.
+    var _vve = null;
+    var VVE_COLORS = { L: '#3b82f6', R: '#f59e0b', M: '#10b981' };
+
+    // Two coordinate systems: the raw side-by-side frame (L and R rectangles) and the flat merged
+    // canvas of the eye merge calibration (M rectangle). Each has its own captured image; the
+    // active one is copied into img/W/H whenever the tab changes (vveUseFrame).
+    function vveNewState(viewName) {
+      return { img: null, W: 0, H: 0, eye: 'L', model: _proModel, origModel: _proModel, origView: viewName,
+               eyes: { L: { rect: null, angle: 0 }, R: { rect: null, angle: 0 }, M: { rect: null, angle: 0 } },
+               frames: { raw: { img: null, W: 0, H: 0 }, M: { img: null, W: 0, H: 0 } },
+               mergeEnabled: false, depth: 0, depthSupported: false, mergedFrom: 0, baseEye: 'R',
+               drag: null, pending: null, hover: null, headsets: [] };
+    }
+
+    function vveFrameKey(eye) { return eye === 'M' ? 'M' : 'raw'; }
+    function vveUseFrame() {
+      var f = _vve.frames[vveFrameKey(_vve.eye)];
+      _vve.img = f.img; _vve.W = f.W; _vve.H = f.H;
+      document.getElementById('vve-canvas').style.display = f.img ? 'block' : 'none';
+      document.getElementById('vve-placeholder').style.display = f.img ? 'none' : '';
+      document.getElementById('vve-placeholder').innerHTML = (_vve.eye === 'M')
+        ? 'Click "Capture frame" on this tab to get the merged picture of both eyes.<br>Draw the framing used by the "Merged (M)" eye of this view.'
+        : 'Select a connected headset and click "Capture frame".<br>The full, uncropped screen is captured with scrcpy (a few seconds).';
+      if (f.img) vveResize();
+    }
+
+    // Shows the Merged tab when the model has an enabled calibration; pre-fills the automatic
+    // merged framing of the view when it has none of its own.
+    function vveLoadMergeState() {
+      var btnM = document.getElementById('vve-eye-M');
+      btnM.hidden = true;
+      if (!_vve || !_vve.model) return;
+      var model = _vve.model;
+      fetch('/api/eye-merge?model=' + encodeURIComponent(model))
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          if (!_vve || _vve.model !== model) return;
+          _vve.mergeEnabled = !!(j && j.ok && j.enabled);
+          _vve.depthSupported = !!(j && j.depthSupported);
+          btnM.hidden = !_vve.mergeEnabled;
+          vveRefreshSide();
+          if (_vve.mergeEnabled && !_vve.eyes.M.rect && _vve.origView && j.views && j.views[_vve.origView]) {
+            _vve.eyes.M.rect = vveParseCrop(j.views[_vve.origView].crop);
+          }
+          if (!_vve.mergeEnabled && _vve.eye === 'M') vveSelectEye('L');
+        })
+        .catch(function() {});
+    }
+
+    function vveParseCrop(s) {
+      var p = String(s || '').split(':').map(function(v) { return parseInt(v, 10); });
+      if (p.length !== 4 || p.some(isNaN) || p[0] <= 0 || p[1] <= 0) return null;   // 0:0:0:0 = no crop
+      return { w: p[0], h: p[1], x: p[2], y: p[3] };
+    }
+    function vveCropStr(r) { return r ? (r.w + ':' + r.h + ':' + r.x + ':' + r.y) : ''; }
+
+    function openVveModal(viewName) {
+      if (!_proModel && viewName) return;
+      _vve = vveNewState(viewName);
+      var nameInp = document.getElementById('vve-name');
+      nameInp.value = viewName || '';
+      if (viewName && _proData[_proModel] && _proData[_proModel].views && _proData[_proModel].views[viewName]) {
+        var v = _proData[_proModel].views[viewName];
+        _vve.eyes.L.rect  = vveParseCrop(v.left_eye && v.left_eye.crop);
+        _vve.eyes.L.angle = Number(v.left_eye && v.left_eye.angle) || 0;
+        _vve.eyes.R.rect  = vveParseCrop(v.right_eye && v.right_eye.crop);
+        _vve.eyes.R.angle = Number(v.right_eye && v.right_eye.angle) || 0;
+        _vve.eyes.M.rect  = vveParseCrop(v.merged && v.merged.crop);
+        _vve.depth        = Number(v.merged && v.merged.depth_m) || 0;
+        _vve.baseEye      = (v.merged && v.merged.base_eye === 'L') ? 'L' : 'R';
+      }
+      document.getElementById('vve-transparent').checked = !!(viewName && _proData[_proModel] && _proData[_proModel].views
+        && _proData[_proModel].views[viewName] && _proData[_proModel].views[viewName].transparent_corners);
+      delete document.getElementById('vve-depth-num').dataset.custom;
+      document.getElementById('vve-canvas').style.display = 'none';
+      document.getElementById('vve-placeholder').style.display = '';
+      vveSetStatus('', '');
+      vveSelectEye('L');
+      vveUpdateModelLabel();
+      document.getElementById('vve-modal').style.display = 'flex';
+      vveLoadHeadsets();
+      vveLoadMergeState();
+    }
+
+    function closeVveModal() {
+      document.getElementById('vve-modal').style.display = 'none';
+      _vve = null;
+    }
+
+    function vveSetStatus(msg, cls) {
+      var el = document.getElementById('vve-status');
+      el.textContent = msg; el.className = 'vve-status' + (cls ? ' ' + cls : '');
+    }
+
+    function vveUpdateModelLabel() {
+      if (!_vve) return;
+      document.getElementById('vve-model-lbl').textContent = _vve.model ? ('- model: ' + _vve.model) : '';
+    }
+
+    function vveLoadHeadsets() {
+      var sel = document.getElementById('vve-headset');
+      sel.innerHTML = '<option value="">Loading...</option>';
+      fetch('/api/headsets-status')
+        .then(function(r) { return r.json(); })
+        .then(function(list) {
+          if (!_vve) return;
+          if (!Array.isArray(list)) list = list ? [list] : [];
+          _vve.headsets = list.filter(function(h) { return h.adb_transport || h.adb; });
+          if (_vve.headsets.length === 0) {
+            sel.innerHTML = '<option value="">No headset connected (USB or WiFi ADB)</option>';
+            return;
+          }
+          var preferred = null;
+          sel.innerHTML = _vve.headsets.map(function(h) {
+            if (preferred === null && h.model === _vve.model) preferred = h.id;
+            var link = h.adb_transport || 'WiFi';
+            return '<option value="' + h.id + '">' + proEsc(h.name) + (h.model ? ' (' + proEsc(h.model) + ')' : '') + ' - ' + proEsc(link) + '</option>';
+          }).join('');
+          if (preferred !== null) sel.value = String(preferred);
+        })
+        .catch(function() { sel.innerHTML = '<option value="">Failed to load headsets</option>'; });
+    }
+
+    function vveCapture() {
+      if (!_vve) return;
+      var id = parseInt(document.getElementById('vve-headset').value, 10);
+      if (!id) { vveSetStatus('Select a connected headset first.', 'err'); return; }
+      var btn = document.getElementById('vve-capture');
+      btn.disabled = true;
+      var mergedTab = (_vve.eye === 'M');
+      vveSetStatus(mergedTab ? 'Capturing and merging both eyes (about 6 s)...' : 'Capturing with scrcpy (about 5 s)...', '');
+      fetch(mergedTab ? '/api/eye-merge/frame' : '/api/headset-screen-frame', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(mergedTab ? { id: id, transport: document.getElementById('vve-transport').value, depth: _vve.depth, baseEye: _vve.baseEye }
+                                       : { id: id, transport: document.getElementById('vve-transport').value })
+      })
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          if (!_vve) return;
+          if (!j.ok) { btn.disabled = false; vveSetStatus(j.error || 'Capture failed.', 'err'); return; }
+          var img = new Image();
+          img.onload = function() {
+            btn.disabled = false;
+            if (!_vve) return;
+            var fk = mergedTab ? 'M' : 'raw';
+            _vve.frames[fk] = { img: img, W: img.naturalWidth, H: img.naturalHeight };
+            if (mergedTab) _vve.mergedFrom = id;      // a depth change re-renders this headset's frame
+            if (vveFrameKey(_vve.eye) === fk) { _vve.img = img; _vve.W = img.naturalWidth; _vve.H = img.naturalHeight; }
+            var saved = { img: _vve.img, W: _vve.W, H: _vve.H };
+            _vve.img = img; _vve.W = img.naturalWidth; _vve.H = img.naturalHeight;   // vveNorm clamps to these
+            (mergedTab ? ['M'] : ['L', 'R']).forEach(function(e) { if (_vve.eyes[e].rect) _vve.eyes[e].rect = vveNorm(_vve.eyes[e].rect); });
+            _vve.img = saved.img; _vve.W = saved.W; _vve.H = saved.H;
+            var note = '';
+            if (j.model && j.model !== _vve.model) {
+              if (_vve.origView) {
+                note = 'This frame comes from a ' + j.model + ' headset, but you are editing a view of ' + _vve.model + '.';
+              } else {
+                _vve.model = j.model;
+                note = 'The new view will be added to model "' + j.model + '".';
+              }
+            }
+            document.getElementById('vve-note').textContent = note;
+            vveUpdateModelLabel();
+            if (!mergedTab) vveLoadMergeState();     // the model may have changed with this frame
+            vveSetStatus((mergedTab ? 'Merged picture ' : 'Frame ') + img.naturalWidth + ' x ' + img.naturalHeight + ' px from ' + (j.name || 'headset') + ' over ' + j.transport + '.', 'ok');
+            vveUseFrame();
+            vveRefreshSide();
+          };
+          img.onerror = function() { btn.disabled = false; vveSetStatus('The captured image could not be loaded.', 'err'); };
+          img.src = j.url;
+        })
+        .catch(function(e) { btn.disabled = false; vveSetStatus('Server unreachable: ' + e.message, 'err'); });
+    }
+
+    // ---- geometry ----
+    function vveNorm(r) {
+      var x = Math.min(r.x, r.x + r.w), y = Math.min(r.y, r.y + r.h);
+      var w = Math.abs(r.w), h = Math.abs(r.h);
+      x = Math.max(0, Math.round(x)); y = Math.max(0, Math.round(y));
+      w = Math.round(w); h = Math.round(h);
+      if (_vve.W) { x = Math.min(x, _vve.W - 2); y = Math.min(y, _vve.H - 2); w = Math.min(w, _vve.W - x); h = Math.min(h, _vve.H - y); }
+      if (document.getElementById('vve-square').checked) { w = h = Math.min(w, h); }
+      w -= w % 2; h -= h % 2;                                  // encoders want even sizes
+      return { x: x, y: y, w: Math.max(2, w), h: Math.max(2, h) };
+    }
+
+    function vveEventPoint(e) {
+      var c = document.getElementById('vve-canvas'), b = c.getBoundingClientRect();
+      return { x: (e.clientX - b.left) * (_vve.W / b.width), y: (e.clientY - b.top) * (_vve.H / b.height) };
+    }
+    function vvePxPerCss() {
+      var b = document.getElementById('vve-canvas').getBoundingClientRect();
+      return b.width ? _vve.W / b.width : 1;
+    }
+
+    function vveHandles(r) {
+      var mx = r.x + r.w / 2, my = r.y + r.h / 2, x2 = r.x + r.w, y2 = r.y + r.h;
+      return [['nw', r.x, r.y], ['n', mx, r.y], ['ne', x2, r.y], ['e', x2, my],
+              ['se', x2, y2], ['s', mx, y2], ['sw', r.x, y2], ['w', r.x, my]];
+    }
+
+    function vveHitTest(p) {
+      var r = _vve.eyes[_vve.eye].rect;
+      if (!r) return null;
+      var tol = 9 * vvePxPerCss();
+      var hs = vveHandles(r);
+      for (var i = 0; i < hs.length; i++) {
+        if (Math.abs(p.x - hs[i][1]) <= tol && Math.abs(p.y - hs[i][2]) <= tol) return hs[i][0];
+      }
+      if (p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h) return 'move';
+      return null;
+    }
+
+    var VVE_CURSORS = { nw: 'nwse-resize', se: 'nwse-resize', ne: 'nesw-resize', sw: 'nesw-resize', n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize', move: 'move' };
+
+    function vveResizeRect(start, handle, dx, dy) {
+      var l = start.x, t = start.y, rr = start.x + start.w, b = start.y + start.h;
+      if (handle.indexOf('w') >= 0) l += dx;
+      if (handle.indexOf('e') >= 0) rr += dx;
+      if (handle.indexOf('n') >= 0) t += dy;
+      if (handle.indexOf('s') >= 0) b += dy;
+      if (document.getElementById('vve-square').checked) {
+        if (handle === 'n' || handle === 's') { rr = l + Math.abs(b - t); }
+        else if (handle.indexOf('n') >= 0) { t = b - Math.abs(rr - l); }
+        else { b = t + Math.abs(rr - l); }
+      }
+      return { x: l, y: t, w: rr - l, h: b - t };
+    }
+
+    // ---- pointer handling ----
+    function vvePointerDown(e) {
+      if (!_vve || !_vve.img) return;
+      var p = vveEventPoint(e);
+      var hit = _vve.pending ? null : vveHitTest(p);
+      var cur = _vve.eyes[_vve.eye];
+      document.getElementById('vve-canvas').setPointerCapture(e.pointerId);
+      if (hit === 'move') {
+        _vve.drag = { mode: 'move', start: p, rect: Object.assign({}, cur.rect), moved: false };
+      } else if (hit) {
+        _vve.drag = { mode: 'resize', handle: hit, start: p, rect: Object.assign({}, cur.rect), moved: false };
+      } else {
+        _vve.drag = { mode: 'new', start: _vve.pending || p, moved: false, cssStart: { x: e.clientX, y: e.clientY } };
+      }
+    }
+
+    function vvePointerMove(e) {
+      if (!_vve || !_vve.img) return;
+      var p = vveEventPoint(e);
+      var c = document.getElementById('vve-canvas');
+      var cur = _vve.eyes[_vve.eye];
+      var d = _vve.drag;
+      if (!d) {
+        _vve.hover = p;
+        var hit = _vve.pending ? null : vveHitTest(p);
+        c.style.cursor = hit ? VVE_CURSORS[hit] : 'crosshair';
+        if (_vve.pending) vveDraw();
+        return;
+      }
+      var dx = p.x - d.start.x, dy = p.y - d.start.y;
+      if (d.mode === 'new') {
+        if (!d.moved && d.cssStart && Math.abs(e.clientX - d.cssStart.x) < 4 && Math.abs(e.clientY - d.cssStart.y) < 4) return;
+        d.moved = true;
+        var w = dx, h = dy;
+        if (document.getElementById('vve-square').checked) { var s = Math.max(Math.abs(w), Math.abs(h)); w = (w < 0 ? -s : s); h = (h < 0 ? -s : s); }
+        cur.rect = { x: d.start.x, y: d.start.y, w: w, h: h };
+      } else if (d.mode === 'move') {
+        d.moved = true;
+        var nx = Math.max(0, Math.min(_vve.W - d.rect.w, d.rect.x + dx));
+        var ny = Math.max(0, Math.min(_vve.H - d.rect.h, d.rect.y + dy));
+        cur.rect = { x: nx, y: ny, w: d.rect.w, h: d.rect.h };
+      } else {
+        d.moved = true;
+        cur.rect = vveResizeRect(d.rect, d.handle, dx, dy);
+      }
+      vveDraw(true);
+    }
+
+    function vvePointerUp(e) {
+      if (!_vve || !_vve.drag) return;
+      var d = _vve.drag, cur = _vve.eyes[_vve.eye];
+      _vve.drag = null;
+      if (d.mode === 'new' && !d.moved) {
+        // Click without drag: two-click mode (first corner, then the opposite one).
+        var p = vveEventPoint(e);
+        if (!_vve.pending) { _vve.pending = p; vveDraw(); return; }
+        var w = p.x - _vve.pending.x, h = p.y - _vve.pending.y;
+        if (document.getElementById('vve-square').checked) { var s = Math.max(Math.abs(w), Math.abs(h)); w = (w < 0 ? -s : s); h = (h < 0 ? -s : s); }
+        cur.rect = { x: _vve.pending.x, y: _vve.pending.y, w: w, h: h };
+      }
+      _vve.pending = null;
+      if (cur.rect) {
+        if (Math.abs(cur.rect.w) < 4 || Math.abs(cur.rect.h) < 4) cur.rect = d.rect || null;
+        if (cur.rect) cur.rect = vveNorm(cur.rect);
+      }
+      vveRefreshSide();
+      vveDraw();
+    }
+
+    // ---- rendering ----
+    function vveResize() {
+      if (!_vve || !_vve.img) return;
+      var stage = document.getElementById('vve-stage'), c = document.getElementById('vve-canvas');
+      var availW = Math.max(50, stage.clientWidth - 20), availH = Math.max(50, stage.clientHeight - 20);
+      var s = Math.min(availW / _vve.W, availH / _vve.H);
+      var cssW = Math.floor(_vve.W * s), cssH = Math.floor(_vve.H * s);
+      var dpr = window.devicePixelRatio || 1;
+      c.style.width = cssW + 'px'; c.style.height = cssH + 'px';
+      c.width = Math.round(cssW * dpr); c.height = Math.round(cssH * dpr);
+      vveDraw();
+    }
+
+    function vveDraw(skipSide) {
+      if (!_vve || !_vve.img) { if (_vve) vveRefreshSide(); vveDrawPreview(); return; }
+      var c = document.getElementById('vve-canvas'), ctx = c.getContext('2d');
+      var k = c.width / _vve.W;                       // canvas px per frame px
+      var px = (window.devicePixelRatio || 1) / k;    // one CSS pixel, in frame px
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, c.width, c.height);
+      ctx.setTransform(k, 0, 0, k, 0, 0);
+      ctx.drawImage(_vve.img, 0, 0, _vve.W, _vve.H);
+
+      var act = _vve.eyes[_vve.eye].rect;
+      if (act && !_vve.drag) {
+        ctx.save();
+        ctx.fillStyle = 'rgba(0,0,0,0.38)';
+        ctx.beginPath();
+        ctx.rect(0, 0, _vve.W, _vve.H);
+        var a = vveNormLoose(act);
+        ctx.rect(a.x, a.y, a.w, a.h);
+        ctx.fill('evenodd');
+        ctx.restore();
+      }
+
+      // Only the rectangles that live in the image on screen: L and R on the raw frame, M on the merged one.
+      (_vve.eye === 'M' ? ['M'] : ['L', 'R']).forEach(function(eye) {
+        var st = _vve.eyes[eye];
+        if (!st.rect) return;
+        var r = vveNormLoose(st.rect), active = (eye === _vve.eye);
+        ctx.save();
+        ctx.globalAlpha = active ? 1 : 0.55;
+        ctx.strokeStyle = VVE_COLORS[eye];
+        ctx.lineWidth = (active ? 2 : 1.5) * px;
+        ctx.strokeRect(r.x, r.y, r.w, r.h);
+        if (st.angle) {
+          // Source area scrcpy samples: the crop rotated counter-clockwise by the angle.
+          ctx.save();
+          ctx.translate(r.x + r.w / 2, r.y + r.h / 2);
+          ctx.rotate(-st.angle * Math.PI / 180);
+          ctx.setLineDash([6 * px, 4 * px]);
+          ctx.strokeRect(-r.w / 2, -r.h / 2, r.w, r.h);
+          ctx.restore();
+        }
+        ctx.fillStyle = VVE_COLORS[eye];
+        ctx.font = 'bold ' + Math.round(14 * px) + 'px sans-serif';
+        ctx.fillText(eye, r.x + 5 * px, r.y + 16 * px);
+        if (active) {
+          var hs = 4 * px;
+          vveHandles(r).forEach(function(h) {
+            ctx.fillStyle = '#fff'; ctx.fillRect(h[1] - hs, h[2] - hs, hs * 2, hs * 2);
+            ctx.strokeStyle = VVE_COLORS[eye]; ctx.lineWidth = 1.5 * px; ctx.strokeRect(h[1] - hs, h[2] - hs, hs * 2, hs * 2);
+          });
+        }
+        ctx.restore();
+      });
+
+      if (_vve.pending) {
+        ctx.save();
+        ctx.strokeStyle = VVE_COLORS[_vve.eye]; ctx.lineWidth = 1.5 * px;
+        ctx.setLineDash([4 * px, 4 * px]);
+        if (_vve.hover) ctx.strokeRect(_vve.pending.x, _vve.pending.y, _vve.hover.x - _vve.pending.x, _vve.hover.y - _vve.pending.y);
+        ctx.fillStyle = VVE_COLORS[_vve.eye];
+        ctx.beginPath(); ctx.arc(_vve.pending.x, _vve.pending.y, 4 * px, 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+      }
+      if (skipSide) vveRefreshCropFields(); else vveRefreshSide();
+      vveDrawPreview();
+    }
+
+    // Normalised copy for drawing during a drag (negative w/h allowed in the raw rect).
+    function vveNormLoose(r) {
+      return { x: Math.min(r.x, r.x + r.w), y: Math.min(r.y, r.y + r.h), w: Math.abs(r.w), h: Math.abs(r.h) };
+    }
+
+    function vveDrawPreview() {
+      var pc = document.getElementById('vve-preview'), info = document.getElementById('vve-preview-info');
+      var ctx = pc.getContext('2d');
+      var st = _vve ? _vve.eyes[_vve.eye] : null;
+      var maxW = 260, maxH = 260;
+      if (!_vve || !st || !st.rect) {
+        pc.width = maxW; pc.height = 120;
+        ctx.fillStyle = '#000'; ctx.fillRect(0, 0, pc.width, pc.height);
+        info.textContent = 'No rectangle for this eye yet.';
+        return;
+      }
+      var r = vveNormLoose(st.rect);
+      var s = Math.min(maxW / r.w, maxH / r.h);
+      pc.width = Math.max(1, Math.round(r.w * s)); pc.height = Math.max(1, Math.round(r.h * s));
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, pc.width, pc.height);
+      if (_vve.img) {
+        ctx.save();
+        ctx.translate(pc.width / 2, pc.height / 2);
+        ctx.scale(s, s);
+        ctx.rotate((st.angle || 0) * Math.PI / 180);      // content rotated clockwise, like scrcpy --angle
+        ctx.drawImage(_vve.img, -(r.x + r.w / 2), -(r.y + r.h / 2));
+        ctx.restore();
+        info.textContent = 'Output ' + Math.round(r.w) + ' x ' + Math.round(r.h) + ' px (before the model max size).';
+      } else {
+        info.textContent = 'Capture a frame to see the preview.';
+      }
+    }
+
+    // ---- side panel ----
+    function vveSelectEye(eye) {
+      if (!_vve) return;
+      _vve.eye = eye; _vve.pending = null;
+      ['L', 'R', 'M'].forEach(function(e) { document.getElementById('vve-eye-' + e).classList.toggle('active', e === eye); });
+      vveUseFrame();
+      vveRefreshSide();
+      vveDraw();
+    }
+
+    function vveRefreshCropFields() {
+      var r = _vve.eyes[_vve.eye].rect;
+      var n = r ? vveNormLoose(r) : null;
+      document.getElementById('vve-crop-w').value = n ? Math.round(n.w) : '';
+      document.getElementById('vve-crop-h').value = n ? Math.round(n.h) : '';
+      document.getElementById('vve-crop-x').value = n ? Math.round(n.x) : '';
+      document.getElementById('vve-crop-y').value = n ? Math.round(n.y) : '';
+      document.getElementById('vve-crop-str').textContent = r && !_vve.drag ? vveCropStr(r) : (n ? '...' : '-');
+    }
+
+    function vveRefreshSide() {
+      if (!_vve) return;
+      var st = _vve.eyes[_vve.eye];
+      document.getElementById('vve-angle-range').value = Math.max(-45, Math.min(45, st.angle || 0));
+      var angNum = document.getElementById('vve-angle-num');
+      if (document.activeElement !== angNum) angNum.value = st.angle || 0;   // do not fight the operator's typing
+      vveRefreshCropFields();
+      // The merged picture is already level and has no "other eye": no angle, no mirror.
+      var isM = (_vve.eye === 'M');
+      document.getElementById('vve-angle-range').disabled = isM;
+      document.getElementById('vve-angle-num').disabled = isM;
+      document.getElementById('vve-mirror').disabled = isM || !(st.rect && _vve.W);
+      var name = sanitizeViewName((document.getElementById('vve-name').value || '').trim());
+      document.getElementById('vve-apply').disabled = !(name && _vve.eyes.L.rect && _vve.eyes.R.rect);
+      vveRefreshDepth();
+    }
+
+    // Merge depth (Merged tab only, models with a lens model): presets, or a custom value in metres.
+    function vveRefreshDepth() {
+      var eyeField = document.getElementById('vve-baseeye-field');
+      eyeField.hidden = !(_vve && _vve.eye === 'M');
+      if (!eyeField.hidden) document.getElementById('vve-baseeye-sel').value = _vve.baseEye === 'L' ? 'L' : 'R';
+      var field = document.getElementById('vve-depth-field');
+      field.hidden = !(_vve && _vve.eye === 'M' && _vve.depthSupported);
+      if (field.hidden) return;
+      var sel = document.getElementById('vve-depth-sel'), num = document.getElementById('vve-depth-num');
+      var d = _vve.depth || 0, preset = null;
+      for (var i = 0; i < sel.options.length; i++) { if (sel.options[i].value !== 'custom' && Number(sel.options[i].value) === d) preset = sel.options[i].value; }
+      if (document.activeElement !== num) {
+        if (preset !== null && !num.dataset.custom) { sel.value = preset; num.hidden = true; }
+        else { sel.value = 'custom'; num.hidden = false; num.value = d || ''; }
+      }
+      document.getElementById('vve-depth-info').textContent = d > 0
+        ? 'Objects about ' + d + ' m away line up; farther ones may look doubled in the blend band.'
+        : 'Scenery and rooms line up (the calibration).';
+    }
+
+    function vveSetDepth(d) {
+      if (!_vve) return;
+      d = Number(d) || 0;
+      if (d > 0) d = Math.min(100, Math.max(0.3, d));
+      if (d === _vve.depth) return;
+      _vve.depth = d;
+      vveRefreshDepth();
+      vveRemerge();
+    }
+
+    function vveSetBaseEye(e) {
+      if (!_vve) return;
+      e = e === 'L' ? 'L' : 'R';
+      if (e === _vve.baseEye) return;
+      _vve.baseEye = e;
+      vveRemerge();
+    }
+
+    // Re-renders the merged picture from the frame already captured (no new capture, about 1 s)
+    // with the current main eye and depth.
+    function vveRemerge() {
+      if (!_vve || !_vve.frames.M.img || !_vve.mergedFrom) return;
+      var d = _vve.depth, e = _vve.baseEye, want = e + '|' + d;
+      var label = (e === 'L' ? 'left' : 'right') + ' main eye, ' + (d > 0 ? d + ' m' : 'far depth');
+      vveSetStatus('Merging again (' + label + ')...', '');
+      fetch('/api/eye-merge/frame', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+             body: JSON.stringify({ id: _vve.mergedFrom, transport: 'Auto', depth: d, baseEye: e, reuse: true }) })
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          if (!_vve || (_vve.baseEye + '|' + _vve.depth) !== want) return;   // superseded by a newer choice
+          if (!j.ok) { vveSetStatus(j.error || 'Merge failed.', 'err'); return; }
+          var img = new Image();
+          img.onload = function() {
+            if (!_vve || (_vve.baseEye + '|' + _vve.depth) !== want) return;
+            _vve.frames.M = { img: img, W: img.naturalWidth, H: img.naturalHeight };
+            if (_vve.eye === 'M') { vveUseFrame(); vveDraw(); }
+            vveSetStatus('Merged picture: ' + label + '.', 'ok');
+          };
+          img.src = j.url;
+        })
+        .catch(function(err) { vveSetStatus('Server unreachable: ' + err.message, 'err'); });
+    }
+
+    function vveSetAngle(v) {
+      if (!_vve || _vve.eye === 'M') return;
+      var a = parseInt(v, 10);
+      if (isNaN(a)) return;                              // e.g. a lone "-" while typing
+      _vve.eyes[_vve.eye].angle = Math.max(-180, Math.min(180, a));
+      vveRefreshSide();
+      vveDraw();
+    }
+
+    function vveCropFromFields() {
+      if (!_vve) return;
+      var w = parseInt(document.getElementById('vve-crop-w').value, 10), h = parseInt(document.getElementById('vve-crop-h').value, 10);
+      var x = parseInt(document.getElementById('vve-crop-x').value, 10), y = parseInt(document.getElementById('vve-crop-y').value, 10);
+      if ([w, h, x, y].some(isNaN) || w <= 0 || h <= 0) return;
+      _vve.eyes[_vve.eye].rect = vveNorm({ x: x, y: y, w: w, h: h });
+      vveRefreshSide();
+      vveDraw();
+    }
+
+    function vveMirror() {
+      if (!_vve || !_vve.W || _vve.eye === 'M') return;
+      var st = _vve.eyes[_vve.eye], other = _vve.eyes[_vve.eye === 'L' ? 'R' : 'L'];
+      if (!st.rect) return;
+      other.rect  = vveNorm({ x: _vve.W - st.rect.x - st.rect.w, y: st.rect.y, w: st.rect.w, h: st.rect.h });
+      other.angle = -(st.angle || 0);
+      vveDraw();
+      showToast('Copied to the ' + (_vve.eye === 'L' ? 'right' : 'left') + ' eye - adjust it if needed.', 2500);
+    }
+
+    function vveApply() {
+      if (!_vve) return;
+      var name = sanitizeViewName((document.getElementById('vve-name').value || '').trim());
+      if (!name) { showToast('View name is required', 2000); return; }
+      if (!_vve.eyes.L.rect || !_vve.eyes.R.rect) { showToast('Draw a rectangle for both eyes first', 2500); return; }
+      var model = _vve.model;
+      if (!model) { showToast('No target model - capture a frame from a headset first', 3000); return; }
+      if (!_proData[model]) {
+        if (!confirm('Model "' + model + '" has no profile yet. Create it?')) return;
+        _proData[model] = { views: {}, max_size: 0, video_codec: 'h264', video_encoder: '', video_buffer: 50, stay_awake: true };
+      }
+      var mdl = _proData[model];
+      if (!mdl.views) mdl.views = {};
+      var editing = (_vve.origView && _vve.origModel === model && mdl.views[_vve.origView]) ? _vve.origView : null;
+      if (mdl.views[name] && name !== editing) {
+        if (!confirm('A view named "' + name + '" already exists in ' + model + '. Overwrite it?')) return;
+      }
+      var wasDefault = !!((editing && mdl.views[editing] && mdl.views[editing].default) || (mdl.views[name] && mdl.views[name].default));
+      var isFirst = Object.keys(mdl.views).length === 0;
+      var val = {
+        left_eye:  { crop: vveCropStr(_vve.eyes.L.rect), angle: _vve.eyes.L.angle || 0 },
+        right_eye: { crop: vveCropStr(_vve.eyes.R.rect), angle: _vve.eyes.R.angle || 0 }
+      };
+      // Merged framing (eye merge): only written when drawn; absent = automatic framing.
+      if (_vve.eyes.M.rect) val.merged = { crop: vveCropStr(_vve.eyes.M.rect) };
+      // Merge depth of the view (absent = far).
+      if (_vve.depth > 0) { if (!val.merged) val.merged = {}; val.merged.depth_m = _vve.depth; }
+      // Main eye of the view's merge (absent = right).
+      if (_vve.baseEye === 'L') { if (!val.merged) val.merged = {}; val.merged.base_eye = 'L'; }
+      // Whole-view option (L, R and Merged alike): mask the area outside the lenses in web views.
+      if (document.getElementById('vve-transparent').checked) val.transparent_corners = true;
+      if (wasDefault || isFirst) val.default = true;
+      // Per-lens-position variants (ADR-0030) are not drawn here: an edited view keeps them.
+      var prevView = (editing && mdl.views[editing]) || mdl.views[name];
+      if (prevView && prevView.ipd) val.ipd = prevView.ipd;
+      // Rebuild the views object so an edited view keeps its position (the order is the display order).
+      var out = {}, oldKey = editing || name;
+      Object.keys(mdl.views).forEach(function(k) {
+        if (k === oldKey) out[name] = val;
+        else if (k !== name) out[k] = mdl.views[k];
+      });
+      if (!(name in out)) out[name] = val;
+      mdl.views = out;
+      _proModel = model; _proDirty = true; _proEditView = null; _proNewView = false;
+      renderProTabs(); renderProBody();
+      closeVveModal();
+      showToast('View "' + name + '" applied to ' + model + '. Click Save to write it to config.json.', 4000);
+    }
+
+    (function initVve() {
+      var c = document.getElementById('vve-canvas');
+      c.addEventListener('pointerdown', vvePointerDown);
+      c.addEventListener('pointermove', vvePointerMove);
+      c.addEventListener('pointerup', vvePointerUp);
+      c.addEventListener('pointercancel', function() { if (_vve) { _vve.drag = null; vveDraw(); } });
+      c.addEventListener('pointerleave', function() { if (_vve && !_vve.drag) { _vve.hover = null; if (_vve.pending) vveDraw(); } });
+      document.getElementById('vve-close').addEventListener('click', closeVveModal);
+      document.getElementById('vve-apply').addEventListener('click', vveApply);
+      document.getElementById('vve-capture').addEventListener('click', vveCapture);
+      document.getElementById('vve-refresh').addEventListener('click', vveLoadHeadsets);
+      document.getElementById('vve-eye-L').addEventListener('click', function() { vveSelectEye('L'); });
+      document.getElementById('vve-eye-R').addEventListener('click', function() { vveSelectEye('R'); });
+      document.getElementById('vve-eye-M').addEventListener('click', function() { vveSelectEye('M'); });
+      document.getElementById('vve-angle-range').addEventListener('input', function() { vveSetAngle(this.value); });
+      document.getElementById('vve-angle-num').addEventListener('input', function() { vveSetAngle(this.value); });
+      document.getElementById('vve-depth-sel').addEventListener('change', function() {
+        var num = document.getElementById('vve-depth-num');
+        if (this.value === 'custom') { num.dataset.custom = '1'; num.hidden = false; num.value = _vve && _vve.depth ? _vve.depth : ''; num.focus(); return; }
+        delete num.dataset.custom; num.hidden = true; vveSetDepth(this.value);
+      });
+      document.getElementById('vve-depth-num').addEventListener('change', function() { vveSetDepth(this.value); });
+      document.getElementById('vve-baseeye-sel').addEventListener('change', function() { vveSetBaseEye(this.value); });
+      ['w', 'h', 'x', 'y'].forEach(function(f) { document.getElementById('vve-crop-' + f).addEventListener('change', vveCropFromFields); });
+      document.getElementById('vve-square').addEventListener('change', function() {
+        if (!_vve) return;
+        var st = _vve.eyes[_vve.eye];
+        if (this.checked && st.rect) { st.rect = vveNorm(st.rect); vveDraw(); }
+      });
+      document.getElementById('vve-mirror').addEventListener('click', vveMirror);
+      document.getElementById('vve-reset').addEventListener('click', function() {
+        if (!_vve) return;
+        _vve.eyes[_vve.eye] = { rect: null, angle: 0 }; _vve.pending = null; vveDraw();
+      });
+      document.getElementById('vve-name').addEventListener('input', vveRefreshSide);
+      window.addEventListener('resize', function() { if (_vve && _vve.img) vveResize(); });
+      document.addEventListener('keydown', function(e) {
+        if (!_vve || document.getElementById('vve-modal').style.display === 'none') return;
+        var tag = (e.target && e.target.tagName) || '';
+        if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+        var st = _vve.eyes[_vve.eye];
+        if (!st.rect) return;
+        var step = e.shiftKey ? 10 : 1, dx = 0, dy = 0;
+        if (e.key === 'ArrowLeft') dx = -step; else if (e.key === 'ArrowRight') dx = step;
+        else if (e.key === 'ArrowUp') dy = -step; else if (e.key === 'ArrowDown') dy = step;
+        else return;
+        e.preventDefault();
+        var r = st.rect;
+        var maxX = _vve.W ? _vve.W - r.w : Infinity, maxY = _vve.H ? _vve.H - r.h : Infinity;
+        st.rect = { x: Math.max(0, Math.min(maxX, r.x + dx)), y: Math.max(0, Math.min(maxY, r.y + dy)), w: r.w, h: r.h };
+        vveDraw();
+      });
+    })();
 
     // ── WiFi Networks ────────────────────────────────────────────────────────
     var _wifiEditSsid  = null;

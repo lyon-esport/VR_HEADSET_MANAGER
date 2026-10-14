@@ -375,7 +375,7 @@ function Show-HeadsetsTableColored {
             foreach ($field in $FieldsToShow) {
                 $value = $headset.$field
                 
-                #convert value from 42.0 to 42 °c
+                #convert value from 42.0 to 42 deg C
                 if ($field -eq "Temp" -and $value) {
                     $degree = [char]0x00B0
                     $value = $($value -replace '\,0$','')+$degree+'C'

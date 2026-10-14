@@ -45,6 +45,17 @@ function Get-NrtDevHeadsets {
     #>
     param([Parameter(Mandatory = $true)][string]$DevRoot)
 
+    # The registry lives in the dev database now (ADR-0017). known_headsets.csv is only the
+    # operator's optional export, so it is as old as the last export: a real run found it five
+    # weeks stale, missing a headset and holding addresses from another network, which made the
+    # harness skip a headset that was sitting right there. Read the database first.
+    try {
+        $dbRows = @(Get-SandboxDbRows -TargetRoot $DevRoot -Sql 'SELECT ID, Name, IPAddress, Model, Brand, SerialNumber, ScrcpyProfile FROM v_headsets ORDER BY SortOrder;')
+        $dbRows = @($dbRows | Where-Object { $_.IPAddress })
+        if ($dbRows.Count -gt 0) { return $dbRows }
+    } catch { }
+
+    # Fallback for a dev folder with no readable database: the CSV export.
     $csv = Join-Path $DevRoot 'data\known_headsets.csv'
     if (-not (Test-Path -LiteralPath $csv)) { return @() }
 
@@ -965,8 +976,31 @@ function Start-NrtHeadsetStream {
         # /api/addheadset ignores any profile in the request and assigns its own
         # default, so carry the operator's real profile across explicitly. Without
         # this the tests would exercise a profile nobody actually uses.
+        # BUT only when the profile's VIEW exists in the sandbox config. Views are config
+        # (scrcpy.parameters.<Model>.views); the sandbox runs on the shipped template, so
+        # a view the operator created in the dev config (e.g. with the visual view editor)
+        # does not exist here. The app then falls back to 'fullscreen' with no crop and,
+        # on the template's uncapped max_size, streams the full native frame - which the
+        # hardware H.264 encoders cannot open. That made section 60 test an accident of
+        # the dev registry instead of the release. Keep the sandbox default in that case.
         if ($Headset.ScrcpyProfile) {
-            Set-NrtScrcpyProfile -Name $Headset.Name -Profile $Headset.ScrcpyProfile | Out-Null
+            $view = ([string]$Headset.ScrcpyProfile) -replace '-[LRM]-[DN]-\d+-\d+$', ''
+            $carry = $true
+            if ($view -ne [string]$Headset.ScrcpyProfile) {
+                $sbCfg = Read-JsonFileUtf8 -Path (Get-SandboxPaths -TargetRoot $TargetRoot).ConfigFile
+                $views = $null
+                if ($sbCfg -and $Headset.Model -and $sbCfg.scrcpy.parameters.($Headset.Model)) {
+                    $views = $sbCfg.scrcpy.parameters.($Headset.Model).views
+                }
+                $known = @()
+                if ($views) { $known = @($views.PSObject.Properties.Name) }
+                if (-not (@($known | Where-Object { $_ -ieq $view }).Count)) { $carry = $false }
+            }
+            if ($carry) {
+                Set-NrtScrcpyProfile -Name $Headset.Name -Profile $Headset.ScrcpyProfile | Out-Null
+            } elseif (Get-Command Add-TestEvidence -ErrorAction SilentlyContinue) {
+                Add-TestEvidence ("profile '{0}' NOT carried over: view '{1}' does not exist for model '{2}' in the release config - the release default profile is used instead" -f $Headset.ScrcpyProfile, $view, $Headset.Model)
+            }
         }
     }
 

@@ -26,6 +26,18 @@ $modulesRoot = Join-Path -Path (Get-DbTestRepoRoot) -ChildPath 'modules'
 
 $global:msg = Import-PowerShellDataFile -Path (Join-Path $modulesRoot 'translations\en-US.psd1')
 
+# Add-Headset builds the default scrcpy profile through ConvertTo-ScrcpyProfile and
+# Get-ScrcpyDefaultView (scrcpy_launcher.ps1) and reads three globals that Get-Config
+# normally sets. Loaded BEFORE the stubs below so those still win for the process and
+# window helpers; dot-sourcing only defines functions, nothing here launches scrcpy.
+. (Join-Path $modulesRoot 'scrcpy_launcher.ps1')
+$global:scrcpyParameters         = [PSCustomObject]@{}
+$global:scrcpyDefaultFps         = 30
+$global:scrcpyDefaultBitrateMbps = 8
+# The real one indexes $global:scrcpyParameters by model, which the strict-mode harness rejects
+# for a model with no entry. This is its documented fallback for an unknown model.
+function Get-ScrcpyDefaultView { param([string]$Model) return 'square' }
+
 function Write-htmlMonitor            { param($h) }
 function Update-HeadsetMonitoringFile { }
 function Update-HeadsetVideoFile      { }
@@ -80,6 +92,10 @@ function Set-TestStatus {
         Charging               = '-'
         ChargingWattage        = '-'
         Temp                   = '-'
+        CpuTemp                = '-'
+        GpuTemp                = '-'
+        SkinTemp               = '-'
+        AdbTransport           = '-'
         BatteryControllerLeft  = '-'
         BatteryControllerRight = '-'
         PowerState             = '-'
@@ -87,10 +103,6 @@ function Set-TestStatus {
         SCRCPY                 = $Scrcpy
         RunningApp             = $RunningApp
         RunningAppIcon         = ''
-        CpuTemp                = '-'
-        GpuTemp                = '-'
-        SkinTemp               = '-'
-        AdbTransport           = '-'
     } | Out-Null
 }
 
@@ -323,11 +335,10 @@ Invoke-RegressionTest -Name 'a battery burst does not abort the whole status bat
         foreach ($pair in @(@{ Id = $idA; Pct = '89' }, @{ Id = $idB; Pct = '49' })) {
             $rows += @{
                 ID = $pair.Id; Ping = 1; ADBWifi = 1; Battery = $pair.Pct
-                Charging = '-'; ChargingWattage = '-'; Temp = '-'
+                Charging = '-'; ChargingWattage = '-'; Temp = '-'; CpuTemp = '-'; GpuTemp = '-'; SkinTemp = '-'; AdbTransport = '-'
                 BatteryControllerLeft = '-'; BatteryControllerRight = '-'
                 PowerState = '-'; TimeRemainingMin = '-'
                 SCRCPY = '-'; RunningApp = '-'; RunningAppIcon = ''
-                CpuTemp = '-'; GpuTemp = '-'; SkinTemp = '-'; AdbTransport = '-'
             }
         }
         Invoke-DbBatch -Name 'status.upsert' -Rows $rows | Out-Null
@@ -465,11 +476,10 @@ Invoke-RegressionTest -Name 'an offline headset writes a valid row through the b
         # is exactly the case that would fail if the write path bound it raw.
         $row = @{
             ID = $id; Ping = (ConvertTo-DbBool $false); ADBWifi = (ConvertTo-DbBool $false)
-            Battery = '-'; Charging = '-'; ChargingWattage = '-'; Temp = '-'
+            Battery = '-'; Charging = '-'; ChargingWattage = '-'; Temp = '-'; CpuTemp = '-'; GpuTemp = '-'; SkinTemp = '-'; AdbTransport = '-'
             BatteryControllerLeft = '-'; BatteryControllerRight = '-'
             PowerState = '-'; TimeRemainingMin = '-'
             SCRCPY = '-'; RunningApp = '-'; RunningAppIcon = ''
-            CpuTemp = '-'; GpuTemp = '-'; SkinTemp = '-'; AdbTransport = '-'
         }
         Invoke-DbBatch -Name 'status.upsert' -Rows @($row) | Out-Null
 
@@ -508,11 +518,10 @@ Invoke-RegressionTest -Name 'a failed statement does not poison the query for th
         # every row and is what the monitor actually calls.
         $good = @{
             ID = $id; Ping = 1; ADBWifi = 1; Battery = '66'
-            Charging = '-'; ChargingWattage = '-'; Temp = '-'
+            Charging = '-'; ChargingWattage = '-'; Temp = '-'; CpuTemp = '-'; GpuTemp = '-'; SkinTemp = '-'; AdbTransport = '-'
             BatteryControllerLeft = '-'; BatteryControllerRight = '-'
             PowerState = '-'; TimeRemainingMin = '-'
             SCRCPY = '-'; RunningApp = '-'; RunningAppIcon = ''
-            CpuTemp = '-'; GpuTemp = '-'; SkinTemp = '-'; AdbTransport = '-'
         }
         $bad = $good.Clone(); $bad.ID = $bogus
         Assert-Throws -Script { Invoke-DbBatch -Name 'status.upsert' -Rows @($good, $bad) } -Match 'constraint' -Label 'a batch containing an orphan row'

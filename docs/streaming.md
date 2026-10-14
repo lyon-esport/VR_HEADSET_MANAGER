@@ -27,8 +27,8 @@ The capture-mode selector in the **Headset Settings** top bar (config key `Perfo
 
 | Mode | Effect |
 |---|---|
-| **Stream only** | Publish to MediaMTX, no window on the PC (lightest on the GPU display side) |
-| **Stream + local scrcpy window** (default) | Publish to MediaMTX and show the local mirror window |
+| **Stream only** (default) | Publish to MediaMTX, no window on the PC (lightest on the GPU display side) |
+| **Stream + local scrcpy window** | Publish to MediaMTX and show the local mirror window |
 | **Local scrcpy window only** | Just the mirror window — nothing is restreamed |
 
 ## scrcpy capture profiles
@@ -42,7 +42,7 @@ view-EYE-AUDIO-FPS-BW
  │     │    │    │  └─ video bitrate in Mbps          (e.g. 8)
  │     │    │    └─── max framerate                   (e.g. 30, 45, 60)
  │     │    └──────── audio duplication: N (no) / Y   (keep audio in headset AND stream it)
- │     └───────────── eye: L or R                     (which eye to crop)
+ │     └───────────── eye: L, R or M                  (which eye to crop - M = both eyes merged)
  └─────────────────── view: max / square / portrait / wide / fullscreen
 ```
 
@@ -60,9 +60,33 @@ Available views (per model, defined in the [configuration](configuration.md#head
 
 Profiles exist out of the box for **Quest 3**, **Quest 2**, and **PICO 4 Ultra** — you can tune the crop rectangles or add new models in the config.
 
+### Merged view: both eyes in one picture (eye `M`)
+
+A single eye only sees part of the scene: the left eye sees further left, the right eye further right. With eye **`M`** (e.g. `square-M-N-45-20`) VRHM stitches **both eyes** into one wider, level picture — about **40 % more picture** than the best single-eye view on a Quest 3.
+
+How it works:
+
+- scrcpy sends the **full, uncropped frame** (both eyes); ffmpeg on the PC rotates, aligns and blends them using lookup tables built once from the model's **calibration**.
+- The **main eye** (right by default; chosen per view on the **Merged** tab of the visual editor, console `[8]`) gives the centre of the picture and the other eye only extends the edges. Where the two are blended, only one distance can line up: by default the **far** one, so scenery is seamless and near objects (hands, menus, floor) can show a double image **in the blend band only**.
+- **Merge depth** (per view, Merged tab of the visual editor, console `[7]`): choose a nearer distance (e.g. 0.75 m) when the player mostly looks at close objects - a table game, a menu, something held - and those line up instead; far content then doubles in the blend band. The picture is merged again at once in the editor so you can compare. Two views (one far, one near) let you switch a headset between both. The depth needs the model's lens model (`lens_focal_px`, shipped for the Quest 3).
+- The merged stream is always **re-encoded** (see below), whatever the re-encode setting — and always encoded on the **CPU** (libx264, or libx265 with the h265 codec), even when a GPU is selected: the merge itself runs on the CPU, and a hardware encoder gave no gain there (the CPU stayed just as busy feeding it). Plan roughly 2 CPU cores per merged headset at 30 fps. Every other stream keeps the selected GPU. Give the headset a higher bitrate: it now sends its full native frame.
+- When recording is on, the recording contains the **merged picture**.
+
+Only **calibrated models** offer the Merged option. The Quest 3 ships calibrated. For another model:
+
+1. Open **Configuration → Headset Profiles**, select the model, and in the **Eye merge** card pick a connected headset and click **Calibrate** (about 6 s). Put the headset level and steady in the Home environment, facing far scenery, with no window close to the eyes.
+2. Open the **visual editor** of a view, go to the **Merged** tab, click **Capture frame** and draw the framing. Views without a merged framing use an automatic one (largest clean rectangle with the view's shape).
+3. Save, then set the headset's profile eye to **Merged (M)**.
+
+Calibrations are shareable: **Copy JSON** in the Eye merge card gives a snippet another VRHM installation can paste into **Import JSON** (or import from the console: scrcpy options → `[7]`).
+
+**Transparent corners.** Tick *Transparent outside the lenses* in the visual editor (it applies to the whole view, L, R and Merged alike) and the black area around the lens picture becomes transparent in the web video pages and in OBS **Browser Sources** - handy to lay the headset view over a scene. The server publishes a mask of the lens area and the page applies it; the video stream itself is unchanged, so an RTSP/HLS player (VLC, an OBS *Media* Source) still shows the corners black. The lens shape comes from the eye merge calibration, so the model must have been calibrated once.
+
+The merged view falls back to the **right eye** when it cannot run: in the **LocalWindow** capture mode (no ffmpeg stage), on an uncalibrated model, or when the headset's resolution differs from the calibration.
+
 ## FFmpeg re-encoding and streaming options
 
-After scrcpy captures the headset, ffmpeg publishes the video to MediaMTX. How it does that is controlled by the **Streaming** options in **Config → App Configuration → Streaming & Recording**:
+After scrcpy captures the headset, ffmpeg publishes the video to MediaMTX. How it does that is controlled by the **Streaming** options in **Config → App Configuration → Streaming**:
 
 ![Streaming options in the App Configuration page](pics/web_vrhm_config_streamingEncoding.png)
 
@@ -84,6 +108,91 @@ More about re-encoding:
 > [!NOTE]
 > Re-encoding trades PC CPU/GPU for network bandwidth. Turn it **off** (passthrough) if you have few viewers and want the lowest possible CPU usage. Recordings are **always** stored with the original capture quality (`-c copy`), never re-encoded.
 
+## Benchmark: what each option costs this PC
+
+The **Benchmark** page (top bar → configuration menu → **Benchmark**) measures what each capture option costs this PC on **one** headset. The console has the same feature under **Services → B**.
+
+### Tests selection
+
+Pick a headset that is on, with ADB (USB or WiFi), then switch option buttons on (green) or off (grey):
+
+| Row | Options |
+|---|---|
+| Encoding | CPU (software), and one button per GPU of this PC |
+| Codec | H264, H265 |
+| Capture bitrate | 5 / 10 / 20 / 40 Mb/s, plus custom values |
+| FPS | 15 / 30 / 45 / 60, plus custom values |
+| View + eye | One view of the model, single eye and/or merged view |
+
+Re-encode bitrate and max capture size follow your configuration unless you force another value. Merged tests always use the full frame, so max capture size does not apply to them.
+
+The benchmark runs a baseline (the idle PC) plus **every combination** of the selected options. The defaults give a single reference test: single eye, 45 fps, 10 Mb/s, best GPU, H264.
+
+**Quick selection** buttons fill the rows for you:
+
+| Button | What it runs |
+|---|---|
+| Reset to default | The reference test only |
+| Full tests | Every encoder, both codecs, every listed bitrate and FPS, single eye and merged. It is a very long run. |
+| **Typical tests** *(recommended)* | One change at a time from the reference, for every encoder × codec, plus a few bitrate, re-encode and merged-view tests (about 40 tests) |
+| Typical (quick) | The same with only the CPU and the best GPU (about 28 tests, about 15 min) |
+
+With a typical preset, the page learns a **load model** and can then estimate **any** combination of settings, including views, sizes and frame rates that were never tested.
+
+The number of tests and the estimated duration update on every click. During the run, the remaining time is recalculated from how long the finished tests actually took.
+
+> [!WARNING]
+> **Every running stream is stopped during the benchmark** (video wall, OBS and kiosks lose their picture). The streams restart automatically when it ends or is cancelled.
+
+### Results
+
+Each test is one row. The figures are grouped in columns:
+
+- status
+- CPU: the **stream CPU**, which is the processes of the capture chain (adb, scrcpy, the pipe bridge, ffmpeg, mediamtx), and the whole-PC CPU
+- one group per GPU
+- RAM
+- the capture-chain processes, one by one
+- the stream: frames per second actually delivered against the target, dropped and duplicated frames, encode speed
+
+An idle measure is taken at the start and at the end of a long run. Their average is the baseline.
+
+Each group shows its main value. Click **+** in a group header to see its details, or click a row to see every figure of that test.
+
+Grey figures are the difference from the baseline. The header stays visible while scrolling, and the grid scrolls sideways when it is wider than the window.
+
+Results **add up across runs** for the same headset model: a test run again replaces its previous result. They can be downloaded as CSV or cleared.
+
+### Recommendations
+
+Choose how many headsets will stream in parallel and the settings to evaluate. The page then estimates the CPU and GPU load:
+
+- **How it estimates:** baseline + N x the cost of one stream, plus a 10% safety margin.
+- **Limits:** the maximum accepted load defaults to the Video Quality Automation max thresholds, and two sliders can change it.
+- **Model mode** (after a typical run, shown by a green "Model" badge): every setting can be chosen freely.
+  - The cost of one stream comes from a model fitted on the tests: load grows with *pixels × frame rate*, separately for each encoder and codec.
+  - Each figure shows a **± band** (the model's measured error).
+  - Settings far outside what was tested are flagged as *extrapolated*.
+  - On a GeForce card the **NVENC limit of 8 simultaneous streams** is applied.
+- **Measured mode** (without a typical run): only the tested values are offered. FPS and bitrate are interpolated between tested ones and never guessed outside them.
+
+**Parallel check.** At the bottom of the section, **Run parallel check** streams the chosen settings on several connected headsets at once. It then compares the real load with the prediction. A ratio close to 1.0 confirms that N headsets really cost N times one stream.
+
+The page also shows:
+
+- the maximum number of headsets at these settings;
+- the total WiFi bandwidth;
+- up to three tested configurations that fit, each with an **Apply** button.
+
+**Apply** first lists the exact changes, then on confirmation writes them:
+
+- the restream settings: re-encoding, frame rate, bitrate, codec, GPU;
+- the model's max capture size;
+- the profile of the selected headsets.
+
+Running streams then restart with the new settings.
+
+The benchmark itself never changes your configuration. Only **Apply** does.
 ## Stream URLs
 
 Every headset stream is published under a path derived from its name (e.g. `Q3 BLUE` → `q3_blue`), on three protocols:
@@ -156,6 +265,16 @@ Enable **Recording** on a headset's card in **Headset Settings** to save its cap
 - Files go to the configured record folder (default `C:\DATA\MEDIA\VR_Records`, see [configuration](configuration.md#headset-capture-profiles-scrcpy))
 - The recording is a lossless copy of the capture (no re-encoding)
 - A **minimum free space guard** (default 5 GB) automatically disables recording on all headsets when the drive runs low; the web UI shows a storage warning banner
+- **A new file for each capture session.** Unplugging a cable or restarting a capture starts a new timestamped `.mkv`; the previous one is finalised when its session ends. Recordings are Matroska (`.mkv`) on purpose, because the format stays readable even if a capture is cut abruptly.
+- **No empty files.** A capture attempt that never produced video (for example a relaunch while the cable is half unplugged) would leave a 0-byte file; the app deletes those automatically when the session ends, and logs a warning for any file under 64 KB, which it keeps.
+- **If a recording was cut abruptly** (ffmpeg had to be force-stopped after 15 s, which the log reports with the file name), the file still plays in VLC and decodes in ffmpeg, but its duration and seek index are missing. Repair it with `ffmpeg -i broken.mkv -c copy fixed.mkv`.
+- **Files are organised** as `<record folder>\<yyyy-MM-dd>\<headset>\<headset>_<yyyyMMdd_HHmmss>.mkv`.
+
+### Recordings page
+
+Every session is also listed in the app's database with its start and end time, size, codec, picture size and the capture settings it was made with (profile, fps, bitrate, capture mode, eye merge). The **Recordings** page (**Config → Recordings**) uses it to show a timeline per headset, watch a recording in the browser (live low-resolution re-encode, the file is never modified), download the original file, protect a recording from deletion and delete old ones. See [Web interface → Recordings](web-interface.md#recordings).
+
+The database follows the record folder: at every start, and every `Recordings.rescan_interval_min` minutes (default 10), the app imports files that appeared in the folder, drops the entries of files deleted outside the app, and closes sessions that a crash or power cut left open (shown as **interrupted**). If the record folder cannot be reached (drive unplugged), nothing is removed - a warning is written to the log instead.
 
 ---
 

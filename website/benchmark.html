@@ -1,0 +1,1131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VR Headsets - Benchmark</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+  <link rel="stylesheet" href="assets/topbar.css">
+  <script src="assets/topbar.js"></script>
+  <style>
+    :root {
+      --bg: #111; --muted: #444; --text: #ccc; --th-bg: #1a1a1a; --tr-hover: #1c1c1e; --border: #222;
+      --ping-ok: #22c55e; --ping-ko: #ef4444; --scrcpy-ok: #3b82f6; --scrcpy-ko: #a06030;
+      --card-bg: #161616; --sub: #777; --warn: #f97316; --input-bd: #333;
+    }
+    [data-theme="light"] {
+      --bg: #f0f0f0; --muted: #999; --text: #222; --th-bg: #e8e8e8; --tr-hover: #ececec; --border: #d8d8d8;
+      --card-bg: #e8e8e8; --sub: #666; --input-bd: #c8c8c8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { background: var(--bg); min-height: 100vh; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color: var(--text); overflow-x: hidden; }
+    .page { padding: 24px; }
+    .pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 20px; font-size: 11px; font-weight: 700; }
+    .pill-green { background: rgba(34,197,94,0.15); color: var(--ping-ok); }
+    .pill-red { background: rgba(239,68,68,0.12); color: var(--ping-ko); }
+
+    .comp-section { margin-top: 16px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+    .comp-section:first-child { margin-top: 0; }
+    .comp-section summary { display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: var(--th-bg); cursor: pointer;
+      font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); user-select: none; list-style: none; }
+    .comp-section summary::-webkit-details-marker { display: none; }
+    .comp-section summary .chevron { margin-left: auto; transition: transform 0.2s; }
+    .comp-section[open] summary .chevron { transform: rotate(90deg); }
+    .comp-section.disabled summary { cursor: default; opacity: 0.7; font-style: italic; text-transform: none; letter-spacing: 0; font-size: 12px; }
+    .comp-section.disabled summary .chevron { display: none; }
+    .comp-body { padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+    .comp-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 6px; padding: 11px 13px; }
+    .comp-card-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin-bottom: 8px; }
+    .comp-refresh-btn { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; background: none;
+      border: 1px solid #333; border-radius: 4px; color: var(--muted); font-size: 10px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.06em; cursor: pointer; transition: color 0.15s, border-color 0.15s, background 0.15s; }
+    .comp-refresh-btn:hover { color: #3b82f6; border-color: rgba(59,130,246,0.5); background: rgba(59,130,246,0.08); }
+    .comp-refresh-btn.danger:hover { color: #ef4444; border-color: rgba(239,68,68,0.5); background: rgba(239,68,68,0.08); }
+    a.comp-refresh-btn { text-decoration: none; margin-left: 0; }
+    /* Quick selection: buttons packed left (the shared margin-left:auto spread them out). */
+    .row.quick .comp-refresh-btn { margin-left: 0; }
+
+    fieldset { border: 0; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+    fieldset:disabled { opacity: 0.55; }
+    .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; }
+    .row > .lbl { width: 150px; flex-shrink: 0; color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
+    select, input[type=number] { background: var(--th-bg); color: var(--text); border: 1px solid var(--input-bd); border-radius: 4px; padding: 4px 8px; font-size: 12px; }
+    input[type=number] { width: 72px; }
+    .bench-opt { display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600;
+      background: transparent; color: var(--sub); border: 1px solid var(--input-bd); transition: background .12s, border-color .12s, color .12s; }
+    .bench-opt:hover { border-color: #666; }
+    .bench-opt.on { background: rgba(34,197,94,0.16); border-color: rgba(34,197,94,0.6); color: #22c55e; }
+    .bench-opt:disabled { opacity: 0.35; cursor: not-allowed; }
+    .bench-opt.flash { background: rgba(239,68,68,0.25); border-color: #ef4444; }
+    .bench-opt.add { border-style: dashed; }
+    .comp-refresh-btn.on { color: #22c55e; border-color: rgba(34,197,94,0.6); background: rgba(34,197,94,0.16); }
+    .row.locked { opacity: 0.4; pointer-events: none; }
+    .mode-badge { padding: 1px 8px; border-radius: 9px; font-size: 10px; font-weight: 800; text-transform: none; letter-spacing: 0; }
+    .mode-badge.model { background: rgba(34,197,94,0.15); color: #22c55e; }
+    .mode-badge.measured { background: rgba(120,120,120,0.2); color: #999; }
+    .ebar .band { position: absolute; top: 0; height: 100%; background: rgba(147,197,253,0.45); border-radius: 3px; }
+    .rec-warn { color: var(--warn); font-size: 12px; margin-top: 6px; }
+    table.small { border-collapse: collapse; font-size: 11.5px; }
+    table.small th, table.small td { padding: 3px 9px; border-bottom: 1px solid var(--border); text-align: right; }
+    table.small th:first-child, table.small td:first-child { text-align: left; }
+    .bench-opt .x { font-size: 11px; opacity: 0.7; padding: 0 2px; }
+    .bench-opt .x:hover { opacity: 1; color: #ef4444; }
+    .note { font-size: 11px; color: var(--sub); }
+    .summary-line { font-size: 13px; font-variant-numeric: tabular-nums; }
+    .summary-line.warn { color: var(--warn); }
+    .summary-line.err { color: #ef4444; }
+    .tests-list { max-height: 260px; overflow-y: auto; border: 1px solid var(--border); border-radius: 4px; padding: 6px 10px; font-size: 12px; margin-top: 6px; }
+    .tests-list div { padding: 1px 0; }
+    .bench-run-btn { padding: 7px 20px; border-radius: 5px; cursor: pointer; border: 1px solid rgba(59,130,246,0.6); background: rgba(59,130,246,0.15);
+      color: #3b82f6; font-size: 12px; font-weight: 800; letter-spacing: 0.06em; }
+    .bench-run-btn:hover { background: rgba(59,130,246,0.28); }
+    .bench-run-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+    .progress { display: none; flex-direction: column; gap: 6px; }
+    .progress-bar { height: 6px; background: #222; border-radius: 3px; overflow: hidden; }
+    [data-theme="light"] .progress-bar { background: #ccc; }
+    .progress-bar > div { height: 100%; background: #3b82f6; width: 0; transition: width 0.8s; }
+    .progress-text { font-size: 12px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .msg { font-size: 12px; padding: 7px 10px; border-radius: 4px; display: none; }
+    .msg.err { display: block; background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.4); color: #ef4444; }
+    .msg.info { display: block; background: rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.4); color: #3b82f6; }
+
+    /* Results grid */
+    .res-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 12px; margin-bottom: 10px; }
+    .res-toolbar .info { color: var(--sub); margin-right: auto; }
+    .grid-wrap { overflow: auto; max-height: calc(100vh - 140px); border: 1px solid var(--border); border-radius: 6px; }
+    table.grid { border-collapse: separate; border-spacing: 0; font-size: 12px; width: max-content; min-width: 100%; }
+    table.grid th, table.grid td { padding: 5px 9px; white-space: nowrap; text-align: center; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); }
+    table.grid thead th { position: sticky; background: var(--th-bg); z-index: 3; font-size: 11px; font-weight: 700; color: var(--sub); }
+    table.grid thead tr.r2 th { cursor: pointer; text-transform: uppercase; letter-spacing: 0.04em; }
+    table.grid thead tr.r3 th { padding: 3px 4px; }
+    table.grid thead tr.r3 select { max-width: 130px; font-size: 11px; padding: 2px 3px; }
+    table.grid .gtoggle { cursor: pointer; margin-left: 6px; padding: 0 5px; border: 1px solid #444; border-radius: 3px; font-size: 11px; background: transparent; color: var(--text); }
+    table.grid .stick-l { position: sticky; left: 0; z-index: 2; background: var(--bg); text-align: left; }
+    table.grid thead .stick-l { z-index: 5; background: var(--th-bg); }
+    table.grid tbody tr.data { cursor: pointer; }
+    table.grid tbody tr.data:hover td { background: var(--tr-hover); }
+    table.grid tbody tr.data td { background: var(--bg); }
+    table.grid tbody tr.base td { font-weight: 600; background: rgba(59,130,246,0.07); }
+    table.grid td.l { text-align: left; }
+    table.grid .sub { font-size: 10px; color: var(--sub); display: block; }
+    .bench-delta { color: #777; font-size: 10.5px; margin-left: 4px; }
+    .c-blue { color: #3b82f6; } .c-orange { color: #f97316; } .c-red { color: #ef4444; } .c-green { color: #22c55e; }
+    .bench-status { padding: 1px 7px; border-radius: 9px; font-size: 10px; font-weight: 800; text-transform: uppercase; }
+    .bench-status.ok { background: rgba(34,197,94,0.15); color: #22c55e; }
+    .bench-status.fallback { background: rgba(249,115,22,0.15); color: #f97316; }
+    .bench-status.failed, .bench-status.error { background: rgba(239,68,68,0.15); color: #ef4444; }
+    .bench-status.skipped { background: rgba(120,120,120,0.2); color: #999; }
+    tr.detail td { text-align: left !important; white-space: normal !important; background: var(--card-bg) !important; }
+    .detail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px 18px; font-size: 12px; }
+    .detail-grid h4 { font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin-bottom: 3px; }
+    .detail-grid .kv { display: flex; justify-content: space-between; gap: 10px; }
+    .detail-grid .kv span:first-child { color: var(--sub); }
+
+    /* Recommendations */
+    .rec-inputs { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px 16px; }
+    .rec-inputs label { display: flex; flex-direction: column; gap: 3px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+    .rec-inputs label select, .rec-inputs label input[type=number] { width: 100%; font-weight: 400; text-transform: none; letter-spacing: 0; }
+    .rec-inputs label .inl { display: flex; gap: 8px; align-items: center; }
+    .rec-inputs label .inl input[type=range] { flex: 1; }
+    .rec-inputs label .inl input[type=number] { width: 64px; flex: none; }
+    .rec-inputs .txt { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--text); font-size: 12px; }
+    .ebar { margin: 7px 0; font-size: 12px; }
+    .ebar .t { display: flex; justify-content: space-between; margin-bottom: 2px; }
+    .ebar .track { position: relative; height: 10px; background: #222; border-radius: 3px; }
+    [data-theme="light"] .ebar .track { background: #ccc; }
+    .ebar .fill { height: 100%; border-radius: 3px; background: #3b82f6; }
+    .ebar .fill.over { background: #ef4444; }
+    .ebar .mark { position: absolute; top: -3px; bottom: -3px; width: 2px; background: #f97316; }
+    .est-facts { display: flex; flex-wrap: wrap; gap: 6px 22px; font-size: 12px; margin-top: 8px; }
+    .props { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+    .prop { border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; background: var(--card-bg); display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+    .prop .ttl { font-weight: 700; }
+    .prop .go { margin-top: 6px; align-self: flex-start; }
+
+    /* Modal */
+    .bench-modal { position: fixed; inset: 0; z-index: 9999; background: rgba(0,0,0,0.72); display: flex; align-items: center; justify-content: center; }
+    .bench-modal-box { background: #1a1a1a; border: 1px solid #333; border-radius: 10px; width: 90%; max-width: 480px; max-height: 90vh; overflow-y: auto;
+      padding: 22px 24px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 8px 32px rgba(0,0,0,0.6); }
+    [data-theme="light"] .bench-modal-box { background: #fff; border-color: #d8d8d8; }
+    .bench-modal-title { font-size: 14px; font-weight: 700; color: #f97316; }
+    .bench-modal-text { font-size: 12.5px; color: #9ca3af; line-height: 1.55; }
+    .bench-modal-text strong { color: var(--text); }
+    .bench-modal-list { max-height: 160px; overflow-y: auto; padding: 7px 10px; border-radius: 6px; font-size: 12px;
+      background: rgba(249,115,22,0.07); border: 1px solid rgba(249,115,22,0.25); color: var(--text); }
+    .bench-modal-list label { display: block; padding: 2px 0; cursor: pointer; }
+    .bench-modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+    .bench-modal-actions button { padding: 7px 16px; border-radius: 6px; border: 1px solid #333; background: transparent; color: #9ca3af; font-size: 13px; font-weight: 600; cursor: pointer; }
+    .bench-modal-actions button.go { border-color: rgba(59,130,246,0.6); background: rgba(59,130,246,0.18); color: #3b82f6; }
+    .bench-modal-actions button:disabled { opacity: 0.4; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <script>document.write(TopBar.brandHTML)</script>
+    <div class="v-sep"></div>
+    <script>document.write(TopBar.compactDropdownHTML)</script>
+    <span class="topbar-title">Benchmark</span>
+    <div class="topbar-right">
+      <script>document.write(TopBar.monitoringBtnHTML)</script>
+      <script>document.write(TopBar.manageDevicesBtnHTML)</script>
+      <script>document.write(TopBar.configMenuHTML)</script>
+    </div>
+  </header>
+
+  <div class="page">
+
+    <!-- A) Tests selection -->
+    <details class="comp-section" id="sec-sel" open>
+      <summary>Tests selection <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg></summary>
+      <div class="comp-body">
+        <fieldset id="sel-fs">
+          <div class="row"><span class="lbl">Headset</span><select id="s-headset"></select><span class="note" id="s-hnote"></span></div>
+          <div class="row quick"><span class="lbl">Quick selection</span>
+            <button type="button" class="comp-refresh-btn" id="q-default" title="Baseline + one reference test (configured settings, best GPU, H264)">Reset to default</button>
+            <button type="button" class="comp-refresh-btn" id="q-full" title="Every encoder, both codecs, every listed bitrate and FPS, single eye and merged - a very long run">Full tests</button>
+            <button type="button" class="comp-refresh-btn" id="q-typical" title="One change at a time from a reference (single eye, 45 fps, 10 Mb/s, native size) for every encoder x codec, plus bitrate / re-encode / merged tests and a closing baseline - enough for the model to predict any combination">Typical tests</button>
+            <button type="button" class="comp-refresh-btn" id="q-typicalq" title="Same as Typical tests, but only the CPU and the best GPU: one change at a time from a reference (single eye, 45 fps, 10 Mb/s, native size), plus bitrate / re-encode / merged tests and a closing baseline - enough for the model to predict any combination">Typical (quick)</button>
+          </div>
+          <div class="row"><span class="lbl">Encoding</span><span class="row" id="g-enc"></span><span class="note pn" hidden>Set by the preset</span></div>
+          <div class="row"><span class="lbl">Codec</span><span class="row" id="g-codec"></span><span class="note pn" hidden>Set by the preset</span></div>
+          <div class="row"><span class="lbl">Capture bitrate</span><span class="row" id="g-mbps"></span><span class="note pn" hidden>Set by the preset</span></div>
+          <div class="row"><span class="lbl">FPS</span><span class="row" id="g-fps"></span><span class="note pn" hidden>Set by the preset</span></div>
+          <div class="row"><span class="lbl">View + eye</span><select id="s-view"></select><span class="row" id="g-eye"></span><span class="note pn" hidden>Eye set by the preset</span></div>
+          <div class="row"><span class="lbl">Re-encode bitrate</span><select id="s-reenc"></select></div>
+          <div class="row"><span class="lbl">Max capture size</span><select id="s-max"></select><span class="note">Not used by merged tests (full frame)</span><span class="note pn" hidden>Set by the preset</span></div>
+          <div class="row"><span class="lbl">Measure window</span>
+            <select id="s-measure"><option value="10">10 s</option><option value="20" selected>20 s</option><option value="40">40 s</option></select></div>
+        </fieldset>
+        <div>
+          <div class="summary-line" id="plan-sum">Loading...</div>
+          <details id="plan-det" style="margin-top:6px"><summary style="cursor:pointer;font-size:12px;color:var(--sub)">Show test list</summary><div class="tests-list" id="plan-list"></div></details>
+        </div>
+        <div class="row"><button class="bench-run-btn" id="btn-run" disabled>RUN BENCHMARK</button></div>
+        <div class="progress" id="progress">
+          <div class="progress-bar"><div id="prog-bar"></div></div>
+          <div class="progress-text"><span id="prog-text"></span><button class="comp-refresh-btn danger" id="btn-cancel">Cancel</button></div>
+        </div>
+        <div class="msg" id="run-msg"></div>
+      </div>
+    </details>
+
+    <!-- B) Results -->
+    <details class="comp-section" id="sec-res">
+      <summary>Results <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg></summary>
+      <div class="comp-body">
+        <div id="res-empty" class="note">No stored result for this model.</div>
+        <div id="res-main" style="display:none">
+          <div class="res-toolbar">
+            <span class="info" id="res-info"></span>
+            <a class="comp-refresh-btn" id="res-csv" href="#">Download CSV</a>
+            <button class="comp-refresh-btn danger" id="res-clear">Clear results</button>
+          </div>
+          <div class="grid-wrap"><table class="grid" id="grid"></table></div>
+        </div>
+      </div>
+    </details>
+
+    <!-- C) Recommendations -->
+    <details class="comp-section disabled" id="sec-rec">
+      <summary id="rec-sum"><span id="rec-title">Please run first a benchmark</span> <span class="mode-badge" id="rec-mode" hidden></span> <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg></summary>
+      <div class="comp-body">
+        <div class="comp-card"><div class="comp-card-title">Scenario</div><div class="rec-inputs" id="rec-inputs"></div></div>
+        <div class="comp-card"><div class="comp-card-title">Estimate</div><div id="rec-est"></div></div>
+        <div class="comp-card"><div class="comp-card-title">Proposals</div><div class="props" id="rec-props"></div></div>
+        <details class="comp-card" id="rec-model" hidden><summary style="cursor:pointer;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted)">Model details</summary><div id="rec-model-body" style="margin-top:8px;overflow-x:auto"></div></details>
+        <div class="comp-card" id="par-card">
+          <div class="comp-card-title">Parallel check</div>
+          <div class="note" style="margin-bottom:8px">Streams the settings above on several headsets at once and compares the real PC load with the prediction - checks that N headsets really cost N x one stream.</div>
+          <div class="bench-modal-list" id="par-list" style="background:transparent;border-color:var(--border)"></div>
+          <div class="row" style="margin-top:8px"><span class="lbl" style="width:auto">Measure window</span>
+            <select id="par-measure"><option value="10">10 s</option><option value="20" selected>20 s</option><option value="40">40 s</option></select>
+            <button class="bench-run-btn" id="par-run" disabled>RUN PARALLEL CHECK</button></div>
+          <div id="par-res" style="margin-top:10px"></div>
+        </div>
+      </div>
+    </details>
+  </div>
+
+<script>
+(function () {
+  'use strict';
+  TopBar.initCompact();
+  TopBar.initManageDevicesBtn();
+
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function arr(x) { return [].concat(x || []); }
+  function num(v, d) { return (v == null || v === '' || isNaN(v)) ? '-' : Number(v).toFixed(d == null ? 1 : d); }
+  function fmtDur(s) {
+    s = Math.max(0, Math.round(s || 0));
+    if (s < 60) return s + ' s';
+    var m = Math.floor(s / 60), r = s % 60;
+    if (m < 60) return m + ' min' + (r ? ' ' + r + ' s' : '');
+    return Math.floor(m / 60) + ' h ' + (m % 60) + ' min';
+  }
+  function debounce(fn, ms) { var t; return function () { var a = arguments; clearTimeout(t); t = setTimeout(function () { fn.apply(null, a); }, ms); }; }
+  function jget(url) { return fetch(url, { cache: 'no-store' }).then(function (r) { return r.json(); }); }
+  function jpost(url, body) {
+    return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) }).then(function (r) { return r.json(); });
+  }
+  function lsGet(k, d) { try { var v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } }
+  function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+
+  var S = {
+    headsets: [], hid: null, opts: null, headset: null,
+    eyeSel: [], enc: [], codec: [], mbps: [], fps: [], view: '', reenc: 0, max: 0, measure: 20,
+    cust: { mbps: [], fps: [], reenc: [] },
+    preset: '', plan: null, busy: false, prog: null, progRecv: 0, lastStatus: 'idle',
+    result: null, rec: null, recSettings: null, recBuilt: false, resOpened: false
+  };
+  var ui = lsGet('bench_ui', { groups: {}, sort: null, filters: {} });
+  function saveUi() { lsSet('bench_ui', ui); }
+
+  /* ---------- modal ---------- */
+  function openModal(title, node, actions) {
+    var bg = document.createElement('div'); bg.className = 'bench-modal';
+    var box = document.createElement('div'); box.className = 'bench-modal-box';
+    var t = document.createElement('div'); t.className = 'bench-modal-title'; t.textContent = title;
+    box.appendChild(t); box.appendChild(node);
+    var act = document.createElement('div'); act.className = 'bench-modal-actions'; box.appendChild(act);
+    bg.appendChild(box); document.body.appendChild(bg);
+    function close() { if (bg.parentNode) bg.parentNode.removeChild(bg); }
+    var api = { close: close, box: box, act: act };
+    api.setActions = function (list) {
+      act.innerHTML = '';
+      list.forEach(function (a) {
+        var b = document.createElement('button'); b.textContent = a.label; if (a.cls) b.className = a.cls;
+        b.addEventListener('click', function () { a.fn(api); }); act.appendChild(b);
+      });
+    };
+    api.setActions(actions);
+    bg.addEventListener('mousedown', function (e) { if (e.target === bg) close(); });
+    return api;
+  }
+  function htmlNode(html) { var d = document.createElement('div'); d.className = 'bench-modal-text'; d.innerHTML = html; return d; }
+
+  /* ---------- headsets ---------- */
+  function isReady(h) { return !!(h.ping && h.adb); }
+  function loadHeadsets() {
+    return jget('/api/headsets-status').then(function (j) {
+      S.headsets = arr(Array.isArray(j) ? j : (j && j.headsets)); renderHeadsetSelect(); renderParList();
+    }).catch(function () {});
+  }
+  var hsSig = '';
+  function renderHeadsetSelect() {
+    var sel = $('s-headset');
+    var sig = S.headsets.map(function (h) { return h.id + h.name + h.ping + h.adb; }).join('|') + '#' + S.hid;
+    if (sig === hsSig) return; hsSig = sig;
+    if (S.hid == null) { var f = S.headsets.filter(isReady)[0]; if (f) { S.hid = f.id; } }
+    sel.innerHTML = S.headsets.map(function (h) {
+      var suf = !h.ping ? ' (offline)' : (!h.adb ? ' (no ADB)' : '');
+      return '<option value="' + esc(h.id) + '"' + (isReady(h) ? '' : ' disabled') + (String(h.id) === String(S.hid) ? ' selected' : '') + '>' + esc(h.name + suf) + '</option>';
+    }).join('');
+    if (S.hid != null && !S.opts) loadOptions();
+    if (!S.headsets.length) $('s-hnote').textContent = 'No registered headset.';
+  }
+  $('s-headset').addEventListener('change', function () { S.hid = this.value; hsSig = ''; loadOptions(); });
+
+  /* ---------- options ---------- */
+  function loadOptions() {
+    if (S.hid == null) return;
+    jget('/api/benchmark/options?id=' + encodeURIComponent(S.hid)).then(function (j) {
+      if (!j || !j.ok) { $('plan-sum').textContent = (j && j.error) || 'Options unavailable'; return; }
+      S.opts = j.options; S.headset = j.headset;
+      var d = S.opts.Defaults || {};
+      S.enc = arr(d.Encodings).slice(); S.codec = arr(d.Codecs).slice(); S.mbps = arr(d.Bitrates).slice(); S.fps = arr(d.Fps).slice();
+      S.eyeSel = arr(d.Eyes).slice(); S.view = d.View || S.opts.CurrentView || ''; S.reenc = d.ReencodeMbps; S.max = d.MaxSize;
+      if (!S.opts.MergeSupported) S.eyeSel = S.eyeSel.filter(function (e) { return e !== 'M'; });
+      if (!S.eyeSel.length) S.eyeSel = ['R'];
+      S.cust = { mbps: [], fps: [], reenc: [] }; S.preset = '';
+      renderSel(); schedulePlan(); loadResult();
+    }).catch(function () { $('plan-sum').textContent = 'Cannot reach the server.'; });
+  }
+
+  /* ---------- toggle rows ---------- */
+  function renderToggles(elId, items, selected, onChange, custom) {
+    var el = $(elId); el.innerHTML = '';
+    items.forEach(function (it) {
+      var b = document.createElement('button'); b.type = 'button';
+      var on = selected.map(String).indexOf(String(it.v)) >= 0;
+      b.className = 'bench-opt' + (on ? ' on' : ''); b.textContent = it.label;
+      if (it.title) b.title = it.title; if (it.disabled) b.disabled = true;
+      if (it.custom) {
+        var x = document.createElement('span'); x.className = 'x'; x.textContent = '×'; x.title = 'Remove';
+        x.addEventListener('click', function (e) { e.stopPropagation(); custom.onRemove(it.v); });
+        b.appendChild(x);
+      }
+      b.addEventListener('click', function () {
+        var idx = selected.map(String).indexOf(String(it.v));
+        if (idx >= 0) {
+          if (selected.length === 1) { b.classList.add('flash'); setTimeout(function () { b.classList.remove('flash'); }, 350); return; }
+          selected.splice(idx, 1);
+        } else selected.push(it.v);
+        onChange(); renderSel(); schedulePlan();
+      });
+      el.appendChild(b);
+    });
+    if (custom) {
+      var add = document.createElement('button'); add.type = 'button'; add.className = 'bench-opt add'; add.textContent = '+ custom';
+      add.addEventListener('click', function () {
+        var inp = document.createElement('input'); inp.type = 'number'; inp.min = custom.min; inp.max = custom.max; inp.placeholder = custom.min + '-' + custom.max;
+        var ok = document.createElement('button'); ok.type = 'button'; ok.className = 'bench-opt'; ok.textContent = 'Add';
+        function commit() {
+          var v = parseInt(inp.value, 10);
+          if (isNaN(v) || v < custom.min || v > custom.max) { inp.style.borderColor = '#ef4444'; return; }
+          custom.onAdd(v);
+        }
+        ok.addEventListener('click', commit);
+        inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') commit(); if (e.key === 'Escape') renderSel(); });
+        el.replaceChild(inp, add); el.appendChild(ok); inp.focus();
+      });
+      el.appendChild(add);
+    }
+  }
+  function numList(base, customs) {
+    var out = arr(base).map(function (v) { return { v: v, label: '' }; });
+    customs.forEach(function (c) { if (arr(base).indexOf(c) < 0) out.push({ v: c, label: '', custom: true }); });
+    out.sort(function (a, b) { return a.v - b.v; });
+    return out;
+  }
+  function customCfg(key, min, max) {
+    return {
+      min: min, max: max,
+      onAdd: function (v) {
+        if (S.cust[key].indexOf(v) < 0 && arr(S.opts.Choices[key === 'mbps' ? 'Bitrates' : 'Fps']).indexOf(v) < 0) S.cust[key].push(v);
+        if (S[key].map(Number).indexOf(v) < 0) S[key].push(v);
+        renderSel(); schedulePlan();
+      },
+      onRemove: function (v) {
+        S.cust[key] = S.cust[key].filter(function (c) { return c !== v; });
+        S[key] = S[key].filter(function (c) { return Number(c) !== v; });
+        if (!S[key].length) S[key] = arr(S.opts.Defaults[key === 'mbps' ? 'Bitrates' : 'Fps']).slice();
+        renderSel(); schedulePlan();
+      }
+    };
+  }
+  function renderSel() {
+    var o = S.opts; if (!o) return;
+    var enc = [{ v: 'cpu', label: 'CPU (software)' }];
+    arr(o.Gpus).forEach(function (g) { enc.push({ v: 'gpu:' + g.Index, label: 'GPU ' + g.Index + ' - ' + g.Model + (g.Best ? ' (best)' : '') }); });
+    renderToggles('g-enc', enc, S.enc, function () {});
+    renderToggles('g-codec', [{ v: 'h264', label: 'H264' }, { v: 'h265', label: 'H265' }], S.codec, function () {});
+    var mb = numList(o.Choices.Bitrates, S.cust.mbps); mb.forEach(function (i) { i.label = i.v + ' Mb/s'; });
+    renderToggles('g-mbps', mb, S.mbps, function () {}, customCfg('mbps', 1, 100));
+    var fp = numList(o.Choices.Fps, S.cust.fps); fp.forEach(function (i) { i.label = i.v + ' fps'; });
+    renderToggles('g-fps', fp, S.fps, function () {}, customCfg('fps', 5, 120));
+    renderToggles('g-eye', [
+      { v: 'R', label: 'Single eye' },
+      { v: 'M', label: 'Merged', disabled: !o.MergeSupported, title: o.MergeSupported ? '' : (o.MergeReason || 'Merged view not supported') }
+    ], S.eyeSel, function () {});
+    $('s-view').innerHTML = arr(o.Views).map(function (v) {
+      return '<option value="' + esc(v.Name) + '"' + (v.Name === S.view ? ' selected' : '') + '>' + esc(v.Name + (v.Current ? ' (current)' : '')) + '</option>';
+    }).join('');
+    // re-encode bitrate
+    var re = ['<option value="' + o.ReencodeMbps + '">Config (' + o.ReencodeMbps + ' Mb/s)</option>'];
+    arr(o.Choices.ReencodeMbps).concat(S.cust.reenc).forEach(function (v) { if (v !== o.ReencodeMbps) re.push('<option value="' + v + '">' + v + ' Mb/s</option>'); });
+    re.push('<option value="__custom">Custom...</option>');
+    $('s-reenc').innerHTML = re.join(''); $('s-reenc').value = String(S.reenc);
+    // max size
+    var mx = ['<option value="' + o.MaxSize + '">Config (' + (o.MaxSize ? o.MaxSize : 'native') + ')</option>'];
+    arr(o.Choices.MaxSizes).forEach(function (v) { if (v !== o.MaxSize) mx.push('<option value="' + v + '">' + (v ? v : 'Native') + '</option>'); });
+    $('s-max').innerHTML = mx.join(''); $('s-max').value = String(S.max);
+    applyLock();
+  }
+  // With a preset active, the preset decides encodings, codecs, bitrates, fps, eyes and max size.
+  // Only View and Re-encode bitrate stay editable (they define the reference).
+  function applyLock() {
+    var on = !!S.preset;
+    ['g-enc', 'g-codec', 'g-mbps', 'g-fps', 'g-eye'].forEach(function (id) { $(id).classList.toggle('locked', on); });
+    $('s-max').disabled = on;
+    Array.prototype.forEach.call(document.querySelectorAll('#sel-fs .pn'), function (n) { n.hidden = !on; });
+    $('q-typical').classList.toggle('on', S.preset === 'typical');
+    $('q-typicalq').classList.toggle('on', S.preset === 'typical-quick');
+  }
+  // Quick selection presets. 'default' = the options' Defaults (baseline + reference test);
+  // 'full' = every encoder, both codecs, every listed + custom bitrate and FPS, both eyes.
+  // View, re-encode bitrate, max size and measure window are left as they are.
+  function applyPreset(kind) {
+    var o = S.opts; if (!o || S.busy) return;
+    var d = o.Defaults || {};
+    S.preset = '';
+    if (kind === 'typical' || kind === 'typical-quick') {
+      S.preset = kind; S.measure = 20; $('s-measure').value = '20';
+    } else if (kind === 'full') {
+      S.enc = ['cpu'].concat(arr(o.Gpus).map(function (g) { return 'gpu:' + g.Index; }));
+      S.codec = ['h264', 'h265'];
+      S.mbps = arr(o.Choices.Bitrates).concat(S.cust.mbps);
+      S.fps = arr(o.Choices.Fps).concat(S.cust.fps);
+      S.eyeSel = o.MergeSupported ? ['R', 'M'] : ['R'];
+    } else {
+      S.enc = arr(d.Encodings).slice(); S.codec = arr(d.Codecs).slice();
+      S.mbps = arr(d.Bitrates).slice(); S.fps = arr(d.Fps).slice();
+      S.eyeSel = arr(d.Eyes).slice(); S.view = d.View || S.view; S.reenc = d.ReencodeMbps; S.max = d.MaxSize;
+    }
+    renderSel(); schedulePlan();
+  }
+  $('q-default').addEventListener('click', function () { applyPreset('default'); });
+  $('q-full').addEventListener('click', function () { applyPreset('full'); });
+  $('q-typical').addEventListener('click', function () { applyPreset('typical'); });
+  $('q-typicalq').addEventListener('click', function () { applyPreset('typical-quick'); });
+  $('s-view').addEventListener('change', function () { S.view = this.value; schedulePlan(); });
+  $('s-max').addEventListener('change', function () { S.max = parseInt(this.value, 10); schedulePlan(); });
+  $('s-measure').addEventListener('change', function () { S.measure = parseInt(this.value, 10); schedulePlan(); });
+  $('s-reenc').addEventListener('change', function () {
+    if (this.value === '__custom') {
+      var v = parseInt(prompt('Re-encode bitrate (Mb/s, 1-100):', ''), 10);
+      if (!isNaN(v) && v >= 1 && v <= 100) { if (v !== S.opts.ReencodeMbps && arr(S.opts.Choices.ReencodeMbps).indexOf(v) < 0 && S.cust.reenc.indexOf(v) < 0) S.cust.reenc.push(v); S.reenc = v; }
+      renderSel(); schedulePlan(); return;
+    }
+    S.reenc = parseInt(this.value, 10); schedulePlan();
+  });
+
+  /* ---------- plan ---------- */
+  function selection() {
+    return { Preset: S.preset || '', Encodings: S.enc, Codecs: S.codec, Bitrates: S.mbps.map(Number), Fps: S.fps.map(Number), Eyes: S.eyeSel, View: S.view, ReencodeMbps: S.reenc, MaxSize: S.max };
+  }
+  var schedulePlan = debounce(refreshPlan, 250);
+  function refreshPlan() {
+    if (S.hid == null || !S.opts) return;
+    jpost('/api/benchmark/plan', { id: parseInt(S.hid, 10), selection: selection(), measureSec: S.measure }).then(function (p) {
+      S.plan = p; var el = $('plan-sum'); el.className = 'summary-line';
+      if (!p || !p.ok) {
+        el.className = 'summary-line err'; el.textContent = (p && p.error) || 'Plan failed'; $('plan-list').innerHTML = ''; updateRunBtn(); return;
+      }
+      el.textContent = S.preset
+        ? p.count + ' tests (' + (S.preset === 'typical' ? 'typical' : 'typical quick') + ': one change at a time) - estimated ' + fmtDur(p.estimateSec)
+        : p.count + ' tests (baseline + grid) - estimated ' + fmtDur(p.estimateSec);
+      if (p.count > 40) { el.className = 'summary-line warn'; el.textContent += ' - long run - consider fewer options'; }
+      $('plan-list').innerHTML = arr(p.tests).map(function (t) {
+        return '<div' + (t.Available === false ? ' style="opacity:.5"' : '') + '>' + esc(t.Label) + (t.Available === false ? ' (' + esc(t.Reason || 'unavailable') + ')' : '') + '</div>';
+      }).join('');
+      updateRunBtn();
+    }).catch(function () { $('plan-sum').className = 'summary-line err'; $('plan-sum').textContent = 'Plan request failed.'; });
+  }
+  function updateRunBtn() { $('btn-run').disabled = S.busy || !S.plan || !S.plan.ok || S.hid == null; }
+
+  /* ---------- run ---------- */
+  function showMsg(kind, text) { var m = $('run-msg'); m.className = 'msg ' + (kind || ''); m.textContent = text || ''; }
+  $('btn-run').addEventListener('click', function () {
+    if (!S.plan || !S.plan.ok) return;
+    var h = S.headsets.filter(function (x) { return String(x.id) === String(S.hid); })[0] || {};
+    var live = S.headsets.filter(function (x) { return x.scrcpy; });
+    var body = '<div class="bench-modal-text"><strong>All current streams will be disconnected during the benchmark.</strong></div>';
+    if (live.length) body += '<div class="bench-modal-list">' + live.map(function (x) { return '<div>' + esc(x.name) + '</div>'; }).join('') + '</div>';
+    body += '<div class="bench-modal-text"><strong>' + S.plan.count + '</strong> tests - estimated <strong>' + esc(fmtDur(S.plan.estimateSec)) + '</strong></div>';
+    openModal('Run the benchmark on ' + (h.name || '?') + '?', htmlNode(body), [
+      { label: 'Cancel', fn: function (m) { m.close(); } },
+      { label: 'Run', cls: 'go', fn: function (m) {
+        m.close(); showMsg('', '');
+        jpost('/api/benchmark/start', { id: parseInt(S.hid, 10), selection: selection(), measureSec: S.measure }).then(function (j) {
+          if (j && j.ok) { S.busy = true; applyBusy(); pollProgress(); }
+          else showMsg('err', (j && j.error) || 'Could not start the benchmark.');
+        }).catch(function () { showMsg('err', 'Start request failed.'); });
+      } }
+    ]);
+  });
+  $('btn-cancel').addEventListener('click', function () {
+    if (!confirm('Cancel the running benchmark?')) return;
+    jpost('/api/benchmark/cancel', {}).catch(function () {});
+  });
+  function applyBusy() { $('sel-fs').disabled = S.busy; $('progress').style.display = S.busy ? 'flex' : 'none'; updateRunBtn(); updateParBtn(); }
+
+  var progTimer = null;
+  // One loop only: every answer replaces the pending timer instead of adding a second one.
+  function schedulePoll(ms) { clearTimeout(progTimer); progTimer = setTimeout(pollProgress, ms); }
+  function pollProgress() {
+    clearTimeout(progTimer);
+    jget('/api/benchmark/progress').then(function (p) {
+      S.prog = p; S.progRecv = Date.now();
+      var st = p && p.status ? p.status : 'idle';
+      var active = st === 'queued' || st === 'running';
+      if (active) {
+        S.activeKind = p.kind || '';
+        if (!S.busy) { S.busy = true; if (p.headset && p.headset.id != null && String(p.headset.id) !== String(S.hid)) { S.hid = p.headset.id; hsSig = ''; renderHeadsetSelect(); loadOptions(); } applyBusy(); }
+        renderProgress();
+        schedulePoll(2000);
+      } else {
+        var was = S.busy; S.busy = false; applyBusy();
+        if (was || (S.lastStatus === 'running' || S.lastStatus === 'queued')) onRunEnd(p);
+        // Keep watching while idle (slower), so a run started from the console, another tab or
+        // the API is picked up too, and its results appear here when it ends.
+        schedulePoll(document.hidden ? 15000 : 5000);
+      }
+      S.lastStatus = st;
+    }).catch(function () { schedulePoll(S.busy ? 3000 : 10000); });
+  }
+  function onRunEnd(p) {
+    var st = p && p.status;
+    var kind = (p && p.kind) || S.activeKind || '';
+    S.activeKind = '';
+    if (kind === 'parallel') {
+      if (st === 'done') showMsg('info', 'Parallel check finished - see the result under Recommendations.');
+      else if (st === 'cancelled') showMsg('info', 'Parallel check cancelled.');
+      else if (st === 'error') showMsg('err', 'Parallel check failed: ' + ((p && p.error) || 'unknown error'));
+      loadParallel().then(function () {
+        if (!S.parResult) return;
+        var sec = $('sec-rec');
+        if (!sec.classList.contains('disabled')) { sec.open = true; setTimeout(function () { $('par-card').scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 150); }
+      });
+      return;
+    }
+    if (st === 'done') showMsg('info', 'Benchmark finished - results updated below.');
+    else if (st === 'cancelled') showMsg('info', 'Benchmark cancelled - results so far are shown below.');
+    else if (st === 'error') showMsg('err', 'Benchmark failed: ' + ((p && p.error) || 'unknown error'));
+    // Refresh the results (and the recommendations built on them), then bring them into view.
+    loadResult().then(function () {
+      if (!S.result) return;
+      var sec = $('sec-res');
+      sec.open = true; S.resOpened = true;
+      setTimeout(function () { sec.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 150);
+    });
+  }
+  function renderProgress() {
+    var p = S.prog; if (!S.busy || !p) return;
+    var drift = (Date.now() - S.progRecv) / 1000;
+    var tot = p.total || 0, idx = p.index || 0;
+    $('prog-bar').style.width = (tot ? Math.min(100, (Math.max(0, idx - 1) / tot) * 100) : 0) + '%';
+    var left = '';
+    if (p.phaseEndsAt != null && p.updatedAt != null) left = ' (' + Math.max(0, Math.round((p.phaseEndsAt - p.updatedAt) / 1000 - drift)) + 's left)';
+    var eta = Math.max(0, (p.etaSec || 0) - drift);
+    var txt = p.status === 'queued' ? 'Starting...' : (p.kind === 'parallel' ?
+      'Parallel check - ' + (p.phase || '') + ' (' + idx + ' / ' + tot + ' headsets)' + left + ' - about ' + fmtDur(eta) + ' remaining (elapsed ' + fmtDur((p.elapsedSec || 0) + drift) + ')' :
+      // Before the first test (stopping streams, encoder check, sampler) there is no test to name yet.
+      (idx > 0 ? 'Test ' + idx + ' / ' + tot + ' - ' + (p.current || '') + ' - ' : 'Preparing ' + tot + ' tests - ') +
+      (p.phase || '') + left + ' - about ' + fmtDur(eta) + ' remaining (elapsed ' + fmtDur((p.elapsedSec || 0) + drift) + ')');
+    $('prog-text').textContent = txt;
+  }
+  setInterval(renderProgress, 1000);
+
+  /* ---------- results ---------- */
+  function loadResult() {
+    if (!S.opts) return Promise.resolve();
+    return jget('/api/benchmark/result?model=' + encodeURIComponent(S.opts.Model)).then(function (j) {
+      S.result = (j && j.ok && j.result) ? j.result : null; renderResult(); loadRecommend(true);
+    }).catch(function () {});
+  }
+  var P_COLS = [
+    { id: 'view', title: 'View', fl: 1, txt: function (r) { return esc(r.View || '-'); }, val: function (r) { return r.View || ''; }, ft: function (r) { return r.View || '-'; } },
+    { id: 'eye', title: 'Eye', fl: 1, txt: function (r) { return r.Eye === 'M' ? 'Merged' : (r.Eye === 'R' ? 'Single' : '-'); }, val: function (r) { return r.Eye || ''; }, ft: function (r) { return r.Eye === 'M' ? 'Merged' : (r.Eye === 'R' ? 'Single' : '-'); } },
+    { id: 'enc', title: 'Encoder', fl: 1, left: 1, txt: function (r) {
+        var e = r.Encoding === 'cpu' ? 'CPU' : (r.Encoding === 'gpu' ? 'GPU ' + r.GpuIndex : '-');
+        return esc(e) + (r.Encoder ? '<span class="sub">' + esc(r.Encoder) + '</span>' : ''); },
+      val: function (r) { return (r.Encoding || '') + (r.GpuIndex == null ? '' : r.GpuIndex); }, ft: function (r) { return r.Encoding === 'cpu' ? 'CPU' : (r.Encoding === 'gpu' ? 'GPU ' + r.GpuIndex : '-'); } },
+    { id: 'codec', title: 'Codec', fl: 1, txt: function (r) { return esc((r.Codec || '-').toUpperCase()); }, val: function (r) { return r.Codec || ''; }, ft: function (r) { return (r.Codec || '-').toUpperCase(); } },
+    { id: 'fps', title: 'FPS', fl: 1, txt: function (r) { return r.Fps == null ? '-' : r.Fps; }, val: function (r) { return r.Fps; }, ft: function (r) { return r.Fps == null ? '-' : String(r.Fps); } },
+    { id: 'mbps', title: 'Capture Mb/s', fl: 1, txt: function (r) { return r.Mbps == null ? '-' : r.Mbps; }, val: function (r) { return r.Mbps; }, ft: function (r) { return r.Mbps == null ? '-' : String(r.Mbps); } },
+    { id: 'reenc', title: 'Re-encode Mb/s', fl: 1, txt: function (r) { return r.Encoding === 'none' ? '-' : (r.ReencodeMbps == null ? '-' : r.ReencodeMbps); }, val: function (r) { return r.ReencodeMbps; }, ft: function (r) { return r.Encoding === 'none' ? '-' : (r.ReencodeMbps == null ? '-' : String(r.ReencodeMbps)); } },
+    { id: 'max', title: 'Max size', fl: 1, txt: function (r) { return maxTxt(r); }, val: function (r) { return r.MaxSize; }, ft: function (r) { return maxTxt(r); } },
+    { id: 'role', title: 'Role', fl: 1, txt: function (r) { return esc(r.Role || '-'); }, val: function (r) { return r.Role || ''; }, ft: function (r) { return r.Role || '-'; } }
+  ];
+  function isBaseRow(r) { return r.Id === 'baseline' || r.Id === 'baseline_end'; }
+  // Reference for the deltas: the average of the idle row at the start and the one at the end
+  // (when both exist), which cancels a background load that drifted during the run.
+  function avgBase(b1, b2) {
+    if (!b1 || !b2 || !b1.Load || !b2.Load) return b1 || b2 || null;
+    function av(a, b) { return (a == null || b == null) ? (a == null ? b : a) : (a + b) / 2; }
+    var l1 = b1.Load, l2 = b2.Load, gp = [];
+    arr(l1.Gpus).forEach(function (g) {
+      var g2 = arr(l2.Gpus).filter(function (x) { return x.Index === g.Index; })[0];
+      gp.push({ Index: g.Index, UtilAvg: av(g.UtilAvg, g2 ? g2.UtilAvg : null) });
+    });
+    return { Id: 'baseline_avg', Load: { CpuAvg: av(l1.CpuAvg, l2.CpuAvg), StreamCpuAvg: av(l1.StreamCpuAvg, l2.StreamCpuAvg), RamUsedGB: av(l1.RamUsedGB, l2.RamUsedGB), Gpus: gp } };
+  }
+  function maxTxt(r) { if (r.Encoding === 'none') return '-'; return r.MaxSize === -1 ? 'full frame' : (r.MaxSize === 0 ? 'native' : (r.MaxSize == null ? '-' : String(r.MaxSize))); }
+  function pcls(v, warn, hi) { if (v == null) return ''; return v >= hi ? 'c-red' : (v >= warn ? 'c-orange' : 'c-blue'); }
+  function cpuLim() { var t = (S.opts && S.opts.Thresholds) || {}; return [t.CpuMitigation || 60, t.CpuMax || 85]; }
+  function gpuLim() { var t = (S.opts && S.opts.Thresholds) || {}; return [t.GpuMitigation || 60, t.GpuMax || 85]; }
+  function delta(r, base, getter, d, unit) {
+    if (!base || isBaseRow(r)) return '';
+    var a = getter(r), b = getter(base); if (a == null || b == null) return '';
+    var x = a - b; return '<span class="bench-delta">' + (x >= 0 ? '+' : '') + x.toFixed(d) + (unit || '') + '</span>';
+  }
+  function ld(r) { return r.Load || null; }
+  function gpuOf(r, idx) { var l = ld(r); if (!l) return null; return arr(l.Gpus).filter(function (g) { return g.Index === idx; })[0] || null; }
+  function pv(v, d, cls, unit) { return v == null ? '-' : '<span class="' + (cls || '') + '">' + Number(v).toFixed(d) + (unit || '') + '</span>'; }
+  function procOf(r, name) { var l = ld(r); return (l && l.Procs && l.Procs[name]) || null; }
+
+  function buildGroups(res, base) {
+    var cl = cpuLim(), gl = gpuLim();
+    var groups = [];
+    groups.push({ id: 'status', title: 'Status', main: [
+      { id: 'st', title: 'Status', fl: 1, txt: function (r) { return '<span class="bench-status ' + esc(r.Status) + '">' + esc(r.Status || '-') + '</span>'; }, val: function (r) { return r.Status || ''; }, ft: function (r) { return r.Status || '-'; } }
+    ], extra: [
+      { id: 'msg', title: 'Message', left: 1, txt: function (r) { return esc(r.Message || ''); }, val: function (r) { return r.Message || ''; } }
+    ] });
+    var hasStreamCpu = res.Results && arr(res.Results).some(function (r) { return r.Load && r.Load.StreamCpuAvg != null; });
+    function lf(f) { return function (r) { return ld(r) && ld(r)[f]; }; }
+    var cpuWhole = { id: 'cpuavg', title: hasStreamCpu ? 'Whole-PC avg %' : 'Avg %', txt: function (r) { return pv(lf('CpuAvg')(r), 1, pcls(lf('CpuAvg')(r), cl[0], cl[1])) + delta(r, base, lf('CpuAvg'), 1); }, val: lf('CpuAvg') };
+    var cpuPeak = { id: 'cpupk', title: hasStreamCpu ? 'Whole-PC peak %' : 'Peak %', txt: function (r) { return pv(lf('CpuPeak')(r), 1, pcls(lf('CpuPeak')(r), cl[0], cl[1])); }, val: lf('CpuPeak') };
+    if (hasStreamCpu) {
+      groups.push({ id: 'cpu', title: 'CPU', main: [
+        { id: 'scpu', title: 'Stream CPU %', txt: function (r) { return pv(lf('StreamCpuAvg')(r), 1, pcls(lf('StreamCpuAvg')(r), cl[0], cl[1])) + delta(r, base, lf('StreamCpuAvg'), 1); }, val: lf('StreamCpuAvg') }
+      ], extra: [
+        { id: 'scpupk', title: 'Stream CPU peak %', txt: function (r) { return pv(lf('StreamCpuPeak')(r), 1); }, val: lf('StreamCpuPeak') },
+        cpuWhole, cpuPeak
+      ] });
+    } else groups.push({ id: 'cpu', title: 'CPU', main: [cpuWhole], extra: [cpuPeak] });
+    arr(res.Gpus).forEach(function (g) {
+      var i = g.Index, short = String(g.Model || '').replace(/^(NVIDIA|AMD|Intel)\s+/i, '').replace(/\(R\)|\(TM\)/g, '').slice(0, 24);
+      function gv(f) { return function (r) { var x = gpuOf(r, i); return x ? x[f] : null; }; }
+      groups.push({ id: 'gpu' + i, title: 'GPU ' + i + ' - ' + short, main: [
+        { id: 'g' + i + 'u', title: 'Util %', txt: function (r) { var v = gv('UtilAvg')(r); return pv(v, 1, pcls(v, gl[0], gl[1])) + delta(r, base, gv('UtilAvg'), 1); }, val: gv('UtilAvg') }
+      ], extra: [
+        { id: 'g' + i + 'p', title: 'Util peak %', txt: function (r) { return pv(gv('UtilPeak')(r), 1); }, val: gv('UtilPeak') },
+        { id: 'g' + i + 'v', title: 'Video %', txt: function (r) { return pv(gv('VideoAvg')(r), 1); }, val: gv('VideoAvg') },
+        { id: 'g' + i + 'e', title: 'Encode %', txt: function (r) { return pv(gv('EncodeAvg')(r), 1); }, val: gv('EncodeAvg') },
+        { id: 'g' + i + 'm', title: 'VRAM GB', txt: function (r) { return pv(gv('VramGB')(r), 2); }, val: gv('VramGB') }
+      ] });
+    });
+    groups.push({ id: 'ram', title: 'RAM', main: [
+      { id: 'ramu', title: 'Used GB', txt: function (r) { return pv(ld(r) && ld(r).RamUsedGB, 1) + delta(r, base, function (x) { return ld(x) && ld(x).RamUsedGB; }, 1); }, val: function (r) { return ld(r) && ld(r).RamUsedGB; } }
+    ], extra: [
+      { id: 'ramp', title: 'Peak GB', txt: function (r) { return pv(ld(r) && ld(r).RamPeakGB, 1); }, val: function (r) { return ld(r) && ld(r).RamPeakGB; } }
+    ] });
+    function pf(n, f) { return function (r) { var p = procOf(r, n); return p ? p[f] : null; }; }
+    groups.push({ id: 'proc', title: 'Processes', main: [
+      { id: 'ffc', title: 'ffmpeg CPU %', txt: function (r) { return pv(pf('ffmpeg', 'CpuAvg')(r), 1); }, val: pf('ffmpeg', 'CpuAvg') }
+    ], extra: [
+      { id: 'ffm', title: 'ffmpeg MB', txt: function (r) { return pv(pf('ffmpeg', 'MemMB')(r), 0); }, val: pf('ffmpeg', 'MemMB') },
+      { id: 'scc', title: 'scrcpy CPU %', txt: function (r) { return pv(pf('scrcpy', 'CpuAvg')(r), 1); }, val: pf('scrcpy', 'CpuAvg') },
+      { id: 'scm', title: 'scrcpy MB', txt: function (r) { return pv(pf('scrcpy', 'MemMB')(r), 0); }, val: pf('scrcpy', 'MemMB') },
+      { id: 'mmc', title: 'mediamtx CPU %', txt: function (r) { return pv(pf('mediamtx', 'CpuAvg')(r), 1); }, val: pf('mediamtx', 'CpuAvg') },
+      { id: 'adc', title: 'adb CPU %', txt: function (r) { return pv(pf('adb', 'CpuAvg')(r), 1); }, val: pf('adb', 'CpuAvg') },
+      { id: 'brc', title: 'bridge CPU %', txt: function (r) { return pv(pf('bridge', 'CpuAvg')(r), 1); }, val: pf('bridge', 'CpuAvg') }
+    ] });
+    function sf(f) { return function (r) { return r.Stream ? r.Stream[f] : null; }; }
+    groups.push({ id: 'stream', title: 'Stream', main: [
+      { id: 'sfps', title: 'Fps / target', txt: function (r) {
+          var s = r.Stream; if (!s || s.Fps == null) return '-';
+          var ratio = s.TargetFps ? s.Fps / s.TargetFps : 1, c = ratio >= 0.9 ? 'c-green' : (ratio >= 0.7 ? 'c-orange' : 'c-red');
+          return '<span class="' + c + '">' + Number(s.Fps).toFixed(1) + '</span> / ' + (s.TargetFps == null ? '-' : s.TargetFps); },
+        val: function (r) { var s = r.Stream; return s && s.Fps != null ? s.Fps : null; } }
+    ], extra: [
+      { id: 'sofps', title: 'Out fps', txt: function (r) { return pv(sf('OutFps')(r), 1); }, val: sf('OutFps') },
+      { id: 'sfr', title: 'Frames', txt: function (r) { return pv(sf('Frames')(r), 0); }, val: sf('Frames') },
+      { id: 'sdr', title: 'Drop', txt: function (r) { return pv(sf('Drop')(r), 0); }, val: sf('Drop') },
+      { id: 'sdu', title: 'Dup', txt: function (r) { return pv(sf('Dup')(r), 0); }, val: sf('Dup') },
+      { id: 'ssp', title: 'Speed', txt: function (r) { var v = sf('Speed')(r); return v == null ? '-' : Number(v).toFixed(2) + 'x'; }, val: sf('Speed') }
+    ] });
+    return groups;
+  }
+
+  var shown = [];   // rows currently displayed (for detail lookup)
+  function renderResult() {
+    var res = S.result, tbl = $('grid');
+    $('res-empty').style.display = res ? 'none' : ''; $('res-main').style.display = res ? '' : 'none';
+    if (res && !S.resOpened) { S.resOpened = true; $('sec-res').open = true; }
+    if (!res) { tbl.innerHTML = ''; return; }
+    var rows = arr(res.Results), b0 = rows.filter(function (r) { return r.Id === 'baseline'; })[0] || null;
+    var b1 = rows.filter(function (r) { return r.Id === 'baseline_end'; })[0] || null;
+    var base = avgBase(b0, b1);
+    var pinned = [b0, b1].filter(Boolean);
+    var rest = rows.filter(function (r) { return !isBaseRow(r); });
+    var h = res.Headset || {};
+    $('res-info').textContent = (h.Name || '?') + ' - ' + (res.Model || '') + ' - ' + (res.Host || '') + ' - last run ' + (res.Timestamp || '');
+    $('res-csv').href = '/api/benchmark/result.csv?model=' + encodeURIComponent(res.Model || '');
+
+    var groups = buildGroups(res, base);
+    var cols = P_COLS.slice();
+    groups.forEach(function (g) {
+      g.exp = !!ui.groups[g.id];
+      g.cols = g.exp ? g.main.concat(g.extra) : g.main;
+      cols = cols.concat(g.cols);
+    });
+    // filters
+    var filt = ui.filters || {};
+    rest = rest.filter(function (r) { return cols.every(function (c) { return !c.ft || !filt[c.id] || c.ft(r) === filt[c.id]; }); });
+    // sort
+    if (ui.sort) {
+      var sc = cols.filter(function (c) { return c.id === ui.sort.key; })[0];
+      if (sc) rest.sort(function (a, b) {
+        var x = sc.val(a), y = sc.val(b);
+        if (x == null || x === '') return 1; if (y == null || y === '') return -1;
+        var c = (typeof x === 'number' && typeof y === 'number') ? x - y : String(x).localeCompare(String(y));
+        return ui.sort.dir === 'desc' ? -c : c;
+      });
+    }
+    var list = pinned.concat(rest); shown = list;
+
+    var h1 = '<tr class="r1"><th class="stick-l" colspan="' + P_COLS.length + '" style="text-align:left">Test</th>';
+    groups.forEach(function (g) {
+      h1 += '<th colspan="' + g.cols.length + '">' + esc(g.title) + '<button type="button" class="gtoggle" data-g="' + esc(g.id) + '">' + (g.exp ? '-' : '+') + '</button></th>';
+    });
+    h1 += '</tr>';
+    var h2 = '<tr class="r2">', h3 = '<tr class="r3">';
+    cols.forEach(function (c, i) {
+      var arrow = ui.sort && ui.sort.key === c.id ? (ui.sort.dir === 'desc' ? ' ▼' : ' ▲') : '';
+      h2 += '<th' + (i === 0 ? ' class="stick-l"' : '') + ' data-sort="' + esc(c.id) + '">' + esc(c.title) + arrow + '</th>';
+      if (c.fl || c.ft) {
+        var vals = {}; rows.forEach(function (r) { if (!isBaseRow(r)) vals[c.ft(r)] = 1; });
+        var opts = Object.keys(vals).sort(function (a, b) { return a.localeCompare(b, undefined, { numeric: true }); });
+        h3 += '<th' + (i === 0 ? ' class="stick-l"' : '') + '><select data-f="' + esc(c.id) + '"><option value="">All</option>' +
+          opts.map(function (v) { return '<option value="' + esc(v) + '"' + (filt[c.id] === v ? ' selected' : '') + '>' + esc(v) + '</option>'; }).join('') + '</select></th>';
+      } else h3 += '<th' + (i === 0 ? ' class="stick-l"' : '') + '></th>';
+    });
+    h2 += '</tr>'; h3 += '</tr>';
+
+    var body = '';
+    list.forEach(function (r, ri) {
+      var isBase = isBaseRow(r);
+      body += '<tr class="data' + (isBase ? ' base' : '') + '" data-ri="' + ri + '">';
+      cols.forEach(function (c, i) {
+        var t = c.txt(r);
+        if (isBase && i < P_COLS.length) t = i === 0 ? (r.Id === 'baseline_end' ? 'Baseline at the end (idle PC)' : 'Baseline (idle PC)') : '-';
+        body += '<td' + (i === 0 ? ' class="stick-l"' : (c.left ? ' class="l"' : '')) + '>' + t + '</td>';
+      });
+      body += '</tr>';
+    });
+    if (!list.length) body = '<tr><td colspan="' + cols.length + '" class="note">No row matches the filters.</td></tr>';
+    tbl.innerHTML = '<thead>' + h1 + h2 + h3 + '</thead><tbody>' + body + '</tbody>';
+    tbl._ncols = cols.length;
+    // sticky offsets
+    var trs = tbl.querySelectorAll('thead tr'), top = 0;
+    for (var k = 0; k < trs.length; k++) {
+      var ths = trs[k].children; for (var q = 0; q < ths.length; q++) ths[q].style.top = top + 'px';
+      top += trs[k].offsetHeight;
+    }
+  }
+  $('grid').addEventListener('click', function (e) {
+    var t = e.target;
+    var g = t.closest && t.closest('.gtoggle');
+    if (g) { var id = g.getAttribute('data-g'); ui.groups[id] = !ui.groups[id]; saveUi(); renderResult(); return; }
+    if (t.tagName === 'SELECT' || t.tagName === 'OPTION') return;
+    var th = t.closest && t.closest('tr.r2 th');
+    if (th) {
+      var k = th.getAttribute('data-sort');
+      if (ui.sort && ui.sort.key === k) ui.sort = ui.sort.dir === 'asc' ? { key: k, dir: 'desc' } : null; else ui.sort = { key: k, dir: 'asc' };
+      saveUi(); renderResult(); return;
+    }
+    var tr = t.closest && t.closest('tr.data');
+    if (tr) toggleDetail(tr);
+  });
+  $('grid').addEventListener('change', function (e) {
+    var f = e.target.getAttribute && e.target.getAttribute('data-f');
+    if (!f) return;
+    ui.filters = ui.filters || {}; if (e.target.value) ui.filters[f] = e.target.value; else delete ui.filters[f];
+    saveUi(); renderResult();
+  });
+  function kv(k, v) { return '<div class="kv"><span>' + esc(k) + '</span><span>' + esc(v == null || v === '' ? '-' : v) + '</span></div>'; }
+  function toggleDetail(tr) {
+    var nx = tr.nextSibling;
+    if (nx && nx.className === 'detail') { nx.parentNode.removeChild(nx); return; }
+    var r = shown[parseInt(tr.getAttribute('data-ri'), 10)]; if (!r) return;
+    var l = r.Load, s = r.Stream, h = '<div class="detail-grid">';
+    h += '<div><h4>Test</h4>' + kv('Label', r.Label) + kv('Id', r.Id) + kv('Role', r.Role) + kv('Status', r.Status) + kv('Message', r.Message) + kv('Encoder', r.Encoder) + kv('Timestamp', r.Timestamp) + kv('Measure (s)', r.MeasureSec) + kv('Elapsed (s)', r.ElapsedSec) + '</div>';
+    if (l) {
+      h += '<div><h4>Load</h4>' + kv('Samples', l.Samples) + kv('Stream CPU avg %', num(l.StreamCpuAvg)) + kv('Stream CPU peak %', num(l.StreamCpuPeak)) + kv('Whole-PC CPU avg %', num(l.CpuAvg)) + kv('Whole-PC CPU peak %', num(l.CpuPeak)) + kv('RAM used GB', num(l.RamUsedGB, 2)) + kv('RAM peak GB', num(l.RamPeakGB, 2)) + kv('RAM used %', num(l.RamUsedPct)) + '</div>';
+      arr(l.Gpus).forEach(function (g) {
+        h += '<div><h4>GPU ' + esc(g.Index) + ' - ' + esc(g.Model) + '</h4>' + kv('Util avg %', num(g.UtilAvg)) + kv('Util peak %', num(g.UtilPeak)) + kv('3D avg %', num(g.D3Avg)) + kv('Video avg %', num(g.VideoAvg)) + kv('Encode avg %', num(g.EncodeAvg)) + kv('VRAM GB', num(g.VramGB, 2)) + '</div>';
+      });
+      Object.keys(l.Procs || {}).forEach(function (n) {
+        var p = l.Procs[n] || {}; h += '<div><h4>' + esc(n) + '</h4>' + kv('CPU avg %', num(p.CpuAvg)) + kv('Mem MB', num(p.MemMB, 0)) + '</div>';
+      });
+    }
+    if (s) h += '<div><h4>Stream</h4>' + kv('Target fps', s.TargetFps) + kv('Delivered fps', num(s.Fps)) + kv('Output fps', num(s.OutFps)) + kv('Frames', s.Frames) + kv('Drop', s.Drop) + kv('Dup', s.Dup) + kv('Speed', s.Speed == null ? '-' : num(s.Speed, 2) + 'x') + '</div>';
+    h += '</div>';
+    var d = document.createElement('tr'); d.className = 'detail';
+    d.innerHTML = '<td colspan="' + $('grid')._ncols + '">' + h + '</td>';
+    tr.parentNode.insertBefore(d, tr.nextSibling);
+  }
+  $('res-clear').addEventListener('click', function () {
+    if (!S.result || !confirm('Clear all stored benchmark results for ' + S.result.Model + '?')) return;
+    jpost('/api/benchmark/clear', { model: S.result.Model }).then(function () { S.resOpened = false; $('sec-res').open = false; loadResult(); }).catch(function () {});
+  });
+
+  /* ---------- recommendations ---------- */
+  var REC_KEYS = [['Eye', 'r-eye'], ['View', 'r-view'], ['Encoding', 'r-enc'], ['Codec', 'r-codec'], ['Fps', 'r-fps'], ['Mbps', 'r-mbps'], ['ReencodeMbps', 'r-reenc'], ['MaxSize', 'r-max']];
+  function setRecAvailable(ok) {
+    var sec = $('sec-rec');
+    sec.classList.toggle('disabled', !ok);
+    $('rec-title').textContent = ok ? 'Recommendations' : 'Please run first a benchmark';
+    if (!ok) { sec.open = false; $('rec-mode').hidden = true; }
+  }
+  $('rec-sum').addEventListener('click', function (e) { if ($('sec-rec').classList.contains('disabled')) e.preventDefault(); });
+  $('sec-rec').addEventListener('toggle', function () { if (this.classList.contains('disabled') && this.open) this.open = false; });
+
+  function gpuLabel(v) {
+    if (v === 'cpu') return 'CPU (software)';
+    var m = /^gpu:(\d+)$/.exec(v); if (!m) return v;
+    var g = arr(S.opts && S.opts.Gpus).filter(function (x) { return String(x.Index) === m[1]; })[0];
+    return 'GPU ' + m[1] + (g ? ' - ' + g.Model : '');
+  }
+  function readRecSettings() {
+    var s = {};
+    REC_KEYS.forEach(function (k) {
+      var el = $(k[1]); if (!el) return;
+      var v = el.value;
+      s[k[0]] = (k[0] === 'Fps' || k[0] === 'Mbps' || k[0] === 'ReencodeMbps' || k[0] === 'MaxSize') ? Number(v) : v;
+    });
+    return s;
+  }
+  function loadRecommend(first) {
+    if (!S.opts) return;
+    var body = { model: S.opts.Model, headsets: parseInt(($('r-n') || {}).value, 10) || 1, maxCpu: parseInt(($('r-cpu') || {}).value, 10) || S.opts.Thresholds.CpuMax, maxGpu: parseInt(($('r-gpu') || {}).value, 10) || S.opts.Thresholds.GpuMax };
+    if (!first && S.recBuilt) body.settings = readRecSettings();
+    jpost('/api/benchmark/recommend', body).then(function (j) {
+      var rec = j && j.recommendation;
+      if (!j || !j.ok || !rec || !rec.Ok) { S.rec = null; S.recBuilt = false; setRecAvailable(false); return; }
+      S.rec = rec; setRecAvailable(true);
+      var mode = rec.Mode === 'model' ? 'model' : 'measured';
+      var mb = $('rec-mode'); mb.hidden = false; mb.className = 'mode-badge ' + mode; mb.textContent = mode === 'model' ? 'Model' : 'Measured only';
+      mb.title = mode === 'model' ? 'Fitted model: any settings value can be predicted' : 'Only measured values (with interpolation)';
+      // Rebuild the controls when the mode changed, or after a fresh result load (the choices may differ).
+      if (!S.recBuilt || S.recMode !== mode || first) buildRecControls(rec, mode); else syncRecControls(rec);
+      renderEstimate(rec);
+      renderModelDetails(rec);
+      renderParList();
+    }).catch(function () {});
+  }
+  var recChanged = debounce(function () { loadRecommend(false); }, 250);
+
+  function selHtml(id, lab, opts, cur) {
+    return '<label>' + esc(lab) + '<select id="' + id + '">' + opts.map(function (o) {
+      return '<option value="' + esc(o[0]) + '"' + (String(o[0]) === String(cur) ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join('') + '</select></label>';
+  }
+  function maxOpts(c, s, mode) {
+    // -1 (merged full frame) only makes sense for a merged eye.
+    var merged = (($('r-eye') && $('r-eye').value) || s.Eye) === 'M';
+    return arr(c.MaxSizes).filter(function (v) { return v !== -1 || merged || s.MaxSize === -1; })
+      .map(function (v) { return [v, v === -1 ? 'Full frame' : (v === 0 ? 'Native' : v)]; });
+  }
+  function dlHtml(id, vals) { return '<datalist id="' + id + '">' + arr(vals).map(function (v) { return '<option value="' + esc(v) + '"></option>'; }).join('') + '</datalist>'; }
+  function buildRecControls(rec, mode) {
+    var c = rec.Choices || {}, s = rec.Settings || {}, t = S.opts.Thresholds || {};
+    var model = mode === 'model';
+    var keepN = $('r-n') ? $('r-n').value : '1';
+    var keepCpu = $('r-cpu') ? $('r-cpu').value : (t.CpuMax || 80), keepGpu = $('r-gpu') ? $('r-gpu').value : (t.GpuMax || 80);
+    var h = '<label>Headsets in parallel<div class="inl"><input type="range" id="r-nr" min="1" max="64" value="' + esc(keepN) + '"><input type="number" id="r-n" min="1" max="64" value="' + esc(keepN) + '"></div></label>';
+    h += selHtml('r-eye', 'Eye', arr(c.Eyes).map(function (e) { return [e, e === 'M' ? 'Merged' : 'Single eye']; }), s.Eye);
+    h += selHtml('r-view', 'View', arr(c.Views).map(function (v) { return [v, v]; }), s.View);
+    h += selHtml('r-enc', 'Encoding', arr(c.Encodings).map(function (v) { return [v, gpuLabel(v)]; }), s.Encoding);
+    h += selHtml('r-codec', 'Codec', arr(c.Codecs).map(function (v) { return [v, String(v).toUpperCase()]; }), s.Codec);
+    if (model) {
+      h += '<label>FPS<input type="number" id="r-fps" min="1" max="240" list="dl-fps" value="' + esc(s.Fps) + '">' + dlHtml('dl-fps', c.Fps) + '</label>';
+      h += '<label>Capture Mb/s<input type="number" id="r-mbps" min="1" max="200" step="1" list="dl-mbps" value="' + esc(s.Mbps) + '">' + dlHtml('dl-mbps', c.Mbps) + '</label>';
+      h += '<label>Re-encode Mb/s<input type="number" id="r-reenc" min="1" max="200" step="1" list="dl-reenc" value="' + esc(s.ReencodeMbps) + '">' + dlHtml('dl-reenc', c.ReencodeMbps) + '</label>';
+    } else {
+      h += '<label>FPS <span id="r-fps-i" class="txt"></span><input type="number" id="r-fps" min="1" max="240" value="' + esc(s.Fps) + '"></label>';
+      h += '<label>Capture Mb/s <span id="r-mbps-i" class="txt"></span><input type="number" id="r-mbps" min="1" max="200" step="1" value="' + esc(s.Mbps) + '"></label>';
+      h += selHtml('r-reenc', 'Re-encode Mb/s', arr(c.ReencodeMbps).map(function (v) { return [v, v + ' Mb/s']; }), s.ReencodeMbps);
+    }
+    h += selHtml('r-max', 'Max size', maxOpts(c, s, mode), s.MaxSize);
+    h += '<label>Max CPU % <div class="inl"><input type="range" id="r-cpu" min="10" max="100" value="' + esc(keepCpu) + '"><span class="txt" id="r-cpu-l"></span></div></label>';
+    h += '<label>Max GPU % <div class="inl"><input type="range" id="r-gpu" min="10" max="100" value="' + esc(keepGpu) + '"><span class="txt" id="r-gpu-l"></span></div></label>';
+    $('rec-inputs').innerHTML = h; S.recBuilt = true; S.recMode = mode;
+    function limLbl() {
+      $('r-cpu-l').textContent = $('r-cpu').value + '%' + (Number($('r-cpu').value) === t.CpuMax ? ' default (VQA max)' : '');
+      $('r-gpu-l').textContent = $('r-gpu').value + '%' + (Number($('r-gpu').value) === t.GpuMax ? ' default (VQA max)' : '');
+    }
+    limLbl();
+    $('r-nr').addEventListener('input', function () { $('r-n').value = this.value; recChanged(); });
+    $('r-n').addEventListener('input', function () { var v = Math.max(1, Math.min(64, parseInt(this.value, 10) || 1)); $('r-nr').value = v; recChanged(); });
+    $('r-cpu').addEventListener('input', function () { limLbl(); recChanged(); });
+    $('r-gpu').addEventListener('input', function () { limLbl(); recChanged(); });
+    REC_KEYS.forEach(function (k) { $(k[1]).addEventListener('input', recChanged); $(k[1]).addEventListener('change', recChanged); });
+  }
+  function syncRecControls(rec) {
+    var s = rec.Settings || {};
+    // The max-size list depends on the eye (-1 = merged full frame).
+    var mx = $('r-max');
+    if (mx && S.recMode === 'model' && document.activeElement !== mx) {
+      var o = maxOpts(rec.Choices || {}, s, 'model');
+      mx.innerHTML = o.map(function (x) { return '<option value="' + esc(x[0]) + '">' + esc(x[1]) + '</option>'; }).join('');
+    }
+    REC_KEYS.forEach(function (k) { var el = $(k[1]); if (el && document.activeElement !== el && s[k[0]] != null) el.value = s[k[0]]; });
+  }
+  function bar(label, pct, lim, band) {
+    var over = pct != null && pct > lim, w = Math.max(0, Math.min(100, pct || 0));
+    var hasBand = band != null && pct != null && band > 0;
+    var lo = hasBand ? Math.max(0, pct - band) : 0, hi = hasBand ? Math.min(100, pct + band) : 0;
+    return '<div class="ebar"><div class="t"><span>' + esc(label) + '</span><span class="' + (over ? 'c-red' : '') + '">' + num(pct) + ' %' + (hasBand ? ' +/- ' + num(band) : '') + '</span></div>' +
+      '<div class="track"><div class="fill' + (over ? ' over' : '') + '" style="width:' + w + '%"></div>' +
+      (hasBand ? '<div class="band" style="left:' + lo + '%;width:' + Math.max(0, hi - lo) + '%"></div>' : '') +
+      '<div class="mark" style="left:' + Math.min(100, lim) + '%" title="Limit ' + lim + '%"></div></div></div>';
+  }
+  function sizeLine(e) {
+    if (e.W == null || e.H == null) return '';
+    return 'Picture ' + num(e.W, 0) + ' x ' + num(e.H, 0) + (e.PixelRate != null ? ', ' + num(e.PixelRate) + ' Mpx/s' : '');
+  }
+  function renderModelDetails(rec) {
+    var d = $('rec-model');
+    if (rec.Mode !== 'model' || !rec.Model) { d.hidden = true; return; }
+    var m = rec.Model, fam = arr(m.Families);
+    var h = '<div class="note" style="margin-bottom:6px">Reference: ' + esc(num(m.RefMbps, 0)) + ' Mb/s capture, ' + esc(num(m.RefReencode, 0)) + ' Mb/s re-encode</div>';
+    h += '<table class="small"><thead><tr><th>Key</th><th>Encoder</th><th>Points</th><th>Merged</th><th>Measured range (Mpx/s)</th><th>CPU fit error</th><th>GPU fit errors</th></tr></thead><tbody>';
+    h += fam.map(function (f) {
+      var gr = arr(f.GpuRmse).map(function (g) { return 'GPU ' + g.Index + ': ' + num(g.Rmse, 2); }).join(', ');
+      return '<tr><td>' + esc(f.Key) + '</td><td>' + esc(f.Encoder || '-') + '</td><td>' + esc(f.Points == null ? '-' : f.Points) + '</td><td>' + (f.Merged ? 'yes' : 'no') +
+        '</td><td>' + num(f.XMin) + ' .. ' + num(f.XMax) + '</td><td>' + num(f.CpuRmse, 2) + '</td><td>' + esc(gr || '-') + '</td></tr>';
+    }).join('');
+    h += '</tbody></table>';
+    $('rec-model-body').innerHTML = h; d.hidden = false;
+  }
+  function renderEstimate(rec) {
+    var e = rec.Estimate || {}, lim = rec.Limits || {}, h = '';
+    $('r-fps-i') && ($('r-fps-i').textContent = e.Interpolated ? '(interpolated)' : '');
+    $('r-mbps-i') && ($('r-mbps-i').textContent = e.Interpolated ? '(interpolated)' : '');
+    if (e.NotMeasured) h = '<div class="note">' + esc(e.Message || 'Not measured.') + '</div>';
+    else {
+      h += bar('CPU', e.Cpu, lim.Cpu || 100, e.CpuBand);
+      arr(e.Gpus).forEach(function (g) { h += bar('GPU ' + g.Index + ' - ' + g.Model, g.Pct, lim.Gpu || 100, g.Band); });
+      var sl = sizeLine(e); if (sl) h += '<div class="note" style="margin-top:4px">' + esc(sl) + '</div>';
+      h += '<div class="est-facts"><span>RAM: <strong>' + num(e.RamGB) + ' GB</strong></span>' +
+        '<span>Max headsets at these settings: <strong>' + esc(e.MaxHeadsets == null ? '-' : e.MaxHeadsets) + '</strong></span>' +
+        '<span>WiFi capture: <strong>' + num(e.CaptureMbpsTotal) + ' Mb/s</strong> total</span>' +
+        '<span>Re-encode output: <strong>' + num(e.ReencodeMbpsPerViewer) + ' Mb/s</strong> per viewer</span></div>';
+      if (e.FpsOk === false) h += '<div class="c-orange" style="margin-top:6px;font-size:12px">Warning: the measured frame rate stayed under the target (ratio ' + num(e.FpsRatio, 2) + ').</div>';
+      if (e.InRange === false) h += '<div class="rec-warn">Outside the measured range - extrapolated, run a benchmark that covers it</div>';
+      if (e.FpsRisk) h += '<div class="rec-warn">Frame rate fell under 90% of target at this load in the tests</div>';
+      if (e.SessionCap > 0) h += '<div class="note" style="margin-top:6px">NVENC session limit: ' + esc(e.SessionCap) + ' streams</div>';
+    }
+    if (rec.Note) h += '<div class="note" style="margin-top:6px">' + esc(rec.Note) + '</div>';
+    $('rec-est').innerHTML = h;
+    var props = arr(rec.Proposals);
+    $('rec-props').innerHTML = props.length ? props.map(function (p, i) {
+      var pe = p.Estimate || {};
+      return '<div class="prop"><div class="ttl">' + esc(p.Label) + '</div>' +
+        (sizeLine(pe) ? '<div class="note">' + esc(sizeLine(pe)) + '</div>' : '') +
+        '<div>CPU: ' + num(pe.Cpu) + ' %' + (pe.CpuBand != null ? ' +/- ' + num(pe.CpuBand) : '') + '</div>' +
+        arr(pe.Gpus).map(function (g) { return '<div>GPU ' + esc(g.Index) + ': ' + num(g.Pct) + ' %' + (g.Band != null ? ' +/- ' + num(g.Band) : '') + '</div>'; }).join('') +
+        '<div>Max headsets: ' + esc(pe.MaxHeadsets == null ? '-' : pe.MaxHeadsets) + '</div>' +
+        '<div><span class="pill ' + (p.Fits ? 'pill-green' : 'pill-red') + '">' + (p.Fits ? 'Fits' : 'Does not fit') + '</span></div>' +
+        '<button type="button" class="comp-refresh-btn go" data-p="' + i + '">Apply</button></div>';
+    }).join('') : '<div class="note">No proposal for these limits.</div>';
+  }
+  $('rec-props').addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('button[data-p]'); if (!b) return;
+    var p = arr(S.rec && S.rec.Proposals)[parseInt(b.getAttribute('data-p'), 10)]; if (p) openApply(p);
+  });
+
+  function openApply(p) {
+    var model = S.opts.Model;
+    var hs = S.headsets.filter(function (h) { return h.model === model; });
+    var wrap = document.createElement('div');
+    wrap.innerHTML = '<div class="bench-modal-text">Apply <strong>' + esc(p.Label) + '</strong> to:</div>' +
+      '<div class="bench-modal-list">' + (hs.length ? hs.map(function (h) { return '<label><input type="checkbox" checked data-hid="' + esc(h.id) + '"> ' + esc(h.name) + '</label>'; }).join('') : 'No registered headset of this model.') + '</div>' +
+      '<div class="bench-modal-text" id="ap-out"></div>';
+    function ids() { return Array.prototype.map.call(wrap.querySelectorAll('input[data-hid]:checked'), function (i) { return parseInt(i.getAttribute('data-hid'), 10); }); }
+    function out(html) { wrap.querySelector('#ap-out').innerHTML = html; }
+    function post(preview) { return jpost('/api/benchmark/apply', { model: model, settings: p.Settings, headsetIds: ids(), preview: preview }); }
+    var cancel = { label: 'Cancel', fn: function (m) { m.close(); } };
+    function previewAct() {
+      return { label: 'Preview changes', cls: 'go', fn: function (m) {
+        if (!ids().length) { out('<span class="c-red">Select at least one headset.</span>'); return; }
+        post(true).then(function (j) {
+          if (!j || !j.ok) { out('<span class="c-red">' + esc((j && j.error) || 'Preview failed') + '</span>'); return; }
+          var ch = arr(j.changes);
+          out(ch.length ? '<div class="bench-modal-list">' + ch.map(function (c) { return '<div>' + esc(c) + '</div>'; }).join('') + '</div>' : 'No change.');
+          m.setActions([cancel, { label: 'Confirm', cls: 'go', fn: function (m2) {
+            post(false).then(function (r) {
+              if (!r || !r.ok) { out('<span class="c-red">' + esc((r && r.error) || 'Apply failed') + '</span>'); return; }
+              out('<span class="c-green">Applied - streams restart now.</span>'); m2.setActions([{ label: 'Close', fn: function (m3) { m3.close(); } }]);
+            }).catch(function () { out('<span class="c-red">Request failed.</span>'); });
+          } }]);
+        }).catch(function () { out('<span class="c-red">Request failed.</span>'); });
+      } };
+    }
+    openModal('Apply recommendation', wrap, [cancel, previewAct()]);
+  }
+
+  /* ---------- parallel check ---------- */
+  S.parOff = {};      // headset ids the operator un-ticked
+  S.parResult = null;
+  var parSig = '';
+  function readyHeadsets() { return S.headsets.filter(isReady); }
+  function renderParList() {
+    var el = $('par-list'); if (!el) return;
+    var rd = readyHeadsets();
+    var sig = rd.map(function (h) { return h.id + ':' + h.name + ':' + (S.parOff[h.id] ? 0 : 1); }).join('|');
+    if (sig !== parSig) {
+      parSig = sig;
+      el.innerHTML = rd.length ? rd.map(function (h) {
+        return '<label><input type="checkbox" data-pid="' + esc(h.id) + '"' + (S.parOff[h.id] ? '' : ' checked') + '> ' + esc(h.name) + (h.model ? ' <span class="note">' + esc(h.model) + '</span>' : '') + '</label>';
+      }).join('') : '<span class="note">No headset is ready (ping and ADB).</span>';
+    }
+    updateParBtn();
+  }
+  function parIds() {
+    return Array.prototype.map.call($('par-list').querySelectorAll('input[data-pid]:checked'), function (i) { return parseInt(i.getAttribute('data-pid'), 10); });
+  }
+  function updateParBtn() { var b = $('par-run'); if (b) b.disabled = S.busy || !S.rec || !parIds().length; }
+  $('par-list').addEventListener('change', function (e) {
+    var id = e.target.getAttribute && e.target.getAttribute('data-pid'); if (id == null) return;
+    if (e.target.checked) delete S.parOff[id]; else S.parOff[id] = true;
+    parSig = ''; renderParList();
+  });
+  $('par-run').addEventListener('click', function () {
+    var ids = parIds(); if (!ids.length || !S.rec) return;
+    var m = parseInt($('par-measure').value, 10) || 20;
+    var settings = readRecSettings();
+    var names = ids.map(function (id) { var h = S.headsets.filter(function (x) { return Number(x.id) === id; })[0]; return h ? h.name : String(id); });
+    var live = S.headsets.filter(function (x) { return x.scrcpy; });
+    var body = '<div class="bench-modal-text"><strong>All current streams will be disconnected during the parallel check.</strong></div>';
+    if (live.length) body += '<div class="bench-modal-list">' + live.map(function (x) { return '<div>' + esc(x.name) + '</div>'; }).join('') + '</div>';
+    body += '<div class="bench-modal-text"><strong>' + ids.length + '</strong> headset' + (ids.length > 1 ? 's' : '') + ': ' + esc(names.join(', ')) + '<br>Rough duration: about <strong>' + esc(fmtDur(2 * m + 60)) + '</strong></div>';
+    openModal('Run the parallel check?', htmlNode(body), [
+      { label: 'Cancel', fn: function (mm) { mm.close(); } },
+      { label: 'Run', cls: 'go', fn: function (mm) {
+        mm.close(); showMsg('', '');
+        jpost('/api/benchmark/parallel', { ids: ids, settings: settings, measureSec: m }).then(function (j) {
+          if (j && j.ok) { S.busy = true; S.activeKind = 'parallel'; applyBusy(); pollProgress(); }
+          else showMsg('err', (j && j.error) || 'Could not start the parallel check.');
+        }).catch(function () { showMsg('err', 'Start request failed.'); });
+      } }
+    ]);
+  });
+  function gpuName(i) {
+    var g = arr(S.opts && S.opts.Gpus).filter(function (x) { return x.Index === i; })[0];
+    return 'GPU ' + i + (g && g.Model ? ' - ' + g.Model : '');
+  }
+  function ratioCell(v) {
+    if (v == null || isNaN(v)) return '-';
+    var c = (v >= 0.8 && v <= 1.2) ? 'c-green' : ((v > 1.2 && v <= 1.5) || (v >= 0.6 && v < 0.8) ? 'c-orange' : 'c-red');
+    return '<span class="' + c + '">' + Number(v).toFixed(2) + '</span>';
+  }
+  function loadParallel() {
+    return jget('/api/benchmark/parallel/result').then(function (j) {
+      S.parResult = (j && j.ok && j.result) ? j.result : null; renderParallel();
+    }).catch(function () {});
+  }
+  function renderParallel() {
+    var el = $('par-res'), r = S.parResult;
+    if (!r) { el.innerHTML = ''; return; }
+    var s = r.Settings || {}, b = r.Baseline || {}, m = r.Measured || {}, p = r.Predicted || {}, rt = r.Ratio || {};
+    var h = '<div class="note" style="margin-bottom:6px">Last parallel check: ' + esc(r.Timestamp || '-') + (r.Host ? ' - ' + esc(r.Host) : '') + ' - window ' + esc(r.MeasureSec == null ? '-' : r.MeasureSec) + ' s - status ' + esc(r.Status || '-') + '</div>';
+    if (r.Error) h += '<div class="c-red" style="font-size:12px;margin-bottom:6px">' + esc(r.Error) + '</div>';
+    h += '<div class="note" style="margin-bottom:6px">Settings: ' + esc((s.Eye === 'M' ? 'Merged' : 'Single eye') + ', ' + (s.Encoding || '-') + ', ' + String(s.Codec || '-').toUpperCase() + ', ' + (s.Fps == null ? '-' : s.Fps) + ' fps, ' + (s.Mbps == null ? '-' : s.Mbps) + ' Mb/s capture, ' + (s.ReencodeMbps == null ? '-' : s.ReencodeMbps) + ' Mb/s re-encode, max size ' + (s.MaxSize === -1 ? 'full frame' : (s.MaxSize === 0 ? 'native' : (s.MaxSize == null ? '-' : s.MaxSize)))) + '</div>';
+    h += '<table class="small"><thead><tr><th>Resource</th><th>Idle</th><th>Measured (above idle)</th><th>Predicted</th><th>Ratio</th></tr></thead><tbody>';
+    h += '<tr><td>CPU (stream)</td><td>' + num(b.StreamCpu) + ' %</td><td>' + num(m.Cpu) + ' %</td><td>' + num(p.Cpu) + ' %</td><td>' + ratioCell(rt.Cpu) + '</td></tr>';
+    arr(m.Gpus).forEach(function (g) {
+      var bg = arr(b.Gpus).filter(function (x) { return x.Index === g.Index; })[0];
+      var pg = arr(p.Gpus).filter(function (x) { return x.Index === g.Index; })[0];
+      var ra = rt.Gpu ? rt.Gpu[String(g.Index)] : null;
+      h += '<tr><td>' + esc(gpuName(g.Index)) + '</td><td>' + num(bg && bg.Pct) + ' %</td><td>' + num(g.Pct) + ' %</td><td>' + num(pg && pg.Pct) + ' %</td><td>' + ratioCell(ra) + '</td></tr>';
+    });
+    h += '<tr><td>RAM</td><td>' + num(b.RamGB) + ' GB</td><td>' + num(m.RamGB) + ' GB</td><td>' + num(p.RamGB) + ' GB</td><td>-</td></tr>';
+    h += '</tbody></table>';
+    if (m.WholeCpu != null) h += '<div class="note" style="margin-top:4px">Whole-PC CPU during the check: ' + num(m.WholeCpu) + ' %</div>';
+    if (p.Ok === false || p.Note) h += '<div class="rec-warn">' + esc(p.Note || 'The prediction is not available for these settings.') + '</div>';
+    var hs = arr(r.Headsets);
+    if (hs.length) {
+      h += '<table class="small" style="margin-top:8px"><thead><tr><th>Headset</th><th>View</th><th>Started</th><th>Delivered fps / target</th></tr></thead><tbody>';
+      h += hs.map(function (x) {
+        var ratio = x.TargetFps ? x.Fps / x.TargetFps : 1, c = x.Fps == null ? '' : (ratio >= 0.9 ? 'c-green' : (ratio >= 0.7 ? 'c-orange' : 'c-red'));
+        return '<tr><td>' + esc(x.Name || x.ID) + '</td><td>' + esc(x.View || '-') + '</td><td>' + (x.Started ? 'yes' : '<span class="c-red">no</span>') + '</td><td><span class="' + c + '">' + num(x.Fps) + '</span> / ' + esc(x.TargetFps == null ? '-' : x.TargetFps) + '</td></tr>';
+      }).join('');
+      h += '</tbody></table>';
+    }
+    el.innerHTML = h;
+  }
+
+  /* ---------- boot ---------- */
+  loadParallel();
+  // Always watch progress: attaches to a run already in progress, and keeps polling (slowly)
+  // while idle so a run started anywhere refreshes the results here when it ends.
+  loadHeadsets().then(function () { pollProgress(); });
+  setInterval(function () { if (!document.hidden) loadHeadsets(); }, 5000);
+})();
+</script>
+</body>
+</html>

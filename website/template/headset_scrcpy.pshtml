@@ -37,6 +37,21 @@
         pointer-events: none;
         display: none;
       }
+      /* Capture starting / restarting: amber text with a spinner, so it reads as "coming" and not
+         as an error. */
+      #status.starting { color: #f59e0b; }
+      #status.starting::before {
+        content: '';
+        display: inline-block;
+        width: 16px; height: 16px;
+        margin-right: 10px;
+        vertical-align: -2px;
+        border-radius: 50%;
+        border: 3px solid rgba(245, 158, 11, 0.35);
+        border-top-color: #f59e0b;
+        animation: status-spin 0.8s linear infinite;
+      }
+      @keyframes status-spin { to { transform: rotate(360deg); } }
 
       /* Hover action buttons */
       #actions-left {
@@ -195,7 +210,11 @@
       // EPS-rendered constants (baked into HTML at generation time)
       var WHEP_HOST = window.location.hostname || 'localhost';
       var WHEP_URL = 'http://' + WHEP_HOST + ':<%= $mediamtx_webrtc_port %>/<%= $stream_path %>/whep';
-      var RETRY_DELAY_MS = 5000;   // retry interval when stream is unavailable
+      // Retry delays when the stream is unavailable. The page is usually loaded a few seconds
+      // BEFORE mediamtx has a publisher (it is shown as soon as scrcpy runs), so the first
+      // attempts fail with a 404 - retry fast at first, then settle at 5 s.
+      var RETRY_DELAYS_MS = [500, 1000, 2000, 5000];
+      var retryCount = 0;
       var PAUSE_WHEN_HIDDEN = <%= if ($pause_when_hidden) { 'true' } else { 'false' } %>;
       var PAUSE_DELAY_MS = <%= $pause_when_hidden_delay_sec %> * 1000;
 
@@ -204,20 +223,77 @@
       var pc = null;
       var retryTimer = null;
 
-      function showStatus(msg) {
+      function showStatus(msg, starting) {
         if (msg) {
           statusEl.textContent = msg;
+          statusEl.className = starting ? 'starting' : '';
           statusEl.style.display = 'block';
         } else {
           statusEl.style.display = 'none';
           statusEl.textContent = '';
+          statusEl.className = '';
         }
+      }
+
+      // ---- Capture state: "starting" is not "unavailable" ----
+      // While there is no picture the page used to say "Stream unavailable - retrying..." whether
+      // the capture was being (re)started or had been stopped, so a kill / profile change looked
+      // like a failure until the logo came back. The server knows (scrcpy_starting, set by the
+      // process that starts the capture): the page asks for it while it has no picture, and a
+      // little more slowly otherwise to notice a restart that is about to drop the stream.
+      var CAPTURE_ID = '<%= $headset_id %>';
+      var capture = { starting: false, scrcpy: true, autoRestart: false, known: false };
+      var capturePollTimer = null;
+      var hasPicture = false;
+
+      function noPictureMessage() {
+        if (capture.starting) { return ['Capture starting...', true]; }
+        if (capture.known && !capture.scrcpy && !capture.autoRestart) { return ['Capture stopped', false]; }
+        return ['Stream unavailable - retrying...', false];
+      }
+
+      function pollCaptureState() {
+        if (capturePollTimer) { clearTimeout(capturePollTimer); capturePollTimer = null; }
+        if (!CAPTURE_ID) { return; }
+        // Hidden tab (stream paused on purpose): nothing to show, do not poll at the fast rate.
+        if (pausedForVisibility) { capturePollTimer = setTimeout(pollCaptureState, 4000); return; }
+        fetch('/api/headset-status?id=' + encodeURIComponent(CAPTURE_ID) + '&_=' + Date.now(), { cache: 'no-store' })
+          .then(function(r) { return r.ok ? r.json() : null; })
+          .then(function(j) {
+            if (!j) { return; }
+            var wasStarting = capture.starting;
+            capture.starting    = !!j.scrcpy_starting;
+            capture.scrcpy      = j.scrcpy !== false;
+            capture.autoRestart = !!j.scrcpy_auto_restart;
+            capture.known       = true;
+            if (document.hidden && pausedForVisibility) { return; }
+            if (capture.starting && hasPicture) {
+              // The stream is about to be replaced: say so over the frozen last picture.
+              showStatus('Capture restarting...', true);
+            } else if (!capture.starting && wasStarting && hasPicture) {
+              // The restart is over. A session that mediamtx terminated stays "connected" in the
+              // browser; make the stall watch decide within ~2 s instead of 8 s.
+              showStatus('');
+              stallLastChange = Math.min(stallLastChange, Date.now() - STALL_MS + 2000);
+            } else if (!hasPicture) {
+              var m = noPictureMessage();
+              showStatus(m[0], m[1]);
+              // The capture just came up: do not sit out the retry delay.
+              if (wasStarting && !capture.starting && capture.scrcpy) { connect(); }
+            }
+          })
+          .catch(function() {})
+          .finally(function() {
+            capturePollTimer = setTimeout(pollCaptureState, (hasPicture && !capture.starting) ? 4000 : 1000);
+          });
       }
 
       function cleanup() {
         if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+        stopStallWatch();
         if (pc) {
           pc.oniceconnectionstatechange = null;
+          pc.onconnectionstatechange = null;
           pc.ontrack = null;
           try { pc.close(); } catch (_) {}
           pc = null;
@@ -226,13 +302,19 @@
 
       function scheduleRetry() {
         cleanup();
-        showStatus('Stream unavailable - retrying...');
-        retryTimer = setTimeout(connect, RETRY_DELAY_MS);
+        hasPicture = false;
+        var m = noPictureMessage();
+        showStatus(m[0], m[1]);
+        var delay = RETRY_DELAYS_MS[Math.min(retryCount, RETRY_DELAYS_MS.length - 1)];
+        retryCount++;
+        retryTimer = setTimeout(connect, delay);
       }
 
       async function connect() {
         cleanup();
-        showStatus('Connecting...');
+        hasPicture = false;
+        if (capture.starting) { var ms = noPictureMessage(); showStatus(ms[0], ms[1]); }
+        else { showStatus('Connecting...'); }
         try {
           pc = new RTCPeerConnection();
 
@@ -244,13 +326,24 @@
           pc.ontrack = function(evt) {
             if (evt.streams && evt.streams[0]) {
               videoEl.srcObject = evt.streams[0];
+              retryCount = 0;   // a later drop starts the fast retries again
+              hasPicture = true;
               showStatus('');
+              refreshStreamMask();   // a new stream may come with another view
+              startStallWatch();
             }
           };
 
           // Reconnect automatically if the ICE connection drops
           pc.oniceconnectionstatechange = function() {
             var s = pc.iceConnectionState;
+            if (s === 'failed' || s === 'disconnected' || s === 'closed') {
+              scheduleRetry();
+            }
+          };
+          // Same for the overall (DTLS) connection state, which a server-side close can reach first.
+          pc.onconnectionstatechange = function() {
+            var s = pc.connectionState;
             if (s === 'failed' || s === 'disconnected' || s === 'closed') {
               scheduleRetry();
             }
@@ -288,6 +381,48 @@
         }
       }
 
+      // ---- Stall watch: reconnect when no video arrives any more ----
+      // When the stream restarts on the server (recording toggled, profile changed, watchdog
+      // restart), mediamtx terminates this viewer session from ITS side ("closed: terminated").
+      // Seen live: the browser kept both connection states at "connected", no retry ever fired and
+      // the page stayed frozen on its last picture until reloaded. So the incoming RTP is checked
+      // every 2 s (getStats): no new packet for STALL_MS -> reconnect. A live stream never goes that
+      // long without a packet, even on a still picture: a re-encoded one keeps a constant frame rate
+      // and scrcpy itself repeats the last frame (~every 100 ms) when the screen does not change.
+      var STALL_MS = 8000;
+      var stallTimer = null;
+      var stallLastPackets = -1;
+      var stallLastChange = 0;
+
+      function stopStallWatch() {
+        if (stallTimer) { clearInterval(stallTimer); stallTimer = null; }
+        stallLastPackets = -1;
+      }
+
+      function startStallWatch() {
+        stopStallWatch();
+        stallLastChange = Date.now();
+        var watched = pc;
+        stallTimer = setInterval(function() {
+          if (!pc || pc !== watched) { stopStallWatch(); return; }
+          pc.getStats().then(function(stats) {
+            if (pc !== watched) { return; }
+            var packets = 0;
+            stats.forEach(function(r) {
+              if (r.type === 'inbound-rtp' && (r.kind === 'video' || r.mediaType === 'video')) { packets += (r.packetsReceived || 0); }
+            });
+            var now = Date.now();
+            if (packets !== stallLastPackets) { stallLastPackets = packets; stallLastChange = now; return; }
+            if (now - stallLastChange >= STALL_MS) {
+              hasPicture = false;
+              if (capture.starting) { var mi = noPictureMessage(); showStatus(mi[0], mi[1]); }
+              else { showStatus('Stream interrupted - reconnecting...'); }
+              connect();
+            }
+          }).catch(function() {});
+        }, 2000);
+      }
+
       // ---- Pause the stream when the browser tab/window is hidden ----
       var hiddenPauseTimer = null;
       var pausedForVisibility = false;
@@ -313,9 +448,47 @@
 
       document.addEventListener('visibilitychange', onVisibilityChange);
 
+      // ---- Transparent outside the lenses (view option "transparent_corners") ----
+      // The stream itself cannot carry transparency (H.264/HEVC have no alpha), so the server
+      // publishes a mask PNG of the lens area (GET /api/stream-mask) and it is applied here with CSS
+      // mask-image. "contain" sizing matches the video's object-fit: contain, so the mask lands
+      // exactly on the picture; outside it (letterbox included) the page is transparent - which is
+      // what an OBS Browser Source shows. The image is preloaded first: a mask-image that has not
+      // loaded yet hides the whole element.
+      var _maskUrl = '';
+      function applyStreamMask(url) {
+        var props = url
+          ? { image: 'url("' + url + '")', size: 'contain', position: 'center', repeat: 'no-repeat' }
+          : { image: 'none', size: '', position: '', repeat: '' };
+        ['webkitMask', 'mask'].forEach(function(p) {
+          videoEl.style[p + 'Image']    = props.image;
+          videoEl.style[p + 'Size']     = props.size;
+          videoEl.style[p + 'Position'] = props.position;
+          videoEl.style[p + 'Repeat']   = props.repeat;
+        });
+        videoEl.style.background = url ? 'transparent' : '';
+      }
+      function refreshStreamMask() {
+        if (!TIMER_ID) return;
+        fetch('/api/stream-mask?id=' + encodeURIComponent(TIMER_ID) + '&_=' + Date.now())
+          .then(function(r) { return r.json(); })
+          .then(function(j) {
+            var url = (j && j.mask && j.url) ? j.url : '';
+            if (url === _maskUrl) return;
+            if (!url) { _maskUrl = ''; applyStreamMask(''); return; }
+            var img = new Image();
+            img.onload = function() { _maskUrl = url; applyStreamMask(url); };
+            img.src = url;
+          })
+          .catch(function() {});
+      }
+      setInterval(refreshStreamMask, 15000);
+
       // Start as soon as the DOM is ready
       document.addEventListener('DOMContentLoaded', function() {
+        pollCaptureState();
         connect();
+        refreshStreamMask();
 
         var inIframe = (window.self !== window.top);
         var noOverlay = new URLSearchParams(window.location.search).get('nooverlay') === '1';

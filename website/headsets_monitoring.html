@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="assets/topbar.css">
   <link rel="stylesheet" href="assets/vendor/uplot/uPlot.min.css">
   <script src="assets/topbar.js"></script>
+  <script src="assets/live_events.js"></script>
   <!-- Loaded here, not at the end of <body>: renderTable() calls into
        BatteryChart on the first poll, which can land before a deferred script. -->
   <script src="assets/vendor/uplot/uPlot.iife.min.js"></script>
@@ -405,14 +406,14 @@
             <th>Ctrl L</th>
             <th>Ctrl R</th>
             <th>Temp</th>
-            <th title="Hottest CPU sensor (dumpsys thermalservice)">CPU</th>
+            <th>CPU</th>
             <th>Model</th>
             <th>Running App</th>
             <th></th>
           </tr>
         </thead>
         <tbody id="table-body">
-          <tr><td colspan="17" id="empty-msg">Loading...</td></tr>
+          <tr><td colspan="16" id="empty-msg">Loading...</td></tr>
         </tbody>
       </table>
     </div>
@@ -568,7 +569,7 @@
     // history page. Falls back to plain text when there is no reading or no id to
     // address - a dash is not worth a control.
     //
-    // Shared by the Battery, Temp, CPU temp, Controller L/R and Charging power cells.
+    // Shared by the Battery, Temp, Controller L/R and Charging power cells.
     // The bar is drawn only for percent metrics: "width: 36%" is a meaningful fill for a
     // battery and a meaningless one for 36 degrees or 15 watts.
     function metricButton(r, metric, raw) {
@@ -638,8 +639,7 @@
           '<td><strong>' + esc(r['name'] || '') + '</strong></td>' +
           '<td style="font-family:monospace;font-size:12px">' + esc(r['ip_address'] || '') + '</td>' +
           '<td class="center">' + pill(pingOk ? 'OK' : 'KO', pingOk ? 'pill-green' : 'pill-red') + '</td>' +
-          // OK becomes USB / WiFi: the transport the poll loop used (ADR-0024, proposed).
-          '<td class="center">' + pill(adbOk ? (r['adb_transport'] || 'OK') : 'KO', adbOk ? 'pill-green' : 'pill-red') + '</td>' +
+          '<td class="center">' + pill(adbOk  ? ('OK' + (r['adb_transport'] ? ' ' + r['adb_transport'] : '')) : 'KO', adbOk  ? 'pill-green' : 'pill-red') + '</td>' +
           '<td class="center">' + pill(scrcpyOk ? 'OK' : 'OFF', scrcpyOk ? 'pill-blue' : 'pill-orange') + '</td>' +
           '<td class="center">' + chargingCell + '</td>' +
           '<td class="center">' + powerPill + '</td>' +
@@ -1255,6 +1255,9 @@
     // first paint so a cell is never coloured on the fallback values and then silently
     // recoloured a few seconds later. loadThresholds always resolves.
     MetricChart.loadThresholds().finally(statusLoop);
+    // Push (ADR-0020): re-fetch as soon as the monitor writes a status change. The timer
+    // above stays as the fallback when the push channel is unavailable.
+    if (window.LiveEvents) { LiveEvents.subscribe('headset_status', pollHeadsetsStatus); }
 
     document.getElementById('headsets-table').addEventListener('click', function(e) {
       var btn = e.target.closest('[data-launch-app]');

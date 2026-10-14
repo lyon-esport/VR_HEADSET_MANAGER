@@ -57,14 +57,39 @@
     implies "no prompts at all"), but you do not need it just to bypass the
     menu - passing the run parameters is enough.
 
+    End of run: unless -Unattended, the harness asks what to do with the app it
+    started: [Enter] keep it running and close the test window (default),
+    [Q] or [K] stop it, [R] retry chosen sections without restarting.
+
+    Generated data is NEVER deleted. At the end of a run the test folder keeps its
+    logs\, data\ (database, recordings) and config\ for troubleshooting, and a copy
+    of every log also goes into the report folder. When a later run starts on the
+    same folder, the previous run's data is MOVED to
+    <release>\nrt_runs_<app folder>\<timestamp>\ so the app folder is pristine again
+    (section 10's packaging checks need that).
+
+.PARAMETER AutoApproveSetup
+    Auto-approves the app's first-boot computer setup (firewall rules, URL ACL,
+    Windows Defender exclusion) so a new release folder starts with no keypress.
+    Exports VRHM_AUTO_APPROVE_SETUP=1 to the app; the app's setup boxes then
+    skip their "[Y or Enter] / [any key] Skip" prompt. The process-kill box
+    never auto-approves.
+
+    Windows cannot approve a UAC dialog from a non-elevated process, so a first
+    boot (no firewall state recorded yet for the target folder) REQUIRES this
+    script to be started from an ELEVATED PowerShell: the app then inherits
+    elevation and no UAC dialog is raised. Otherwise the run stops with exit 2.
+    Once the folder has been set up, elevation is no longer needed.
+    Combine with -Unattended for a fully hands-off run.
+
 .PARAMETER RestoreOnly
-    Do not run any test. Just tear down a sandbox left behind by a crashed run.
+    Do not run any test. Stop anything a crashed run left running, then move its
+    generated data to nrt_runs_<app folder>\<timestamp>\ (never deleted).
 
 .PARAMETER KeepSandbox
-    Skip the end-of-run sandbox reset, leaving config\config.json, data\ and
-    logs\ in place for post-mortem inspection. Note that the NEXT run against
-    that same folder will then fail section 10's packaging assertions, which are
-    only meaningful on a pristine extraction.
+    Do NOT move the previous run's data aside when this run starts: the new run
+    starts on top of it. Section 10's packaging assertions will then fail, since
+    they are only meaningful on a pristine extraction.
 
 .PARAMETER Force
     Allow -TargetRoot to point at the dev folder. Dangerous: the run will
@@ -80,6 +105,10 @@
 
 .EXAMPLE
     .\scripts\Invoke-NonRegressionTests.ps1 -Depth Light -Sections 10,20 -Mode Auto -Unattended
+
+.EXAMPLE
+    # From an ELEVATED PowerShell: fully hands-off first boot of a fresh release
+    .\scripts\Invoke-NonRegressionTests.ps1 -VRHMFolder "C:\path\VR_HEADSET_MANAGER.v1.2.3" -Mode Auto -Unattended -AutoApproveSetup
 #>
 param(
     [string]$VRHMFolder = '',
@@ -94,6 +123,7 @@ param(
     [string]$HeadsetName = '',
     [switch]$AllowDestructive,
     [switch]$Unattended,
+    [switch]$AutoApproveSetup,
     [switch]$RestoreOnly,
     [switch]$KeepSandbox,
     [switch]$Force
@@ -125,13 +155,14 @@ foreach ($piece in @('test_core.ps1', 'test_prompt.ps1', 'test_api.ps1', 'test_s
 $sectionRegistry = @(
     [PSCustomObject]@{ Id = 10; Title = 'Startup and packaging'; File = '10_startup.ps1';          Light = 2; Standard = 2;  Full = 2;  Operator = $false }
     [PSCustomObject]@{ Id = 20; Title = 'Web pages and API';     File = '20_webpages.ps1';         Light = 2; Standard = 3;  Full = 3;  Operator = $false }
+    [PSCustomObject]@{ Id = 25; Title = 'Timer API';             File = '25_timer_api.ps1';        Light = 1; Standard = 1;  Full = 1;  Operator = $false }
     [PSCustomObject]@{ Id = 30; Title = 'USB onboarding';        File = '30_headset_usb.ps1';      Light = 0; Standard = 5;  Full = 5;  Operator = $true  }
     [PSCustomObject]@{ Id = 40; Title = 'Registry CRUD';         File = '40_headset_registry.ps1'; Light = 1; Standard = 3;  Full = 4;  Operator = $false }
     [PSCustomObject]@{ Id = 50; Title = 'scrcpy lifecycle';      File = '50_scrcpy.ps1';           Light = 2; Standard = 8;  Full = 20; Operator = $true  }
     [PSCustomObject]@{ Id = 60; Title = 'Streaming matrix';      File = '60_streaming.ps1';        Light = 1; Standard = 10; Full = 35; Operator = $true  }
     [PSCustomObject]@{ Id = 70; Title = 'Monitoring';            File = '70_monitoring.ps1';       Light = 1; Standard = 3;  Full = 5;  Operator = $false }
     [PSCustomObject]@{ Id = 80; Title = 'Apps manager';          File = '80_apps.ps1';             Light = 0; Standard = 4;  Full = 8;  Operator = $true  }
-    [PSCustomObject]@{ Id = 85; Title = 'DIAG page and USB-first transport'; File = '85_diag_transport.ps1'; Light = 0; Standard = 10; Full = 15; Operator = $true  }
+    [PSCustomObject]@{ Id = 85; Title = 'DIAG and USB transport'; File = '85_diag_transport.ps1';   Light = 0; Standard = 6;  Full = 12; Operator = $true  }
     [PSCustomObject]@{ Id = 90; Title = 'Shutdown and reaper';   File = '90_shutdown.ps1';         Light = 1; Standard = 2;  Full = 3;  Operator = $false }
 )
 
@@ -371,7 +402,8 @@ if ($RestoreOnly) {
     if (Get-Command Remove-SandboxArtifacts -ErrorAction SilentlyContinue) {
         Remove-SandboxArtifacts -TargetRoot $target
         if (-not $KeepSandbox) {
-            Reset-SandboxTarget -TargetRoot $target -DevRoot $devRoot | Out-Null
+            # Moved aside, never deleted: the data of that run stays available for troubleshooting.
+            Reset-SandboxTarget -TargetRoot $target -DevRoot $devRoot -ArchiveTo (Get-SandboxRunArchivePath -TargetRoot $target) | Out-Null
         }
         Write-Host '  Done.' -ForegroundColor Green
         exit 0
@@ -413,7 +445,24 @@ if ($selected.Count -eq 0) {
 $plannedMinutes = 0
 foreach ($s in $selected) { $plannedMinutes += (Get-SectionEstimate -Section $s -AtDepth $Depth) }
 
+# -AutoApproveSetup: a first boot needs elevation, and a UAC dialog cannot be answered from
+# here. Fail fast rather than burn the whole startup timeout on an unanswerable prompt.
+if ($AutoApproveSetup) {
+    $isElevated = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    $fwStateKnown = $false
+    try { $fwStateKnown = ($null -ne (Get-SandboxFwStateJson -TargetRoot $target)) } catch { }
+    if (-not $isElevated -and -not $fwStateKnown) {
+        Write-Host ''
+        Write-Host 'ERROR: -AutoApproveSetup needs an elevated PowerShell on the first boot of this folder.' -ForegroundColor Red
+        Write-Host '       Windows cannot approve a UAC prompt from a non-elevated process. Start PowerShell' -ForegroundColor DarkGray
+        Write-Host '       as Administrator and re-run, or drop the flag and approve the prompt by hand.' -ForegroundColor DarkGray
+        exit 2
+    }
+    $env:VRHM_AUTO_APPROVE_SETUP = '1'
+}
+
 Initialize-TestRun -TargetRoot $target -Version $Version -Mode $Mode -Depth $Depth -ReportFolder (Join-Path $harnessRoot 'reports') | Out-Null
+$global:TestRun.AutoApproveSetup = [bool]$AutoApproveSetup
 $global:TestRun.AllowDestructive = [bool]$AllowDestructive
 $global:TestRun.HeadsetName = $HeadsetName
 # Sections 50/60 use this to decide whether prompting for a headset is allowed.
@@ -430,6 +479,8 @@ foreach ($s in $selected) {
 }
 
 $exitCode = 2
+$keepAppRunning = $false
+$summaryShown = $false
 try {
     # --- Preconditions and sandbox provisioning -----------------------------
     if (Get-Command Test-SandboxPreconditions -ErrorAction SilentlyContinue) {
@@ -444,71 +495,154 @@ try {
         Write-Host '  NOTE: test_sandbox.ps1 not present - running harness-only sections.' -ForegroundColor Yellow
     }
 
+    # --- Start from a pristine app folder, WITHOUT losing the previous run --------
+    # A run never cleans up after itself (its logs, database, recordings and config
+    # are what a failure is analysed with). So a folder that was already tested still
+    # holds that run's data; it is MOVED to nrt_runs_<app folder>\<timestamp> beside
+    # the app folder, because section 10's packaging checks need a clean extraction.
+    # Preconditions above guarantee the app is not running, so nothing is locked.
+    if ((-not $KeepSandbox) -and (Get-Command Reset-SandboxTarget -ErrorAction SilentlyContinue)) {
+        try {
+            Reset-SandboxTarget -TargetRoot $target -DevRoot $devRoot -ArchiveTo (Get-SandboxRunArchivePath -TargetRoot $target) | Out-Null
+        } catch {
+            Write-Host ("  WARNING: could not move the previous run's data aside: {0}" -f $_.Exception.Message) -ForegroundColor Yellow
+        }
+    }
+
     # --- Run sections -------------------------------------------------------
-    $runIndex = 0
-    foreach ($section in $selected) {
-        $runIndex++
-        $remaining = 0
-        foreach ($s in ($selected | Select-Object -Skip $runIndex)) {
-            $remaining += (Get-SectionEstimate -Section $s -AtDepth $Depth)
-        }
-
-        Start-TestSection -Id ([string]$section.Id) -Title $section.Title -EstimateMinutes (Get-SectionEstimate -Section $section -AtDepth $Depth) | Out-Null
-
-        $sectionFile = Join-Path (Join-Path $harnessRoot 'tests') $section.File
-        if (-not (Test-Path -LiteralPath $sectionFile)) {
-            Write-TestResult -Status 'SKIP' -Name $section.Title -Detail 'section not implemented yet'
-            $global:TestRun.Results.Add([PSCustomObject]@{
-                Section = [string]$section.Id; Name = $section.Title; Status = 'SKIP'
-                Detail = 'section not implemented yet'; Evidence = @(); Warnings = @()
-                Duration = [TimeSpan]::Zero; Override = $false; At = Get-Date
-            }) | Out-Null
-        }
-        else {
-            try {
-                . $sectionFile
+    # The app stays up between passes (sections never start or stop it), so the
+    # end-of-run prompt below can offer "retry" without a restart.
+    $toRun = @($selected)
+    $keepAppRunning = $false
+    $summaryShown = $false
+    while ($true) {
+        $runIndex = 0
+        foreach ($section in $toRun) {
+            $runIndex++
+            $remaining = 0
+            foreach ($s in ($toRun | Select-Object -Skip $runIndex)) {
+                $remaining += (Get-SectionEstimate -Section $s -AtDepth $Depth)
             }
-            catch {
-                Write-TestResult -Status 'FAIL' -Name ("{0} (section aborted)" -f $section.Title) -Detail $_.Exception.Message
+
+            Start-TestSection -Id ([string]$section.Id) -Title $section.Title -EstimateMinutes (Get-SectionEstimate -Section $section -AtDepth $Depth) | Out-Null
+
+            $sectionFile = Join-Path (Join-Path $harnessRoot 'tests') $section.File
+            if (-not (Test-Path -LiteralPath $sectionFile)) {
+                Write-TestResult -Status 'SKIP' -Name $section.Title -Detail 'section not implemented yet'
                 $global:TestRun.Results.Add([PSCustomObject]@{
-                    Section = [string]$section.Id; Name = ("{0} (section aborted)" -f $section.Title); Status = 'FAIL'
-                    Detail = $_.Exception.Message; Evidence = @(); Warnings = @()
+                    Section = [string]$section.Id; Name = $section.Title; Status = 'SKIP'
+                    Detail = 'section not implemented yet'; Evidence = @(); Warnings = @()
                     Duration = [TimeSpan]::Zero; Override = $false; At = Get-Date
                 }) | Out-Null
             }
+            else {
+                try {
+                    . $sectionFile
+                }
+                catch {
+                    Write-TestResult -Status 'FAIL' -Name ("{0} (section aborted)" -f $section.Title) -Detail $_.Exception.Message
+                    $global:TestRun.Results.Add([PSCustomObject]@{
+                        Section = [string]$section.Id; Name = ("{0} (section aborted)" -f $section.Title); Status = 'FAIL'
+                        Detail = $_.Exception.Message; Evidence = @(); Warnings = @()
+                        Duration = [TimeSpan]::Zero; Override = $false; At = Get-Date
+                    }) | Out-Null
+                }
+            }
+
+            Complete-TestSection
+            if ($remaining -gt 0) {
+                Write-Host ("    ~{0} min of tests remaining" -f $remaining) -ForegroundColor DarkGray
+            }
         }
 
-        Complete-TestSection
-        if ($remaining -gt 0) {
-            Write-Host ("    ~{0} min of tests remaining" -f $remaining) -ForegroundColor DarkGray
+        $global:TestRun.FinishedAt = Get-Date
+        $exitCode = Get-TestExitCode
+
+        # --- End-of-run choice ----------------------------------------------
+        # -Unattended means no prompts: close the app as before.
+        if ($Unattended) { break }
+
+        Write-TestSummary
+        $summaryShown = $true
+        Write-Host ''
+        Write-Host '  The app is still running. What now?' -ForegroundColor White
+        Write-Host '    [Enter] Keep the app running and close this test window (default)'
+        Write-Host '    [Q] or [K] Close (kill) the app and finish (all test data is kept)'
+        Write-Host '    [R] Retry: run one or more sections again'
+        $endChoice = Read-TestMenuChoice -Prompt '  Select' -Accept @('', 'Q', 'K', 'R') -Default ''
+
+        if ($endChoice -eq 'Q' -or $endChoice -eq 'K') { break }
+        if ($endChoice -eq '') { $keepAppRunning = $true; break }
+
+        # Retry: pick sections, drop their earlier results so the new verdict
+        # replaces the old one, then loop.
+        $retryable = @($sectionRegistry | Where-Object { (Get-SectionEstimate -Section $_ -AtDepth $Depth) -gt 0 })
+        Write-Host ''
+        Write-Host '  Sections:' -ForegroundColor Gray
+        foreach ($s in $retryable) {
+            $flag = ''
+            if ($s.Operator) { $flag = '  (needs operator)' }
+            Write-Host ("    {0}  {1}{2}" -f $s.Id, $s.Title, $flag)
         }
+        $raw = Read-Host '  Sections to retry (comma separated, empty = same as this run)'
+        $retryIds = @()
+        if ($raw -and $raw.Trim()) {
+            $retryIds = @($raw -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^\d+$' } | ForEach-Object { [int]$_ })
+        }
+        if ($retryIds.Count -gt 0) {
+            $toRun = @($retryable | Where-Object { $retryIds -contains $_.Id })
+        }
+        else {
+            $toRun = @($selected)
+        }
+        if ($toRun.Count -eq 0) {
+            Write-Host '  No matching section - nothing to retry.' -ForegroundColor Yellow
+            $toRun = @($selected)
+            continue
+        }
+        $retryKeys = @($toRun | ForEach-Object { [string]$_.Id })
+        $kept = @($global:TestRun.Results | Where-Object { $retryKeys -notcontains [string]$_.Section })
+        $keptSections = @($global:TestRun.Sections | Where-Object { $retryKeys -notcontains [string]$_.Id })
+        $global:TestRun.Sections.Clear()
+        foreach ($sec in $keptSections) { $global:TestRun.Sections.Add($sec) | Out-Null }
+        $global:TestRun.Results.Clear()
+        foreach ($r in $kept) { $global:TestRun.Results.Add($r) | Out-Null }
     }
-
-    $global:TestRun.FinishedAt = Get-Date
-    $exitCode = Get-TestExitCode
 }
 finally {
     # Teardown always runs, including on Ctrl+C.
-    if (Get-Command Stop-SandboxApp -ErrorAction SilentlyContinue) {
+    if ($AutoApproveSetup) { Remove-Item Env:\VRHM_AUTO_APPROVE_SETUP -ErrorAction SilentlyContinue }
+    if ((-not $keepAppRunning) -and (Get-Command Stop-SandboxApp -ErrorAction SilentlyContinue)) {
         try { Stop-SandboxApp -TargetRoot $target | Out-Null } catch { }
     }
 
-    # Preserve the app's log file as run evidence before Reset-SandboxTarget
-    # deletes logs\ entirely below.
+    # Copy the logs into the report folder as well, so the report is self-contained.
     if (Get-Command Save-SandboxLogs -ErrorAction SilentlyContinue) {
         try { Save-SandboxLogs -TargetRoot $target } catch { }
     }
 
-    # Restore the target to its just-extracted state so it can be tested again.
-    # Section 10's packaging assertions only hold on a pristine extraction, and
-    # the sandbox seed (config\config.json, data\) is what breaks them.
-    if ((-not $KeepSandbox) -and (Get-Command Reset-SandboxTarget -ErrorAction SilentlyContinue)) {
-        try { Reset-SandboxTarget -TargetRoot $target -DevRoot $devRoot | Out-Null } catch { }
+    # NO reset here, on purpose. The test folder exists for troubleshooting: its logs\,
+    # data\ (database, recordings) and config\ are exactly what a failure is analysed
+    # with, and wiping them at the end of the run destroyed that evidence (only the main
+    # log survived, in the report). The next run on this folder moves them aside first
+    # (see "Start from a pristine app folder" above), so nothing is ever deleted.
+    if (-not $keepAppRunning) {
+        Write-Host ''
+        Write-Host '  Everything this run generated is kept in the test folder (logs\, data\, config\):' -ForegroundColor DarkGray
+        Write-Host ("    {0}" -f $target) -ForegroundColor DarkGray
+    }
+
+    if ($keepAppRunning) {
+        Write-Host ''
+        Write-Host '  The app was left running in the test folder (the sandbox seed is still in place):' -ForegroundColor Yellow
+        Write-Host ("    {0}" -f $target) -ForegroundColor DarkGray
+        Write-Host '  To stop it (its data is moved aside, never deleted), run:' -ForegroundColor Yellow
+        Write-Host '    .\scripts\Invoke-NonRegressionTests.ps1 -RestoreOnly -VRHMFolder <that folder>' -ForegroundColor DarkGray
     }
 
     if ($null -ne $global:TestRun) {
         if (-not $global:TestRun.FinishedAt) { $global:TestRun.FinishedAt = Get-Date }
-        Write-TestSummary
+        if (-not $summaryShown) { Write-TestSummary }
 
         try {
             $txt  = Write-TestReportText
