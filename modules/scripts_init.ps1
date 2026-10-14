@@ -440,6 +440,12 @@ function Invoke-AppShutdown {
     $shutdownFlagPath   = Join-Path $global:ScriptPath "data\shutdown.flag"
     $reaperExitFlagPath = Join-Path $global:ScriptPath "data\reaper_exit.flag"
 
+    # 0. Restore VQA-applied parameters FIRST, without restarting any service:
+    #    a restart after Stop-MediaMtx would leave an orphan mediamtx behind.
+    if ($global:VQA_Enabled -and (Get-Command Restore-VqaOriginals -ErrorAction SilentlyContinue)) {
+        try { Restore-VqaOriginals -NoServiceRestart | Out-Null } catch { }
+    }
+
     # 1. Signal VRMonitor to exit its loop before we tear down services.
     try { New-Item -ItemType File -Path $shutdownFlagPath -Force | Out-Null } catch { }
 
@@ -479,11 +485,6 @@ function Invoke-AppShutdown {
     try { Stop-WebServer    } catch { }
     try { Stop-MdnsResponder } catch { }
     try { Stop-MediaMtx    } catch { }
-
-    # Restore any VQA-applied parameters back to operator originals before exit.
-    if ($global:VQA_Enabled -and (Get-Command Restore-VqaOriginals -ErrorAction SilentlyContinue)) {
-        try { Restore-VqaOriginals | Out-Null } catch { }
-    }
 
     # Close the database last, after every service that might still write to it.
     # -Checkpoint folds the WAL back into the .db so the folder is left with a

@@ -887,7 +887,8 @@ function Invoke-VqaApply {
                 if ($row) {
                     Stop-Scrcpy -HeadsetName $name -HeadsetIP $row.IPAddress | Out-Null
                     Start-Sleep -Milliseconds 500
-                    start-screenCopy -headsetIP $row.IPAddress -displayName $row.Name -scrcpyProfile $row.ScrcpyProfile
+                    $wantRecording = ((ConvertTo-DbBool $row.Record) -eq 1)
+                    start-screenCopy -headsetIP $row.IPAddress -displayName $row.Name -recording $wantRecording -scrcpyProfile $row.ScrcpyProfile
                 }
             } catch {
                 Write-Log ("VQA: failed to restart scrcpy for $name " + $_.Exception.Message) -Level WARNING
@@ -914,6 +915,11 @@ function Invoke-VqaApply {
 # (recorded in vqa_applied.json), the operator did not touch it -> safe to
 # revert. Otherwise leave it alone.
 function Restore-VqaOriginals {
+    param(
+        # Write config/registry back but never restart scrcpy or mediamtx
+        # (shutdown path: a restart there would leave an orphan mediamtx).
+        [switch]$NoServiceRestart
+    )
     if ($null -eq (Get-DbKeyValue -Key 'vqa_originals')) { return $false }
 
     $lock = Enter-VqaLock
@@ -1042,13 +1048,15 @@ function Restore-VqaOriginals {
         }
     }
 
+    if ($NoServiceRestart) { $restartProcs = @(); $restartMtx = $false }
     foreach ($name in $restartProcs) {
         try {
             $row = Get-KnownHeadsets | Where-Object { $_.Name -eq $name } | Select-Object -First 1
             if ($row -and (Get-ScrcpyProcess -displayName ($row.Name -replace ' ','_') -headsetIP $row.IPAddress)) {
                 Stop-Scrcpy -HeadsetName $name -HeadsetIP $row.IPAddress | Out-Null
                 Start-Sleep -Milliseconds 500
-                start-screenCopy -headsetIP $row.IPAddress -displayName $row.Name -scrcpyProfile $row.ScrcpyProfile
+                $wantRecording = ((ConvertTo-DbBool $row.Record) -eq 1)
+                start-screenCopy -headsetIP $row.IPAddress -displayName $row.Name -recording $wantRecording -scrcpyProfile $row.ScrcpyProfile
             }
         } catch {
             Write-Log ("VQA restore: scrcpy restart failed for $name`: " + $_.Exception.Message) -Level WARNING
@@ -1086,7 +1094,10 @@ function Restore-VqaOriginals {
 
 
 # Public alias used by the web UI / console "Restore originals" button.
-function Reset-VqaToOriginals { return Restore-VqaOriginals }
+function Reset-VqaToOriginals {
+    param([switch]$NoServiceRestart)
+    return (Restore-VqaOriginals -NoServiceRestart:$NoServiceRestart)
+}
 
 
 ###############################################################

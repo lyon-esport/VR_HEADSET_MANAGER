@@ -222,6 +222,29 @@ function Send-JsonResponse {
     }
 }
 
+# Helper: close a response without letting the close throw (S1-1).
+# HttpListenerResponse.Close() raises HttpListenerException when the client has
+# already gone (tab closed, OBS source reloaded mid-transfer). Inside the accept
+# loop that exception used to unwind out of the while loop and stop the listener.
+function Close-HttpResponse {
+    param([Parameter(Mandatory = $true)] $Response)
+    try { $Response.Close() } catch {}
+}
+
+# Helper: $true when an exception (or any exception it wraps) is a client abort -
+# HttpListenerException 64 (network name no longer available), 995 (operation
+# aborted) or 1229 (connection reset/closed). PowerShell wraps .NET method errors
+# in MethodInvocationException, hence the walk down InnerException.
+function Test-HttpClientAbort {
+    param($Exception)
+    $e = $Exception
+    while ($e) {
+        if ($e -is [System.Net.HttpListenerException] -and @(64, 995, 1229) -contains $e.ErrorCode) { return $true }
+        $e = $e.InnerException
+    }
+    return $false
+}
+
 
 # Show LAN URLs. Reuses Get-PrivateNetworks (network_scanner.ps1, already dot-sourced via
 # scripts_init.ps1 above) so this startup log stays consistent with the console menu and
@@ -863,8 +886,26 @@ function Complete-PendingRecordingDownloads {
 
 try {
     while ($listener.IsListening) {
-        # GetContext() blocks until a request arrives
-        $context  = $listener.GetContext()
+        # GetContext() blocks until a request arrives. Guarded (S1-1): it throws when the
+        # listener is stopped (leave the loop) and, rarely, on a transient socket error
+        # (log it and keep listening).
+        $context  = $null
+        $request  = $null
+        $response = $null
+        try {
+            $context = $listener.GetContext()
+        } catch {
+            if (-not $listener.IsListening) { break }
+            Write-Log ("Web server: GetContext failed: " + $_.Exception.Message) -Level WARNING
+            continue
+        }
+
+        # ---- per-request guard (S1-1) - closes at the end of the static-file fallback ----
+        # One failed request must never stop the listener. Handlers leave their branch
+        # with `continue`, which still targets this while loop from inside the try (and
+        # is never intercepted by the catch below - verified on PS 5.1). The body below
+        # keeps its original indentation on purpose, so this guard stays a small diff.
+        try {
         $request  = $context.Request
         $response = $context.Response
         if ($script:RecordingDownloads.Count -gt 0) { Complete-PendingRecordingDownloads }
@@ -911,7 +952,7 @@ try {
             $response.Headers.Add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
             $response.Headers.Add('Access-Control-Allow-Headers', 'Content-Type')
             $response.StatusCode = 204
-            $response.Close()
+            Close-HttpResponse -Response $response
             continue
         }
 
@@ -956,7 +997,7 @@ try {
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -994,7 +1035,7 @@ try {
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -1052,7 +1093,7 @@ try {
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -1091,7 +1132,7 @@ try {
                             $response.Headers.Add('Access-Control-Allow-Origin', '*')
                             $response.ContentLength64 = $respBytes.Length
                             $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
-                            $response.Close()
+                            Close-HttpResponse -Response $response
                             continue
                         }
                     }
@@ -1119,7 +1160,7 @@ try {
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -1143,7 +1184,7 @@ try {
             } catch {
                 try { Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = 'server error' } } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -1168,7 +1209,7 @@ try {
                 }
             } catch {
                 try { Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = 'server error' } } catch {}
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -1178,7 +1219,7 @@ try {
                 Send-JsonResponse -Response $response -Body @{ ok = $true; mode = "$global:CaptureMode" }
             } catch {
                 try { Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = 'server error' } } catch {}
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -1198,7 +1239,7 @@ try {
                 }
             } catch {
                 try { Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = "$($_.Exception.Message)" } } catch {}
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -1233,7 +1274,7 @@ try {
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -1268,7 +1309,7 @@ try {
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -1303,7 +1344,7 @@ try {
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -1357,7 +1398,7 @@ try {
                     $alsoShutdownApp = $false
                 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
                 # App shutdown injected AFTER response is flushed so the browser receives
                 # the JSON before the web server process begins its own teardown.
                 if ($alsoShutdownApp) {
@@ -1446,7 +1487,7 @@ try {
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ error = $_.Exception.Message }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -1483,7 +1524,7 @@ try {
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -1510,7 +1551,7 @@ try {
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -1545,7 +1586,7 @@ try {
                 }
                 Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $errMsg }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -1582,7 +1623,7 @@ try {
                 }
                 Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $errMsg }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -1636,7 +1677,7 @@ try {
                 }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $_.Exception.Message }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -1656,7 +1697,7 @@ try {
                 }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; mask = $false; error = $_.Exception.Message }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -1710,7 +1751,7 @@ try {
                 }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $_.Exception.Message }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -1734,7 +1775,7 @@ try {
                 }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $_.Exception.Message }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -1788,7 +1829,7 @@ try {
                 }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $_.Exception.Message }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -1823,7 +1864,7 @@ try {
                 }
                 Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; message = $errMsg }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -1863,7 +1904,7 @@ try {
                 }
                 Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; message = $errMsg; output = ''; truncated = $false; blocked = $false }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -1881,7 +1922,7 @@ try {
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -1905,7 +1946,7 @@ try {
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -1932,7 +1973,7 @@ try {
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -1987,7 +2028,7 @@ try {
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -2009,7 +2050,7 @@ try {
                 Write-KioskLog "api add-manual result=failed error=$($_.Exception.Message)" -Level ERROR
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -2030,7 +2071,7 @@ try {
                 Write-KioskLog "api scan result=failed error=$($_.Exception.Message)" -Level ERROR
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -2043,7 +2084,7 @@ try {
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -2063,7 +2104,7 @@ try {
                 Write-KioskLog "api update result=failed error=$($_.Exception.Message)" -Level ERROR
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -2082,7 +2123,7 @@ try {
                 Write-KioskLog "api remove result=failed error=$($_.Exception.Message)" -Level ERROR
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -2132,7 +2173,7 @@ try {
                 Write-KioskLog "api push result=failed error=$($_.Exception.Message)" -Level ERROR
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -2176,7 +2217,7 @@ try {
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -2201,7 +2242,7 @@ try {
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -2242,7 +2283,7 @@ try {
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -2277,7 +2318,7 @@ try {
                 Write-KioskLog "api power result=failed error=$($_.Exception.Message)" -Level ERROR
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -2306,7 +2347,7 @@ try {
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -2367,7 +2408,7 @@ try {
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -2423,7 +2464,7 @@ try {
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -2457,7 +2498,7 @@ try {
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -2500,7 +2541,7 @@ try {
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -2560,7 +2601,7 @@ try {
             } catch {
                 try { Send-JsonResponse -Response $response -Raw '{"ok":false,"error":"server error"}' -StatusCode 500 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -2577,7 +2618,7 @@ try {
             } catch {
                 try { Send-JsonResponse -Response $response -Raw '{"ok":false,"error":"server error"}' -StatusCode 500 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -2594,7 +2635,7 @@ try {
             } catch {
                 try { Send-JsonResponse -Response $response -Raw '{"ok":false,"error":"server error"}' -StatusCode 500 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -2632,7 +2673,7 @@ try {
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -2690,7 +2731,7 @@ try {
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ error = $_.Exception.Message }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -2731,7 +2772,7 @@ try {
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -2794,7 +2835,7 @@ try {
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -2836,7 +2877,7 @@ try {
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -2916,7 +2957,7 @@ try {
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -2954,7 +2995,7 @@ try {
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -2980,7 +3021,7 @@ try {
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -3021,7 +3062,7 @@ try {
                 Send-JsonResponse -Response $response -Body @{ usb = $usbAvailable; usbSpeed = $usbSpeed; wifi = $wifiAvailable }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ error = $_.Exception.Message }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -3039,7 +3080,7 @@ try {
                 }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ error = $_.Exception.Message }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -3073,7 +3114,7 @@ try {
                 Send-JsonResponse -Response $response -Body @{ ok = $true }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ error = $_.Exception.Message }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -3107,7 +3148,7 @@ try {
                 Send-JsonResponse -Response $response -Body @{ status = 'started' }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ status = 'error'; error = $_.Exception.Message }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -3133,7 +3174,7 @@ try {
                 }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ status = 'error' }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -3160,7 +3201,7 @@ try {
                     default           { $_.Exception.Message }
                 }
                 Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $errMsg }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -3196,7 +3237,7 @@ try {
                     default           { $_.Exception.Message }
                 }
                 Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $errMsg }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -3244,7 +3285,7 @@ try {
                     default           { $_.Exception.Message }
                 }
                 Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $errMsg }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -3297,7 +3338,7 @@ try {
                     default            { $_.Exception.Message }
                 }
                 Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $errMsg }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -3307,7 +3348,7 @@ try {
                 Send-JsonResponse -Response $response -Depth 10 -Body @{ ok = $true; result = (Get-StreamBenchmarkParallelResult) }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -3327,7 +3368,7 @@ try {
                 Send-JsonResponse -Response $response -Raw $raw
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ status = 'error' }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -3335,7 +3376,9 @@ try {
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/benchmark/cancel') {
             try {
                 Send-JsonResponse -Response $response -Body @{ ok = [bool](Stop-StreamBenchmark) }
-            } finally { $response.Close() }
+            } catch {
+                Send-JsonResponse -Response $response -Body @{ ok = $false; error = $_.Exception.Message } -StatusCode 500
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -3349,7 +3392,7 @@ try {
                 Send-JsonResponse -Response $response -Depth 12 -Body @{ ok = $true; result = $benchRes }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -3372,7 +3415,7 @@ try {
                 }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -3391,7 +3434,7 @@ try {
                     default           { $_.Exception.Message }
                 }
                 Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $errMsg }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -3421,7 +3464,7 @@ try {
                     default           { $_.Exception.Message }
                 }
                 Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $errMsg }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -3449,7 +3492,7 @@ try {
                     default           { $_.Exception.Message }
                 }
                 Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $errMsg }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -3479,7 +3522,7 @@ try {
                 Send-JsonResponse -Response $response -Body @{ status = 'started' }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ status = 'error'; error = $_.Exception.Message }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -3505,7 +3548,7 @@ try {
                 }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ status = 'error' }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -3538,7 +3581,7 @@ try {
                 Send-JsonResponse -Response $response -Body @{ ok = $true }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -3688,7 +3731,7 @@ try {
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -3733,7 +3776,7 @@ try {
                     $response.StatusCode = 200; $response.ContentType = 'application/json; charset=utf-8'
                     $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
                 } catch {}
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -3769,7 +3812,7 @@ try {
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -3809,7 +3852,7 @@ try {
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -3843,7 +3886,7 @@ try {
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -3870,7 +3913,7 @@ try {
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -3919,7 +3962,7 @@ try {
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -3978,7 +4021,7 @@ try {
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -3999,7 +4042,7 @@ try {
                 Send-JsonResponse -Response $response -Body $payload
             } catch {
                 Send-JsonResponse -Response $response -Body @{ ok = $false; error = $_.Exception.Message } -StatusCode 500
-            }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -4027,7 +4070,7 @@ try {
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -4088,7 +4131,7 @@ try {
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -4124,7 +4167,7 @@ try {
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -4160,7 +4203,7 @@ try {
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -4208,7 +4251,7 @@ try {
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -4277,7 +4320,7 @@ try {
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -4327,7 +4370,7 @@ try {
                 }
                 Send-JsonResponse -Response $response -Body @{ ok = $false; error = $errMsg }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -4389,7 +4432,7 @@ try {
                 }
                 Send-JsonResponse -Response $response -Body @{ ok = $false; pushed = $false; visibleKnown = @(); error = $errMsg }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -4417,7 +4460,7 @@ try {
             } catch {
                 try { Send-JsonResponse -Response $response -Body @{ ok = $false; error = $_.Exception.Message } -StatusCode 500 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -4606,7 +4649,7 @@ try {
                 }
                 try { Send-JsonResponse -Response $response -Body @{ ok = $false; error = $txt } -StatusCode $code } catch {}
             } finally {
-                if (-not $recDeferClose) { $response.Close() }
+                if (-not $recDeferClose) { Close-HttpResponse -Response $response }
             }
             continue
         }
@@ -4633,7 +4676,7 @@ try {
             } catch {
                 Send-JsonResponse -Response $response -Body @{ ok = $false; error = $_.Exception.Message } -StatusCode 500
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -4660,7 +4703,7 @@ try {
             } catch {
                 try { Send-JsonResponse -Response $response -Body @{ ok = $false; error = $_.Exception.Message } -StatusCode 500 } catch {}
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -4694,7 +4737,7 @@ try {
             } catch {
                 Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'Server error.'; devices = @(); count = 0 }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -4726,7 +4769,7 @@ try {
                 }
                 Send-JsonResponse -Response $response -Body @{ ok = $false; error = $errMsg }
             } finally {
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -4751,7 +4794,7 @@ try {
                     $response.ContentLength64 = $errBytes.Length
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -4767,7 +4810,7 @@ try {
                 Send-JsonResponse -Response $response -Raw '{"ok":true}'
             } catch {
                 try { Send-JsonResponse -Response $response -Raw '{"ok":false,"error":"server error"}' -StatusCode 500 } catch {}
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -4787,7 +4830,7 @@ try {
             } catch {
                 Write-Log ("app-restart failed: " + $_.Exception.Message) -Level ERROR
                 try { Send-JsonResponse -Response $response -Raw '{"ok":false,"error":"server error"}' -StatusCode 500 } catch {}
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -4810,7 +4853,7 @@ try {
                 Send-JsonResponse -Response $response -Raw '{"ok":true}'
             } catch {
                 try { Send-JsonResponse -Response $response -Raw '{"ok":false,"error":"server error"}' -StatusCode 500 } catch {}
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -4833,7 +4876,7 @@ try {
                 $response.Headers.Add('Access-Control-Allow-Origin', '*')
                 $response.ContentLength64 = $respBytes.Length
                 $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
-                $response.Close()
+                Close-HttpResponse -Response $response
 
                 # The killer also releases data\webserver.pid once the process is gone:
                 # Stop-Process -Force skips our finally block, so nobody else would.
@@ -4876,7 +4919,7 @@ try {
                 }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -4895,7 +4938,7 @@ try {
                 }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -4910,7 +4953,7 @@ try {
                 }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -4948,7 +4991,7 @@ try {
                 }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -4961,7 +5004,7 @@ try {
                     ok    = $false
                     error = 'toggle-vqo is deprecated; use POST /api/vqa/toggle-auto-apply with { section, enabled }'
                 }
-            } catch { } finally { $response.Close() }
+            } catch { } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -5017,7 +5060,7 @@ try {
                 Send-JsonResponse -Response $response -Body @{ ok = $true }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -5044,7 +5087,7 @@ try {
                     $response.ContentLength64 = $errBytes.Length
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -5070,7 +5113,7 @@ try {
                 }
             } catch {
                 Send-JsonResponse -Response $response -Body @{ ok = $false; error = $_.Exception.Message } -StatusCode 500
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -5106,7 +5149,7 @@ try {
                     $response.ContentLength64 = $errBytes.Length
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -5129,7 +5172,7 @@ try {
                 Send-JsonResponse -Response $response -Body @{ ok = $true; sources = $sourceRows }
             } catch {
                 Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'server error' } -StatusCode 500
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -5175,7 +5218,7 @@ try {
                 Send-JsonResponse -Response $response -Raw $rawJson
             } catch {
                 Send-JsonResponse -Response $response -Raw '[]' -StatusCode 500
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -5213,7 +5256,7 @@ try {
                     $response.ContentLength64 = $errBytes.Length
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -5227,7 +5270,7 @@ try {
                 Send-JsonResponse -Response $response -Body @{ app = 'VRHM'; version = $versionStr }
             } catch {
                 try { Send-JsonResponse -Response $response -Body @{ app = 'VRHM'; version = 'unknown' } } catch {}
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -5265,7 +5308,7 @@ try {
                     $response.ContentLength64 = $errBytes.Length
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -5292,7 +5335,7 @@ try {
                     $response.ContentLength64 = $errBytes.Length
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -5318,7 +5361,7 @@ try {
                 }
             } catch {
                 Send-JsonResponse -Response $response -Body @{ ok = $false; error = $_.Exception.Message } -StatusCode 500
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -5354,7 +5397,7 @@ try {
                     $response.ContentLength64 = $errBytes.Length
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -5400,7 +5443,7 @@ try {
                 Send-JsonResponse -Response $response -Raw $rawJson
             } catch {
                 Send-JsonResponse -Response $response -Raw '[]' -StatusCode 500
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -5438,7 +5481,7 @@ try {
                     $response.ContentLength64 = $errBytes.Length
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -5476,7 +5519,7 @@ try {
                     $response.ContentLength64 = $errBytes.Length
                     $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
                 } catch {}
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -5513,7 +5556,7 @@ try {
                     $response.StatusCode = 200; $response.ContentType = 'application/json; charset=utf-8'
                     $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
                 } catch {}
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -5553,7 +5596,7 @@ try {
                     $response.StatusCode = 500; $response.ContentType = 'application/json; charset=utf-8'
                     $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
                 } catch {}
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -5584,7 +5627,7 @@ try {
                     $response.StatusCode = 500; $response.ContentType = 'application/json; charset=utf-8'
                     $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
                 } catch {}
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -5598,7 +5641,7 @@ try {
                 try {
                     Send-JsonResponse -Response $response -Body ([ordered]@{ ok = $false; error = [string]$_ }) -StatusCode 500
                 } catch {}
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -5636,7 +5679,7 @@ try {
                     $response.StatusCode = 500; $response.ContentType = 'application/json; charset=utf-8'
                     $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
                 } catch {}
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -5671,7 +5714,7 @@ try {
                 try {
                     Send-JsonResponse -Response $response -Body ([ordered]@{ ok = $false; error = [string]$_ }) -StatusCode 500
                 } catch {}
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -5701,7 +5744,7 @@ try {
                 try {
                     Send-JsonResponse -Response $response -Body ([ordered]@{ ok = $false; error = [string]$_ }) -StatusCode 500
                 } catch {}
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -5726,7 +5769,7 @@ try {
                 try {
                     Send-JsonResponse -Response $response -Body ([ordered]@{ ok = $false; error = [string]$_ }) -StatusCode 500
                 } catch {}
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -5754,7 +5797,7 @@ try {
                     $response.StatusCode = 500; $response.ContentType = 'application/json; charset=utf-8'
                     $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
                 } catch {}
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -5781,7 +5824,7 @@ try {
                     $response.StatusCode = 500; $response.ContentType = 'application/json; charset=utf-8'
                     $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
                 } catch {}
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -5792,7 +5835,7 @@ try {
                 Send-JsonResponse -Response $response -Body @{ localIPs = $ips } -StatusCode 200
             } catch {
                 Send-JsonResponse -Response $response -Body @{ localIPs = @('127.0.0.1', 'localhost') } -StatusCode 200
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -5804,7 +5847,7 @@ try {
                 Send-JsonResponse -Response $response -Body @{ ok = $true; gpus = @($gpus) }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -5945,7 +5988,7 @@ try {
                 $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
             } catch {
                 Send-JsonResponse -Response $response -Body @{ ok = $false; error = $_.Exception.Message } -StatusCode 400
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -5974,7 +6017,7 @@ try {
                     $response.StatusCode = 500; $response.ContentType = 'application/json; charset=utf-8'
                     $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
                 } catch {}
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -5985,7 +6028,7 @@ try {
                 Send-JsonResponse -Response $response -Body @{ ok = $true; installedVersion = $installedVersion }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -6002,7 +6045,7 @@ try {
                 }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -6019,7 +6062,7 @@ try {
                 $lock = Enter-VqaLock -TimeoutMs 3000
                 if (-not $lock) {
                     Send-JsonResponse -Response $response -StatusCode 409 -Body @{ ok = $false; pending = $true; error = "Another config change is in progress. Please retry shortly." }
-                    $response.Close()
+                    Close-HttpResponse -Response $response
                     continue
                 }
 
@@ -6045,7 +6088,7 @@ try {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
                 if ($lock) { Exit-VqaLock -Stream $lock }
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -6061,7 +6104,7 @@ try {
                 Send-JsonResponse -Response $response -Body @{ ok = $true; versions = @($versions) }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -6085,7 +6128,7 @@ try {
                 $resolved = Test-RequestPath -Path $requestedFolder -Root $ffmpegRoot
                 if (-not $resolved -or -not (Test-Path -LiteralPath (Join-Path $resolved "ffmpeg.exe"))) {
                     Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = "Invalid or missing ffmpeg version folder." }
-                    $response.Close()
+                    Close-HttpResponse -Response $response
                     continue
                 }
                 $relFolder = Join-Path "ffmpeg" (Split-Path -Path $resolved -Leaf)
@@ -6093,7 +6136,7 @@ try {
                 $lock = Enter-VqaLock -TimeoutMs 3000
                 if (-not $lock) {
                     Send-JsonResponse -Response $response -StatusCode 409 -Body @{ ok = $false; pending = $true; error = "Another config change is in progress. Please retry shortly." }
-                    $response.Close()
+                    Close-HttpResponse -Response $response
                     continue
                 }
 
@@ -6116,7 +6159,7 @@ try {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
                 if ($lock) { Exit-VqaLock -Stream $lock }
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -6129,7 +6172,7 @@ try {
                 Send-JsonResponse -Response $response -Body @{ ok = $true; installedVersion = $installedVersion }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -6146,7 +6189,7 @@ try {
                 }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -6161,7 +6204,7 @@ try {
                 Send-JsonResponse -Response $response -Body @{ ok = $true; versions = @($versions) }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -6185,7 +6228,7 @@ try {
                 $resolved = Test-RequestPath -Path $requestedFolder -Root $mediamtxRoot
                 if (-not $resolved -or -not (Test-Path -LiteralPath (Join-Path $resolved "mediamtx.exe"))) {
                     Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = "Invalid or missing mediamtx version folder." }
-                    $response.Close()
+                    Close-HttpResponse -Response $response
                     continue
                 }
                 $relFolder = Join-Path "MediaMTX" (Split-Path -Path $resolved -Leaf)
@@ -6193,7 +6236,7 @@ try {
                 $lock = Enter-VqaLock -TimeoutMs 3000
                 if (-not $lock) {
                     Send-JsonResponse -Response $response -StatusCode 409 -Body @{ ok = $false; pending = $true; error = "Another config change is in progress. Please retry shortly." }
-                    $response.Close()
+                    Close-HttpResponse -Response $response
                     continue
                 }
 
@@ -6216,7 +6259,7 @@ try {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
                 if ($lock) { Exit-VqaLock -Stream $lock }
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -6233,7 +6276,7 @@ try {
                 $lock = Enter-VqaLock -TimeoutMs 3000
                 if (-not $lock) {
                     Send-JsonResponse -Response $response -StatusCode 409 -Body @{ ok = $false; pending = $true; error = "Another config change is in progress. Please retry shortly." }
-                    $response.Close()
+                    Close-HttpResponse -Response $response
                     continue
                 }
 
@@ -6259,7 +6302,7 @@ try {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
                 if ($lock) { Exit-VqaLock -Stream $lock }
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -6272,7 +6315,7 @@ try {
                 Send-JsonResponse -Response $response -Body @{ ok = $true; installedVersion = $installedVersion }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -6291,7 +6334,7 @@ try {
                 }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -6306,7 +6349,7 @@ try {
                 Send-JsonResponse -Response $response -Body @{ ok = $true; versions = @($versions) }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
@@ -6331,7 +6374,7 @@ try {
                 $resolved = Test-RequestPath -Path $requestedFolder -Root $scrcpyRoot
                 if (-not $resolved -or -not (Test-Path -LiteralPath (Join-Path $resolved "scrcpy.exe"))) {
                     Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = "Invalid or missing scrcpy version folder." }
-                    $response.Close()
+                    Close-HttpResponse -Response $response
                     continue
                 }
                 $relFolder = Join-Path "scrcpy" (Split-Path -Path $resolved -Leaf)
@@ -6339,7 +6382,7 @@ try {
                 $lock = Enter-VqaLock -TimeoutMs 3000
                 if (-not $lock) {
                     Send-JsonResponse -Response $response -StatusCode 409 -Body @{ ok = $false; pending = $true; error = "Another config change is in progress. Please retry shortly." }
-                    $response.Close()
+                    Close-HttpResponse -Response $response
                     continue
                 }
 
@@ -6362,7 +6405,7 @@ try {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
                 if ($lock) { Exit-VqaLock -Stream $lock }
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -6381,7 +6424,7 @@ try {
                 $lock = Enter-VqaLock -TimeoutMs 3000
                 if (-not $lock) {
                     Send-JsonResponse -Response $response -StatusCode 409 -Body @{ ok = $false; pending = $true; error = "Another config change is in progress. Please retry shortly." }
-                    $response.Close()
+                    Close-HttpResponse -Response $response
                     continue
                 }
 
@@ -6407,7 +6450,7 @@ try {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
             } finally {
                 if ($lock) { Exit-VqaLock -Stream $lock }
-                $response.Close()
+                Close-HttpResponse -Response $response
             }
             continue
         }
@@ -6490,10 +6533,12 @@ try {
                 $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
             } catch {
                 Send-JsonResponse -Response $response -Body @{ ok = $false; error = $_.Exception.Message } -StatusCode 400
-            } finally { $response.Close() }
+            } finally { Close-HttpResponse -Response $response }
             continue
         }
 
+        $staticHeadersSent = $false
+        $staticAborted     = $false
         try {
             # Resolve URL path to a file.
             # /data/*.csv  -> served from <ScriptPath>\data\  (read-only CSV export)
@@ -6508,7 +6553,7 @@ try {
                 # returns the same shape from the database. Refusing the whole
                 # prefix keeps a stale legacy_* copy from being served too.
                 $response.StatusCode = 403
-                $response.Close()
+                Close-HttpResponse -Response $response
                 continue
             } else {
                 $resolvedFile    = [System.IO.Path]::GetFullPath((Join-Path $websitePath $urlPath))
@@ -6516,7 +6561,7 @@ try {
                 # Prevent path traversal outside websitePath
                 if (-not $resolvedFile.StartsWith($resolvedBase)) {
                     $response.StatusCode = 403
-                    $response.Close()
+                    Close-HttpResponse -Response $response
                     continue
                 }
                 # Transparent fallback: if not found at website root, try website/generated/
@@ -6540,18 +6585,47 @@ try {
                 $response.ContentLength64   = $bytes.Length
                 $response.Headers.Add('Last-Modified', $lastMod)
                 $response.Headers.Add('Cache-Control', 'no-cache')
+                $staticHeadersSent = $true
                 $response.OutputStream.Write($bytes, 0, $bytes.Length)
             } else {
                 $response.StatusCode = 404
                 $msg404 = [System.Text.Encoding]::UTF8.GetBytes("404 Not Found: $urlPath")
                 $response.ContentType     = 'text/plain; charset=utf-8'
                 $response.ContentLength64 = $msg404.Length
+                $staticHeadersSent = $true
                 $response.OutputStream.Write($msg404, 0, $msg404.Length)
             }
         } catch {
-            $response.StatusCode = 500
+            # Once the body write has started the headers are on the wire and setting
+            # StatusCode throws (client abort mid-transfer): drop the connection instead.
+            $staticLine = "Web server: static file failed (/" + $request.Url.LocalPath.TrimStart('/') + "): " + $_.Exception.Message
+            if (Test-HttpClientAbort -Exception $_.Exception) {
+                Write-Log $staticLine -Level DEBUG
+            } else {
+                Write-Log $staticLine -Level WARNING
+            }
+            if ($staticHeadersSent) {
+                $staticAborted = $true
+                try { $response.Abort() } catch {}
+            } else {
+                try { $response.StatusCode = 500 } catch {}
+            }
         } finally {
-            $response.Close()
+            if (-not $staticAborted) { Close-HttpResponse -Response $response }
+        }
+        } catch {
+            # ---- end of the per-request guard (S1-1) ----
+            # A client abort (64/995/1229) is routine - OBS reload, tab closed mid-transfer.
+            $reqMethod = if ($request) { $request.HttpMethod } else { '?' }
+            $reqPath   = if ($request) { $request.Url.LocalPath } else { '?' }
+            $reqLine   = "Web server: request failed ($reqMethod $reqPath): " + $_.Exception.Message
+            if (Test-HttpClientAbort -Exception $_.Exception) {
+                Write-Log $reqLine -Level DEBUG
+            } else {
+                Write-Log $reqLine -Level WARNING
+            }
+            # Abort, not Close: the response state is unknown at this point.
+            if ($response) { try { $response.Abort() } catch {} }
         }
     }
 } finally {

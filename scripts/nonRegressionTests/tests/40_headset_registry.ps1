@@ -427,8 +427,12 @@ Invoke-RegressionTest -Name 'Eye merge: M profile builds a full-frame capture, f
             Merged      = $merged
             Right       = $right
             LocalWindow = $localWin
-            Unsupported = ConvertTo-ScrcpyArguments -headsetModel 'Quest 2' -scrcpyProfile 'square-M-N-45-20'
-            Quest2Right = ConvertTo-ScrcpyArguments -headsetModel 'Quest 2' -scrcpyProfile 'square-R-N-45-20'
+            # A model with NO eye_merge block. The Quest 2 used to be the uncalibrated example,
+            # but it ships a calibration since 03770ba (Quest 2 lens positions, ADR-0030).
+            UncalModel  = 'PICO 4 Ultra'
+            UncalHasCal = Test-EyeMergeSupported -Model 'PICO 4 Ultra'
+            Unsupported = ConvertTo-ScrcpyArguments -headsetModel 'PICO 4 Ultra' -scrcpyProfile 'square-M-N-45-20'
+            UncalRight  = ConvertTo-ScrcpyArguments -headsetModel 'PICO 4 Ultra' -scrcpyProfile 'square-R-N-45-20'
             RoundTrip   = (ConvertTo-ScrcpyProfile -View 'square' -Eye 'M' -AudioDup $false -Fps 45 -BitrateMbps 20)
         }
     }
@@ -439,7 +443,11 @@ Invoke-RegressionTest -Name 'Eye merge: M profile builds a full-frame capture, f
     Assert-True ($built.Merged -notlike '*--angle*')    'a merged view needs the full frame: no --angle'
     Assert-True ($built.Merged -notlike '*--max-size*') 'a merged view needs the native size: no --max-size'
     Assert-Equal $built.Right $built.LocalWindow 'LocalWindow mode has no ffmpeg: M falls back to the right eye'
-    Assert-Equal $built.Quest2Right $built.Unsupported 'an uncalibrated model falls back to the right eye'
+    if ($built.UncalHasCal) {
+        Add-TestEvidence ("'{0}' is now calibrated: uncalibrated fallback not checked - pick another model" -f $built.UncalModel)
+    } else {
+        Assert-Equal $built.UncalRight $built.Unsupported 'an uncalibrated model falls back to the right eye'
+    }
     Assert-Equal 'square-M-N-45-20' $built.RoundTrip 'M survives ConvertTo-ScrcpyProfile'
 }
 

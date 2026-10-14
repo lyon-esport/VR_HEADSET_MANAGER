@@ -244,7 +244,19 @@ function Write-FileWithoutBom {
         [string]$Content
     )
     $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-    [System.IO.File]::WriteAllText($Path, $Content, $utf8NoBom)
+    # Another process (web server, VRMonitor, the registry save regenerating pages) can hold
+    # the same file for a few milliseconds - seen when a new headset's [monitoring].html was
+    # created by two writers at once. A sharing violation is retried briefly; any other
+    # error, or the last attempt, is thrown as before.
+    for ($attempt = 1; $attempt -le 4; $attempt++) {
+        try {
+            [System.IO.File]::WriteAllText($Path, $Content, $utf8NoBom)
+            return
+        } catch [System.IO.IOException] {
+            if ($attempt -eq 4 -or $_.Exception -is [System.IO.FileNotFoundException] -or $_.Exception -is [System.IO.DirectoryNotFoundException]) { throw }
+            Start-Sleep -Milliseconds (50 * $attempt)
+        }
+    }
 }
 
 
