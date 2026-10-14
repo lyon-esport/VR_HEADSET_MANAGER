@@ -4,6 +4,13 @@
 # Per-file hash cache - avoids rewriting HTML when data has not changed since last render
 $script:_monitoringHashes = @{}
 
+# Computes MD5 hash of a UTF8 string. Used by all three overlay generators.
+function Get-TextHash {
+    param([string]$Text)
+    $hashBytes = [System.Security.Cryptography.MD5]::Create().ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Text))
+    ($hashBytes | ForEach-Object { $_.ToString('x2') }) -join ''
+}
+
 # Resolves the website/assets subfolder to use for a headset's hardware icons (Ctrl_Left/Right, Headset).
 # Returns "" when Model is empty/"-" (hides icons, unchanged legacy behavior).
 # Returns the URL-encoded Model name when website/assets/<Model>/ already exists.
@@ -90,8 +97,7 @@ function Update-HeadsetMonitoringFile {
         $outputFile = Join-Path -Path $outputPath -ChildPath ((Convert-Displayname($ownerName)) + "[monitoring].html")
 
         # Skip write if content has not changed
-        $hashBytes = [System.Security.Cryptography.MD5]::Create().ComputeHash([System.Text.Encoding]::UTF8.GetBytes($headsetsHtml))
-        $hashStr = ($hashBytes | ForEach-Object { $_.ToString('x2') }) -join ''
+        $hashStr = Get-TextHash -Text $headsetsHtml
         if ($script:_monitoringHashes[$outputFile] -ne $hashStr) {
             Write-FileWithoutBom -Path $outputFile -Content $headsetsHtml
             $script:_monitoringHashes[$outputFile] = $hashStr
@@ -199,8 +205,7 @@ function Update-HeadsetVideoFile {
         $outputFile = Join-Path -Path $outputPath -ChildPath ((Convert-Displayname $headset.Name) + "[video].html")
 
         # Skip write if content has not changed
-        $hash = ($videoHtml | Get-FileHash -Algorithm MD5 -ErrorAction SilentlyContinue)
-        $hashStr = if ($hash) { $hash.Hash } else { [guid]::NewGuid().ToString() }
+        $hashStr = Get-TextHash -Text $videoHtml
         if ($script:_monitoringHashes[$outputFile] -ne $hashStr) {
             Write-FileWithoutBom -Path $outputFile -Content $videoHtml
             $script:_monitoringHashes[$outputFile] = $hashStr
@@ -238,8 +243,7 @@ function Update-HeadsetTimerFile {
         $outputFile = Join-Path -Path $outputPath -ChildPath ((Convert-Displayname $headset.Name) + "[timer].html")
 
         # Skip write if content has not changed
-        $hash = ($timerHtml | Get-FileHash -Algorithm MD5 -ErrorAction SilentlyContinue)
-        $hashStr = if ($hash) { $hash.Hash } else { [guid]::NewGuid().ToString() }
+        $hashStr = Get-TextHash -Text $timerHtml
         if ($script:_monitoringHashes[$outputFile] -ne $hashStr) {
             Write-FileWithoutBom -Path $outputFile -Content $timerHtml
             $script:_monitoringHashes[$outputFile] = $hashStr

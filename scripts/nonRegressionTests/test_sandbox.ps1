@@ -933,8 +933,34 @@ function Confirm-SandboxApp {
 
     $paths = Get-SandboxPaths -TargetRoot $TargetRoot
 
+    # Sections run via -Sections (no section 10) call this without -DevRoot.
+    if (-not $DevRoot -and $global:TestRun -and $global:TestRun.DevRoot) {
+        $DevRoot = [string]$global:TestRun.DevRoot
+    }
+
     if (-not (Test-Path -LiteralPath $paths.ConfigFile)) {
         Initialize-SandboxConfig -TargetRoot $TargetRoot -DevRoot $DevRoot | Out-Null
+    }
+    else {
+        # A config already exists (left by an earlier run), so the seeding in
+        # Initialize-SandboxConfig is skipped - but ffmpeg is never in the release
+        # zip and the app dies at its binaries check without it.
+        $cfg = Read-JsonFileUtf8 -Path $paths.ConfigFile
+        $ffFolder = 'ffmpeg'
+        if ($cfg -and $cfg.ffmpeg -and $cfg.ffmpeg.folder) { $ffFolder = [string]$cfg.ffmpeg.folder }
+        $ffTarget = Join-Path (Join-Path $paths.SourcesFolder $ffFolder) 'ffmpeg.exe'
+        if (-not (Test-Path -LiteralPath $ffTarget) -and $DevRoot) {
+            $ffDev = Join-Path $DevRoot ('sources\' + $ffFolder + '\ffmpeg.exe')
+            if (Test-Path -LiteralPath $ffDev) {
+                $ffDir = Split-Path -Parent $ffTarget
+                if (-not (Test-Path -LiteralPath $ffDir)) { New-Item -ItemType Directory -Path $ffDir -Force | Out-Null }
+                Write-Host '  Supplying ffmpeg.exe to the sandbox (a real first run downloads it)...' -ForegroundColor DarkGray
+                Copy-Item -LiteralPath $ffDev -Destination $ffTarget -Force
+            }
+            else {
+                Write-Host '  WARNING: no ffmpeg.exe available - the app will not start.' -ForegroundColor Yellow
+            }
+        }
     }
 
     $webPort = Get-SandboxWebPort -TargetRoot $TargetRoot

@@ -155,6 +155,7 @@ foreach ($piece in @('test_core.ps1', 'test_prompt.ps1', 'test_api.ps1', 'test_s
 $sectionRegistry = @(
     [PSCustomObject]@{ Id = 10; Title = 'Startup and packaging'; File = '10_startup.ps1';          Light = 2; Standard = 2;  Full = 2;  Operator = $false }
     [PSCustomObject]@{ Id = 20; Title = 'Web pages and API';     File = '20_webpages.ps1';         Light = 2; Standard = 3;  Full = 3;  Operator = $false }
+    [PSCustomObject]@{ Id = 25; Title = 'Timer API';             File = '25_timer_api.ps1';        Light = 1; Standard = 1;  Full = 1;  Operator = $false }
     [PSCustomObject]@{ Id = 30; Title = 'USB onboarding';        File = '30_headset_usb.ps1';      Light = 0; Standard = 5;  Full = 5;  Operator = $true  }
     [PSCustomObject]@{ Id = 40; Title = 'Registry CRUD';         File = '40_headset_registry.ps1'; Light = 1; Standard = 3;  Full = 4;  Operator = $false }
     [PSCustomObject]@{ Id = 50; Title = 'scrcpy lifecycle';      File = '50_scrcpy.ps1';           Light = 2; Standard = 8;  Full = 20; Operator = $true  }

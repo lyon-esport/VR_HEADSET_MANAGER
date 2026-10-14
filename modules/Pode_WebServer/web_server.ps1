@@ -511,6 +511,24 @@ $resolveJobBlock = {
     }
 }
 
+# Background job for the "update versions" action (Update-AppCacheOnline).
+# Same preamble as $resolveJobBlock: the role globals MUST be set before dot-sourcing
+# scripts_init.ps1, otherwise the job runs the MAIN startup path (Main DB role, relay
+# file deletion, VQA recovery, Start-WebServer...).
+$updateVersionsJobBlock = {
+    param([string]$ScriptPath, [string]$ProgressFile, [string]$ConfigFilePath)
+    try {
+        $global:ScriptPath         = $ScriptPath
+        $global:ConfigFilePath     = $ConfigFilePath
+        $global:IsWebServerProcess = $true
+        . (Join-Path $ScriptPath 'modules\scripts_init.ps1')
+        Update-AppCacheOnline -ProgressFile $ProgressFile
+    } catch {
+        $err = ($_.ToString() -replace '"', "'") -replace '[^\x20-\x7E]', ''
+        try { [System.IO.File]::WriteAllText($ProgressFile, "{`"status`":`"error`",`"error`":`"$err`"}") } catch {}
+    }
+}
+
 # Active resolve job guard (only one at a time)
 $script:resolveJob      = $null
 $script:resolveProgFile = [System.IO.Path]::Combine($env:TEMP, 'vrm_resolve.json')
@@ -3464,14 +3482,7 @@ try {
                 try { $bodyObj = $bodyJson | ConvertFrom-Json } catch { $bodyObj = $null }
                 $script:updateVersionsHeadsetName = if ($bodyObj -and $bodyObj.headsetName) { $bodyObj.headsetName } else { $null }
                 [System.IO.File]::WriteAllText($script:updateVersionsProgFile, '{"status":"queued"}')
-                $uvProgFile  = $script:updateVersionsProgFile
-                $uvScriptPath = $ScriptPath
-                $uvConfigPath = $ConfigFilePath
-                $script:updateVersionsJob = Start-Job -ScriptBlock {
-                    param($sp, $pf, $cf)
-                    . (Join-Path $sp 'modules\scripts_init.ps1')
-                    Update-AppCacheOnline -ProgressFile $pf
-                } -ArgumentList $uvScriptPath, $uvProgFile, $uvConfigPath
+                $script:updateVersionsJob = Start-Job -ScriptBlock $updateVersionsJobBlock -ArgumentList $ScriptPath, $script:updateVersionsProgFile, $ConfigFilePath
                 Send-JsonResponse -Response $response -Body @{ status = 'started' }
             } catch {
                 Send-JsonResponse -Response $response -StatusCode 500 -Body @{ status = 'error'; error = $_.Exception.Message }
@@ -5060,24 +5071,12 @@ try {
                 $folder = $folderMap[$target]
                 if ($folder -and [System.IO.Directory]::Exists($folder)) {
                     Start-Process explorer.exe -ArgumentList "`"$folder`""
-                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                    Send-JsonResponse -Response $response -Body @{ ok = $true } -StatusCode 200
                 } else {
-                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"folder not found"}')
+                    Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'folder not found' } -StatusCode 200
                 }
-                $response.StatusCode      = 200
-                $response.ContentType     = 'application/json; charset=utf-8'
-                $response.Headers.Add('Access-Control-Allow-Origin', '*')
-                $response.ContentLength64 = $respBytes.Length
-                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
             } catch {
-                try {
-                    $dbgMsg = $_.Exception.Message -replace '"',"'" -replace '[^\x20-\x7E]','?'
-                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes("{`"ok`":false,`"error`":`"$dbgMsg`"}")
-                    $response.StatusCode      = 500
-                    $response.ContentType     = 'application/json; charset=utf-8'
-                    $response.ContentLength64 = $errBytes.Length
-                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
-                } catch {}
+                Send-JsonResponse -Response $response -Body @{ ok = $false; error = $_.Exception.Message } -StatusCode 500
             } finally { $response.Close() }
             continue
         }
@@ -5320,24 +5319,12 @@ try {
                 $folder = $folderMap[$target]
                 if ($folder -and [System.IO.Directory]::Exists($folder)) {
                     Start-Process explorer.exe -ArgumentList "`"$folder`""
-                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                    Send-JsonResponse -Response $response -Body @{ ok = $true } -StatusCode 200
                 } else {
-                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"folder not found"}')
+                    Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'folder not found' } -StatusCode 200
                 }
-                $response.StatusCode      = 200
-                $response.ContentType     = 'application/json; charset=utf-8'
-                $response.Headers.Add('Access-Control-Allow-Origin', '*')
-                $response.ContentLength64 = $respBytes.Length
-                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
             } catch {
-                try {
-                    $dbgMsg = $_.Exception.Message -replace '"',"'" -replace '[^\x20-\x7E]','?'
-                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes("{`"ok`":false,`"error`":`"$dbgMsg`"}")
-                    $response.StatusCode      = 500
-                    $response.ContentType     = 'application/json; charset=utf-8'
-                    $response.ContentLength64 = $errBytes.Length
-                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
-                } catch {}
+                Send-JsonResponse -Response $response -Body @{ ok = $false; error = $_.Exception.Message } -StatusCode 500
             } finally { $response.Close() }
             continue
         }
@@ -5835,20 +5822,10 @@ try {
         # API: GET /api/server-info  - returns server local IPs so the client can detect local access
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/server-info') {
             try {
-                $ips = @('127.0.0.1', 'localhost') + @($lanIPs | Where-Object { $_ })
-                $ipJson = ($ips | ForEach-Object { '"' + $_ + '"' }) -join ','
-                $rb = [System.Text.Encoding]::UTF8.GetBytes("{`"localIPs`":[$ipJson]}")
-                $response.StatusCode = 200
-                $response.ContentType = 'application/json; charset=utf-8'
-                $response.Headers.Add('Access-Control-Allow-Origin', '*')
-                $response.ContentLength64 = $rb.Length
-                $response.OutputStream.Write($rb, 0, $rb.Length)
+                $ips = @('127.0.0.1', 'localhost') + @($lanNetworks | ForEach-Object { $_.IPAddress })
+                Send-JsonResponse -Response $response -Body @{ localIPs = $ips } -StatusCode 200
             } catch {
-                try {
-                    $eb = [System.Text.Encoding]::UTF8.GetBytes('{"localIPs":["127.0.0.1","localhost"]}')
-                    $response.StatusCode = 200; $response.ContentType = 'application/json; charset=utf-8'
-                    $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
-                } catch {}
+                Send-JsonResponse -Response $response -Body @{ localIPs = @('127.0.0.1', 'localhost') } -StatusCode 200
             } finally { $response.Close() }
             continue
         }
@@ -6001,12 +5978,7 @@ try {
                 $response.ContentLength64 = $respBytes.Length
                 $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
             } catch {
-                try {
-                    $errMsg = ($_ -replace '"',"'") -replace '[\r\n]',' '
-                    $eb = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"' + $errMsg + '"}')
-                    $response.StatusCode = 400; $response.ContentType = 'application/json; charset=utf-8'
-                    $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
-                } catch {}
+                Send-JsonResponse -Response $response -Body @{ ok = $false; error = $_.Exception.Message } -StatusCode 400
             } finally { $response.Close() }
             continue
         }
@@ -6551,11 +6523,7 @@ try {
                 $response.ContentLength64 = $respBytes.Length
                 $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
             } catch {
-                try {
-                    $eb = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"' + ($_.Exception.Message -replace '"',"'") + '"}')
-                    $response.StatusCode = 400; $response.ContentType = 'application/json; charset=utf-8'
-                    $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
-                } catch {}
+                Send-JsonResponse -Response $response -Body @{ ok = $false; error = $_.Exception.Message } -StatusCode 400
             } finally { $response.Close() }
             continue
         }
