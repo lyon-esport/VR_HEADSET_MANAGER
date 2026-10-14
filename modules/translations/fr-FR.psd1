@@ -396,6 +396,11 @@
         WifiPushOk        = "Le casque '{0}' a ete bascule sur le reseau WiFi '{1}'."
         WifiPushFailed    = "Echec de l'envoi WiFi : {0}"
         WifiPreferredTag  = "(prefere)"
+        # --- Ligne d'etat VRMonitor de l'en-tete du menu principal (Get-VRMonitorStatusText) ---
+        MonitorRunning    = "Surveillance des casques : active"
+        MonitorRestarted  = "Surveillance des casques : active - redemarree automatiquement {0} fois, derniere a {1}"
+        MonitorDown       = "Surveillance des casques : ARRETEE - redemarrage automatique en cours"
+        MonitorGaveUp     = "Surveillance des casques : ARRETEE - trop de redemarrages, redemarrez l'application (00)"
         # --- Capture d'une image complete pour concevoir une vue scrcpy (console + POST /api/headset-screen-frame) ---
         FrameMenuEntry    = "8. Capturer une image plein ecran (pour concevoir une vue de capture)"
         FramePickHeadset  = "ID du casque (0 pour revenir)"

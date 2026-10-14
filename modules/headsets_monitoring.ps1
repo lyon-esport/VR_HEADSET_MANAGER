@@ -52,6 +52,154 @@ function Stop-VRMonitor {
     }
 }
 
+<#
+.SYNOPSIS
+    One-line description of a tick failure for the VRMonitor log: the message, the
+    command that threw and the statement it was running.
+.EXAMPLE
+    try { Get-KnownHeadsets } catch { Write-Log (Get-VRMonitorTickErrorText -ErrorRecord $_) -Level ERROR }
+#>
+function Get-VRMonitorTickErrorText {
+    param($ErrorRecord)
+    try {
+        $text = [string]$ErrorRecord.Exception.Message
+        $inv  = $ErrorRecord.InvocationInfo
+        if ($inv) {
+            $cmd = if ($inv.MyCommand) { [string]$inv.MyCommand.Name } else { '' }
+            $line = if ($inv.Line) { ([string]$inv.Line).Trim() } else { '' }
+            if ($line.Length -gt 120) { $line = $line.Substring(0, 120) + '...' }
+            if ($cmd)  { $text += " [in $cmd]" }
+            if ($line) { $text += " at: $line" }
+        }
+        return $text
+    } catch {
+        return [string]$ErrorRecord
+    }
+}
+
+<#
+.SYNOPSIS
+    Restarts the VRMonitor job when it has died, from the main process.
+.DESCRIPTION
+    Called about once a second by the main menu while it waits for a key
+    (Read-MenuLine -OnIdle). A job event (Register-ObjectEvent StateChanged) or a
+    System.Timers.Timer event would be the obvious hook, but neither -Action runs
+    while the console host blocks in Read-Host (measured on Windows PowerShell 5.1,
+    ConsoleHost: neither the job state change nor ~8 timer ticks ran an action in
+    16 s), so the menu polls instead.
+
+    A dead job (Failed / Completed / Stopped, or gone) is logged at ERROR with its
+    reason on first sight and restarted with Start-VRMonitor once it has been dead
+    for -RestartDelaySec, at most -MaxRestarts times per -WindowMin minutes; past
+    that it logs one ERROR and stops trying. Does nothing while the application is
+    shutting down (data\shutdown.flag or $global:AppShutdownInProgress).
+
+    The job's host process exits with the job, taking its per-headset runspaces
+    with it (measured), so a restart never doubles the runspaces.
+
+    While the job runs, also empties the record collections nobody receives (Output,
+    Information, Warning, Verbose, Debug, Progress) and keeps only the last 20 errors,
+    so the main process does not grow with them. State is kept in
+    $global:VRMonitorSupervision for Get-VRMonitorStatusText.
+.EXAMPLE
+    Invoke-VRMonitorSupervision
+#>
+function Invoke-VRMonitorSupervision {
+    param(
+        [string]$JobName         = 'VRMonitor',
+        [int]$RestartDelaySec    = 5,
+        [int]$MaxRestarts        = 5,
+        [int]$WindowMin          = 10
+    )
+    try {
+        if ($global:IsVRMonitorJob -or $global:AppShutdownInProgress) { return }
+        if (-not $global:VRMonitorSupervision) {
+            $global:VRMonitorSupervision = @{ RestartCount = 0; RestartTimes = @(); DeadSince = $null; GaveUp = $false; LastRestartAt = $null; LastDrainAt = [datetime]::MinValue }
+        }
+        $sup = $global:VRMonitorSupervision
+        if ($global:ScriptPath -and (Test-Path -LiteralPath (Join-Path $global:ScriptPath 'data\shutdown.flag'))) { return }
+
+        $job = Get-Job -Name $JobName -ErrorAction SilentlyContinue | Select-Object -Last 1
+        $now = Get-Date
+
+        if ($job -and $job.State -notin @('Failed', 'Completed', 'Stopped')) {
+            $sup.DeadSince = $null
+            if (($now - $sup.LastDrainAt).TotalSeconds -ge 30) {
+                $sup.LastDrainAt = $now
+                foreach ($j in @($job) + @($job.ChildJobs)) {
+                    foreach ($stream in 'Output', 'Information', 'Warning', 'Verbose', 'Debug', 'Progress') {
+                        try { if ($j.$stream.Count -gt 0) { $j.$stream.Clear() } } catch { }
+                    }
+                    try { while ($j.Error.Count -gt 20) { $j.Error.RemoveAt(0) } } catch { }
+                }
+            }
+            return
+        }
+
+        if ($sup.GaveUp) { return }
+
+        if (-not $sup.DeadSince) {
+            $sup.DeadSince = $now
+            $state  = if ($job) { [string]$job.State } else { 'missing' }
+            $reason = ''
+            if ($job) {
+                $child = $job.ChildJobs | Select-Object -First 1
+                if ($child -and $child.JobStateInfo.Reason) { $reason = [string]$child.JobStateInfo.Reason.Message }
+                if (-not $reason -and $job.JobStateInfo.Reason) { $reason = [string]$job.JobStateInfo.Reason.Message }
+                if (-not $reason -and $child) {
+                    $lastErr = $child.Error | Select-Object -Last 1
+                    if ($lastErr) { $reason = [string]$lastErr }
+                }
+            }
+            if (-not $reason) { $reason = 'no error recorded' }
+            Write-Log ("VRMonitor job is not running (state {0}): {1}. Restarting it in {2} s." -f $state, $reason, $RestartDelaySec) -Level ERROR
+            return
+        }
+        if (($now - $sup.DeadSince).TotalSeconds -lt $RestartDelaySec) { return }
+
+        $recent = @($sup.RestartTimes | Where-Object { ($now - $_).TotalMinutes -lt $WindowMin })
+        if ($recent.Count -ge $MaxRestarts) {
+            $sup.GaveUp = $true
+            Write-Log ("VRMonitor job restarted {0} times in {1} minutes - automatic restart stopped. Restart the application." -f $recent.Count, $WindowMin) -Level ERROR
+            return
+        }
+
+        if ($job) { try { Remove-Job -Job $job -Force -ErrorAction Stop } catch { } }
+        $null = Start-VRMonitor -VRMonitor_refresh_timer $global:VRMonitor_refresh_timer -jobName $JobName
+        $sup.RestartTimes  = @($recent) + $now
+        $sup.RestartCount++
+        $sup.LastRestartAt = $now
+        $sup.DeadSince     = $null
+        Write-Log ("VRMonitor job restarted (restart #{0})." -f $sup.RestartCount) -Level WARNING
+    } catch {
+        try { Write-Log ("VRMonitor supervision failed: " + $_.Exception.Message) -Level ERROR } catch { }
+    }
+}
+
+<#
+.SYNOPSIS
+    The VRMonitor line of the main menu header: @{ Text; Color }.
+.DESCRIPTION
+    Running, running after N automatic restarts, waiting for a restart, or given up
+    (see Invoke-VRMonitorSupervision). Strings come from $msg.Headset.Monitor*.
+.EXAMPLE
+    $s = Get-VRMonitorStatusText; Write-Host $s.Text -ForegroundColor $s.Color
+#>
+function Get-VRMonitorStatusText {
+    param([string]$JobName = 'VRMonitor')
+    $sup = $global:VRMonitorSupervision
+    $job = Get-Job -Name $JobName -ErrorAction SilentlyContinue | Select-Object -Last 1
+    $alive = $job -and $job.State -notin @('Failed', 'Completed', 'Stopped')
+    if (-not $alive) {
+        if ($sup -and $sup.GaveUp) { return @{ Text = $msg.Headset.MonitorGaveUp; Color = 'Red' } }
+        return @{ Text = $msg.Headset.MonitorDown; Color = 'Red' }
+    }
+    if ($sup -and $sup.RestartCount -gt 0) {
+        return @{ Text = ($msg.Headset.MonitorRestarted -f $sup.RestartCount, $sup.LastRestartAt.ToString('HH:mm:ss')); Color = 'Yellow' }
+    }
+    return @{ Text = $msg.Headset.MonitorRunning; Color = 'DarkGreen' }
+}
+
 # --- TESTS  ---
 <#
     Start-VRMonitor
@@ -274,9 +422,20 @@ function Start-VRMonitor {
     )
     Stop-VRMonitor $jobName
     $parentPID = $PID
+    # main.ps1 holds the config path in its script scope (scripts_init.ps1 is dot-sourced
+    # there); a restart by Invoke-VRMonitorSupervision may run from another call stack.
+    $vrmConfigFilePath = if ($ConfigFilePath) { $ConfigFilePath } else { $global:ConfigFilePath }
     Start-Job -Name $jobName -ScriptBlock {
+        # Nobody receives this job's output, and a job keeps every record it writes in the
+        # PARENT process until Receive-Job: Write-Host (which Write-Log uses for the console)
+        # goes to the Information stream, so main.ps1 grew without bound (~70k records a
+        # day). Measured on PS 5.1: $InformationPreference = 'SilentlyContinue' does NOT
+        # stop the retention (500 of 500 records kept); InformationAction Ignore keeps 0.
+        # The job has no visible console, so nothing is lost; the log file is unaffected.
+        $global:PSDefaultParameterValues['Write-Host:InformationAction'] = 'Ignore'
+
         $global:ScriptPath              = $using:ScriptPath
-        $global:ConfigFilePath          = $using:ConfigFilePath
+        $global:ConfigFilePath          = $using:vrmConfigFilePath
         $global:logFolder               = $using:logFolder
         $global:logFile                 = $using:logFile
         $global:VRMonitor_refresh_timer = $using:VRMonitor_refresh_timer
@@ -727,6 +886,18 @@ function Start-VRMonitor {
         # whole minute. Get-GpuEncoder now caches its result for the life of the process
         # (utils.ps1), so only the first capture pays for the probe.
 
+        # Tick guard bookkeeping. The fast and slow paths each run inside a try/catch so one
+        # terminating error (SQLITE_BUSY after retries, a module bug) loses one tick instead
+        # of ending this job - which used to stop live status, the watchdogs, USB onboarding
+        # and stream restarts silently. The shutdown check and the sleep stay OUTSIDE the
+        # guards, so the loop always paces itself and always exits on shutdown.
+        # Counted per guarded step ("fast tick", "slow tick", and the sub-steps with their own
+        # guard): a fault on the slow path alone is separated by clean fast ticks, which must
+        # not reset its count.
+        $tickFailures       = @{}   # step -> consecutive failed runs
+        $tickFailureLogMax  = 20    # logged every run up to this many in a row...
+        $lastTickErrorLogAt = @{}   # step -> last time it was logged (then once a minute)
+
         while ($true) {
 
             # Cooperative shutdown and parent-process-gone detection
@@ -773,447 +944,510 @@ function Start-VRMonitor {
                 return
             }
 
-            # ---- FAST PATH (every 500ms) ----
-            # Pick up registry changes immediately instead of waiting for the slow
-            # tick. The registry is reloaded below only when its change counter has
-            # actually moved, which is one indexed scalar read (~0.3 ms) on a tick
-            # that already does more than that.
-            #
-            # This is not an optimisation, it is a correctness fix. headset_status
-            # has a foreign key to headsets(id), and the fast path writes a row for
-            # every headset in the snapshot it holds. Remove a headset through the
-            # web UI or the console and, until the next slow tick, this loop was
-            # still writing a status row for an id that no longer exists - which
-            # SQLite rejects, and because every headset is written in ONE batch
-            # transaction, the whole tick was lost for everyone. Observed in
-            # production: adding a discovered headset (which removed and recreated
-            # a row) froze live status for all five headsets.
+            $tickErrors = @{ 'fast tick' = $null }   # guarded step -> error text, $null = ran cleanly
             try {
-                $registryVersion = Get-DbTableVersion -Name 'headsets'
-                if ($registryVersion -ne $lastRegistryVersion) {
-                    $knownHeadsets       = @(Get-KnownHeadsets)
-                    $lastRegistryVersion = $registryVersion
-                    $lastFingerprint     = ""
-                }
-            } catch { }
+                # ---- FAST PATH (every 500ms) ----
+                # Pick up registry changes immediately instead of waiting for the slow
+                # tick. The registry is reloaded below only when its change counter has
+                # actually moved, which is one indexed scalar read (~0.3 ms) on a tick
+                # that already does more than that.
+                #
+                # This is not an optimisation, it is a correctness fix. headset_status
+                # has a foreign key to headsets(id), and the fast path writes a row for
+                # every headset in the snapshot it holds. Remove a headset through the
+                # web UI or the console and, until the next slow tick, this loop was
+                # still writing a status row for an id that no longer exists - which
+                # SQLite rejects, and because every headset is written in ONE batch
+                # transaction, the whole tick was lost for everyone. Observed in
+                # production: adding a discovered headset (which removed and recreated
+                # a row) froze live status for all five headsets.
+                try {
+                    $registryVersion = Get-DbTableVersion -Name 'headsets'
+                    if ($registryVersion -ne $lastRegistryVersion) {
+                        $knownHeadsets       = @(Get-KnownHeadsets)
+                        $lastRegistryVersion = $registryVersion
+                        $lastFingerprint     = ""
+                    }
+                } catch { }
 
-            # Build knownHeadsetsInfo from sharedState; use a default placeholder until first poll
-            $knownHeadsetsInfo = [System.Collections.ArrayList]@()
-            foreach ($h in $knownHeadsets) {
-                $info = $sharedState[$h.IPAddress]
-                if ($info) {
-                    # Re-stamp the authoritative identity from the registry row onto the record,
-                    # on EVERY tick - not only when the fingerprint moved. The runspace that
-                    # produced this record captured its $headset once at startup, so right after
-                    # an address changes owner it still carries the PREVIOUS headset's identity.
-                    # ID is the exported key (ADR-0016), so a stale one would attach this
-                    # headset's live status to another row. Sync-HeadsetRunspaces respawns the
-                    # drifted runspace on the next slow tick; this keeps the export correct
-                    # until it does.
-                    if ($info.ID        -ne $h.ID)        { $info.ID        = $h.ID }
-                    if ($info.Name      -ne $h.Name)      { $info.Name      = $h.Name }
-                    if ($info.IPAddress -ne $h.IPAddress) { $info.IPAddress = $h.IPAddress }
-                    [void]$knownHeadsetsInfo.Add($info)
-                } else {
-                    [void]$knownHeadsetsInfo.Add((New-DefaultHeadsetInfo -knownHeadset $h))
+                # Build knownHeadsetsInfo from sharedState; use a default placeholder until first poll
+                $knownHeadsetsInfo = [System.Collections.ArrayList]@()
+                foreach ($h in $knownHeadsets) {
+                    $info = $sharedState[$h.IPAddress]
+                    if ($info) {
+                        # Re-stamp the authoritative identity from the registry row onto the record,
+                        # on EVERY tick - not only when the fingerprint moved. The runspace that
+                        # produced this record captured its $headset once at startup, so right after
+                        # an address changes owner it still carries the PREVIOUS headset's identity.
+                        # ID is the exported key (ADR-0016), so a stale one would attach this
+                        # headset's live status to another row. Sync-HeadsetRunspaces respawns the
+                        # drifted runspace on the next slow tick; this keeps the export correct
+                        # until it does.
+                        if ($info.ID        -ne $h.ID)        { $info.ID        = $h.ID }
+                        if ($info.Name      -ne $h.Name)      { $info.Name      = $h.Name }
+                        if ($info.IPAddress -ne $h.IPAddress) { $info.IPAddress = $h.IPAddress }
+                        [void]$knownHeadsetsInfo.Add($info)
+                    } else {
+                        [void]$knownHeadsetsInfo.Add((New-DefaultHeadsetInfo -knownHeadset $h))
+                    }
                 }
-            }
 
-            # ---- FAST PATH: stream benchmark pause (ADR-0026) ----
-            # A benchmark (stream_benchmark.ps1, another process) raises an expiring app_kv
-            # flag. This process owns the running pipelines, so IT stops them, on the flag's
-            # rising edge, then acknowledges so the benchmark can start its own test stream
-            # without the watchdog killing it. Watch-ScrcpyProcesses returns at once while the
-            # flag is set. On the falling edge the edge memory is wiped so every headset with
-            # auto-restart counts as a fresh "ready" edge below and restarts on this very tick.
-            $benchState = $null
-            if (Get-Command Get-StreamBenchmarkState -ErrorAction SilentlyContinue) { $benchState = Get-StreamBenchmarkState }
-            if ($benchState) {
-                if ($benchState.RunId -ne $benchRunId) {
-                    Write-Log ("VRMonitor: stream benchmark {0} started - stopping every stream until it ends." -f $benchState.RunId) -Level INFO
-                    try { Stop-Scrcpy | Out-Null } catch { Write-Log ("VRMonitor: stopping streams for the benchmark failed: " + $_.Exception.Message) -Level WARNING }
-                    Confirm-StreamBenchmarkPause -RunId $benchState.RunId
-                    $benchRunId = $benchState.RunId
-                }
-            } elseif ($benchRunId) {
-                Write-Log "VRMonitor: stream benchmark over - restarting the normal streams." -Level INFO
-                $benchRunId      = ''
-                $scrcpyEdgeState = @{}
-            }
-
-            # ---- FAST PATH: stream restart request (ADR-0027) ----
-            # Another process changed config that a running stream would not pick up (e.g. the
-            # re-encode settings of an applied benchmark recommendation). This process owns the
-            # pipelines, so it restarts them: reload config, stop every stream, and wipe the
-            # edge memory so the watchdog trigger below restarts them on this same tick.
-            if (-not $benchState -and (Get-Command Get-StreamRestartRequest -ErrorAction SilentlyContinue)) {
-                $restartReq = Get-StreamRestartRequest
-                if ($restartReq -and [string]$restartReq.id -and [string]$restartReq.id -ne $restartReqId) {
-                    $restartReqId = [string]$restartReq.id
-                    Write-Log ("VRMonitor: stream restart requested ({0}) - reloading config and restarting every stream." -f $restartReq.reason) -Level INFO
-                    try { Get-Config -ConfigFilePath $global:ConfigFilePath | Out-Null } catch { Write-Log ("VRMonitor: config reload failed: " + $_.Exception.Message) -Level WARNING }
-                    try { Stop-Scrcpy | Out-Null } catch { Write-Log ("VRMonitor: stopping streams for the restart failed: " + $_.Exception.Message) -Level WARNING }
+                # ---- FAST PATH: stream benchmark pause (ADR-0026) ----
+                # A benchmark (stream_benchmark.ps1, another process) raises an expiring app_kv
+                # flag. This process owns the running pipelines, so IT stops them, on the flag's
+                # rising edge, then acknowledges so the benchmark can start its own test stream
+                # without the watchdog killing it. Watch-ScrcpyProcesses returns at once while the
+                # flag is set. On the falling edge the edge memory is wiped so every headset with
+                # auto-restart counts as a fresh "ready" edge below and restarts on this very tick.
+                $benchState = $null
+                if (Get-Command Get-StreamBenchmarkState -ErrorAction SilentlyContinue) { $benchState = Get-StreamBenchmarkState }
+                if ($benchState) {
+                    if ($benchState.RunId -ne $benchRunId) {
+                        Write-Log ("VRMonitor: stream benchmark {0} started - stopping every stream until it ends." -f $benchState.RunId) -Level INFO
+                        try { Stop-Scrcpy | Out-Null } catch { Write-Log ("VRMonitor: stopping streams for the benchmark failed: " + $_.Exception.Message) -Level WARNING }
+                        Confirm-StreamBenchmarkPause -RunId $benchState.RunId
+                        $benchRunId = $benchState.RunId
+                    }
+                } elseif ($benchRunId) {
+                    Write-Log "VRMonitor: stream benchmark over - restarting the normal streams." -Level INFO
+                    $benchRunId      = ''
                     $scrcpyEdgeState = @{}
                 }
-            }
 
-            # ---- FAST PATH: scrcpy start trigger (edge only) ----
-            # Watch-ScrcpyProcesses otherwise runs only on the slow tick, so a click on the
-            # auto-restart button (or ADB coming back on a headset that has it on) waited a
-            # full refresh_timer plus the whole slow-path work before scrcpy even launched.
-            # The registry change counter above already reloaded $knownHeadsets on this tick
-            # if /api/autorestart just wrote, and the runspaces refresh ADBWifi every second.
-            # Only a false->true transition fires, so the steady state costs no process scan;
-            # crash restarts and transport switches stay on the slow tick.
-            $infoByIp = @{}
-            foreach ($i in $knownHeadsetsInfo) { if ($i.IPAddress) { $infoByIp[[string]$i.IPAddress] = $i } }
-            #
-            # Same for a SETTING change on a headset that is already capturing: a new view
-            # (ScrcpyProfile, e.g. the view picker on the settings page) or a recording toggle
-            # (Record). Those are registry writes too, so they land here on this tick; without
-            # this the running session was only compared with its new settings on the next
-            # slow tick, after all the slow-path work. Only the IDs whose settings actually
-            # changed are passed - Watch-ScrcpyProcesses' existing comparison (options,
-            # recording, merged view) still decides whether a restart is needed.
-            $scrcpyEdgeIds = @()
-            foreach ($h in $knownHeadsets) {
-                $info  = $infoByIp[[string]$h.IPAddress]
-                $ready = (ConvertTo-BoolField $h.scrcpy_AutoRestart) -and -not (Test-UnknownIp $h.IPAddress) `
-                         -and $info -and (ConvertTo-BoolField $info.ADBWifi)
-                $edgeKey = [string]$h.ID
-                $cfgSig  = '{0}|{1}' -f $h.ScrcpyProfile, $h.Record
-                $cfgChanged = $scrcpyCfgState.ContainsKey($edgeKey) -and $scrcpyCfgState[$edgeKey] -ne $cfgSig
-                if ($ready -and (-not $scrcpyEdgeState[$edgeKey] -or $cfgChanged)) { $scrcpyEdgeIds += [int]$h.ID }
-                $scrcpyEdgeState[$edgeKey] = [bool]$ready
-                $scrcpyCfgState[$edgeKey]  = $cfgSig
-            }
-
-            # An explicit "check these headsets now" (Request-ScrcpyCheck): the kill button, a
-            # profile / recording / capture-mode / view / calibration change made by another
-            # process. Those leave the registry untouched or change it in a way the edge above
-            # cannot see (the capture is simply gone, or its options changed in config.json), so
-            # they used to wait for the slow tick. Config is reloaded first: the running session
-            # is compared with the NEW view definitions. Watch-ScrcpyProcesses then decides
-            # (start / restart / nothing) and clears the "starting" mark when nothing is needed.
-            if (-not $benchState -and (Get-Command Get-ScrcpyCheckRequest -ErrorAction SilentlyContinue)) {
-                $checkReq = Get-ScrcpyCheckRequest
-                if ($checkReq -and [string]$checkReq.id -and [string]$checkReq.id -ne $checkReqId) {
-                    $checkReqId = [string]$checkReq.id
-                    $knownIds = @($knownHeadsets | ForEach-Object { [int]$_.ID })
-                    $checkIds = @($checkReq.ids | ForEach-Object { [int]$_ } | Where-Object { $knownIds -contains $_ })
-                    if ($checkIds.Count -gt 0) {
-                        Write-Log ("VRMonitor: capture check requested ({0}) for headset id(s) {1}" -f $checkReq.reason, ($checkIds -join ',')) -Level DEBUG
+                # ---- FAST PATH: stream restart request (ADR-0027) ----
+                # Another process changed config that a running stream would not pick up (e.g. the
+                # re-encode settings of an applied benchmark recommendation). This process owns the
+                # pipelines, so it restarts them: reload config, stop every stream, and wipe the
+                # edge memory so the watchdog trigger below restarts them on this same tick.
+                if (-not $benchState -and (Get-Command Get-StreamRestartRequest -ErrorAction SilentlyContinue)) {
+                    $restartReq = Get-StreamRestartRequest
+                    if ($restartReq -and [string]$restartReq.id -and [string]$restartReq.id -ne $restartReqId) {
+                        $restartReqId = [string]$restartReq.id
+                        Write-Log ("VRMonitor: stream restart requested ({0}) - reloading config and restarting every stream." -f $restartReq.reason) -Level INFO
                         try { Get-Config -ConfigFilePath $global:ConfigFilePath | Out-Null } catch { Write-Log ("VRMonitor: config reload failed: " + $_.Exception.Message) -Level WARNING }
-                        $scrcpyEdgeIds = @($scrcpyEdgeIds + $checkIds | Select-Object -Unique)
+                        try { Stop-Scrcpy | Out-Null } catch { Write-Log ("VRMonitor: stopping streams for the restart failed: " + $_.Exception.Message) -Level WARNING }
+                        $scrcpyEdgeState = @{}
                     }
                 }
-            }
-            if ($scrcpyEdgeIds.Count -gt 0) {
-                Write-Log ("VRMonitor: capture requested or settings changed for headset id(s) {0} - checking scrcpy now" -f ($scrcpyEdgeIds -join ',')) -Level DEBUG
-                # mediamtx before scrcpy (publisher ordering - see the eager block above).
-                try { Start-MediaMtx } catch { Write-Log ("VRMonitor: mediamtx watchdog (trigger) failed: " + $_.Exception.Message) -Level WARNING }
-                try { Watch-ScrcpyProcesses -HeadsetId $scrcpyEdgeIds -HeadsetInfo $infoByIp } catch { Write-Log ("VRMonitor: scrcpy start trigger failed: " + $_.Exception.Message) -Level WARNING }
-            }
 
-            # Fingerprint of key display fields - triggers CSV/HTML write on any change.
-            # Keyed on ID (the exported key). Brand/Model/SerialNumber are NOT exported any
-            # more but stay in the fingerprint: they gate the Update-HeadsetField write-back
-            # and the Set-HeadsetIdentity queueing in the block below.
-            $fp = ($knownHeadsetsInfo | ForEach-Object {
-                "$($_.ID)|$($_.Ping)|$($_.ADBWifi)|$($_.Battery)|$($_.Charging)|$($_.ChargingWattage)|$($_.Temp)|$($_.CpuTemp)|$($_.GpuTemp)|$($_.SkinTemp)|$($_.BatteryControllerLeft)|$($_.BatteryControllerRight)|$($_.PowerState)|$($_.TimeRemainingMin)|$($_.AdbTransport)|$($_.SCRCPY)|$($_.Brand)|$($_.Model)|$($_.SerialNumber)|$($_.RunningApp)"
-            }) -join '~'
+                # ---- FAST PATH: scrcpy start trigger (edge only) ----
+                # Watch-ScrcpyProcesses otherwise runs only on the slow tick, so a click on the
+                # auto-restart button (or ADB coming back on a headset that has it on) waited a
+                # full refresh_timer plus the whole slow-path work before scrcpy even launched.
+                # The registry change counter above already reloaded $knownHeadsets on this tick
+                # if /api/autorestart just wrote, and the runspaces refresh ADBWifi every second.
+                # Only a false->true transition fires, so the steady state costs no process scan;
+                # crash restarts and transport switches stay on the slow tick.
+                $infoByIp = @{}
+                foreach ($i in $knownHeadsetsInfo) { if ($i.IPAddress) { $infoByIp[[string]$i.IPAddress] = $i } }
+                #
+                # Same for a SETTING change on a headset that is already capturing: a new view
+                # (ScrcpyProfile, e.g. the view picker on the settings page) or a recording toggle
+                # (Record). Those are registry writes too, so they land here on this tick; without
+                # this the running session was only compared with its new settings on the next
+                # slow tick, after all the slow-path work. Only the IDs whose settings actually
+                # changed are passed - Watch-ScrcpyProcesses' existing comparison (options,
+                # recording, merged view) still decides whether a restart is needed.
+                $scrcpyEdgeIds = @()
+                foreach ($h in $knownHeadsets) {
+                    $info  = $infoByIp[[string]$h.IPAddress]
+                    $ready = (ConvertTo-BoolField $h.scrcpy_AutoRestart) -and -not (Test-UnknownIp $h.IPAddress) `
+                             -and $info -and (ConvertTo-BoolField $info.ADBWifi)
+                    $edgeKey = [string]$h.ID
+                    $cfgSig  = '{0}|{1}' -f $h.ScrcpyProfile, $h.Record
+                    $cfgChanged = $scrcpyCfgState.ContainsKey($edgeKey) -and $scrcpyCfgState[$edgeKey] -ne $cfgSig
+                    if ($ready -and (-not $scrcpyEdgeState[$edgeKey] -or $cfgChanged)) { $scrcpyEdgeIds += [int]$h.ID }
+                    $scrcpyEdgeState[$edgeKey] = [bool]$ready
+                    $scrcpyCfgState[$edgeKey]  = $cfgSig
+                }
 
-            if ($fp -ne $lastFingerprint -and $knownHeadsets.Count -gt 0) {
-                $lastFingerprint = $fp
-
-                # Identity mismatches found this tick: the headset answering at a row's
-                # address reports a DIFFERENT serial than the row holds. Collected here and
-                # applied after the loop, because each fix rewrites the whole registry.
-                $identityFixes = @()
-
-                # Model/Serial CSV updates must be serialized in the main thread
-                foreach ($headsetInfo in $knownHeadsetsInfo) {
-                    # Resolve by IP, not by ID: $headsetInfo.ID is a value the per-headset
-                    # runspace captured once at startup and never refreshes, while ID can be
-                    # reassigned on a reorder. IP is the loop's own stable join key (see
-                    # $sharedState[$h.IPAddress] above), so it is safe against ID recycling.
-                    $headset = $knownHeadsets | Where-Object { $_.IPAddress -eq $headsetInfo.IPAddress } | Select-Object -First 1
-                    if (-not $headset) { continue }
-
-                    $fetchedModel = $headsetInfo.Model
-                    if ((ConvertTo-BoolField $headsetInfo.ADBWifi) `
-                        -and -not [string]::IsNullOrWhiteSpace($fetchedModel) `
-                        -and $fetchedModel -ne "-" -and $fetchedModel -ne $headset.Model) {
-                        Write-Log ($msg.UpdatingModel -f $headset.Name, $headset.IPAddress, $fetchedModel) -Level INFO
-                        Update-HeadsetField -ID $headset.ID -Field "Model" -NewValue $fetchedModel
-                    }
-                    $fetchedBrand = $headsetInfo.Brand
-                    $currentBrand = if ($headset.PSObject.Properties['Brand']) { $headset.Brand } else { "" }
-                    if ((ConvertTo-BoolField $headsetInfo.ADBWifi) `
-                        -and -not [string]::IsNullOrWhiteSpace($fetchedBrand) `
-                        -and $fetchedBrand -ne $currentBrand) {
-                        Write-Log ("Updating brand for headset {0} ({1}): {2}" -f $headset.Name, $headset.IPAddress, $fetchedBrand) -Level INFO
-                        Update-HeadsetField -ID $headset.ID -Field "Brand" -NewValue $fetchedBrand
-                    }
-                    # SerialNumber is the headset's permanent identity, so it is NEVER
-                    # blindly overwritten with whatever answers at this address. Doing so
-                    # is what used to make a DHCP lease swap permanent: headset A's row
-                    # would silently inherit headset B's serial, destroying the only key
-                    # capable of healing it.
-                    $fetchedSerial = $headsetInfo.SerialNumber
-                    if ((ConvertTo-BoolField $headsetInfo.ADBWifi) `
-                        -and -not [string]::IsNullOrWhiteSpace($fetchedSerial) `
-                        -and $fetchedSerial -ne "-") {
-
-                        if ([string]::IsNullOrWhiteSpace($headset.SerialNumber)) {
-                            # Learning: a row created from an IP alone (manual add) gets
-                            # keyed on first contact. Safe - there is nothing to contradict.
-                            Write-Log ($msg.UpdatingSerialNumber -f $headset.Name, $headset.IPAddress, $fetchedSerial) -Level INFO
-                            Update-HeadsetField -ID $headset.ID -Field "SerialNumber" -NewValue $fetchedSerial
-                        }
-                        elseif (([string]$headset.SerialNumber).Trim() -ne $fetchedSerial.Trim()) {
-                            # Mismatch: this address now belongs to a different headset.
-                            # Hand it to Set-HeadsetIdentity, which moves the address to its
-                            # rightful owner and releases this row.
-                            $identityFixes += @{
-                                Serial = $fetchedSerial.Trim()
-                                IP     = $headsetInfo.IPAddress
-                                Model  = $headsetInfo.Model
-                                Brand  = $headsetInfo.Brand
-                            }
+                # An explicit "check these headsets now" (Request-ScrcpyCheck): the kill button, a
+                # profile / recording / capture-mode / view / calibration change made by another
+                # process. Those leave the registry untouched or change it in a way the edge above
+                # cannot see (the capture is simply gone, or its options changed in config.json), so
+                # they used to wait for the slow tick. Config is reloaded first: the running session
+                # is compared with the NEW view definitions. Watch-ScrcpyProcesses then decides
+                # (start / restart / nothing) and clears the "starting" mark when nothing is needed.
+                if (-not $benchState -and (Get-Command Get-ScrcpyCheckRequest -ErrorAction SilentlyContinue)) {
+                    $checkReq = Get-ScrcpyCheckRequest
+                    if ($checkReq -and [string]$checkReq.id -and [string]$checkReq.id -ne $checkReqId) {
+                        $checkReqId = [string]$checkReq.id
+                        $knownIds = @($knownHeadsets | ForEach-Object { [int]$_.ID })
+                        $checkIds = @($checkReq.ids | ForEach-Object { [int]$_ } | Where-Object { $knownIds -contains $_ })
+                        if ($checkIds.Count -gt 0) {
+                            Write-Log ("VRMonitor: capture check requested ({0}) for headset id(s) {1}" -f $checkReq.reason, ($checkIds -join ',')) -Level DEBUG
+                            try { Get-Config -ConfigFilePath $global:ConfigFilePath | Out-Null } catch { Write-Log ("VRMonitor: config reload failed: " + $_.Exception.Message) -Level WARNING }
+                            $scrcpyEdgeIds = @($scrcpyEdgeIds + $checkIds | Select-Object -Unique)
                         }
                     }
                 }
-
-                # Apply identity fixes. Convergence for a crossed pair: row A=.10 / row B=.11
-                # with the real headsets swapped - polling .10 returns B's serial, so B takes
-                # .10 and A is released to an unknown address; the next tick polls .11,
-                # returns A's serial, and A takes .11. At most two ticks, no operator action.
-                $identityChanged = $false
-                foreach ($fix in $identityFixes) {
-                    try {
-                        $r = Set-HeadsetIdentity -SerialNumber $fix.Serial -IPAddress $fix.IP `
-                                                 -Model $fix.Model -Brand $fix.Brand -Source 'adb-poll'
-                        if ($r.Ok -and $r.Action -ne 'unchanged') {
-                            $identityChanged = $true
-                            # Drop cached poll results for every address that moved, so a
-                            # stale record is never joined onto the row that now owns it.
-                            $staleIps = @($fix.IP) + @($r.Released | ForEach-Object { $_.OldIP })
-                            foreach ($staleIp in ($staleIps | Select-Object -Unique)) {
-                                if ($staleIp -and $sharedState.ContainsKey($staleIp)) { $sharedState.Remove($staleIp) }
-                            }
-                        }
-                    } catch {
-                        Write-Log ("VRMonitor: identity fix failed for serial " + $fix.Serial + ": " + $_.Exception.Message) -Level WARNING
-                    }
+                if ($scrcpyEdgeIds.Count -gt 0) {
+                    Write-Log ("VRMonitor: capture requested or settings changed for headset id(s) {0} - checking scrcpy now" -f ($scrcpyEdgeIds -join ',')) -Level DEBUG
+                    # mediamtx before scrcpy (publisher ordering - see the eager block above).
+                    try { Start-MediaMtx } catch { Write-Log ("VRMonitor: mediamtx watchdog (trigger) failed: " + $_.Exception.Message) -Level WARNING }
+                    try { Watch-ScrcpyProcesses -HeadsetId $scrcpyEdgeIds -HeadsetInfo $infoByIp } catch { Write-Log ("VRMonitor: scrcpy start trigger failed: " + $_.Exception.Message) -Level WARNING }
                 }
 
-                if ($identityChanged) {
-                    # The registry moved under us. Re-read it and force a full recompute on
-                    # the next tick instead of exporting a snapshot built on stale rows.
-                    $knownHeadsets = @(Get-KnownHeadsets)
-                    $lastFingerprint = ""
-                }
-                else {
-                    # Write ID + live status only (ADR-0016). Name/IPAddress/Brand/Model/
-                    # SerialNumber are authoritative in the registry and are deliberately
-                    # NOT duplicated here - a rename or an IP change must not touch a
-                    # status row.
-                    #
-                    # One batch = one transaction. The CSV rewrite this replaces was the
-                    # most frequent write in the application (up to 2 Hz behind the
-                    # fingerprint gate) and it rewrote every row to change one.
-                    #
-                    # Rows are built explicitly rather than piped through Select-Object:
-                    # ping/adb_wifi are INTEGER columns with CHECK (x IN (0,1)), so a .NET
-                    # bool has to become 0/1, and every text column is NOT NULL, so a $null
-                    # from a headset that never answered has to become the '-' placeholder
-                    # the CSV era wrote. Binding the record as-is would fail the constraint
-                    # on the first offline headset.
-                    $statusRows = @()
-                    foreach ($info in $knownHeadsetsInfo) {
-                        $statusRows += @{
-                            ID                     = [int]$info.ID
-                            Ping                   = (ConvertTo-DbBool $info.Ping)
-                            ADBWifi                = (ConvertTo-DbBool $info.ADBWifi)
-                            Battery                = [string](Get-StatusFieldOrDash $info.Battery)
-                            Charging               = [string](Get-StatusFieldOrDash $info.Charging)
-                            ChargingWattage        = [string](Get-StatusFieldOrDash $info.ChargingWattage)
-                            Temp                   = [string](Get-StatusFieldOrDash $info.Temp)
-                            CpuTemp                = [string](Get-StatusFieldOrDash $info.CpuTemp)
-                            GpuTemp                = [string](Get-StatusFieldOrDash $info.GpuTemp)
-                            SkinTemp               = [string](Get-StatusFieldOrDash $info.SkinTemp)
-                            BatteryControllerLeft  = [string](Get-StatusFieldOrDash $info.BatteryControllerLeft)
-                            BatteryControllerRight = [string](Get-StatusFieldOrDash $info.BatteryControllerRight)
-                            PowerState             = [string](Get-StatusFieldOrDash $info.PowerState)
-                            TimeRemainingMin       = [string](Get-StatusFieldOrDash $info.TimeRemainingMin)
-                            AdbTransport           = [string](Get-StatusFieldOrDash $info.AdbTransport)
-                            SCRCPY                 = [string](Get-StatusFieldOrDash $info.SCRCPY)
-                            RunningApp             = [string](Get-StatusFieldOrDash $info.RunningApp)
-                            RunningAppIcon         = [string]$(if ($null -eq $info.RunningAppIcon) { '' } else { $info.RunningAppIcon })
-                        }
-                    }
-                    try {
-                        Invoke-DbBatch -Name 'status.upsert' -Rows $statusRows | Out-Null
-                    } catch {
-                        Write-Log ("VRMonitor: live status write failed - " + $_.Exception.Message) -Level WARNING
-                    }
-
-                    Update-HeadsetMonitoringFile -knownHeadsetsInfo $knownHeadsetsInfo
-
-                    Write-Log ($msg.JobInfoCollected -f $knownHeadsetsInfo.Count) -Level DEBUG
-                }
-            }
-
-            # ---- FAST PATH: kiosk status snapshot (write-on-change, mirrors above) ----
-            $kioskKeys = @($sharedState.Keys | Where-Object { $_ -like "kiosk_*" })
-            if ($kioskKeys.Count -gt 0) {
-                $kioskStatuses = @($kioskKeys | ForEach-Object { $sharedState[$_] } | Where-Object { $_ })
-                $kioskFp = ($kioskStatuses | ForEach-Object {
-                    "$($_.IPAddress)|$($_.Port)|$($_.Reachable)|$($_.LatencyMs)|$($_.CdpOpen)|$($_.CurrentUrl)"
+                # Fingerprint of key display fields - triggers CSV/HTML write on any change.
+                # Keyed on ID (the exported key). Brand/Model/SerialNumber are NOT exported any
+                # more but stay in the fingerprint: they gate the Update-HeadsetField write-back
+                # and the Set-HeadsetIdentity queueing in the block below.
+                $fp = ($knownHeadsetsInfo | ForEach-Object {
+                    "$($_.ID)|$($_.Ping)|$($_.ADBWifi)|$($_.Battery)|$($_.Charging)|$($_.ChargingWattage)|$($_.Temp)|$($_.CpuTemp)|$($_.GpuTemp)|$($_.SkinTemp)|$($_.BatteryControllerLeft)|$($_.BatteryControllerRight)|$($_.PowerState)|$($_.TimeRemainingMin)|$($_.AdbTransport)|$($_.SCRCPY)|$($_.Brand)|$($_.Model)|$($_.SerialNumber)|$($_.RunningApp)"
                 }) -join '~'
-                if ($kioskFp -ne $lastKioskFingerprint) {
-                    $lastKioskFingerprint = $kioskFp
-                    try {
-                        # One transaction for the whole snapshot, behind the same
-                        # fingerprint gate as before. LastChecked is gone: it used
-                        # to serialise as a culture-dependent DateTime blob that
-                        # nothing ever read, and the table's own updated_at says
-                        # the same thing.
-                        $kioskRows = @($kioskStatuses | ForEach-Object {
-                            @{
-                                ip_address  = [string]$_.IPAddress
-                                port        = [int]$_.Port
-                                reachable   = (ConvertTo-DbBool $_.Reachable)
-                                latency_ms  = $(if ($null -ne $_.LatencyMs) { [int]$_.LatencyMs } else { $null })
-                                cdp_open    = (ConvertTo-DbBool $_.CdpOpen)
-                                current_url = [string]$_.CurrentUrl
-                                extra_json  = '{}'
+
+                if ($fp -ne $lastFingerprint -and $knownHeadsets.Count -gt 0) {
+                    $lastFingerprint = $fp
+
+                    # Identity mismatches found this tick: the headset answering at a row's
+                    # address reports a DIFFERENT serial than the row holds. Collected here and
+                    # applied after the loop, because each fix rewrites the whole registry.
+                    $identityFixes = @()
+
+                    # Model/Serial CSV updates must be serialized in the main thread
+                    foreach ($headsetInfo in $knownHeadsetsInfo) {
+                        # Resolve by IP, not by ID: $headsetInfo.ID is a value the per-headset
+                        # runspace captured once at startup and never refreshes, while ID can be
+                        # reassigned on a reorder. IP is the loop's own stable join key (see
+                        # $sharedState[$h.IPAddress] above), so it is safe against ID recycling.
+                        $headset = $knownHeadsets | Where-Object { $_.IPAddress -eq $headsetInfo.IPAddress } | Select-Object -First 1
+                        if (-not $headset) { continue }
+
+                        $fetchedModel = $headsetInfo.Model
+                        if ((ConvertTo-BoolField $headsetInfo.ADBWifi) `
+                            -and -not [string]::IsNullOrWhiteSpace($fetchedModel) `
+                            -and $fetchedModel -ne "-" -and $fetchedModel -ne $headset.Model) {
+                            Write-Log ($msg.UpdatingModel -f $headset.Name, $headset.IPAddress, $fetchedModel) -Level INFO
+                            Update-HeadsetField -ID $headset.ID -Field "Model" -NewValue $fetchedModel
+                        }
+                        $fetchedBrand = $headsetInfo.Brand
+                        $currentBrand = if ($headset.PSObject.Properties['Brand']) { $headset.Brand } else { "" }
+                        if ((ConvertTo-BoolField $headsetInfo.ADBWifi) `
+                            -and -not [string]::IsNullOrWhiteSpace($fetchedBrand) `
+                            -and $fetchedBrand -ne $currentBrand) {
+                            Write-Log ("Updating brand for headset {0} ({1}): {2}" -f $headset.Name, $headset.IPAddress, $fetchedBrand) -Level INFO
+                            Update-HeadsetField -ID $headset.ID -Field "Brand" -NewValue $fetchedBrand
+                        }
+                        # SerialNumber is the headset's permanent identity, so it is NEVER
+                        # blindly overwritten with whatever answers at this address. Doing so
+                        # is what used to make a DHCP lease swap permanent: headset A's row
+                        # would silently inherit headset B's serial, destroying the only key
+                        # capable of healing it.
+                        $fetchedSerial = $headsetInfo.SerialNumber
+                        if ((ConvertTo-BoolField $headsetInfo.ADBWifi) `
+                            -and -not [string]::IsNullOrWhiteSpace($fetchedSerial) `
+                            -and $fetchedSerial -ne "-") {
+
+                            if ([string]::IsNullOrWhiteSpace($headset.SerialNumber)) {
+                                # Learning: a row created from an IP alone (manual add) gets
+                                # keyed on first contact. Safe - there is nothing to contradict.
+                                Write-Log ($msg.UpdatingSerialNumber -f $headset.Name, $headset.IPAddress, $fetchedSerial) -Level INFO
+                                Update-HeadsetField -ID $headset.ID -Field "SerialNumber" -NewValue $fetchedSerial
                             }
-                        })
-                        Invoke-DbBatch -Name 'kiosk_status.upsert' -Rows $kioskRows | Out-Null
-                    } catch {
-                        Write-Log ("VRMonitor: failed to store kiosk status: " + $_.Exception.Message) -Level WARNING
+                            elseif (([string]$headset.SerialNumber).Trim() -ne $fetchedSerial.Trim()) {
+                                # Mismatch: this address now belongs to a different headset.
+                                # Hand it to Set-HeadsetIdentity, which moves the address to its
+                                # rightful owner and releases this row.
+                                $identityFixes += @{
+                                    Serial = $fetchedSerial.Trim()
+                                    IP     = $headsetInfo.IPAddress
+                                    Model  = $headsetInfo.Model
+                                    Brand  = $headsetInfo.Brand
+                                }
+                            }
+                        }
+                    }
+
+                    # Apply identity fixes. Convergence for a crossed pair: row A=.10 / row B=.11
+                    # with the real headsets swapped - polling .10 returns B's serial, so B takes
+                    # .10 and A is released to an unknown address; the next tick polls .11,
+                    # returns A's serial, and A takes .11. At most two ticks, no operator action.
+                    $identityChanged = $false
+                    foreach ($fix in $identityFixes) {
+                        try {
+                            $r = Set-HeadsetIdentity -SerialNumber $fix.Serial -IPAddress $fix.IP `
+                                                     -Model $fix.Model -Brand $fix.Brand -Source 'adb-poll'
+                            if ($r.Ok -and $r.Action -ne 'unchanged') {
+                                $identityChanged = $true
+                                # Drop cached poll results for every address that moved, so a
+                                # stale record is never joined onto the row that now owns it.
+                                $staleIps = @($fix.IP) + @($r.Released | ForEach-Object { $_.OldIP })
+                                foreach ($staleIp in ($staleIps | Select-Object -Unique)) {
+                                    if ($staleIp -and $sharedState.ContainsKey($staleIp)) { $sharedState.Remove($staleIp) }
+                                }
+                            }
+                        } catch {
+                            Write-Log ("VRMonitor: identity fix failed for serial " + $fix.Serial + ": " + $_.Exception.Message) -Level WARNING
+                        }
+                    }
+
+                    if ($identityChanged) {
+                        # The registry moved under us. Re-read it and force a full recompute on
+                        # the next tick instead of exporting a snapshot built on stale rows.
+                        $knownHeadsets = @(Get-KnownHeadsets)
+                        $lastFingerprint = ""
+                    }
+                    else {
+                        # Write ID + live status only (ADR-0016). Name/IPAddress/Brand/Model/
+                        # SerialNumber are authoritative in the registry and are deliberately
+                        # NOT duplicated here - a rename or an IP change must not touch a
+                        # status row.
+                        #
+                        # One batch = one transaction. The CSV rewrite this replaces was the
+                        # most frequent write in the application (up to 2 Hz behind the
+                        # fingerprint gate) and it rewrote every row to change one.
+                        #
+                        # Rows are built explicitly rather than piped through Select-Object:
+                        # ping/adb_wifi are INTEGER columns with CHECK (x IN (0,1)), so a .NET
+                        # bool has to become 0/1, and every text column is NOT NULL, so a $null
+                        # from a headset that never answered has to become the '-' placeholder
+                        # the CSV era wrote. Binding the record as-is would fail the constraint
+                        # on the first offline headset.
+                        $statusRows = @()
+                        foreach ($info in $knownHeadsetsInfo) {
+                            $statusRows += @{
+                                ID                     = [int]$info.ID
+                                Ping                   = (ConvertTo-DbBool $info.Ping)
+                                ADBWifi                = (ConvertTo-DbBool $info.ADBWifi)
+                                Battery                = [string](Get-StatusFieldOrDash $info.Battery)
+                                Charging               = [string](Get-StatusFieldOrDash $info.Charging)
+                                ChargingWattage        = [string](Get-StatusFieldOrDash $info.ChargingWattage)
+                                Temp                   = [string](Get-StatusFieldOrDash $info.Temp)
+                                CpuTemp                = [string](Get-StatusFieldOrDash $info.CpuTemp)
+                                GpuTemp                = [string](Get-StatusFieldOrDash $info.GpuTemp)
+                                SkinTemp               = [string](Get-StatusFieldOrDash $info.SkinTemp)
+                                BatteryControllerLeft  = [string](Get-StatusFieldOrDash $info.BatteryControllerLeft)
+                                BatteryControllerRight = [string](Get-StatusFieldOrDash $info.BatteryControllerRight)
+                                PowerState             = [string](Get-StatusFieldOrDash $info.PowerState)
+                                TimeRemainingMin       = [string](Get-StatusFieldOrDash $info.TimeRemainingMin)
+                                AdbTransport           = [string](Get-StatusFieldOrDash $info.AdbTransport)
+                                SCRCPY                 = [string](Get-StatusFieldOrDash $info.SCRCPY)
+                                RunningApp             = [string](Get-StatusFieldOrDash $info.RunningApp)
+                                RunningAppIcon         = [string]$(if ($null -eq $info.RunningAppIcon) { '' } else { $info.RunningAppIcon })
+                            }
+                        }
+                        try {
+                            Invoke-DbBatch -Name 'status.upsert' -Rows $statusRows | Out-Null
+                        } catch {
+                            Write-Log ("VRMonitor: live status write failed - " + $_.Exception.Message) -Level WARNING
+                        }
+
+                        # Own guard: an overlay write failure must not skip the kiosk snapshot below.
+                        $tickErrors['monitoring overlay update'] = $null
+                        try { Update-HeadsetMonitoringFile -knownHeadsetsInfo $knownHeadsetsInfo }
+                        catch { $tickErrors['monitoring overlay update'] = Get-VRMonitorTickErrorText -ErrorRecord $_ }
+
+                        Write-Log ($msg.JobInfoCollected -f $knownHeadsetsInfo.Count) -Level DEBUG
                     }
                 }
+
+                # ---- FAST PATH: kiosk status snapshot (write-on-change, mirrors above) ----
+                $kioskKeys = @($sharedState.Keys | Where-Object { $_ -like "kiosk_*" })
+                if ($kioskKeys.Count -gt 0) {
+                    $kioskStatuses = @($kioskKeys | ForEach-Object { $sharedState[$_] } | Where-Object { $_ })
+                    $kioskFp = ($kioskStatuses | ForEach-Object {
+                        "$($_.IPAddress)|$($_.Port)|$($_.Reachable)|$($_.LatencyMs)|$($_.CdpOpen)|$($_.CurrentUrl)"
+                    }) -join '~'
+                    if ($kioskFp -ne $lastKioskFingerprint) {
+                        $lastKioskFingerprint = $kioskFp
+                        try {
+                            # One transaction for the whole snapshot, behind the same
+                            # fingerprint gate as before. LastChecked is gone: it used
+                            # to serialise as a culture-dependent DateTime blob that
+                            # nothing ever read, and the table's own updated_at says
+                            # the same thing.
+                            $kioskRows = @($kioskStatuses | ForEach-Object {
+                                @{
+                                    ip_address  = [string]$_.IPAddress
+                                    port        = [int]$_.Port
+                                    reachable   = (ConvertTo-DbBool $_.Reachable)
+                                    latency_ms  = $(if ($null -ne $_.LatencyMs) { [int]$_.LatencyMs } else { $null })
+                                    cdp_open    = (ConvertTo-DbBool $_.CdpOpen)
+                                    current_url = [string]$_.CurrentUrl
+                                    extra_json  = '{}'
+                                }
+                            })
+                            Invoke-DbBatch -Name 'kiosk_status.upsert' -Rows $kioskRows | Out-Null
+                        } catch {
+                            Write-Log ("VRMonitor: failed to store kiosk status: " + $_.Exception.Message) -Level WARNING
+                        }
+                    }
+                }
+            } catch {
+                $tickErrors['fast tick'] = Get-VRMonitorTickErrorText -ErrorRecord $_
+                # Inside a try, an error that used to skip ONE statement aborts the rest of
+                # the block - possibly after the fingerprint was taken and before the status
+                # write. Forget the fingerprints so the next tick redoes that work.
+                $lastFingerprint      = ""
+                $lastKioskFingerprint = ""
             }
 
             # ---- SLOW PATH (every refresh_timer seconds) ----
             $slowCounter++
             if ($slowCounter -ge $slowEvery) {
                 $slowCounter = 0
+                $tickErrors['slow tick'] = $null
 
-                Get-Config -ConfigFilePath $global:ConfigFilePath | Out-Null
-                $sharedState["_refresh_timer"] = $global:VRMonitor_refresh_timer
-                $slowEvery = [Math]::Max(1, [int]($global:VRMonitor_refresh_timer / 0.5))
-
-                Write-Log ($msg.DebugConfigFilePath -f $global:ConfigFilePath) -Level DEBUG
-                Write-Log ($msg.DebugKnownHeadsetsPath -f $global:knownHeadsetsFilePath) -Level DEBUG
-
-                $knownHeadsets = @(Get-KnownHeadsets)
-
-                # Guarded like the discovery/companion calls below it: anything that
-                # escapes here would abort the rest of the slow tick (service
-                # watchdogs, Update-ComputerMonitoring, VQA) for every headset.
+                # Liveness for other processes (web server, NR harness): the loop reached a
+                # slow tick. Written first and on its own, so a slow tick that fails further
+                # down still says the loop is alive - the failure itself is logged as ERROR.
+                # A quoted JSON string, like usb_busy_until: app_kv values are JSON documents.
                 try {
-                    Invoke-UsbHeadsetActions | Out-Null
-                } catch {
-                    Write-Log ("VRMonitor: USB tick failed: " + $_.Exception.Message) -Level WARNING
-                }
+                    Set-DbKeyValue -Key 'vrmonitor_heartbeat' -Value ('"' + (Get-Date).ToUniversalTime().ToString('o') + '"')
+                } catch { }
 
-                # Discover companion apps: heals IP drift silently and returns companion states
                 try {
-                    if (Get-Command Invoke-CompanionDiscovery -ErrorAction SilentlyContinue) {
-                        Invoke-CompanionDiscovery -TimeoutMs 1500 | Out-Null
+                    Get-Config -ConfigFilePath $global:ConfigFilePath | Out-Null
+                    $sharedState["_refresh_timer"] = $global:VRMonitor_refresh_timer
+                    $slowEvery = [Math]::Max(1, [int]($global:VRMonitor_refresh_timer / 0.5))
+
+                    Write-Log ($msg.DebugConfigFilePath -f $global:ConfigFilePath) -Level DEBUG
+                    Write-Log ($msg.DebugKnownHeadsetsPath -f $global:knownHeadsetsFilePath) -Level DEBUG
+
+                    $knownHeadsets = @(Get-KnownHeadsets)
+
+                    # Guarded like the discovery/companion calls below it: anything that
+                    # escapes here would abort the rest of the slow tick (service
+                    # watchdogs, Update-ComputerMonitoring, VQA) for every headset.
+                    try {
+                        Invoke-UsbHeadsetActions | Out-Null
+                    } catch {
+                        Write-Log ("VRMonitor: USB tick failed: " + $_.Exception.Message) -Level WARNING
                     }
-                } catch {
-                    Write-Log ("VRMonitor: companion discovery failed: " + $_.Exception.Message) -Level DEBUG
-                }
 
-                # Background LAN discovery: start/stop to match the config toggle, then
-                # drain whatever the sweep runspace published. Applying the results here
-                # keeps every registry write in the main thread, like the fast path above.
-                try {
-                    Sync-HeadsetDiscoveryRunspace -registry ([ref]$discoveryRunspace) -sharedState $sharedState `
-                        -scriptPath $global:ScriptPath -configFilePath $global:ConfigFilePath `
-                        -pollBlock $discoveryPollBlock
+                    # Discover companion apps: heals IP drift silently and returns companion states
+                    try {
+                        if (Get-Command Invoke-CompanionDiscovery -ErrorAction SilentlyContinue) {
+                            Invoke-CompanionDiscovery -TimeoutMs 1500 | Out-Null
+                        }
+                    } catch {
+                        Write-Log ("VRMonitor: companion discovery failed: " + $_.Exception.Message) -Level DEBUG
+                    }
 
-                    if ($sharedState["_discovery_results"]) {
-                        $discovered = @($sharedState["_discovery_results"])
-                        $sharedState["_discovery_results"] = $null
-                        if ($discovered.Count -gt 0) {
-                            if ((Update-HeadsetsFromDiscovery -Devices $discovered) -gt 0) {
-                                # Rows moved - reload and force a fast-path recompute.
-                                $knownHeadsets = @(Get-KnownHeadsets)
-                                $lastFingerprint = ""
+                    # Background LAN discovery: start/stop to match the config toggle, then
+                    # drain whatever the sweep runspace published. Applying the results here
+                    # keeps every registry write in the main thread, like the fast path above.
+                    try {
+                        Sync-HeadsetDiscoveryRunspace -registry ([ref]$discoveryRunspace) -sharedState $sharedState `
+                            -scriptPath $global:ScriptPath -configFilePath $global:ConfigFilePath `
+                            -pollBlock $discoveryPollBlock
+
+                        if ($sharedState["_discovery_results"]) {
+                            $discovered = @($sharedState["_discovery_results"])
+                            $sharedState["_discovery_results"] = $null
+                            if ($discovered.Count -gt 0) {
+                                if ((Update-HeadsetsFromDiscovery -Devices $discovered) -gt 0) {
+                                    # Rows moved - reload and force a fast-path recompute.
+                                    $knownHeadsets = @(Get-KnownHeadsets)
+                                    $lastFingerprint = ""
+                                }
                             }
                         }
+                    } catch {
+                        Write-Log ("VRMonitor: headset discovery failed: " + $_.Exception.Message) -Level WARNING
                     }
-                } catch {
-                    Write-Log ("VRMonitor: headset discovery failed: " + $_.Exception.Message) -Level WARNING
-                }
 
-                Sync-HeadsetRunspaces -knownHeadsets $knownHeadsets -runspaceRegistry ([ref]$runspaceRegistry) `
-                    -sharedState $sharedState -scriptPath $global:ScriptPath `
-                    -configFilePath $global:ConfigFilePath -pollBlock $headsetPollBlock
+                    # Each sub-step below has its own guard so one failure does not skip the
+                    # service watchdogs and the computer monitoring that follow it. Their failures go
+                    # through the same rate-limited report as the tick guards (below the slow path).
+                    foreach ($step in 'headset runspace sync', 'video overlay update', 'timer overlay update', 'restream path sync') { $tickErrors[$step] = $null }
+                    try {
+                        Sync-HeadsetRunspaces -knownHeadsets $knownHeadsets -runspaceRegistry ([ref]$runspaceRegistry) `
+                            -sharedState $sharedState -scriptPath $global:ScriptPath `
+                            -configFilePath $global:ConfigFilePath -pollBlock $headsetPollBlock
+                    } catch { $tickErrors['headset runspace sync'] = Get-VRMonitorTickErrorText -ErrorRecord $_ }
 
-                try {
-                    Sync-KioskRunspaces -runspaceRegistry ([ref]$kioskRunspaceRegistry) `
-                        -sharedState $sharedState -scriptPath $global:ScriptPath `
-                        -configFilePath $global:ConfigFilePath -pollBlock $kioskPollBlock
-                } catch { Write-Log ("VRMonitor: kiosk sync failed: " + $_.Exception.Message) -Level WARNING }
+                    try {
+                        Sync-KioskRunspaces -runspaceRegistry ([ref]$kioskRunspaceRegistry) `
+                            -sharedState $sharedState -scriptPath $global:ScriptPath `
+                            -configFilePath $global:ConfigFilePath -pollBlock $kioskPollBlock
+                    } catch { Write-Log ("VRMonitor: kiosk sync failed: " + $_.Exception.Message) -Level WARNING }
 
-                Update-HeadsetVideoFile
-                Update-HeadsetTimerFile
-                Sync-RestreamPaths
+                    try { Update-HeadsetVideoFile } catch { $tickErrors['video overlay update'] = Get-VRMonitorTickErrorText -ErrorRecord $_ }
+                    try { Update-HeadsetTimerFile } catch { $tickErrors['timer overlay update'] = Get-VRMonitorTickErrorText -ErrorRecord $_ }
+                    try { Sync-RestreamPaths }      catch { $tickErrors['restream path sync']   = Get-VRMonitorTickErrorText -ErrorRecord $_ }
 
-                # mediamtx before scrcpy watchdog (publisher ordering - see eager block above)
-                try { Start-MediaMtx }         catch { Write-Log ("VRMonitor: mediamtx watchdog failed: " + $_.Exception.Message) -Level WARNING }
-                try { Watch-ScrcpyProcesses -HeadsetInfo $infoByIp } catch { Write-Log ("VRMonitor: scrcpy watchdog failed: " + $_.Exception.Message) -Level WARNING }
-                try { Start-WebServer }        catch { Write-Log ("VRMonitor: web server watchdog failed: " + $_.Exception.Message) -Level WARNING }
+                    # mediamtx before scrcpy watchdog (publisher ordering - see eager block above)
+                    try { Start-MediaMtx }         catch { Write-Log ("VRMonitor: mediamtx watchdog failed: " + $_.Exception.Message) -Level WARNING }
+                    try { Watch-ScrcpyProcesses -HeadsetInfo $infoByIp } catch { Write-Log ("VRMonitor: scrcpy watchdog failed: " + $_.Exception.Message) -Level WARNING }
+                    try { Start-WebServer }        catch { Write-Log ("VRMonitor: web server watchdog failed: " + $_.Exception.Message) -Level WARNING }
 
-                # Not during a stream benchmark: this snapshot is several seconds of WMI and
-                # performance-counter reads, which would land inside the benchmark's measures.
-                if (-not $benchRunId) { Update-ComputerMonitoring }
+                    # Not during a stream benchmark: this snapshot is several seconds of WMI and
+                    # performance-counter reads, which would land inside the benchmark's measures.
+                    if (-not $benchRunId) {
+                        $tickErrors['computer monitoring'] = $null
+                        try { Update-ComputerMonitoring } catch { $tickErrors['computer monitoring'] = Get-VRMonitorTickErrorText -ErrorRecord $_ }
+                    }
 
-                # Database housekeeping - currently the battery-history retention
-                # window. Called on every slow tick but self-throttled to
-                # database.maintenance_interval_min, so this is a cheap comparison
-                # almost every time. It lives here, on the slow loop, precisely so
-                # it stays off the fast path's batched status write: anything that
-                # throws in that transaction loses every headset's status for the
-                # tick, not just one row's.
-                if (Get-Command Invoke-DbMaintenance -ErrorAction SilentlyContinue) {
-                    try { Invoke-DbMaintenance | Out-Null }
-                    catch { Write-Log ("VRMonitor: database maintenance failed: " + $_.Exception.Message) -Level WARNING }
-                }
+                    # Database housekeeping - currently the battery-history retention
+                    # window. Called on every slow tick but self-throttled to
+                    # database.maintenance_interval_min, so this is a cheap comparison
+                    # almost every time. It lives here, on the slow loop, precisely so
+                    # it stays off the fast path's batched status write: anything that
+                    # throws in that transaction loses every headset's status for the
+                    # tick, not just one row's.
+                    if (Get-Command Invoke-DbMaintenance -ErrorAction SilentlyContinue) {
+                        try { Invoke-DbMaintenance | Out-Null }
+                        catch { Write-Log ("VRMonitor: database maintenance failed: " + $_.Exception.Message) -Level WARNING }
+                    }
 
-                # Recordings catalogue: sweep for stale records and missing files. Self-throttles.
-                if (Get-Command Sync-RecordingCatalog -ErrorAction SilentlyContinue) { try { [void](Sync-RecordingCatalog) } catch {} }
-                # Interrupted recordings (writer killed, app crash): one background remux at a time,
-                # never blocking this loop (Update-RecordingRepair only starts or collects it).
-                if (Get-Command Update-RecordingRepair -ErrorAction SilentlyContinue) { try { [void](Update-RecordingRepair) } catch {} }
+                    # Recordings catalogue: sweep for stale records and missing files. Self-throttles.
+                    if (Get-Command Sync-RecordingCatalog -ErrorAction SilentlyContinue) { try { [void](Sync-RecordingCatalog) } catch {} }
+                    # Interrupted recordings (writer killed, app crash): one background remux at a time,
+                    # never blocking this loop (Update-RecordingRepair only starts or collects it).
+                    if (Get-Command Update-RecordingRepair -ErrorAction SilentlyContinue) { try { [void](Update-RecordingRepair) } catch {} }
 
-                # VQA neither recommends from benchmark load nor rewrites config during a run.
-                if (-not $benchRunId -and $global:VQA_Enabled -and (Get-Command Invoke-VideoQualityRecommendation -ErrorAction SilentlyContinue)) {
-                    # Tier-gated: idle=every tick (m=1), mitigation=every 2nd (m=2), max=every 5th (m=5).
-                    # Increment first so the first tick always runs (counter % 1 == 0).
-                    $vqrTickCounter++
-                    $m = try { Get-LoadMultiplier } catch { 1 }
-                    if ($vqrTickCounter % $m -eq 0) {
-                        try {
-                            Invoke-VideoQualityRecommendation | Out-Null
-                            if ($global:VQA_EnabledVQO) { Invoke-VideoQualityOptimizer }
-                        } catch {
-                            Write-Log ("VQA: cycle failed: " + $_.Exception.Message) -Level WARNING
+                    # VQA neither recommends from benchmark load nor rewrites config during a run.
+                    if (-not $benchRunId -and $global:VQA_Enabled -and (Get-Command Invoke-VideoQualityRecommendation -ErrorAction SilentlyContinue)) {
+                        # Tier-gated: idle=every tick (m=1), mitigation=every 2nd (m=2), max=every 5th (m=5).
+                        # Increment first so the first tick always runs (counter % 1 == 0).
+                        $vqrTickCounter++
+                        $m = try { Get-LoadMultiplier } catch { 1 }
+                        if ($vqrTickCounter % $m -eq 0) {
+                            try {
+                                Invoke-VideoQualityRecommendation | Out-Null
+                                if ($global:VQA_EnabledVQO) { Invoke-VideoQualityOptimizer }
+                            } catch {
+                                Write-Log ("VQA: cycle failed: " + $_.Exception.Message) -Level WARNING
+                            }
+                        } else {
+                            Write-Log ("VQA: skipped tick (multiplier={0}, counter={1})" -f $m, $vqrTickCounter) -Level DEBUG
                         }
-                    } else {
-                        Write-Log ("VQA: skipped tick (multiplier={0}, counter={1})" -f $m, $vqrTickCounter) -Level DEBUG
+                    }
+
+                    Write-Log ($msg.JobRestartsIn -f $jobName, $global:VRMonitor_refresh_timer) -Level DEBUG
+                } catch {
+                    $tickErrors['slow tick'] = Get-VRMonitorTickErrorText -ErrorRecord $_
+                }
+            }
+
+            # Report this tick's failures, per guarded step. Every failed run is logged up to
+            # $tickFailureLogMax in a row; past that a persistent fault would write a line every
+            # tick, so it is summarised once a minute until a clean run of that step resets its
+            # count. A step that did not run this tick (the slow ones) keeps its count. Guarded:
+            # the report itself must never be what ends the loop.
+            try {
+                $now = Get-Date
+                foreach ($step in @($tickErrors.Keys)) {
+                    $tickError = $tickErrors[$step]
+                    if (-not $tickFailures.ContainsKey($step)) { $tickFailures[$step] = 0; $lastTickErrorLogAt[$step] = [datetime]::MinValue }
+                    if ($tickError) {
+                        $tickFailures[$step]++
+                        if ($tickFailures[$step] -le $tickFailureLogMax) {
+                            Write-Log ("VRMonitor {0} failed: {1}" -f $step, $tickError) -Level ERROR
+                            $lastTickErrorLogAt[$step] = $now
+                        } elseif (($now - $lastTickErrorLogAt[$step]).TotalSeconds -ge 60) {
+                            Write-Log ("VRMonitor {0} failed {1} times in a row, still failing: {2}" -f $step, $tickFailures[$step], $tickError) -Level ERROR
+                            $lastTickErrorLogAt[$step] = $now
+                        }
+                    } elseif ($tickFailures[$step] -gt 0) {
+                        if ($tickFailures[$step] -gt $tickFailureLogMax) {
+                            Write-Log ("VRMonitor {0} recovered after {1} consecutive failures" -f $step, $tickFailures[$step]) -Level INFO
+                        }
+                        $tickFailures[$step] = 0
                     }
                 }
-
-                Write-Log ($msg.JobRestartsIn -f $jobName, $global:VRMonitor_refresh_timer) -Level DEBUG
-            }
+            } catch { }
 
             Start-Sleep -Milliseconds 500
         }

@@ -480,15 +480,16 @@ function Invoke-AdbCmd {
             throw ($msg.AdbCmdPortClosed -f $ip, $port)
         }
 
-        & $adb connect $deviceId 2>$null | Out-Null
-        $isConnected = [bool](& $adb devices 2>$null |
+        # Bounded: this recovery branch runs on every failed command of a repeating poll.
+        $null = Invoke-Adb -Arguments @('connect', $deviceId) -Adb $adb -TimeoutSeconds 10
+        $isConnected = [bool]((Invoke-Adb -Arguments @('devices') -Adb $adb -TimeoutSeconds 5).StdOut |
             Where-Object { $_ -match ("^" + [regex]::Escape($deviceId) + "\s+device$") })
         if (-not $isConnected) {
             throw ($msg.AdbCmdWifiNotConnected -f $deviceId)
         }
 
     } elseif ($Device.ConnectionType -eq 'USB') {
-        $devicesOutput = @(& $adb devices 2>$null | Where-Object { $_ -notmatch '^List of devices' -and $_ -ne '' })
+        $devicesOutput = @((Invoke-Adb -Arguments @('devices') -Adb $adb -TimeoutSeconds 5).StdOut | Where-Object { $_ -notmatch '^List of devices' -and $_ -ne '' })
 
         if ($devicesOutput | Where-Object { $_ -match 'unauthorized' }) {
             $serial = (($devicesOutput | Where-Object { $_ -match 'unauthorized' } | Select-Object -First 1) -split "`t")[0].Trim()
@@ -1618,7 +1619,9 @@ function Get-AdbWifiDevice {
     }
 
     # Already connected? Return immediately without re-connecting.
-    $alreadyConnected = & $adb devices 2>&1 |
+    # Bounded (5 s): this runs in every poll runspace, a wedged adb server must not hang it.
+    $devicesResult = Invoke-Adb -Arguments @('devices') -Adb $adb -TimeoutSeconds 5
+    $alreadyConnected = $devicesResult.StdOut |
         Where-Object { $_ -match ("^" + [regex]::Escape($DeviceId) + "\s+device$") }
     if ($alreadyConnected) {
         Write-Log ($msg.AdbWifiAlreadyConnected -f $DeviceId) -Level DEBUG
@@ -1641,8 +1644,9 @@ function Get-AdbWifiDevice {
     }
 
     try {
-        $connectOutput = & $adb connect $DeviceId 2>&1
-        $nowConnected = & $adb devices 2>&1 |
+        $connectResult = Invoke-Adb -Arguments @('connect', $DeviceId) -Adb $adb -TimeoutSeconds 10
+        $connectOutput = @($connectResult.StdOut) + @($connectResult.StdErr)
+        $nowConnected = (Invoke-Adb -Arguments @('devices') -Adb $adb -TimeoutSeconds 5).StdOut |
             Where-Object { $_ -match ("^" + [regex]::Escape($DeviceId) + "\s+device$") }
         if ($nowConnected) {
             Write-Log ($msg.AdbWifiConnected -f $DeviceId) -Level SUCCESS
