@@ -134,3 +134,58 @@ Invoke-RegressionTest -Name 'Sync-HeadsetRunspaces picks up a headset added mid-
         Invoke-VrmApi -Path '/api/removeheadset' -Method POST -Body @{ name = $nrtName } | Out-Null
     }
 }
+
+function Get-Nrt70StatusCounter {
+    $row = @(Get-SandboxDbRows -TargetRoot $target -Sql "SELECT version FROM db_versions WHERE name = 'headset_status';")
+    if ($row.Count -gt 0 -and $null -ne $row[0].version) { return [int64]$row[0].version }
+    return $null
+}
+
+function Get-Nrt70MonitoringStamp {
+    $row = @(Get-SandboxDbRows -TargetRoot $target -Sql "SELECT updated_at FROM app_kv WHERE key = 'computer_monitoring';")
+    if ($row.Count -gt 0 -and $row[0].updated_at) { return [string]$row[0].updated_at }
+    return $null
+}
+
+Invoke-RegressionTest -Name 'VRMonitor liveness: status counter or monitoring snapshot advances' -Test {
+    $config = Read-JsonFileUtf8 -Path $paths.ConfigFile
+    $refreshSec = 5
+    if ($config -and $config.VRMonitor -and $config.VRMonitor.refresh_timer) {
+        $refreshSec = [int]$config.VRMonitor.refresh_timer
+    }
+    $waitSec = 3 * $refreshSec
+
+    # A headset is "reachable" when the live status says ping or ADB answers.
+    $reachable = $false
+    $st = Invoke-VrmApi -Path '/api/headsets-status'
+    if ($st.Ok -and $st.Json) {
+        $list = if ($st.Json.headsets) { @($st.Json.headsets) } else { @($st.Json) }
+        foreach ($h in $list) {
+            if ($h -and (($h.ping -eq $true) -or ($h.adb -eq $true))) { $reachable = $true }
+        }
+    }
+    Add-TestEvidence ("reachable headset: {0}; window {1}s" -f $reachable, $waitSec)
+
+    if ($reachable) {
+        $c1 = Get-Nrt70StatusCounter
+        Assert-NotNull $c1 'headset_status change counter (db_versions)'
+        Start-Sleep -Seconds $waitSec
+        $c2 = Get-Nrt70StatusCounter
+        Add-TestEvidence ("headset_status counter {0} -> {1}" -f $c1, $c2)
+        Assert-True ($c2 -gt $c1) ("headset_status counter did not move in {0}s with a reachable headset - VRMonitor looks dead" -f $waitSec)
+        return
+    }
+
+    # No reachable headset: the computer_monitoring row must advance after a forced refresh.
+    $s1 = Get-Nrt70MonitoringStamp
+    if (-not $s1) { Skip-Test -Reason 'no reachable headset and no computer_monitoring row to observe' }
+    Invoke-VrmApi -Path '/api/computer-monitoring/force-refresh' -Method POST -Body @{} | Out-Null
+    $deadline = (Get-Date).AddSeconds([Math]::Max(60, $waitSec))
+    $s2 = $s1
+    while ((Get-Date) -lt $deadline -and $s2 -eq $s1) {
+        Start-Sleep -Seconds 2
+        $s2 = Get-Nrt70MonitoringStamp
+    }
+    Add-TestEvidence ("computer_monitoring updated_at {0} -> {1}" -f $s1, $s2)
+    Assert-True ($s2 -ne $s1) 'computer_monitoring row did not advance - VRMonitor looks dead'
+}

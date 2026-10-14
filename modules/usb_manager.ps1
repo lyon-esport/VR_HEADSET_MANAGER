@@ -87,7 +87,10 @@ function Get-AdbUsbPresence {
     }
     if (-not $adb -or -not (Test-Path -LiteralPath $adb)) { return $out }
 
-    $lines = @(& $adb devices 2>$null | Where-Object { $_ -and $_ -notmatch '^List of devices' })
+    # Bounded: a wedged adb server must not hang the VRMonitor slow tick. A timeout
+    # yields an empty StdOut, i.e. the same "nothing cabled" result as no device.
+    $devicesResult = Invoke-Adb -Arguments @('devices') -Adb $adb -TimeoutSeconds 5
+    $lines = @($devicesResult.StdOut | Where-Object { $_ -and $_ -notmatch '^List of devices' })
 
     $live    = @()
     $offline = @()
@@ -281,7 +284,7 @@ function Connect-HeadsetWifiAdb {
     if (-not $IPAddress) { return $false }
     $target = "${IPAddress}:${AdbPort}"
     try {
-        $out = & $adb connect $target 2>$null
+        $out = (Invoke-Adb -Arguments @('connect', $target) -Adb $adb -TimeoutSeconds 10).StdOut
         return [bool](@($out) -match 'connected to')
     } catch {
         return $false

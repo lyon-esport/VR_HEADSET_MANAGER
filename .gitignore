@@ -27,6 +27,7 @@ scrcpy_manualScripts/
 # dumps saved per run) - local to the machine that ran the harness
 scripts/nonRegressionTests/reports/
 scripts/dbTests/reports/
+scripts/perf_reports/
 
 # ignore large sources
 /sources/ffmpeg-8.1-essentials_build.zip

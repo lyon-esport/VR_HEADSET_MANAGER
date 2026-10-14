@@ -397,6 +397,11 @@
         WifiPushOk        = "Headset '{0}' was moved to WiFi network '{1}'."
         WifiPushFailed    = "WiFi push failed: {0}"
         WifiPreferredTag  = "(preferred)"
+        # --- VRMonitor state line of the main menu header (Get-VRMonitorStatusText) ---
+        MonitorRunning    = "Headset monitoring: running"
+        MonitorRestarted  = "Headset monitoring: running - restarted automatically {0} time(s), last at {1}"
+        MonitorDown       = "Headset monitoring: STOPPED - automatic restart in progress"
+        MonitorGaveUp     = "Headset monitoring: STOPPED - too many restarts, restart the application (00)"
         # --- Full-frame capture for designing a scrcpy view (console + POST /api/headset-screen-frame) ---
         FrameMenuEntry    = "8. Capture a full-screen frame (to design a capture view)"
         FramePickHeadset  = "Headset ID (0 to go back)"

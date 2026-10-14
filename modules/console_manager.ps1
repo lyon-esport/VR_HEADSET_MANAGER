@@ -33,6 +33,42 @@ function Read-MenuChoice {
     return @{ Kind = $kind; Value = $val; Raw = $key }
 }
 
+# Read-Host that keeps running -OnIdle (about every -IdleIntervalMs) while it waits.
+# A blocking Read-Host stops the main thread, and PowerShell event actions do not run
+# during it either, so anything the main process must do on its own (restarting a dead
+# VRMonitor job) would wait for the operator's next keypress. This waits for the first
+# key with [Console]::KeyAvailable, then hands over to Read-Host, which reads that key
+# from the console buffer with normal line editing - keystrokes injected by the web
+# server (/api/app-shutdown) go through the same buffer and work the same way.
+# Falls back to a plain Read-Host when the input is redirected (KeyAvailable throws).
+# Example: $choice = Read-MenuLine -Prompt $msg.EnterChoice -OnIdle { Invoke-VRMonitorSupervision }
+function Read-MenuLine {
+    param(
+        [string]$Prompt,
+        [scriptblock]$OnIdle,
+        [int]$IdleIntervalMs = 1000
+    )
+    $canPoll = $true
+    try { $null = [Console]::KeyAvailable } catch { $canPoll = $false }
+    if (-not $canPoll -or -not $OnIdle) { return (Read-Host $Prompt) }
+
+    $promptText = if ($Prompt) { $Prompt + ': ' } else { '' }
+    Write-Host $promptText -NoNewline
+    $nextIdle = Get-Date
+    while (-not [Console]::KeyAvailable) {
+        if ((Get-Date) -ge $nextIdle) {
+            $before = try { '{0},{1}' -f [Console]::CursorLeft, [Console]::CursorTop } catch { '' }
+            try { & $OnIdle } catch { }
+            $after  = try { '{0},{1}' -f [Console]::CursorLeft, [Console]::CursorTop } catch { '' }
+            # The idle action printed something (a log line): show the prompt again.
+            if ($before -ne $after) { Write-Host ''; Write-Host $promptText -NoNewline }
+            $nextIdle = (Get-Date).AddMilliseconds($IdleIntervalMs)
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    return (Read-Host)
+}
+
 
 # Operator-facing resolver for a single port conflict.
 # Tests whether the port is free; if not, shows the offender + a 3-way menu
@@ -305,6 +341,8 @@ function Show-MainMenu {
         Clear-Host
         Start-Sleep -Milliseconds 200
         Write-Host $msg.MainMenuTitle -ForegroundColor Cyan
+        $vrmStatus = Get-VRMonitorStatusText
+        if ($vrmStatus.Text) { Write-Host $vrmStatus.Text -ForegroundColor $vrmStatus.Color }
         Write-Host $msg.StreamHeadset -BackgroundColor Yellow -ForegroundColor Black
         #Write-Host " I. Check internet connection " -BackgroundColor White -ForegroundColor Black
         Write-Host $msg.AddModifyHeadset -BackgroundColor Green -ForegroundColor DarkMagenta
@@ -352,7 +390,8 @@ function Show-MainMenu {
 
         $headsets = @(Get-KnownHeadsets)
 
-        $choice = (Read-Host $msg.EnterChoice).ToUpper()
+        # Waits for input while supervising the VRMonitor job (restarts it if it died).
+        $choice = ([string](Read-MenuLine -Prompt $msg.EnterChoice -OnIdle { Invoke-VRMonitorSupervision })).ToUpper()
         
         if ($choice -in $headsets.ID){
             $headsetName = ($headsets | Where-Object { $_.ID -eq $choice }).Name

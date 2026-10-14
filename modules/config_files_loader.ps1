@@ -88,8 +88,6 @@ function Get-Config {
         [string]$ConfigFilePath
     )
     
-    Write-Host "DEBUG ConfigFilePath = $ConfigFilePath" -ForegroundColor Magenta
-    
     # Check whether the file exists
     if (-not (Test-Path $ConfigFilePath)) {
         Write-Host "Configuration file does not exist..." -ForegroundColor Red
@@ -103,9 +101,13 @@ function Get-Config {
 
     # Load mandatory global variables from the JSON file
     $global:SelectedLanguage = $configContent.language
-    Write-Host "Config: SelectedLanguage = $($global:SelectedLanguage)"
     $global:knownHeadsetsFile = $configContent.Paths.knownHeadsetsFile
-    Write-Host "Config: knownHeadsetsFile = $($global:knownHeadsetsFile)"
+    # Was three Write-Host lines on every call. Get-Config runs on every VRMonitor slow tick,
+    # and inside a background job Write-Host records pile up in the parent process. Logged
+    # at DEBUG once logging is set up (a later call); silent on the first load.
+    if ($global:logFile -and $global:debugLevelToFile -and (Get-Command Write-Log -ErrorAction SilentlyContinue)) {
+        Write-Log ("Config: {0} (language {1}, headsets file {2})" -f $ConfigFilePath, $global:SelectedLanguage, $global:knownHeadsetsFile) -Level DEBUG
+    }
     
     $global:knownHeadsetsFilePath       = Join-Path -Path $(Join-Path -Path $global:ScriptPath -ChildPath "data") -ChildPath $global:knownHeadsetsFile
     $global:knownHeadsetsInfosFilePath  = Join-Path -Path $(Join-Path -Path $global:ScriptPath -ChildPath "data") -ChildPath $($global:knownHeadsetsFile).Replace(".csv","_infos.csv")

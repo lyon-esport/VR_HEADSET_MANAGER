@@ -586,3 +586,76 @@ Invoke-RegressionTest -Name '/api/appnames returns the known-apps catalog' -Test
     Add-TestEvidence ("catalog holds {0} app(s)" -f $apps.Count)
     Assert-True ($apps.Count -gt 0) 'known-apps catalog is empty - templates\data\known_apps.csv may not be shipped'
 }
+
+# ---------------------------------------------------------------------------
+# Route census (S0-3): every literal /api/... the shipped pages and templates
+# call must still be routed. A 400/405 proves the route exists; only 404 fails.
+# Routes that ACT on a GET (shutdown, reboot, ...) are skipped, one list, here.
+# ---------------------------------------------------------------------------
+$script:NrtCensusSkip = @(
+    'shutdown', 'reboot', 'app-restart', 'host-shutdown', 'restartwebserver',
+    'kill-browser', 'install', 'update', 'wipe', 'delete', 'push-wifi',
+    'power', 'browse-folder', 'openfolder', 'openconfig',
+    # Streams and downloads never answer-and-close (SSE has its own tests above).
+    '/api/events', 'adb-tools', 'adb-wifi-apk', 'result.csv', 'recordings/download',
+    # Capture a frame / block the single-threaded listener for seconds.
+    'screen-frame', 'eye-merge/frame', 'eye-merge/calibrate', 'recordings/play'
+)
+
+function Get-NrtCensusRoute {
+    param([Parameter(Mandatory = $true)][string]$Root)
+    $web   = Join-Path $Root 'website'
+    $files = @()
+    $files += @(Get-ChildItem -LiteralPath $web -Filter '*.html' -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -notmatch '\\(generated|vendor)\\' })
+    $files += @(Get-ChildItem -LiteralPath (Join-Path $web 'assets') -Filter '*.js' -File -ErrorAction SilentlyContinue)
+    $files += @(Get-ChildItem -LiteralPath (Join-Path $web 'template') -Filter '*.pshtml' -File -ErrorAction SilentlyContinue)
+    $set = @{}
+    foreach ($f in $files) {
+        $text = [System.IO.File]::ReadAllText($f.FullName, [System.Text.Encoding]::UTF8)
+        foreach ($m in [regex]::Matches($text, '[''"](/api/[A-Za-z0-9_\-/\.]+)')) {
+            $p = $m.Groups[1].Value
+            if ($p.EndsWith('/')) { continue }
+            $set[$p] = $true
+        }
+    }
+    return @($set.Keys | Sort-Object)
+}
+
+Invoke-RegressionTest -Name 'Route census: every /api route the pages call is routed' -Test {
+    $routes  = @(Get-NrtCensusRoute -Root $global:TestRun.TargetRoot)
+    Assert-True ($routes.Count -gt 0) 'no /api literal found under website\ - extraction is broken'
+    $routerText = ''
+    foreach ($rf in @('web_server.ps1', 'web_routes.ps1')) {
+        $rp = Join-Path (Join-Path $global:TestRun.TargetRoot 'modules\Pode_WebServer') $rf
+        if (Test-Path -LiteralPath $rp) { $routerText += [System.IO.File]::ReadAllText($rp, [System.Text.Encoding]::UTF8) }
+    }
+    Assert-True ($routerText.Length -gt 0) 'web server source not found under modules\Pode_WebServer'
+    $tested  = 0
+    $skipped = @()
+    $missing = @()
+    $slow    = @()
+    foreach ($p in $routes) {
+        $hit = $script:NrtCensusSkip | Where-Object { $p -like ('*' + $_ + '*') } | Select-Object -First 1
+        if ($hit) { $skipped += ("{0} (acts: {1})" -f $p, $hit); continue }
+        $tested++
+        # The router is method-gated and has no 405: a POST-only route answers a
+        # GET with 404, and a GET route with no data yet also answers 404. So a
+        # live 404 alone proves nothing. A route is "routed" when the web server
+        # source carries its literal path; only a path with no branch AND a live
+        # 404 is a real orphan. Nothing is POSTed (those routes act).
+        if ($routerText -and $routerText.Contains("'" + $p + "'")) { continue }
+        $r = Invoke-VrmApi -Path $p -Method GET -TimeoutSec 5
+        # A route that is routed but slow is not a 404: a timeout without a status is not a failure here.
+        if ($r.StatusCode -eq 404) {
+            $missing += ("{0} -> 404" -f $p)
+        }
+        elseif (-not $r.StatusCode) {
+            $slow += ("{0} (no answer in 5 s)" -f $p)
+        }
+    }
+    Add-TestEvidence ("census: {0} routes found, {1} tested, {2} skipped" -f $routes.Count, $tested, $skipped.Count)
+    foreach ($s in $skipped) { Add-TestEvidence ("skipped: {0}" -f $s) }
+    foreach ($s in $slow) { Add-TestEvidence ("slow: {0}" -f $s) }
+    Assert-True ($missing.Count -eq 0) ("{0} route(s) not answered: {1}" -f $missing.Count, ($missing -join '; '))
+}
