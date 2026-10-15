@@ -1474,7 +1474,7 @@ function Invoke-UsbHeadsetActions {
 
     # This runs on the VRMonitor SLOW TICK, and that caller does not guard it.
     # Anything escaping here aborts the rest of the tick - service watchdogs,
-    # Update-ComputerMonitoring, VQA - for every headset, not just this one. The
+    # the computer monitoring respawn, VQA - for every headset, not just this one. The
     # original implementation wrapped its whole body for exactly this reason.
     $action = 'error'
     try {

@@ -238,6 +238,83 @@ function Start-HeadsetRunspace {
     return @{ PS = $ps; Runspace = $rs; Handle = $handle }
 }
 
+function Start-ComputerMonitorRunspace {
+    <#
+    .SYNOPSIS
+    Starts the computer monitoring runspace if absent, or respawns it if it died (S3-2).
+    .DESCRIPTION
+    The CPU/RAM/GPU/workload/recording-drive snapshot (Update-ComputerMonitoring) used to
+    run on the VRMonitor thread and froze the 500 ms fast path for 6-19 s per run. It now
+    runs in this runspace, which mirrors Start-HeadsetRunspace: $sharedState is injected
+    via InitialSessionState (shared reference), and the poll block opens its own database
+    connection (Worker role, ADR-0017). It publishes to the same app_kv row as before.
+    Idempotent: called once at VRMonitor start and on every slow tick.
+    Shared state keys: _benchmark_active (read; written by the fast path, ADR-0026),
+    _recording_drive_low (written; drained by the slow tick), _stop_computer_monitor
+    (stop flag; _stop_all also stops it).
+    .EXAMPLE
+    Start-ComputerMonitorRunspace -registry ([ref]$computerMonitorRunspace) -sharedState $sharedState `
+        -scriptPath $global:ScriptPath -configFilePath $global:ConfigFilePath -pollBlock $computerMonitorPollBlock
+    #>
+    param(
+        [ref]$registry,
+        [hashtable]$sharedState,
+        [string]$scriptPath,
+        [string]$configFilePath,
+        [scriptblock]$pollBlock
+    )
+    $entry = $registry.Value
+    if ($entry -and -not $entry.Handle.IsCompleted) { return }
+    if ($entry) {
+        $why = ''
+        try {
+            if ($entry.PS.InvocationStateInfo.Reason) { $why = $entry.PS.InvocationStateInfo.Reason.Message }
+            elseif ($entry.PS.Streams.Error.Count -gt 0) { $why = [string]$entry.PS.Streams.Error[-1] }
+        } catch { }
+        Write-Log ("VRMonitor: computer monitoring runspace died, restarting. " + $why) -Level WARNING
+        try { $entry.PS.Dispose() }       catch {}
+        try { $entry.Runspace.Dispose() } catch {}
+        $registry.Value = $null
+    }
+    $sharedState.Remove('_stop_computer_monitor')
+    $iss = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
+    $iss.Variables.Add([System.Management.Automation.Runspaces.SessionStateVariableEntry]::new(
+        'sharedState', $sharedState, ''))
+    $rs = [runspacefactory]::CreateRunspace($iss)
+    $rs.Open()
+    $ps = [powershell]::Create()
+    $ps.Runspace = $rs
+    $ps.AddScript($pollBlock).AddArgument($scriptPath).AddArgument($configFilePath) | Out-Null
+    $handle = $ps.BeginInvoke()
+    $registry.Value = @{ PS = $ps; Runspace = $rs; Handle = $handle }
+    Write-Log "VRMonitor: started computer monitoring runspace" -Level INFO
+}
+
+function Stop-ComputerMonitorRunspace {
+    <#
+    .SYNOPSIS
+    Signals the computer monitoring runspace to exit, waits up to -TimeoutSec, then disposes
+    it (a run still sampling past the timeout is stopped by the dispose). No-op when absent.
+    .EXAMPLE
+    Stop-ComputerMonitorRunspace -registry ([ref]$computerMonitorRunspace) -sharedState $sharedState
+    #>
+    param(
+        [ref]$registry,
+        [hashtable]$sharedState,
+        [int]$TimeoutSec = 5
+    )
+    $entry = $registry.Value
+    if (-not $entry) { return }
+    $sharedState['_stop_computer_monitor'] = $true
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while (-not $entry.Handle.IsCompleted -and (Get-Date) -lt $deadline) {
+        Start-Sleep -Milliseconds 200
+    }
+    try { $entry.PS.Dispose() }       catch {}
+    try { $entry.Runspace.Dispose() } catch {}
+    $registry.Value = $null
+}
+
 function Start-KioskRunspace {
     <#
     .SYNOPSIS
@@ -462,6 +539,8 @@ function Start-VRMonitor {
         $kioskRunspaceRegistry = @{}
         # Single optional runspace (not a per-device registry): @{PS;Runspace;Handle} or $null
         $discoveryRunspace = $null
+        $companionRunspace = $null
+        $computerMonitorRunspace = $null
         $sharedState["_refresh_timer"] = $global:VRMonitor_refresh_timer
 
         # Poll scriptblock executed inside each per-headset runspace.
@@ -802,7 +881,7 @@ function Start-VRMonitor {
 
                 # Config is re-read every cycle so an interval change from the web config
                 # page applies on the next sweep without an application restart.
-                try { Get-Config -ConfigFilePath $configFilePath | Out-Null } catch {}
+                try { if (Test-ConfigChanged -ConfigFilePath $configFilePath) { Get-Config -ConfigFilePath $configFilePath | Out-Null } } catch {}
                 $interval = if ($global:HeadsetDiscovery_interval_sec) { [int]$global:HeadsetDiscovery_interval_sec } else { 60 }
                 if ($interval -lt 10) { $interval = 10 }
                 for ($s = 0; $s -lt $interval; $s++) {
@@ -810,6 +889,148 @@ function Start-VRMonitor {
                     if ($sharedState["_stop_all"] -or $sharedState["_stop_discovery"]) { return }
                 }
             }
+            } finally {
+                if (Get-Command Close-DbConnection -ErrorAction SilentlyContinue) {
+                    try { Close-DbConnection } catch { }
+                }
+            }
+        }
+
+        # Companion discovery (UDP 5556 broadcast + up to 1.5 s receive) runs here, never on the
+        # VRMonitor thread (S3-1). It only COLLECTS: replies go to _companion_results and the
+        # main loop heals IPs through Set-HeadsetIdentity (registry writes stay on main).
+        $companionPollBlock = {
+            param(
+                [string]$scriptPath,
+                [string]$configFilePath
+            )
+            $global:ScriptPath     = $scriptPath
+            $global:ConfigFilePath = $configFilePath
+            $modPath = Join-Path $scriptPath "modules"
+            foreach ($mod in @("logging.ps1","config_files_loader.ps1","utils.ps1","network_scanner.ps1")) {
+                $f = Join-Path $modPath $mod
+                if (Test-Path -LiteralPath $f) { . $f }
+            }
+            Get-Config -ConfigFilePath $configFilePath | Out-Null
+            $transFolder = Join-Path $scriptPath "modules\translations"
+            $transFile   = Join-Path $transFolder "$($global:SelectedLanguage).psd1"
+            if (-not (Test-Path -LiteralPath $transFile)) { $transFile = Join-Path $transFolder "en-US.psd1" }
+            if (Test-Path -LiteralPath $transFile) { $global:msg = Import-PowerShellDataFile -LiteralPath $transFile }
+
+            while ($true) {
+                if ($sharedState["_stop_all"] -or $sharedState["_stop_companion"]) { return }
+                try {
+                    $found = @(Invoke-CompanionDiscovery -TimeoutMs 1500 -NoHeal)
+                    if ($found.Count -gt 0) {
+                        $pending = @()
+                        if ($sharedState["_companion_results"]) { $pending = @($sharedState["_companion_results"]) }
+                        $sharedState["_companion_results"] = @($pending + $found)
+                    }
+                } catch {
+                    Write-Log ("Companion discovery runspace: " + $_.Exception.Message) -Level DEBUG
+                }
+                try { if (Test-ConfigChanged -ConfigFilePath $configFilePath) { Get-Config -ConfigFilePath $configFilePath | Out-Null } } catch {}
+                $interval = [Math]::Max(5, [int]$global:VRMonitor_refresh_timer)
+                for ($s = 0; $s -lt $interval; $s++) {
+                    Start-Sleep -Seconds 1
+                    if ($sharedState["_stop_all"] -or $sharedState["_stop_companion"]) { return }
+                }
+            }
+        }
+
+        # Computer monitoring (S3-2): the CPU/RAM/GPU/workload snapshot runs here, never on
+        # the VRMonitor thread. It keeps a sampler (New-ComputerMonitorSampler) for its whole
+        # life, so a sample is a few hundred ms with no sleep instead of 6-19 s. Schedule:
+        # one sample every Get-AdaptiveMonitorInterval seconds, or within $windowSec of a
+        # force-refresh flag (VQA apply, /api/computer-monitoring/force-refresh). Each sample
+        # measures the $windowSec since its baseline (Reset-ComputerMonitorBaseline), like the
+        # old 5 s CPU average. Paused while a stream benchmark runs (ADR-0026: the fast path
+        # mirrors its pause into _benchmark_active). A low recording drive is PUBLISHED, not
+        # acted on: the main loop owns registry writes (Disable-RecordingOnLowDisk).
+        $computerMonitorPollBlock = {
+            param(
+                [string]$scriptPath,
+                [string]$configFilePath
+            )
+            # This runspace has no host: Write-Host records (Write-Log console output) would
+            # pile up in its PowerShell.Streams.Information for the life of the process.
+            $global:PSDefaultParameterValues['Write-Host:InformationAction'] = 'Ignore'
+            $global:ScriptPath     = $scriptPath
+            $global:ConfigFilePath = $configFilePath
+            $modPath = Join-Path $scriptPath "modules"
+            # database.ps1: this runspace opens a connection of its own (never shared).
+            foreach ($mod in @("logging.ps1","config_files_loader.ps1","utils.ps1","database.ps1")) {
+                $f = Join-Path $modPath $mod
+                if (Test-Path -LiteralPath $f) { . $f }
+            }
+            Get-Config -ConfigFilePath $configFilePath | Out-Null
+            $transFolder = Join-Path $scriptPath "modules\translations"
+            $transFile   = Join-Path $transFolder "$($global:SelectedLanguage).psd1"
+            if (-not (Test-Path -LiteralPath $transFile)) { $transFile = Join-Path $transFolder "en-US.psd1" }
+            if (Test-Path -LiteralPath $transFile) { $global:msg = Import-PowerShellDataFile -LiteralPath $transFile }
+            if (Get-Command Initialize-Database -ErrorAction SilentlyContinue) {
+                try { Initialize-Database -Role Worker | Out-Null } catch { }
+            }
+
+            $stopNow  = { [bool]($sharedState["_stop_all"] -or $sharedState["_stop_computer_monitor"]) }
+            $flagFile = Join-Path $scriptPath "data\computer_monitoring_forcerefresh.flag"
+            $windowSec = 5
+            try {
+                $sampler  = New-ComputerMonitorSampler
+                $nextDue  = [DateTime]::UtcNow.AddSeconds($windowSec)
+                $haveBase = $true
+                $paused   = $false
+                $lastErrorLogAt = [DateTime]::MinValue
+                while ($true) {
+                    if (& $stopNow) { return }
+                    $now = [DateTime]::UtcNow
+                    # One failed sample (SQLITE_BUSY after retries, a WMI hiccup) must not end the
+                    # runspace: a respawn rebuilds the sampler, whose first counter read is the slow one.
+                    try {
+                        if ($sharedState["_benchmark_active"]) {
+                            $paused = $true
+                        } else {
+                            if ($paused) {
+                                # The baseline predates the benchmark: retake it so its load is not averaged in.
+                                $paused = $false
+                                Reset-ComputerMonitorBaseline -Sampler $sampler
+                                $haveBase = $true
+                                if ($nextDue -lt $sampler.BaselineAt.AddSeconds($windowSec)) { $nextDue = $sampler.BaselineAt.AddSeconds($windowSec) }
+                            }
+                            if (Test-Path -LiteralPath $flagFile) {
+                                if (-not $haveBase) { Reset-ComputerMonitorBaseline -Sampler $sampler; $haveBase = $true }
+                                $forcedAt = $sampler.BaselineAt.AddSeconds($windowSec)
+                                if ($forcedAt -lt $nextDue) { $nextDue = $forcedAt }
+                            }
+                            if (-not $haveBase -and $now -ge $nextDue.AddSeconds(-$windowSec)) {
+                                Reset-ComputerMonitorBaseline -Sampler $sampler
+                                $haveBase = $true
+                            }
+                            if ($haveBase -and $now -ge $nextDue) {
+                                $sw = [System.Diagnostics.Stopwatch]::StartNew()
+                                $snap = Update-ComputerMonitoring -Sampler $sampler -Force -NoRegistryWrite
+                                Write-Log ("Computer monitoring sample took {0} ms" -f $sw.ElapsedMilliseconds) -Level DEBUG
+                                if ($snap -and $snap.RecordingDrive -and $snap.RecordingDrive.IsLow) {
+                                    $sharedState["_recording_drive_low"] = $snap.RecordingDrive
+                                }
+                                $haveBase = $false
+                                $interval = 60
+                                try { $interval = [int](Get-AdaptiveMonitorInterval) } catch { }
+                                $nextDue = [DateTime]::UtcNow.AddSeconds([Math]::Max($windowSec, $interval))
+                            }
+                        }
+                    } catch {
+                        # Rate-limited; the next attempt waits a full window with a fresh baseline.
+                        if (($now - $lastErrorLogAt).TotalSeconds -ge 60) {
+                            Write-Log ("Computer monitoring sample failed: " + $_.Exception.Message) -Level WARNING
+                            $lastErrorLogAt = $now
+                        }
+                        $haveBase = $false
+                        $nextDue  = [DateTime]::UtcNow.AddSeconds($windowSec)
+                    }
+                    try { if (Test-ConfigChanged -ConfigFilePath $configFilePath) { Get-Config -ConfigFilePath $configFilePath | Out-Null } } catch {}
+                    Start-Sleep -Seconds 1
+                }
             } finally {
                 if (Get-Command Close-DbConnection -ErrorAction SilentlyContinue) {
                     try { Close-DbConnection } catch { }
@@ -868,6 +1089,12 @@ function Start-VRMonitor {
                 -sharedState $sharedState -scriptPath $global:ScriptPath `
                 -configFilePath $global:ConfigFilePath -pollBlock $kioskPollBlock
         } catch { Write-Log ("VRMonitor: eager kiosk sync failed: " + $_.Exception.Message) -Level WARNING }
+        # Computer monitoring runs in its own runspace (S3-2); started now so the first snapshot
+        # does not wait for a slow tick. The slow tick respawns it if it dies.
+        try {
+            Start-ComputerMonitorRunspace -registry ([ref]$computerMonitorRunspace) -sharedState $sharedState `
+                -scriptPath $global:ScriptPath -configFilePath $global:ConfigFilePath -pollBlock $computerMonitorPollBlock
+        } catch { Write-Log ("VRMonitor: computer monitoring runspace start failed: " + $_.Exception.Message) -Level WARNING }
 
         # Fire service watchdogs eagerly so scrcpy / mediamtx / web server start at the same
         # time as the runspaces, instead of waiting one full slow-tick (~refresh_timer seconds)
@@ -936,6 +1163,15 @@ function Start-VRMonitor {
                     try { $discoveryRunspace.PS.Dispose() }       catch {}
                     try { $discoveryRunspace.Runspace.Dispose() } catch {}
                 }
+                if ($companionRunspace) {
+                    $companionDeadline = (Get-Date).AddSeconds(5)
+                    while (-not $companionRunspace.Handle.IsCompleted -and (Get-Date) -lt $companionDeadline) {
+                        Start-Sleep -Milliseconds 200
+                    }
+                    try { $companionRunspace.PS.Dispose() }       catch {}
+                    try { $companionRunspace.Runspace.Dispose() } catch {}
+                }
+                try { Stop-ComputerMonitorRunspace -registry ([ref]$computerMonitorRunspace) -sharedState $sharedState } catch {}
                 # Release the job's own connection last, after every runspace it
                 # supervises has released theirs.
                 if (Get-Command Close-DbConnection -ErrorAction SilentlyContinue) {
@@ -1013,6 +1249,9 @@ function Start-VRMonitor {
                     $benchRunId      = ''
                     $scrcpyEdgeState = @{}
                 }
+                # The computer monitoring runspace pauses on this (its WMI/counter reads would land
+                # inside the benchmark's measures). Mirrored here so it needs no stream_benchmark.ps1.
+                $sharedState["_benchmark_active"] = [bool]$benchRunId
 
                 # ---- FAST PATH: stream restart request (ADR-0027) ----
                 # Another process changed config that a running stream would not pick up (e.g. the
@@ -1287,6 +1526,8 @@ function Start-VRMonitor {
             if ($slowCounter -ge $slowEvery) {
                 $slowCounter = 0
                 $tickErrors['slow tick'] = $null
+                # DEBUG timing (S3-2 / S0-1): the fast path waits for the whole slow tick.
+                $slowTickSw = [System.Diagnostics.Stopwatch]::StartNew()
 
                 # Liveness for other processes (web server, NR harness): the loop reached a
                 # slow tick. Written first and on its own, so a slow tick that fails further
@@ -1297,7 +1538,9 @@ function Start-VRMonitor {
                 } catch { }
 
                 try {
-                    Get-Config -ConfigFilePath $global:ConfigFilePath | Out-Null
+                    if (Test-ConfigChanged -ConfigFilePath $global:ConfigFilePath) {
+                        Get-Config -ConfigFilePath $global:ConfigFilePath | Out-Null
+                    }
                     $sharedState["_refresh_timer"] = $global:VRMonitor_refresh_timer
                     $slowEvery = [Math]::Max(1, [int]($global:VRMonitor_refresh_timer / 0.5))
 
@@ -1308,17 +1551,28 @@ function Start-VRMonitor {
 
                     # Guarded like the discovery/companion calls below it: anything that
                     # escapes here would abort the rest of the slow tick (service
-                    # watchdogs, Update-ComputerMonitoring, VQA) for every headset.
+                    # watchdogs, computer monitoring respawn, VQA) for every headset.
                     try {
                         Invoke-UsbHeadsetActions | Out-Null
                     } catch {
                         Write-Log ("VRMonitor: USB tick failed: " + $_.Exception.Message) -Level WARNING
                     }
 
-                    # Discover companion apps: heals IP drift silently and returns companion states
+                    # Companion apps: discovery runs in its own runspace (S3-1, no blocking UDP
+                    # receive here). Apply what it published: heals IP drift by serial.
                     try {
-                        if (Get-Command Invoke-CompanionDiscovery -ErrorAction SilentlyContinue) {
-                            Invoke-CompanionDiscovery -TimeoutMs 1500 | Out-Null
+                        Sync-CompanionDiscoveryRunspace -registry ([ref]$companionRunspace) -sharedState $sharedState `
+                            -scriptPath $global:ScriptPath -configFilePath $global:ConfigFilePath `
+                            -pollBlock $companionPollBlock
+                        if ($sharedState["_companion_results"]) {
+                            $companions = @($sharedState["_companion_results"])
+                            $sharedState["_companion_results"] = $null
+                            foreach ($c in $companions) {
+                                if ($c.Serial -and $c.IP) {
+                                    Set-HeadsetIdentity -SerialNumber $c.Serial -IPAddress $c.IP `
+                                                        -Model $c.Model -Source 'companion' | Out-Null
+                                }
+                            }
                         }
                     } catch {
                         Write-Log ("VRMonitor: companion discovery failed: " + $_.Exception.Message) -Level DEBUG
@@ -1372,12 +1626,19 @@ function Start-VRMonitor {
                     try { Watch-ScrcpyProcesses -HeadsetInfo $infoByIp } catch { Write-Log ("VRMonitor: scrcpy watchdog failed: " + $_.Exception.Message) -Level WARNING }
                     try { Start-WebServer }        catch { Write-Log ("VRMonitor: web server watchdog failed: " + $_.Exception.Message) -Level WARNING }
 
-                    # Not during a stream benchmark: this snapshot is several seconds of WMI and
-                    # performance-counter reads, which would land inside the benchmark's measures.
-                    if (-not $benchRunId) {
-                        $tickErrors['computer monitoring'] = $null
-                        try { Update-ComputerMonitoring } catch { $tickErrors['computer monitoring'] = Get-VRMonitorTickErrorText -ErrorRecord $_ }
-                    }
+                    # Computer monitoring runs in its own runspace (S3-2), which also honours the
+                    # benchmark pause. Here: respawn it if it died, and apply what only this thread
+                    # may do - the registry write that turns recording off on a low drive.
+                    $tickErrors['computer monitoring'] = $null
+                    try {
+                        Start-ComputerMonitorRunspace -registry ([ref]$computerMonitorRunspace) -sharedState $sharedState `
+                            -scriptPath $global:ScriptPath -configFilePath $global:ConfigFilePath -pollBlock $computerMonitorPollBlock
+                        $lowDrive = $sharedState["_recording_drive_low"]
+                        if ($lowDrive) {
+                            $sharedState["_recording_drive_low"] = $null
+                            [void](Disable-RecordingOnLowDisk -RecordingDrive $lowDrive)
+                        }
+                    } catch { $tickErrors['computer monitoring'] = Get-VRMonitorTickErrorText -ErrorRecord $_ }
 
                     # Database housekeeping - currently the battery-history retention
                     # window. Called on every slow tick but self-throttled to
@@ -1419,6 +1680,7 @@ function Start-VRMonitor {
                 } catch {
                     $tickErrors['slow tick'] = Get-VRMonitorTickErrorText -ErrorRecord $_
                 }
+                Write-Log ("VRMonitor slow tick took {0} ms" -f $slowTickSw.ElapsedMilliseconds) -Level DEBUG
             }
 
             # Report this tick's failures, per guarded step. Every failed run is logged up to

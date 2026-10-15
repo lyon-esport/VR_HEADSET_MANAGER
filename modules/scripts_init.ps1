@@ -742,6 +742,8 @@ function Start-WebServer {
 if (-not $global:IsVRMonitorJob -and -not $global:IsDashboardProcess) {
     Initialize-TimerFiles
     if (-not $global:IsWebServerProcess) {
+        # Main process only: timer jobs run in the web server, so it must not reset their tokens
+        Reset-TimerRunTokens
         Update-HeadsetMonitoringFile
         Update-HeadsetVideoFile
         Update-HeadsetTimerFile

@@ -140,6 +140,12 @@ function Get-Config {
         return $false
     }
 
+    $statBeforeRead = $null
+    try {
+        $statItem = Get-Item -LiteralPath $ConfigFilePath -ErrorAction Stop
+        $statBeforeRead = '{0}|{1}|{2}' -f $ConfigFilePath, $statItem.LastWriteTimeUtc.Ticks, $statItem.Length
+    } catch { }
+
     # Read and validate the JSON file content
     if ($Interactive -and -not $global:ConfigLoadedOnce) {
         $configContent = Read-ConfigJson -ConfigFilePath $ConfigFilePath
@@ -608,8 +614,27 @@ function Get-Config {
     
     Write-Log "Configuration variables successfully loaded" -Level DEBUG
     $global:ConfigLoadedOnce = $true
+    # Memo for Test-ConfigChanged: the stat taken BEFORE the read, so a write landing during
+    # the read leaves a different stamp and is picked up on the next check.
+    if ($null -ne $statBeforeRead) { $script:ConfigStamp = $statBeforeRead }
     return $true
 } # OK
+
+# $true when config.json differs (last-write time or length) from what the last successful
+# Get-Config in THIS process/runspace loaded, or when nothing was loaded yet. Read-only: only
+# Get-Config updates the memo, so a failed parse is retried on the next check. Length is
+# compared too, to cover two writes inside one timestamp tick. Example:
+#   if (Test-ConfigChanged) { Get-Config | Out-Null }
+function Test-ConfigChanged {
+    param ([string]$ConfigFilePath = $global:ConfigFilePath)
+    if ([string]::IsNullOrWhiteSpace($ConfigFilePath)) { return $true }
+    $stamp = $null
+    try {
+        $item  = Get-Item -LiteralPath $ConfigFilePath -ErrorAction Stop
+        $stamp = '{0}|{1}|{2}' -f $ConfigFilePath, $item.LastWriteTimeUtc.Ticks, $item.Length
+    } catch { return $true }
+    return ($stamp -ne $script:ConfigStamp)
+}
 
 # RETIRED - the headset registry is a table now, validated by the schema and by
 # Test-DatabaseIntegrity rather than by re-parsing a CSV header on every start.

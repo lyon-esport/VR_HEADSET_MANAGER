@@ -552,39 +552,16 @@ function New-StreamBenchmarkPlan {
 # ---------------------------------------------------------------------------
 
 function Initialize-StreamBenchmarkCpuType {
-    <# Compiles the GetSystemTimes wrapper once per process. Locale-independent, unlike Get-Counter. #>
+    <# Compiles the GetSystemTimes wrapper once per process. The type lives in utils.ps1 (Initialize-CpuTimesType), shared with the computer monitor. #>
     param()
-    if ('VrhmCpuTimes' -as [type]) { return $true }
-    try {
-        Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class VrhmCpuTimes {
-    [DllImport("kernel32.dll", SetLastError = true)]
-    static extern bool GetSystemTimes(out long idle, out long kernel, out long user);
-    public static long[] Read() {
-        long i, k, u;
-        if (!GetSystemTimes(out i, out k, out u)) { return null; }
-        return new long[] { i, k, u };
-    }
-}
-'@ -ErrorAction Stop
-        return $true
-    } catch {
-        Write-Log ("Benchmark: CPU time helper unavailable: " + $_.Exception.Message) -Level WARNING
-        return $false
-    }
+    return (Initialize-CpuTimesType)
 }
 
 
 function Get-StreamBenchmarkCpuPercent {
-    <# Whole-PC CPU % between two VrhmCpuTimes snapshots (kernel time includes idle). #>
+    <# Whole-PC CPU % between two VrhmCpuTimes snapshots (kernel time includes idle). See Get-CpuTimesPercent (utils.ps1). #>
     param($From, $To)
-    if (-not $From -or -not $To) { return $null }
-    $idle = [double]($To[0] - $From[0])
-    $total = [double](($To[1] - $From[1]) + ($To[2] - $From[2]))
-    if ($total -le 0) { return $null }
-    return [Math]::Round([Math]::Max(0.0, [Math]::Min(100.0, (1 - $idle / $total) * 100)), 1)
+    return (Get-CpuTimesPercent -From $From -To $To)
 }
 
 
@@ -604,19 +581,14 @@ function New-StreamBenchmarkSampler {
     param()
     $s = @{ Gpus = @(); Single = $false; ExcludeLuid = $null; Engine = $null; Memory = $null
             Cores = [Math]::Max(1, [Environment]::ProcessorCount); Prev = $null; BridgePids = @() }
+    # Same adapter / PCI filter / LUID rules as Get-GpuInfo: one implementation (utils.ps1).
     try {
-        $all = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop)
-        $ctrl = @($all | Where-Object { $_.PNPDeviceID -like 'PCI\*' })
-        if ($ctrl.Count -eq 0) { $ctrl = $all }   # VM with only a synthetic adapter, as Get-GpuInfo
-        $luids = @{}
-        if (([System.Management.Automation.PSTypeName]'_VRM_DxgiLuid').Type) { try { $luids = [_VRM_DxgiLuid]::GetAdapterLuids() } catch { } }
-        $s.Gpus = @(for ($i = 0; $i -lt $ctrl.Count; $i++) {
-            $name = ($ctrl[$i].Name -replace '\s+', ' ').Trim()
-            @{ Index = $i; Model = $name; Luid = $luids[$name] }
-        })
-        $s.Single = ($ctrl.Count -eq 1)
-        $s.ExcludeLuid = $luids['Microsoft Basic Render Driver']
-        foreach ($c in $all) { if ($c) { $c.Dispose() } }
+        $layout = Get-GpuLayout
+        if ($layout) {
+            $s.Gpus        = @($layout.Gpus)
+            $s.Single      = [bool]$layout.Single
+            $s.ExcludeLuid = $layout.ExcludeLuid
+        }
     } catch { }
     try {
         $s.Engine = [System.Diagnostics.PerformanceCounterCategory]::new('GPU Engine')
@@ -713,50 +685,24 @@ function Measure-StreamBenchmarkSample {
     $span = ($now.Time - $prev.Time).TotalSeconds
     if ($span -le 0) { $span = 0.001 }
 
-    # GPU engines, bucketed [luid][engine type] = summed % over the interval.
-    $map = @{}
-    if ($prev.Util -and $now.Util) {
-        foreach ($name in @($now.Util.Keys)) {
-            $b = $now.Util[$name]; $a = $prev.Util[$name]
-            if (-not $a -or -not $b) { continue }   # instance born or gone during the interval
-            if ($name -notmatch 'luid_(0x[0-9a-f]+_0x[0-9a-f]+).*engtype_(.+)$') { continue }
-            $luid = $Matches[1]; $eng = $Matches[2].Trim().ToLower()
-            $v = 0.0; try { $v = [System.Diagnostics.CounterSample]::Calculate($a.Sample, $b.Sample) } catch { }
-            if (-not $map.ContainsKey($luid)) { $map[$luid] = @{} }
-            if (-not $map[$luid].ContainsKey($eng)) { $map[$luid][$eng] = 0.0 }
-            $map[$luid][$eng] += $v
-        }
-    }
-    $stats = {
-        param($engines)
-        $r = @{ Load3D = 0.0; Encode = 0.0; Video = 0.0; Util = 0.0 }
-        if ($engines) {
-            foreach ($kv in $engines.GetEnumerator()) {
-                $n = [string]$kv.Key; $v = [double]$kv.Value
-                if ($v -gt $r.Util) { $r.Util = $v }
-                if ($n -eq '3d') { $r.Load3D += $v }
-                if ($n -like '*videoencode*') { $r.Encode += $v }
-                if (($n -like '*video*' -or $n -like '*codec*') -and $n -notlike '*jpeg*') { $r.Video += $v }
-            }
-        }
-        return $r
-    }
+    # GPU engines, bucketed [luid][engine type] = summed % over the interval (same helpers
+    # and vendor rules as Get-GpuInfo, utils.ps1).
+    $map = Get-GpuEngineDeltaMap -Previous $prev.Util -Current $now.Util
     $clip = { param($x) [Math]::Round([Math]::Min(100.0, [Math]::Max(0.0, $x)), 1) }
     $gpus = foreach ($g in $Sampler.Gpus) {
         $eng = $null; $memB = $null
         if ($Sampler.Single) {
-            # One physical GPU: sum every LUID except the software renderer (RDP LUID mismatch, see Get-GpuInfo).
-            $eng = @{}
-            foreach ($l in $map.Keys) { if ($l -eq $Sampler.ExcludeLuid) { continue }; foreach ($e in $map[$l].GetEnumerator()) { if (-not $eng.ContainsKey($e.Key)) { $eng[$e.Key] = 0.0 }; $eng[$e.Key] += $e.Value } }
+            # One physical GPU: sum every LUID except the software renderer (RDP LUID mismatch, see Merge-GpuEngineMap).
+            $eng = Merge-GpuEngineMap -EngineMap $map -ExcludeLuid $Sampler.ExcludeLuid
             $memB = 0.0; foreach ($k in $now.Mem.Keys) { if ($k -ne $Sampler.ExcludeLuid) { $memB += $now.Mem[$k] } }
         } elseif ($g.Luid) {
             $eng = $map[$g.Luid]
             if ($now.Mem.ContainsKey($g.Luid)) { $memB = $now.Mem[$g.Luid] }
         }
-        $st = & $stats $eng
+        $st = Get-GpuEngineStats $eng
         [PSCustomObject]@{
             Index = $g.Index; Model = $g.Model
-            UtilizationPercent = & $clip $st.Util; Load3DPercent = & $clip $st.Load3D
+            UtilizationPercent = & $clip $st.Utilization; Load3DPercent = & $clip $st.Load3D
             VideoPercent = & $clip $st.Video; EncodePercent = & $clip $st.Encode
             VramUsedGB = if ($null -ne $memB) { [Math]::Round($memB / 1GB, 2) } else { $null }
         }

@@ -6597,16 +6597,65 @@ try {
             if ([System.IO.File]::Exists($resolvedFile)) {
                 $ext      = [System.IO.Path]::GetExtension($resolvedFile).ToLower()
                 $mime     = if ($mimeTypes.ContainsKey($ext)) { $mimeTypes[$ext] } else { 'application/octet-stream' }
-                $bytes    = [System.IO.File]::ReadAllBytes($resolvedFile)
-                $lastMod  = [System.IO.File]::GetLastWriteTimeUtc($resolvedFile).ToString('R')
+                $fileInfo = New-Object System.IO.FileInfo($resolvedFile)
+                # HTTP dates have no sub-second part: truncate, or every conditional request misses.
+                $mtimeRaw = $fileInfo.LastWriteTimeUtc
+                # [DateTime]::new, NOT New-Object DateTime(a - b, kind): New-Object parses its
+                # arguments in command mode, where the comma binds tighter than the minus, so
+                # that form subtracted an array and every static file answered 500 (TEST9).
+                $mtime    = [DateTime]::new($mtimeRaw.Ticks - ($mtimeRaw.Ticks % [TimeSpan]::TicksPerSecond), [DateTimeKind]::Utc)
+                $lastMod  = $mtime.ToString('R', [System.Globalization.CultureInfo]::InvariantCulture)
 
-                $response.StatusCode        = 200
-                $response.ContentType       = $mime
-                $response.ContentLength64   = $bytes.Length
-                $response.Headers.Add('Last-Modified', $lastMod)
-                $response.Headers.Add('Cache-Control', 'no-cache')
-                $staticHeadersSent = $true
-                $response.OutputStream.Write($bytes, 0, $bytes.Length)
+                # Cache lifetime: generated pages and HTML always revalidate; bundled
+                # assets that practically never change may be reused without asking.
+                $generatedRoot = [System.IO.Path]::GetFullPath((Join-Path $websitePath 'generated')) + [System.IO.Path]::DirectorySeparatorChar
+                $assetsRoot    = [System.IO.Path]::GetFullPath((Join-Path $websitePath 'assets')) + [System.IO.Path]::DirectorySeparatorChar
+                $cacheControl  = 'no-cache'
+                if (-not $resolvedFile.StartsWith($generatedRoot, [System.StringComparison]::OrdinalIgnoreCase) -and
+                    $resolvedFile.StartsWith($assetsRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $sep = [System.IO.Path]::DirectorySeparatorChar
+                    if ($resolvedFile.StartsWith($assetsRoot + 'app_icons' + $sep, [System.StringComparison]::OrdinalIgnoreCase) -or
+                        $resolvedFile.StartsWith($assetsRoot + 'vendor' + $sep, [System.StringComparison]::OrdinalIgnoreCase)) {
+                        $cacheControl = 'public, max-age=86400'
+                    } elseif ($ext -eq '.js' -or $ext -eq '.css') {
+                        $cacheControl = 'public, max-age=300'
+                    }
+                }
+
+                $notModified = $false
+                $ims = $request.Headers['If-Modified-Since']
+                if ($ims) {
+                    $imsDate = [DateTime]::MinValue
+                    if ([DateTime]::TryParseExact($ims.Trim(), 'r', [System.Globalization.CultureInfo]::InvariantCulture,
+                            [System.Globalization.DateTimeStyles]::AdjustToUniversal -bor [System.Globalization.DateTimeStyles]::AssumeUniversal, [ref]$imsDate)) {
+                        if ($mtime -le $imsDate) { $notModified = $true }
+                    }
+                }
+
+                if ($notModified) {
+                    $response.StatusCode = 304
+                    $response.Headers.Add('Last-Modified', $lastMod)
+                    $response.Headers.Add('Cache-Control', $cacheControl)
+                    $staticHeadersSent = $true
+                } elseif ($fileInfo.Length -gt 1MB) {
+                    $response.StatusCode        = 200
+                    $response.ContentType       = $mime
+                    $response.ContentLength64   = $fileInfo.Length
+                    $response.Headers.Add('Last-Modified', $lastMod)
+                    $response.Headers.Add('Cache-Control', $cacheControl)
+                    $staticHeadersSent = $true
+                    $fs = [System.IO.File]::Open($resolvedFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete)
+                    try { $fs.CopyTo($response.OutputStream, 81920) } finally { $fs.Dispose() }
+                } else {
+                    $bytes = [System.IO.File]::ReadAllBytes($resolvedFile)
+                    $response.StatusCode        = 200
+                    $response.ContentType       = $mime
+                    $response.ContentLength64   = $bytes.Length
+                    $response.Headers.Add('Last-Modified', $lastMod)
+                    $response.Headers.Add('Cache-Control', $cacheControl)
+                    $staticHeadersSent = $true
+                    $response.OutputStream.Write($bytes, 0, $bytes.Length)
+                }
             } else {
                 $response.StatusCode = 404
                 $msg404 = [System.Text.Encoding]::UTF8.GetBytes("404 Not Found: $urlPath")

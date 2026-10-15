@@ -98,6 +98,38 @@ function Clear-TimerFile {
     [System.IO.File]::WriteAllText((Get-TimerRunFilePath -headsetId $headsetId), '', $utf8NoBom)
 }
 
+# Startup only: called from scripts_init.ps1 in the main process, right after Initialize-TimerFiles.
+# A crash or a restart leaves the previous run token valid, so a timer job from the old process
+# keeps writing its frozen value. Emptying the token makes that job exit on its next ownership
+# check (Test-StillOwner), and the display files go back to the idle value that Stop-HeadsetTimer
+# leaves (Clear-TimerFile). Runs once per process: the console Refresh key dot-sources
+# scripts_init.ps1 again, and a second reset would stop timers the web server is running.
+function Reset-TimerRunTokens {
+    if ($global:TimerRunTokensReset) { return }
+    $global:TimerRunTokensReset = $true
+
+    $timerFolder = Join-Path $global:ScriptPath "website\timer"
+    if (-not (Test-Path -LiteralPath $timerFolder)) { return }
+
+    $staleTokens = 0
+    foreach ($file in @(Get-ChildItem -LiteralPath $timerFolder -File -ErrorAction SilentlyContinue)) {
+        try {
+            if ($file.Name.EndsWith('[timer].run')) {
+                $previous = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8
+                if ($previous -and $previous.Trim()) { $staleTokens++ }
+                Write-FileWithoutBom -Path $file.FullName -Content ''
+            }
+            elseif ($file.Name.EndsWith('[timer].txt')) {
+                Write-FileWithoutBom -Path $file.FullName -Content ''
+            }
+        }
+        catch { Write-Log ("Reset-TimerRunTokens: " + $file.Name + " - " + $_.Exception.Message) -Level WARNING }
+    }
+    if ($staleTokens -gt 0) {
+        Write-Log ("Reset-TimerRunTokens: {0} stale timer run token(s) cleared" -f $staleTokens) -Level INFO
+    }
+}
+
 # Only the timer CONFIGURATION lives in the database. The live countdown stays
 # in website\timer\<id>[timer].txt: it is written every second by a job that
 # loads no modules, and served as a static file to remote OBS browser sources.

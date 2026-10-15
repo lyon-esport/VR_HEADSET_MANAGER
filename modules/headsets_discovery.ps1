@@ -461,6 +461,41 @@ function Start-HeadsetDiscoveryRunspace {
 }
 
 
+function Sync-CompanionDiscoveryRunspace {
+    <#
+    .SYNOPSIS
+    Starts the companion-discovery runspace if absent, respawns it if it died (S3-1).
+    Independent of HeadsetDiscovery_enabled. Reuses Start-HeadsetDiscoveryRunspace (same
+    InitialSessionState injection of $sharedState). Results arrive in _companion_results.
+    .EXAMPLE
+    Sync-CompanionDiscoveryRunspace -registry ([ref]$companionRunspace) -sharedState $sharedState `
+        -scriptPath $global:ScriptPath -configFilePath $global:ConfigFilePath -pollBlock $companionPollBlock
+    #>
+    param(
+        [ref]$registry,
+        [hashtable]$sharedState,
+        [string]$scriptPath,
+        [string]$configFilePath,
+        [scriptblock]$pollBlock
+    )
+
+    $entry = $registry.Value
+    if ($entry -and $entry.Handle.IsCompleted) {
+        Write-Log "VRMonitor: companion discovery runspace died, restarting" -Level WARNING
+        try { $entry.PS.Dispose() }       catch {}
+        try { $entry.Runspace.Dispose() } catch {}
+        $registry.Value = $null
+        $entry = $null
+    }
+    if (-not $entry) {
+        $sharedState.Remove("_stop_companion")
+        $registry.Value = Start-HeadsetDiscoveryRunspace -sharedState $sharedState `
+            -scriptPath $scriptPath -configFilePath $configFilePath -pollBlock $pollBlock
+        Write-Log "VRMonitor: started companion discovery runspace" -Level INFO
+    }
+}
+
+
 function Sync-HeadsetDiscoveryRunspace {
     <#
     .SYNOPSIS

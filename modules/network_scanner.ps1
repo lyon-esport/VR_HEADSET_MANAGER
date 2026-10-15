@@ -356,97 +356,122 @@ Test-port -hostname "192.168.1.243" -port 46801
 function Test-PortForCidr {
     <#
     .SYNOPSIS
-    Tests the availability of a port on all IP addresses of a CIDR network in parallel.
-    
+    Tests the availability of a port on all IP addresses of a CIDR network, with a bounded
+    number of connection attempts in flight.
+
     .PARAMETER CIDR
     The CIDR notation of the network to scan (e.g.: "192.168.1.0/24")
-    
+
     .PARAMETER Port
     The port to test (default: 5555)
-    
+
     .PARAMETER Timeout
-    Timeout in milliseconds (default: 500ms)
-    
-    .PARAMETER MaxThreads
-    Maximum number of parallel threads (default: 50)
+    Per-host timeout in milliseconds (default: 500ms)
+
+    .PARAMETER MaxConcurrency
+    Maximum connection attempts in flight at once (default 32, clamped 1..64: WaitAny
+    accepts at most 64 handles). Alias: MaxThreads (kept for old callers).
+
+    .PARAMETER AllowLarge
+    Lifts the /22 size cap. Without it a network larger than /22 is refused (empty result).
+
+    .EXAMPLE
+    Test-PortForCidr -CIDR '192.168.1.0/24' -Port 5555 -Timeout 300
     #>
     param (
         [Parameter(Mandatory=$true)]
         [string]$CIDR,
-        
+
         [int]$Port = 5555,
-        
+
         [ValidateRange(100,5000)]
         [int]$Timeout = 500,
-        
-        [int]$MaxThreads = 50
+
+        [Alias('MaxThreads')]
+        [int]$MaxConcurrency = 32,
+
+        [switch]$AllowLarge
     )
 
-    # Retrieve all IPs from the CIDR
-    $ipRange = Get-IpRange $CIDR
+    # Refuse oversized networks BEFORE expanding them (Get-IpRange is slow on a /16)
+    if ($CIDR -match '/(\d{1,2})$') {
+        if ([int]$Matches[1] -lt 22 -and -not $AllowLarge) {
+            Write-Log "Port scan refused: $CIDR is larger than /22 (use -AllowLarge)." -Level WARNING
+            return @()
+        }
+    }
+
+    $ipRange = @(Get-IpRange $CIDR)
     $totalIPs = $ipRange.Count
     Write-Log ($msg.ScanStarting -f $totalIPs, $Port) -Level INFO
 
-    # Configure the runspace pool
-    $runspacePool = [runspacefactory]::CreateRunspacePool(1, $MaxThreads)
-    $runspacePool.Open()
-    $jobs = @()
+    if ($MaxConcurrency -lt 1) { $MaxConcurrency = 1 }
+    if ($MaxConcurrency -gt 64) { $MaxConcurrency = 64 }
 
-    # ScriptBlock to test a port
-    $testPortScript = {
-        param($ip, $port, $timeout)
-        
-        $result = [PSCustomObject]@{
-                IPAddress   = $ip
-                Port        = $port
-                Open        = $false
-        }
-        
-        try {
-            $tcpClient = New-Object System.Net.Sockets.TcpClient
-            $asyncResult = $tcpClient.BeginConnect($ip, $port, $null, $null)
-            $connectionStatus = $asyncResult.AsyncWaitHandle.WaitOne($timeout, $false)
+    $results  = New-Object 'System.Collections.Generic.List[object]'
+    $inflight = New-Object 'System.Collections.Generic.List[object]'
+    $clock    = [System.Diagnostics.Stopwatch]::StartNew()
+    $next     = 0
 
-            if ($connectionStatus -and $tcpClient.Connected) {
-                $result.Open = $true
-                $tcpClient.EndConnect($asyncResult)
+    try {
+        while ($next -lt $totalIPs -or $inflight.Count -gt 0) {
+            # Fill the window
+            while ($next -lt $totalIPs -and $inflight.Count -lt $MaxConcurrency) {
+                $ip = $ipRange[$next]
+                $next++
+                $client = $null
+                try {
+                    $client = New-Object System.Net.Sockets.TcpClient
+                    $async  = $client.BeginConnect($ip, $Port, $null, $null)
+                    $inflight.Add([PSCustomObject]@{
+                        IP       = $ip
+                        Client   = $client
+                        Async    = $async
+                        Deadline = $clock.ElapsedMilliseconds + $Timeout
+                    })
+                }
+                catch {
+                    if ($client) { $client.Dispose() }
+                }
+            }
+            if ($inflight.Count -eq 0) { continue }
+
+            # Sleep until one attempt completes (or 25 ms): no busy spin
+            $handles = New-Object 'System.Threading.WaitHandle[]' $inflight.Count
+            for ($i = 0; $i -lt $inflight.Count; $i++) { $handles[$i] = $inflight[$i].Async.AsyncWaitHandle }
+            [void][System.Threading.WaitHandle]::WaitAny($handles, 25)
+
+            # Harvest completed or expired attempts
+            $now = $clock.ElapsedMilliseconds
+            for ($i = $inflight.Count - 1; $i -ge 0; $i--) {
+                $entry = $inflight[$i]
+                $done  = $entry.Async.IsCompleted
+                if (-not $done -and $now -lt $entry.Deadline) { continue }
+                if ($done) {
+                    try {
+                        $entry.Client.EndConnect($entry.Async)
+                        if ($entry.Client.Connected) {
+                            $results.Add([PSCustomObject]@{
+                                IPAddress = $entry.IP
+                                Port      = $Port
+                                Open      = $true
+                            })
+                        }
+                    } catch {}
+                }
+                try { $entry.Client.Dispose() } catch {}
+                $inflight.RemoveAt($i)
             }
         }
-        catch {}
-        finally {
-            if ($tcpClient) { $tcpClient.Dispose() }
+    }
+    finally {
+        foreach ($entry in $inflight) {
+            try { $entry.Client.Dispose() } catch {}
         }
-        return $result
     }
 
-    # Launch jobs in parallel
-    foreach ($ip in $ipRange) {
-        $powershell = [powershell]::Create().AddScript($testPortScript).AddArgument($ip).AddArgument($Port).AddArgument($Timeout)
-        $powershell.RunspacePool = $runspacePool
-        $jobs += [PSCustomObject]@{
-            PowerShell = $powershell
-            AsyncResult = $powershell.BeginInvoke()
-        }
-    }
-    Start-Sleep -Milliseconds $(20*$timeout)
-    # Collect results
-    $results = do {
-        foreach ($job in $jobs) {
-            if ($job.AsyncResult.IsCompleted) {
-                $job.PowerShell.EndInvoke($job.AsyncResult)
-                $job.PowerShell.Dispose()
-            }
-        }
-        $jobs = $jobs | Where-Object { -not $_.AsyncResult.IsCompleted }
-    } while ($jobs.Count -gt 0)
-
-    # Cleanup
-    $runspacePool.Close()
-    $runspacePool.Dispose()
-
-    return $results | Where-Object Open
+    return $results.ToArray()
 }
-
 
 
 
@@ -692,17 +717,28 @@ function Invoke-CompanionDiscovery {
     #>
     param(
         [int]$TimeoutMs = 2000,
-        [int]$UdpPort   = 5556
+        [int]$UdpPort   = 5556,
+        # Collect only: do not write the registry. The companion runspace uses this and
+        # the VRMonitor main thread applies the results (Set-HeadsetIdentity), S3-1.
+        [switch]$NoHeal
     )
 
     $discovered = [System.Collections.Generic.List[PSCustomObject]]::new()
     $udp        = $null
 
     try {
-        # Get our local LAN IPs to populate server_ip in the probe
-        $localIPs = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-            Where-Object { $_.IPAddress -match '^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)' } |
-            Select-Object -ExpandProperty IPAddress)
+        # Local addresses, cached 60 s: Get-NetIPAddress is a CIM query. $allLocal holds every
+        # address (our own broadcast loops back from one of them and must be ignored),
+        # $localIPs only the private ones (first one goes into the probe).
+        $now = [datetime]::UtcNow
+        if (-not $script:CompanionLocalIpCache -or ($now - $script:CompanionLocalIpCacheAt).TotalSeconds -gt 60) {
+            $addrs = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                Select-Object -ExpandProperty IPAddress)
+            $script:CompanionLocalIpCache   = $addrs
+            $script:CompanionLocalIpCacheAt = $now
+        }
+        $allLocal = @($script:CompanionLocalIpCache) + '127.0.0.1'
+        $localIPs = @($script:CompanionLocalIpCache | Where-Object { $_ -match '^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)' })
         $serverIp = if ($localIPs.Count -gt 0) { $localIPs[0] } else { "127.0.0.1" }
 
         $probe = [System.Text.Encoding]::UTF8.GetBytes(
@@ -722,11 +758,15 @@ function Invoke-CompanionDiscovery {
         [void]$udp.Send($probe, $probe.Length, $bcastEp)
         Write-Log "Invoke-CompanionDiscovery: broadcast sent on port $UdpPort, waiting ${TimeoutMs}ms" -Level DEBUG
 
-        $deadline = [datetime]::UtcNow.AddMilliseconds($TimeoutMs)
-        while ([datetime]::UtcNow -lt $deadline) {
+        # ONE overall deadline: the receive timeout is re-set to the time that remains on
+        # every loop, so ignored datagrams (our own probe looping back) never re-arm a full wait.
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        while ($sw.ElapsedMilliseconds -lt $TimeoutMs) {
             try {
+                $udp.Client.ReceiveTimeout = [Math]::Max(1, [int]($TimeoutMs - $sw.ElapsedMilliseconds))
                 $remoteEp = [System.Net.IPEndPoint]::new([System.Net.IPAddress]::Any, 0)
                 $bytes    = $udp.Receive([ref]$remoteEp)
+                if ($allLocal -contains $remoteEp.Address.ToString()) { continue }
                 $json     = [System.Text.Encoding]::UTF8.GetString($bytes) | ConvertFrom-Json -ErrorAction Stop
 
                 if ($json.type -ne "VRHM_COMPANION") { continue }
@@ -751,8 +791,10 @@ function Invoke-CompanionDiscovery {
                 # Unknown serials are deliberately NOT added here - a companion app answering
                 # on the LAN is not by itself an instruction to take the headset into
                 # inventory; that is the operator's call.
-                Set-HeadsetIdentity -SerialNumber $companion.Serial -IPAddress $companion.IP `
-                                    -Model $companion.Model -Source 'companion' | Out-Null
+                if (-not $NoHeal) {
+                    Set-HeadsetIdentity -SerialNumber $companion.Serial -IPAddress $companion.IP `
+                                        -Model $companion.Model -Source 'companion' | Out-Null
+                }
             } catch [System.Net.Sockets.SocketException] {
                 break  # timeout
             } catch {
