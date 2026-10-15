@@ -1196,7 +1196,7 @@ try {
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/load-tier') {
             try {
                 $tier = try { Get-LoadTier } catch { 'idle' }
-                $mult = try { Get-LoadMultiplier } catch { 1 }
+                $mult = try { Get-LoadMultiplier -Tier $tier } catch { 1 }
                 $vrm  = if ($null -ne $global:VRMonitor_refresh_timer) { [int]$global:VRMonitor_refresh_timer } else { 5 }
                 $cm   = if ($null -ne $global:ComputerMonitoring_refresh_timer_sec) { [int]$global:ComputerMonitoring_refresh_timer_sec } else { 60 }
                 Send-JsonResponse -Response $response -Body @{
@@ -1497,7 +1497,7 @@ try {
             try {
                 $safeName = [regex]::Match($request.QueryString['name'], '^[\w\-]+$').Value
                 if (-not $safeName) { throw "Invalid headset name" }
-                $rows    = Get-KnownHeadsets
+                $rows    = Get-KnownHeadsetsCached
                 $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
                 if (-not $headset) { throw "Headset not found" }
                 $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort -adb $adbPath
@@ -1534,7 +1534,7 @@ try {
             try {
                 $safeName = [regex]::Match($request.QueryString['name'], '^[\w\-]+$').Value
                 if (-not $safeName) { throw "Invalid headset name" }
-                $rows    = Get-KnownHeadsets
+                $rows    = Get-KnownHeadsetsCached
                 $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
                 if (-not $headset) { throw "Headset not found" }
                 $device  = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort -adb $adbPath
@@ -1688,7 +1688,7 @@ try {
             try {
                 $smId = 0
                 if (-not [int]::TryParse([string]$request.QueryString['id'], [ref]$smId) -or $smId -le 0) { throw 'Invalid or missing headset id.' }
-                $smHeadset = Get-HeadsetDiagTarget -Id $smId
+                $smHeadset = @(Get-KnownHeadsetsCached) | Where-Object { [string]$_.ID -eq [string]$smId } | Select-Object -First 1
                 if (-not $smHeadset) { throw 'This headset is not registered on this server.' }
                 $sm = Get-StreamMask -Headset $smHeadset
                 Send-JsonResponse -Response $response -Body @{
@@ -1934,7 +1934,7 @@ try {
             try {
                 $safeName = [regex]::Match($request.QueryString['name'], '^[\w\-]+$').Value
                 if (-not $safeName) { throw "Invalid headset name" }
-                $rows    = Get-KnownHeadsets
+                $rows    = Get-KnownHeadsetsCached
                 $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
                 if (-not $headset) { throw "Headset not found" }
                 $info = Get-CompanionInfo -IP $headset.IPAddress
@@ -1992,11 +1992,17 @@ try {
                 # polled every 4s by the browser.
                 $agentList = @(Get-KioskAgentReports)
 
+                # Index both lists by IP once (first row wins, as Select-Object -First 1 did).
+                $statusByIp = @{}
+                foreach ($s in $statusList) { $key = [string]$s.IPAddress; if (-not $statusByIp.ContainsKey($key)) { $statusByIp[$key] = $s } }
+                $agentByIp = @{}
+                foreach ($a in $agentList) { $key = [string]$a.IPAddress; if (-not $agentByIp.ContainsKey($key)) { $agentByIp[$key] = $a } }
+
                 $merged = $kiosks | ForEach-Object {
                     $k = $_
-                    $st = $statusList | Where-Object { $_.IPAddress -eq $k.IPAddress } | Select-Object -First 1
+                    $st = $statusByIp[[string]$k.IPAddress]
                     # Agent fields stay $null for basic (v1) kiosks, which never report.
-                    $ag = $agentList | Where-Object { $_.IPAddress -eq $k.IPAddress } | Select-Object -First 1
+                    $ag = $agentByIp[[string]$k.IPAddress]
                     [PSCustomObject]@{
                         ID            = $k.ID
                         Name          = $k.Name
@@ -2328,7 +2334,7 @@ try {
             try {
                 $safeName = [regex]::Match($request.QueryString['name'], '^[\w\-]+$').Value
                 if (-not $safeName) { throw "Invalid headset name" }
-                $rows    = Get-KnownHeadsets
+                $rows    = Get-KnownHeadsetsCached
                 $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
                 if (-not $headset) { throw "Headset not found" }
                 $device  = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort -adb $adbPath
@@ -2643,21 +2649,24 @@ try {
         # API: GET /api/headsets  - returns all known headsets as JSON (from Get-KnownHeadsets)
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/headsets') {
             try {
-                $rows = Get-KnownHeadsets
-                $jsonItems = @($rows | ForEach-Object {
-                    $row = $_
-                    '{"ID":' + [int]$row.ID +
-                    ',"Name":' + ($row.Name         | ConvertTo-Json) +
-                    ',"IPAddress":' + ($row.IPAddress  | ConvertTo-Json) +
-                    ',"Model":' + ($row.Model         | ConvertTo-Json) +
-                    ',"Brand":' + ($row.Brand         | ConvertTo-Json) +
-                    ',"SerialNumber":' + ($row.SerialNumber | ConvertTo-Json) +
-                    ',"ScrcpyProfile":' + ($row.ScrcpyProfile | ConvertTo-Json) +
-                    ',"scrcpy_AutoRestart":' + ($row.scrcpy_AutoRestart | ConvertTo-Json) +
-                    ',"Record":' + ($row.Record       | ConvertTo-Json) +
-                    '}'
-                })
-                $json = '[' + ($jsonItems -join ',') + ']'
+                $rows = Get-KnownHeadsetsCached
+                $items = [System.Collections.Generic.List[object]]::new()
+                foreach ($row in $rows) {
+                    $items.Add([ordered]@{
+                        ID                 = [int]$row.ID
+                        Name               = $row.Name
+                        IPAddress          = $row.IPAddress
+                        Model              = $row.Model
+                        Brand              = $row.Brand
+                        SerialNumber       = $row.SerialNumber
+                        ScrcpyProfile      = $row.ScrcpyProfile
+                        scrcpy_AutoRestart = $row.scrcpy_AutoRestart
+                        Record             = $row.Record
+                    })
+                }
+                # ONE serialisation for the whole list. -InputObject keeps a 0 or 1 row
+                # list a JSON array (the pipeline would unroll it).
+                $json = if ($items.Count -eq 0) { '[]' } else { ConvertTo-Json -InputObject $items.ToArray() -Compress -Depth 3 }
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes($json)
                 $response.Headers.Add('Access-Control-Allow-Origin', '*')
                 $response.StatusCode      = 200
@@ -2902,7 +2911,7 @@ try {
 
                 # Refresh cache from headset when requested (covers both includeSystem and default)
                 if ($refresh) {
-                    $rows    = Get-KnownHeadsets
+                    $rows    = Get-KnownHeadsetsCached
                     $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
                     if (-not $headset) { throw "Headset not found" }
                     $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort
@@ -2926,7 +2935,7 @@ try {
                 } else {
                     $appNamesLookup = Get-AppCatalogMap
                     # Fallback: live ADB call (no cache yet)
-                    $rows    = Get-KnownHeadsets
+                    $rows    = Get-KnownHeadsetsCached
                     $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
                     if (-not $headset) { throw "Headset not found" }
                     $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort -adb $adbPath
@@ -3744,7 +3753,7 @@ try {
                 $safeName  = [regex]::Match(($nameParam -replace ' ','_'), '^[\w\-]+$').Value
                 if (-not $safeName) { throw "Invalid headset name" }
 
-                $rows    = Get-KnownHeadsets
+                $rows    = Get-KnownHeadsetsCached
                 $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
                 if (-not $headset) { throw "Headset not found" }
 
@@ -4219,7 +4228,7 @@ try {
                     $preferredWifi   = $knownNetworks | Where-Object { $_.Preferred } | Select-Object -First 1
                     if (-not $preferredWifi) { $preferredWifi = $knownNetworks | Select-Object -First 1 }
                     $expectedSsidVal = if ($preferredWifi) { $preferredWifi.SSID } else { '' }
-                    $rows       = Get-KnownHeadsets
+                    $rows       = Get-KnownHeadsetsCached
                     $alreadyReg = $false
                     if ($details.SerialNumber) { $alreadyReg = [bool]($rows | Where-Object { $_.SerialNumber -eq $details.SerialNumber }) }
                     if (-not $alreadyReg -and $details.IP) { $alreadyReg = [bool]($rows | Where-Object { $_.IPAddress -eq $details.IP }) }
@@ -5013,10 +5022,12 @@ try {
         # disk; the body is the same object that file used to hold.
         if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/computer-monitoring') {
             try {
-                $snapshot = $null
-                try { $snapshot = Get-DbKeyValue -Key 'computer_monitoring' } catch { }
-                if ($snapshot) {
-                    Send-JsonResponse -Response $response -Body $snapshot
+                # The stored JSON text is sent as is: parsing it only to serialise it
+                # again was the whole cost of this poll.
+                $snapshotRaw = $null
+                try { $snapshotRaw = Get-DbKeyValueRaw -Key 'computer_monitoring' } catch { }
+                if ($snapshotRaw) {
+                    Send-JsonResponse -Response $response -Raw $snapshotRaw
                 } else {
                     # 404, not an empty object: the page must be able to tell
                     # "no snapshot yet" from "a snapshot with no CPU in it".
@@ -5288,7 +5299,7 @@ try {
                         mediamtxWebrtcPort = if ($global:mediamtxWebrtcPort) { $global:mediamtxWebrtcPort } else { 8889 }
                         mediamtxApiPort    = if ($global:mediamtxApiPort)    { $global:mediamtxApiPort }    else { 9997 }
                         webServerPid       = $PID
-                        mediamtxPid        = (Get-Process -Name "mediamtx" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Id)
+                        mediamtxPid        = (Get-MediaMtxProcess | Select-Object -First 1 -ExpandProperty Id)
                     }
                     $script:appInfoCacheAt = Get-Date
                 }
@@ -5499,7 +5510,7 @@ try {
                         mediamtxWebrtcPort = if ($global:mediamtxWebrtcPort) { $global:mediamtxWebrtcPort } else { 8889 }
                         mediamtxApiPort    = if ($global:mediamtxApiPort)    { $global:mediamtxApiPort }    else { 9997 }
                         webServerPid       = $PID
-                        mediamtxPid        = (Get-Process -Name "mediamtx" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Id)
+                        mediamtxPid        = (Get-MediaMtxProcess | Select-Object -First 1 -ExpandProperty Id)
                     }
                     $script:appInfoCacheAt = Get-Date
                 }
@@ -6493,7 +6504,7 @@ try {
                     $headsetId = [int]$qParams['id']
                 } elseif ($qParams.ContainsKey('name') -and $qParams['name'] -ne '') {
                     $safeName = Convert-Displayname $qParams['name']
-                    $matched = @(Get-KnownHeadsets) | Where-Object { (Convert-Displayname $_.Name) -eq $safeName } | Select-Object -First 1
+                    $matched = @(Get-KnownHeadsetsCached) | Where-Object { (Convert-Displayname $_.Name) -eq $safeName } | Select-Object -First 1
                     if ($matched) { $headsetId = [int]$matched.ID }
                 }
                 $action = if ($qParams.ContainsKey('action')) { $qParams['action'].ToLower() } else { '' }
@@ -6501,6 +6512,9 @@ try {
                 if ($headsetId -le 0 -or -not $action) { throw 'Missing id or action' }
 
                 $respJson = '{"ok":false,"error":"unknown action"}'
+
+                # Any action but status can change what status answers: drop the memo.
+                if ($action -ne 'status' -and $script:timerStatusMemo) { $script:timerStatusMemo.Remove($headsetId) }
 
                 switch ($action) {
                     'start' {
@@ -6524,6 +6538,14 @@ try {
                         $respJson = '{"ok":true}'
                     }
                     'status' {
+                        # Two pollers in the same second (page + [timer] overlay) share one computation.
+                        if (-not $script:timerStatusMemo) { $script:timerStatusMemo = @{} }
+                        $memo = $script:timerStatusMemo[$headsetId]
+                        $nowMs = [Environment]::TickCount
+                        if ($memo -and [int]($nowMs - $memo.At) -ge 0 -and [int]($nowMs - $memo.At) -lt 500) {
+                            $respJson = $memo.Json
+                            break
+                        }
                         $st = Get-TimerStatus -headsetId $headsetId
                         $activeStr = if ($st.active)  { 'true' } else { 'false' }
                         $pausedStr = if ($st.paused)  { 'true' } else { 'false' }
@@ -6535,6 +6557,7 @@ try {
                                      ',"minutes":' + $st.minutes +
                                      ',"seconds":' + $st.seconds +
                                      ',"mode":'    + $modeJson + '}'
+                        $script:timerStatusMemo[$headsetId] = @{ At = $nowMs; Json = $respJson }
                     }
                     'config' {
                         $min  = if ($qParams.ContainsKey('minutes') -and $qParams['minutes'] -match '^\d+$') { [int]$qParams['minutes'] } else { 5 }

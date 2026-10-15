@@ -1104,7 +1104,29 @@ function Start-VRMonitor {
         # if mediamtx starts (or restarts) after that publish, the session is lost and
         # the ffmpeg pusher goes zombie (stream serves 404 while scrcpy looks healthy).
         try { Start-MediaMtx }         catch { Write-Log ("VRMonitor: mediamtx watchdog (eager) failed: " + $_.Exception.Message) -Level WARNING }
-        try { Watch-ScrcpyProcesses } catch { Write-Log ("VRMonitor: scrcpy watchdog (eager) failed: " + $_.Exception.Message) -Level WARNING }
+        # The eager watchdog gets the live records the poll runspaces have already published, so it
+        # does not run a synchronous Get-KnownHeadsetInfos (ping + ADB) per headset. The runspaces
+        # have only just started, so wait a bounded time (3 s, 250 ms polls) for the first record of
+        # each auto-restart headset with a usable address. A headset still without a record is left
+        # out; the fast-path edge trigger starts it as soon as its runspace reports ADB up.
+        $eagerWaitRows = @($knownHeadsets | Where-Object {
+            (ConvertTo-BoolField $_.scrcpy_AutoRestart) -and -not (Test-UnknownIp $_.IPAddress) })
+        $eagerDeadline = (Get-Date).AddSeconds(3)
+        $eagerIds      = @()
+        $eagerInfoByIp = @{}
+        do {
+            $eagerIds      = @()
+            $eagerInfoByIp = @{}
+            foreach ($h in $eagerWaitRows) {
+                $rec = $sharedState[[string]$h.IPAddress]
+                if ($rec) { $eagerInfoByIp[[string]$h.IPAddress] = $rec; $eagerIds += [int]$h.ID }
+            }
+            if ($eagerIds.Count -eq $eagerWaitRows.Count) { break }
+            Start-Sleep -Milliseconds 250
+        } while ((Get-Date) -lt $eagerDeadline)
+        if ($eagerIds.Count -gt 0) {
+            try { Watch-ScrcpyProcesses -HeadsetId $eagerIds -HeadsetInfo $eagerInfoByIp } catch { Write-Log ("VRMonitor: scrcpy watchdog (eager) failed: " + $_.Exception.Message) -Level WARNING }
+        }
         try { Start-WebServer }        catch { Write-Log ("VRMonitor: web server watchdog (eager) failed: " + $_.Exception.Message) -Level WARNING }
 
         # NOTE: no GPU encoder pre-warm here. It was tried and removed: the probe has no

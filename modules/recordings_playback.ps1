@@ -34,7 +34,7 @@ function Test-RecordingPlaybackAvailable {
         if ($global:CaptureMode -eq 'LocalWindow') {
             return @{ Ok = $false; Reason = 'Capture mode is LocalWindow: the streaming server accepts no stream.' }
         }
-        if (-not (Get-Process -Name 'mediamtx' -ErrorAction SilentlyContinue)) {
+        if (-not (Get-MediaMtxProcess)) {
             return @{ Ok = $false; Reason = 'Streaming server (mediamtx) is not running.' }
         }
         return @{ Ok = $true; Reason = '' }

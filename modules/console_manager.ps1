@@ -1916,7 +1916,7 @@ function Show-SubMenu-Services {
         Write-Host ($msg.ServicesWebServerStatus -f $wsStatus) -ForegroundColor $(if ($wsRunning) { 'Green' } else { 'Red' })
 
         # --- MediaMtx status ---
-        $mtxProc   = Get-Process -Name "mediamtx" -ErrorAction SilentlyContinue | Select-Object -First 1
+        $mtxProc   = Get-MediaMtxProcess
         $mtxStatus = if ($mtxProc) { $msg.ServicesRunning -f $mtxProc.Id } else { $msg.ServicesStopped }
         Write-Host ($msg.ServicesMediaMtxStatus -f $mtxStatus) -ForegroundColor $(if ($mtxProc) { 'Green' } else { 'Red' })
 

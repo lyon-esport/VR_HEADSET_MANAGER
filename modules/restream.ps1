@@ -83,6 +83,44 @@ $pathsBlock
 }
 
 
+function Get-MediaMtxProcess {
+    <#
+    .SYNOPSIS
+    Returns the mediamtx process owned by THIS install, or $null.
+
+    .DESCRIPTION
+    Never matches on the process name alone. Order: (1) the PID in data\mediamtx.pid when
+    it is alive and its exe path equals the configured mediamtx exe; (2) the first mediamtx
+    process whose exe path is under <ScriptPath>\sources\MediaMTX\ (any version folder of
+    this install). A process whose Path cannot be read counts as "not ours".
+    Example: $p = Get-MediaMtxProcess; if ($p) { Stop-Process -Id $p.Id }
+    #>
+    $pidFile = Join-Path $global:ScriptPath "data\mediamtx.pid"
+    $exe     = $global:mediamtxFilePath
+    if ((Test-Path -LiteralPath $pidFile) -and $exe) {
+        try {
+            $raw = (Get-Content -LiteralPath $pidFile -Raw -Encoding UTF8 -ErrorAction Stop)
+            $storedPid = 0
+            if ([int]::TryParse(($raw -split '\s+' | Where-Object { $_ } | Select-Object -First 1), [ref]$storedPid) -and $storedPid -gt 0) {
+                $p = Get-Process -Id $storedPid -ErrorAction SilentlyContinue
+                if ($p -and $p.Path -and ([string]::Equals($p.Path, $exe, [System.StringComparison]::OrdinalIgnoreCase))) {
+                    return $p
+                }
+            }
+        } catch { }
+    }
+    $root = (Join-Path $global:ScriptPath "sources\MediaMTX").TrimEnd('\') + '\'
+    foreach ($p in @(Get-Process -Name "mediamtx" -ErrorAction SilentlyContinue)) {
+        $path = $null
+        try { $path = $p.Path } catch { }
+        if ($path -and $path.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $p
+        }
+    }
+    return $null
+}
+
+
 function Start-MediaMtx {
     <#
     .SYNOPSIS
@@ -97,16 +135,16 @@ function Start-MediaMtx {
         Write-Log $msg.MediaMtxNotEnabled -Level DEBUG
         return
     }
-    if (-not (Test-Path $global:mediamtxFilePath)) {
+    if (-not (Test-Path -LiteralPath $global:mediamtxFilePath)) {
         Write-Log ($msg.MediaMtxNotFound -f $global:mediamtxFilePath) -Level ERROR
         return
     }
     $mediamtxPidFile = Join-Path $global:ScriptPath "data\mediamtx.pid"
-    $running = Get-Process -Name "mediamtx" -ErrorAction SilentlyContinue
+    $running = Get-MediaMtxProcess
     if ($running) {
         Write-Log ($msg.MediaMtxAlreadyRunning -f $running.Id) -Level DEBUG
-        # Refresh stale PID file (e.g. crash + restart by user)
-        $running.Id | Set-Content -LiteralPath $mediamtxPidFile -Force -ErrorAction SilentlyContinue
+        # Refresh stale PID file (e.g. crash + restart by user): exactly one PID
+        ([string]$running.Id) | Set-Content -LiteralPath $mediamtxPidFile -Force -ErrorAction SilentlyContinue
         return
     }
     Write-Log $msg.MediaMtxStarting -Level INFO
@@ -135,9 +173,15 @@ function Stop-MediaMtx {
     Stops the mediamtx process if it is running.
     #>
     try {
-        $procs = Get-Process -Name "mediamtx" -ErrorAction SilentlyContinue
-        if ($procs) {
-            $procs | Stop-Process -Force -ErrorAction Stop
+        $stopped = $false
+        for ($i = 0; $i -lt 3; $i++) {
+            $proc = Get-MediaMtxProcess
+            if (-not $proc) { break }
+            Stop-Process -Id $proc.Id -Force -ErrorAction Stop
+            $proc.WaitForExit(3000) | Out-Null
+            $stopped = $true
+        }
+        if ($stopped) {
             Write-Log $msg.MediaMtxStopped -Level INFO
         }
     }
@@ -245,7 +289,7 @@ function Sync-RestreamPaths {
     if (-not $global:mediamtxEnabled) { return }
 
     # Ensure mediamtx is running
-    if (-not (Get-Process -Name "mediamtx" -ErrorAction SilentlyContinue)) {
+    if (-not (Get-MediaMtxProcess)) {
         Start-MediaMtx
         Start-Sleep -Seconds 2
     }

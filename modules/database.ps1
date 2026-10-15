@@ -884,6 +884,22 @@ function Get-DbKeyValue {
 
 <#
 .SYNOPSIS
+    One app_kv entry as the stored JSON TEXT, unparsed ($null when absent or blank).
+.DESCRIPTION
+    For a caller that only forwards the document (an HTTP response): skips the
+    ConvertFrom-Json / ConvertTo-Json round trip of Get-DbKeyValue.
+.EXAMPLE
+    $raw = Get-DbKeyValueRaw -Key 'computer_monitoring'
+#>
+function Get-DbKeyValueRaw {
+    param([Parameter(Mandatory = $true)][string]$Key)
+    $json = Invoke-DbScalar -Name 'kv.get' -Parameters @{ key = $Key }
+    if ($null -eq $json -or [string]::IsNullOrWhiteSpace([string]$json)) { return $null }
+    return [string]$json
+}
+
+<#
+.SYNOPSIS
     Writes one app_kv entry (insert or replace).
 .EXAMPLE
     Set-DbKeyValue -Key 'computer_monitoring' -Value $snapshot

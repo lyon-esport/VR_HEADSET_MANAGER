@@ -2013,16 +2013,29 @@ function Write-ConfigJson {
 # (multiplier 1) and every interval reverts to its configured base.
 # -------------------------------------------------------------------
 
+$script:LoadTierCpuMemo = $null   # @{At=<TickCount ms>; Cpu=<int|$null>}
+
 function Get-LoadTier {
     if (-not $global:AdaptiveMonitoring_Enabled) { return 'idle' }
     if (-not $global:VQA_Enabled)                { return 'idle' }
-    $snap = $null
-    try { $snap = Get-DbKeyValue -Key 'computer_monitoring' } catch { return 'idle' }
-    if ($null -eq $snap) { return 'idle' }
+    # The snapshot is parsed at most once per second per process: this is polled by
+    # every page (1 s in the video wall's fast mode) and by the monitoring loops.
     $cpu = $null
-    if     ($null -ne $snap.CPU.LoadPercent) { $cpu = [int]$snap.CPU.LoadPercent }
-    elseif ($null -ne $snap.Cpu.LoadPercent) { $cpu = [int]$snap.Cpu.LoadPercent }
-    elseif ($null -ne $snap.CpuLoadPercent)  { $cpu = [int]$snap.CpuLoadPercent }
+    $memo = $script:LoadTierCpuMemo
+    $nowMs = [Environment]::TickCount
+    $age = if ($memo) { [int]($nowMs - $memo.At) } else { -1 }
+    if ($memo -and $age -ge 0 -and $age -lt 1000) {
+        $cpu = $memo.Cpu
+    }
+    else {
+        $snap = $null
+        try { $snap = Get-DbKeyValue -Key 'computer_monitoring' } catch { return 'idle' }
+        if ($null -eq $snap) { return 'idle' }
+        if     ($null -ne $snap.CPU.LoadPercent) { $cpu = [int]$snap.CPU.LoadPercent }
+        elseif ($null -ne $snap.Cpu.LoadPercent) { $cpu = [int]$snap.Cpu.LoadPercent }
+        elseif ($null -ne $snap.CpuLoadPercent)  { $cpu = [int]$snap.CpuLoadPercent }
+        $script:LoadTierCpuMemo = @{ At = $nowMs; Cpu = $cpu }
+    }
     if ($null -eq $cpu) { return 'idle' }
     if ($cpu -ge [int]$global:VQA_CpuMaxThreshold)        { return 'max' }
     if ($cpu -ge [int]$global:VQA_CpuMitigationThreshold) { return 'mitigation' }
@@ -2030,7 +2043,11 @@ function Get-LoadTier {
 }
 
 function Get-LoadMultiplier {
-    switch (Get-LoadTier) {
+    # -Tier: a tier the caller already computed, so the snapshot is not read twice
+    # (/api/load-tier needs both the tier and the multiplier).
+    param([string]$Tier)
+    if (-not $Tier) { $Tier = Get-LoadTier }
+    switch ($Tier) {
         'max'        { return 5 }
         'mitigation' { return 2 }
         default      { return 1 }
