@@ -17,12 +17,16 @@
 
     Coverage scales with depth:
       Light     one stream on the headset's configured settings
-      Standard  + re-encode ON and OFF (the two branches of Start-FfmpegStreamPush)
+                + it self-heals after a mediamtx restart (pipeline health check)
+      Standard  + it self-heals after its ffmpeg push is killed
+                + re-encode ON and OFF (the two branches of Start-FfmpegStreamPush),
+                  the self-heal after a mediamtx restart repeated on the other arm
                 + recording produces a growing file
       Full      + h264 vs h265
 
-    Config changes go through POST /api/config/save, which owns the restart
-    choreography (bounce every scrcpy session, then mediamtx) under the VQA lock.
+    Config changes go through POST /api/config/save, which asks VRMonitor to
+    restart mediamtx and every running capture (Request-StreamRestart, ADR-0032)
+    and answers at once; Set-NrtMediaMtxSetting waits for the new mediamtx PID.
     Doing it by writing config.json directly would leave the running ffmpeg
     processes on the old settings and the test would silently measure nothing.
 
@@ -92,8 +96,31 @@ function Set-NrtMediaMtxSetting {
     if ($config.config) { $config = $config.config }
     $config.mediamtx.$Field = $Value
 
+    $pidFile = (Get-SandboxPaths -TargetRoot $target).MediaMtxPid
+    $pidBefore = ''
+    if (Test-Path -LiteralPath $pidFile) { $pidBefore = ([string](Get-Content -LiteralPath $pidFile -Raw -Encoding UTF8)).Trim() }
+
     $save = Invoke-VrmApi -Path '/api/config/save' -Method POST -Body $config -TimeoutSec 180
     Assert-VrmOk -Result $save -Label ("save mediamtx.{0} = {1}" -f $Field, $Value)
+    $saveMs = [int]$save.Elapsed.TotalMilliseconds
+    Add-TestEvidence ("config save answered in {0} ms" -f $saveMs)
+    # The restart is a request to VRMonitor (S4-3, ADR-0032): the save no longer waits for it.
+    if ($saveMs -gt 1000) { Write-TestWarning ("config save took {0} ms - the restart should not block the request any more" -f $saveMs) }
+
+    # Wait for VRMonitor to run the request (its fast tick is 500 ms) before the caller measures:
+    # otherwise the OLD stream, still ready for a moment, would be measured and then drop.
+    if ($save.Json -and $save.Json.restarted -and $save.Json.restarted.mediamtx -and $pidBefore) {
+        $deadline = (Get-Date).AddSeconds(60)
+        $pidNow = $pidBefore
+        while ((Get-Date) -lt $deadline) {
+            $pidNow = ''
+            if (Test-Path -LiteralPath $pidFile) { $pidNow = ([string](Get-Content -LiteralPath $pidFile -Raw -Encoding UTF8)).Trim() }
+            if ($pidNow -and $pidNow -ne $pidBefore) { break }
+            Start-Sleep -Milliseconds 500
+        }
+        Add-TestEvidence ("mediamtx PID {0} -> {1} (restarted by VRMonitor)" -f $pidBefore, $pidNow)
+        Assert-True ($pidNow -and $pidNow -ne $pidBefore) 'VRMonitor must restart mediamtx within 60 s of the config save'
+    }
     return $save
 }
 
@@ -155,6 +182,79 @@ function Invoke-NrtStreamCase {
     }
 
     return $s
+}
+
+function Invoke-NrtSelfHealCase {
+    <#
+    .SYNOPSIS
+        Breaks the running stream behind a live scrcpy and demands that it comes back on its
+        own: the watchdog's pipeline health check (Get-HeadsetPipelineFaults) restarts it.
+
+    .DESCRIPTION
+        -Break MediaMtx kills mediamtx (PID from data\mediamtx.pid); the VRMonitor watchdog
+        starts it again and the ffmpeg push has lost its RTSP session. -Break Ffmpeg kills the headset's ffmpeg push, found by the
+        out-pipe name in its command line. The path must then be ready again with a NEW
+        publisher session (source id) within -TimeoutSec, and stay stable for -Seconds.
+        Only a capture started by VRMonitor is healed (its pipelines live in that process), so
+        the caller must make sure the stream was (re)started through auto-restart.
+
+    .EXAMPLE
+        Invoke-NrtSelfHealCase -Break MediaMtx
+    #>
+    param(
+        [ValidateSet('MediaMtx', 'Ffmpeg')][string]$Break = 'MediaMtx',
+        [int]$TimeoutSec = 90,
+        [int]$Seconds = 10
+    )
+
+    $before = Get-NrtMediaMtxPath -PathName $streamPath -ApiPort $ports.MediaMtxApi
+    Assert-True ($before -and $before.ready) ("mediamtx path '{0}' must be published before breaking it" -f $streamPath)
+    $beforeId = ''
+    if ($before.source -and $before.source.id) { $beforeId = [string]$before.source.id }
+
+    if ($Break -eq 'MediaMtx') {
+        # Kill mediamtx outright: an unplanned outage. POST /api/restartmediamtx would not do -
+        # since S4-3 it asks VRMonitor for a PLANNED restart that restarts the captures too, so
+        # the health check would have nothing to heal. Here VRMonitor's slow-tick watchdog starts
+        # mediamtx again, and the health check sees the new mediamtx PID behind a live scrcpy.
+        $pidFile = (Get-SandboxPaths -TargetRoot $target).MediaMtxPid
+        Assert-True (Test-Path -LiteralPath $pidFile) 'data\mediamtx.pid must exist while streaming'
+        $mtxPid = [int](([string](Get-Content -LiteralPath $pidFile -Raw -Encoding UTF8)).Trim())
+        Stop-Process -Id $mtxPid -Force -ErrorAction Stop
+        Add-TestEvidence ("mediamtx PID {0} killed" -f $mtxPid)
+    }
+    else {
+        $pipeName = 'vrm_{0}_out' -f $nrtSafeName
+        $pushes = @(Get-CimInstance Win32_Process -Filter "Name = 'ffmpeg.exe'" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($pipeName, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 })
+        Assert-True ($pushes.Count -gt 0) ("no ffmpeg push reading pipe '{0}' found" -f $pipeName)
+        foreach ($p in $pushes) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+        Add-TestEvidence ("killed ffmpeg push PID(s) {0}" -f (($pushes | ForEach-Object { $_.ProcessId }) -join ', '))
+    }
+
+    $brokenAt = Get-Date
+    $deadline = $brokenAt.AddSeconds($TimeoutSec)
+    $healed   = $null
+    while ((Get-Date) -lt $deadline) {
+        $p = Get-NrtMediaMtxPath -PathName $streamPath -ApiPort $ports.MediaMtxApi
+        if ($p -and $p.ready -and $p.source -and [string]$p.source.id -and [string]$p.source.id -ne $beforeId) {
+            $healed = $p
+            break
+        }
+        Start-Sleep -Milliseconds 1000
+    }
+    $healSec = [int]((Get-Date) - $brokenAt).TotalSeconds
+    if ($healed) {
+        Add-TestEvidence ("path '{0}' republished after {1}s (publisher session {2} -> {3})" -f $streamPath, $healSec, $beforeId, $healed.source.id)
+    }
+    else {
+        Add-TestEvidence ("path '{0}' not republished within {1}s - look for 'Stream of {2} is broken' in the app log" -f $streamPath, $TimeoutSec, $nrtSafeName)
+    }
+    Assert-NotNull $healed ("a new publisher on mediamtx path '{0}' within {1}s" -f $streamPath, $TimeoutSec)
+
+    $s = Test-NrtStreamStable -PathName $streamPath -ApiPort $ports.MediaMtxApi -Seconds $Seconds
+    Add-TestEvidence ("after the heal: {0}" -f $s.Reason)
+    Assert-True $s.Stable $s.Reason
 }
 
 Invoke-RegressionTest -Name 'A real headset is available for streaming tests' -Test {
@@ -249,11 +349,24 @@ Invoke-RegressionTest -Name 'Viewer endpoints are reachable while streaming' -Te
     Assert-True $rtspOpen 'the RTSP port must be listening'
 }
 
+# An unplanned mediamtx outage under a running capture kills its ffmpeg push (broken pipe) while
+# scrcpy keeps running. Before the pipeline health check nothing restarted it: the path stayed 404.
+# The capture here was started through auto-restart, so VRMonitor owns it and heals it.
+Invoke-RegressionTest -Name 'Stream self-heals after a mediamtx restart' -Test {
+    Assert-NrtStreamHeadsetAvailable
+    Invoke-NrtSelfHealCase -Break MediaMtx
+}
+
 # ---------------------------------------------------------------------------
 # Standard and Full - re-encode matrix and recording
 # ---------------------------------------------------------------------------
 
 if ($depth -ne 'Light') {
+
+    Invoke-RegressionTest -Name 'Stream self-heals after its ffmpeg push is killed' -Test {
+        Assert-NrtStreamHeadsetAvailable
+        Invoke-NrtSelfHealCase -Break Ffmpeg
+    }
 
     Invoke-RegressionTest -Name 'Stream is stable with re-encode toggled' -Test {
         Assert-NrtStreamHeadsetAvailable
@@ -273,6 +386,14 @@ if ($depth -ne 'Light') {
         $expectedCodec = ''
         if ($flipped) { $expectedCodec = $originalCodec }
         Invoke-NrtStreamCase -Label ("re-encode {0}" -f $flipped) -Seconds $stableSeconds -ExpectedCodec $expectedCodec | Out-Null
+    }
+
+    # The other re-encode arm. The config save above had VRMonitor restart the capture (S4-3), so
+    # it is one of VRMonitor's pipelines and the health check can see it - no hand-back needed.
+    Invoke-RegressionTest -Name 'Stream self-heals after a mediamtx restart (re-encode toggled)' -Test {
+        Assert-NrtStreamHeadsetAvailable
+        Add-TestEvidence ("re-encode now {0}" -f (-not $originalReEncode))
+        Invoke-NrtSelfHealCase -Break MediaMtx
     }
 
     Invoke-RegressionTest -Name 'Recording produces a growing file while streaming' -Test {

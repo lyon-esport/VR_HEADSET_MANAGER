@@ -337,13 +337,20 @@
       // Polling: fetch only JSON data, update DOM in-place (no full-page reload)
       (function () {
         var INTERVAL_MS = 2000;
+        // Guarded poller for an OBS Browser Source: chained setTimeout (a slow answer never
+        // overlaps the next request), x2 backoff up to 30 s while the server is down, and
+        // NO hidden-tab pause - an OBS source can report itself hidden while on air.
+        var _errors = 0;
         function refresh() {
           fetch('/api/headset-status?id=' + encodeURIComponent(_ID), { cache: 'no-store' })
-            .then(function (r) { return r.json(); })
-            .then(_updateFromJson)
-            .catch(function () {});
+            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then(function (d) { _errors = 0; _updateFromJson(d); })
+            .catch(function () { _errors++; })
+            .then(function () {
+              setTimeout(refresh, Math.min(30000, INTERVAL_MS * Math.pow(2, Math.min(_errors, 5))));
+            });
         }
-        setInterval(refresh, INTERVAL_MS);
+        setTimeout(refresh, INTERVAL_MS);
       })();
     </script>
   </body>

@@ -465,7 +465,9 @@
     _vqaWarningUpdate: function () {
       var el = document.getElementById('topbar-vqa-warning');
       if (!el) return;
-      fetch('/api/vqa/status').then(function (r) { return r.json(); }).then(function (s) {
+      // Returns the promise so VRHM.poll can back off on a failure; every error is
+      // swallowed inside the chain, so the chip just stays as it was.
+      return fetch('/api/vqa/status').then(function (r) { return r.json(); }).then(function (s) {
         // Hidden when VQA is disabled OR when the derived VQO badge is ON (operator
         // chose auto-apply for at least one section, so a warning would just be noise).
         if (!s.enabled || s.enabled_vqo) { el.style.display = 'none'; return; }
@@ -503,8 +505,21 @@
     // Public initializer. Self-invoked below so individual pages do not need to
     // call it - the chip just maintains itself everywhere the topbar is used.
     initVqaWarning: function () {
-      document.addEventListener('DOMContentLoaded', function () { TopBar._vqaWarningUpdate(); });
-      setInterval(function () { TopBar._vqaWarningUpdate(); }, 30000);
+      // 30 s guarded poll (no overlap, paused while the tab is hidden, backoff on error).
+      // vrhm_common.js is loaded on demand: most pages include topbar.js on its own.
+      function startPoll() {
+        TopBar._vqaPoller = VRHM.poll(function () { return TopBar._vqaWarningUpdate(); },
+          { intervalMs: 30000, maxBackoffMs: 120000 });
+      }
+      function boot() {
+        if (window.VRHM) { startPoll(); return; }
+        var s = document.createElement('script');
+        s.src = '/assets/vrhm_common.js';
+        s.onload = startPoll;
+        document.head.appendChild(s);
+      }
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+      else boot();
     }
   };
 

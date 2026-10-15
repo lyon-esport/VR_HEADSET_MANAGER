@@ -7,6 +7,7 @@
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
   <link rel="stylesheet" href="assets/topbar.css">
   <script src="assets/topbar.js"></script>
+  <script src="assets/vrhm_common.js"></script>
   <style>
     :root {
       --bg:                 #111;
@@ -754,9 +755,7 @@
   </div>
 
   <script>
-    function esc(s) {
-      return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-    }
+    var esc = VRHM.esc;
 
     // ── Add kiosk device modal ─────────────────────────────────────────────
     var addKioskModal = document.getElementById('add-kiosk-modal');
@@ -2149,18 +2148,23 @@
         });
     });
 
+    // The one fetch of the table. Rejects on a network error or non-2xx, which is what
+    // makes VRHM.poll back off instead of piling requests on a busy server.
+    function fetchKiosks() {
+      return VRHM.fetchJson('/api/kiosks?_=' + Date.now()).then(function(d) {
+        if (d.ok) {
+          lastKiosks = d.kiosks || [];
+          pruneSelection();
+          renderTable(lastKiosks);
+          updatePushBtnState();
+        }
+      });
+    }
+
+    var kioskPoller = null;
+    // Called after every operator action: refresh now (never overlaps the timed run).
     function pollKiosks() {
-      return fetch('/api/kiosks?_=' + Date.now())
-        .then(function(r) { return r.json(); })
-        .then(function(d) {
-          if (d.ok) {
-            lastKiosks = d.kiosks || [];
-            pruneSelection();
-            renderTable(lastKiosks);
-            updatePushBtnState();
-          }
-        })
-        .catch(function() {});
+      return kioskPoller ? kioskPoller.runNow() : Promise.resolve();
     }
 
     // Fill the launcher command lines with this server's own address, so the
@@ -2192,8 +2196,7 @@
       });
     })();
 
-    pollKiosks();
-    setInterval(pollKiosks, 4000);
+    kioskPoller = VRHM.poll(fetchKiosks, { intervalMs: 4000, maxBackoffMs: 30000 });
     loadHeadsetsForCast();
   </script>
 </body>

@@ -6,6 +6,7 @@
   <title>VR Headset Manager - Help &amp; Diagnostics</title>
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
   <link rel="stylesheet" href="assets/topbar.css">
+  <script src="assets/vrhm_common.js"></script>
   <script src="assets/topbar.js"></script>
   <style>
     :root {
@@ -594,26 +595,29 @@
     }
 
     function refreshAppInfo() {
-      fetch('/api/appinfo')
-        .then(function(r) { return r.json(); })
+      return VRHM.fetchJson('/api/appinfo')
         .then(function(info) { _appInfo = info; updatePidTags(info); })
-        .catch(function() { markWebServerOffline(); });
+        .catch(function() { markWebServerOffline(); throw new Error('appinfo unreachable'); });
     }
 
-    fetch('/api/appinfo')
-      .then(function(r) { return r.json(); })
+    // Both pollers are guarded: no overlap, paused in a hidden tab, backoff on error.
+    function startHelpPollers() {
+      _pollTimer = VRHM.poll(loadStreamLinks, { intervalMs: 5000, immediate: false });
+      VRHM.poll(refreshAppInfo, { intervalMs: 5000, immediate: false });
+    }
+
+    VRHM.fetchJson('/api/appinfo')
       .then(function(info) {
         _appInfo = info;
         updatePidTags(info);
         buildLinks(info.mediamtxApiPort || 9997);
         loadStreamLinks();
-        _pollTimer = setInterval(loadStreamLinks, 5000);
-        setInterval(refreshAppInfo, 5000);
+        startHelpPollers();
       })
       .catch(function() {
         markWebServerOffline();
-        buildLinks(9997); loadStreamLinks(); _pollTimer = setInterval(loadStreamLinks, 5000);
-        setInterval(refreshAppInfo, 5000);
+        buildLinks(9997); loadStreamLinks();
+        startHelpPollers();
       });
 
     // Convert headset name to MediaMTX path (mirrors ConvertTo-RestreamPathName PS function)
@@ -640,8 +644,8 @@
       var hlsPort    = _appInfo.mediamtxHlsPort    || 8888;
       var webrtcPort = _appInfo.mediamtxWebrtcPort || 8889;
 
-      Promise.all([
-        fetch('/api/headsets').then(function(r) { return r.json(); }),
+      return Promise.all([
+        VRHM.fetchJson('/api/headsets'),
         fetch('/proxy/mediamtx/v3/paths/list').then(function(r) { return r.json(); }).catch(function() { return {items:[]}; })
       ]).then(function(results) {
         var headsets   = results[0];
@@ -797,10 +801,10 @@
       scrollBtn.classList.toggle('active', _autoScroll);
       if (_autoScroll) {
         fetchLogs();
-        if (!_liveInterval) _liveInterval = setInterval(fetchLogs, 10000);
+        if (!_liveInterval) _liveInterval = VRHM.poll(fetchLogs, { intervalMs: 10000, immediate: false });
         logsBody.scrollTop = _reversed ? 0 : logsBody.scrollHeight;
       } else {
-        if (_liveInterval) { clearInterval(_liveInterval); _liveInterval = null; }
+        if (_liveInterval) { _liveInterval.stop(); _liveInterval = null; }
       }
     });
 
@@ -953,8 +957,7 @@
       if (Date.now() - _sourcesLoadedAt > 60000) { _sourcesLoadedAt = Date.now(); loadSources(false); }
       var url = '/api/logs?n=' + _fetchCount;
       if (_currentFile) url += '&file=' + encodeURIComponent(_currentFile);
-      fetch(url)
-        .then(function(r) { return r.json(); })
+      return VRHM.fetchJson(url)
         .then(function(lines) {
           if (!Array.isArray(lines)) return;
           var newest = lines.length ? lines[lines.length - 1] : '';

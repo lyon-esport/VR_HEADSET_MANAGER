@@ -7,6 +7,7 @@
   <title>VR Headsets - Video Monitor</title>
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
   <link rel="stylesheet" href="assets/topbar.css">
+  <script src="assets/vrhm_common.js"></script>
   <script src="assets/topbar.js"></script>
   <script src="assets/live_events.js"></script>
   <style>
@@ -986,10 +987,7 @@
     var FAST_STATUS_MS     = 1000;
     var FAST_STATUS_MAX_MS = 60000;
     var _pendingSince      = {};    // display name -> ms timestamp the pending state was first seen
-    var _statusTimer       = null;
-    var _statusInFlight    = false;
-    var _statusKick        = false;
-    var _statusLoopFn      = null;  // set once the status loop is bootstrapped
+    var _statusLoopFn      = null;  // runNow() of the status poller, set once it is bootstrapped
 
     function captureStarting() {
       var now = Date.now(), fast = false;
@@ -1003,12 +1001,10 @@
       return fast;
     }
 
-    // Run the status loop now instead of waiting for its timer. If a poll is already in flight,
-    // flag it so that poll reschedules immediately - never start a second polling chain.
+    // Run the status loop now instead of waiting for its timer. VRHM.poll's runNow() queues
+    // one more run behind a poll already in flight - never a second polling chain.
     function kickStatusLoop() {
       if (!_statusLoopFn) return;
-      if (_statusInFlight) { _statusKick = true; return; }
-      if (_statusTimer) { clearTimeout(_statusTimer); _statusTimer = null; }
       _statusLoopFn();
     }
 
@@ -1400,7 +1396,7 @@
     function startCellTimerPoll(tid) {
       stopCellTimerPoll(tid);
       function poll() {
-        fetch('/api/timer?id=' + tid + '&action=status&_=' + Date.now())
+        return fetch('/api/timer?id=' + tid + '&action=status&_=' + Date.now())
           .then(function(r) { return r.ok ? r.json() : null; })
           .then(function(j) {
             if (!j) return;
@@ -1418,12 +1414,11 @@
             }
           }).catch(function() {});
       }
-      poll();
-      timerIntervals[tid] = setInterval(poll, 1000);
+      timerIntervals[tid] = VRHM.poll(poll, { intervalMs: 1000, maxBackoffMs: 10000 });
     }
 
     function stopCellTimerPoll(tid) {
-      if (timerIntervals[tid]) { clearInterval(timerIntervals[tid]); delete timerIntervals[tid]; }
+      if (timerIntervals[tid]) { timerIntervals[tid].stop(); delete timerIntervals[tid]; }
     }
 
     // ---- Timer cell button click/long-press (delegated) ----
@@ -1636,22 +1631,22 @@
     // (?hidetopbar=1) and the live-only filter from the URL/server on every load.
     function checkHeadsetListChanged() {
       if (lastHeadsetsSignature === null) return; // buildGrid() hasn't captured a baseline yet
-      fetch('/api/headsets')
-        .then(function(r) { return r.ok ? r.json() : null; })
+      return VRHM.fetchJson('/api/headsets')
         .then(function(rows) {
           if (!rows) return;
           if (headsetsSignature(rows) !== lastHeadsetsSignature) location.reload();
-        })
-        .catch(function() {}); // transient network error - just try again next tick
+        });   // a failure rejects: the poller backs off and tries again
     }
 
     // ------ Boot ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     TopBar.initCompact();
     TopBar.initManageDevicesBtn();
 
-    fetchKioskList();
-    setInterval(fetchKioskList, 30000); // pick up newly added/removed kiosk screens without a page reload
-    setInterval(checkHeadsetListChanged, 30000); // pick up added/removed/renamed/reordered headsets without a manual refresh
+    // Guarded 30 s polls (paused in a hidden tab, backoff on error):
+    // pick up newly added/removed kiosk screens without a page reload, and
+    // added/removed/renamed/reordered headsets without a manual refresh.
+    VRHM.poll(fetchKioskList, { intervalMs: 30000 });
+    VRHM.poll(checkHeadsetListChanged, { intervalMs: 30000, immediate: false });
 
     // Override compact detection: topbar-filters is flex:0 so scrollWidth check doesn't work.
     // Instead check if the overlay-toggles right edge overlaps the topbar-right left edge.
@@ -1687,19 +1682,16 @@
           });
         }
         // Bootstrap: learn the tier + base from the server BEFORE scheduling polls.
-        // After every poll completion, refresh the tier in parallel and re-schedule using
-        // setTimeout (not setInterval) so each tick re-reads the current multiplier.
-        function statusLoop() {
-          _statusInFlight = true;
-          Promise.all([pollHeadsetsStatus(), refreshLoadTier(), refreshCaptureMode()]).finally(function() {
-            _statusInFlight = false;
-            var delay = _statusKick ? 0 : (captureStarting() ? FAST_STATUS_MS : nextStatusDelay());
-            _statusKick = false;
-            _statusTimer = setTimeout(statusLoop, delay);
-          });
+        // VRHM.poll chains the runs (no overlap), pauses in a hidden tab, backs off on
+        // error, and re-reads the period (fast while a capture starts, else the load
+        // tier's) before every schedule.
+        function startStatusLoop() {
+          var statusPoller = VRHM.poll(function() {
+            return Promise.all([pollHeadsetsStatus(), refreshLoadTier(), refreshCaptureMode()]);
+          }, { intervalMs: function() { return captureStarting() ? FAST_STATUS_MS : nextStatusDelay(); } });
+          _statusLoopFn = function() { statusPoller.runNow(); };
         }
-        _statusLoopFn = statusLoop;
-        refreshLoadTier().finally(statusLoop);
+        refreshLoadTier().finally(startStatusLoop);
         // Push (ADR-0020): a status write (scrcpy started/stopped, ADB up/down) re-runs the
         // status fetch at once, so a cell loads its video as soon as scrcpy runs. The loop
         // above stays as the fallback when the push channel is unavailable.

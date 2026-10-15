@@ -231,6 +231,21 @@ function Get-HeadsetSitePath {
     return (Join-Path -Path $global:ScriptPath -ChildPath (Join-Path -Path 'website\generated' -ChildPath $file))
 }
 
+# Path of a background-job progress/cancel file under <ScriptPath>\data\jobs\ (S6-6).
+# Creates the folder on demand. Fixed names in %TEMP% were shared by two installs on one PC.
+# Example: Get-JobFilePath -Name 'vrm_benchmark.json'
+function Get-JobFilePath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+    $dir = Join-Path -Path $global:ScriptPath -ChildPath 'data\jobs'
+    if (-not (Test-Path -LiteralPath $dir)) {
+        try { New-Item -ItemType Directory -Path $dir -Force | Out-Null } catch { }
+    }
+    return (Join-Path -Path $dir -ChildPath $Name)
+}
+
 
 # Write text to a file as UTF-8 WITHOUT BOM.
 # .ps1 files in this project must not have a BOM (CLAUDE.md rule 1).

@@ -6,6 +6,7 @@
   <title>VR Headsets - Benchmark</title>
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
   <link rel="stylesheet" href="assets/topbar.css">
+  <script src="assets/vrhm_common.js"></script>
   <script src="assets/topbar.js"></script>
   <style>
     :root {
@@ -530,12 +531,23 @@
   });
   function applyBusy() { $('sel-fs').disabled = S.busy; $('progress').style.display = S.busy ? 'flex' : 'none'; updateRunBtn(); updateParBtn(); }
 
-  var progTimer = null;
-  // One loop only: every answer replaces the pending timer instead of adding a second one.
-  function schedulePoll(ms) { clearTimeout(progTimer); progTimer = setTimeout(pollProgress, ms); }
+  // One VRHM.poll loop only. Period: 2 s while a run is active, 5 s idle (15 s in a hidden
+  // tab), x2 backoff on error up to 10 s. pollProgress() = "check now" (queued behind a
+  // check already in flight, never a second chain).
+  var progPoller = null;
   function pollProgress() {
-    clearTimeout(progTimer);
-    jget('/api/benchmark/progress').then(function (p) {
+    if (!progPoller) {
+      progPoller = VRHM.poll(progressStep, {
+        intervalMs: function () { return S.busy ? 2000 : 5000; },
+        hiddenIntervalMs: 15000,
+        maxBackoffMs: 10000,
+        immediate: false
+      });
+    }
+    return progPoller.runNow();
+  }
+  function progressStep() {
+    return jget('/api/benchmark/progress').then(function (p) {
       S.prog = p; S.progRecv = Date.now();
       var st = p && p.status ? p.status : 'idle';
       var active = st === 'queued' || st === 'running';
@@ -543,16 +555,14 @@
         S.activeKind = p.kind || '';
         if (!S.busy) { S.busy = true; if (p.headset && p.headset.id != null && String(p.headset.id) !== String(S.hid)) { S.hid = p.headset.id; hsSig = ''; renderHeadsetSelect(); loadOptions(); } applyBusy(); }
         renderProgress();
-        schedulePoll(2000);
       } else {
         var was = S.busy; S.busy = false; applyBusy();
         if (was || (S.lastStatus === 'running' || S.lastStatus === 'queued')) onRunEnd(p);
         // Keep watching while idle (slower), so a run started from the console, another tab or
         // the API is picked up too, and its results appear here when it ends.
-        schedulePoll(document.hidden ? 15000 : 5000);
       }
       S.lastStatus = st;
-    }).catch(function () { schedulePoll(S.busy ? 3000 : 10000); });
+    });   // a failure rejects: the poller backs off and tries again
   }
   function onRunEnd(p) {
     var st = p && p.status;
@@ -1124,7 +1134,7 @@
   // Always watch progress: attaches to a run already in progress, and keeps polling (slowly)
   // while idle so a run started anywhere refreshes the results here when it ends.
   loadHeadsets().then(function () { pollProgress(); });
-  setInterval(function () { if (!document.hidden) loadHeadsets(); }, 5000);
+  VRHM.poll(loadHeadsets, { intervalMs: 5000, immediate: false });   // paused while hidden
 })();
 </script>
 </body>

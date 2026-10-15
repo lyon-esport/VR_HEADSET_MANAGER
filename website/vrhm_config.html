@@ -696,11 +696,12 @@
         }
         if (j.ok) {
           var r = j.restarted || {};
-          if (r.mediamtx) {
+          if (r.requested) {
+            // The restart runs in the monitor process a moment after this answer.
             var n = (r.scrcpy && r.scrcpy.length) ? r.scrcpy.length : 0;
-            showToast('MediaMTX restarted. Scrcpy restarted for ' + n + ' headset(s).', 3500);
+            showToast((r.mediamtx ? 'Saved. MediaMTX and ' : 'Saved. ') + n + ' running capture(s) restarting now.', 3500);
           } else if (r.pending) {
-            showToast('Saved. MediaMTX restart deferred (VQA busy) - retry or restart app.', 3500);
+            showToast('Saved, but the stream restart could not be requested - restart the streams or the app.', 4000);
           }
         } else {
           showToast('Save failed: ' + (j.error || 'unknown error'), 4000);

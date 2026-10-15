@@ -6,6 +6,7 @@
   <title>VR Headsets - Application Manager</title>
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
   <link rel="stylesheet" href="assets/topbar.css">
+  <script src="assets/vrhm_common.js"></script>
   <script src="assets/topbar.js"></script>
   <style>
     :root {
@@ -717,12 +718,13 @@
 
   function pollAdbConnectivity() {
     if (!selectedHeadset) return;
-    fetch('/api/headset-connection-check', {
+    // Errors are shown as "unavailable" badges (as before) and swallowed, so the
+    // poller itself never sees a rejection.
+    return VRHM.fetchJson('/api/headset-connection-check', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: selectedHeadset.replace(/_/g, ' ') })
     })
-      .then(function (r) { return r.json(); })
       .then(function (d) { updateAdbBadges(d.usb, d.wifi, d.usbSpeed); })
       .catch(function () { updateAdbBadges(false, false); });
   }
@@ -732,12 +734,11 @@
     var bar = $id('adb-conn-bar');
     bar.style.display = 'flex';
     updateAdbBadges(false, false, null);
-    pollAdbConnectivity();
-    adbConnTimer = setInterval(pollAdbConnectivity, 5000);
+    adbConnTimer = VRHM.poll(pollAdbConnectivity, { intervalMs: 5000, maxBackoffMs: 30000 });
   }
 
   function stopAdbPolling() {
-    if (adbConnTimer) { clearInterval(adbConnTimer); adbConnTimer = null; }
+    if (adbConnTimer) { adbConnTimer.stop(); adbConnTimer = null; }
     $id('adb-conn-bar').style.display = 'none';
   }
 
@@ -1048,26 +1049,24 @@
 
   function _resolveStartPolling() {
     if (_resolvePoller) return;
-    _resolvePoller = setInterval(function() {
-      fetch('/api/resolve-progress')
-        .then(function(r) { return r.json(); })
+    _resolvePoller = VRHM.poll(function() {
+      return VRHM.fetchJson('/api/resolve-progress')
         .then(function(d) {
           if (d.status === 'done') {
-            clearInterval(_resolvePoller); _resolvePoller = null;
+            _resolvePoller.stop(); _resolvePoller = null;
             var summary = (d.total > 0) ? ' (' + d.done + ' / ' + d.total + ' packages)' : '';
             setStatus('Online search complete' + summary, 'ok');
             _resolveResetBtn();
             if (selectedHeadset) loadApps(false);
           } else if (d.status === 'error') {
-            clearInterval(_resolvePoller); _resolvePoller = null;
+            _resolvePoller.stop(); _resolvePoller = null;
             setStatus('Search failed: ' + (d.error || 'unknown error'), 'err');
             _resolveResetBtn();
           } else if (d.done !== undefined && d.total > 0) {
             setStatus('Searching online... ' + d.done + ' / ' + d.total + ' packages', 'busy');
           }
-        })
-        .catch(function() {});
-    }, 3000);
+        });
+    }, { intervalMs: 3000, maxBackoffMs: 15000, immediate: false });
   }
 
   $id('resolve-names-btn').addEventListener('click', function() {
@@ -1101,8 +1100,7 @@
 
   // Always-on 15s poll: lock/unlock resolve button across all browsers
   function _syncResolveState() {
-    fetch('/api/resolve-progress')
-      .then(function(r) { return r.json(); })
+    return VRHM.fetchJson('/api/resolve-progress')
       .then(function(d) {
         var running = d.status === 'queued' || d.status === 'running';
         if (running && _resolveBtn && !_resolveBtn.disabled) {
@@ -1114,11 +1112,9 @@
         } else if (!running && _resolveBtn && _resolveBtn.disabled && !_resolvePoller) {
           _resolveResetBtn();
         }
-      })
-      .catch(function() {});
+      });
   }
-  _syncResolveState();
-  setInterval(_syncResolveState, 15000);
+  VRHM.poll(_syncResolveState, { intervalMs: 15000, maxBackoffMs: 60000 });
 
   // -- Search app updates (MetaMetadata LatestVersion) -----------------------
   var _updateVersionsPoller   = null;
@@ -1149,12 +1145,11 @@
 
   function _updateVersionsStartPolling() {
     if (_updateVersionsPoller) return;
-    _updateVersionsPoller = setInterval(function() {
-      fetch('/api/update-app-versions-progress')
-        .then(function(r) { return r.json(); })
+    _updateVersionsPoller = VRHM.poll(function() {
+      return VRHM.fetchJson('/api/update-app-versions-progress')
         .then(function(d) {
           if (d.status === 'done' || d.status === 'complete') {
-            clearInterval(_updateVersionsPoller); _updateVersionsPoller = null;
+            _updateVersionsPoller.stop(); _updateVersionsPoller = null;
             var summary = (d.total > 0) ? ' (' + d.done + ' / ' + d.total + ' packages)' : '';
             setStatus('Update search complete' + summary + '. Refreshing headset cache...', 'busy');
             _updateVersionsResetBtn();
@@ -1176,15 +1171,14 @@
               setStatus('Update search complete' + summary, 'ok');
             }
           } else if (d.status === 'error') {
-            clearInterval(_updateVersionsPoller); _updateVersionsPoller = null;
+            _updateVersionsPoller.stop(); _updateVersionsPoller = null;
             setStatus('Update search failed: ' + (d.error || 'unknown error'), 'err');
             _updateVersionsResetBtn();
           } else if (d.done !== undefined && d.total > 0) {
             setStatus('Searching updates... ' + d.done + ' / ' + d.total + ' packages', 'busy');
           }
-        })
-        .catch(function() {});
-    }, 3000);
+        });
+    }, { intervalMs: 3000, maxBackoffMs: 15000, immediate: false });
   }
 
   if (_updateVersionsBtn) {
@@ -1226,8 +1220,7 @@
 
   // Always-on 15s poll: sync update-versions button state across all browsers
   function _syncUpdateVersionsState() {
-    fetch('/api/update-app-versions-progress')
-      .then(function(r) { return r.json(); })
+    return VRHM.fetchJson('/api/update-app-versions-progress')
       .then(function(d) {
         var running = d.status === 'queued' || d.status === 'running';
         if (running && _updateVersionsBtn && !_updateVersionsPoller) {
@@ -1239,11 +1232,9 @@
         } else if (!running && !_updateVersionsPoller) {
           updateVersionsBtnState();
         }
-      })
-      .catch(function() {});
+      });
   }
-  _syncUpdateVersionsState();
-  setInterval(_syncUpdateVersionsState, 15000);
+  VRHM.poll(_syncUpdateVersionsState, { intervalMs: 15000, maxBackoffMs: 60000 });
 
   // -- Toggle system apps ----------------------------------------------------
 
@@ -1343,7 +1334,7 @@
   }
 
   function stopPolling() {
-    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    if (pollTimer) { pollTimer.stop(); pollTimer = null; }
   }
 
   function resetInstallUI() {
@@ -1357,9 +1348,8 @@
   function startPolling(jobId) {
     activeJobId = jobId;
     showProgressOverlay('Preparing...', '', false);
-    pollTimer = setInterval(function () {
-      fetch('/api/install-progress?jobId=' + jobId)
-        .then(function (r) { return r.json(); })
+    pollTimer = VRHM.poll(function () {
+      return VRHM.fetchJson('/api/install-progress?jobId=' + jobId)
         .then(function (p) {
           var step = p.step || '';
           if (step === 'queued' || step === 'apk_installing') {
@@ -1388,9 +1378,8 @@
             resetInstallUI();
             setInstallStatus('Installation cancelled.', '');
           }
-        })
-        .catch(function () {});
-    }, 800);
+        });
+    }, { intervalMs: 800, maxBackoffMs: 8000, immediate: false });
   }
 
   $id('cancel-inst-btn').addEventListener('click', function () {

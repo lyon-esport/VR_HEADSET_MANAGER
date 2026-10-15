@@ -399,6 +399,19 @@ if (-not (Get-Variable -Name HeadsetPipelines -Scope Global -ErrorAction Silentl
     $global:HeadsetPipelines = @{}
 }
 
+# Pipeline health check (Get-HeadsetPipelineFaults, run by the slow-tick watchdog): a pipeline can
+# break while its scrcpy keeps running - ffmpeg exits on a broken pipe when mediamtx restarts, the
+# bridge job dies - and the stream then answers 404 with nothing to restart it. Per safe display
+# name: PathMisses = consecutive checks with the mediamtx path missing or not ready, Restarts =
+# times of the automatic restarts (rate limit), GaveUpUntil = end of the current give-up period.
+if (-not (Get-Variable -Name HeadsetPipelineHealth -Scope Global -ErrorAction SilentlyContinue)) {
+    $global:HeadsetPipelineHealth = @{}
+}
+$script:PipelineHealthGraceSec    = 20   # no verdict this long after a pipeline start (publish takes a few s)
+$script:PipelineHealthPathMisses  = 2    # a missing/unready path must be seen on this many checks in a row
+$script:PipelineHealthMaxRestarts = 3    # automatic restarts allowed per headset...
+$script:PipelineHealthWindowMin   = 5    # ...within this sliding window, then ERROR and wait
+
 # Recording files that scrcpy (windowed LocalWindow mode) writes DIRECTLY, keyed by the safe display
 # name, so they can be checked once the session is over. In the pipe modes ffmpeg writes the file and
 # the path lives in $global:HeadsetPipelines[<name>].RecordFile instead.
@@ -714,8 +727,8 @@ function Start-FfmpegStreamPush {
     }
 }
 
-# Sets the global capture mode, persists it to config.json, and restarts any
-# currently-running scrcpy session that's affected by the change. Used by the
+# Sets the global capture mode, persists it to config.json, and asks VRMonitor to restart
+# the running captures in the new mode (Request-StreamRestart). Used by the
 # CLI Config sub-menu and the web settings page so the operator can toggle
 # window visibility live without bouncing the app.
 function Set-CaptureMode {
@@ -754,52 +767,14 @@ function Set-CaptureMode {
     }
     $global:CaptureMode = $Mode
 
-    # mediamtx YAML structure depends on the mode (paths: {} vs all_others:).
-    # LocalWindow uses paths: {} (no publishers accepted),
-    # pipe modes (StreamOnly/StreamAndLocalWindow) need all_others:. Restart mediamtx
-    # only when crossing that boundary.
+    # The captures belong to VRMonitor (ADR-0032), and this helper runs in the web server or the
+    # console, so it only ASKS: VRMonitor reloads config (picking up the new mode), stops every
+    # running capture, restarts mediamtx when the LocalWindow boundary was crossed (its YAML differs:
+    # paths: {} vs all_others:), then restarts the captures in the new mode.
     $crossedBoundary = (($previous -eq 'LocalWindow') -ne ($Mode -eq 'LocalWindow'))
-    if ($crossedBoundary) {
-        try { Stop-MediaMtx; Start-Sleep -Milliseconds 500; Start-MediaMtx } catch {
-            Write-Log ("Set-CaptureMode: mediamtx restart failed: {0}" -f $_.Exception.Message) -Level WARNING
-        }
-    }
+    [void](Request-StreamRestart -MediaMtx:$crossedBoundary -Reason ("capture mode {0} -> {1}" -f $previous, $Mode))
 
-    # Kill every owned scrcpy process so they get restarted in the new mode.
-    # We deliberately do NOT call start-screenCopy here:
-    #  - This helper is called both from the web server (separate process - it does
-    #    not own the running pipelines) and from the CLI menu (main process).
-    #    Restarting from the wrong process would orphan the bridge job and lose
-    #    track of the pipeline.
-    #  - The VRMonitor background job reloads config.json on every slow cycle
-    #    (refresh_timer), then Watch-ScrcpyProcesses sees a headset with
-    #    AutoRestart=True and no running scrcpy, and respawns it with the freshly
-    #    loaded $global:CaptureMode. That is the single owner of restarts.
-    $owned = @(Get-Process -Name scrcpy -ErrorAction SilentlyContinue |
-               Where-Object { $_.Path -like "$($global:scrcpyFolder)\scrcpy.exe" })
-    foreach ($p in $owned) {
-        $title = if ($p.MainWindowTitle) { $p.MainWindowTitle } else { '' }
-        $headset = $null
-        if ($title) {
-            $headset = Get-KnownHeadsets | Where-Object { (Convert-Displayname $_.Name) -eq $title } | Select-Object -First 1
-        }
-        if ($headset) {
-            Write-Log ("Set-CaptureMode: stopping {0} so VRMonitor restarts it in {1} mode" -f $headset.Name, $Mode) -Level INFO
-            Stop-Scrcpy -HeadsetName $headset.Name | Out-Null
-        } else {
-            # Headless scrcpy has no window title - fall back to direct PID kill.
-            Write-Log ("Set-CaptureMode: stopping scrcpy pid={0} (no window title, headless) so VRMonitor restarts it" -f $p.Id) -Level INFO
-            try { Stop-Process -Id $p.Id -Force -ErrorAction Stop } catch {}
-        }
-    }
-    # Local registry cleanup (web/main may both hold dead entries after a kill)
-    foreach ($key in @($global:HeadsetPipelines.Keys)) { Stop-HeadsetPipeline -SafeName $key }
-
-    # Do not wait for the slow tick: ask VRMonitor to respawn the captures now (and show them as
-    # "starting" meanwhile). It reloads config first, so it starts them in the new mode.
-    [void](Request-ScrcpyCheck -All -Reason 'capture mode changed')
-
-    Write-Log ("CaptureMode set to {0} (was {1}); VRMonitor respawns the captures now" -f $Mode, $previous) -Level SUCCESS
+    Write-Log ("CaptureMode set to {0} (was {1}); VRMonitor restarts the captures now" -f $Mode, $previous) -Level SUCCESS
     return $true
 }
 
@@ -812,7 +787,17 @@ function Stop-HeadsetPipeline {
     if ($entry.FfmpegProcess) {
         $ff = $entry.FfmpegProcess
         try {
-            if (-not $ff.HasExited) {
+            if ($ff.HasExited) {
+                # ffmpeg died on its own before this stop (a broken RTSP pipe when mediamtx restarted,
+                # a crash): a failed ffmpeg does not write the recording's index, so the file is
+                # handled like a forced kill and repaired in the background.
+                $code = 0
+                try { $code = [int]$ff.ExitCode } catch { }
+                if ($code -ne 0 -and $entry.RecordFile) {
+                    $forcedKill = $true
+                    Write-Log ("Stop-HeadsetPipeline: ffmpeg for {0} had already exited with code {1}. The recording '{2}' may lack its index; it is repaired automatically in the background (Recordings catalogue)." -f $SafeName, $code, $entry.RecordFile) -Level INFO
+                }
+            } else {
                 # Ask ffmpeg to quit gracefully ("q" on stdin) so the -c copy recording
                 # output gets flushed/finalised instead of losing buffered frames to a
                 # hard kill. Only force-kill if it doesn't exit within the timeout.
@@ -1103,6 +1088,12 @@ function start-screenCopy {
             if ($recording -and $recordFile) {
                 $ffmpegRecord = [System.IO.Path]::ChangeExtension($recordFile, '.mkv')
             }
+            # The mediamtx this publisher connects to. Another PID later means mediamtx restarted
+            # under the stream and the RTSP session is gone (Get-HeadsetPipelineFault).
+            $mediaMtxPid = 0
+            if (Get-Command Get-MediaMtxProcess -ErrorAction SilentlyContinue) {
+                try { $mtxProc = Get-MediaMtxProcess; if ($mtxProc) { $mediaMtxPid = [int]$mtxProc.Id } } catch { }
+            }
             $ffmpegPush = Start-FfmpegStreamPush -SafeName $displayName -RtspUrl $rtspUrl -RecordFile $ffmpegRecord -SourceCodec $sourceCodec -EyeMerge $eyeMergeMaps -ProgressFile $ffmpegProgressFile
             $global:HeadsetPipelines[$displayName] = @{
                 Bridge              = $bridgeJob
@@ -1117,6 +1108,7 @@ function start-screenCopy {
                 Recording      = [bool]$recording
                 RecordFile     = $ffmpegRecord
                 EyeMergeKey    = $eyeMergeKey
+                MediaMtxPid    = $mediaMtxPid
                 StartedAt      = (Get-Date)
             }
             Write-Log ("Pipe pipeline up for {0}: mode={1} rtsp={2}" -f $displayName, $captureMode, $rtspUrl) -Level SUCCESS
@@ -1395,6 +1387,211 @@ function Get-ScrcpyCheckRequest {
 }
 
 
+function Get-HeadsetPipelineFault {
+    <#
+    .SYNOPSIS
+    Why one pipe pipeline is broken, or '' when it is healthy or cannot be judged yet. The
+    decision behind Get-HeadsetPipelineFaults; the only state it changes is -State.PathMisses.
+
+    .DESCRIPTION
+    Broken when ANY of:
+      - the ffmpeg push has exited;
+      - the pipe bridge job is no longer Running;
+      - mediamtx runs under another PID than the one the pipeline published to (it restarted and
+        the RTSP session went with it);
+      - the mediamtx path is missing or not ready on PipelineHealthPathMisses (2) checks in a row
+        (-State.PathMisses counts them).
+    Nothing is judged during the first PipelineHealthGraceSec (20) s of a pipeline: ffmpeg only
+    publishes a few seconds after the start. -PathStates $null (the mediamtx API did not answer)
+    skips the path rule and keeps the miss count as it was, so one missed answer never counts.
+    -MediaMtxPid 0 (mediamtx not found) skips the PID rule, as does a pipeline that recorded no
+    PID at start. scrcpy is not looked at: the caller only asks about pipelines whose scrcpy runs.
+
+    .EXAMPLE
+    $state = @{ PathMisses = 0 }
+    Get-HeadsetPipelineFault -Pipeline $global:HeadsetPipelines['Q3_RED'] -PathName 'q3_red' -PathStates (Get-MediaMtxPathStates) -MediaMtxPid 4242 -State $state
+    #>
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Pipeline,
+        [Parameter(Mandatory = $true)][string]$PathName,
+        [hashtable]$PathStates = $null,
+        [int]$MediaMtxPid = 0,
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [datetime]$Now = (Get-Date)
+    )
+    if ($Pipeline.StartedAt -and (($Now - [datetime]$Pipeline.StartedAt).TotalSeconds -lt $script:PipelineHealthGraceSec)) {
+        $State.PathMisses = 0
+        return ''
+    }
+    $ff = $Pipeline.FfmpegProcess
+    if ($ff) {
+        $exited = $false
+        try { $exited = $ff.HasExited } catch { }
+        if ($exited) {
+            $code = '?'
+            try { $code = [string]$ff.ExitCode } catch { }
+            return ("the ffmpeg push exited (code {0})" -f $code)
+        }
+    }
+    if ($Pipeline.Bridge) {
+        $bridgeState = [string]$Pipeline.Bridge.State
+        if ($bridgeState -ne 'Running') { return ("the pipe bridge job is {0}" -f $bridgeState) }
+    }
+    $startPid = [int]$Pipeline.MediaMtxPid
+    if ($MediaMtxPid -gt 0 -and $startPid -gt 0 -and $MediaMtxPid -ne $startPid) {
+        return ("mediamtx restarted under the stream (pid {0} -> {1})" -f $startPid, $MediaMtxPid)
+    }
+    if ($null -ne $PathStates) {
+        $path = $PathStates[$PathName]
+        if ($path -and $path.Ready) {
+            $State.PathMisses = 0
+        } else {
+            $State.PathMisses = [int]$State.PathMisses + 1
+            if ($State.PathMisses -ge $script:PipelineHealthPathMisses) {
+                $what = if ($path) { 'not ready' } else { 'missing' }
+                return ("mediamtx path '{0}' {1} on {2} checks in a row" -f $PathName, $what, $State.PathMisses)
+            }
+        }
+    }
+    return ''
+}
+
+function Get-HeadsetPipelineFaults {
+    <#
+    .SYNOPSIS
+    Pipeline health check of the VRMonitor slow tick: the pipe pipelines of THIS process whose
+    scrcpy still runs but whose stream is broken, as a hashtable safe display name -> reason
+    (Get-HeadsetPipelineFault). Never throws.
+
+    .DESCRIPTION
+    Called by Watch-ScrcpyProcesses -CheckPipelineHealth, which restarts the broken ones through
+    its usual restart path, rate-limited by Approve-HeadsetPipelineRestart. mediamtx's path list
+    is read ONCE (Get-MediaMtxPathStates), and only when a pipeline is past its start grace.
+    Returns an empty table, judging nothing, while:
+      - a stream benchmark runs (it owns the captures, ADR-0026);
+      - the capture mode is LocalWindow (no pipeline) or mediamtx is disabled (nothing to publish to).
+    Only the pipelines in $global:HeadsetPipelines are judged, i.e. those this process started.
+    Every planned stream / mediamtx restart is a request VRMonitor runs itself on its fast path
+    (Request-StreamRestart, ADR-0032), on the same thread as this check, so the two never race and
+    no lock is needed here.
+    -PathStates and -MediaMtxPid replace the live reads (tests).
+
+    .EXAMPLE
+    $faults = Get-HeadsetPipelineFaults
+    foreach ($name in $faults.Keys) { '{0}: {1}' -f $name, $faults[$name] }
+    #>
+    param(
+        [hashtable]$PathStates = $null,
+        [int]$MediaMtxPid = 0,
+        [datetime]$Now = (Get-Date)
+    )
+    $faults = @{}
+    try {
+        $health = $global:HeadsetPipelineHealth
+        # Forget the path misses of pipelines that are gone, but keep their restart times while
+        # they still count, so a restart that did not bring a pipeline back stays rate-limited.
+        $cutoff = $Now.AddMinutes(-$script:PipelineHealthWindowMin)
+        foreach ($key in @($health.Keys)) {
+            if ($global:HeadsetPipelines.ContainsKey($key)) { continue }
+            $health[$key].PathMisses = 0
+            if (@($health[$key].Restarts | Where-Object { $_ -gt $cutoff }).Count -eq 0) { $health.Remove($key) }
+        }
+        if ($global:HeadsetPipelines.Count -eq 0) { return $faults }
+        if (-not $global:mediamtxEnabled -or $global:CaptureMode -eq 'LocalWindow') { return $faults }
+        if ((Get-Command Test-StreamBenchmarkActive -ErrorAction SilentlyContinue) -and (Test-StreamBenchmarkActive)) { return $faults }
+
+        # Pipelines that can be judged: scrcpy still running (a dead scrcpy is the watchdog's
+        # ordinary restart) and past the start grace.
+        $candidates = @()
+        foreach ($key in @($global:HeadsetPipelines.Keys)) {
+            $entry = $global:HeadsetPipelines[$key]
+            if (-not $entry -or $entry.CaptureMode -eq 'LocalWindow') { continue }
+            $scrcpyAlive = $false
+            try { $scrcpyAlive = [bool]($entry.ScrcpyProcess -and -not $entry.ScrcpyProcess.HasExited) } catch { }
+            if (-not $scrcpyAlive) { continue }
+            if (-not $health.ContainsKey($key)) { $health[$key] = @{ PathMisses = 0; Restarts = @(); GaveUpUntil = $null } }
+            if ($entry.StartedAt -and (($Now - [datetime]$entry.StartedAt).TotalSeconds -lt $script:PipelineHealthGraceSec)) {
+                $health[$key].PathMisses = 0
+                continue
+            }
+            $candidates += $key
+        }
+        if ($candidates.Count -eq 0) { return $faults }
+
+        if (-not $PSBoundParameters.ContainsKey('PathStates')) {
+            $PathStates = $null
+            if (Get-Command Get-MediaMtxPathStates -ErrorAction SilentlyContinue) { $PathStates = Get-MediaMtxPathStates }
+        }
+        if (-not $PSBoundParameters.ContainsKey('MediaMtxPid')) {
+            $MediaMtxPid = 0
+            if (Get-Command Get-MediaMtxProcess -ErrorAction SilentlyContinue) {
+                $mtx = Get-MediaMtxProcess
+                if ($mtx) { $MediaMtxPid = [int]$mtx.Id }
+            }
+        }
+        if ($null -eq $PathStates) {
+            Write-Log "Pipeline health check: the mediamtx API did not answer - path check skipped this tick." -Level DEBUG
+        }
+
+        foreach ($key in $candidates) {
+            # Same path name start-screenCopy publishes to.
+            $pathName = ConvertTo-RestreamPathName -HeadsetName $key
+            $reason = Get-HeadsetPipelineFault -Pipeline $global:HeadsetPipelines[$key] -PathName $pathName `
+                -PathStates $PathStates -MediaMtxPid $MediaMtxPid -State $health[$key] -Now $Now
+            if ($reason) { $faults[$key] = $reason }
+        }
+    } catch {
+        Write-Log ("Pipeline health check failed: {0}" -f $_.Exception.Message) -Level WARNING
+    }
+    return $faults
+}
+
+function Approve-HeadsetPipelineRestart {
+    <#
+    .SYNOPSIS
+    Rate limit of the automatic pipeline restarts: $true (and the restart is counted) while the
+    headset had fewer than PipelineHealthMaxRestarts (3) of them in the last
+    PipelineHealthWindowMin (5) minutes, $false otherwise. Never throws.
+
+    .DESCRIPTION
+    Logs the WARNING of an approved restart with its reason. When the limit is reached it logs ONE
+    ERROR and approves nothing more until the oldest counted restart leaves the window, so a
+    mediamtx that stays down cannot cause a restart loop, and a stream still comes back on its own
+    once mediamtx is fixed.
+
+    .EXAMPLE
+    if (Approve-HeadsetPipelineRestart -SafeName 'Q3_RED' -Reason 'the ffmpeg push exited (code 1)') { 'restart it' }
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$SafeName,
+        [string]$Reason = '',
+        [datetime]$Now = (Get-Date)
+    )
+    try {
+        $health = $global:HeadsetPipelineHealth
+        if (-not $health.ContainsKey($SafeName)) { $health[$SafeName] = @{ PathMisses = 0; Restarts = @(); GaveUpUntil = $null } }
+        $state  = $health[$SafeName]
+        $cutoff = $Now.AddMinutes(-$script:PipelineHealthWindowMin)
+        $state.Restarts = @($state.Restarts | Where-Object { $_ -gt $cutoff })
+        if ($state.Restarts.Count -ge $script:PipelineHealthMaxRestarts) {
+            if (-not $state.GaveUpUntil -or $Now -ge $state.GaveUpUntil) {
+                $state.GaveUpUntil = (@($state.Restarts | Sort-Object)[0]).AddMinutes($script:PipelineHealthWindowMin)
+                Write-Log ("Stream of {0} is still broken ({1}) after {2} automatic restarts in {3} min - no more automatic restart before {4:HH:mm:ss}. Check that mediamtx runs (Services menu) and read the latest {0}_*_ffmpegPush_stderr.txt log." -f $SafeName, $Reason, $state.Restarts.Count, $script:PipelineHealthWindowMin, $state.GaveUpUntil) -Level ERROR
+            }
+            return $false
+        }
+        $state.GaveUpUntil = $null
+        $state.PathMisses  = 0
+        $state.Restarts    = @($state.Restarts) + @($Now)
+        Write-Log ("Stream of {0} is broken while scrcpy still runs: {1} - restarting the whole pipeline (automatic restart {2}/{3} in {4} min)." -f $SafeName, $Reason, $state.Restarts.Count, $script:PipelineHealthMaxRestarts, $script:PipelineHealthWindowMin) -Level WARNING
+        return $true
+    } catch {
+        Write-Log ("Approve-HeadsetPipelineRestart failed for {0}: {1}" -f $SafeName, $_.Exception.Message) -Level DEBUG
+        return $false
+    }
+}
+
+
 function Watch-ScrcpyProcesses {
     param(
         # IP -> live info record, as the VRMonitor per-headset runspaces publish it in
@@ -1404,7 +1601,11 @@ function Watch-ScrcpyProcesses {
         # whether ADB is up - that poll, one headset after another, delayed every start.
         [hashtable]$HeadsetInfo = $null,
         # Limit the pass to these headset IDs (the VRMonitor fast-path start trigger).
-        [int[]]$HeadsetId = $null
+        [int[]]$HeadsetId = $null,
+        # Also restart a running capture whose pipeline broke under it (dead ffmpeg push or bridge,
+        # mediamtx restarted, path not published): Get-HeadsetPipelineFaults. Passed by the
+        # VRMonitor slow tick only, so mediamtx's path list is read once per slow tick.
+        [switch]$CheckPipelineHealth
     )
 
     # A stream benchmark is running (stream_benchmark.ps1, ADR-0026): it owns the capture of
@@ -1414,6 +1615,9 @@ function Watch-ScrcpyProcesses {
         Write-Log "Watch-ScrcpyProcesses: stream benchmark running - watchdog paused." -Level DEBUG
         return
     }
+
+    $pipelineFaults = @{}
+    if ($CheckPipelineHealth) { $pipelineFaults = Get-HeadsetPipelineFaults }
 
     # Step 1: Retrieve scrcpy processes running on the machine
 
@@ -1535,6 +1739,18 @@ function Watch-ScrcpyProcesses {
                     }
                 }
 
+                # Pipeline health: scrcpy runs but the stream behind it is broken (nothing would
+                # ever restart it). Checked last, so a restart already due for another reason does
+                # not use up the rate limit. The restart below finalises the old recording
+                # (Stop-HeadsetPipeline, from start-screenCopy) and keeps recording on.
+                if (-not $shouldRestart) {
+                    $faultKey = Convert-Displayname $headset.Name
+                    if ($pipelineFaults.ContainsKey($faultKey) -and
+                        (Approve-HeadsetPipelineRestart -SafeName $faultKey -Reason $pipelineFaults[$faultKey])) {
+                        $shouldRestart = $true
+                    }
+                }
+
                 if ($shouldRestart) {
                     # Announce the restart now: closing the old session can take seconds and the
                     # operator must see "starting", not a dead stream.
@@ -1554,6 +1770,10 @@ function Watch-ScrcpyProcesses {
                         Start-Sleep -Seconds 1
                     }
                     Complete-DirectRecording -SafeName (Convert-Displayname $headset.Name)
+                    # Tear the old pipeline down HERE (ffmpeg, bridge, and the old recording file is
+                    # finalised) rather than only inside start-screenCopy, which skips it when the
+                    # headset no longer answers ADB. No-op when this process holds no pipeline for it.
+                    Stop-HeadsetPipeline -SafeName (Convert-Displayname $headset.Name)
                     start-screenCopy -displayName $headset.Name -headsetIP $headset.IPAddress -recording $expectedRecording -scrcpyProfile $headsetProfile
                 } else {
                     # The running session already matches: a "starting" mark set by

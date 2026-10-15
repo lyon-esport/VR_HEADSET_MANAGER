@@ -552,7 +552,7 @@ $updateVersionsJobBlock = {
 
 # Active resolve job guard (only one at a time)
 $script:resolveJob      = $null
-$script:resolveProgFile = [System.IO.Path]::Combine($env:TEMP, 'vrm_resolve.json')
+$script:resolveProgFile = Get-JobFilePath -Name 'vrm_resolve.json'
 # Reset stale progress file from a previous session (running/queued with no active job)
 if (Test-Path -LiteralPath $script:resolveProgFile) {
     try {
@@ -568,7 +568,8 @@ if (Test-Path -LiteralPath $script:resolveProgFile) {
 # progress JSON (Get-StreamBenchmarkProgressPath). The planned tests travel as one JSON string.
 $benchmarkJobBlock = {
     param([string]$ScriptPath, [string]$ConfigFilePath, [int]$HeadsetId, [string]$TestsJson, [int]$MeasureSec)
-    $progFile = [System.IO.Path]::Combine($env:TEMP, 'vrm_benchmark.json')
+    # Same file as Get-StreamBenchmarkProgressPath (utils.ps1 is not loaded yet at this point).
+    $progFile = [System.IO.Path]::Combine($ScriptPath, 'data\jobs\vrm_benchmark.json')
     try {
         $global:ScriptPath         = $ScriptPath
         $global:ConfigFilePath     = $ConfigFilePath
@@ -590,7 +591,8 @@ $benchmarkJobBlock = {
 # once. Same process model and progress file as the benchmark; ids travel as a comma string.
 $benchmarkParallelJobBlock = {
     param([string]$ScriptPath, [string]$ConfigFilePath, [string]$IdsCsv, [string]$SettingsJson, [int]$MeasureSec)
-    $progFile = [System.IO.Path]::Combine($env:TEMP, 'vrm_benchmark.json')
+    # Same file as Get-StreamBenchmarkProgressPath (utils.ps1 is not loaded yet at this point).
+    $progFile = [System.IO.Path]::Combine($ScriptPath, 'data\jobs\vrm_benchmark.json')
     try {
         $global:ScriptPath         = $ScriptPath
         $global:ConfigFilePath     = $ConfigFilePath
@@ -615,11 +617,11 @@ $benchmarkParallelJobBlock = {
 $script:benchmarkJob = $null
 # A progress file left "running" by a previous web server session is stale unless a
 # benchmark still holds the pause flag (a console run, for instance).
-$script:benchmarkProgFile = [System.IO.Path]::Combine($env:TEMP, 'vrm_benchmark.json')
+$script:benchmarkProgFile = Get-JobFilePath -Name 'vrm_benchmark.json'
 
 # Active update-versions job guard (only one at a time)
 $script:updateVersionsJob          = $null
-$script:updateVersionsProgFile     = [System.IO.Path]::Combine($env:TEMP, 'vrm_update_versions.json')
+$script:updateVersionsProgFile     = Get-JobFilePath -Name 'vrm_update_versions.json'
 $script:updateVersionsHeadsetName  = $null
 
 # USB detection is NOT probed here any more.
@@ -884,6 +886,65 @@ function Complete-PendingRecordingDownloads {
     }
 }
 
+# Housekeeping (S6-5): nothing a request leaves behind may accumulate. Install jobs are
+# released (Receive-Job + Remove-Job) as soon as they finish, their progress file is kept
+# $script:InstallFileKeepSec so the client can read the final status, and files older than a
+# day are swept. Idle playback sessions and finished downloads are reaped here too, instead of
+# waiting for the next /api/recordings request. Throttled by a Stopwatch; runs at the top of
+# a loop iteration, so it needs one request per interval (any polling page provides it).
+$script:InstallFileKeepSec     = 60
+$script:InstallFileMaxAgeSec   = 86400
+$script:HousekeepingIntervalMs = 10000
+$script:HousekeepingWatch      = [System.Diagnostics.Stopwatch]::StartNew()
+$script:installJobFinished     = @{}   # jobId -> DateTime the finished job was released
+
+function Remove-FinishedWebJob {
+    # Receives (discards) the output of a finished job and removes it. $true when removed.
+    param($Job)
+    if (-not $Job) { return $false }
+    if ($Job.State -in @('Running', 'NotStarted')) { return $false }
+    try { Receive-Job -Job $Job -ErrorAction SilentlyContinue | Out-Null } catch { }
+    try { Remove-Job -Job $Job -Force -ErrorAction SilentlyContinue } catch { }
+    return $true
+}
+
+function Invoke-WebHousekeeping {
+    if ($script:HousekeepingWatch.ElapsedMilliseconds -lt $script:HousekeepingIntervalMs) { return }
+    $script:HousekeepingWatch.Restart()
+    $now = Get-Date
+    try {
+        # 1. install jobs: release finished ones, then their progress file after the keep window
+        foreach ($id in @($script:installJobs.Keys)) {
+            if (Remove-FinishedWebJob -Job $script:installJobs[$id]) {
+                $script:installJobs.Remove($id)
+                $script:installJobFinished[$id] = $now
+            }
+        }
+        foreach ($id in @($script:installJobFinished.Keys)) {
+            if (($now - $script:installJobFinished[$id]).TotalSeconds -ge $script:InstallFileKeepSec) {
+                $f = Get-JobFilePath -Name "vrm_install_$id.json"
+                try { if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue } } catch { }
+                $script:installJobFinished.Remove($id)
+            }
+        }
+        # orphan progress files (previous run, cancelled job) older than a day
+        foreach ($f in @(Get-ChildItem -LiteralPath (Split-Path -Parent (Get-JobFilePath -Name 'x')) -Filter 'vrm_install_*.json' -File -ErrorAction SilentlyContinue)) {
+            if (($now - $f.LastWriteTime).TotalSeconds -ge $script:InstallFileMaxAgeSec) {
+                try { Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue } catch { }
+            }
+        }
+        # 2. single-slot jobs: progress is file based, so a finished job holds nothing useful
+        if (Remove-FinishedWebJob -Job $script:resolveJob)        { $script:resolveJob = $null }
+        if (Remove-FinishedWebJob -Job $script:updateVersionsJob) { $script:updateVersionsJob = $null }
+        if (Remove-FinishedWebJob -Job $script:benchmarkJob)      { $script:benchmarkJob = $null }
+        # 3. recording playback sessions and finished downloads
+        try { Remove-IdleRecordingPlayback | Out-Null } catch { }
+        if ($script:RecordingDownloads.Count -gt 0) { Complete-PendingRecordingDownloads }
+    } catch {
+        Write-Log ("Web server: housekeeping failed: " + $_.Exception.Message) -Level DEBUG
+    }
+}
+
 try {
     while ($listener.IsListening) {
         # GetContext() blocks until a request arrives. Guarded (S1-1): it throws when the
@@ -909,6 +970,7 @@ try {
         $request  = $context.Request
         $response = $context.Response
         if ($script:RecordingDownloads.Count -gt 0) { Complete-PendingRecordingDownloads }
+        Invoke-WebHousekeeping
 
         # API: GET /api/events - Server-Sent Events (ADR-0020). The ONLY route that does
         # not close its response: the context is handed to the pump runspace, which owns
@@ -3080,7 +3142,7 @@ try {
             try {
                 $jobId = [regex]::Match($request.Url.Query, '[?&]?jobId=([a-f0-9]+)').Groups[1].Value
                 if (-not $jobId) { throw "Missing jobId" }
-                $pFile = [System.IO.Path]::Combine($env:TEMP, "vrm_install_$jobId.json")
+                $pFile = Get-JobFilePath -Name "vrm_install_$jobId.json"
                 if (Test-Path -LiteralPath $pFile) {
                     $raw = [System.IO.File]::ReadAllText($pFile)
                     Send-JsonResponse -Response $response -Raw $raw
@@ -3109,7 +3171,7 @@ try {
                     $script:installJobs.Remove($jobId)
                 }
 
-                $pFile = [System.IO.Path]::Combine($env:TEMP, "vrm_install_$jobId.json")
+                $pFile = Get-JobFilePath -Name "vrm_install_$jobId.json"
                 if (Test-Path -LiteralPath $pFile) {
                     try {
                         $prog = [System.IO.File]::ReadAllText($pFile) | ConvertFrom-Json
@@ -3636,7 +3698,7 @@ try {
                 $startJob = {
                     param($deviceId2, $installPath2, $isFolder2, $obbPath2, $pkgName2, $cleanupApk2)
                     $jobId    = [guid]::NewGuid().ToString('N')
-                    $pFile    = [System.IO.Path]::Combine($env:TEMP, "vrm_install_$jobId.json")
+                    $pFile    = Get-JobFilePath -Name "vrm_install_$jobId.json"
                     [System.IO.File]::WriteAllText($pFile, '{"step":"queued","pct":0,"file":"","error":"","adbPid":0}')
                     $job = Start-Job -ScriptBlock $installJobBlock -ArgumentList $adbPath, $deviceId2, $installPath2, $isFolder2, $obbPath2, $pkgName2, $pFile, $cleanupApk2
                     $script:installJobs[$jobId] = $job
@@ -4784,12 +4846,14 @@ try {
         }
 
         # API: POST /api/restartmediamtx
+        # mediamtx and the captures publishing to it belong to VRMonitor (ADR-0032): ask it to
+        # restart mediamtx together with every running capture (a mediamtx restart breaks every
+        # publisher anyway). Answers at once; the restart runs on VRMonitor's next fast tick.
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/restartmediamtx') {
             try {
-                Stop-MediaMtx
-                Start-Sleep -Milliseconds 800
-                Start-MediaMtx
-                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                $reqId = Request-StreamRestart -MediaMtx -Reason 'mediamtx restart (web)'
+                if (-not $reqId) { throw 'restart request not written' }
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true,"requested":true}')
                 $response.StatusCode      = 200
                 $response.ContentType     = 'application/json; charset=utf-8'
                 $response.Headers.Add('Access-Control-Allow-Origin', '*')
@@ -5877,10 +5941,10 @@ try {
                 $newCfg = $body | ConvertFrom-Json
                 $cfgFile = Join-Path $ScriptPath "config\config.json"
 
-                # Snapshot the three live-applicable mediamtx streaming fields
-                # against the in-memory globals BEFORE writing. If any change,
-                # we mirror the VQA restart sequence (running scrcpy + mediamtx)
-                # so the new framerate / bitrate / re-encode flag take effect
+                # Snapshot the live-applicable mediamtx streaming fields against
+                # the in-memory globals BEFORE writing. If any change, VRMonitor is
+                # asked to restart mediamtx and the running captures (below) so the
+                # new framerate / bitrate / re-encode flag / codec take effect
                 # without an app restart.
                 $oldFps      = $global:mediamtxFramerate
                 $oldBw       = $global:mediamtxBitrate
@@ -5897,10 +5961,10 @@ try {
 
                 # Snapshot Capture Mode against the in-memory global BEFORE writing.
                 # Performance.Capture_Mode is not live-applied by a plain config
-                # write - Set-CaptureMode (used by the dedicated /api/capture-mode
-                # endpoint) is the single owner of updating $global:CaptureMode,
-                # bouncing mediamtx across the LocalWindow boundary, and killing
-                # owned scrcpy so VRMonitor respawns it in the new mode.
+                # write: the running captures must be restarted in the new mode
+                # (and mediamtx when the LocalWindow boundary is crossed), which
+                # the restart request below asks VRMonitor to do - the same thing
+                # Set-CaptureMode does for the dedicated /api/capture-mode endpoint.
                 $oldCaptureMode = $global:CaptureMode
                 $newCaptureMode = $null
                 if ($newCfg -and $newCfg.Performance) { $newCaptureMode = $newCfg.Performance.Capture_Mode }
@@ -5932,77 +5996,39 @@ try {
                     [void](Request-ScrcpyCheck -All -NoMark -Reason 'capture settings changed')
                 }
 
-                $restarted = @{ mediamtx = $false; scrcpy = @(); pending = $false; captureMode = $false }
-                if ($streamingChanged) {
-                    $lock = Enter-VqaLock -TimeoutMs 3000
-                    if (-not $lock) {
-                        # VQA is busy applying a change. Skipping in-band restart
-                        # keeps us from racing on mediamtx / scrcpy lifecycles.
-                        $restarted.pending = $true
-                        Write-Log "config/save: mediamtx streaming fields changed but VQA lock contended - restart deferred to operator." -Level WARNING
-                    } else {
-                        try {
-                            $null = Get-Config -ConfigFilePath $cfgFile
-                            # Order matters: restart mediamtx FIRST, then scrcpy.
-                            # If we restart scrcpy first, the freshly-spawned ffmpeg
-                            # pusher connects to the *old* mediamtx, then Stop-MediaMtx
-                            # kills it underneath, the RTSP push dies with a broken
-                            # pipe, and nothing respawns ffmpeg (Watch-ScrcpyProcesses
-                            # only watches scrcpy itself). Bouncing mediamtx first
-                            # ensures every new ffmpeg push connects to a healthy
-                            # server it will keep talking to.
-                            try {
-                                Stop-MediaMtx
-                                Start-Sleep -Seconds 1
-                                Start-MediaMtx
-                                # Brief settle so mediamtx is accepting RTSP before
-                                # ffmpeg pushers try to connect.
-                                Start-Sleep -Milliseconds 800
-                                $restarted.mediamtx = $true
-                            } catch {
-                                Write-Log ("config/save: mediamtx restart failed: " + $_.Exception.Message) -Level WARNING
-                            }
-                            # Restart any scrcpy session that is currently running so
-                            # Start-FfmpegStreamPush re-reads the new globals and
-                            # connects to the freshly-restarted mediamtx.
-                            $runningNames = @()
-                            foreach ($row in (Get-KnownHeadsets)) {
-                                $safe = Convert-Displayname $row.Name
-                                if (Get-ScrcpyProcess -displayName $safe -headsetIP $row.IPAddress) {
-                                    try {
-                                        Stop-Scrcpy -HeadsetName $row.Name -HeadsetIP $row.IPAddress | Out-Null
-                                        Start-Sleep -Milliseconds 500
-                                        start-screenCopy -headsetIP $row.IPAddress -displayName $row.Name -scrcpyProfile $row.ScrcpyProfile
-                                        $runningNames += $row.Name
-                                    } catch {
-                                        Write-Log ("config/save: scrcpy restart failed for " + $row.Name + ": " + $_.Exception.Message) -Level WARNING
-                                    }
-                                }
-                            }
-                            $restarted.scrcpy = $runningNames
-                        } finally {
-                            Exit-VqaLock -Stream $lock
+                # Streams and mediamtx belong to VRMonitor (ADR-0032): this request only ASKS, in
+                # ONE request (a second one written before VRMonitor's next 500 ms fast tick would
+                # replace the first). VRMonitor reloads config, stops the running captures, restarts
+                # mediamtx when the streaming fields changed (or the LocalWindow boundary was crossed:
+                # its YAML differs) and starts the captures again - the ffmpeg push re-reads the new
+                # framerate / bitrate / re-encode / codec globals, and the new mode applies. The
+                # response no longer waits for it: mediamtx = a mediamtx restart was requested,
+                # scrcpy = the headsets whose capture runs now and will be restarted, requested =
+                # a restart request was written, pending = it could not be written.
+                $restarted = @{ mediamtx = $false; scrcpy = @(); pending = $false; captureMode = $false; requested = $false }
+                if ($streamingChanged -or $captureModeChanged) {
+                    # This process's globals (capture mode, streaming fields) follow the saved file.
+                    try { $null = Get-Config -ConfigFilePath $cfgFile } catch { }
+                    $crossedBoundary = $captureModeChanged -and (($oldCaptureMode -eq 'LocalWindow') -ne ($newCaptureMode -eq 'LocalWindow'))
+                    $wantMtx = [bool]($streamingChanged -or $crossedBoundary)
+                    $reasons = @()
+                    if ($streamingChanged)   { $reasons += 'mediamtx streaming settings changed' }
+                    if ($captureModeChanged) { $reasons += ("capture mode {0} -> {1}" -f $oldCaptureMode, $newCaptureMode) }
+                    $reqId = Request-StreamRestart -MediaMtx:$wantMtx -Reason ('config save: ' + ($reasons -join ', '))
+                    if ($reqId) {
+                        $restarted.requested   = $true
+                        $restarted.mediamtx    = $wantMtx
+                        $restarted.captureMode = [bool]$captureModeChanged
+                        $runningNames = @()
+                        foreach ($row in (Get-KnownHeadsetsCached)) {
+                            if (Get-ScrcpyProcess -displayName (Convert-Displayname $row.Name) -headsetIP $row.IPAddress -headsetSerial $row.SerialNumber) { $runningNames += $row.Name }
                         }
+                        $restarted.scrcpy = $runningNames
+                    } else {
+                        $restarted.pending = $true
+                        Write-Log "config/save: the stream restart request could not be written - restart the streams or the app." -Level WARNING
                     }
                 }
-
-                if ($captureModeChanged) {
-                    $lock = Enter-VqaLock -TimeoutMs 3000
-                    if (-not $lock) {
-                        $restarted.pending = $true
-                        Write-Log "config/save: Capture Mode changed but VQA lock contended - apply deferred to operator." -Level WARNING
-                    } else {
-                        try {
-                            $null = Set-CaptureMode -Mode $newCaptureMode
-                            $restarted.captureMode = $true
-                        } catch {
-                            Write-Log ("config/save: Set-CaptureMode failed: " + $_.Exception.Message) -Level WARNING
-                        } finally {
-                            Exit-VqaLock -Stream $lock
-                        }
-                    }
-                }
-
                 $respObj = @{ ok = $true; restarted = $restarted }
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes(($respObj | ConvertTo-Json -Compress -Depth 4))
                 $response.StatusCode      = 200

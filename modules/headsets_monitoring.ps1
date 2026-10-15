@@ -200,6 +200,97 @@ function Get-VRMonitorStatusText {
     return @{ Text = $msg.Headset.MonitorRunning; Color = 'DarkGreen' }
 }
 
+<#
+.SYNOPSIS
+    Runs one stream restart request (Request-StreamRestart) INSIDE VRMonitor, the process that
+    owns the pipelines (ADR-0027, ADR-0032). Called by the Start-VRMonitor fast path on a new id.
+.DESCRIPTION
+    Order: reload config, stop the targeted captures that run, then mediamtx (restart or stop),
+    then restart. A headset with auto-restart ON is NOT started here: its id is returned in
+    EdgeIds (or All = $true) and the caller drops it from the watchdog edge memory, so the edge
+    trigger on the same tick starts it once its ADB is up. A headset with auto-restart OFF is
+    started here when it was running (or the request says -Start), since nothing else would.
+    Missing request fields (older writer) mean: every capture, no mediamtx, no start.
+    Returns @{All;EdgeIds;Stopped;Started;MediaMtx}. Never throws.
+.EXAMPLE
+    $r = Invoke-StreamRestartRequest -Request (Get-StreamRestartRequest) -KnownHeadsets @(Get-KnownHeadsets)
+#>
+function Invoke-StreamRestartRequest {
+    param(
+        [Parameter(Mandatory = $true)]$Request,
+        [object[]]$KnownHeadsets = @()
+    )
+    $res = @{ All = $false; EdgeIds = @(); Stopped = @(); Started = @(); MediaMtx = '' }
+    try {
+        $scope    = $Request.headsets
+        $all      = ($null -eq $scope) -or (($scope -is [string]) -and $scope -eq 'all')
+        $wantMtx  = ConvertTo-BoolField $Request.mediamtx
+        $stopMtx  = ConvertTo-BoolField $Request.mediamtxStop
+        $forceRun = ConvertTo-BoolField $Request.start
+        $res.All  = $all
+
+        $targets = @($KnownHeadsets | Where-Object { $_ -and -not (Test-UnknownIp $_.IPAddress) })
+        if (-not $all) {
+            $ids = @(@($scope) | ForEach-Object { [int]$_ })
+            $targets = @($targets | Where-Object { $ids -contains [int]$_.ID })
+        }
+
+        Write-Log ("VRMonitor: stream restart requested ({0}) - captures: {1}, mediamtx: {2}" -f `
+            $Request.reason, $(if ($all) { 'all' } else { (@($targets | ForEach-Object { $_.Name }) -join ', ') }), `
+            $(if ($stopMtx) { 'stop' } elseif ($wantMtx) { 'restart' } else { 'no' })) -Level INFO
+        try { Get-Config -ConfigFilePath $global:ConfigFilePath | Out-Null } catch { Write-Log ("VRMonitor: config reload failed: " + $_.Exception.Message) -Level WARNING }
+
+        # Which targets run now (decides who is started again when auto-restart is off).
+        $wasRunning = @{}
+        foreach ($h in $targets) {
+            $p = $null
+            try { $p = Get-ScrcpyProcess -displayName (Convert-Displayname $h.Name) -headsetIP $h.IPAddress -headsetSerial $h.SerialNumber } catch { }
+            $wasRunning[[string]$h.ID] = [bool]$p
+        }
+
+        if ($all) {
+            # No argument: also ends an owned scrcpy no registry row matches, and tears down every pipeline.
+            try { Stop-Scrcpy | Out-Null } catch { Write-Log ("VRMonitor: stopping streams for the restart failed: " + $_.Exception.Message) -Level WARNING }
+            $res.Stopped = @($targets | Where-Object { $wasRunning[[string]$_.ID] } | ForEach-Object { $_.Name })
+        } else {
+            foreach ($h in $targets) {
+                if (-not $wasRunning[[string]$h.ID]) { continue }
+                try { Stop-Scrcpy -HeadsetName $h.Name -HeadsetIP $h.IPAddress | Out-Null; $res.Stopped += $h.Name }
+                catch { Write-Log ("VRMonitor: stopping {0} for the restart failed: {1}" -f $h.Name, $_.Exception.Message) -Level WARNING }
+            }
+        }
+
+        # mediamtx after the captures: a push started before the bounce would lose its RTSP session.
+        if ($stopMtx) {
+            try { Stop-MediaMtx; $res.MediaMtx = 'stopped' } catch { Write-Log ("VRMonitor: mediamtx stop failed: " + $_.Exception.Message) -Level WARNING }
+        } elseif ($wantMtx) {
+            try {
+                Stop-MediaMtx
+                Start-Sleep -Seconds 1
+                Start-MediaMtx
+                # Let mediamtx accept RTSP before the first push connects.
+                Start-Sleep -Milliseconds 800
+                $res.MediaMtx = 'restarted'
+            } catch { Write-Log ("VRMonitor: mediamtx restart failed: " + $_.Exception.Message) -Level WARNING }
+        }
+
+        foreach ($h in $targets) {
+            if (ConvertTo-BoolField $h.scrcpy_AutoRestart) { $res.EdgeIds += [int]$h.ID; continue }
+            if (-not ($wasRunning[[string]$h.ID] -or $forceRun)) { continue }
+            try {
+                $prof = if ($h.ScrcpyProfile) { $h.ScrcpyProfile } else { 'R-N-45-20' }
+                start-screenCopy -displayName $h.Name -headsetIP $h.IPAddress -recording (ConvertTo-BoolField $h.Record) -scrcpyProfile $prof
+                $res.Started += $h.Name
+            } catch {
+                Write-Log ("VRMonitor: restarting {0} failed: {1}" -f $h.Name, $_.Exception.Message) -Level WARNING
+            }
+        }
+    } catch {
+        Write-Log ("VRMonitor: stream restart request failed: " + $_.Exception.Message) -Level WARNING
+    }
+    return $res
+}
+
 # --- TESTS  ---
 <#
     Start-VRMonitor
@@ -1275,19 +1366,20 @@ function Start-VRMonitor {
                 # inside the benchmark's measures). Mirrored here so it needs no stream_benchmark.ps1.
                 $sharedState["_benchmark_active"] = [bool]$benchRunId
 
-                # ---- FAST PATH: stream restart request (ADR-0027) ----
-                # Another process changed config that a running stream would not pick up (e.g. the
-                # re-encode settings of an applied benchmark recommendation). This process owns the
-                # pipelines, so it restarts them: reload config, stop every stream, and wipe the
-                # edge memory so the watchdog trigger below restarts them on this same tick.
+                # ---- FAST PATH: stream restart request (ADR-0027, ADR-0032) ----
+                # Every planned restart of a capture or of mediamtx is a request from another
+                # process (config save, capture mode, VQA, benchmark apply, console Services menu)
+                # or from this one (VQO). This process owns the pipelines, so it runs it here:
+                # reload config, stop the targeted captures, restart mediamtx when asked, restart
+                # the captures (Invoke-StreamRestartRequest). The auto-restart ones are dropped
+                # from the edge memory so the watchdog trigger below restarts them on this tick.
                 if (-not $benchState -and (Get-Command Get-StreamRestartRequest -ErrorAction SilentlyContinue)) {
                     $restartReq = Get-StreamRestartRequest
                     if ($restartReq -and [string]$restartReq.id -and [string]$restartReq.id -ne $restartReqId) {
                         $restartReqId = [string]$restartReq.id
-                        Write-Log ("VRMonitor: stream restart requested ({0}) - reloading config and restarting every stream." -f $restartReq.reason) -Level INFO
-                        try { Get-Config -ConfigFilePath $global:ConfigFilePath | Out-Null } catch { Write-Log ("VRMonitor: config reload failed: " + $_.Exception.Message) -Level WARNING }
-                        try { Stop-Scrcpy | Out-Null } catch { Write-Log ("VRMonitor: stopping streams for the restart failed: " + $_.Exception.Message) -Level WARNING }
-                        $scrcpyEdgeState = @{}
+                        $restartRes = Invoke-StreamRestartRequest -Request $restartReq -KnownHeadsets $knownHeadsets
+                        if ($restartRes.All) { $scrcpyEdgeState = @{} }
+                        else { foreach ($eid in $restartRes.EdgeIds) { $scrcpyEdgeState.Remove([string]$eid) } }
                     }
                 }
 
@@ -1643,9 +1735,11 @@ function Start-VRMonitor {
                     try { Update-HeadsetTimerFile } catch { $tickErrors['timer overlay update'] = Get-VRMonitorTickErrorText -ErrorRecord $_ }
                     try { Sync-RestreamPaths }      catch { $tickErrors['restream path sync']   = Get-VRMonitorTickErrorText -ErrorRecord $_ }
 
-                    # mediamtx before scrcpy watchdog (publisher ordering - see eager block above)
+                    # mediamtx before scrcpy watchdog (publisher ordering - see eager block above).
+                    # Only this slow-tick pass checks pipeline health: a capture whose ffmpeg push,
+                    # bridge or mediamtx publisher died under a running scrcpy is restarted here.
                     try { Start-MediaMtx }         catch { Write-Log ("VRMonitor: mediamtx watchdog failed: " + $_.Exception.Message) -Level WARNING }
-                    try { Watch-ScrcpyProcesses -HeadsetInfo $infoByIp } catch { Write-Log ("VRMonitor: scrcpy watchdog failed: " + $_.Exception.Message) -Level WARNING }
+                    try { Watch-ScrcpyProcesses -HeadsetInfo $infoByIp -CheckPipelineHealth } catch { Write-Log ("VRMonitor: scrcpy watchdog failed: " + $_.Exception.Message) -Level WARNING }
                     try { Start-WebServer }        catch { Write-Log ("VRMonitor: web server watchdog failed: " + $_.Exception.Message) -Level WARNING }
 
                     # Computer monitoring runs in its own runspace (S3-2), which also honours the

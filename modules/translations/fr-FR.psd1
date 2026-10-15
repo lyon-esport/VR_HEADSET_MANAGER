@@ -139,8 +139,8 @@
     ServicesChoiceBack      = " 0. Retour"
     ServicesWebServerRestarted = "Serveur web redemarre."
     ServicesWebServerStopped   = "Serveur web arrete."
-    ServicesMediaMtxRestarted  = "MediaMtx redemarre."
-    ServicesMediaMtxStopped    = "MediaMtx arrete."
+    ServicesMediaMtxRestarted  = "Redemarrage de MediaMtx demande : le moniteur le redemarre avec les captures en cours."
+    ServicesMediaMtxStopped    = "Arret de MediaMtx demande."
     AnyOtherKey = " Any other key : Refresh"
     KnownHeadsets = "=== CASQUES CONNUS ==="
     EnterChoice = "Entrez votre choix"
@@ -849,6 +849,7 @@
 
     # Groups moved out of the top level (S1-5): the top-level hashtable is capped at 500 keys.
     Scrcpy = @{
+        StartRequested = "Demarrage de la capture de {0} demande au moniteur."
         Tracking = " S. Gestion du tracking des process scrcpy "
         Options = " M. Modifier les options scrcpy par casque "
         TrackingTitle = "== GESTION DU TRACKING DES PROCESS SCRCPY =="

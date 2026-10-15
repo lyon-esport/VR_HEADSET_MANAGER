@@ -409,7 +409,9 @@ function Show-MainMenu {
             Write-Log -Message ($msg.TryingConnection -f $headsetName, $headsetIPAddress) -Level "INFO"
             #Check ping headset first !
             if (Test-Connection -ComputerName $headsetIPAddress -Count 1 -Quiet){
-                start-screenCopy -displayName $headsetName -headsetIP $headsetIPAddress -recording $headsetRecording -scrcpyProfile $headsetProfile
+                # VRMonitor owns the pipelines (ADR-0032): it starts the capture on its next fast tick.
+                [void](Request-StreamRestart -HeadsetId ([int]$choice) -Start -Reason 'console start')
+                Write-Log ($msg.Scrcpy.StartRequested -f $headsetName) -Level INFO
             }
             else {
                 Write-Log -Message ($msg.PingKO -f $headsetIPAddress) -Level "WARNING"
@@ -531,7 +533,9 @@ function Show-SubMenu-StreamHeadset { # CHOICE 1
             Write-Log -Message ($msg.TryingConnection -f $headsetName, $headsetIPAddress) -Level "INFO"
             #Check ping headset first !
             if (Test-Connection -ComputerName $headsetIPAddress -Count 1 -Quiet){
-                start-screenCopy -displayName $headsetName  -headsetIP $headsetIPAddress -recording $headsetRecording -scrcpyProfile $headsetProfile
+                # VRMonitor owns the pipelines (ADR-0032): it starts the capture on its next fast tick.
+                [void](Request-StreamRestart -HeadsetId ([int]$userInput) -Start -Reason 'console start')
+                Write-Log ($msg.Scrcpy.StartRequested -f $headsetName) -Level INFO
             }
             else {
                 Write-Log -Message ($msg.PingKO -f $headsetIPAddress) -Level "WARNING"
@@ -1944,15 +1948,15 @@ function Show-SubMenu-Services {
                 Write-Log $msg.ServicesWebServerStopped -Level INFO
                 Start-Sleep -Seconds 1
             }
+            # mediamtx and the captures belong to VRMonitor (ADR-0032): ask, do not do.
             '3' {
-                Stop-MediaMtx
-                Start-Sleep -Milliseconds 500
-                Start-MediaMtx
+                [void](Request-StreamRestart -MediaMtx -Reason 'mediamtx restart (console)')
                 Write-Log $msg.ServicesMediaMtxRestarted -Level SUCCESS
                 Start-Sleep -Seconds 1
             }
             '4' {
-                Stop-MediaMtx
+                # The slow-tick mediamtx watchdog starts it again, as it always did.
+                [void](Request-StreamRestart -StopMediaMtx -NoHeadsets -Reason 'mediamtx stop (console)')
                 Write-Log $msg.ServicesMediaMtxStopped -Level INFO
                 Start-Sleep -Seconds 1
             }

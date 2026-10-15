@@ -365,6 +365,69 @@ function Get-MediaMtxClientCount {
 }
 
 
+function Get-MediaMtxPathStates {
+    <#
+    .SYNOPSIS
+    Publisher state of every mediamtx path from ONE GET /v3/paths/list: a hashtable
+    path name -> @{ Ready; Source }, or $null when mediamtx is disabled or its API does not
+    answer.
+
+    .DESCRIPTION
+    Read once per VRMonitor slow tick by the pipeline health check (Get-HeadsetPipelineFaults).
+    $null means "unknown": the caller skips its publisher check for that tick instead of
+    treating every path as missing. A response without an 'items' list is unknown too.
+    Ready is the path's 'available' flag (mediamtx 1.20) or the older 'ready' one. Source is
+    the publisher type ('rtspSession' for an ffmpeg push), '' when the path has no publisher.
+    A path configured through the API but not published is listed with Ready = $false; a path
+    of the 'all_others' catch-all disappears with its publisher.
+    Sent with HttpWebRequest rather than Invoke-RestMethod: the timeout is in milliseconds
+    (Invoke-RestMethod only takes whole seconds) and proxy detection is skipped. Never throws.
+
+    .EXAMPLE
+    $states = Get-MediaMtxPathStates
+    if ($states -and $states['q3_red'] -and $states['q3_red'].Ready) { 'publishing' }
+    #>
+    param(
+        [int]$TimeoutMs = 1500,
+        # 0 = the configured mediamtx API port.
+        [int]$ApiPort = 0
+    )
+    if (-not $global:mediamtxEnabled) { return $null }
+    $port = if ($ApiPort -gt 0) { $ApiPort } else { [int]$global:mediamtxApiPort }
+    if ($port -le 0) { return $null }
+    $resp = $null
+    $doc  = $null
+    try {
+        $req = [System.Net.HttpWebRequest]::Create("http://127.0.0.1:$port/v3/paths/list")
+        $req.Method           = 'GET'
+        $req.Timeout          = $TimeoutMs
+        $req.ReadWriteTimeout = $TimeoutMs
+        $req.Proxy            = $null
+        $req.KeepAlive        = $false
+        $resp   = $req.GetResponse()
+        $reader = [System.IO.StreamReader]::new($resp.GetResponseStream(), [System.Text.Encoding]::UTF8)
+        try { $body = $reader.ReadToEnd() } finally { $reader.Dispose() }
+        $doc = $body | ConvertFrom-Json
+    } catch {
+        return $null
+    } finally {
+        if ($resp) { try { $resp.Close() } catch { } }
+    }
+    if (-not $doc -or -not ($doc.PSObject.Properties.Name -contains 'items')) { return $null }
+    $states = @{}
+    foreach ($item in @($doc.items)) {
+        if (-not $item -or -not $item.name) { continue }
+        $source = ''
+        if ($item.source -and $item.source.type) { $source = [string]$item.source.type }
+        $states[[string]$item.name] = @{
+            Ready  = ([bool]$item.available -or [bool]$item.ready)
+            Source = $source
+        }
+    }
+    return $states
+}
+
+
 function Get-RestreamUrl {
     <#
     .SYNOPSIS

@@ -7,6 +7,7 @@
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
   <link rel="stylesheet" href="assets/topbar.css">
   <link rel="stylesheet" href="assets/vendor/uplot/uPlot.min.css">
+  <script src="assets/vrhm_common.js"></script>
   <script src="assets/topbar.js"></script>
   <script src="assets/live_events.js"></script>
   <!-- Loaded here, not at the end of <body>: renderTable() calls into
@@ -665,8 +666,9 @@
           renderTable(items);
           applyFilter();
           reanchorBattTip();
+          return true;
         })
-        .catch(function() {});
+        .catch(function() { return false; });   // false = failed: the poller backs off
     }
 
     // ── Battery hover sparkline ────────────────────────────────────────────────
@@ -926,24 +928,24 @@
           var tsEl = bodyEl ? bodyEl.querySelector('.comp-ts') : null;
           if (tsEl) before = tsEl.textContent;
           var attempts = 0;
-          var check = setInterval(function() {
+          var check = VRHM.poll(function() {
             attempts++;
-            fetch(COMP_JSON_PATH + '?_=' + Date.now())
+            return fetch(COMP_JSON_PATH + '?_=' + Date.now())
               .then(function(r) { return r.json(); })
               .then(function(d) {
                 var newTs = d.Timestamp ? d.Timestamp.replace('T', ' ') : null;
                 var changed = newTs && (!before || before.indexOf(newTs) === -1);
                 if (changed || attempts >= 15) {
-                  clearInterval(check);
+                  check.stop();
                   btn.classList.remove('spinning');
                   btn.disabled = false;
                   renderComp(d);
                 }
               })
               .catch(function() {
-                if (attempts >= 15) { clearInterval(check); btn.classList.remove('spinning'); btn.disabled = false; }
+                if (attempts >= 15) { check.stop(); btn.classList.remove('spinning'); btn.disabled = false; }
               });
-          }, 1000);
+          }, { intervalMs: 1000, immediate: false });
         })
         .catch(function() { btn.classList.remove('spinning'); btn.disabled = false; });
     }
@@ -952,9 +954,10 @@
     // comp fetch (no separate VQA timer). Tier multiplier widens cadence under load:
     // idle = 30 s, mitigation = 60 s, max = 150 s (config-driven base x multiplier).
     function compLoop() {
-      Promise.all([pollComp(), refreshLoadTier()])
-        .then(function(){ if (typeof pollVqa === 'function') { return pollVqa(); } })
-        .finally(function(){ setTimeout(compLoop, nextComputerDelay()); });
+      VRHM.poll(function() {
+        return Promise.all([pollComp(), refreshLoadTier()])
+          .then(function(){ if (typeof pollVqa === 'function') { return pollVqa(); } });
+      }, { intervalMs: nextComputerDelay });
     }
     refreshLoadTier().finally(compLoop);
     // ── /Computer monitoring ─────────────────────────────────────────────────
@@ -1246,10 +1249,14 @@
     // ── /Video Quality Automation ───────────────────────────────────────────
 
     // Status loop: bootstrap-then-recursive setTimeout so each tick re-reads the multiplier.
+    // VRHM.poll: no overlap, paused in a hidden tab, backoff when the status fetch fails;
+    // the period is re-read from the load tier before every schedule.
     function statusLoop() {
-      Promise.all([pollHeadsetsStatus(), refreshLoadTier()]).finally(function() {
-        setTimeout(statusLoop, nextStatusDelay());
-      });
+      VRHM.poll(function() {
+        return Promise.all([pollHeadsetsStatus(), refreshLoadTier()]).then(function(r) {
+          if (r[0] === false) throw new Error('status fetch failed');
+        });
+      }, { intervalMs: nextStatusDelay });
     }
     // Metric bands come from config (Monitoring.thresholds) - fetch them BEFORE the
     // first paint so a cell is never coloured on the fallback values and then silently

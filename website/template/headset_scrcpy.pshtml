@@ -198,6 +198,7 @@
       <iframe src="<%= $display_name %>[monitoring].html" scrolling="no" allow="autoplay"></iframe>
     </div>
 
+    <script src="/assets/vrhm_common.js"></script>
     <script>
       // -----------------------------------------------------------------------
       // WHEP (WebRTC HTTP Egress Protocol) player for mediamtx
@@ -470,8 +471,7 @@
       }
       function refreshStreamMask() {
         if (!TIMER_ID) return;
-        fetch('/api/stream-mask?id=' + encodeURIComponent(TIMER_ID) + '&_=' + Date.now())
-          .then(function(r) { return r.json(); })
+        return VRHM.fetchJson('/api/stream-mask?id=' + encodeURIComponent(TIMER_ID) + '&_=' + Date.now())
           .then(function(j) {
             var url = (j && j.mask && j.url) ? j.url : '';
             if (url === _maskUrl) return;
@@ -479,10 +479,11 @@
             var img = new Image();
             img.onload = function() { _maskUrl = url; applyStreamMask(url); };
             img.src = url;
-          })
-          .catch(function() {});
+          });
       }
-      setInterval(refreshStreamMask, 15000);
+      // Guarded (no overlap, backoff on error). hiddenIntervalMs = the same period: this
+      // page is an OBS Browser Source and must keep refreshing even if reported hidden.
+      VRHM.poll(refreshStreamMask, { intervalMs: 15000, hiddenIntervalMs: 15000, immediate: false });
 
       // Start as soon as the DOM is ready
       document.addEventListener('DOMContentLoaded', function() {
@@ -636,7 +637,7 @@
       function startTimerPoll() {
         stopTimerPoll();
         function poll() {
-          fetch('/api/timer?id=' + TIMER_ID + '&action=status&_=' + Date.now())
+          return fetch('/api/timer?id=' + TIMER_ID + '&action=status&_=' + Date.now())
             .then(function(r) { return r.ok ? r.json() : null; })
             .then(function(j) {
               if (!j) return;
@@ -654,12 +655,12 @@
               else if (j.paused) { btn.classList.add('paused'); }
             }).catch(function() {});
         }
-        poll();
-        _timerInterval = setInterval(poll, 1000);
+        // OBS Browser Source: same period while hidden (see the mask poller above).
+        _timerInterval = VRHM.poll(poll, { intervalMs: 1000, hiddenIntervalMs: 1000, maxBackoffMs: 10000 });
       }
 
       function stopTimerPoll() {
-        if (_timerInterval) { clearInterval(_timerInterval); _timerInterval = null; }
+        if (_timerInterval) { _timerInterval.stop(); _timerInterval = null; }
       }
 
       // ---- Timer control button (hourglass) ----

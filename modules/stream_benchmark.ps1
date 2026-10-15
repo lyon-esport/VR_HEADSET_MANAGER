@@ -805,15 +805,15 @@ function Get-StreamBenchmarkAggregate {
 # ---------------------------------------------------------------------------
 
 function Get-StreamBenchmarkProgressPath {
-    <# Progress JSON of the running/last benchmark (TEMP, like the other web jobs). #>
+    <# Progress JSON of the running/last benchmark (data\jobs\, like the other web jobs). #>
     param()
-    return [System.IO.Path]::Combine($env:TEMP, 'vrm_benchmark.json')
+    return (Get-JobFilePath -Name 'vrm_benchmark.json')
 }
 
 
 function Get-StreamBenchmarkCancelPath {
     param()
-    return [System.IO.Path]::Combine($env:TEMP, 'vrm_benchmark.cancel')
+    return (Get-JobFilePath -Name 'vrm_benchmark.cancel')
 }
 
 
@@ -872,7 +872,7 @@ function Invoke-StreamBenchmark {
     $runId = [guid]::NewGuid().ToString('N')
     $cancelPath = Get-StreamBenchmarkCancelPath
     if (Test-Path -LiteralPath $cancelPath) { Remove-Item -LiteralPath $cancelPath -Force -ErrorAction SilentlyContinue }
-    $ffProgress = [System.IO.Path]::Combine($env:TEMP, 'vrm_benchmark_ffprogress.txt')
+    $ffProgress = Get-JobFilePath -Name 'vrm_benchmark_ffprogress.txt'
     $safeName = Convert-Displayname ([string]$Headset.Name)
     $model = [string]$Headset.Model
 
@@ -1340,7 +1340,7 @@ function Invoke-StreamBenchmarkParallel {
             $model = [string]$h.Model
             $parsed = ConvertFrom-ScrcpyProfile -Profile ([string]$h.ScrcpyProfile)
             $view = if ($parsed) { $parsed.View } else { Get-ScrcpyDefaultView -Model $model }
-            $prog = [System.IO.Path]::Combine($env:TEMP, ('vrm_benchmark_par_{0}.txt' -f $h.ID))
+            $prog = Get-JobFilePath -Name ('vrm_benchmark_par_{0}.txt' -f $h.ID)
             if (Test-Path -LiteralPath $prog) { Remove-Item -LiteralPath $prog -Force -ErrorAction SilentlyContinue }
             if ($eye -ne 'M') {
                 if (Get-Command Update-EyeMergeParameters -ErrorAction SilentlyContinue) { try { Update-EyeMergeParameters } catch { } }
@@ -2330,22 +2330,58 @@ function Set-StreamBenchmarkRecommendation {
 function Request-StreamRestart {
     <#
     .SYNOPSIS
-    Asks VRMonitor to restart every running stream (after a config change that a running
-    stream would not pick up, e.g. the re-encode settings). VRMonitor owns the pipelines, so
-    it does the restart itself: reload config, Stop-Scrcpy, then the watchdog restarts them
-    on the same tick (ADR-0027). Any process may call this.
+    Asks VRMonitor to restart streams and/or mediamtx. VRMonitor owns the pipelines, so it is
+    the only process that starts or stops them (ADR-0027, extended by ADR-0032): it reloads
+    config, stops the targeted captures, restarts mediamtx when asked, then restarts the
+    captures (auto-restart headsets through its watchdog edge trigger, the others directly when
+    they were running). Any process may call this; it returns at once.
+
+    .DESCRIPTION
+    Writes the app_kv row streams_restart_request = {id;at;reason;mediamtx;mediamtxStop;headsets;start}.
+    -HeadsetId     the headsets concerned (permanent ids); omitted = every capture ('all').
+    -NoHeadsets    no capture is touched (a mediamtx-only request).
+    -MediaMtx      restart mediamtx (stop, start) after the captures are stopped. Ask it with
+                   every capture: restarting mediamtx breaks every publisher.
+    -StopMediaMtx  stop mediamtx only (the slow-tick watchdog starts it again, as before).
+    -Start         also start the listed headsets that were not running (a manual start).
+    A request without the newer fields (older writer) means: every capture, no mediamtx.
+    Only ONE request is pending at a time: a second write before VRMonitor's next fast tick
+    (500 ms) replaces the first, so a caller with several reasons builds one request.
+    Returns the request id, '' when it could not be written. Never throws.
+
+    .EXAMPLE
+    Request-StreamRestart -MediaMtx -Reason 'mediamtx streaming settings changed'
+    Request-StreamRestart -HeadsetId 3 -Start -Reason 'console start'
     #>
-    param([string]$Reason = '')
+    param(
+        [string]$Reason = '',
+        [int[]]$HeadsetId = @(),
+        [switch]$NoHeadsets,
+        [switch]$MediaMtx,
+        [switch]$StopMediaMtx,
+        [switch]$Start
+    )
+    $scope = 'all'
+    if ($NoHeadsets) { $scope = @() }
+    elseif (@($HeadsetId).Count -gt 0) { $scope = @($HeadsetId | Sort-Object -Unique) }
+    $id = [guid]::NewGuid().ToString('N')
     try {
         Set-DbKeyValue -Key $script:BenchKvRestart -Value @{
-            id = [guid]::NewGuid().ToString('N'); at = (Get-Date).ToUniversalTime().ToString('o'); reason = $Reason
+            id = $id; at = (Get-Date).ToUniversalTime().ToString('o'); reason = $Reason
+            mediamtx = [bool]$MediaMtx; mediamtxStop = [bool]$StopMediaMtx
+            headsets = $scope; start = [bool]$Start
         }
-    } catch { }
+        Write-Log ("Stream restart requested from VRMonitor ({0})" -f $Reason) -Level DEBUG
+        return $id
+    } catch {
+        Write-Log ("Request-StreamRestart failed: {0}" -f $_.Exception.Message) -Level WARNING
+        return ''
+    }
 }
 
 
 function Get-StreamRestartRequest {
-    <# The pending stream restart request @{id;at;reason}, or $null. Read by VRMonitor. #>
+    <# The pending stream restart request @{id;at;reason;mediamtx;mediamtxStop;headsets;start}, or $null. Read by VRMonitor. #>
     param()
     try { return (Get-DbKeyValue -Key $script:BenchKvRestart) } catch { return $null }
 }

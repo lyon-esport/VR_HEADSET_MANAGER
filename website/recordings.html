@@ -6,6 +6,7 @@
   <title>Recordings - VR Headset Manager</title>
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
   <link rel="stylesheet" href="assets/topbar.css">
+  <script src="assets/vrhm_common.js"></script>
   <script src="assets/topbar.js"></script>
   <style>
     :root {
@@ -802,10 +803,12 @@
       return lane.length ? lane[0] : null;
     }
 
-    pingTimer = setInterval(function () {
+    // Playback keep-alive: guarded (no overlap, backoff on error). Kept running at the
+    // same period in a hidden tab - the server ends a preview whose heartbeat stops.
+    pingTimer = VRHM.poll(function () {
       if (!cur || !cur.token || cur.paused) return;
       var tok = cur.token, rec = cur.rec;
-      api('/api/recordings/play-ping', { token: tok }).then(function (j) {
+      return api('/api/recordings/play-ping', { token: tok }).then(function (j) {
         if (!cur || cur.token !== tok) return;
         if (j.ok === false && j.error) { showError('Playback keep-alive failed: ' + j.error); return; }
         if (j.alive === false) {
@@ -815,7 +818,7 @@
           else { cur.playing = false; cur.paused = true; cur.pos = curPos(); setOverlay(near ? 'End of recording' : 'Playback ended'); updatePlayerUi(); }
         }
       });
-    }, 10000);
+    }, { intervalMs: 10000, hiddenIntervalMs: 10000, immediate: false });
 
     clockTimer = setInterval(updatePlayerUi, 500);
 
@@ -893,19 +896,15 @@
     });
 
     // -- Refresh --------------------------------------------------------------
-    function tick() {
-      var connected = false;
-      try { connected = window.LiveEvents && LiveEvents.isConnected(); } catch (e) {}
-      if (!wipeOpen()) loadList();
-      setTimeout(tick, connected ? 60000 : 30000);
+    // The poller owns the 'recordings' LiveEvents subscription (no second subscribe).
+    function startListPoll() {
+      VRHM.poll(function () { return wipeOpen() ? null : loadList(); },
+        { intervalMs: 30000, liveEventsCounter: 'recordings', immediate: false });
     }
-    try {
-      if (window.LiveEvents) LiveEvents.subscribe('recordings', function () { if (!wipeOpen()) loadList(); });
-    } catch (e) {}
 
     // -- Boot -----------------------------------------------------------------
     fillHourSelects();
-    reloadFull().then(function () { setTimeout(tick, 30000); });
+    reloadFull().then(startListPoll);
   </script>
 </body>
 </html>

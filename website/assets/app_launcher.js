@@ -149,7 +149,42 @@
   var _appNameCache     = {};
   var _statusResolver   = null;   // optional fn(dn) -> bool for ADB status
   var _showSystem       = false;
-  var _resolvePoller    = null;   // setInterval handle for background resolve polling
+  var _resolvePoller    = null;   // VRHM.poll handle, alive only while a resolve is running
+  var _resolveStarting  = false;  // vrhm_common.js is being loaded for the first poll
+
+  function _stopResolvePolling() {
+    if (_resolvePoller) { _resolvePoller.stop(); _resolvePoller = null; }
+  }
+
+  // Run cb once VRHM (assets/vrhm_common.js) exists; pages that include this script do
+  // not all load it, so it is injected on first use.
+  function _withVrhm(cb) {
+    if (window.VRHM) { cb(); return; }
+    var s = document.createElement('script');
+    s.src = '/assets/vrhm_common.js';
+    s.onload = cb;
+    document.head.appendChild(s);
+  }
+
+  // One cheap check of the server-side resolve state (another browser may have started
+  // one). Called when the refresh button appears, NOT on a permanent timer: polling only
+  // runs while a resolve is actually running.
+  function _syncResolveOnce() {
+    var btn = document.getElementById('lm-refresh-btn');
+    if (!btn || btn.style.display === 'none' || _resolvePoller || _resolveStarting) return;
+    var statusEl = document.getElementById('lm-status');
+    fetch('/api/resolve-progress')
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var running = d.status === 'queued' || d.status === 'running';
+        if (running && !btn.disabled) {
+          btn.disabled = true;
+          if (statusEl) { statusEl.textContent = 'Online search in progress...'; statusEl.className = 'lm-status'; }
+          _startResolvePolling(statusEl);
+        }
+      })
+      .catch(function () {});
+  }
 
   function _isAdbUp() {
     return _statusResolver ? !!_statusResolver(_launchDn) : false;
@@ -230,7 +265,7 @@
   function closeLaunchModal() {
     document.getElementById('app-launcher').style.display = 'none';
     _launchDn = null;
-    if (_resolvePoller) { clearInterval(_resolvePoller); _resolvePoller = null; }
+    _stopResolvePolling();
   }
 
   function renderLaunchList(apps, isFavView) {
@@ -470,6 +505,7 @@
           document.getElementById('lm-running-app').style.display = 'none';
           document.getElementById('lm-search').value = '';
           _renderAllApps(apps);
+          _syncResolveOnce();
         })
         .catch(function () {
           btn.disabled = false;
@@ -489,13 +525,16 @@
       '<path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>';
 
     function _startResolvePolling(statusEl) {
-      if (_resolvePoller) { clearInterval(_resolvePoller); _resolvePoller = null; }
-      _resolvePoller = setInterval(function () {
-        fetch('/api/resolve-progress')
-          .then(function (r) { return r.json(); })
+      _stopResolvePolling();
+      _resolveStarting = true;
+      _withVrhm(function () {
+      _resolveStarting = false;
+      _stopResolvePolling();
+      _resolvePoller = VRHM.poll(function () {
+        return VRHM.fetchJson('/api/resolve-progress')
           .then(function (p) {
             if (p.status === 'done') {
-              clearInterval(_resolvePoller); _resolvePoller = null;
+              _stopResolvePolling();
               statusEl.textContent = 'App names updated.';
               statusEl.className   = 'lm-status ok';
               setTimeout(function () {
@@ -509,13 +548,13 @@
                 .then(function (apps) { _allApps = apps; _renderAllApps(apps); })
                 .catch(function () {});
             } else if (p.status === 'error') {
-              clearInterval(_resolvePoller); _resolvePoller = null;
+              _stopResolvePolling();
               statusEl.textContent = 'Name resolution failed.';
               statusEl.className   = 'lm-status err';
             }
-          })
-          .catch(function () {});
-      }, 3000);
+          });
+      }, { intervalMs: 3000, maxBackoffMs: 15000 });
+      });
     }
 
     document.getElementById('lm-refresh-btn').addEventListener('click', function () {
@@ -568,26 +607,6 @@
     init();
   }
 
-  // Always-on 15s poll: syncs resolve button lock state across all browsers
-  setInterval(function() {
-    var btn = document.getElementById('lm-refresh-btn');
-    if (!btn || btn.style.display === 'none') return;
-    var statusEl = document.getElementById('lm-status');
-    fetch('/api/resolve-progress')
-      .then(function(r) { return r.json(); })
-      .then(function(d) {
-        var running = d.status === 'queued' || d.status === 'running';
-        if (running && !btn.disabled) {
-          btn.disabled = true;
-          if (statusEl) { statusEl.textContent = 'Online search in progress...'; statusEl.className = 'lm-status'; }
-          _startResolvePolling(statusEl);
-        } else if (!running && btn.disabled && !_resolvePoller) {
-          btn.disabled = false;
-          if (statusEl) { statusEl.textContent = ''; statusEl.className = 'lm-status'; }
-        }
-      })
-      .catch(function() {});
-  }, 15000);
 
   window.openLaunchModal = openLaunchModal;
   window.appLauncher = {

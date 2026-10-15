@@ -175,6 +175,7 @@
     <div class="bh-note" id="note"></div>
   </div>
 
+  <script src="assets/vrhm_common.js"></script>
   <script src="assets/vendor/uplot/uPlot.iife.min.js"></script>
   <script src="assets/battery_chart.js"></script>
   <script>
@@ -425,8 +426,10 @@
       'holds until the next recorded change.';
 
     // -- Boot -----------------------------------------------------------------
+    // Guarded poll: no overlap, paused in a hidden tab, backoff on error. The period
+    // is the load-tier one, re-read before every schedule (nextDelay).
     function loop() {
-      load().then(function () { setTimeout(loop, nextDelay()); });
+      VRHM.poll(load, { intervalMs: nextDelay });
     }
     // Config first: the chart line, the fill and the "Current" stat are all coloured
     // by the thresholds, and the window buttons depend on the retention period, so
@@ -436,7 +439,7 @@
       .then(refreshLoadTier)
       .then(loadHeadsets)
       .then(function () { syncUrl(); loop(); });
-    setInterval(refreshLoadTier, 60000);
+    VRHM.poll(refreshLoadTier, { intervalMs: 60000, immediate: false });
   </script>
 </body>
 </html>

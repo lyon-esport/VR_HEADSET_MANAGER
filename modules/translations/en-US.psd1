@@ -133,8 +133,8 @@
     ServicesChoiceBack      = " 0. Back"
     ServicesWebServerRestarted = "Web server restarted."
     ServicesWebServerStopped   = "Web server stopped."
-    ServicesMediaMtxRestarted  = "MediaMtx restarted."
-    ServicesMediaMtxStopped    = "MediaMtx stopped."
+    ServicesMediaMtxRestarted  = "MediaMtx restart requested: the monitor restarts it with the running captures."
+    ServicesMediaMtxStopped    = "MediaMtx stop requested."
     AnyOtherKey = " Any other key : Refresh"
     KnownHeadsets = "=== KNOWN HEADSETS ==="
     EnterChoice = "Enter your choice"
@@ -849,6 +849,7 @@
 
     # Groups moved out of the top level (S1-5): the top-level hashtable is capped at 500 keys.
     Scrcpy = @{
+        StartRequested = "Capture start of {0} requested from the monitor."
         Tracking = " S. Scrcpy process tracking management "
         Options = " M. Modify scrcpy options per headset "
         TrackingTitle = "== SCRCPY PROCESS TRACKING MANAGEMENT =="

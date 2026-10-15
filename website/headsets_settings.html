@@ -6,6 +6,7 @@
   <title>VR Headsets - Settings</title>
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
   <link rel="stylesheet" href="assets/topbar.css">
+  <script src="assets/vrhm_common.js"></script>
   <script src="assets/topbar.js"></script>
   <script src="assets/live_events.js"></script>
   <style>
@@ -3348,14 +3349,20 @@
 
     // setTimeout chain. Single cadence indexed to VRMonitor.refresh_timer x multiplier so
     // the whole page slows down together under load (idle ~5 s, mitigation x2, max x5).
+    // VRHM.poll: no overlap, paused in a hidden tab, backoff on error; the period is
+    // re-read from the load tier before every schedule. The LiveEvents subscriptions
+    // below stay as they are (not passed as liveEventsCounter: three counters feed
+    // three different fetches here).
     function pollAll() {
-      Promise.all([
-        pollHeadsetsCsv(),
-        pollHeadsetsStatus(),
-        Promise.resolve(pollForNewUsbHeadset()),
-        pollDiscoveredDevices(),
-        refreshLoadTier()
-      ]).finally(function() { setTimeout(pollAll, nextStatusDelay()); });
+      VRHM.poll(function() {
+        return Promise.all([
+          pollHeadsetsCsv(),
+          pollHeadsetsStatus(),
+          Promise.resolve(pollForNewUsbHeadset()),
+          pollDiscoveredDevices(),
+          refreshLoadTier()
+        ]);
+      }, { intervalMs: nextStatusDelay });
     }
     refreshLoadTier().finally(pollAll);
     // Push (ADR-0020): status dots (scrcpy blue dot, ADB, ping) and the registry fields
@@ -3392,10 +3399,11 @@
     }
 
     function pollTimerDisplays() {
+      var pending = [];
       document.querySelectorAll('.timer-display[data-timer-id]').forEach(function(disp) {
         var tid = disp.dataset.timerId;
         var startBtn = document.querySelector('.timer-start-btn[data-timer-id="' + tid + '"]');
-        fetch('/api/timer?id=' + tid + '&action=status&_=' + Date.now())
+        pending.push(fetch('/api/timer?id=' + tid + '&action=status&_=' + Date.now())
           .then(function(r) { return r.ok ? r.json() : null; })
           .then(function(j) {
             if (!j) return;
@@ -3407,8 +3415,9 @@
               else if (j.paused) { startBtn.classList.add('paused');  startBtn.textContent = 'Resume'; }
               else               { startBtn.textContent = 'Start'; }
             }
-          }).catch(function() {});
+          }).catch(function() {}));
       });
+      return Promise.all(pending);   // the poller waits for every timer before the next run
     }
 
     function initTimerStates(configs) {
@@ -3445,7 +3454,7 @@
       if (secInput) { saveTimerConfigDebounced(secInput.dataset.timerId); return; }
     });
 
-    setInterval(pollTimerDisplays, 1000);
+    VRHM.poll(pollTimerDisplays, { intervalMs: 1000, maxBackoffMs: 10000, immediate: false });
 
     // Manage New Devices modal â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     var _ndmData = null;  // USB device details from /api/usbdeviceinfo

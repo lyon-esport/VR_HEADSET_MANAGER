@@ -159,6 +159,16 @@ $moduleFiles = Get-ChildItem -Path $ModulesPath -Filter "*.ps1" -File | Sort-Obj
                 Get-ChildItem -LiteralPath (Join-Path $global:ScriptPath "data") -Filter "vrm_relay_*.mkv" -ErrorAction SilentlyContinue |
                     Remove-Item -Force -ErrorAction SilentlyContinue
             } catch { }
+            # Stale job progress/cancel files (data\jobs\), older than 1 day
+            try {
+                $jobsDir = Join-Path $global:ScriptPath 'data\jobs'
+                if (Test-Path -LiteralPath $jobsDir) {
+                    $jobsCutoff = (Get-Date).AddDays(-1)
+                    Get-ChildItem -LiteralPath $jobsDir -File -ErrorAction SilentlyContinue |
+                        Where-Object { $_.LastWriteTime -lt $jobsCutoff } |
+                        Remove-Item -Force -ErrorAction SilentlyContinue
+                }
+            } catch { }
         }
     }
 

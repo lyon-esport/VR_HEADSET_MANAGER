@@ -873,6 +873,9 @@ function Invoke-VqaApply {
         }
         Set-DbKeyValue -Key 'vqa_applied' -Value $appliedToWrite -Depth 5
 
+        # -- Restart the affected captures. VRMonitor owns them (ADR-0032), and this runs in the
+        # web server or the console as well as in VRMonitor (VQO), so it is always a request,
+        # run on VRMonitor's next fast tick with the config written above.
         # mediamtx never reads stream_framerate/stream_bitrate - only
         # Start-FfmpegStreamPush does. So a mediamtx-only change does not need
         # mediamtx restarted, it needs every currently-running ffmpeg pusher
@@ -880,27 +883,10 @@ function Invoke-VqaApply {
         # would sever their RTSP sockets underneath them (broken pipe / HEVC
         # POC corruption) for no benefit.
         if ($restartMtx) {
-            foreach ($row in (Get-KnownHeadsets)) {
-                $safe = Convert-Displayname $row.Name
-                if ((Get-ScrcpyProcess -displayName $safe -headsetIP $row.IPAddress) -and ($restartProcs -notcontains $row.Name)) {
-                    $restartProcs += $row.Name
-                }
-            }
-        }
-
-        # -- Restart affected scrcpy sessions
-        foreach ($name in $restartProcs) {
-            try {
-                $row = Get-KnownHeadsets | Where-Object { $_.Name -eq $name } | Select-Object -First 1
-                if ($row) {
-                    Stop-Scrcpy -HeadsetName $name -HeadsetIP $row.IPAddress | Out-Null
-                    Start-Sleep -Milliseconds 500
-                    $wantRecording = ((ConvertTo-DbBool $row.Record) -eq 1)
-                    start-screenCopy -headsetIP $row.IPAddress -displayName $row.Name -recording $wantRecording -scrcpyProfile $row.ScrcpyProfile
-                }
-            } catch {
-                Write-Log ("VQA: failed to restart scrcpy for $name " + $_.Exception.Message) -Level WARNING
-            }
+            [void](Request-StreamRestart -Reason 'VQA apply (mediamtx settings)')
+        } elseif ($restartProcs.Count -gt 0) {
+            $ids = @(Get-KnownHeadsets | Where-Object { $restartProcs -contains $_.Name } | ForEach-Object { [int]$_.ID })
+            if ($ids.Count -gt 0) { [void](Request-StreamRestart -HeadsetId $ids -Reason 'VQA apply') }
         }
 
         Write-Log ($msg.Vqa.RecommendationApplied -f $rec.Direction) -Level SUCCESS
@@ -1057,24 +1043,15 @@ function Restore-VqaOriginals {
     }
 
     if ($NoServiceRestart) { $restartProcs = @(); $restartMtx = $false }
-    foreach ($name in $restartProcs) {
-        try {
-            $row = Get-KnownHeadsets | Where-Object { $_.Name -eq $name } | Select-Object -First 1
-            if ($row -and (Get-ScrcpyProcess -displayName ($row.Name -replace ' ','_') -headsetIP $row.IPAddress)) {
-                Stop-Scrcpy -HeadsetName $name -HeadsetIP $row.IPAddress | Out-Null
-                Start-Sleep -Milliseconds 500
-                $wantRecording = ((ConvertTo-DbBool $row.Record) -eq 1)
-                start-screenCopy -headsetIP $row.IPAddress -displayName $row.Name -recording $wantRecording -scrcpyProfile $row.ScrcpyProfile
-            }
-        } catch {
-            Write-Log ("VQA restore: scrcpy restart failed for $name`: " + $_.Exception.Message) -Level WARNING
-            # scrcpy restart failure does not corrupt baseline; do not block file cleanup
-        }
-    }
+    # The restart itself is VRMonitor's (ADR-0032): a request, run on its next fast tick. Only the
+    # captures that run are restarted there. A mediamtx restart breaks every publisher, so it is
+    # asked together with every capture (VRMonitor restarts mediamtx once the captures are stopped).
+    # A failed request does not corrupt the baseline; it does not block the cleanup below.
     if ($restartMtx) {
-        try { Stop-MediaMtx; Start-Sleep -Seconds 1; Start-MediaMtx } catch {
-            Write-Log ("VQA restore: mediamtx restart failed: " + $_.Exception.Message) -Level WARNING
-        }
+        [void](Request-StreamRestart -MediaMtx -Reason 'VQA restore (mediamtx settings)')
+    } elseif ($restartProcs.Count -gt 0) {
+        $ids = @(Get-KnownHeadsets | Where-Object { $restartProcs -contains $_.Name } | ForEach-Object { [int]$_.ID })
+        if ($ids.Count -gt 0) { [void](Request-StreamRestart -HeadsetId $ids -Reason 'VQA restore') }
     }
 
     if ($errCount -gt 0) {
