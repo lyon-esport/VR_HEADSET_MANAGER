@@ -205,6 +205,9 @@ function Resolve-NrtTestHeadset {
         [int]$AdbPort = 5555
     )
 
+    # -NoHeadset: nothing is connected, so do not probe, bridge USB or prompt.
+    if ($global:TestRun -and $global:TestRun.NoHeadset) { return $null }
+
     $candidates = @(Get-NrtDevHeadsets -DevRoot $DevRoot)
     if ($candidates.Count -eq 0) { return $null }
 

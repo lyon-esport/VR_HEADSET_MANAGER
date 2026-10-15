@@ -41,7 +41,7 @@ function Initialize-TimerFiles {
     $timerFolder = Join-Path $global:ScriptPath "website\timer"
     if (-not (Test-Path -LiteralPath $timerFolder)) {
         $null = New-Item -ItemType Directory -Path $timerFolder -Force
-        Write-Log ($msg.TimerFolderCreated -f $timerFolder) -Level INFO
+        Write-Log ($msg.Timer.FolderCreated -f $timerFolder) -Level INFO
     }
 
     $utf8NoBom = New-Object System.Text.UTF8Encoding $false
@@ -67,7 +67,7 @@ function Initialize-TimerFiles {
         }
     }
     if ($count -gt 0) {
-        Write-Log ($msg.TimerFilesInitialized -f $count) -Level DEBUG
+        Write-Log ($msg.Timer.FilesInitialized -f $count) -Level DEBUG
     }
 
     # Clean up any old numeric or intermediate-named files; ensure only [timer]-named files remain
@@ -220,7 +220,7 @@ function Start-HeadsetTimer {
         totalSecs       = $totalSecs
         elapsedBefore   = 0
     }
-    Write-Log ($msg.TimerStarted -f $headsetId, $totalSecs, $config.mode) -Level INFO
+    Write-Log ($msg.Timer.Started -f $headsetId, $totalSecs, $config.mode) -Level INFO
 }
 
 function Suspend-HeadsetTimer {
@@ -250,7 +250,7 @@ function Suspend-HeadsetTimer {
     $entry.pausedRemaining = $remainingSecs
     $entry.elapsedBefore   = $totalElapsed   # total elapsed at pause; used as inc display offset on resume
     $script:activeTimers[$headsetId] = $entry
-    Write-Log ($msg.TimerStopped -f $headsetId) -Level INFO
+    Write-Log ($msg.Timer.Stopped -f $headsetId) -Level INFO
     return $true
 }
 
@@ -303,7 +303,7 @@ function Resume-HeadsetTimer {
         totalSecs       = $originalTotal
         elapsedBefore   = $elapsedSoFar
     }
-    Write-Log ($msg.TimerStarted -f $headsetId, $jobTotal, $mode) -Level INFO
+    Write-Log ($msg.Timer.Started -f $headsetId, $jobTotal, $mode) -Level INFO
     return $true
 }
 
@@ -314,7 +314,7 @@ function Stop-HeadsetTimer {
         try { Stop-Job  -Job $entry.job -ErrorAction SilentlyContinue } catch {}
         try { Remove-Job -Job $entry.job -Force -ErrorAction SilentlyContinue } catch {}
         $script:activeTimers.Remove($headsetId)
-        Write-Log ($msg.TimerStopped -f $headsetId) -Level INFO
+        Write-Log ($msg.Timer.Stopped -f $headsetId) -Level INFO
     }
     Clear-TimerFile -headsetId $headsetId
 }

@@ -303,8 +303,8 @@
       padding: 8px 14px;
       border-top: 1px solid var(--card-border);
     }
-    .card-ipd-row { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 0; }
-    .ipd-select { background: var(--surface-2, #1e1e1e); color: inherit; border: 1px solid var(--border, #444); border-radius: 6px; padding: 3px 6px; font-size: 12px; }
+    .card-ipd-row { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 14px; border-top:1px solid var(--card-border); }
+    .ipd-select { background: var(--card-bg); color: inherit; border: 1px solid var(--card-border); border-radius: 6px; padding: 4px 8px; font-size: .78rem; font-family: inherit; }
     .hs-adv-btn {
       display: inline-flex; align-items: center; gap: 6px;
       font-size: .78rem; padding: 5px 13px; border-radius: 6px;
@@ -1518,7 +1518,7 @@
               'Advanced Settings' +
             '</span>' +
             '<span style="display:inline-flex;gap:6px">' +
-              '<a class="hs-adv-btn" href="headset_diag.html?id=' + encodeURIComponent(cfg.ID) + '" title="Diagnostics for this headset" style="text-decoration:none;display:inline-block">DIAG</a>' +
+              '<a class="hs-adv-btn" data-diag="' + dn + '" href="headset_diag.html?id=' + encodeURIComponent(cfg.ID) + '" title="Diagnostics for this headset" style="text-decoration:none;display:inline-block">DIAG</a>' +
               '<button class="hs-adv-btn" data-adv-settings="' + dn + '" data-adv-brand="' + esc(cfg.Brand || '') + '">Configure</button>' +
             '</span>' +
           '</div>' +
@@ -2226,6 +2226,7 @@
         [
           document.querySelector('[data-launch-app="' + dn + '"]'),
           document.querySelector('[data-adv-settings="' + dn + '"]'),
+          document.querySelector('[data-diag="' + dn + '"]'),
           document.querySelector('[data-power="reboot"][data-power-headset="' + dn + '"]'),
           document.querySelector('[data-power="shutdown"][data-power-headset="' + dn + '"]')
         ].forEach(function(b) { if (b) b.classList.toggle('btn-adb-disabled', !adbOk); });

@@ -1,5 +1,20 @@
 #Load-Config -ConfigFilePath $ConfigFilePath
 
+# Whole text of a config file, UTF-8 (a BOM is honoured), literal path. The file is opened with
+# ReadWrite + Delete sharing so a reader never blocks Write-ConfigJson's File.Replace. Throws on
+# an I/O error (Read-ConfigJson retries).
+function Read-ConfigFileText {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $share = [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
+    $fs = [System.IO.FileStream]::new($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, $share)
+    try {
+        $sr = [System.IO.StreamReader]::new($fs, [System.Text.UTF8Encoding]::new($false), $true)
+        try { return $sr.ReadToEnd() } finally { $sr.Dispose() }
+    } finally {
+        $fs.Dispose()
+    }
+}
+
 function Read-ConfigJson {
     <#
     .SYNOPSIS
@@ -14,6 +29,10 @@ function Read-ConfigJson {
     .PARAMETER NonInteractive
     When set, returns $null on parse failure instead of prompting. Use for
     callers that cannot block on console input (web request handlers, jobs).
+    A read that fails with an I/O error is retried up to 5 times (50..250 ms
+    apart, ~750 ms in all) first: Write-ConfigJson swaps the file in with
+    File.Replace, and a reader opening it at that exact moment can get a
+    sharing violation. A parse error is not retried here.
     #>
     param (
         [string]$ConfigFilePath,
@@ -22,14 +41,29 @@ function Read-ConfigJson {
 
     $configContent = $null
     $jsonValid = $false
+    $attempt = 0
     while (-not $jsonValid) {
+        $attempt++
         try {
-            $jsonRaw = Get-Content -Path $ConfigFilePath -Raw -Encoding UTF8 -ErrorAction Stop
+            # Literal path, UTF-8 (a BOM is still honoured). Opened with Delete sharing so this
+            # read never blocks Write-ConfigJson's File.Replace, and vice versa as far as Windows
+            # allows (Get-Content opens without it and collided with the swap).
+            $jsonRaw = Read-ConfigFileText -Path $ConfigFilePath
+            # An empty or whitespace-only file parses to $null without an error; treat it as a
+            # failure, otherwise the caller would load defaults into every global.
+            if ([string]::IsNullOrWhiteSpace($jsonRaw)) { throw "the file is empty" }
             $configContent = $jsonRaw | ConvertFrom-Json -ErrorAction Stop
+            if ($null -eq $configContent) { throw "the file holds no JSON object" }
             $jsonValid = $true
         }
         catch {
             if ($NonInteractive) {
+                # Only an I/O error (sharing violation during a swap) is worth retrying; a parse
+                # error means the file really is broken and Get-Config's own retry covers it.
+                $ex = $_.Exception
+                $ioError = ($ex -is [System.IO.IOException]) -or ($ex -is [System.UnauthorizedAccessException]) -or
+                           ($ex.InnerException -is [System.IO.IOException]) -or ($ex.InnerException -is [System.UnauthorizedAccessException])
+                if ($ioError -and $attempt -lt 6) { Start-Sleep -Milliseconds (50 * $attempt); continue }
                 try { Write-Log ("Read-ConfigJson: parse failed in non-interactive mode: " + $_.Exception.Message) -Level WARNING } catch { }
                 return $null
             }
@@ -55,8 +89,8 @@ function Read-ConfigJson {
                 }
                 'T' {
                     $templatePath = Join-Path -Path $global:ScriptPath -ChildPath "templates\config\config.json"
-                    if (Test-Path $templatePath) {
-                        Copy-Item -Path $templatePath -Destination $ConfigFilePath -Force
+                    if (Test-Path -LiteralPath $templatePath) {
+                        Copy-Item -LiteralPath $templatePath -Destination $ConfigFilePath -Force
                         Write-Host "  Default template restored to '$ConfigFilePath'." -ForegroundColor Green
                         Write-Host "  Opening the file in Notepad - please fill in your settings, then restart." -ForegroundColor Yellow
                         notepad $ConfigFilePath
@@ -83,19 +117,54 @@ function Read-ConfigJson {
 }
 
 # Function to load configuration variables from a JSON file
+#
+# -Interactive: only the main console process at startup passes it (scripts_init.ps1). Every
+# other caller - the VRMonitor job, its runspaces, the web server, a reload after a config
+# write - reads non-interactively: an invalid file must never open a browser or wait on
+# Read-Host in a process nobody is looking at.
+# Once a config has been loaded ($global:ConfigLoadedOnce), a read that fails (invalid JSON,
+# empty file, a writer mid-replace) is retried once after 200 ms, then the call returns
+# $false WITHOUT touching any global, so the process keeps running on its previous values.
 function Get-Config {
     param (
-        [string]$ConfigFilePath
+        [string]$ConfigFilePath = $global:ConfigFilePath,
+        [switch]$Interactive
     )
-    
+    if ([string]::IsNullOrWhiteSpace($ConfigFilePath)) {
+        $ConfigFilePath = Join-Path -Path $global:ScriptPath -ChildPath "config\config.json"
+    }
+
     # Check whether the file exists
-    if (-not (Test-Path $ConfigFilePath)) {
+    if (-not (Test-Path -LiteralPath $ConfigFilePath)) {
         Write-Host "Configuration file does not exist..." -ForegroundColor Red
         return $false
     }
 
     # Read and validate the JSON file content
-    $configContent = Read-ConfigJson -ConfigFilePath $ConfigFilePath
+    if ($Interactive -and -not $global:ConfigLoadedOnce) {
+        $configContent = Read-ConfigJson -ConfigFilePath $ConfigFilePath
+    } else {
+        $configContent = $null
+        try { $configContent = Read-ConfigJson -ConfigFilePath $ConfigFilePath -NonInteractive } catch { $configContent = $null }
+        if ($null -eq $configContent) {
+            Start-Sleep -Milliseconds 200
+            try { $configContent = Read-ConfigJson -ConfigFilePath $ConfigFilePath -NonInteractive } catch { $configContent = $null }
+        }
+        if ($null -eq $configContent) {
+            $keepMsg = "Get-Config: '$ConfigFilePath' could not be read or parsed"
+            if ($global:ConfigLoadedOnce) {
+                $keepMsg += " - keeping the previously loaded values"
+            } else {
+                $keepMsg += " - no configuration loaded"
+            }
+            if ($global:logFile -and (Get-Command Write-Log -ErrorAction SilentlyContinue)) {
+                try { Write-Log $keepMsg -Level WARNING } catch { Write-Host $keepMsg -ForegroundColor Yellow }
+            } else {
+                Write-Host $keepMsg -ForegroundColor Yellow
+            }
+            return $false
+        }
+    }
     $sourcesPath = Join-Path -Path $global:ScriptPath -ChildPath "sources"
 
 
@@ -123,7 +192,18 @@ function Get-Config {
             Rename-Item -LiteralPath $global:AppCacheFilePath -NewName (Split-Path $newPath -Leaf) -ErrorAction SilentlyContinue
         }
         $configContent.Paths.AppCacheFileName = 'known_apps.csv'
-        try { [System.IO.File]::WriteAllText($ConfigFilePath, ($configContent | ConvertTo-Json -Depth 20), (New-Object System.Text.UTF8Encoding($false))) } catch {}
+        # Re-read under the config lock and change only this field, so a write made by another
+        # process since our read is not overwritten.
+        try {
+            $migLock = Enter-VqaLock -TimeoutMs 5000
+            try {
+                $fresh = Read-ConfigJson -ConfigFilePath $ConfigFilePath -NonInteractive
+                if ($fresh -and $fresh.Paths) {
+                    $fresh.Paths.AppCacheFileName = 'known_apps.csv'
+                    Write-ConfigJson -Object $fresh -Path $ConfigFilePath -Depth 20
+                }
+            } finally { if ($migLock) { Exit-VqaLock -Stream $migLock } }
+        } catch {}
         $global:AppCacheFileName = 'known_apps.csv'
         $global:AppCacheFilePath = $newPath
         Write-Host "Config: migrated app_names.csv to known_apps.csv"
@@ -139,7 +219,17 @@ function Get-Config {
         if ($repairedRecordFolder -ne $configContent.scrcpy.recordFolder) {
             Write-Log ("Repaired mojibake in scrcpy.recordFolder: '{0}' -> '{1}'" -f $configContent.scrcpy.recordFolder, $repairedRecordFolder) -Level WARNING
             $configContent.scrcpy.recordFolder = $repairedRecordFolder
-            try { [System.IO.File]::WriteAllText($ConfigFilePath, ($configContent | ConvertTo-Json -Depth 20), (New-Object System.Text.UTF8Encoding($false))) } catch {}
+            # Same as above: re-read under the lock, change only this field.
+            try {
+                $repLock = Enter-VqaLock -TimeoutMs 5000
+                try {
+                    $fresh = Read-ConfigJson -ConfigFilePath $ConfigFilePath -NonInteractive
+                    if ($fresh -and $fresh.scrcpy) {
+                        $fresh.scrcpy.recordFolder = $repairedRecordFolder
+                        Write-ConfigJson -Object $fresh -Path $ConfigFilePath -Depth 20
+                    }
+                } finally { if ($repLock) { Exit-VqaLock -Stream $repLock } }
+            } catch {}
         }
     }
     # Absolute (C:\...) and UNC (\\nas\...) paths are used as they are; a relative path is taken from
@@ -418,8 +508,8 @@ function Get-Config {
     $global:computerName = $env:COMPUTERNAME
     $global:logFolder = $(Join-Path -Path $global:ScriptPath -ChildPath "Logs\$($global:computerName)")
     #create log folder if it does not exist
-    if (-not (Test-Path $global:logFolder)) {
-        New-Item -Path $global:logFolder -ItemType Directory -Force | Out-Null
+    if (-not (Test-Path -LiteralPath $global:logFolder)) {
+        [void][System.IO.Directory]::CreateDirectory($global:logFolder)
     }
     # Generate log file name with current date
     $dateString = Get-Date -Format "yyyy-MM-dd"
@@ -517,6 +607,7 @@ function Get-Config {
     $global:scrcpyRestartAuto = $true
     
     Write-Log "Configuration variables successfully loaded" -Level DEBUG
+    $global:ConfigLoadedOnce = $true
     return $true
 } # OK
 

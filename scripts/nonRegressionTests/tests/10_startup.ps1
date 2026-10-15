@@ -195,14 +195,8 @@ Invoke-RegressionTest -Name 'Translation parity across shipped locales' -Test {
 
     # Real drift (missing/extra/type-mismatched key, unparsable file) is always a FAIL.
     Assert-True (-not $parityDrift) 'translation drift between locales (see evidence for the dotted keys)'
-
-    if ($limitHit) {
-        # TODO(S1-5): the top-level table sits at 499/500 keys, so this gate trips today.
-        # Downgraded to WARN until S1-5 regroups the keys; then drop this branch and
-        # let Assert-Equal below make it a hard FAIL.
-        Write-TestWarning 'a translation hashtable has >= 480 keys (hard limit 500): regroup under a nested key (S1-5)'
-        return
-    }
+    # Top level at or over the warn threshold (480) is a hard FAIL since S1-5.
+    Assert-True (-not $limitHit) 'a translation hashtable has >= 480 top-level keys (hard limit 500): regroup under a nested key'
     Assert-Equal 0 $code 'Test-TranslationParity exit code'
 }
 

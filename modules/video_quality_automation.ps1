@@ -556,38 +556,46 @@ function Set-VqaAutoApply {
         [Parameter(Mandatory)] [bool]$Enabled
     )
     $cfgPath = Join-Path $global:ScriptPath 'config\config.json'
-    $cfg = Read-ConfigJson -ConfigFilePath $cfgPath -NonInteractive
-    if (-not $cfg -or -not $cfg.VideoQualityAutomation) {
-        Write-Log "VQA: cannot toggle auto-apply, config.json unreadable." -Level ERROR
+    $cfgLock = Enter-VqaLock -TimeoutMs 5000
+    try {
+        $cfg = Read-ConfigJson -ConfigFilePath $cfgPath -NonInteractive
+        if (-not $cfg -or -not $cfg.VideoQualityAutomation) {
+            Write-Log "VQA: cannot toggle auto-apply, config.json unreadable." -Level ERROR
+            return $false
+        }
+        switch ($Section) {
+            'profiles' {
+                if ($cfg.VideoQualityAutomation.PSObject.Properties.Name -contains 'auto_apply_profiles') {
+                    $cfg.VideoQualityAutomation.auto_apply_profiles = $Enabled
+                } else {
+                    $cfg.VideoQualityAutomation | Add-Member -MemberType NoteProperty -Name 'auto_apply_profiles' -Value $Enabled
+                }
+                $global:VQA_AutoApplyProfiles = $Enabled
+            }
+            'headsets' {
+                if ($cfg.VideoQualityAutomation.PSObject.Properties.Name -contains 'auto_apply_headsets') {
+                    $cfg.VideoQualityAutomation.auto_apply_headsets = $Enabled
+                } else {
+                    $cfg.VideoQualityAutomation | Add-Member -MemberType NoteProperty -Name 'auto_apply_headsets' -Value $Enabled
+                }
+                $global:VQA_AutoApplyHeadsets = $Enabled
+            }
+            'mediamtx' {
+                if ($cfg.VideoQualityAutomation.PSObject.Properties.Name -contains 'auto_apply_mediamtx') {
+                    $cfg.VideoQualityAutomation.auto_apply_mediamtx = $Enabled
+                } else {
+                    $cfg.VideoQualityAutomation | Add-Member -MemberType NoteProperty -Name 'auto_apply_mediamtx' -Value $Enabled
+                }
+                $global:VQA_AutoApplyMediaMtx = $Enabled
+            }
+        }
+        Write-ConfigJson -Object $cfg -Path $cfgPath -Depth 20
+    } catch {
+        Write-Log ("VQA: auto_apply_$Section not saved: " + $_.Exception.Message) -Level ERROR
         return $false
+    } finally {
+        if ($cfgLock) { Exit-VqaLock -Stream $cfgLock }
     }
-    switch ($Section) {
-        'profiles' {
-            if ($cfg.VideoQualityAutomation.PSObject.Properties.Name -contains 'auto_apply_profiles') {
-                $cfg.VideoQualityAutomation.auto_apply_profiles = $Enabled
-            } else {
-                $cfg.VideoQualityAutomation | Add-Member -MemberType NoteProperty -Name 'auto_apply_profiles' -Value $Enabled
-            }
-            $global:VQA_AutoApplyProfiles = $Enabled
-        }
-        'headsets' {
-            if ($cfg.VideoQualityAutomation.PSObject.Properties.Name -contains 'auto_apply_headsets') {
-                $cfg.VideoQualityAutomation.auto_apply_headsets = $Enabled
-            } else {
-                $cfg.VideoQualityAutomation | Add-Member -MemberType NoteProperty -Name 'auto_apply_headsets' -Value $Enabled
-            }
-            $global:VQA_AutoApplyHeadsets = $Enabled
-        }
-        'mediamtx' {
-            if ($cfg.VideoQualityAutomation.PSObject.Properties.Name -contains 'auto_apply_mediamtx') {
-                $cfg.VideoQualityAutomation.auto_apply_mediamtx = $Enabled
-            } else {
-                $cfg.VideoQualityAutomation | Add-Member -MemberType NoteProperty -Name 'auto_apply_mediamtx' -Value $Enabled
-            }
-            $global:VQA_AutoApplyMediaMtx = $Enabled
-        }
-    }
-    Write-FileWithoutBom -Path $cfgPath -Content (($cfg | ConvertTo-Json -Depth 12))
     $global:VQA_EnabledVQO = ($global:VQA_AutoApplyProfiles -or $global:VQA_AutoApplyHeadsets -or $global:VQA_AutoApplyMediaMtx)
     Write-Log ("VQA: auto_apply_$Section set to $Enabled.") -Level INFO
     return $true
@@ -844,7 +852,7 @@ function Invoke-VqaApply {
             $restartMtx = $true
         }
         if ($applied.Profiles.Count -gt 0 -or $applied.MediaMtx) {
-            Write-FileWithoutBom -Path $configPath -Content (($cfg | ConvertTo-Json -Depth 12))
+            Write-ConfigJson -Object $cfg -Path $configPath -Depth 20
             try { Get-Config -ConfigFilePath $configPath | Out-Null } catch { }
         }
 
@@ -895,7 +903,7 @@ function Invoke-VqaApply {
             }
         }
 
-        Write-Log ($msg.VqaRecommendationApplied -f $rec.Direction) -Level SUCCESS
+        Write-Log ($msg.Vqa.RecommendationApplied -f $rec.Direction) -Level SUCCESS
         Start-VqaCooldown
         Set-VqaRecommendationCooldown
         # Drop the cross-process flag read by the VRMonitor loop's
@@ -984,7 +992,7 @@ function Restore-VqaOriginals {
 
     if ($configChanged) {
         try {
-            Write-FileWithoutBom -Path $configPath -Content (($cfg | ConvertTo-Json -Depth 12))
+            Write-ConfigJson -Object $cfg -Path $configPath -Depth 20
             try { Get-Config -ConfigFilePath $configPath | Out-Null } catch { }
         } catch {
             Write-Log ("VQA restore: config.json write failed: " + $_.Exception.Message) -Level ERROR
@@ -1076,7 +1084,7 @@ function Restore-VqaOriginals {
 
     Remove-DbKeyValue -Key 'vqa_originals'
     Remove-DbKeyValue -Key 'vqa_applied'
-    Write-Log $msg.VqaRestored -Level SUCCESS
+    Write-Log $msg.Vqa.Restored -Level SUCCESS
     # Restore is also a "system mutated" event - arm the cooldown so VQR/VQO
     # let the workload re-stabilise before reacting.
     Start-VqaCooldown
@@ -1123,7 +1131,7 @@ function Initialize-VideoQualityAutomation {
     }
     # Per-session history: header only - only when restore succeeded (or was unnecessary).
     Invoke-DbNonQuery -Name 'vqa.history_clear' | Out-Null
-    Write-Log $msg.VqaHistoryReset -Level DEBUG
+    Write-Log $msg.Vqa.HistoryReset -Level DEBUG
 }
 
 

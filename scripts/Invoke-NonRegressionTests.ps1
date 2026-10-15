@@ -68,6 +68,12 @@
     <release>\nrt_runs_<app folder>\<timestamp>\ so the app folder is pristine again
     (section 10's packaging checks need that).
 
+.PARAMETER NoHeadset
+    Declares that no headset is connected. Every step that would ask the
+    operator to plug, unplug or look at a headset is skipped at once (no prompt),
+    and headset-driven sections SKIP. Unlike -Unattended it keeps the launch
+    menu and the end-of-run question.
+
 .PARAMETER AutoApproveSetup
     Auto-approves the app's first-boot computer setup (firewall rules, URL ACL,
     Windows Defender exclusion) so a new release folder starts with no keypress.
@@ -123,6 +129,7 @@ param(
     [string]$HeadsetName = '',
     [switch]$AllowDestructive,
     [switch]$Unattended,
+    [switch]$NoHeadset,
     [switch]$AutoApproveSetup,
     [switch]$RestoreOnly,
     [switch]$KeepSandbox,
@@ -467,6 +474,7 @@ $global:TestRun.AllowDestructive = [bool]$AllowDestructive
 $global:TestRun.HeadsetName = $HeadsetName
 # Sections 50/60 use this to decide whether prompting for a headset is allowed.
 $global:TestRun.Unattended = [bool]$Unattended
+$global:TestRun.NoHeadset  = [bool]$NoHeadset
 $global:TestRun.DevRoot = $devRoot
 
 Write-Host ''

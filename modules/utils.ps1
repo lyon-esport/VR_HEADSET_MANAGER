@@ -132,7 +132,7 @@ function Get-MessageString {
 function Test-RequiredBinaries {
     $candidates = @(
         [PSCustomObject]@{ ExeName = 'adb.exe';    Path = $global:adbPath;        MessageKey = 'ADBExecutableNotFound' }
-        [PSCustomObject]@{ ExeName = 'scrcpy.exe'; Path = $global:scrcpyFilePath; MessageKey = 'ScrcpyNotFound' }
+        [PSCustomObject]@{ ExeName = 'scrcpy.exe'; Path = $global:scrcpyFilePath; MessageKey = 'Scrcpy.NotFound' }
         # The database engine. Both files are mandatory and must stay together:
         # System.Data.SQLite.dll is the managed assembly, x64\SQLite.Interop.dll
         # the native engine it P/Invokes. Missing either one means no persistence
@@ -359,7 +359,7 @@ function Get-WifiNetworks {
         }
         return $list
     } catch {
-        Write-Log ($msg.WifiNetworksFileCorrupt) -Level WARNING
+        Write-Log ($msg.Wifi.NetworksFileCorrupt) -Level WARNING
         try { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue } catch {}
         return @()
     }
@@ -381,7 +381,7 @@ function Save-WifiNetworks {
     $ss        = ConvertTo-SecureString $plain -AsPlainText -Force
     $encrypted = ConvertFrom-SecureString $ss
     Write-FileWithoutBom -Path $path -Content $encrypted
-    Write-Log ($msg.WifiNetworksSaved -f $Networks.Count) -Level DEBUG
+    Write-Log ($msg.Wifi.NetworksSaved -f $Networks.Count) -Level DEBUG
 }
 
 
@@ -1633,19 +1633,34 @@ function Get-GpuEncoder {
 # here (not in video_quality_automation.ps1) so it is always loaded even
 # when VideoQualityAutomation.enabled is false and that module is skipped.
 # Always release via Exit-VqaLock in a finally block.
+#
+# Re-entrant per runspace: a caller that already holds the lock (e.g. the
+# web server's binary update around Set-BinaryFolderConfig, or a VQA apply)
+# and then reaches Write-ConfigJson gets the SAME stream back with a depth
+# count, instead of waiting on its own FileShare.None handle until timeout.
+# Exit-VqaLock only closes the file when the outermost holder releases it.
+# State is per runspace ($global: is per runspace), so two runspaces of one
+# process still exclude each other through the file itself.
 # -------------------------------------------------------------------
 
 function Enter-VqaLock {
     param([int]$TimeoutMs = 3000)
+    $held = $global:VqaLockHeld
+    if ($held -and $held.Stream) {
+        $held.Depth++
+        return $held.Stream
+    }
     $lockPath = Join-Path $global:ScriptPath 'data\vqa.lock'
     $deadline = (Get-Date).AddMilliseconds($TimeoutMs)
     while ((Get-Date) -lt $deadline) {
         try {
-            return [System.IO.FileStream]::new(
+            $stream = [System.IO.FileStream]::new(
                 $lockPath,
                 [System.IO.FileMode]::OpenOrCreate,
                 [System.IO.FileAccess]::Write,
                 [System.IO.FileShare]::None)
+            $global:VqaLockHeld = @{ Stream = $stream; Depth = 1 }
+            return $stream
         } catch [System.IO.IOException] {
             Start-Sleep -Milliseconds 100
         }
@@ -1655,8 +1670,84 @@ function Enter-VqaLock {
 
 function Exit-VqaLock {
     param($Stream)
-    if ($Stream) {
-        try { $Stream.Dispose() } catch { }
+    if (-not $Stream) { return }
+    $held = $global:VqaLockHeld
+    if ($held -and [object]::ReferenceEquals($held.Stream, $Stream)) {
+        $held.Depth--
+        if ($held.Depth -gt 0) { return }
+        $global:VqaLockHeld = $null
+    }
+    try { $Stream.Dispose() } catch { }
+}
+
+# -------------------------------------------------------------------
+# Write-ConfigJson: THE writer for config\config.json (and, with -Path, its
+# template). Every config write in the app goes through it.
+#   - serialises -Object with ConvertTo-Json -Depth (keep each caller's depth),
+#   - writes <path>.<id>.tmp as UTF-8 without BOM, then swaps it in with
+#     File.Replace, so a reader (VRMonitor every slow tick, runspaces, the web
+#     server) sees either the old file or the new one, never an empty or
+#     truncated one; Move when the target does not exist yet,
+#   - holds Enter-VqaLock (re-entrant) for the write. A writer doing a
+#     read-modify-write takes Enter-VqaLock itself around the read, so the
+#     whole cycle is serialised against the other processes.
+# When the lock cannot be taken within -LockTimeoutMs the write still happens
+# (atomically) and a WARNING is logged: refusing would lose an operator's
+# change while a long restart holds the lock.
+# Throws when the write itself fails (same contract as Write-FileWithoutBom).
+# Example: Write-ConfigJson -Object $cfg -Depth 20
+# -------------------------------------------------------------------
+function Write-ConfigJson {
+    param(
+        [Parameter(Mandatory = $true)]$Object,
+        [string]$Path,
+        [int]$Depth = 20,
+        [int]$LockTimeoutMs = 5000
+    )
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        $Path = Join-Path -Path $global:ScriptPath -ChildPath 'config\config.json'
+    }
+    if ($Object -is [string]) {
+        $json = $Object
+    } else {
+        $json = $Object | ConvertTo-Json -Depth $Depth
+    }
+    if ([string]::IsNullOrWhiteSpace($json)) { throw "Write-ConfigJson: refusing to write an empty document to '$Path'" }
+
+    $lock = Enter-VqaLock -TimeoutMs $LockTimeoutMs
+    if (-not $lock) {
+        try { Write-Log ("Write-ConfigJson: lock not acquired within {0} ms, writing '{1}' without it" -f $LockTimeoutMs, $Path) -Level WARNING } catch { }
+    }
+    try {
+        # Unique temp name: a writer that went ahead without the lock must not share it.
+        $tmp = '{0}.{1}.tmp' -f $Path, ([guid]::NewGuid().ToString('N').Substring(0, 8))
+        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+        [System.IO.File]::WriteAllText($tmp, $json, $utf8NoBom)
+        for ($attempt = 1; $attempt -le 10; $attempt++) {
+            try {
+                if ([System.IO.File]::Exists($Path)) {
+                    # [NullString]::Value, not $null: PowerShell passes $null to a [string]
+                    # parameter as '', which File.Replace rejects as an invalid backup path.
+                    [System.IO.File]::Replace($tmp, $Path, [NullString]::Value)
+                } else {
+                    [System.IO.File]::Move($tmp, $Path)
+                }
+                return
+            } catch [System.IO.IOException] {
+                # A reader holding the file open without delete sharing blocks the swap
+                # for a few milliseconds; retry, then give up with the original error.
+                if ($attempt -eq 10) { throw }
+                Start-Sleep -Milliseconds (20 * $attempt)
+            } catch [System.UnauthorizedAccessException] {
+                if ($attempt -eq 10) { throw }
+                Start-Sleep -Milliseconds (20 * $attempt)
+            }
+        }
+    } finally {
+        if ($tmp -and [System.IO.File]::Exists($tmp)) {
+            try { [System.IO.File]::Delete($tmp) } catch { }
+        }
+        if ($lock) { Exit-VqaLock -Stream $lock }
     }
 }
 
@@ -1962,25 +2053,31 @@ function Get-MediaMtxInstalledVersions {
 function Set-ConfigTemplateFields {
     param([Parameter(Mandatory = $true)][hashtable]$Fields)
     $tplFile = Join-Path $global:ScriptPath "templates\config\config.json"
-    $raw = Get-Content -LiteralPath $tplFile -Raw -Encoding UTF8
-    $tpl = $raw | ConvertFrom-Json
-    foreach ($path in $Fields.Keys) {
-        $parts = $path -split '\.'
-        $node = $tpl
-        for ($i = 0; $i -lt $parts.Count - 1; $i++) {
-            if (-not $node.($parts[$i])) {
-                $node | Add-Member -NotePropertyName $parts[$i] -NotePropertyValue ([PSCustomObject]@{}) -Force
+    $lock = Enter-VqaLock -TimeoutMs 5000
+    try {
+        $raw = Get-Content -LiteralPath $tplFile -Raw -Encoding UTF8
+        $tpl = $raw | ConvertFrom-Json
+        if ($null -eq $tpl) { throw "templates\config\config.json is empty or invalid" }
+        foreach ($path in $Fields.Keys) {
+            $parts = $path -split '\.'
+            $node = $tpl
+            for ($i = 0; $i -lt $parts.Count - 1; $i++) {
+                if (-not $node.($parts[$i])) {
+                    $node | Add-Member -NotePropertyName $parts[$i] -NotePropertyValue ([PSCustomObject]@{}) -Force
+                }
+                $node = $node.($parts[$i])
             }
-            $node = $node.($parts[$i])
+            $leaf = $parts[-1]
+            if ($node.PSObject.Properties.Name -contains $leaf) {
+                $node.$leaf = $Fields[$path]
+            } else {
+                $node | Add-Member -NotePropertyName $leaf -NotePropertyValue $Fields[$path] -Force
+            }
         }
-        $leaf = $parts[-1]
-        if ($node.PSObject.Properties.Name -contains $leaf) {
-            $node.$leaf = $Fields[$path]
-        } else {
-            $node | Add-Member -NotePropertyName $leaf -NotePropertyValue $Fields[$path] -Force
-        }
+        Write-ConfigJson -Object $tpl -Path $tplFile -Depth 20
+    } finally {
+        if ($lock) { Exit-VqaLock -Stream $lock }
     }
-    ($tpl | ConvertTo-Json -Depth 20) | Write-FileWithoutBom -Path $tplFile
 }
 
 # Persists $RelativeFolder to every dotted config path in -ConfigPaths (e.g.
@@ -2001,25 +2098,31 @@ function Set-BinaryFolderConfig {
         [switch]$UpdateTemplate
     )
     $cfgFile = Join-Path $global:ScriptPath "config\config.json"
-    $raw = Get-Content -LiteralPath $cfgFile -Raw -Encoding UTF8
-    $cfg = $raw | ConvertFrom-Json
-    foreach ($path in $ConfigPaths) {
-        $parts = $path -split '\.'
-        $node = $cfg
-        for ($i = 0; $i -lt $parts.Count - 1; $i++) {
-            if (-not $node.($parts[$i])) {
-                $node | Add-Member -NotePropertyName $parts[$i] -NotePropertyValue ([PSCustomObject]@{}) -Force
+    # Read-modify-write under the config lock (re-entrant: the update endpoints already hold it).
+    $lock = Enter-VqaLock -TimeoutMs 5000
+    try {
+        $cfg = Read-ConfigJson -ConfigFilePath $cfgFile -NonInteractive
+        if ($null -eq $cfg) { throw "config\config.json could not be read" }
+        foreach ($path in $ConfigPaths) {
+            $parts = $path -split '\.'
+            $node = $cfg
+            for ($i = 0; $i -lt $parts.Count - 1; $i++) {
+                if (-not $node.($parts[$i])) {
+                    $node | Add-Member -NotePropertyName $parts[$i] -NotePropertyValue ([PSCustomObject]@{}) -Force
+                }
+                $node = $node.($parts[$i])
             }
-            $node = $node.($parts[$i])
+            $leaf = $parts[-1]
+            if ($node.PSObject.Properties.Name -contains $leaf) {
+                $node.$leaf = $RelativeFolder
+            } else {
+                $node | Add-Member -NotePropertyName $leaf -NotePropertyValue $RelativeFolder -Force
+            }
         }
-        $leaf = $parts[-1]
-        if ($node.PSObject.Properties.Name -contains $leaf) {
-            $node.$leaf = $RelativeFolder
-        } else {
-            $node | Add-Member -NotePropertyName $leaf -NotePropertyValue $RelativeFolder -Force
-        }
+        Write-ConfigJson -Object $cfg -Path $cfgFile -Depth 20
+    } finally {
+        if ($lock) { Exit-VqaLock -Stream $lock }
     }
-    ($cfg | ConvertTo-Json -Depth 20) | Write-FileWithoutBom -Path $cfgFile
     $null = Get-Config -ConfigFilePath $cfgFile
 
     if ($UpdateTemplate) {

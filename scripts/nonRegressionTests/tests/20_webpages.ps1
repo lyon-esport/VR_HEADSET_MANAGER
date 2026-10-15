@@ -590,16 +590,52 @@ Invoke-RegressionTest -Name '/api/appnames returns the known-apps catalog' -Test
 # ---------------------------------------------------------------------------
 # Route census (S0-3): every literal /api/... the shipped pages and templates
 # call must still be routed. A 400/405 proves the route exists; only 404 fails.
-# Routes that ACT on a GET (shutdown, reboot, ...) are skipped, one list, here.
+# Routes that ACT (write, start/stop, install, open a window) or block the listener
+# are skipped, one list, here. Entries are FULL PATHS matched for equality: a
+# substring match skipped read-only routes such as /api/installedapps or
+# /api/install-progress. A new acting route goes in this list by its exact path.
 # ---------------------------------------------------------------------------
 $script:NrtCensusSkip = @(
-    'shutdown', 'reboot', 'app-restart', 'host-shutdown', 'restartwebserver',
-    'kill-browser', 'install', 'update', 'wipe', 'delete', 'push-wifi',
-    'power', 'browse-folder', 'openfolder', 'openconfig',
-    # Streams and downloads never answer-and-close (SSE has its own tests above).
-    '/api/events', 'adb-tools', 'adb-wifi-apk', 'result.csv', 'recordings/download',
-    # Capture a frame / block the single-threaded listener for seconds.
-    'screen-frame', 'eye-merge/frame', 'eye-merge/calibrate', 'recordings/play'
+    # Shutdown, restart and power of the PC, the app, the web server or a kiosk
+    '/api/app-shutdown', '/api/app-restart', '/api/host-shutdown', '/api/shutdown-all',
+    # Headset power: POST-only today and built dynamically ('/api/'+action), listed anyway
+    # so a future GET handler or literal call can never reboot / power off a headset.
+    '/api/reboot', '/api/shutdown',
+    '/api/restartwebserver', '/api/restartmediamtx',
+    '/api/ffmpeg-update', '/api/mediamtx-update', '/api/scrcpy-update',
+    '/api/kiosks/power', '/api/kiosks/kill-browser', '/api/kiosks/update',
+    '/api/kiosks/push', '/api/kiosks/remove', '/api/kiosks/add-manual', '/api/kiosks/scan',
+    # Headset and stream state changes
+    '/api/addheadset', '/api/removeheadset', '/api/renameheadset', '/api/reorderheadsets',
+    '/api/updateip', '/api/updateprofile', '/api/autorestart', '/api/recording', '/api/capture-mode',
+    '/api/start-scrcpy-all', '/api/stop-scrcpy', '/api/stop-scrcpy-all',
+    '/api/headset-settings/apply', '/api/launchapp', '/api/togglefavorite',
+    '/api/enablewifiadb', '/api/connectwifi', '/api/refresh-headset-apps-cache',
+    '/api/headsets/register-by-serial', '/api/headsets/push-wifi', '/api/headsets/discovered/forget',
+    '/api/computer-monitoring/force-refresh', '/api/resolve-app-names',
+    # Apps: install, uninstall, update, catalogue and favourite writes
+    '/api/installapk', '/api/installadbwifiapk', '/api/install-cancel', '/api/uninstallapp',
+    '/api/update-app', '/api/update-app-versions',
+    '/api/appnames/save', '/api/appnames/clear', '/api/appnames/delete',
+    '/api/favorites/reorder', '/api/defaultfavorites/reorder', '/api/defaultfavorites/toggle',
+    # Config, VQA, benchmark, eye merge and DIAG writes or shell
+    '/api/config/save', '/api/config/reset',
+    '/api/vqa/apply', '/api/vqa/restore', '/api/vqa/toggle-auto-apply',
+    '/api/benchmark/start', '/api/benchmark/parallel', '/api/benchmark/apply',
+    '/api/benchmark/cancel', '/api/benchmark/clear',
+    '/api/eye-merge/import', '/api/eye-merge/enable', '/api/eye-merge/calibrate', '/api/eye-merge/frame',
+    '/api/headset-diag/action', '/api/headset-diag/command',
+    # Recordings: keep, rescan, wipe, delete, playback start / stop
+    '/api/recordings/keep', '/api/recordings/rescan', '/api/recordings/wipe',
+    '/api/recordings/delete', '/api/recordings/play', '/api/recordings/play-stop',
+    # Windows opened on this PC, WiFi store writes
+    '/api/browse-folder', '/api/openfolder', '/api/openconfig',
+    '/api/wifi-networks/upsert', '/api/wifi-networks/set-preferred', '/api/wifi-networks/delete',
+    # Streams and downloads never answer-and-close (SSE has its own tests above)
+    '/api/events', '/api/adb-tools', '/api/adb-wifi-apk', '/api/benchmark/result.csv',
+    '/api/recordings/download',
+    # Captures a frame: blocks the single-threaded listener for seconds
+    '/api/headset-screen-frame'
 )
 
 function Get-NrtCensusRoute {
@@ -636,7 +672,7 @@ Invoke-RegressionTest -Name 'Route census: every /api route the pages call is ro
     $missing = @()
     $slow    = @()
     foreach ($p in $routes) {
-        $hit = $script:NrtCensusSkip | Where-Object { $p -like ('*' + $_ + '*') } | Select-Object -First 1
+        $hit = $script:NrtCensusSkip | Where-Object { $p -eq $_ } | Select-Object -First 1
         if ($hit) { $skipped += ("{0} (acts: {1})" -f $p, $hit); continue }
         $tested++
         # The router is method-gated and has no 405: a POST-only route answers a

@@ -346,8 +346,8 @@ function Show-MainMenu {
         Write-Host $msg.StreamHeadset -BackgroundColor Yellow -ForegroundColor Black
         #Write-Host " I. Check internet connection " -BackgroundColor White -ForegroundColor Black
         Write-Host $msg.AddModifyHeadset -BackgroundColor Green -ForegroundColor DarkMagenta
-        Write-Host $msg.ScrcpyTracking -BackgroundColor DarkRed -ForegroundColor White
-        Write-Host $msg.ScrcpyOptions -BackgroundColor DarkCyan -ForegroundColor Yellow
+        Write-Host $msg.Scrcpy.Tracking -BackgroundColor DarkRed -ForegroundColor White
+        Write-Host $msg.Scrcpy.Options -BackgroundColor DarkCyan -ForegroundColor Yellow
         Write-Host $msg.RecordingManagement -BackgroundColor DarkBlue -ForegroundColor White
         Write-Host $msg.FilesFolders -BackgroundColor DarkCyan -ForegroundColor Black
         Write-Host $msg.ServicesManagement -BackgroundColor DarkGray -ForegroundColor White
@@ -423,10 +423,10 @@ function Show-MainMenu {
                         Show-SubMenu-AddHeadset
                     }
 
-                'S' { Write-Host $msg.ScrcpyTrackingTitle
+                'S' { Write-Host $msg.Scrcpy.TrackingTitle
                         Show-SubMenu-scrcpyTracking
                     }
-                'M' { Write-Host $msg.ScrcpyOptionsTitle
+                'M' { Write-Host $msg.Scrcpy.OptionsTitle
                         Show-SubMenu-ScrcpyOptions
                     }
                 'R' { Write-Host $msg.RecordingTitle
@@ -592,7 +592,7 @@ function Show-SubMenu-AddHeadset { #CHOICE 2
             Show-SubMenu-LaunchApp
         }
         '6' {
-            Write-Host $msg.WifiADBActivation
+            Write-Host $msg.Wifi.ADBActivation
             Enable-WiFiADB
         }
         '7' {
@@ -1494,8 +1494,8 @@ function Show-SubMenu-ScrcpyOptions {
         if (-not $idInput) {
             Clear-Host
             Start-Sleep -Milliseconds 100
-            Write-Host $msg.ScrcpyOptionsTitle -ForegroundColor Cyan
-            Write-Host $msg.ScrcpyOptionsSelectHeadset
+            Write-Host $msg.Scrcpy.OptionsTitle -ForegroundColor Cyan
+            Write-Host $msg.Scrcpy.OptionsSelectHeadset
             Write-Host $msg.IDNameScrcpyProfile
             Write-Host $msg.Separator
             $headsets | ForEach-Object {
@@ -1545,15 +1545,15 @@ function Show-SubMenu-ScrcpyOptions {
             $defaultView = Get-ScrcpyDefaultView -Model $headsetModel
 
             Clear-Host
-            Write-Host "$($msg.ScrcpyOptionsTitle) - $($headset.Name)" -ForegroundColor Cyan
+            Write-Host "$($msg.Scrcpy.OptionsTitle) - $($headset.Name)" -ForegroundColor Cyan
             Write-Host $msg.Separator
-            Write-Host " [#]  $($msg.ScrcpyOptTableHeader)"
+            Write-Host " [#]  $($msg.Scrcpy.OptTableHeader)"
             Write-Host $msg.Separator
             Write-Host " [1]  $("View".PadRight(16)) : $view  ($viewList)"
-            Write-Host " [2]  $($msg.ScrcpyOptEyeLabel.PadRight(16)) : $eyeLabel"
-            Write-Host " [3]  $($msg.ScrcpyOptAudioLabel.PadRight(16)) : $audioLabel"
-            Write-Host " [4]  $($msg.ScrcpyOptFPSLabel.PadRight(16)) : $fps"
-            Write-Host " [5]  $($msg.ScrcpyOptBitrateLabel.PadRight(16)) : $bw"
+            Write-Host " [2]  $($msg.Scrcpy.OptEyeLabel.PadRight(16)) : $eyeLabel"
+            Write-Host " [3]  $($msg.Scrcpy.OptAudioLabel.PadRight(16)) : $audioLabel"
+            Write-Host " [4]  $($msg.Scrcpy.OptFPSLabel.PadRight(16)) : $fps"
+            Write-Host " [5]  $($msg.Scrcpy.OptBitrateLabel.PadRight(16)) : $bw"
             Write-Host " [6]  $($msg.Headset.ScrcpyOptSetDefaultView)"
             Write-Host " [7]  $(($msg.EyeMerge.Title -f $(if ($headsetModel) { $headsetModel } else { '?' })))"
             $viewObjNow = if ($headsetModel -and $global:scrcpyParameters.$headsetModel -and $global:scrcpyParameters.$headsetModel.views) { $global:scrcpyParameters.$headsetModel.views.$view } else { $null }
@@ -1561,7 +1561,7 @@ function Show-SubMenu-ScrcpyOptions {
             Write-Host " [8]  $(($msg.EyeMerge.TransparentOption -f $view, $(if ($transpNow) { 'ON' } else { 'OFF' })))"
             Write-Host " [0]  $($msg.Return)"
 
-            $opt = Read-Host $msg.ScrcpyOptionsEnterOption
+            $opt = Read-Host $msg.Scrcpy.OptionsEnterOption
 
             switch ($opt) {
                 '1' {
@@ -1586,7 +1586,7 @@ function Show-SubMenu-ScrcpyOptions {
                     }
                 }
                 '2' {
-                    $val = (Read-Host ($msg.ScrcpyOptionsEye -f $eye)).ToUpper()
+                    $val = (Read-Host ($msg.Scrcpy.OptionsEye -f $eye)).ToUpper()
                     if ($val -eq 'M' -and -not (Test-EyeMergeSupported -Model $headsetModel)) {
                         # Merged view only for models with an enabled calibration (option 7).
                         Write-Host ($msg.EyeMerge.NotSupported -f $headsetModel) -ForegroundColor Yellow
@@ -1600,21 +1600,21 @@ function Show-SubMenu-ScrcpyOptions {
                         }
                         $parts[1] = $val
                     } else {
-                        Write-Host $msg.ScrcpyOptionsInvalidEye -ForegroundColor Red
+                        Write-Host $msg.Scrcpy.OptionsInvalidEye -ForegroundColor Red
                         Start-Sleep -Seconds 2
                     }
                 }
                 '3' {
-                    $val = (Read-Host ($msg.ScrcpyOptionsAudio -f $audio)).ToUpper()
+                    $val = (Read-Host ($msg.Scrcpy.OptionsAudio -f $audio)).ToUpper()
                     if ($val -in @('D','N')) {
                         $parts[2] = $val
                     } else {
-                        Write-Host $msg.ScrcpyOptionsInvalidAudio -ForegroundColor Red
+                        Write-Host $msg.Scrcpy.OptionsInvalidAudio -ForegroundColor Red
                         Start-Sleep -Seconds 2
                     }
                 }
                 '4' {
-                    $val = Read-Host ($msg.ScrcpyOptionsFPS -f $fps)
+                    $val = Read-Host ($msg.Scrcpy.OptionsFPS -f $fps)
                     if ($val -match '^\d+$' -and [int]$val -gt 0) {
                         # Merged view above 30 fps: warn about the CPU cost and ask for confirmation.
                         $advice = Get-EyeMergeFpsAdvice -ScrcpyProfile ('{0}-{1}-{2}-{3}-{4}' -f $parts[0], $parts[1], $parts[2], $val, $parts[4])
@@ -1624,16 +1624,16 @@ function Show-SubMenu-ScrcpyOptions {
                         }
                         $parts[3] = $val
                     } else {
-                        Write-Host $msg.ScrcpyOptionsInvalidNumber -ForegroundColor Red
+                        Write-Host $msg.Scrcpy.OptionsInvalidNumber -ForegroundColor Red
                         Start-Sleep -Seconds 2
                     }
                 }
                 '5' {
-                    $val = Read-Host ($msg.ScrcpyOptionsBitrate -f $bw)
+                    $val = Read-Host ($msg.Scrcpy.OptionsBitrate -f $bw)
                     if ($val -match '^\d+$' -and [int]$val -gt 0) {
                         $parts[4] = $val
                     } else {
-                        Write-Host $msg.ScrcpyOptionsInvalidNumber -ForegroundColor Red
+                        Write-Host $msg.Scrcpy.OptionsInvalidNumber -ForegroundColor Red
                         Start-Sleep -Seconds 2
                     }
                 }
@@ -1704,7 +1704,7 @@ function Show-SubMenu-ScrcpyOptions {
                 # Refresh local array so the outer list reflects the change
                 $headsets = @(Get-KnownHeadsets)
                 $headset = $headsets | Where-Object { $_.ID -eq $idInput }
-                Write-Log ($msg.ScrcpyOptionsSaved -f $headset.Name, $newProfile) -Level INFO
+                Write-Log ($msg.Scrcpy.OptionsSaved -f $headset.Name, $newProfile) -Level INFO
             }
         } while ($opt -ne '0')
 
@@ -2678,16 +2678,26 @@ function Show-SubMenu-Config {
             }
             'D' {
                 $cfgPath = if ($global:configFilePath) { $global:configFilePath } else { Join-Path $global:ScriptPath "config\config.json" }
-                $cfg = Read-ConfigJson -ConfigFilePath $cfgPath
-                if ($cfg) {
-                    if ($null -eq $cfg.VRMonitor) {
-                        $cfg | Add-Member -NotePropertyName VRMonitor -NotePropertyValue ([PSCustomObject]@{ showConsole = $false })
+                $cfg = $null
+                $cfgLock = Enter-VqaLock -TimeoutMs 5000
+                try {
+                    $cfg = Read-ConfigJson -ConfigFilePath $cfgPath -NonInteractive
+                    if ($cfg) {
+                        if ($null -eq $cfg.VRMonitor) {
+                            $cfg | Add-Member -NotePropertyName VRMonitor -NotePropertyValue ([PSCustomObject]@{ showConsole = $false })
+                        }
+                        $newVal = -not [bool]$cfg.VRMonitor.showConsole
+                        $cfg.VRMonitor.showConsole = $newVal
+                        Write-ConfigJson -Object $cfg -Path $cfgPath -Depth 20
+                        $global:Dashboard_showConsole = $newVal
                     }
-                    $newVal = -not [bool]$cfg.VRMonitor.showConsole
-                    $cfg.VRMonitor.showConsole = $newVal
-                    $global:Dashboard_showConsole = $newVal
-                    $json = $cfg | ConvertTo-Json -Depth 10
-                    Write-FileWithoutBom -Path $cfgPath -Content $json
+                } catch {
+                    Write-Log ("Dashboard toggle: config.json not updated: " + $_.Exception.Message) -Level ERROR
+                    $cfg = $null
+                } finally {
+                    if ($cfgLock) { Exit-VqaLock -Stream $cfgLock }
+                }
+                if ($cfg) {
                     if (-not $newVal) {
                         # Toggled OFF: kill any running dashboard now so it does
                         # not linger. Show-MainMenu's gate prevents a respawn.
@@ -2786,22 +2796,22 @@ function Set-WifiNetworkEntry {
 
     if ($existing) {
         if ($existing.Password -ceq $Password) {
-            Write-Log ($msg.WifiNetworkUnchanged -f $SSID) -Level INFO
+            Write-Log ($msg.Wifi.NetworkUnchanged -f $SSID) -Level INFO
             return $false
         }
-        Write-Log ($msg.WifiNetworkDuplicate -f $SSID) -Level WARNING
-        $confirm = (Read-Host $msg.WifiNetworkOverwritePrompt).Trim().ToUpper()
+        Write-Log ($msg.Wifi.NetworkDuplicate -f $SSID) -Level WARNING
+        $confirm = (Read-Host $msg.Wifi.NetworkOverwritePrompt).Trim().ToUpper()
         if ($confirm -ne 'Y' -and $confirm -ne 'O') { return $false }
         $existing.Password = $Password
         Save-WifiNetworks -Networks $networks
-        Write-Log ($msg.WifiNetworkUpdated -f $SSID) -Level SUCCESS
+        Write-Log ($msg.Wifi.NetworkUpdated -f $SSID) -Level SUCCESS
         return $true
     }
 
     $isFirst   = ($networks.Count -eq 0)
     $networks += [PSCustomObject]@{ SSID = $SSID; Password = $Password; Preferred = $isFirst }
     Save-WifiNetworks -Networks $networks
-    Write-Log ($msg.WifiNetworkAdded -f $SSID) -Level SUCCESS
+    Write-Log ($msg.Wifi.NetworkAdded -f $SSID) -Level SUCCESS
     return $true
 }
 
@@ -2809,11 +2819,11 @@ function Set-WifiNetworkEntry {
 function Show-SubMenu-WifiNetworks {
     do {
         Clear-Host
-        Write-Host $msg.WifiNetworksTitle -ForegroundColor Cyan
+        Write-Host $msg.Wifi.NetworksTitle -ForegroundColor Cyan
         Write-Host ""
         $networks = @(Get-WifiNetworks)
         if ($networks.Count -eq 0) {
-            Write-Host $msg.WifiNetworksEmpty -ForegroundColor Yellow
+            Write-Host $msg.Wifi.NetworksEmpty -ForegroundColor Yellow
         } else {
             $i = 1
             foreach ($n in $networks) {
@@ -2825,7 +2835,7 @@ function Show-SubMenu-WifiNetworks {
         }
         Write-Host ""
         Write-Host "  A. Add a network"
-        Write-Host $msg.WifiPcCopyOption
+        Write-Host $msg.Wifi.PcCopyOption
         if ($networks.Count -gt 0) {
             Write-Host "  [1-$($networks.Count)]. Edit / Delete a network"
         }
@@ -2835,9 +2845,9 @@ function Show-SubMenu-WifiNetworks {
         $choice = (Read-Host $msg.EnterChoice).Trim()
 
         if ($choice.ToUpper() -eq 'A') {
-            $ssid = (Read-Host $msg.WifiNetworkSsidPrompt).Trim()
+            $ssid = (Read-Host $msg.Wifi.NetworkSsidPrompt).Trim()
             if (-not $ssid) { continue }
-            $wifiPassword = (Read-Host $msg.WifiNetworkPasswordPrompt).Trim()
+            $wifiPassword = (Read-Host $msg.Wifi.NetworkPasswordPrompt).Trim()
             Set-WifiNetworkEntry -SSID $ssid -Password $wifiPassword | Out-Null
             Start-Sleep -Seconds 1
             continue
@@ -2849,18 +2859,18 @@ function Show-SubMenu-WifiNetworks {
         if ($choice.ToUpper() -eq 'P') {
             $pcWifi = Get-ComputerWifiInfo
             if (-not $pcWifi -or -not $pcWifi.Ssid) {
-                Write-Log $msg.WifiPcNotDetected -Level WARNING
+                Write-Log $msg.Wifi.PcNotDetected -Level WARNING
                 Start-Sleep -Seconds 2
                 continue
             }
             Write-Host ""
-            Write-Log ($msg.WifiPcDetected -f $pcWifi.Ssid) -Level INFO
+            Write-Log ($msg.Wifi.PcDetected -f $pcWifi.Ssid) -Level INFO
             $wifiPassword = $pcWifi.Password
             if (-not $wifiPassword) {
-                Write-Log ($msg.WifiPcPasswordMissing -f $pcWifi.Ssid) -Level WARNING
-                $wifiPassword = (Read-Host $msg.WifiNetworkPasswordPrompt).Trim()
+                Write-Log ($msg.Wifi.PcPasswordMissing -f $pcWifi.Ssid) -Level WARNING
+                $wifiPassword = (Read-Host $msg.Wifi.NetworkPasswordPrompt).Trim()
             }
-            $confirm = (Read-Host $msg.WifiPcUseConfirm).Trim().ToUpper()
+            $confirm = (Read-Host $msg.Wifi.PcUseConfirm).Trim().ToUpper()
             if ($confirm -ne 'Y' -and $confirm -ne 'O') { continue }
             Set-WifiNetworkEntry -SSID $pcWifi.Ssid -Password $wifiPassword | Out-Null
             Start-Sleep -Seconds 2
@@ -2872,23 +2882,23 @@ function Show-SubMenu-WifiNetworks {
             if ($idx -ge 0 -and $idx -lt $networks.Count) {
                 $target = $networks[$idx]
                 Write-Host ""
-                $prefLabel = if ($target.Preferred) { '[already preferred]' } else { $msg.WifiNetworkSetPref }
+                $prefLabel = if ($target.Preferred) { '[already preferred]' } else { $msg.Wifi.NetworkSetPref }
                 Write-Host ("  Selected: {0}" -f $target.SSID)
                 Write-Host ("  E. Edit password    P. {0}    D. Delete    0. Cancel" -f $prefLabel)
                 $action = (Read-Host $msg.EnterChoice).Trim().ToUpper()
                 if ($action -eq 'E') {
-                    $wifiPwdInput = (Read-Host $msg.WifiNetworkPasswordPrompt).Trim()
+                    $wifiPwdInput = (Read-Host $msg.Wifi.NetworkPasswordPrompt).Trim()
                     $target.Password = $wifiPwdInput
                     Save-WifiNetworks -Networks $networks
-                    Write-Log ($msg.WifiNetworkUpdated -f $target.SSID) -Level SUCCESS
+                    Write-Log ($msg.Wifi.NetworkUpdated -f $target.SSID) -Level SUCCESS
                     Start-Sleep -Seconds 1
                 } elseif ($action -eq 'P') {
                     if ($target.Preferred) {
-                        Write-Log ($msg.WifiNetworkAlreadyPref -f $target.SSID) -Level INFO
+                        Write-Log ($msg.Wifi.NetworkAlreadyPref -f $target.SSID) -Level INFO
                     } else {
                         foreach ($n in $networks) { $n.Preferred = ($n.SSID -eq $target.SSID) }
                         Save-WifiNetworks -Networks $networks
-                        Write-Log ($msg.WifiNetworkPreferred -f $target.SSID) -Level SUCCESS
+                        Write-Log ($msg.Wifi.NetworkPreferred -f $target.SSID) -Level SUCCESS
                     }
                     Start-Sleep -Seconds 1
                 } elseif ($action -eq 'D') {
@@ -2896,7 +2906,7 @@ function Show-SubMenu-WifiNetworks {
                     $networks = @($networks | Where-Object { $_.SSID -ne $target.SSID })
                     if ($wasPreferred -and $networks.Count -gt 0) { $networks[0].Preferred = $true }
                     Save-WifiNetworks -Networks $networks
-                    Write-Log ($msg.WifiNetworkRemoved -f $target.SSID) -Level SUCCESS
+                    Write-Log ($msg.Wifi.NetworkRemoved -f $target.SSID) -Level SUCCESS
                     Start-Sleep -Seconds 1
                 }
             }

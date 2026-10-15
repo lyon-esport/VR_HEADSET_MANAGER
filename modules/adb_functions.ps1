@@ -47,7 +47,7 @@ function Connect-HeadsetToWifi {
     if (-not $Password) {
         $Password = Get-WifiPassword -Ssid $Ssid
         if (-not $Password) {
-            Write-Log ($msg.WifiPasswordNotFound -f $Ssid) -Level ERROR
+            Write-Log ($msg.Wifi.PasswordNotFound -f $Ssid) -Level ERROR
             return $false
         }
     }
@@ -67,14 +67,14 @@ function Connect-HeadsetToWifi {
     $out = Invoke-AdbCmd -Device $Device -Command "shell cmd -w wifi connect-network `"$Ssid`" wpa2 `"$Password`" -r $macFlag" -SilentOnFail
 
     if ($out -ne $false -and ($out -join '') -notmatch 'error|failed|unknown') {
-        Write-Log ($msg.WifiConnectSuccess -f $Ssid, $Device.DeviceId) -Level SUCCESS
+        Write-Log ($msg.Wifi.ConnectSuccess -f $Ssid, $Device.DeviceId) -Level SUCCESS
         return $true
     } else {
         # Mask password before logging the response. Generic redaction in case the
         # response echoes the command line on some firmware.
         $resp = ($out -join ' ').Trim()
         $resp = $resp -replace [regex]::Escape($Password), '***'
-        Write-Log ($msg.WifiConnectFailed -f $Ssid, $Device.DeviceId, $resp) -Level ERROR
+        Write-Log ($msg.Wifi.ConnectFailed -f $Ssid, $Device.DeviceId, $resp) -Level ERROR
         return $false
     }
 }
@@ -862,7 +862,7 @@ function Enable-WiFiADB {
     $preferredNet  = $knownNetworks | Where-Object { $_.Preferred } | Select-Object -First 1
     if (-not $preferredNet) { $preferredNet = $knownNetworks | Select-Object -First 1 }
     if (-not $preferredNet) {
-        Write-Log $msg.WifiNoNetworkConfigured -Level ERROR
+        Write-Log $msg.Wifi.NoNetworkConfigured -Level ERROR
         return $false
     }
     $wifi_ssid = $preferredNet.SSID
@@ -904,7 +904,7 @@ function Enable-WiFiADB {
         # Step 4: Verify the connected SSID
         $onKnownNetwork = $knownNetworks | Where-Object { $currentSSID -match [regex]::Escape($_.SSID) }
         if ($onKnownNetwork) {
-            Write-Log ($msg.WifiHeadsetOnKnownNetwork -f $currentSSID) -Level INFO
+            Write-Log ($msg.Wifi.HeadsetOnKnownNetwork -f $currentSSID) -Level INFO
         } elseif ($currentSSID -notmatch [regex]::Escape($wifi_ssid)) {
             Write-Log ($msg.HeadsetNotConnectedToSsid -f $wifi_ssid) -Level WARNING
 
@@ -934,7 +934,7 @@ function Enable-WiFiADB {
             return $false
         }
 
-        Write-Log ($msg.WifiIpDetected -f $ipInfo) -Level INFO
+        Write-Log ($msg.Wifi.IpDetected -f $ipInfo) -Level INFO
 
         # 4. Install OculusWirelessAdb APK
         $answer = Read-Host $msg.UsbInstallPrompt

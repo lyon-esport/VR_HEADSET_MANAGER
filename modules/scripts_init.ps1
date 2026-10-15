@@ -52,10 +52,14 @@ if (-not (Get-Module -Name EPS)) {
 $vqaPreEnabled = $false
 $vqaPreConfigPath = if ($global:custom_config) { $global:custom_config } else { Join-Path $global:ScriptPath "config\config.json" }
 if (Test-Path -LiteralPath $vqaPreConfigPath) {
-    try {
-        $vqaPreCfg = Get-Content -LiteralPath $vqaPreConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        if ($vqaPreCfg.VideoQualityAutomation -and $vqaPreCfg.VideoQualityAutomation.enabled) { $vqaPreEnabled = $true }
-    } catch { }
+    # Retried: a read landing on a Write-ConfigJson swap gets a sharing violation.
+    for ($vqaPreTry = 1; $vqaPreTry -le 4; $vqaPreTry++) {
+        try {
+            $vqaPreCfg = Get-Content -LiteralPath $vqaPreConfigPath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json
+            if ($vqaPreCfg.VideoQualityAutomation -and $vqaPreCfg.VideoQualityAutomation.enabled) { $vqaPreEnabled = $true }
+            break
+        } catch { Start-Sleep -Milliseconds 100 }
+    }
 }
 
 $moduleFiles = Get-ChildItem -Path $ModulesPath -Filter "*.ps1" -File | Sort-Object Name |
@@ -108,19 +112,19 @@ $moduleFiles = Get-ChildItem -Path $ModulesPath -Filter "*.ps1" -File | Sort-Obj
 
 
 # check if config file exists and load it
-    if ( -not (Test-Path $ConfigFilePath)) {
+    if ( -not (Test-Path -LiteralPath $ConfigFilePath)) {
         Write-Host ""
         Write-Host "  *** Configuration file not found! ***" -ForegroundColor Red -BackgroundColor Black
         Write-Host "  Expected : $ConfigFilePath" -ForegroundColor Yellow
         Write-Host ""
         $templatePath = Join-Path -Path $global:ScriptPath -ChildPath "templates\config\config.json"
-        if (Test-Path $templatePath) {
+        if (Test-Path -LiteralPath $templatePath) {
             # Ensure the destination directory exists
             $configDir = Split-Path $ConfigFilePath -Parent
-            if (-not (Test-Path $configDir)) {
+            if (-not (Test-Path -LiteralPath $configDir)) {
                 New-Item -Path $configDir -ItemType Directory -Force | Out-Null
             }
-            Copy-Item -Path $templatePath -Destination $ConfigFilePath -Force
+            Copy-Item -LiteralPath $templatePath -Destination $ConfigFilePath -Force
             Write-Host "  A default configuration file has been created from the template." -ForegroundColor Green
             Write-Host "  Please fill in your settings, save and restart the script." -ForegroundColor Yellow
             Write-Host ""
@@ -134,7 +138,13 @@ $moduleFiles = Get-ChildItem -Path $ModulesPath -Filter "*.ps1" -File | Sort-Obj
         exit 1
 
     } else {
-        Get-Config -ConfigFilePath $ConfigFilePath | Out-Null
+        # Only the main console process may prompt on an invalid file ([R]/[T]/[Q]); the web
+        # server, the VRMonitor job, its runspaces and the dashboard read non-interactively.
+        # A Start-Job child ('ServerRemoteHost') or a bare runspace ('Default Host') is never
+        # interactive either, whatever role flags it was given.
+        $configInteractive = ($Host.Name -eq 'ConsoleHost') -and
+                             -not ($global:IsVRMonitorJob -or $global:IsDashboardProcess -or $global:IsWebServerProcess)
+        Get-Config -ConfigFilePath $ConfigFilePath -Interactive:$configInteractive | Out-Null
         Write-Log "Configuration file $ConfigFilePath loaded successfully" -Level DEBUG
         Write-Host "DEBUG global:knownHeadsetsFile = $($global:knownHeadsetsFile)" -ForegroundColor Magenta
         Write-Host "DEBUG global:knownHeadsetsFilePath = $($global:knownHeadsetsFilePath)" -ForegroundColor Magenta
@@ -580,6 +590,7 @@ function Confirm-AppPortsAvailable {
     # the in-process globals so the rest of startup (firewall rules, mediamtx
     # YAML, web server bind) sees the final ports.
     if ($changes.Count -gt 0) {
+        $cfgLock = Enter-VqaLock -TimeoutMs 5000
         try {
             $cfg = Read-ConfigJson -ConfigFilePath $global:configFilePath -NonInteractive
             if ($null -eq $cfg) {
@@ -597,13 +608,14 @@ function Confirm-AppPortsAvailable {
                     $node.($parts[-1]) = [int]$changes[$k]
                 }
             }
-            $json = $cfg | ConvertTo-Json -Depth 10
-            Write-FileWithoutBom -Path $global:configFilePath -Content $json
+            Write-ConfigJson -Object $cfg -Path $global:configFilePath -Depth 20
             Write-Log ("Confirm-AppPortsAvailable: {0} port(s) updated in config.json." -f $changes.Count) -Level SUCCESS
             # Refresh $global:* ports
-            Get-Config | Out-Null
+            Get-Config -ConfigFilePath $global:configFilePath | Out-Null
         } catch {
             Write-Log ("Confirm-AppPortsAvailable: failed to persist port changes: " + $_.Exception.Message) -Level ERROR
+        } finally {
+            if ($cfgLock) { Exit-VqaLock -Stream $cfgLock }
         }
     } elseif (-not $anyConflict) {
         $msgTxt = if ($global:msg -and $global:msg.PortAllClear) { $global:msg.PortAllClear } else { "All required ports are available." }

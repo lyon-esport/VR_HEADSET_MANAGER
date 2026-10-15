@@ -290,10 +290,8 @@ function Invoke-WelcomeSetup {
     # ------------------------------------------------------------------
     Write-Host ""
     Write-WizardAction "Writing config\config.json ..."
-    $outputJson = $config | ConvertTo-Json -Depth 10
-    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
     try {
-        [System.IO.File]::WriteAllText($ConfigOutputPath, $outputJson, $utf8NoBom)
+        Write-ConfigJson -Object $config -Path $ConfigOutputPath -Depth 20
     } catch {
         $diag = Test-FolderWriteAccess -Path $ConfigOutputPath
         Write-Host "  Error: Could not write '$ConfigOutputPath'." -ForegroundColor Red

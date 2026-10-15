@@ -5778,7 +5778,13 @@ try {
             try {
                 $cfgFile = Join-Path $ScriptPath "config\config.json"
                 if (Test-Path -LiteralPath $cfgFile) {
-                    $raw = Get-Content -LiteralPath $cfgFile -Raw -Encoding UTF8
+                    # Read-ConfigFileText opens with Delete sharing; retried briefly so a read that
+                    # lands on a Write-ConfigJson swap does not hand the page an error.
+                    $raw = $null
+                    for ($cfgTry = 1; $cfgTry -le 5; $cfgTry++) {
+                        try { $raw = Read-ConfigFileText -Path $cfgFile; break }
+                        catch { if ($cfgTry -eq 5) { throw }; Start-Sleep -Milliseconds (50 * $cfgTry) }
+                    }
                     # Strip UTF-8 BOM if present so JSON.parse() succeeds in the browser
                     if ($raw -and $raw[0] -eq [char]0xFEFF) { $raw = $raw.Substring(1) }
                     $respBytes = [System.Text.Encoding]::UTF8.GetBytes($raw)
@@ -5892,15 +5898,22 @@ try {
                 # Snapshot of the capture settings (scrcpy section: view crops/angles, codec, buffers,
                 # eye merge calibration) before and after: a running capture is built from them, and
                 # the monitor would only notice a change on its next slow tick.
+                if ($null -eq $newCfg) { throw "The posted configuration is empty." }
                 $oldCaptureSig = ''
-                try {
-                    $oldCfgObj = Get-Content -LiteralPath $cfgFile -Raw -Encoding UTF8 | ConvertFrom-Json
-                    if ($oldCfgObj -and $oldCfgObj.scrcpy) { $oldCaptureSig = ($oldCfgObj.scrcpy | ConvertTo-Json -Depth 20 -Compress) }
-                } catch {}
                 $newCaptureSig = if ($newCfg -and $newCfg.scrcpy) { ($newCfg.scrcpy | ConvertTo-Json -Depth 20 -Compress) } else { '' }
 
-                $utf8NoBom = New-Object System.Text.UTF8Encoding $false
-                [System.IO.File]::WriteAllText($cfgFile, $body, $utf8NoBom)
+                # Snapshot read and write under the config lock, so another writer cannot slip in
+                # between; the posted text is written as-is (atomic swap, UTF-8 without BOM).
+                $saveLock = Enter-VqaLock -TimeoutMs 5000
+                try {
+                    try {
+                        $oldCfgObj = Read-ConfigJson -ConfigFilePath $cfgFile -NonInteractive
+                        if ($oldCfgObj -and $oldCfgObj.scrcpy) { $oldCaptureSig = ($oldCfgObj.scrcpy | ConvertTo-Json -Depth 20 -Compress) }
+                    } catch {}
+                    Write-ConfigJson -Object $body -Path $cfgFile
+                } finally {
+                    if ($saveLock) { Exit-VqaLock -Stream $saveLock }
+                }
 
                 if ($oldCaptureSig -ne $newCaptureSig) {
                     # -NoMark: most of these edits (another model's view, a new view) restart nothing;
@@ -5998,13 +6011,20 @@ try {
                 $cfgFile = Join-Path $ScriptPath "config\config.json"
                 $tplFile = Join-Path $ScriptPath "templates\config\config.json"
                 if (-not (Test-Path -LiteralPath $tplFile)) { throw "Template file not found" }
-                if (Test-Path -LiteralPath $cfgFile) {
-                    $stamp   = Get-Date -Format 'yyyy.MM.dd-HH.mm'
-                    $cfgDir  = [System.IO.Path]::GetDirectoryName($cfgFile)
-                    $archive = Join-Path $cfgDir "config_$stamp.json"
-                    Copy-Item -LiteralPath $cfgFile -Destination $archive -Force
+                $tplRaw = Get-Content -LiteralPath $tplFile -Raw -Encoding UTF8
+                if ($null -eq ($tplRaw | ConvertFrom-Json)) { throw "Template file is empty" }
+                $resetLock = Enter-VqaLock -TimeoutMs 5000
+                try {
+                    if (Test-Path -LiteralPath $cfgFile) {
+                        $stamp   = Get-Date -Format 'yyyy.MM.dd-HH.mm'
+                        $cfgDir  = [System.IO.Path]::GetDirectoryName($cfgFile)
+                        $archive = Join-Path $cfgDir "config_$stamp.json"
+                        Copy-Item -LiteralPath $cfgFile -Destination $archive -Force
+                    }
+                    Write-ConfigJson -Object $tplRaw -Path $cfgFile
+                } finally {
+                    if ($resetLock) { Exit-VqaLock -Stream $resetLock }
                 }
-                Copy-Item -LiteralPath $tplFile -Destination $cfgFile -Force
                 $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
                 $response.StatusCode      = 200
                 $response.ContentType     = 'application/json; charset=utf-8'

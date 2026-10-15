@@ -93,22 +93,30 @@ function Set-ScrcpyDefaultView {
         [Parameter(Mandatory)] [string]$View
     )
     $cfgPath = Join-Path $global:ScriptPath 'config\config.json'
-    $cfg = Read-ConfigJson -ConfigFilePath $cfgPath -NonInteractive
-    if (-not $cfg -or -not $cfg.scrcpy -or -not $cfg.scrcpy.parameters -or -not $cfg.scrcpy.parameters.$Model -or -not $cfg.scrcpy.parameters.$Model.views -or -not $cfg.scrcpy.parameters.$Model.views.$View) {
-        Write-Log "Set-ScrcpyDefaultView: model '$Model' or view '$View' not found in config.json." -Level ERROR
-        return $false
-    }
-    foreach ($vName in ($cfg.scrcpy.parameters.$Model.views.PSObject.Properties.Name)) {
-        $isDefault = ($vName -eq $View)
-        $viewObj = $cfg.scrcpy.parameters.$Model.views.$vName
-        if ($viewObj.PSObject.Properties.Name -contains 'default') {
-            $viewObj.default = $isDefault
-        } elseif ($isDefault) {
-            $viewObj | Add-Member -MemberType NoteProperty -Name 'default' -Value $true
+    $cfgLock = Enter-VqaLock -TimeoutMs 5000
+    try {
+        $cfg = Read-ConfigJson -ConfigFilePath $cfgPath -NonInteractive
+        if (-not $cfg -or -not $cfg.scrcpy -or -not $cfg.scrcpy.parameters -or -not $cfg.scrcpy.parameters.$Model -or -not $cfg.scrcpy.parameters.$Model.views -or -not $cfg.scrcpy.parameters.$Model.views.$View) {
+            Write-Log "Set-ScrcpyDefaultView: model '$Model' or view '$View' not found in config.json." -Level ERROR
+            return $false
         }
+        foreach ($vName in ($cfg.scrcpy.parameters.$Model.views.PSObject.Properties.Name)) {
+            $isDefault = ($vName -eq $View)
+            $viewObj = $cfg.scrcpy.parameters.$Model.views.$vName
+            if ($viewObj.PSObject.Properties.Name -contains 'default') {
+                $viewObj.default = $isDefault
+            } elseif ($isDefault) {
+                $viewObj | Add-Member -MemberType NoteProperty -Name 'default' -Value $true
+            }
+        }
+        Write-ConfigJson -Object $cfg -Path $cfgPath -Depth 20
+    } catch {
+        Write-Log ("Set-ScrcpyDefaultView: failed to update config.json: " + $_.Exception.Message) -Level ERROR
+        return $false
+    } finally {
+        if ($cfgLock) { Exit-VqaLock -Stream $cfgLock }
     }
-    Write-FileWithoutBom -Path $cfgPath -Content (($cfg | ConvertTo-Json -Depth 12))
-    Get-Config
+    Get-Config -ConfigFilePath $cfgPath | Out-Null
     Write-Log ("Set-ScrcpyDefaultView: '{0}' is now the default view for model '{1}'." -f $View, $Model) -Level INFO
     return $true
 }
@@ -250,7 +258,7 @@ function ConvertTo-ScrcpyArguments {
     }
 
     if ($parts.Count -ne 5) {
-        Write-Log ($msg.ScrcpyInvalidProfile -f $scrcpyProfile) -Level WARNING
+        Write-Log ($msg.Scrcpy.InvalidProfile -f $scrcpyProfile) -Level WARNING
         $parts = @('portrait', 'R', 'N', '45', '20')
     }
 
@@ -288,7 +296,7 @@ function ConvertTo-ScrcpyArguments {
     $audioArg = if ($audioPref -eq 'D') { "--audio-dup" } else { "--no-audio" }
 
     if ($null -eq $modelTemplate) {
-        Write-Log $msg.ScrcpyModelUnknown -Level WARNING
+        Write-Log $msg.Scrcpy.ModelUnknown -Level WARNING
         return "--max-fps=$fps -b ${bw}M $audioArg"
     }
 
@@ -305,7 +313,7 @@ function ConvertTo-ScrcpyArguments {
         if (-not $view) {
             $firstKey = ($modelTemplate.views | Get-Member -MemberType NoteProperty | Select-Object -First 1).Name
             $view = $modelTemplate.views.$firstKey
-            Write-Log ($msg.ScrcpyInvalidProfile -f "view '$viewName' not found, using '$firstKey'") -Level WARNING
+            Write-Log ($msg.Scrcpy.InvalidProfile -f "view '$viewName' not found, using '$firstKey'") -Level WARNING
         }
         if ($view -and -not $mergeFullFrame) {
             $eyeObj = if ($eye -eq 'L') { $view.left_eye } else { $view.right_eye }
@@ -724,6 +732,7 @@ function Set-CaptureMode {
 
     # Persist to config.json (the source of truth across restarts)
     $cfgPath = Join-Path $global:ScriptPath "config\config.json"
+    $cfgLock = Enter-VqaLock -TimeoutMs 5000
     try {
         $cfg = Read-ConfigJson -ConfigFilePath $cfgPath -NonInteractive
         if (-not $cfg) { Write-Log "Set-CaptureMode: could not read config.json" -Level ERROR; return $false }
@@ -736,10 +745,12 @@ function Set-CaptureMode {
                 $cfg.Performance | Add-Member -NotePropertyName Capture_Mode -NotePropertyValue $Mode
             }
         }
-        Write-FileWithoutBom -Path $cfgPath -Content ($cfg | ConvertTo-Json -Depth 20)
+        Write-ConfigJson -Object $cfg -Path $cfgPath -Depth 20
     } catch {
         Write-Log ("Set-CaptureMode: failed to update config.json: {0}" -f $_.Exception.Message) -Level ERROR
         return $false
+    } finally {
+        if ($cfgLock) { Exit-VqaLock -Stream $cfgLock }
     }
     $global:CaptureMode = $Mode
 
@@ -875,7 +886,7 @@ function start-screenCopy {
 
     # Guard: skip if a scrcpy window for this headset is already running
     if (Get-ScrcpyProcess -displayName $displayName) {
-        Write-Log -Message ($msg.ScrcpyAlreadyRunning -f $displayName) -Level WARNING
+        Write-Log -Message ($msg.Scrcpy.AlreadyRunning -f $displayName) -Level WARNING
         Start-Sleep -Seconds 5
         return
     }
@@ -905,10 +916,10 @@ function start-screenCopy {
 
     $captureDevice = $null
     try {
-        Write-Log -Message ($msg.ScrcpyCheckingAdb -f "$headsetIP`:$adbPort") -Level "INFO"
+        Write-Log -Message ($msg.Scrcpy.CheckingAdb -f "$headsetIP`:$adbPort") -Level "INFO"
         $captureDevice = Resolve-HeadsetAdbDevice -Headset $knownRow -PreferTransport $transport -AdbPort $adbPort
     } catch {
-        Write-Log -Message ($msg.ScrcpyExecError -f $_.Exception.Message) -Level "ERROR"
+        Write-Log -Message ($msg.Scrcpy.ExecError -f $_.Exception.Message) -Level "ERROR"
 		return
     }
 
@@ -922,7 +933,7 @@ function start-screenCopy {
     $adb_device = $captureDevice.DeviceId
     Write-Log ("scrcpy capture for {0} over {1} ({2})" -f $displayName, $captureDevice.ConnectionType, $adb_device) -Level INFO
     $headsetModel   = Get-HeadsetModel -Device $captureDevice
-    Write-Log -Message ($msg.ScrcpyModelDetected -f $headsetModel) -Level "INFO"
+    Write-Log -Message ($msg.Scrcpy.ModelDetected -f $headsetModel) -Level "INFO"
     $modelTemplate  = $global:scrcpyParameters.$headsetModel
     $sourceCodec    = if ($modelTemplate -and $modelTemplate.video_codec) { $modelTemplate.video_codec } else { 'h264' }
 	<#
@@ -971,7 +982,7 @@ function start-screenCopy {
 
     # Check that scrcpy exists
     if (-not (Test-Path $scrcpy)) {
-        Write-Log -Message ($msg.ScrcpyNotFound -f $scrcpyPath) -Level "ERROR"
+        Write-Log -Message ($msg.Scrcpy.NotFound -f $scrcpyPath) -Level "ERROR"
         return
     }
 
@@ -986,7 +997,7 @@ function start-screenCopy {
         $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
         $recordFile = Join-Path -Path $recordFolder -ChildPath "${displayName}_$timestamp.mkv"
         $recordOption = "--record=`"$recordFile`""
-        Write-Log -Message ($msg.ScrcpyRecording -f $recordFile) -Level "INFO"
+        Write-Log -Message ($msg.Scrcpy.Recording -f $recordFile) -Level "INFO"
     } else {
         $recordOption = ""
         $recordFile = ''
@@ -1031,7 +1042,7 @@ function start-screenCopy {
     #.\scrcpy.exe --crop 1664:1304:2260:450 --angle=-21 --max-fps 45 -b 16M --no-audio --video-buffer=100 --video-codec=h264 --video-encoder=OMX.qcom.video.encoder.avc -s $adb_device
     #.\sources\scrcpy-win64-v3.3\scrcpy.exe -s 192.168.1.243:5555 -b20m --crop=1664:1304:2260:450 --angle=-21 --max-size=800 --max-fps=30 --video-codec=h265 --no-audio --window-title=Q3_BLUE
 
-	Write-Log -Message ($msg.ScrcpyLaunching -f $arguments) -Level "SUCCESS"
+	Write-Log -Message ($msg.Scrcpy.Launching -f $arguments) -Level "SUCCESS"
 
     # Pipe modes: start the bridge BEFORE scrcpy so the pipe-in server is listening.
     # Defensively clear any leftover pipeline entry first - if a previous scrcpy died
@@ -1057,7 +1068,7 @@ function start-screenCopy {
 			-RedirectStandardOutput (Join-Path -Path $global:logFolder -ChildPath ("{0}_{1}_StandardOutput.txt" -f $displayName, $sessionStamp)) `
 			-RedirectStandardError  (Join-Path -Path $global:logFolder -ChildPath ("{0}_{1}_StandardError.txt" -f $displayName, $sessionStamp))
 	} catch {
-        Write-Log -Message ($msg.ScrcpyLaunchError -f $_.Exception.Message) -Level "ERROR"
+        Write-Log -Message ($msg.Scrcpy.LaunchError -f $_.Exception.Message) -Level "ERROR"
         if ($bridgeJob) { try { Stop-Job $bridgeJob -EA SilentlyContinue; Remove-Job $bridgeJob -Force -EA SilentlyContinue } catch {} }
 		return
     }
@@ -1418,7 +1429,7 @@ function Watch-ScrcpyProcesses {
     # For each headset with autorestart, ensure there's a scrcpy process started
 
     foreach ($headset in $knownHeadsets_with_autorestart) {
-        Write-Log ($msg.ScrcpyCheckHeadset -f $headset.Name, $headset.IPAddress) -Level DEBUG
+        Write-Log ($msg.Scrcpy.CheckHeadset -f $headset.Name, $headset.IPAddress) -Level DEBUG
 
         $headsetInfos = $null
         if ($HeadsetInfo -and $HeadsetInfo.ContainsKey([string]$headset.IPAddress)) {
@@ -1426,16 +1437,16 @@ function Watch-ScrcpyProcesses {
         }
         if (-not $headsetInfos) { $headsetInfos = Get-KnownHeadsetInfos $headset }
         if (ConvertTo-BoolField $headsetInfos.ADBWifi) {
-            Write-Log ($msg.ScrcpyCheckProcess -f $headset.Name, $headset.IPAddress) -Level DEBUG
+            Write-Log ($msg.Scrcpy.CheckProcess -f $headset.Name, $headset.IPAddress) -Level DEBUG
             $runningScrcpyProcess_forThisheadset = Get-ScrcpyProcess -displayName (Convert-Displayname $headset.Name) -headsetIP $headset.IPAddress -headsetSerial $headset.SerialNumber
 
-            Write-Log ($msg.ScrcpyProcessFound -f $runningScrcpyProcess_forThisheadset) -Level DEBUG
+            Write-Log ($msg.Scrcpy.ProcessFound -f $runningScrcpyProcess_forThisheadset) -Level DEBUG
             if (-not $runningScrcpyProcess_forThisheadset) {
                 # Re-read capture mode from config.json to avoid a stale mode when
                 # Set-CaptureMode fires between the slow-path Get-Config and this watchdog.
-                # Uses -LiteralPath and -Encoding UTF8 (mandatory for the accented project root).
+                # Read-ConfigJson: literal path, UTF-8, and retried across a Write-ConfigJson swap.
                 try {
-                    $freshJson = Get-Content -LiteralPath (Join-Path $global:ScriptPath "config\config.json") -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+                    $freshJson = Read-ConfigJson -ConfigFilePath (Join-Path $global:ScriptPath "config\config.json") -NonInteractive
                     if ($freshJson -and $freshJson.Performance -and $freshJson.Performance.Capture_Mode) {
                         $global:CaptureMode = $freshJson.Performance.Capture_Mode
                     }
@@ -1464,7 +1475,7 @@ function Watch-ScrcpyProcesses {
                     $pipeline = $global:HeadsetPipelines[$safeName]
                     $currentRecording = if ($pipeline) { [bool]$pipeline.Recording } else { $false }
                     if ($currentRecording -ne $expectedRecording) {
-                        Write-Log ($msg.ScrcpyRecordingChanged -f $headset.Name) -Level INFO
+                        Write-Log ($msg.Scrcpy.RecordingChanged -f $headset.Name) -Level INFO
                         $shouldRestart = $true
                     }
                     # Merged view: the scrcpy command line is identical to 'fullscreen' (no crop), so
@@ -1482,7 +1493,7 @@ function Watch-ScrcpyProcesses {
                 } else {
                     $hasRecord = if ($cmdLine) { [bool]($cmdLine -match '--record=(?!\\\\\.\\pipe\\)') } else { $expectedRecording }
                     if ($hasRecord -ne $expectedRecording) {
-                        Write-Log ($msg.ScrcpyRecordingChanged -f $headset.Name) -Level INFO
+                        Write-Log ($msg.Scrcpy.RecordingChanged -f $headset.Name) -Level INFO
                         $shouldRestart = $true
                     }
                 }
@@ -1506,7 +1517,7 @@ function Watch-ScrcpyProcesses {
                         $normalizedCmdLine = ($cmdLineForCompare -replace '\s+', ' ').Trim()
                         $normalizedOptions = ($expectedOptions -replace '\s+', ' ').Trim()
                         if ($normalizedCmdLine -notlike "*$normalizedOptions*") {
-                            Write-Log ($msg.ScrcpyOptionsChanged -f $headset.Name, $headsetModel) -Level INFO
+                            Write-Log ($msg.Scrcpy.OptionsChanged -f $headset.Name, $headsetModel) -Level INFO
                             $shouldRestart = $true
                         }
                     }
@@ -1528,7 +1539,7 @@ function Watch-ScrcpyProcesses {
                     # Announce the restart now: closing the old session can take seconds and the
                     # operator must see "starting", not a dead stream.
                     Set-ScrcpyStartingState -HeadsetId ([int]$headset.ID)
-                    Write-Log ($msg.ScrcpyRestarting -f $headset.Name) -Level INFO
+                    Write-Log ($msg.Scrcpy.Restarting -f $headset.Name) -Level INFO
                     # Send WM_CLOSE so scrcpy can finalise any recording file before exiting
                     # Same rule as Stop-Scrcpy: only a scrcpy that HAS a window can be closed politely, and
                     # only a window that ignored the request deserves the "may be incomplete" warning.
@@ -1538,7 +1549,7 @@ function Watch-ScrcpyProcesses {
                         $runningScrcpyProcess_forThisheadset.WaitForExit(10000) | Out-Null
                     }
                     if (-not $runningScrcpyProcess_forThisheadset.HasExited) {
-                        if ($hadWindow) { Write-Log ($msg.ScrcpyStopTimeout -f $headset.Name) -Level WARNING }
+                        if ($hadWindow) { Write-Log ($msg.Scrcpy.StopTimeout -f $headset.Name) -Level WARNING }
                         Stop-Process -Id $runningScrcpyProcess_forThisheadset.Id -Force -ErrorAction SilentlyContinue
                         Start-Sleep -Seconds 1
                     }
@@ -1595,7 +1606,7 @@ function Stop-Scrcpy {
         if ($closed) { $proc.WaitForExit(10000) | Out-Null }
         if (-not $proc.HasExited) {
             if ($hadWindow) {
-                Write-Log ($msg.ScrcpyStopTimeout -f $proc.MainWindowTitle) -Level WARNING
+                Write-Log ($msg.Scrcpy.StopTimeout -f $proc.MainWindowTitle) -Level WARNING
             } else {
                 Write-Log "Stopping a windowless scrcpy (its recording, if any, is finalised by ffmpeg)." -Level DEBUG
             }
@@ -1615,7 +1626,7 @@ function Stop-Scrcpy {
     else { foreach ($key in @($global:DirectRecordings.Keys)) { Complete-DirectRecording -SafeName $key } }
 
     if ($HeadsetName) {
-        Write-Log ($msg.ScrcpyStopForHeadset -f (Convert-Displayname $HeadsetName)) -Level INFO
+        Write-Log ($msg.Scrcpy.StopForHeadset -f (Convert-Displayname $HeadsetName)) -Level INFO
     } else {
         Write-Log "All scrcpy processes stopped." -Level INFO
     }
@@ -1642,7 +1653,7 @@ function Install-ScrcpyDependencies {
     if (-not (Test-Path -Path "C:\msys64\mingw64\share\scrcpy\scrcpy-server")) {
         New-Item -Path "C:/msys64/mingw64/share/scrcpy/" -ItemType Directory -Force
         Copy-Item -Path "$scrcpyFolder\scrcpy-server" -Destination "C:\msys64\mingw64\share\scrcpy\" -Force
-        Write-Log $msg.ScrcpyServerFileCopied -Level INFO
+        Write-Log $msg.Scrcpy.ServerFileCopied -Level INFO
     } else {
         #Write-Log "Scrcpy server file already exists." -Level DEBUG
     }
@@ -1651,7 +1662,7 @@ function Install-ScrcpyDependencies {
     if (-not (Test-Path -Path $destinationPath)) {
         New-Item -Path ([System.IO.Path]::GetDirectoryName($destinationPath)) -ItemType Directory -Force
         Copy-Item -Path "$scrcpyFolder\icon.png" -Destination $destinationPath -Force
-        Write-Log $msg.ScrcpyIconFileCopied -Level INFO
+        Write-Log $msg.Scrcpy.IconFileCopied -Level INFO
     } else {
         #Write-Log "Scrcpy icon file already exists." -Level DEBUG
     }

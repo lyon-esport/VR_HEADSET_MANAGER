@@ -1415,6 +1415,7 @@ function Find-HeadsetIpdFromFrame {
 function Update-EyeMergeConfig {
     param([Parameter(Mandatory)][string]$Model, [Parameter(Mandatory)][scriptblock]$Mutate, [switch]$CreateModel)
     $cfgPath = Join-Path $global:ScriptPath 'config\config.json'
+    $cfgLock = Enter-VqaLock -TimeoutMs 5000
     try {
         $cfg = Read-ConfigJson -ConfigFilePath $cfgPath -NonInteractive
         if (-not $cfg -or -not $cfg.scrcpy -or -not $cfg.scrcpy.parameters) {
@@ -1428,12 +1429,14 @@ function Update-EyeMergeConfig {
             $cfg.scrcpy.parameters | Add-Member -NotePropertyName $Model -NotePropertyValue $modelObj
         }
         & $Mutate $modelObj
-        Write-FileWithoutBom -Path $cfgPath -Content ($cfg | ConvertTo-Json -Depth 20)
+        Write-ConfigJson -Object $cfg -Path $cfgPath -Depth 20
     } catch {
         Write-Log ("Eye merge: config update for '{0}' failed: {1}" -f $Model, $_.Exception.Message) -Level ERROR
         return $false
+    } finally {
+        if ($cfgLock) { Exit-VqaLock -Stream $cfgLock }
     }
-    Get-Config
+    Get-Config -ConfigFilePath $cfgPath | Out-Null
     # A running merged stream no longer matches a changed calibration / crop / depth / main eye:
     # have the monitor compare and restart it now instead of on its next slow tick. -NoMark: most
     # captures (L/R views, other models) need nothing, the watchdog announces the real restarts.

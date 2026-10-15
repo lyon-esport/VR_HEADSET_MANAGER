@@ -2347,7 +2347,7 @@ function Set-StreamBenchmarkRecommendation {
         }
         $cfgChanged = $changes.Count -gt 0
         if ($cfgChanged -and -not $Preview) {
-            Write-FileWithoutBom -Path $cfgPath -Content ($cfg | ConvertTo-Json -Depth 20)
+            Write-ConfigJson -Object $cfg -Path $cfgPath -Depth 20
         }
     } finally {
         if ($lock) { Exit-VqaLock -Stream $lock }

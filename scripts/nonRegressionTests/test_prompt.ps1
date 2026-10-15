@@ -93,6 +93,11 @@ function Wait-OperatorAction {
         [string]$Hint = ''
     )
 
+    if ($global:TestRun -and $global:TestRun.NoHeadset) {
+        Write-Host '  -NoHeadset: operator action skipped.' -ForegroundColor DarkGray
+        return $false
+    }
+
     Write-Host ''
     Write-Host '  +---------------------------------------------------------------+' -ForegroundColor Yellow
     Write-Host '  | OPERATOR ACTION REQUIRED                                      |' -ForegroundColor Yellow
@@ -138,6 +143,11 @@ function Read-OperatorObservation {
         [Parameter(Mandatory = $true)][string]$Message,
         [string]$Hint = ''
     )
+
+    if ($global:TestRun -and $global:TestRun.NoHeadset) {
+        Write-Host '  -NoHeadset: operator observation skipped.' -ForegroundColor DarkGray
+        return 'Skip'
+    }
 
     Write-Host ''
     Write-Host '  +---------------------------------------------------------------+' -ForegroundColor Yellow
