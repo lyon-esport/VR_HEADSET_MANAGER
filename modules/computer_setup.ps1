@@ -432,6 +432,88 @@ function Set-FwState {
     }
 }
 
+# Full firewall verification is forced again when the last one is older than this.
+# The fast path only checks that the rules exist and are enabled (not their ports or
+# programs, which fw_state vouches for), so a rule edited in place under the same
+# name is caught by this periodic full pass.
+$script:FwFullVerifyDays = 7
+
+# The inputs the firewall / URL ACL setup depends on, as one hashtable. THE single
+# source for both what Set-FwState stores and what Test-FwFastPath compares, so the
+# two cannot drift apart.
+function Get-FwStateInputs {
+    param([string]$HostExe)
+    return @{
+        AdbPath         = $global:adbPath
+        WebServerPort   = $global:WebServer_port
+        WebServerEnabled = $global:WebServer_enabled
+        MediaMtxRtsp    = $global:mediamtxRtspPort
+        MediaMtxHls     = $global:mediamtxHlsPort
+        MediaMtxWebrtc  = $global:mediamtxWebrtcPort
+        MediaMtxApi     = $global:mediamtxApiPort
+        MediaMtxProgram = $global:mediamtxFilePath
+        MediaMtxEnabled = $global:mediamtxEnabled
+        MdnsEnabled     = $global:MdnsResponder_enabled
+        HostExe         = $HostExe
+        ScriptPath      = $global:ScriptPath
+    }
+}
+
+# Decides whether the per-rule firewall queries of Initialize-ComputerSetup can be
+# skipped (measured 12-18 s per start: each check re-enumerates every firewall rule).
+# Returns @{Eligible; Reason}. All of these must hold, otherwise the full path runs
+# exactly as before:
+#   1. fw_state exists and every input of Get-FwStateInputs equals the stored value
+#      (a state written before this feature has no HostExe, so it never matches once);
+#   2. the last full verification (FwVerifiedAt) is younger than $script:FwFullVerifyDays;
+#   3. adb.exe still exists;
+#   4. ONE enumeration of the VR_HEADSET_MANAGER rules shows enough enabled rules per
+#      feature (ADB 2, MediaMtx 8, WebServer 1, Companion 1, mDNS 1 - the same minimums
+#      the elevated VerifyScripts use). A deleted or disabled rule fails here.
+# Never throws; any read failure is "not eligible".
+function Test-FwFastPath {
+    param($PriorState, [string]$HostExe)
+    try {
+        if (-not $PriorState) { return @{ Eligible = $false; Reason = 'no stored state' } }
+        if ([string]::IsNullOrWhiteSpace($HostExe)) { return @{ Eligible = $false; Reason = 'PowerShell host path unknown' } }
+        $props = @($PriorState.PSObject.Properties.Name)
+        $current = Get-FwStateInputs -HostExe $HostExe
+        foreach ($k in $current.Keys) {
+            if ($props -notcontains $k) { return @{ Eligible = $false; Reason = "state has no $k" } }
+            if (([string]$PriorState.$k) -ine ([string]$current[$k])) { return @{ Eligible = $false; Reason = "$k changed" } }
+        }
+        $verified = [datetime]::MinValue
+        $rawVerified = $PriorState.FwVerifiedAt
+        if ($rawVerified -is [datetime]) {
+            $verified = $rawVerified
+        } elseif (-not $rawVerified -or -not [datetime]::TryParse([string]$rawVerified, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind, [ref]$verified)) {
+            return @{ Eligible = $false; Reason = 'never fully verified' }
+        }
+        if (([datetime]::UtcNow - $verified.ToUniversalTime()).TotalDays -ge $script:FwFullVerifyDays) {
+            return @{ Eligible = $false; Reason = ("full verification older than {0} days" -f $script:FwFullVerifyDays) }
+        }
+        if (-not (Test-Path -LiteralPath $global:adbPath)) { return @{ Eligible = $false; Reason = 'adb.exe missing' } }
+
+        $rules = @(Get-NetFirewallRule -DisplayName '*VR_HEADSET_MANAGER*' -ErrorAction Stop |
+                   Where-Object { $_.Enabled -eq 'True' })
+        $need = @(
+            @{ Pattern = '*ADB*';       Min = 2; On = $true }
+            @{ Pattern = '*MediaMtx*';  Min = 8; On = [bool]$global:mediamtxEnabled }
+            @{ Pattern = '*WebServer*'; Min = 1; On = [bool]$global:WebServer_enabled }
+            @{ Pattern = '*Companion*'; Min = 1; On = $true }
+            @{ Pattern = '*mDNS*';      Min = 1; On = [bool]$global:MdnsResponder_enabled }
+        )
+        foreach ($n in $need) {
+            if (-not $n.On) { continue }
+            $count = @($rules | Where-Object { $_.DisplayName -ilike $n.Pattern }).Count
+            if ($count -lt $n.Min) { return @{ Eligible = $false; Reason = ("rules {0}: {1} enabled, {2} expected" -f $n.Pattern, $count, $n.Min) } }
+        }
+        return @{ Eligible = $true; Reason = 'state matches and rules present' }
+    } catch {
+        return @{ Eligible = $false; Reason = ("check failed: " + $_.Exception.Message) }
+    }
+}
+
 # Returns $true if the WebServer firewall rule(s) exist AND every matching
 # rule's LocalPort matches the current $global:WebServer_port.
 # Mirror of Test-MediaMtxFirewallCurrent.
@@ -509,14 +591,38 @@ function Get-HostExeBlockRule {
     param([string]$HostExe)
     if ([string]::IsNullOrWhiteSpace($HostExe)) { return @() }
     try {
-        return @(Get-NetFirewallRule -Direction Inbound -Action Block -Enabled True -ErrorAction Stop |
-                 Where-Object {
-                     $prog = ($_ | Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue).Program
+        # Two bulk reads joined on the rule id, NOT one Get-NetFirewallApplicationFilter
+        # per block rule: that was one CIM round trip each (measured 11.1 s for 80
+        # block rules, the largest single cost of Initialize-ComputerSetup) against
+        # about 0.8 s for the bulk form. An application filter's InstanceID is the
+        # Name of the rule it belongs to.
+        $blocks = @(Get-NetFirewallRule -Direction Inbound -Action Block -Enabled True -ErrorAction Stop)
+        if ($blocks.Count -eq 0) { return @() }
+        $progByRule = @{}
+        foreach ($f in @(Get-NetFirewallApplicationFilter -ErrorAction Stop)) {
+            $progByRule[[string]$f.InstanceID] = [string]$f.Program
+        }
+        return @($blocks | Where-Object {
+                     $prog = $progByRule[[string]$_.Name]
                      $prog -and ($prog -ieq $HostExe)
                  })
     } catch {
         return @()
     }
+}
+
+# Logs the WARNING for a BLOCK rule on the PowerShell host (see Get-HostExeBlockRule).
+# Shared by Unblock-CompanionDiscoveryFirewallRule (full path) and the fast path of
+# Initialize-ComputerSetup, which does not call that function. Never throws.
+function Write-HostExeBlockRuleWarning {
+    param([string]$HostExe)
+    try {
+        $blockers = @(Get-HostExeBlockRule -HostExe $HostExe)
+        if ($blockers.Count -gt 0) {
+            Write-Log ("A firewall BLOCK rule exists for '{0}' ({1}) - it overrides any allow rule, so companion discovery will stay blocked. Remove it with: Get-NetFirewallRule -DisplayName '{2}' | Remove-NetFirewallRule" -f `
+                        $HostExe, (($blockers | ForEach-Object { $_.DisplayName }) -join ', '), $blockers[0].DisplayName) -Level WARNING
+        }
+    } catch { }
 }
 
 # Returns $true if an enabled companion-discovery rule exists whose Program filter
@@ -718,11 +824,7 @@ function Unblock-CompanionDiscoveryFirewallRule {
         # powerless against the block rule Windows writes when someone answers
         # Cancel to its own popup. We do not delete rules we did not create -
         # naming them and the one-line cleanup is the useful thing to do here.
-        $blockers = @(Get-HostExeBlockRule -HostExe $hostExe)
-        if ($blockers.Count -gt 0) {
-            Write-Log ("A firewall BLOCK rule exists for '{0}' ({1}) - it overrides any allow rule, so companion discovery will stay blocked. Remove it with: Get-NetFirewallRule -DisplayName '{2}' | Remove-NetFirewallRule" -f `
-                        $hostExe, (($blockers | ForEach-Object { $_.DisplayName }) -join ', '), $blockers[0].DisplayName) -Level WARNING
-        }
+        Write-HostExeBlockRuleWarning -HostExe $hostExe
 
         if (Test-CompanionFirewallCurrent -HostExe $hostExe) {
             Write-Log "Companion discovery firewall rule already present" -Level DEBUG
@@ -1039,37 +1141,57 @@ function Initialize-ComputerSetup {
     # Collect all pending firewall/ACL tasks, then open a single admin console for all of them.
     $pendingTasks = @()
 
-    $adbTask = Unblock-ADBFirewallRule -AdbPath $global:adbPath -ReturnTask
-    if ($adbTask -is [hashtable]) {
-        $pendingTasks += $adbTask
-    } elseif ($adbTask -eq $false) {
-        Write-Log $msg.FirewallConfigSkipped -Level WARNING
-    }
+    # Fast path: every per-rule firewall query below re-enumerates all the firewall rules
+    # (about 0.6 s each plus filter lookups; 12-18 s in total), yet on a restart nothing
+    # has changed. Test-FwFastPath skips them when the stored fw_state matches the current
+    # inputs and one enumeration shows the rules still present. Any drift runs the full
+    # path below, unchanged. The URL ACL, Defender and mDNS client checks always run
+    # (each is cheap or already short-circuits on the stored state).
+    $hostExe  = Get-PowerShellHostPath
+    $fastPath = Test-FwFastPath -PriorState $priorState -HostExe $hostExe
+    $fwFast   = [bool]$fastPath.Eligible
 
-    if (Test-MediaMtxFirewallCurrent) {
-        Write-Log $msg.MediaMtxFirewallRuleExists -Level DEBUG
+    if ($fwFast) {
+        Write-Log ("Firewall setup: fast path ({0})" -f $fastPath.Reason) -Level DEBUG
+        # Still advisory, still cheap now (bulk join): a BLOCK rule can appear at any time.
+        Write-HostExeBlockRuleWarning -HostExe $hostExe
     } else {
-        $mtxTask = Unblock-MediaMtxFirewallRule -ReturnTask
-        if ($mtxTask -is [hashtable]) { $pendingTasks += $mtxTask }
+        Write-Log ("Firewall setup: full check ({0})" -f $fastPath.Reason) -Level DEBUG
+        $adbTask = Unblock-ADBFirewallRule -AdbPath $global:adbPath -ReturnTask
+        if ($adbTask -is [hashtable]) {
+            $pendingTasks += $adbTask
+        } elseif ($adbTask -eq $false) {
+            Write-Log $msg.FirewallConfigSkipped -Level WARNING
+        }
+
+        if (Test-MediaMtxFirewallCurrent) {
+            Write-Log $msg.MediaMtxFirewallRuleExists -Level DEBUG
+        } else {
+            $mtxTask = Unblock-MediaMtxFirewallRule -ReturnTask
+            if ($mtxTask -is [hashtable]) { $pendingTasks += $mtxTask }
+        }
+
+        $wsTask = Unblock-WebServerFirewallRule -ReturnTask
+        if ($wsTask -is [hashtable]) { $pendingTasks += $wsTask }
+
+        # Must be part of THIS batch, not left to Windows: Invoke-CompanionDiscovery
+        # binds UDP 5556 from the VRMonitor slow path seconds after startup, and with
+        # no matching program rule Windows raises its own notification - whose Cancel
+        # writes a lasting BLOCK rule for the PowerShell host.
+        $companionTask = Unblock-CompanionDiscoveryFirewallRule -ReturnTask
+        if ($companionTask -is [hashtable]) { $pendingTasks += $companionTask }
+
+        if ($global:MdnsResponder_enabled) {
+            if (Test-MdnsFirewallCurrent) {
+                Write-Log $msg.MdnsFirewallRuleExists -Level DEBUG
+            } else {
+                $mdnsTask = Unblock-MdnsFirewallRule -ReturnTask
+                if ($mdnsTask -is [hashtable]) { $pendingTasks += $mdnsTask }
+            }
+        }
     }
-
-    $wsTask = Unblock-WebServerFirewallRule -ReturnTask
-    if ($wsTask -is [hashtable]) { $pendingTasks += $wsTask }
-
-    # Must be part of THIS batch, not left to Windows: Invoke-CompanionDiscovery
-    # binds UDP 5556 from the VRMonitor slow path seconds after startup, and with
-    # no matching program rule Windows raises its own notification - whose Cancel
-    # writes a lasting BLOCK rule for the PowerShell host.
-    $companionTask = Unblock-CompanionDiscoveryFirewallRule -ReturnTask
-    if ($companionTask -is [hashtable]) { $pendingTasks += $companionTask }
 
     if ($global:MdnsResponder_enabled) {
-        if (Test-MdnsFirewallCurrent) {
-            Write-Log $msg.MdnsFirewallRuleExists -Level DEBUG
-        } else {
-            $mdnsTask = Unblock-MdnsFirewallRule -ReturnTask
-            if ($mdnsTask -is [hashtable]) { $pendingTasks += $mdnsTask }
-        }
         $mdnsClientTask = Enable-WindowsMdnsClient -ReturnTask
         if ($mdnsClientTask -is [hashtable]) { $pendingTasks += $mdnsClientTask }
     }
@@ -1083,9 +1205,13 @@ function Initialize-ComputerSetup {
     if ($defenderTask -is [hashtable] -and $defenderTask.Script) { $pendingTasks += $defenderTask }
 
     # Open one admin console for all pending tasks (zero UAC prompts if nothing to do)
+    $unconfirmed = @()
+    $setupNotDone = $false
     if ($pendingTasks.Count -gt 0) {
         $setupResults = Invoke-BatchAsAdmin -Tasks $pendingTasks
         $unconfirmed  = @($setupResults | Where-Object { $_.Approved -and $_.Verified -eq $false })
+        # A declined or errored task leaves its rule missing: do not mark the setup verified.
+        $setupNotDone = (@($setupResults | Where-Object { -not $_.Approved -or $_.Error }).Count -gt 0)
         if ($unconfirmed.Count -gt 0) {
             Write-Log ($msg.FirewallSetupIncomplete -f (($unconfirmed | ForEach-Object { $_.Title }) -join ', ')) -Level WARNING
         }
@@ -1105,17 +1231,16 @@ function Initialize-ComputerSetup {
 
     # Persist what we just (re)applied so the next run can detect drift.
     # Written even when no tasks ran - the values still describe the live OS state.
-    Set-FwState -State @{
-        AdbPath               = $global:adbPath
-        WebServerPort         = $global:WebServer_port
-        MediaMtxRtsp          = $global:mediamtxRtspPort
-        MediaMtxHls           = $global:mediamtxHlsPort
-        MediaMtxWebrtc        = $global:mediamtxWebrtcPort
-        MediaMtxApi           = $global:mediamtxApiPort
-        MediaMtxProgram       = $global:mediamtxFilePath
-        DefenderExclusionPath = $defenderExclusionPath
-        MdnsEnabled           = $global:MdnsResponder_enabled
-    }
+    # FwVerifiedAt = when the firewall rules were last checked in FULL: kept from the
+    # prior state on the fast path (so the periodic full pass still comes due), now
+    # after a full pass, and cleared when the operator left a task unconfirmed so the
+    # next start runs the full path again.
+    $fwState = Get-FwStateInputs -HostExe $hostExe
+    $fwState.DefenderExclusionPath = $defenderExclusionPath
+    $fwState.FwVerifiedAt = if ($fwFast) { $priorState.FwVerifiedAt }
+                            elseif ($unconfirmed.Count -gt 0 -or $setupNotDone) { $null }
+                            else { [datetime]::UtcNow.ToString('o') }
+    Set-FwState -State $fwState
 
     # Write the ready flag so headsets_dashboard.ps1 knows firewall setup is done.
     # Content is the port fingerprint - dashboard deletes the file after reading it.
