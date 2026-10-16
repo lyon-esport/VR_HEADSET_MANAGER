@@ -3,6 +3,13 @@
 ##########################
 
 
+# One UTF-8 (no BOM) encoder and one named mutex per process/runspace, created on first
+# use instead of once per log line. The mutex name is machine-wide so every VRHM process
+# serialises its appends to the same log file.
+$script:LogUtf8   = New-Object System.Text.UTF8Encoding($false)
+$script:LogMutex  = $null
+$script:LogLevels = @("DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR")
+
 function Write-Log {
     param (
         [Parameter(Mandatory = $true)]
@@ -11,43 +18,40 @@ function Write-Log {
         [string]$Level = "INFO"
     )
 
-    # Color dictionary for the console
-    $colors = @{
-        "DEBUG"   = "DarkGray"
-        "INFO"    = "Green"
-        "SUCCESS" = @{ Background = "Magenta"; Foreground = "White" }
-        "WARNING" = "Yellow"
-        "ERROR"   = @{ Background = "Red"; Foreground = "White" }
-    }
-    
-    # Get the current time in "yyyy-MM-dd HH:mm:ss" format
-    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $logEntry = "$timestamp [$Level] $Message"
-    $consoleEntry = "[$Level] $Message"
+    # Self-heal the load-time state: a runspace or job that defined this function without
+    # running the file's top level would otherwise make EVERY Write-Log throw.
+    if (-not $script:LogLevels) { $script:LogLevels = @("DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR") }
+    if (-not $script:LogUtf8)   { $script:LogUtf8   = New-Object System.Text.UTF8Encoding($false) }
 
-    # List of log levels sorted by importance
-    $logLevels = @("DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR")
-    
-    # Check whether the log level allows console output
-    if ($logLevels.IndexOf($Level) -ge $logLevels.IndexOf($global:debugLevelToConsole) -or $global:debugLevelToConsole -eq "DEBUG") {
-        
-        if ($colors[$Level].GetType().Name -eq "Hashtable") {
-            # Display with colored background for errors/success
-            Write-Host $consoleEntry -BackgroundColor $colors[$Level].Background -ForegroundColor $colors[$Level].Foreground
-        } else {
-            # Normal display for other log levels
-            Write-Host $consoleEntry -ForegroundColor $colors[$Level]
+    # Decide the destinations first: a line below both thresholds costs nothing more.
+    $levelIdx  = $script:LogLevels.IndexOf($Level)
+    $toConsole = ($levelIdx -ge $script:LogLevels.IndexOf($global:debugLevelToConsole)) -or ($global:debugLevelToConsole -eq "DEBUG")
+    $toFile    = ($levelIdx -ge $script:LogLevels.IndexOf($global:debugLevelToFile)) -or ($global:debugLevelToFile -eq "DEBUG")
+    if (-not $toConsole -and -not $toFile) { return }
+
+    if ($toConsole) {
+        $consoleEntry = "[$Level] $Message"
+        switch ($Level) {
+            "DEBUG"   { Write-Host $consoleEntry -ForegroundColor DarkGray }
+            "INFO"    { Write-Host $consoleEntry -ForegroundColor Green }
+            "SUCCESS" { Write-Host $consoleEntry -BackgroundColor Magenta -ForegroundColor White }
+            "WARNING" { Write-Host $consoleEntry -ForegroundColor Yellow }
+            "ERROR"   { Write-Host $consoleEntry -BackgroundColor Red -ForegroundColor White }
+            default   { Write-Host $consoleEntry }
         }
     }
 
-    # Check whether the log level allows writing to file
-    if ($logLevels.IndexOf($Level) -ge $logLevels.IndexOf($global:debugLevelToFile) -or $global:debugLevelToFile -eq "DEBUG") {
+    if ($toFile) {
+        $logEntry = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') [$Level] $Message"
         try {
-            $mtx = [System.Threading.Mutex]::new($false, 'Global\VRHMLog')
+            if (-not $script:LogMutex) {
+                $script:LogMutex = [System.Threading.Mutex]::new($false, 'Global\VRHMLog')
+            }
             $acq = $false
             try {
-                $acq = $mtx.WaitOne(1000)
-                $bytes = [System.Text.Encoding]::Default.GetBytes($logEntry + "`r`n")
+                try { $acq = $script:LogMutex.WaitOne(1000) }
+                catch [System.Threading.AbandonedMutexException] { $acq = $true }   # previous owner died: we own it now
+                $bytes = $script:LogUtf8.GetBytes($logEntry + "`r`n")
                 $fs = [System.IO.File]::Open(
                     $global:logFile,
                     [System.IO.FileMode]::Append,
@@ -55,8 +59,7 @@ function Write-Log {
                     [System.IO.FileShare]::ReadWrite)
                 try { $fs.Write($bytes, 0, $bytes.Length) } finally { $fs.Close() }
             } finally {
-                if ($acq) { $mtx.ReleaseMutex() }
-                $mtx.Dispose()
+                if ($acq) { try { $script:LogMutex.ReleaseMutex() } catch {} }
             }
         } catch {
             Write-Warning "Failed to write to the log file: $logEntry"
@@ -64,7 +67,6 @@ function Write-Log {
     }
 
 }
-
 
 # **Usage examples:**
 <#
@@ -118,11 +120,12 @@ function Remove-OldLogFiles {
 
 # Log file families found in $global:logFolder, and how each one is labelled and decoded.
 # Order drives the "Log type" dropdown in help.html and the console log picker.
-# Encoding is per family: Write-Log and the scrcpy/ffmpeg redirections write ANSI
-# (see Write-Log's [System.Text.Encoding]::Default), while mediamtx (Go), the web
-# server child process and Write-KioskLog all write UTF-8.
+# Encoding is per family: the scrcpy/ffmpeg redirections (child processes) write ANSI,
+# while Write-Log (since S8-3), mediamtx (Go), the web server child process and
+# Write-KioskLog write UTF-8. Main logs written before that switch are ANSI: Get-LogSources
+# detects the encoding of each main file (see Get-LogFileEncoding).
 $script:LogFamilies = @(
-    @{ Order = 10; Type = 'main';      TypeLabel = 'Main program';  Encoding = 'ansi'; Pattern = '^log_(\d{4}-\d{2}-\d{2})\.txt$' }
+    @{ Order = 10; Type = 'main';      TypeLabel = 'Main program';  Encoding = 'utf8'; Pattern = '^log_(\d{4}-\d{2}-\d{2})\.txt$' }
     @{ Order = 20; Type = 'mediamtx';  TypeLabel = 'mediamtx';      Encoding = 'utf8'; Pattern = '^mediamtx(?:_(\d{4}-\d{2}-\d{2}))?\.log$' }
     @{ Order = 30; Type = 'webserver'; TypeLabel = 'Web server';    Encoding = 'utf8'; Pattern = '^webserver_(\d{4}-\d{2}-\d{2})_(out|err)\.log$' }
     # scrcpy / ffmpeg logs are one file per capture session: <Headset>_<yyyyMMdd_HHmmss_fff>_...
@@ -132,6 +135,56 @@ $script:LogFamilies = @(
     @{ Order = 60; Type = 'kiosk';     TypeLabel = 'Kiosk screens'; Encoding = 'utf8'; Pattern = '^kiosk_(\d{4}-\d{2}-\d{2})\.log$' }
 )
 
+
+$script:LogEncodingMemo = @{}
+
+function Get-LogFileEncoding {
+    <#
+    .SYNOPSIS
+    'utf8' or 'ansi' for one main-program log file.
+
+    .DESCRIPTION
+    Main logs were ANSI before Write-Log switched to UTF-8, and an old file can still sit
+    in the folder. The last 64 KB are decoded strictly as UTF-8: pure ASCII or valid UTF-8
+    -> 'utf8', any invalid sequence -> 'ansi'. Memoised on name + size + write time, so a
+    listing only re-reads a file that changed. Never throws ('utf8' on an unreadable file).
+    #>
+    param([Parameter(Mandatory = $true)][System.IO.FileInfo]$File)
+
+    $key = "$($File.FullName)|$($File.Length)|$($File.LastWriteTimeUtc.Ticks)"
+    if ($script:LogEncodingMemo.ContainsKey($key)) { return $script:LogEncodingMemo[$key] }
+
+    $result = 'utf8'
+    try {
+        $fs = [System.IO.File]::Open($File.FullName, [System.IO.FileMode]::Open,
+              [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        try {
+            $size = [int][Math]::Min([long]65536, $fs.Length)
+            $fs.Position = $fs.Length - $size
+            $buf = New-Object byte[] $size
+            $got = 0
+            while ($got -lt $size) {
+                $n = $fs.Read($buf, $got, $size - $got)
+                if ($n -le 0) { break }
+                $got += $n
+            }
+            $start = 0
+            if ($fs.Length -gt $size) {
+                # The block starts mid-file: skip the continuation bytes of a cut character.
+                while ($start -lt 3 -and $start -lt $got -and ($buf[$start] -band 0xC0) -eq 0x80) { $start++ }
+            }
+            # ... and drop an incomplete character at the end by cutting at the last newline.
+            $end = $got
+            for ($i = $got - 1; $i -ge $start; $i--) { if ($buf[$i] -eq 10) { $end = $i + 1; break } }
+            $strict = New-Object System.Text.UTF8Encoding($false, $true)
+            try { [void]$strict.GetString($buf, $start, $end - $start) } catch { $result = 'ansi' }
+        } finally { $fs.Close() }
+    } catch { $result = 'utf8' }
+
+    if ($script:LogEncodingMemo.Count -gt 200) { $script:LogEncodingMemo = @{} }
+    $script:LogEncodingMemo[$key] = $result
+    return $result
+}
 
 function Get-LogSources {
     <#
@@ -180,6 +233,7 @@ function Get-LogSources {
             $type      = $family.Type
             $typeLabel = $family.TypeLabel
             $encoding  = $family.Encoding
+            if ($type -eq 'main') { $encoding = Get-LogFileEncoding -File $file }
             $order     = $family.Order
 
             switch ($type) {

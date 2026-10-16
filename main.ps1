@@ -75,11 +75,93 @@ if ((Split-Path $global:ScriptPath -Leaf) -eq "modules") {
     $global:ScriptPath = Split-Path $global:ScriptPath -Parent
 }
 
-#Unblock all scripts in the module folder (in case they were blocked by Windows)
-# .dll is included for the bundled SQLite engine: a managed assembly still
-# carrying the Mark-Of-The-Web from a downloaded zip fails to load with an
+# Startup stage timing (S8-4). One INFO line listing every stage is written just before the
+# main menu. Stages are recorded by Add-StartupStage; scripts_init.ps1 calls it when present
+# (only this main process defines it - workers dot-sourcing scripts_init.ps1 skip it).
+$global:StartupStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+$global:StartupStages     = New-Object System.Collections.Generic.List[object]
+$global:StartupLastMs     = 0
+$global:StartupReported   = $false
+function Add-StartupStage {
+    param([Parameter(Mandatory = $true)][string]$Name)
+    if ($global:StartupReported -or -not $global:StartupStopwatch) { return }
+    $nowMs = $global:StartupStopwatch.ElapsedMilliseconds
+    $global:StartupStages.Add(@{ Name = $Name; Ms = ($nowMs - $global:StartupLastMs) })
+    $global:StartupLastMs = $nowMs
+}
+Add-StartupStage -Name 'pre-checks'
+
+# Unblock the scripts and binaries we execute (in case Windows blocked them: Mark-Of-The-Web
+# from a downloaded zip). Scoped to what we run - modules\, scripts\, main.ps1, the root .cmd,
+# the toolbox folder and the ACTIVE scrcpy/adb, mediamtx and ffmpeg folders - instead of walking
+# the whole tree (sources\ versions, logs\ ~1 GB, worktrees). .dll is included for the bundled
+# SQLite engine: a managed assembly still carrying the Mark-Of-The-Web fails to load with an
 # opaque loadFromRemoteSources error that names nothing useful.
-Get-ChildItem -Path $global:ScriptPath -Include "*.ps1","*.psd1","*.dll" -Recurse -File | Unblock-File
+# A marker (data\unblock.marker = version + root + active binary folders) skips the whole pass
+# on later starts; a new extraction, a new version or a binary switch changes/removes it.
+$unblockExtensions = @('.ps1', '.psd1', '.psm1', '.dll', '.exe')
+$unblockVersion    = ''
+$unblockVersionFile = Join-Path -Path $global:ScriptPath -ChildPath 'version.txt'
+if (Test-Path -LiteralPath $unblockVersionFile) {
+    try { $unblockVersion = (Get-Content -LiteralPath $unblockVersionFile -Raw -Encoding UTF8).Trim() } catch { }
+}
+# Active binary folders, read straight from config.json (Get-Config is not loaded yet).
+$unblockBinFolders = @()
+$unblockConfigFile = if ($args[0]) { [string]$args[0] } else { Join-Path -Path $global:ScriptPath -ChildPath 'config\config.json' }
+# First start of a fresh extraction: no config.json yet, but the run is about to load the
+# SQLite engine and start the binaries named by the template - unblock those folders.
+if (-not (Test-Path -LiteralPath $unblockConfigFile)) {
+    $unblockConfigFile = Join-Path -Path $global:ScriptPath -ChildPath 'templates\config\config.json'
+}
+if (Test-Path -LiteralPath $unblockConfigFile) {
+    try {
+        $unblockCfg = Get-Content -LiteralPath $unblockConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
+        # database.folder = the SQLite engine (System.Data.SQLite.dll + x64\SQLite.Interop.dll):
+        # a blocked copy fails to load with the opaque loadFromRemoteSources error.
+        foreach ($rel in @($unblockCfg.scrcpy.folder, $unblockCfg.ADB.folder, $unblockCfg.mediamtx.folder, $unblockCfg.ffmpeg.folder, $unblockCfg.database.folder)) {
+            if ($rel -and ($unblockBinFolders -notcontains [string]$rel)) { $unblockBinFolders += [string]$rel }
+        }
+    } catch { }
+}
+$unblockMarkerFile = Join-Path -Path $global:ScriptPath -ChildPath 'data\unblock.marker'
+$unblockMarkerText = ($unblockVersion + '|' + $global:ScriptPath + '|' + ($unblockBinFolders -join ';'))
+$unblockUpToDate = $false
+if (Test-Path -LiteralPath $unblockMarkerFile) {
+    try { $unblockUpToDate = ((Get-Content -LiteralPath $unblockMarkerFile -Raw -Encoding UTF8).Trim() -ceq $unblockMarkerText) } catch { }
+}
+if (-not $unblockUpToDate) {
+    $unblockTargets = @()
+    foreach ($sub in @('modules', 'scripts', 'website\headset-toolbox')) {
+        $unblockTargets += @{ Path = (Join-Path -Path $global:ScriptPath -ChildPath $sub); Recurse = $true }
+    }
+    foreach ($rel in $unblockBinFolders) {
+        $unblockTargets += @{ Path = (Join-Path -Path (Join-Path -Path $global:ScriptPath -ChildPath 'sources') -ChildPath $rel); Recurse = $true }
+    }
+    $unblockTargets += @{ Path = $global:ScriptPath; Recurse = $false }   # main.ps1 + root .cmd
+    $unblockFailed = 0
+    foreach ($target in $unblockTargets) {
+        if (-not (Test-Path -LiteralPath $target.Path -PathType Container)) { continue }
+        try {
+            $gci = @{ LiteralPath = $target.Path; File = $true; ErrorAction = 'SilentlyContinue' }
+            if ($target.Recurse) { $gci.Recurse = $true }
+            Get-ChildItem @gci |
+                Where-Object { $unblockExtensions -contains $_.Extension.ToLowerInvariant() -or $_.Extension -ieq '.cmd' } |
+                ForEach-Object {
+                    try { Unblock-File -LiteralPath $_.FullName -ErrorAction Stop } catch { $unblockFailed++ }
+                }
+        } catch { $unblockFailed++ }
+    }
+    if ($unblockFailed -gt 0) {
+        Write-Host "WARNING: Unblock-File failed on $unblockFailed item(s); the unblock pass will be retried at next start." -ForegroundColor Yellow
+    } else {
+        try {
+            $unblockMarkerDir = Split-Path -Path $unblockMarkerFile -Parent
+            if (-not (Test-Path -LiteralPath $unblockMarkerDir)) { New-Item -ItemType Directory -Path $unblockMarkerDir -Force | Out-Null }
+            [System.IO.File]::WriteAllText($unblockMarkerFile, $unblockMarkerText, (New-Object System.Text.UTF8Encoding($false)))
+        } catch { }
+    }
+}
+Add-StartupStage -Name 'unblock'
 
 
 ########################## INITIALISATION ##########################
@@ -107,7 +189,7 @@ if (-not $rootDiag.Writable) {
 $requiredFolders = @("config","data","logs","website","website\generated")
 foreach ($folder in $requiredFolders) {
     $folderPath = Join-Path -Path $global:ScriptPath -ChildPath $folder
-    if (-not (Test-Path -Path $folderPath)) {
+    if (-not (Test-Path -LiteralPath $folderPath)) {
         try {
             New-Item -ItemType Directory -Path $folderPath -ErrorAction Stop | Out-Null
             Write-Host "Created missing folder: $folder" -ForegroundColor Yellow
@@ -173,8 +255,9 @@ if (-not (Test-Path -LiteralPath $global:configFilePath)) {
 
 # Import modules files (must be executed at global level, and cannot start in a function !)
 $scripts_init = Join-Path -Path $global:ScriptPath -ChildPath "\modules\scripts_init.ps1"
-if (Test-Path -Path $scripts_init) {
+if (Test-Path -LiteralPath $scripts_init) {
     . $scripts_init
+    Add-StartupStage -Name 'scripts_init (total)'
 } else {
     Write-Host "Error: The initialization modules script is missing!" -ForegroundColor Red
     Read-Host "Press enter for exit"
@@ -235,8 +318,11 @@ if (Test-Path -LiteralPath $reaperScript) {
     ) -WindowStyle Hidden | Out-Null
 }
 
+Add-StartupStage -Name 'adb server + reaper'
+
 #Start auto checks of headsets details
 Start-VRMonitor -VRMonitor_refresh_timer $global:VRMonitor_refresh_timer
+Add-StartupStage -Name 'VRMonitor start'
 
 # Dashboard is a pure DISPLAY window now. Only spawn it when actually visible.
 if ($global:Dashboard_showConsole) {
@@ -252,7 +338,7 @@ if ($global:Dashboard_showConsole) {
     ) -WindowStyle Normal -PassThru
     if ($dashProc) {
         $dashPidFile = Join-Path $global:ScriptPath "data\dashboard.pid"
-        $dashProc.Id | Set-Content -LiteralPath $dashPidFile -Force -ErrorAction SilentlyContinue
+        $dashProc.Id | Set-Content -LiteralPath $dashPidFile -Encoding ASCII -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -262,7 +348,16 @@ Write-Host "Waiting 5 seconds before showing the main menu... " -ForegroundColor
         Start-Sleep -Seconds 1
     }
 Write-Host "`n"
+Add-StartupStage -Name 'dashboard + 5s countdown'
 
+# One INFO line with every startup stage (S8-4). The fixed countdown is part of the last
+# stage, so read the real startup cost from the stages before it.
+if (-not $global:StartupReported) {
+    $stageText  = ($global:StartupStages | ForEach-Object { '{0}={1}ms' -f $_.Name, $_.Ms }) -join ', '
+    $totalMs    = $global:StartupStopwatch.ElapsedMilliseconds
+    Write-Log ("Startup stages: {0}; total={1}ms" -f $stageText, $totalMs) -Level INFO
+    $global:StartupReported = $true
+}
 
 # Starting the main menu function that will show the different options to the user
 # Loop re-enters Show-MainMenu whenever a module reload is triggered (any-key refresh).

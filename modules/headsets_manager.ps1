@@ -177,7 +177,6 @@ function Show-HeadsetsTable {
 
 function Show-HeadsetsConfig {
     param (
-            #[array]$knownHeadsetsInfosFilePath = $global:knownHeadsetsInfosFilePath,
             [array]$FieldsToShow = @("ID","Name","IPAddress","scrcpy_AutoRestart","Record","ScrcpyProfile","Model","SerialNumber"),
             [bool]$UseColors = $true
         )
@@ -252,9 +251,6 @@ function Show-HeadsetsConfig {
 
 function Show-HeadsetsTableColored {
     param (
-        # Vestigial, see Get-HeadsetInfosMerged. No default: an unset $global:
-        # throws under strict mode and nothing reads this.
-        [array]$knownHeadsetsInfosFilePath,
         [array]$FieldsToShow = @("ID","Name","IPAddress","Ping","ADBWifi","Battery","Charging","Temp","SCRCPY","Model","SerialNumber","RunningApp"),
         [bool]$UseColors = $true
     )

@@ -3,7 +3,7 @@
 # Following code should be added in any script that needs to import all modules :
 <#
 $scripts_init = Join-Path -Path $global:ScriptPath -ChildPath "\modules\scripts_init.ps1"
-if (Test-Path -Path $scripts_init) {
+if (Test-Path -LiteralPath $scripts_init) {
     . $scripts_init
 } else {
     Write-Host "Error: The module initialization script was not found!" -ForegroundColor Red
@@ -96,6 +96,7 @@ $moduleFiles = Get-ChildItem -LiteralPath $ModulesPath -Filter "*.ps1" -File | S
             }
         }
     }
+    if (Get-Command Add-StartupStage -ErrorAction SilentlyContinue) { Add-StartupStage -Name 'module load' }
 
 #TODO IDEA : install all config files in mydocuments or in local or roaming if they do not exist : [environment]::GetFolderPath('MyDocuments')
 
@@ -172,6 +173,8 @@ $moduleFiles = Get-ChildItem -LiteralPath $ModulesPath -Filter "*.ps1" -File | S
         }
     }
 
+    if (Get-Command Add-StartupStage -ErrorAction SilentlyContinue) { Add-StartupStage -Name 'Get-Config + housekeeping' }
+
     # Load centralized translations based on selected language.
     # Runs after the config if/else so it also applies when the config file was
     # missing (no language set) - falls back to English in that case.
@@ -195,6 +198,7 @@ $moduleFiles = Get-ChildItem -LiteralPath $ModulesPath -Filter "*.ps1" -File | S
         exit
     }
     Write-Log ($msg.TranslationsLoaded -f $global:SelectedLanguage) -Level DEBUG
+    if (Get-Command Add-StartupStage -ErrorAction SilentlyContinue) { Add-StartupStage -Name 'translations' }
 
 # ---------------------------------------------------------------------------
 # Embedded database
@@ -282,6 +286,8 @@ if (Get-Command Initialize-Database -ErrorAction SilentlyContinue) {
         exit 1
     }
 }
+
+if (Get-Command Add-StartupStage -ErrorAction SilentlyContinue) { Add-StartupStage -Name 'database init/migrate' }
 
 # Seed the app catalogue from templates\data\known_apps.csv on a fresh install.
 #
@@ -667,8 +673,11 @@ if (-not $global:IsWebServerProcess -and -not $global:IsDashboardProcess -and -n
         exit 1
     }
 
+    if (Get-Command Add-StartupStage -ErrorAction SilentlyContinue) { Add-StartupStage -Name 'catalog/VQA/adb tools + network/binaries check' }
     Confirm-AppPortsAvailable
+    if (Get-Command Add-StartupStage -ErrorAction SilentlyContinue) { Add-StartupStage -Name 'port check' }
     Initialize-ComputerSetup
+    if (Get-Command Add-StartupStage -ErrorAction SilentlyContinue) { Add-StartupStage -Name 'computer setup' }
 }
 
 function Start-WebServer {
@@ -768,8 +777,10 @@ if (-not $global:IsVRMonitorJob -and -not $global:IsDashboardProcess) {
 # finished bootstrapping (headsets_monitoring.ps1), and calling it here at dot-source time only
 # made the job race the main process' launcher.
 if (-not $global:IsWebServerProcess -and -not $global:IsDashboardProcess -and -not $global:IsVRMonitorJob) {
+    if (Get-Command Add-StartupStage -ErrorAction SilentlyContinue) { Add-StartupStage -Name 'overlay files' }
     Start-WebServer
     Start-MdnsResponder
+    if (Get-Command Add-StartupStage -ErrorAction SilentlyContinue) { Add-StartupStage -Name 'web server + mdns launch' }
 }
 
 # Auto-open the default browser to the dashboard on startup (operator-configurable via WebServer.openBrowserOnStartup)

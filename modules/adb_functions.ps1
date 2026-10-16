@@ -2435,7 +2435,6 @@ function Get-HeadsetInstalledApps {
     param (
         [Parameter(Mandatory=$true)]
         [PSCustomObject]$Device,
-        [string]$AppCacheFilePath = $global:AppCacheFilePath,
         [switch]$ThirdPartyOnly = $true,
         [switch]$ResolveMissing = $false,
         [string]$adb    = $global:adbPath
@@ -2636,8 +2635,6 @@ function Get-AppInfo {
     Update the cache file with any new information found online to minimize future lookups.
     .PARAMETER PackageName
     The Android package name to look up (e.g. "com.myapp.vr").
-    .PARAMETER AppCacheFilePath
-    Path to the local CSV cache file (default: global AppCacheFilePath).
     .PARAMETER IconCacheDir
     Directory to store downloaded icons (default: "website\assets\app_icons" under the script path).
     .PARAMETER searchOnline
@@ -2651,7 +2648,6 @@ function Get-AppInfo {
     param (
         [Parameter(Mandatory=$true)]
         [string]$PackageName,
-        [string]$AppCacheFilePath = $global:AppCacheFilePath,
         [string]$IconCacheDir = $(Join-Path $global:ScriptPath "website\assets\app_icons"),
         [bool]$searchOnline = $false,
         [switch]$ForceOnline = $false
@@ -2870,8 +2866,6 @@ function Save-AppCatalogEntry {
 
 function Update-AppCacheOnline {
     param(
-        # Accepted and ignored: kept so existing callers keep compiling.
-        [string]$AppCacheFilePath = $global:AppCacheFilePath,
         [string]$ProgressFile = '',
         [int]$MaxThreads = 12,
         [switch]$ForceOnline = $false
@@ -3178,11 +3172,6 @@ function Initialize-AppNamesCache {
     .EXAMPLE
     Initialize-AppNamesCache
     #>
-    param(
-        # Accepted and ignored: kept so existing callers keep compiling.
-        [string]$AppCacheFilePath = $global:AppCacheFilePath
-    )
-
     try {
         $existing = Invoke-DbScalar -Name 'catalog.count'
         if ($null -ne $existing -and [int]$existing -gt 0) { return }
@@ -3250,11 +3239,6 @@ function Clear-AppNamesCache {
     .EXAMPLE
     Clear-AppNamesCache
     #>
-    param(
-        # Accepted and ignored: kept so existing callers keep compiling.
-        [string]$AppCacheFilePath = $global:AppCacheFilePath
-    )
-
     try {
         # Clear and re-seed in one transaction: a reader must never see the
         # catalogue empty, which is exactly what the window between the two used

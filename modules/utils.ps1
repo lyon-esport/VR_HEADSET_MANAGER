@@ -2358,6 +2358,10 @@ function Set-BinaryFolderConfig {
     }
     $null = Get-Config -ConfigFilePath $cfgFile
 
+    # The active binary folder changed: drop the startup unblock marker (main.ps1) so the
+    # next start runs Unblock-File over the new folder too.
+    Remove-Item -LiteralPath (Join-Path $global:ScriptPath 'data\unblock.marker') -Force -ErrorAction SilentlyContinue
+
     if ($UpdateTemplate) {
         try {
             $fields = @{}

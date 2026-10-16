@@ -33,7 +33,7 @@ foreach ($p in @($runtimePath, $templatePath)) {
 function Read-JsonObject {
     param([string]$Path)
     try {
-        $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+        $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 -ErrorAction Stop
         return ($raw | ConvertFrom-Json -ErrorAction Stop)
     } catch {
         Write-Host ("ERROR: failed to parse JSON: {0}: {1}" -f $Path, $_) -ForegroundColor Red

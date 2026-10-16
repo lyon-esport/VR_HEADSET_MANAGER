@@ -144,7 +144,7 @@ function Start-MediaMtx {
     if ($running) {
         Write-Log ($msg.MediaMtxAlreadyRunning -f $running.Id) -Level DEBUG
         # Refresh stale PID file (e.g. crash + restart by user): exactly one PID
-        ([string]$running.Id) | Set-Content -LiteralPath $mediamtxPidFile -Force -ErrorAction SilentlyContinue
+        ([string]$running.Id) | Set-Content -LiteralPath $mediamtxPidFile -Encoding ASCII -Force -ErrorAction SilentlyContinue
         return
     }
     Write-Log $msg.MediaMtxStarting -Level INFO
@@ -158,7 +158,7 @@ function Start-MediaMtx {
                               -PassThru `
                               -ErrorAction Stop
         Start-Sleep -Milliseconds 1500   # give mediamtx time to bind ports
-        $proc.Id | Set-Content -LiteralPath $mediamtxPidFile -Force -ErrorAction SilentlyContinue
+        $proc.Id | Set-Content -LiteralPath $mediamtxPidFile -Encoding ASCII -Force -ErrorAction SilentlyContinue
         Write-Log ($msg.MediaMtxStarted -f $proc.Id) -Level SUCCESS
     }
     catch {

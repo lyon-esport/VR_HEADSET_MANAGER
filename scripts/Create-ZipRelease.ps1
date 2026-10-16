@@ -132,7 +132,7 @@ function ConvertTo-PatternRegex {
 $includeRegexes = [System.Collections.Generic.List[string]]::new()
 $excludeRegexes = [System.Collections.Generic.List[string]]::new()
 
-foreach ($rawLine in (Get-Content -LiteralPath $releaseIncludePath)) {
+foreach ($rawLine in (Get-Content -LiteralPath $releaseIncludePath -Encoding UTF8)) {
     $line = $rawLine.Trim()
     if ($line -eq '' -or $line.StartsWith('#')) { continue }
     if ($line.StartsWith('!')) {

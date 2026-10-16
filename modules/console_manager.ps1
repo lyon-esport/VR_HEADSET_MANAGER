@@ -329,7 +329,7 @@ function Show-MainMenu {
                 ) -WindowStyle Normal -PassThru
                 if ($dashProc) {
                     $dashPidFile = Join-Path $global:ScriptPath "data\dashboard.pid"
-                    $dashProc.Id | Set-Content -LiteralPath $dashPidFile -Force -ErrorAction SilentlyContinue
+                    $dashProc.Id | Set-Content -LiteralPath $dashPidFile -Encoding ASCII -Force -ErrorAction SilentlyContinue
                 }
             }
         }

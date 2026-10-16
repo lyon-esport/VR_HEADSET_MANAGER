@@ -376,8 +376,8 @@ if (-not $selected) {
 }
 
 try {
-    (@{ IPAddress = $selected.IPAddress; Port = $selected.Port } | ConvertTo-Json -Compress) |
-        Set-Content -LiteralPath $ServerCachePath -Encoding UTF8 -NoNewline
+    $cacheJson = (@{ IPAddress = $selected.IPAddress; Port = $selected.Port } | ConvertTo-Json -Compress)
+    [System.IO.File]::WriteAllText($ServerCachePath, $cacheJson, (New-Object System.Text.UTF8Encoding $false))
     Write-Host "Remembered $($selected.IPAddress):$($selected.Port) at $ServerCachePath" -ForegroundColor Green
 } catch {
     Write-Host "Could not write the server cache file at $ServerCachePath - $($_.Exception.Message)" -ForegroundColor Yellow
