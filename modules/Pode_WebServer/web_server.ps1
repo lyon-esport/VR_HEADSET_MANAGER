@@ -868,7 +868,8 @@ $slowWorkerBlock = {
     if ($ctx.LogFolder) { $global:logFolder = $ctx.LogFolder }
     if ($ctx.LogFile)   { $global:logFile   = $ctx.LogFile }
 
-    # What the route chain reads from its caller's scope (see Invoke-HttpRoute).
+    # What the route handlers read from their caller's scope (list in Invoke-HttpRoute). $port
+    # is not set here: its only reader, /api/appinfo, is a fast route and never runs in the worker.
     $ScriptPath     = $sp
     $ConfigFilePath = $cp
     $PidFile        = $ctx.PidFile

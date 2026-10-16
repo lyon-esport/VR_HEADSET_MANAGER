@@ -319,6 +319,7 @@ function Show-MainMenu {
                 Write-Host $msg.VRMonitorNotRunning -ForegroundColor Yellow
                 $headsets_dashboard_script = Join-Path -Path $scriptPath -ChildPath "modules\headsets_dashboard.ps1"
                 $dashProc = Start-Process powershell.exe -ArgumentList @(
+                    "-NoProfile",
                     "-NoExit",
                     "-File",
                     "`"$headsets_dashboard_script`"",

@@ -473,8 +473,10 @@ function Start-HeadsetDiscoveryRunspace {
     $ps = [powershell]::Create()
     $ps.Runspace = $rs
     $ps.AddScript($pollBlock).AddArgument($scriptPath).AddArgument($configFilePath) | Out-Null
-    $handle = $ps.BeginInvoke()
-    return @{ PS = $ps; Runspace = $rs; Handle = $handle }
+    # Owned output buffer (Start-RunspaceInvocation, headsets_monitoring.ps1) so the slow
+    # tick's Clear-RunspaceStreams can empty it (S5-5).
+    $inv = Start-RunspaceInvocation -PS $ps
+    return @{ PS = $ps; Runspace = $rs; Handle = $inv.Handle; Output = $inv.Output }
 }
 
 

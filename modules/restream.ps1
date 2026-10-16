@@ -121,6 +121,47 @@ function Get-MediaMtxProcess {
 }
 
 
+# Waits until the mediamtx owned by this install accepts TCP connections on its API port and,
+# in pipe modes, its RTSP port (the port the ffmpeg pushers publish to): one loopback connect per
+# port every -PollMs, at most -TimeoutMs. Replaces the fixed 1.5 s / 2 s sleeps of Start-MediaMtx
+# and Sync-RestreamPaths (S3-5); a caller proceeds at the cap exactly as after the old sleep.
+# Returns early ($false) when -Process exited. Returns $true when every port answered. Never throws.
+function Wait-MediaMtxReady {
+    param(
+        [System.Diagnostics.Process]$Process = $null,
+        [int]$TimeoutMs = 1500,
+        [int]$PollMs = 100
+    )
+    $ports = @()
+    foreach ($p in @($global:mediamtxApiPort, $global:mediamtxRtspPort)) {
+        $n = 0
+        if ($p -and [int]::TryParse([string]$p, [ref]$n) -and $n -gt 0 -and $n -le 65535) { $ports += $n }
+    }
+    if ($global:CaptureMode -eq 'LocalWindow' -and $ports.Count -gt 1) { $ports = @($ports[0]) }
+    if ($ports.Count -eq 0) { return $false }
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $pending = New-Object System.Collections.ArrayList
+    foreach ($p in $ports) { [void]$pending.Add($p) }
+    while ($true) {
+        foreach ($p in @($pending)) {
+            $client = $null
+            try {
+                $client = New-Object System.Net.Sockets.TcpClient
+                $ar = $client.BeginConnect('127.0.0.1', $p, $null, $null)
+                if ($ar.AsyncWaitHandle.WaitOne(50) -and $client.Connected) { [void]$pending.Remove($p) }
+            } catch {
+            } finally {
+                if ($client) { try { $client.Close() } catch { } }
+            }
+        }
+        if ($pending.Count -eq 0) { return $true }
+        if ($Process) { try { if ($Process.HasExited) { return $false } } catch { } }
+        if ($sw.ElapsedMilliseconds -ge $TimeoutMs) { return $false }
+        Start-Sleep -Milliseconds $PollMs
+    }
+}
+
+
 function Start-MediaMtx {
     <#
     .SYNOPSIS
@@ -157,7 +198,10 @@ function Start-MediaMtx {
                               -WindowStyle Hidden `
                               -PassThru `
                               -ErrorAction Stop
-        Start-Sleep -Milliseconds 1500   # give mediamtx time to bind ports
+        # Give mediamtx time to bind its ports: poll them (S3-5) instead of a fixed 1.5 s, same cap.
+        $mtxWait = [System.Diagnostics.Stopwatch]::StartNew()
+        $mtxReady = Wait-MediaMtxReady -Process $proc -TimeoutMs 1500
+        Write-Log ("Start-MediaMtx: ports ready={0} after {1} ms" -f $mtxReady, $mtxWait.ElapsedMilliseconds) -Level DEBUG
         $proc.Id | Set-Content -LiteralPath $mediamtxPidFile -Encoding ASCII -Force -ErrorAction SilentlyContinue
         Write-Log ($msg.MediaMtxStarted -f $proc.Id) -Level SUCCESS
     }
@@ -291,7 +335,8 @@ function Sync-RestreamPaths {
     # Ensure mediamtx is running
     if (-not (Get-MediaMtxProcess)) {
         Start-MediaMtx
-        Start-Sleep -Seconds 2
+        # Was a fixed 2 s on top of Start-MediaMtx's own wait: poll the ports, same cap (S3-5).
+        [void](Wait-MediaMtxReady -Process (Get-MediaMtxProcess) -TimeoutMs 2000)
     }
 
     # Verify the REST API is responsive before attempting path sync

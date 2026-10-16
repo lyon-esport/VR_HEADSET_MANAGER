@@ -166,6 +166,23 @@ function Write-htmlMonitor {
     Write-FileWithoutBom -Path $outputPath -Content $headsetsHtml
 }
 
+# Registry change counter for the page generators, or $null when the database is not
+# available in this process (the guard is then simply off). Removing a headset drops its
+# row and then deletes its pages; a generator that read the headset list just before that
+# would write the page back. Test-HeadsetRegistryUnchanged is called right before each
+# write and makes the pass stop when the registry moved meanwhile - the next pass
+# regenerates from the fresh list (NR section 40, TEST20).
+function Get-HeadsetRegistryVersion {
+    if (-not (Get-Command Get-DbTableVersion -ErrorAction SilentlyContinue)) { return $null }
+    try { return (Get-DbTableVersion -Name 'headsets') } catch { return $null }
+}
+
+function Test-HeadsetRegistryUnchanged {
+    param($Version)
+    if ($null -eq $Version) { return $true }
+    $now = Get-HeadsetRegistryVersion
+    return ($null -eq $now -or $now -eq $Version)
+}
 # Generates one [video].html per headset using the scrcpy WHEP video template.
 # Each file embeds a WebRTC player (WHEP) that connects to the mediamtx stream
 # on demand (mediamtx starts ffmpeg GDI capture of the scrcpy window when a viewer connects).
@@ -182,6 +199,7 @@ function Update-HeadsetVideoFile {
         return
     }
 
+    $regVersion = Get-HeadsetRegistryVersion
     $allKnown = Get-KnownHeadsets
     foreach ($headset in $allKnown) {
         # Compute the mediamtx stream path from the headset name.
@@ -207,6 +225,7 @@ function Update-HeadsetVideoFile {
         # Skip write if content has not changed
         $hashStr = Get-TextHash -Text $videoHtml
         if ($script:_monitoringHashes[$outputFile] -ne $hashStr) {
+            if (-not (Test-HeadsetRegistryUnchanged -Version $regVersion)) { return }
             Write-FileWithoutBom -Path $outputFile -Content $videoHtml
             $script:_monitoringHashes[$outputFile] = $hashStr
         }
@@ -231,6 +250,7 @@ function Update-HeadsetTimerFile {
         return
     }
 
+    $regVersion = Get-HeadsetRegistryVersion
     $allKnown = Get-KnownHeadsets
     foreach ($headset in $allKnown) {
         $timerInfo = @{
@@ -245,6 +265,7 @@ function Update-HeadsetTimerFile {
         # Skip write if content has not changed
         $hashStr = Get-TextHash -Text $timerHtml
         if ($script:_monitoringHashes[$outputFile] -ne $hashStr) {
+            if (-not (Test-HeadsetRegistryUnchanged -Version $regVersion)) { return }
             Write-FileWithoutBom -Path $outputFile -Content $timerHtml
             $script:_monitoringHashes[$outputFile] = $hashStr
         }

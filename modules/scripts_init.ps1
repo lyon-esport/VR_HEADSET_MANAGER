@@ -732,7 +732,9 @@ function Start-WebServer {
     $wsOutLog       = Join-Path $global:logFolder "webserver_${dateStamp}_out.log"
     $wsErrLog       = Join-Path $global:logFolder "webserver_${dateStamp}_err.log"
 
+    # -NoProfile: the operator's PowerShell profile must not run inside the web server (S5-5).
     $global:WebServerProcess = Start-Process powershell.exe -ArgumentList @(
+        "-NoProfile",
         "-File",
         "`"$web_server_script`"",
         "-ScriptPath",

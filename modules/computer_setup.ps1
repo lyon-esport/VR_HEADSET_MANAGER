@@ -1004,6 +1004,9 @@ function Register-WebServerUrlAcl {
 
 # Keep Windows awake (no sleep, no screensaver, no screen lock) while the app is running.
 # Uses the official SetThreadExecutionState Win32 API via P/Invoke.
+# Guarded: this file is dot-sourced again on every scripts_init reload, and a type
+# cannot be redefined in the same process (S5-5).
+if (-not ([System.Management.Automation.PSTypeName]'AwakeMode').Type) {
 Add-Type -TypeDefinition @"
     using System;
     using System.Runtime.InteropServices;
@@ -1015,6 +1018,7 @@ Add-Type -TypeDefinition @"
         public const uint ES_DISPLAY_REQUIRED = 0x00000002;
     }
 "@ -ErrorAction SilentlyContinue
+}
 
 function Set-AwakeMode {
     # Prevents sleep, screensaver and screen lock

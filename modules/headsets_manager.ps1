@@ -919,6 +919,15 @@ function Remove-Headset {
         # also be wrong: it would run before the row is gone.
         # Stop timer job and delete timer files (.txt and .run)
         Stop-HeadsetTimer -headsetId ([int]$headsetToRemove.ID)
+        # The timer row, the live status row and the per-headset app rows are removed
+        # by ON DELETE CASCADE when Save-Headsets drops the headset. The CSV era had to
+        # delete each by hand, and a row was missed whenever a rename had moved its
+        # file first.
+        # Drop the row BEFORE deleting the side files: the other processes (VRMonitor's
+        # overlay regeneration, the web server) regenerate pages from the registry, so
+        # deleting a page while its row still existed let them write it back
+        # (NR section 40, TEST20).
+        Save-Headsets -headsets $headsets
         $timerTxt = Get-TimerFilePath    -headsetId ([int]$headsetToRemove.ID)
         $timerRun = Get-TimerRunFilePath -headsetId ([int]$headsetToRemove.ID)
         foreach ($f in @($timerTxt, $timerRun)) {
@@ -929,10 +938,7 @@ function Remove-Headset {
             $htmlPath = Get-HeadsetSitePath -Name $headsetToRemove.Name -Kind $kind
             if (Test-Path -LiteralPath $htmlPath) { Remove-Item -LiteralPath $htmlPath -Force -ErrorAction SilentlyContinue }
         }
-        # The timer row, the live status row and (once apps move) the per-headset
-        # app rows are removed by ON DELETE CASCADE when Save-Headsets drops the
-        # headset below. The CSV era had to delete each by hand, and a row was
-        # missed whenever a rename had moved its file first.
+        return
     } else {
         Write-Log ($msg.HeadsetIdNotFound -f $ID) -Level ERROR
     }

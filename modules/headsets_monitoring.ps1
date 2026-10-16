@@ -307,8 +307,63 @@ function Start-HeadsetRunspace {
     $ps = [powershell]::Create()
     $ps.Runspace = $rs
     $ps.AddScript($pollBlock).AddArgument($headset).AddArgument($scriptPath).AddArgument($configFilePath) | Out-Null
-    $handle = $ps.BeginInvoke()
-    return @{ PS = $ps; Runspace = $rs; Handle = $handle }
+    $inv = Start-RunspaceInvocation -PS $ps
+    return @{ PS = $ps; Runspace = $rs; Handle = $inv.Handle; Output = $inv.Output }
+}
+
+function Start-RunspaceInvocation {
+    <#
+    .SYNOPSIS
+    BeginInvoke() with an output buffer the caller owns. Returns @{Handle;Output}.
+    .DESCRIPTION
+    A plain BeginInvoke() keeps every object the poll block emits in an internal buffer
+    that only EndInvoke() releases - never, for a runspace that loops for the life of the
+    process. Owning the buffer lets Clear-RunspaceStreams empty it (S5-5).
+    .EXAMPLE
+    $inv = Start-RunspaceInvocation -PS $ps
+    #>
+    param([System.Management.Automation.PowerShell]$PS)
+    $in = New-Object 'System.Management.Automation.PSDataCollection[psobject]'
+    $in.Complete()
+    $out = New-Object 'System.Management.Automation.PSDataCollection[psobject]'
+    return @{ Handle = $PS.BeginInvoke($in, $out); Output = $out }
+}
+
+function Clear-RunspaceStreams {
+    <#
+    .SYNOPSIS
+    Empties the stream records and output that long-lived polling runspaces accumulate.
+    .DESCRIPTION
+    A [powershell] instance keeps every Information (Write-Host, i.e. Write-Log console
+    output), Warning, Verbose, Debug, Progress and Error record its script writes, for as
+    long as the instance lives; the runspace's own $Error is capped at 256, these are not
+    (measured, S5-5). Called by the VRMonitor slow tick on every registry entry
+    (@{PS;Output;...}). The last -KeepErrors error records are kept, because a dead
+    runspace's restart message reads Streams.Error[-1]. Safe while the runspace runs
+    (PSDataCollection is synchronised). Never throws.
+    .EXAMPLE
+    Clear-RunspaceStreams -Entries @($runspaceRegistry.Values)
+    #>
+    param(
+        [object[]]$Entries,
+        [int]$KeepErrors = 5
+    )
+    foreach ($e in $Entries) {
+        if (-not $e -or -not $e.PS) { continue }
+        try {
+            $s = $e.PS.Streams
+            foreach ($c in @($s.Information, $s.Warning, $s.Verbose, $s.Debug, $s.Progress)) {
+                if ($c.Count -gt 0) { $c.Clear() }
+            }
+            if ($s.Error.Count -gt $KeepErrors) {
+                # ReadAll() drains without enumerating: enumerating (or piping) a
+                # PSDataCollection that is still open BLOCKS until the runspace ends.
+                $all = $s.Error.ReadAll()
+                for ($i = [Math]::Max(0, $all.Count - $KeepErrors); $i -lt $all.Count; $i++) { $s.Error.Add($all[$i]) }
+            }
+            if ($e.Output -and $e.Output.Count -gt 0) { $e.Output.Clear() }
+        } catch { }
+    }
 }
 
 function Start-ComputerMonitorRunspace {
@@ -358,8 +413,8 @@ function Start-ComputerMonitorRunspace {
     $ps = [powershell]::Create()
     $ps.Runspace = $rs
     $ps.AddScript($pollBlock).AddArgument($scriptPath).AddArgument($configFilePath) | Out-Null
-    $handle = $ps.BeginInvoke()
-    $registry.Value = @{ PS = $ps; Runspace = $rs; Handle = $handle }
+    $inv = Start-RunspaceInvocation -PS $ps
+    $registry.Value = @{ PS = $ps; Runspace = $rs; Handle = $inv.Handle; Output = $inv.Output }
     Write-Log "VRMonitor: started computer monitoring runspace" -Level INFO
 }
 
@@ -412,8 +467,8 @@ function Start-KioskRunspace {
     $ps = [powershell]::Create()
     $ps.Runspace = $rs
     $ps.AddScript($pollBlock).AddArgument($IPAddress).AddArgument($Port).AddArgument($scriptPath).AddArgument($configFilePath) | Out-Null
-    $handle = $ps.BeginInvoke()
-    return @{ PS = $ps; Runspace = $rs; Handle = $handle }
+    $inv = Start-RunspaceInvocation -PS $ps
+    return @{ PS = $ps; Runspace = $rs; Handle = $inv.Handle; Output = $inv.Output }
 }
 
 function Sync-KioskRunspaces {
@@ -618,7 +673,9 @@ function Start-VRMonitor {
 
         # Poll scriptblock executed inside each per-headset runspace.
         # $sharedState is injected via InitialSessionState (shared reference, no serialization).
-        # Imports 6 required modules, loads config + translations once, then loops indefinitely.
+        # Imports the 9 modules its call graph needs (S5-5 dependency map: firmware and IPD
+        # need headset_diag, Test-UsbBusy needs usb_manager, Test-Port needs network_scanner),
+        # loads config + translations once, then loops indefinitely.
         $headsetPollBlock = {
             param(
                 [PSCustomObject]$headset,
@@ -626,6 +683,9 @@ function Start-VRMonitor {
                 [string]$configFilePath
             )
             # $sharedState available via InitialSessionState injection
+            # No host here: Write-Host records (Write-Log console output) would otherwise pile up
+            # in this runspace's PowerShell.Streams.Information for the life of the process (S5-5).
+            $global:PSDefaultParameterValues['Write-Host:InformationAction'] = 'Ignore'
             $global:ScriptPath     = $scriptPath
             $global:ConfigFilePath = $configFilePath
             $modPath = Join-Path $scriptPath "modules"
@@ -847,6 +907,9 @@ function Start-VRMonitor {
                 [string]$configFilePath
             )
             # $sharedState available via InitialSessionState injection
+            # No host here: Write-Host records (Write-Log console output) would otherwise pile up
+            # in this runspace's PowerShell.Streams.Information for the life of the process (S5-5).
+            $global:PSDefaultParameterValues['Write-Host:InformationAction'] = 'Ignore'
             $global:ScriptPath     = $scriptPath
             $global:ConfigFilePath = $configFilePath
             $modPath = Join-Path $scriptPath "modules"
@@ -914,6 +977,9 @@ function Start-VRMonitor {
                 [string]$configFilePath
             )
             # $sharedState available via InitialSessionState injection
+            # No host here: Write-Host records (Write-Log console output) would otherwise pile up
+            # in this runspace's PowerShell.Streams.Information for the life of the process (S5-5).
+            $global:PSDefaultParameterValues['Write-Host:InformationAction'] = 'Ignore'
             $global:ScriptPath     = $scriptPath
             $global:ConfigFilePath = $configFilePath
             $modPath = Join-Path $scriptPath "modules"
@@ -985,6 +1051,9 @@ function Start-VRMonitor {
                 [string]$scriptPath,
                 [string]$configFilePath
             )
+            # No host here: Write-Host records (Write-Log console output) would otherwise pile up
+            # in this runspace's PowerShell.Streams.Information for the life of the process (S5-5).
+            $global:PSDefaultParameterValues['Write-Host:InformationAction'] = 'Ignore'
             $global:ScriptPath     = $scriptPath
             $global:ConfigFilePath = $configFilePath
             $modPath = Join-Path $scriptPath "modules"
@@ -1757,6 +1826,11 @@ function Start-VRMonitor {
                             [void](Disable-RecordingOnLowDisk -RecordingDrive $lowDrive)
                         }
                     } catch { $tickErrors['computer monitoring'] = Get-VRMonitorTickErrorText -ErrorRecord $_ }
+
+                    # Drop the stream records and output every polling runspace piled up since
+                    # the last slow tick (S5-5): nobody reads them, and nothing else bounds them.
+                    Clear-RunspaceStreams -Entries (@($runspaceRegistry.Values) + @($kioskRunspaceRegistry.Values) +
+                        @($discoveryRunspace, $companionRunspace, $computerMonitorRunspace))
 
                     # Database housekeeping - currently the battery-history retention
                     # window. Called on every slow tick but self-throttled to

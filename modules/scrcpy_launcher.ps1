@@ -521,9 +521,21 @@ function Start-HeadsetPipeBridge {
             # buffer and errors out long before ffmpeg gets a chance to connect.
             $arIn  = $srvIn.BeginWaitForConnection($null, $null)
             $arOut = $srvOut.BeginWaitForConnection($null, $null)
+            # Readiness signals for the parent (Wait-HeadsetPipeBridgeSignal reads the job's
+            # Output collection, no Receive-Job): 'listening' = both pipe servers exist, so scrcpy
+            # may open pipe-in; 'data' = scrcpy wrote its first bytes (the Matroska header with
+            # the codec extradata), so ffmpeg can be started.
+            Write-Output 'listening'
             $srvIn.EndWaitForConnection($arIn)
-            $srvOut.EndWaitForConnection($arOut)
             $buf = New-Object byte[] 4096
+            # Read the first chunk BEFORE ffmpeg connects: it is held here and written first once
+            # pipe-out is connected, so nothing is lost or reordered. Later bytes wait in the
+            # pipe-in kernel buffer exactly as before.
+            $first = $srvIn.Read($buf, 0, $buf.Length)
+            if ($first -le 0) { return }
+            Write-Output 'data'
+            $srvOut.EndWaitForConnection($arOut)
+            try { $srvOut.Write($buf, 0, $first); $srvOut.Flush() } catch { return }
             while ($true) {
                 $n = $srvIn.Read($buf, 0, $buf.Length)
                 if ($n -le 0) { break }
@@ -536,6 +548,40 @@ function Start-HeadsetPipeBridge {
         }
     } -ArgumentList $names.In, $names.Out, $bridgePidFile
     return $job
+}
+
+# Waits until the pipe bridge job of Start-HeadsetPipeBridge has emitted -Signal ('listening' or
+# 'data'), polling its Output collection every -PollMs, for at most -TimeoutMs. Returns early
+# (with $false) when the bridge job ended, or when -Process (scrcpy) exited. Replaces the fixed
+# 500 ms / 3000 ms sleeps of start-screenCopy (S3-5): the caller proceeds at the cap exactly as
+# it did after the old sleep. Returns $true when the signal was seen. Never throws.
+function Wait-HeadsetPipeBridgeSignal {
+    param(
+        [Parameter(Mandatory)]$Job,
+        [Parameter(Mandatory)][ValidateSet('listening','data')][string]$Signal,
+        [int]$TimeoutMs = 1000,
+        [int]$PollMs = 50,
+        [System.Diagnostics.Process]$Process = $null
+    )
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        $child = $null
+        while ($true) {
+            if (-not $child -and $Job.ChildJobs -and $Job.ChildJobs.Count -gt 0) { $child = $Job.ChildJobs[0] }
+            if ($child) {
+                foreach ($o in @($child.Output)) { if ([string]$o -eq $Signal) { return $true } }
+                if ($child.State -notin @('NotStarted','Running')) { return $false }
+            }
+            if ($Process) { try { if ($Process.HasExited) { return $false } } catch { } }
+            if ($sw.ElapsedMilliseconds -ge $TimeoutMs) { return $false }
+            Start-Sleep -Milliseconds $PollMs
+        }
+    } catch {
+        Write-Log ("Wait-HeadsetPipeBridgeSignal: {0}" -f $_.Exception.Message) -Level DEBUG
+        return $false
+    } finally {
+        $sw.Stop()
+    }
 }
 
 # Quotes/escapes a single argument for ProcessStartInfo.Arguments (a single
@@ -881,8 +927,13 @@ function start-screenCopy {
 
     # Guard: skip if a scrcpy window for this headset is already running
     if (Get-ScrcpyProcess -displayName $displayName) {
+        # No sleep here (S3-5): this used to wait 5 s, which froze the caller (the VRMonitor loop)
+        # for nothing - the guard alone prevents the second instance, and every caller runs at most
+        # once per tick. Say whether this process owns the session, for diagnosis.
+        $owned = ($global:HeadsetPipelines -and $global:HeadsetPipelines.ContainsKey($displayName)) -or
+                 ($script:ScrcpyLaunchState -and $script:ScrcpyLaunchState.ContainsKey($displayName))
         Write-Log -Message ($msg.Scrcpy.AlreadyRunning -f $displayName) -Level WARNING
-        Start-Sleep -Seconds 5
+        Write-Log ("start-screenCopy: {0} already running, session owned by this process: {1}" -f $displayName, [bool]$owned) -Level DEBUG
         return
     }
 
@@ -1052,7 +1103,12 @@ function start-screenCopy {
         Stop-HeadsetPipeline -SafeName $displayName
         try {
             $bridgeJob = Start-HeadsetPipeBridge -SafeName $displayName
-            Start-Sleep -Milliseconds 500   # let the job create both pipe-server objects
+            # Wait for the job to create both pipe-server objects (it emits 'listening'), at most
+            # 1 s: scrcpy opens pipe-in only after it has connected to the device, which takes
+            # longer than that, so proceeding at the cap is what the old fixed 500 ms did.
+            $bridgeWait = [System.Diagnostics.Stopwatch]::StartNew()
+            $bridgeReady = Wait-HeadsetPipeBridgeSignal -Job $bridgeJob -Signal 'listening' -TimeoutMs 1000
+            Write-Log ("start-screenCopy: pipe bridge for {0} listening={1} after {2} ms" -f $displayName, $bridgeReady, $bridgeWait.ElapsedMilliseconds) -Level DEBUG
         } catch {
             Write-Log -Message ("Failed to start pipe bridge for {0}: {1}" -f $displayName, $_.Exception.Message) -Level "ERROR"
             return
@@ -1093,7 +1149,12 @@ function start-screenCopy {
         # Wait for scrcpy to open its record file (connect to pipe-in) and produce the first
         # video packets so the H.264 extradata is available - ffmpeg needs it for the RTSP
         # PUBLISH SDP, otherwise mediamtx rejects with 400 Bad Request.
-        Start-Sleep -Milliseconds 3000
+        # The bridge emits 'data' once scrcpy's first bytes (Matroska header + extradata) are in
+        # (S3-5); wait for that, 100 ms period, at most the 3 s the old fixed sleep took. A scrcpy
+        # that exits, or a bridge that ends, stops the wait early (ffmpeg then fails as before).
+        $dataWait = [System.Diagnostics.Stopwatch]::StartNew()
+        $dataReady = Wait-HeadsetPipeBridgeSignal -Job $bridgeJob -Signal 'data' -TimeoutMs 3000 -PollMs 100 -Process $scrcpyProc
+        Write-Log ("start-screenCopy: first scrcpy data for {0} seen={1} after {2} ms" -f $displayName, $dataReady, $dataWait.ElapsedMilliseconds) -Level DEBUG
         try {
             $pathName = (ConvertTo-RestreamPathName -HeadsetName $displayName)
             $rtspUrl  = "rtsp://127.0.0.1:$($global:mediamtxRtspPort)/$pathName"
@@ -1817,7 +1878,7 @@ function Watch-ScrcpyProcesses {
                     if (-not $runningScrcpyProcess_forThisheadset.HasExited) {
                         if ($hadWindow) { Write-Log ($msg.Scrcpy.StopTimeout -f $headset.Name) -Level WARNING }
                         Stop-Process -Id $runningScrcpyProcess_forThisheadset.Id -Force -ErrorAction SilentlyContinue
-                        Start-Sleep -Seconds 1
+                        try { [void]$runningScrcpyProcess_forThisheadset.WaitForExit(1000) } catch { }
                     }
                     Complete-DirectRecording -SafeName (Convert-Displayname $headset.Name)
                     # Tear the old pipeline down HERE (ffmpeg, bridge, and the old recording file is
@@ -1881,7 +1942,7 @@ function Stop-Scrcpy {
                 Write-Log "Stopping a windowless scrcpy (its recording, if any, is finalised by ffmpeg)." -Level DEBUG
             }
             Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-            Start-Sleep -Seconds 1
+            try { [void]$proc.WaitForExit(1000) } catch { }
         }
     }
 
