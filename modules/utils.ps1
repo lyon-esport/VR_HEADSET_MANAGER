@@ -299,23 +299,6 @@ function Get-FormattedUptime {
 }
 
 
-# Print "<prefix> N..." on a single line, counting down once per second.
-# Used by headsets_dashboard.ps1 and any "wait then refresh" loop.
-function Wait-WithCountdown {
-    param(
-        [Parameter(Mandatory = $true)]
-        [int]$Seconds,
-        [string]$Prefix = 'Refreshing in'
-    )
-    if ($Seconds -le 0) { return }
-    for ($i = $Seconds; $i -ge 1; $i--) {
-        Write-Host -NoNewline ("`r{0} {1}s ..." -f $Prefix, $i)
-        Start-Sleep -Seconds 1
-    }
-    Write-Host -NoNewline ("`r" + (' ' * ($Prefix.Length + 12)) + "`r")
-}
-
-
 # Validate that a constructed file path stays under the project root.
 # Returns the resolved absolute path on success, or $null if it would escape.
 # Use this for any web-route handler that builds a path from request input.
@@ -568,37 +551,6 @@ function Get-ComputerWifiInfo {
         InterfaceAlias = $adapter.InterfaceAlias
         Password       = $wifiPassword
     }
-}
-
-
-# Returns the SSID of the WiFi network this computer is connected to, or $null.
-# Thin wrapper over Get-ComputerWifiInfo - prefer that function when you also
-# need the password, so the netsh export runs only once.
-function Get-ComputerWifiSSID {
-    $info = Get-ComputerWifiInfo
-    if ($info) { return $info.Ssid }
-    return $null
-}
-
-
-# Returns the plain-text password stored for a given network, or $null.
-# $SSID accepts either an SSID or a WLAN profile name: when it does not match a
-# saved profile directly, the profile whose exported SSID equals it is used.
-function Get-ComputerWifiPassword {
-    param([string]$SSID)
-    if ([string]::IsNullOrWhiteSpace($SSID)) { return $null }
-
-    $target = $SSID.Trim()
-    $saved  = @(Get-WlanProfileName)
-    if ($saved.Count -gt 0 -and $saved -notcontains $target) {
-        # Not a profile name - it may be an SSID whose profile is named
-        # differently. Fall back to the currently connected network when it
-        # matches, which covers the common case without exporting every profile.
-        $info = Get-ComputerWifiInfo
-        if ($info -and $info.Ssid -eq $target) { return $info.Password }
-        return $null
-    }
-    return Get-WlanProfileKey -ProfileName $target
 }
 
 

@@ -1914,26 +1914,3 @@ function Convert-Displayname {
 }
 
 
-function Install-ScrcpyDependencies {
-    param (
-        [string]$scrcpyFolder
-    )
-    # Create the scrcpy folder if it doesn't exist
-    # scrcpy-server
-    if (-not (Test-Path -LiteralPath "C:\msys64\mingw64\share\scrcpy\scrcpy-server")) {
-        New-Item -Path "C:/msys64/mingw64/share/scrcpy/" -ItemType Directory -Force
-        Copy-Item -LiteralPath "$scrcpyFolder\scrcpy-server" -Destination "C:\msys64\mingw64\share\scrcpy\" -Force
-        Write-Log $msg.Scrcpy.ServerFileCopied -Level INFO
-    } else {
-        #Write-Log "Scrcpy server file already exists." -Level DEBUG
-    }
-    # scrcpy.png
-    $destinationPath = "C:/msys64/mingw64/share/icons/hicolor/256x256/apps/scrcpy.png"
-    if (-not (Test-Path -LiteralPath $destinationPath)) {
-        New-Item -Path ([System.IO.Path]::GetDirectoryName($destinationPath)) -ItemType Directory -Force
-        Copy-Item -LiteralPath "$scrcpyFolder\icon.png" -Destination $destinationPath -Force
-        Write-Log $msg.Scrcpy.IconFileCopied -Level INFO
-    } else {
-        #Write-Log "Scrcpy icon file already exists." -Level DEBUG
-    }
-}

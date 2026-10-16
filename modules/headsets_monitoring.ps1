@@ -4,24 +4,6 @@
 
 $script:ScrcpyPidCache = @{}   # keyed by IP; value: scrcpy PID. Persists for runspace lifetime.
 
-function Test-VRMonitor { #For tests purpose only
-Copilot: Check Status
-
-    $job = Get-Job -Name "VRMonitor"
-    Receive-Job -Job $job
-
-
-    # 2. Stop the job (if running)
-    if ($job.State -eq "Running") {
-        Stop-Job -Job $job
-    }
-
-    # 3. Retrieve the latest results (optional)
-    $results = Receive-Job -Job $job
-    Write-Host $results
-    # 4. Remove the job
-    Remove-Job -Job $job
-}
 
 
 

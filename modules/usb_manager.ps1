@@ -681,14 +681,3 @@ function Update-UsbWatchState {
 }
 
 
-function Clear-UsbMemo {
-    <#
-    .SYNOPSIS
-    Forgets the onboarding memo, so the next tick re-onboards from scratch.
-    Used by operator actions that deliberately change the device's WiFi state.
-    #>
-    param([string]$Serial)
-    if ($Serial) { $script:UsbMemo.Remove($Serial) | Out-Null }
-    else         { $script:UsbMemo = @{} }
-    $script:UsbLastSerial = $null
-}

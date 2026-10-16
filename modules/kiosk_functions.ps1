@@ -485,26 +485,6 @@ function Get-KioskWallUrl {
 }
 
 
-# ---------------------------------------------------------------------------
-# RETIRED PATH HELPERS
-#
-# The three helpers below name files the application no longer reads or writes:
-# agent reports, the command queue and the auto-add denylist are tables now.
-# They are kept because the legacy importer still has to find those files once,
-# on the first startup after the migration, and because a support request may
-# ask where the pre-migration data went. Do not use them in new code.
-# ---------------------------------------------------------------------------
-
-function Get-KioskAgentReportPath {
-    <#
-    .SYNOPSIS
-    RETIRED - path of the pre-migration data\kiosks_agent.json. The agent cache
-    is the kiosk_agent_reports table now; this is only for the legacy importer.
-    #>
-    return (Join-Path $global:ScriptPath "data\kiosks_agent.json")
-}
-
-
 # Get-KioskCommandFolder and ConvertTo-KioskIpToken were removed here.
 #
 # They served the pre-migration queue, which was one JSON file per command under

@@ -1125,19 +1125,6 @@ function Get-UsbDeviceSpeed {
 }
 
 
-function Clear-UsbSpeedCache {
-    <#
-    .SYNOPSIS
-    Drops memoized USB link speeds. Call when a device is unplugged, so a replug
-    into a different port is measured again rather than answered from the memo.
-    #>
-    param([string]$Serial)
-    if (-not $script:UsbSpeedCache) { return }
-    if ($Serial) { $script:UsbSpeedCache.Remove($Serial) | Out-Null }
-    else         { $script:UsbSpeedCache = @{} }
-}
-
-
 function Get-PublishedUsbDevices {
     <#
     .SYNOPSIS
@@ -2151,57 +2138,6 @@ function Invoke-HeadsetReboot {
     try {
         Write-Log ($msg.HeadsetRebooting -f $DeviceId) -Level INFO
         Invoke-AdbCmd -Device $Device -Command "reboot" -adb $adb | Out-Null
-        return $true
-    }
-    catch {
-        Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
-        return $false
-    }
-}
-
-
-function Invoke-HeadsetRecenter {
-    <#
-    .SYNOPSIS
-    Triggers a view recenter on a Meta Quest headset via ADB over WiFi.
-
-    .DESCRIPTION
-    *** NOT WORKING - UNDER INVESTIGATION ***
-
-    Attempted approach: send a proximity-close broadcast (com.oculus.vrpowermanager.prox_close)
-    to simulate putting the headset on, which should trigger RecenterLocalSpace_Internal
-    in com.oculus.vrruntimeservice.
-
-    Logcat confirms RecenterLocalSpace_Internal is called when the user manually recenters
-    via the controller long-press or the hand tracking UI, but the broadcast alone does
-    not reliably trigger it remotely via ADB.
-
-    Other approaches tested with no success:
-      - am broadcast -a com.oculus.vrpowermanager.RECENTER
-      - am broadcast -a com.oculus.vrshell.RECENTER
-      - am broadcast -a com.oculus.guardian.RESET_ORIENTATION
-      - input keyevent --longpress 312 (KEYCODE_STEM_PRIMARY)
-      - input keyevent --longpress 3 (HOME)
-      - service call space 1/2/3
-      - service call runtimeipchelper 1..10
-    #>
-    param (
-        [Parameter(Mandatory=$true)]
-        [PSCustomObject]$Device,
-        [string]$adb = $global:adbPath,
-        [string]$Brand = ""
-    )
-    if (-not $Device) { Write-Log ($msg.AdbWifiConnectFailed -f 'unknown', 'no device') -Level ERROR; return $false }
-    $DeviceId = $Device.DeviceId
-
-    if ($Brand -eq "Pico") {
-        Write-Log "Recenter not supported on Pico ($DeviceId) - no public broadcast surface. Use the in-headset long-press gesture." -Level WARNING
-        return $false
-    }
-
-    try {
-        Write-Log ($msg.HeadsetRecentering -f $DeviceId) -Level INFO
-        Invoke-AdbCmd -Device $Device -Command "shell am broadcast -a com.oculus.vrpowermanager.prox_close" -adb $adb | Out-Null
         return $true
     }
     catch {
@@ -3754,102 +3690,6 @@ function Uninstall-HeadsetApp {
         return $false
     }
 }
-
-
-function Install-HeadsetApp {
-    <#
-    .SYNOPSIS
-    Installs an APK (and optional OBB data folder) onto a VR headset via ADB.
-    .DESCRIPTION
-    $path can be a direct .apk file path, or a folder whose root contains:
-      - <packagename>.apk  (installed via adb install -r)
-      - <packagename>/     (optional OBB data, pushed to /sdcard/Android/obb/<packagename>/)
-    Returns [PSCustomObject]@{PackageName; Version} on success, $false on error or skipped install.
-    If the app is already installed and -Overwrite is not set, returns $false.
-    #>
-    param (
-        [Parameter(Mandatory=$true)]
-        [PSCustomObject]$Device,
-        [Parameter(Mandatory=$true)]
-        [string]$path,
-        [switch]$Overwrite,
-        [string]$adb = $global:adbPath
-    )
-    if (-not $Device) { Write-Log ($msg.AdbWifiConnectFailed -f 'unknown', 'no device') -Level ERROR; return [PSCustomObject]@{ Ok = $false; Error = 'No device' } }
-    $DeviceId = $Device.DeviceId
-
-    try {
-        # --- Resolve APK file ---
-        $isFolder = Test-Path -LiteralPath $path -PathType Container
-        $apkPath  = $null
-
-        if (-not $isFolder) {
-            if (-not ($path -match '\.apk$') -or -not (Test-Path -LiteralPath $path)) {
-                Write-Log ($msg.ApkNotFound -f $path) -Level ERROR
-                return [PSCustomObject]@{ Ok = $false; Error = "APK not found: $path" }
-            }
-            $apkPath = $path
-        } else {
-            $apkFiles = @(Get-ChildItem -LiteralPath $path -Filter '*.apk' -File)
-            if ($apkFiles.Count -eq 0) {
-                Write-Log ($msg.ApkFileNotFound -f $path) -Level ERROR
-                return [PSCustomObject]@{ Ok = $false; Error = "No .apk file found in folder: $path" }
-            }
-            $apkPath = $apkFiles[0].FullName
-        }
-
-        $packageName = [System.IO.Path]::GetFileNameWithoutExtension($apkPath)
-
-        # --- Pre-check: already installed? ---
-        $allApps     = Get-HeadsetInstalledApps -Device $Device -ThirdPartyOnly:$false -adb $adb
-        $isInstalled = [bool]($allApps | Where-Object { $_.PackageName -eq $packageName })
-        if ($isInstalled) {
-            $verMatch         = Invoke-AdbCmd -Device $Device -Command "shell dumpsys package $packageName" -adb $adb | Select-String 'versionName' | Select-Object -Last 1
-            $installedVersion = if ($verMatch -and "$verMatch" -match 'versionName=(\S+)') { $Matches[1] } else { '' }
-            Write-Log ($msg.ApkAlreadyInstalled -f $packageName, $installedVersion) -Level INFO
-            if (-not $Overwrite) {
-                Write-Log ($msg.UserCancelled) -Level INFO
-                return [PSCustomObject]@{ Ok = $false; Error = 'Already installed'; PackageName = $packageName; InstalledVersion = $installedVersion }
-            }
-        }
-
-        # --- Step 1: Install APK ---
-        Write-Log ($msg.InstallingApk) -Level INFO
-        $installOutput = Invoke-AdbCmd -Device $Device -Command "install -r `"$apkPath`"" -TimeoutSeconds 120 -adb $adb
-        $outputText    = if ($installOutput -ne $false) { ($installOutput -join ' ').Trim() } else { '' }
-        if ($installOutput -eq $false -or $outputText -match 'Failure|INSTALL_FAILED') {
-            $errDetail = if ($outputText -match '(INSTALL_FAILED_\S+|\[.+\])') { $Matches[1] } elseif ($outputText) { $outputText } else { 'ADB install command failed' }
-            Write-Log ($msg.ApkInstallFailed) -Level ERROR
-            return [PSCustomObject]@{ Ok = $false; Error = $errDetail }
-        }
-
-        $verMatchPost     = Invoke-AdbCmd -Device $Device -Command "shell dumpsys package $packageName" -adb $adb | Select-String 'versionName' | Select-Object -Last 1
-        $installedVersion = if ($verMatchPost -and "$verMatchPost" -match 'versionName=(\S+)') { $Matches[1] } else { '' }
-        Write-Log ($msg.ApkInstallSuccess -f $packageName, $DeviceId) -Level SUCCESS
-
-        # --- Step 2: Push OBB folder (folder input only) ---
-        if ($isFolder) {
-            $obbFolder = Join-Path $path $packageName
-            if (Test-Path -LiteralPath $obbFolder -PathType Container) {
-                Write-Log ($msg.ObbFolderFound -f $packageName) -Level INFO
-                Invoke-AdbCmd -Device $Device -Command "shell mkdir -p /sdcard/Android/obb/$packageName" -adb $adb | Out-Null
-                $pushResult = Invoke-AdbCmd -Device $Device -Command "push `"$obbFolder`" /sdcard/Android/obb/$packageName" -TimeoutSeconds 300 -adb $adb
-                if ($pushResult -eq $false) {
-                    Write-Log ($msg.ObbPushFailed -f $packageName, $DeviceId, 'ADB push failed') -Level ERROR
-                    return [PSCustomObject]@{ Ok = $false; Error = 'OBB data push failed' }
-                }
-                Write-Log ($msg.ObbPushSuccess -f $packageName, $DeviceId) -Level SUCCESS
-            }
-        }
-
-        return [PSCustomObject]@{ Ok = $true; PackageName = $packageName; Version = $installedVersion }
-    }
-    catch {
-        Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
-        return [PSCustomObject]@{ Ok = $false; Error = $_.ToString() }
-    }
-}
-
 
 
 function Set-HeadsetGuardianPause {

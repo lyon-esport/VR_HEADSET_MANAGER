@@ -503,53 +503,6 @@ function Show-MainMenu {
 
 
 
-function Show-SubMenu-StreamHeadset { # CHOICE 1
-    Clear-Host
-    Write-Host $msg.SelectHeadsetToStream -BackgroundColor Yellow -ForegroundColor Black
-    $headsets = @(get-knownHeadsets)
-    if ($headsets.Count -eq 0){
-        Write-Host $msg.AddHeadsetFirst -ForegroundColor DarkRed -BackgroundColor White
-    }
-    else {
-        #Show-HeadsetsTable
-        Show-HeadsetsTableColored -FieldsToShow @("ID","Name","IPAddress","Ping","ADBWifi","SCRCPY")
-        $userInput = $(Read-Host $msg.YourChoiceCancel).ToUpper()
-        
-        if ($userInput -eq '0') {
-            Write-Log -Message $msg.ReturnPrevious -Level "INFO"
-        }
-        elseif ($userInput -match '^\d+$' -and  $userInput -ge 0 -and $userInput -le $headsets.count) {
-            $headsetName = ($headsets | Where-Object { $_.ID -eq $userInput }).Name
-            $headsetIPAddress = ($headsets | Where-Object { $_.ID -eq $userInput }).IPAddress
-            $headsetRecording = ($headsets | Where-Object { $_.ID -eq $userInput }).Record
-            $headsetProfile = ($headsets | Where-Object { $_.ID -eq $userInput }).ScrcpyProfile
-            if (-not $headsetProfile) { $headsetProfile = "portrait-R-N-45-20" }
-            #convert $headsetRecording to boolean
-            if ($headsetRecording -in @("True", "true", $true)) {
-                $headsetRecording = $true
-            } else {
-                $headsetRecording = $false
-            }
-            Write-Log -Message ($msg.TryingConnection -f $headsetName, $headsetIPAddress) -Level "INFO"
-            #Check ping headset first !
-            if (Test-Connection -ComputerName $headsetIPAddress -Count 1 -Quiet){
-                # VRMonitor owns the pipelines (ADR-0032): it starts the capture on its next fast tick.
-                [void](Request-StreamRestart -HeadsetId ([int]$userInput) -Start -Reason 'console start')
-                Write-Log ($msg.Scrcpy.StartRequested -f $headsetName) -Level INFO
-            }
-            else {
-                Write-Log -Message ($msg.PingKO -f $headsetIPAddress) -Level "WARNING"
-                Start-Sleep -Seconds 5
-            }
-        }
-        else {
-            Write-Log -Message ($msg.InvalidID -f $userInput) -Level "ERROR"
-        }
-    }
-    
-} # TODO
-
-
 function Show-SubMenu-AddHeadset { #CHOICE 2
     Clear-Host
     Start-Sleep -Milliseconds 200
