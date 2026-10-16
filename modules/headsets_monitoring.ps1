@@ -716,6 +716,8 @@ function Start-VRMonitor {
             # at startup, so a row added from an IP alone has no serial in it - without this
             # the USB-first transport could not tell the headset is cabled.
             $learnedSerial    = ''
+            # Memo of the resolved ADB device (Get-HeadsetPollDevice, S5-1).
+            $pollDeviceCache  = @{}
 
             # try/finally around the whole loop: the stop flags exit via return,
             # and this runspace owns a database connection that must be released
@@ -746,7 +748,9 @@ function Start-VRMonitor {
                         if ($workingInfo.ADBWifi) {
                             # USB when the headset is cabled here, WiFi otherwise (and WiFi
                             # again the moment the cable drops - Invoke-AdbCmd retries once).
-                            $device = Resolve-HeadsetAdbDevice -Headset $liveHeadset
+                            # The resolved device is memoised for 2 x refresh_timer (S5-1): no
+                            # "adb devices" per cycle; any failure below drops the memo.
+                            $device = Get-HeadsetPollDevice -Headset $liveHeadset -Cache $pollDeviceCache -MaxAgeSec ($timer * 2)
                             if (-not $device) {
                                 $workingInfo.ADBWifi      = $false
                                 $workingInfo.AdbTransport = "-"
@@ -754,8 +758,11 @@ function Start-VRMonitor {
                                 $workingInfo.AdbTransport = $device.ConnectionType
 
                                 # --- Stage 2: identity + battery ---
-                                $s2 = Get-HeadsetInfoStage2Identity -knownHeadset $liveHeadset -Device $device
+                                $pollData = @{}
+                                $s2 = Get-HeadsetInfoStage2Identity -knownHeadset $liveHeadset -Device $device -PollData $pollData
                                 foreach ($k in $s2.Keys) { $workingInfo.$k = $s2[$k] }
+                                # The combined read failed (transport gone, timeout): resolve again next cycle.
+                                if ($pollData.CallFailed) { $pollDeviceCache.Clear() }
                                 if ($workingInfo.SerialNumber -and $workingInfo.SerialNumber -ne "-") { $learnedSerial = [string]$workingInfo.SerialNumber }
 
                                 # --- Firmware history (slow cadence, one adb call) ---
@@ -789,7 +796,7 @@ function Start-VRMonitor {
                                 }
 
                                 # --- Stage 3: foreground app + installed-apps cache ---
-                                $s3 = Get-HeadsetInfoStage3App -knownHeadset $headset -Device $device
+                                $s3 = Get-HeadsetInfoStage3App -knownHeadset $headset -Device $device -PollData $pollData
                                 foreach ($k in $s3.Keys) { $workingInfo.$k = $s3[$k] }
                                 if ($appsCacheCounter % $appsCacheEvery -eq 0) {
                                     Update-InstalledAppsCache -Device $device -headsetName $headset.Name -HeadsetId ([int]$headset.ID)
@@ -805,6 +812,7 @@ function Start-VRMonitor {
                     # Set-HeadsetIdentity fix that rewrites the whole registry. Clearing here also
                     # reproduces the old build-from-defaults-every-cycle semantics.
                     if (-not $workingInfo.ADBWifi) {
+                        $pollDeviceCache.Clear()
                         $workingInfo.Battery                = "-"
                         $workingInfo.Charging               = "-"
                         $workingInfo.ChargingWattage        = "-"
@@ -2149,12 +2157,136 @@ function Get-HeadsetInfoStage1Reachability {
     return $out
 }
 
+function Get-HeadsetPollSnapshot {
+    <#
+    .SYNOPSIS
+    Battery, controller batteries and foreground app of one headset in ONE adb call.
+
+    .DESCRIPTION
+    Replaces three separate "adb shell dumpsys" spawns per poll cycle (battery,
+    OVRRemoteService, activity activities) with one script whose segments are split on an
+    echoed marker (Invoke-HeadsetDiagShell) and fed to the existing parsers
+    (ConvertFrom-BatteryDump, ConvertFrom-ControllerDump, ConvertFrom-ForegroundActivityLines).
+    The device-side grep keeps the output small: the full "dumpsys activity activities" is
+    hundreds of KB. OVRRemoteService is skipped on Pico (Meta only).
+
+    Returns @{ Ok; Battery; ForegroundPackage }. Ok = $false when the call itself failed
+    (transport gone, timeout): Battery and ForegroundPackage are then $null, i.e. the same
+    "unknown" the separate calls gave. Battery is a Get-HeadsetBatteryStatus-shaped object
+    (controller fields filled on Meta) or $null when the headset returned no battery data.
+    Falls back to the separate calls when Invoke-HeadsetDiagShell is not loaded.
+
+    .EXAMPLE
+    $snap = Get-HeadsetPollSnapshot -Device $device -Brand 'Meta'
+    #>
+    param(
+        [Parameter(Mandatory=$true)]$Device,
+        [string]$Brand = "",
+        [string]$adb = $global:adbPath
+    )
+    $res = @{ Ok = $false; Battery = $null; ForegroundPackage = $null }
+
+    if (-not (Get-Command Invoke-HeadsetDiagShell -ErrorAction SilentlyContinue)) {
+        $res.Battery = Get-HeadsetBatteryStatus -Device $Device -adb $adb -Brand $Brand
+        $res.ForegroundPackage = Get-HeadsetForegroundApp -Device $Device -adb $adb
+        $res.Ok = $true
+        return $res
+    }
+
+    $isPico = ($Brand -eq "Pico")
+    $cmds = @(
+        'dumpsys battery',
+        $(if ($isPico) { 'true' } else { 'dumpsys OVRRemoteService | grep "Paired device:"' }),
+        'dumpsys activity activities | grep -E -A1 "topResumedActivity=|mResumedActivity"'
+    )
+    $seg = Invoke-HeadsetDiagShell -Device $Device -Commands $cmds -TimeoutSeconds 15
+    if ($null -eq $seg) { return $res }
+    $res.Ok = $true
+
+    $battLines = @($seg[0] | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($battLines.Count -gt 0) {
+        $b = ConvertFrom-BatteryDump -Lines $battLines
+        if (-not $isPico) {
+            $c = ConvertFrom-ControllerDump -Lines $seg[1] -DeviceId $Device.DeviceId
+            $b.BatteryControllerLeft  = $c.Left.Battery
+            $b.BatteryControllerRight = $c.Right.Battery
+        }
+        $res.Battery = $b
+    } else {
+        Write-Log ($msg.NoBatteryData -f $Device.DeviceId) -Level WARNING
+    }
+    $res.ForegroundPackage = ConvertFrom-ForegroundActivityLines -Lines $seg[2]
+    return $res
+}
+
+function Get-HeadsetPollDevice {
+    <#
+    .SYNOPSIS
+    The ADB device object of a headset for the poll runspace, memoised in -Cache.
+
+    .DESCRIPTION
+    Resolve-HeadsetAdbDevice runs "adb devices" for a WiFi headset, i.e. one adb.exe spawn
+    per poll cycle just to learn what the previous cycle already knew. The resolved object
+    is kept in -Cache (a hashtable owned by the runspace) for -MaxAgeSec and re-resolved
+    when: it is older than that, -Reset was passed (the caller saw a transport failure or
+    the headset unreachable), a cached USB device is no longer in the published cabled set
+    or USB is held by an operator action (Test-UsbBusy), or a cached WiFi device now has a
+    cable and ADB.prefer_usb is on. Invoke-AdbCmd updates the device object in place on its
+    USB->WiFi fallback, so the cached object always names the transport that last answered.
+    The "adb connect" of an offline headset still happens: a failed call clears the cache
+    and the next cycle goes through Resolve-HeadsetAdbDevice -> Get-AdbWifiDevice again.
+
+    .EXAMPLE
+    $device = Get-HeadsetPollDevice -Headset $liveHeadset -Cache $deviceCache -MaxAgeSec 10
+    #>
+    param(
+        [Parameter(Mandatory=$true)]$Headset,
+        [Parameter(Mandatory=$true)][hashtable]$Cache,
+        [int]$MaxAgeSec = 10,
+        [switch]$Reset
+    )
+
+    if ($Reset) { $Cache.Clear() }
+
+    $dev = $Cache.Device
+    if ($dev) {
+        $serial = if ($Headset.SerialNumber) { ([string]$Headset.SerialNumber).Trim() } else { '' }
+        if ($serial -eq '-') { $serial = '' }
+        $age     = ([datetime]::UtcNow - $Cache.At).TotalSeconds
+        $cabled  = $false
+        if ($serial -and (Get-Command Get-PublishedUsbDevices -ErrorAction SilentlyContinue)) {
+            $cabled = [bool](@(Get-PublishedUsbDevices | Where-Object { $_.Serial -eq $serial }).Count)
+        }
+        $busy = $false
+        if (Get-Command Test-UsbBusy -ErrorAction SilentlyContinue) { $busy = [bool](Test-UsbBusy) }
+        $preferUsb = if ($null -ne $global:ADB_prefer_usb) { [bool]$global:ADB_prefer_usb } else { $true }
+
+        $valid = ($age -ge 0 -and $age -lt $MaxAgeSec)
+        if ($valid -and $dev.ConnectionType -eq 'USB'  -and (-not $cabled -or $busy)) { $valid = $false }
+        if ($valid -and $dev.ConnectionType -eq 'WiFi' -and $cabled -and $preferUsb -and -not $busy) { $valid = $false }
+        if ($valid -and $Cache.IP -ne [string]$Headset.IPAddress) { $valid = $false }
+        if ($valid) { return $dev }
+        $Cache.Clear()
+    }
+
+    $dev = Resolve-HeadsetAdbDevice -Headset $Headset
+    if ($dev) {
+        $Cache.Device = $dev
+        $Cache.At     = [datetime]::UtcNow
+        $Cache.IP     = [string]$Headset.IPAddress
+    }
+    return $dev
+}
+
 function Get-HeadsetInfoStage2Identity {
     # Stage 2 (medium): model + serial + battery dumpsys. Requires a connected $Device.
     param(
         [Parameter(Mandatory=$true)][PSCustomObject]$knownHeadset,
         [Parameter(Mandatory=$true)]$Device,
-        [string]$adb = $global:adbPath
+        [string]$adb = $global:adbPath,
+        # Filled with what the combined read also fetched (ForegroundRead, ForegroundPackage)
+        # so Stage 3 does not run a second adb call for the foreground app.
+        [hashtable]$PollData
     )
     $out = @{
         Brand = ""; Model = "-"; SerialNumber = "-"
@@ -2172,7 +2304,15 @@ function Get-HeadsetInfoStage2Identity {
             if (-not [string]::IsNullOrWhiteSpace($bm.Serial)) { $out.SerialNumber = $bm.Serial }
         }
 
-        $batteryInfo = Get-HeadsetBatteryStatus -Device $Device -adb $adb -Brand $out.Brand
+        # Battery, controllers and foreground app in ONE adb call (S5-1).
+        $snap = Get-HeadsetPollSnapshot -Device $Device -Brand $out.Brand -adb $adb
+        $batteryInfo = $snap.Battery
+        if ($PollData -ne $null) {
+            # A failed call is final for this cycle: Stage 3 reports "-", no second attempt.
+            $PollData.ForegroundRead    = $true
+            $PollData.ForegroundPackage = $snap.ForegroundPackage
+            $PollData.CallFailed        = -not [bool]$snap.Ok
+        }
         if ($batteryInfo) {
             if ($null -ne $batteryInfo.Level)    { $out.Battery  = "$($batteryInfo.Level) %" }
             if ($null -ne $batteryInfo.Charging) { $out.Charging = $batteryInfo.Charging }
@@ -2255,11 +2395,14 @@ function Get-HeadsetInfoStage3App {
     param(
         [Parameter(Mandatory=$true)][PSCustomObject]$knownHeadset,
         [Parameter(Mandatory=$true)]$Device,
-        [string]$adb = $global:adbPath
+        [string]$adb = $global:adbPath,
+        # From Stage 2 when it already read the foreground app with the battery (S5-1).
+        [hashtable]$PollData
     )
     $out = @{ RunningApp = "-"; RunningAppIcon = "" }
     try {
-        $pkg = Get-HeadsetForegroundApp -Device $Device -adb $adb
+        $pkg = if ($PollData -ne $null -and $PollData.ForegroundRead) { $PollData.ForegroundPackage }
+               else { Get-HeadsetForegroundApp -Device $Device -adb $adb }
         if ($pkg) {
             $appInfo = Get-AppInfo -PackageName $pkg -searchOnline $false
             $out.RunningApp     = if ($appInfo.DisplayName) { $appInfo.DisplayName } else { $pkg }
@@ -2301,10 +2444,11 @@ function Get-KnownHeadsetInfos {
     }
     $result.AdbTransport = $device.ConnectionType
 
-    $s2 = Get-HeadsetInfoStage2Identity -knownHeadset $knownHeadset -Device $device -adb $adb
+    $pollData = @{}
+    $s2 = Get-HeadsetInfoStage2Identity -knownHeadset $knownHeadset -Device $device -adb $adb -PollData $pollData
     foreach ($k in $s2.Keys) { $result.$k = $s2[$k] }
 
-    $s3 = Get-HeadsetInfoStage3App -knownHeadset $knownHeadset -Device $device -adb $adb
+    $s3 = Get-HeadsetInfoStage3App -knownHeadset $knownHeadset -Device $device -adb $adb -PollData $pollData
     foreach ($k in $s3.Keys) { $result.$k = $s3[$k] }
 
     return $result

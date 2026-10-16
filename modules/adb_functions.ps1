@@ -1720,20 +1720,20 @@ function Get-HeadsetModel {
 }
 
 
-function Get-QuestControllerBatteryStatus {
+function ConvertFrom-ControllerDump {
     <#
     .SYNOPSIS
-    Retrieves Quest controller battery, connection status and tracking state
-    using OVRRemoteService dumpsys.
-    #>
+    Parses the "Paired device:" lines of "dumpsys OVRRemoteService" into
+    @{ Left = @{Battery;Status;ExternalStatus;TrackingStatus}; Right = ... }.
+    Unknown fields stay $null.
 
+    .EXAMPLE
+    $c = ConvertFrom-ControllerDump -Lines $dump -DeviceId '192.168.1.10:5555'
+    #>
     param (
-        [Parameter(Mandatory=$true)]
-        [PSCustomObject]$Device,
-        [string]$adb = $global:adbPath
+        $Lines,
+        [string]$DeviceId = ''
     )
-    if (-not $Device) { return @{ Left = @{ Battery=$null; Status=$null; ExternalStatus=$null; TrackingStatus=$null }; Right = @{ Battery=$null; Status=$null; ExternalStatus=$null; TrackingStatus=$null } } }
-    $DeviceId = $Device.DeviceId
 
     $result = @{
         Left  = @{
@@ -1750,6 +1750,58 @@ function Get-QuestControllerBatteryStatus {
         }
     }
 
+    $paired = @($Lines | Where-Object { $_ -match "Paired device:" })
+
+    foreach ($line in $paired) {
+
+        if ($line -match "Type:\s+(Left|Right)") {
+            $side = $Matches[1]
+
+            if ($line -match "Battery:\s*(\d+)%") {
+                $result[$side].Battery = [int]$Matches[1]
+            }
+
+            if ($line -match "Status:\s*([A-Za-z]+)") {
+                $result[$side].Status = $Matches[1]
+            }
+
+            if ($line -match "ExternalStatus:\s*(\S+)") {
+                $result[$side].ExternalStatus = $Matches[1].TrimEnd(',')
+                # Null out battery if controller is not connected (e.g. Searching, Disconnected)
+                if ($result[$side].ExternalStatus -notmatch "^CONNECTED") {
+                    $result[$side].Battery = $null
+                }
+            }
+
+            if ($line -match "TrackingStatus:\s*([A-Za-z]+)") {
+                $result[$side].TrackingStatus = $Matches[1]
+            }
+
+            $batteryDisplay = if ($null -ne $result[$side].Battery) { $result[$side].Battery } else { "N/A" }
+            Write-Log ($msg.ControllerBatteryStatus -f $DeviceId, $side, $batteryDisplay, $result[$side].ExternalStatus, $result[$side].TrackingStatus) -Level DEBUG
+        }
+    }
+    return $result
+}
+
+
+function Get-QuestControllerBatteryStatus {
+    <#
+    .SYNOPSIS
+    Retrieves Quest controller battery, connection status and tracking state
+    using OVRRemoteService dumpsys.
+    #>
+
+    param (
+        [Parameter(Mandatory=$true)]
+        [PSCustomObject]$Device,
+        [string]$adb = $global:adbPath
+    )
+    if (-not $Device) { return @{ Left = @{ Battery=$null; Status=$null; ExternalStatus=$null; TrackingStatus=$null }; Right = @{ Battery=$null; Status=$null; ExternalStatus=$null; TrackingStatus=$null } } }
+    $DeviceId = $Device.DeviceId
+
+    $result = ConvertFrom-ControllerDump -Lines @() -DeviceId $DeviceId
+
     try {
         Write-Log ($msg.QueryControllerStatus -f $DeviceId) -Level DEBUG
 
@@ -1759,39 +1811,7 @@ function Get-QuestControllerBatteryStatus {
             return $result
         }
 
-        $lines = $dump | Where-Object { $_ -match "Paired device:" }
-
-        foreach ($line in $lines) {
-
-            if ($line -match "Type:\s+(Left|Right)") {
-                $side = $Matches[1]
-
-                if ($line -match "Battery:\s*(\d+)%") {
-                    $result[$side].Battery = [int]$Matches[1]
-                }
-
-                if ($line -match "Status:\s*([A-Za-z]+)") {
-                    $result[$side].Status = $Matches[1]
-                }
-
-                if ($line -match "ExternalStatus:\s*(\S+)") {
-                    $result[$side].ExternalStatus = $Matches[1].TrimEnd(',')
-                    # Null out battery if controller is not connected (e.g. Searching, Disconnected)
-                    if ($result[$side].ExternalStatus -notmatch "^CONNECTED") {
-                        $result[$side].Battery = $null
-                    }
-                }
-
-                if ($line -match "TrackingStatus:\s*([A-Za-z]+)") {
-                    $result[$side].TrackingStatus = $Matches[1]
-                }
-
-                $batteryDisplay = if ($null -ne $result[$side].Battery) { $result[$side].Battery } else { "N/A" }
-                Write-Log ($msg.ControllerBatteryStatus -f $DeviceId, $side, $batteryDisplay, $result[$side].ExternalStatus, $result[$side].TrackingStatus) -Level DEBUG
-            }
-        }
-
-        return $result
+        return (ConvertFrom-ControllerDump -Lines $dump -DeviceId $DeviceId)
     }
     catch {
         Write-Log ($msg.ControllerStatusFailed -f $_.Exception.Message) -Level ERROR
@@ -1800,23 +1820,20 @@ function Get-QuestControllerBatteryStatus {
 }
 
 
-function Get-HeadsetBatteryStatus {
+function ConvertFrom-BatteryDump {
     <#
     .SYNOPSIS
-    Retrieves battery level, charging state and temperature from a VR headset via ADB.
-    Controller battery: Meta uses dumpsys OVRRemoteService (works). Pico controller
-    battery is not reachable from public ADB (the level lives behind the
-    PXR.IPxrControllerService binder, only callable from a signed system-priv APK)
-    so we return $null for Brand=Pico. TODO: ship a companion APK if needed.
+    Parses the lines of "dumpsys battery" into the battery status object
+    (Level, Charging, TempC, RawStatus, MaxCharging*). The controller fields stay $null.
+
+    .EXAMPLE
+    $b = ConvertFrom-BatteryDump -Lines $batteryInfo
     #>
     param (
         [Parameter(Mandatory=$true)]
-        [PSCustomObject]$Device,
-        [string]$adb = $global:adbPath,
-        [string]$Brand = ""
+        $Lines
     )
-    if (-not $Device) { return $null }
-    $DeviceId = $Device.DeviceId
+    $batteryInfo = @($Lines)
 
     $result = [PSCustomObject]@{
         Level                  = $null
@@ -1830,6 +1847,65 @@ function Get-HeadsetBatteryStatus {
         BatteryControllerRight = $null
     }
 
+    $result.RawStatus = $batteryInfo -join "`n"
+
+    # Battery level
+    $levelMatch = $batteryInfo | Select-String "level:\s+(\d+)"
+    if ($levelMatch) {
+        $result.Level = [int]$levelMatch.Matches[0].Groups[1].Value
+    }
+
+    # Charging state
+    $chargingMatch = $batteryInfo | Select-String "AC powered:\s+(true|false)"
+    if ($chargingMatch) {
+        $result.Charging = $chargingMatch.Matches[0].Groups[1].Value -eq "true"
+    }
+
+    # Temperature (tenths of degree)
+    $tempMatch = $batteryInfo | Select-String "temperature:\s+(\d+)"
+    if ($tempMatch) {
+        $result.TempC = [math]::Round(
+            $tempMatch.Matches[0].Groups[1].Value / 10,
+            1
+        )
+    }
+
+    # Max charging current (microamps -> A) and voltage (microvolts -> V)
+    $currentMatch = $batteryInfo | Select-String "Max charging current:\s+(\d+)"
+    $voltageMatch = $batteryInfo | Select-String "Max charging voltage:\s+(\d+)"
+    if ($currentMatch) {
+        $result.MaxChargingCurrentA = [math]::Round($currentMatch.Matches[0].Groups[1].Value / 1000000, 3)
+    }
+    if ($voltageMatch) {
+        $result.MaxChargingVoltageV = [math]::Round($voltageMatch.Matches[0].Groups[1].Value / 1000000, 3)
+    }
+    if ($result.MaxChargingCurrentA -and $result.MaxChargingVoltageV) {
+        $result.MaxChargingWattageW = [math]::Round($result.MaxChargingCurrentA * $result.MaxChargingVoltageV, 2)
+    }
+    return $result
+}
+
+
+function Get-HeadsetBatteryStatus {
+    <#
+    .SYNOPSIS
+    Retrieves battery level, charging state and temperature from a VR headset via ADB.
+    Controller battery: Meta uses dumpsys OVRRemoteService (works). Pico controller
+    battery is not reachable from public ADB (the level lives behind the
+    PXR.IPxrControllerService binder, only callable from a signed system-priv APK)
+    so we return $null for Brand=Pico. TODO: ship a companion APK if needed.
+    The poll runspace does not call this: it reads battery, controllers and the
+    foreground app in one adb call (Get-HeadsetPollSnapshot) and feeds the same parsers.
+    #>
+    param (
+        [Parameter(Mandatory=$true)]
+        [PSCustomObject]$Device,
+        [string]$adb = $global:adbPath,
+        [string]$Brand = ""
+    )
+    if (-not $Device) { return $null }
+    $DeviceId = $Device.DeviceId
+
     try {
         Write-Log ($msg.BatteryStatusQuery -f $DeviceId) -Level DEBUG
 
@@ -1840,41 +1916,7 @@ function Get-HeadsetBatteryStatus {
             return $null
         }
 
-        $result.RawStatus = $batteryInfo -join "`n"
-
-        # Battery level
-        $levelMatch = $batteryInfo | Select-String "level:\s+(\d+)"
-        if ($levelMatch) {
-            $result.Level = [int]$levelMatch.Matches[0].Groups[1].Value
-        }
-
-        # Charging state
-        $chargingMatch = $batteryInfo | Select-String "AC powered:\s+(true|false)"
-        if ($chargingMatch) {
-            $result.Charging = $chargingMatch.Matches[0].Groups[1].Value -eq "true"
-        }
-
-        # Temperature (tenths of degree)
-        $tempMatch = $batteryInfo | Select-String "temperature:\s+(\d+)"
-        if ($tempMatch) {
-            $result.TempC = [math]::Round(
-                $tempMatch.Matches[0].Groups[1].Value / 10,
-                1
-            )
-        }
-
-        # Max charging current (microamps -> A) and voltage (microvolts -> V)
-        $currentMatch = $batteryInfo | Select-String "Max charging current:\s+(\d+)"
-        $voltageMatch = $batteryInfo | Select-String "Max charging voltage:\s+(\d+)"
-        if ($currentMatch) {
-            $result.MaxChargingCurrentA = [math]::Round($currentMatch.Matches[0].Groups[1].Value / 1000000, 3)
-        }
-        if ($voltageMatch) {
-            $result.MaxChargingVoltageV = [math]::Round($voltageMatch.Matches[0].Groups[1].Value / 1000000, 3)
-        }
-        if ($result.MaxChargingCurrentA -and $result.MaxChargingVoltageV) {
-            $result.MaxChargingWattageW = [math]::Round($result.MaxChargingCurrentA * $result.MaxChargingVoltageV, 2)
-        }
+        $result = ConvertFrom-BatteryDump -Lines $batteryInfo
 
         # Controller battery levels (left & right) - Meta only.
         if ($Brand -ne "Pico") {
@@ -1996,6 +2038,47 @@ function Get-BatteryTimeEstimate {
 }
 
 
+function ConvertFrom-ForegroundActivityLines {
+    <#
+    .SYNOPSIS
+    Package name of the foreground app from the lines of "dumpsys activity activities"
+    (full dump, or filtered with grep -A1 on topResumedActivity=/mResumedActivity), or $null.
+
+    .EXAMPLE
+    ConvertFrom-ForegroundActivityLines -Lines $dumpLines
+    #>
+    param (
+        $Lines
+    )
+    $dumpLines = @($Lines | ForEach-Object { [string]$_ })
+
+    # Quest 3 / Android 12+: the ActivityRecord wraps across two lines:
+    #   line N  : "  topResumedActivity=ActivityRecord{hash u0 "
+    #   line N+1: "com.package.name/com.ClassName tXXXX}"
+    # We want the FIRST match (= the user app, not system overlays).
+    for ($i = 0; $i -lt $dumpLines.Count - 1; $i++) {
+        if ($dumpLines[$i] -match 'topResumedActivity=ActivityRecord\{') {
+            # Most common: package on next line
+            $nextLine = $dumpLines[$i + 1].Trim()
+            if ($nextLine -match '^([\w\.]+)/') {
+                return $Matches[1]
+            }
+            # Same-line format (some Android 10/11 builds)
+            if ($dumpLines[$i] -match 'topResumedActivity.*?\s+([\w\.]+)/') {
+                return $Matches[1]
+            }
+        }
+    }
+
+    # Fallback: mResumedActivity (Quest 2 / older firmware)
+    $line = $dumpLines | Select-String "mResumedActivity" | Select-Object -First 1
+    if ($line -match 'mResumedActivity.*?\s+([\w\.]+)/') {
+        return $Matches[1]
+    }
+    return $null
+}
+
+
 function Get-HeadsetForegroundApp {
     param (
         [Parameter(Mandatory=$true)]
@@ -2006,31 +2089,7 @@ function Get-HeadsetForegroundApp {
 
     try {
         $dumpLines = @(Invoke-AdbCmd -Device $Device -Command "shell dumpsys activity activities" -adb $adb)
-
-        # Quest 3 / Android 12+: the ActivityRecord wraps across two lines:
-        #   line N  : "  topResumedActivity=ActivityRecord{hash u0 "
-        #   line N+1: "com.package.name/com.ClassName tXXXX}"
-        # We want the FIRST match (= the user app, not system overlays).
-        for ($i = 0; $i -lt $dumpLines.Count - 1; $i++) {
-            if ($dumpLines[$i] -match 'topResumedActivity=ActivityRecord\{') {
-                # Most common: package on next line
-                $nextLine = $dumpLines[$i + 1].Trim()
-                if ($nextLine -match '^([\w\.]+)/') {
-                    return $Matches[1]
-                }
-                # Same-line format (some Android 10/11 builds)
-                if ($dumpLines[$i] -match 'topResumedActivity.*?\s+([\w\.]+)/') {
-                    return $Matches[1]
-                }
-            }
-        }
-
-        # Fallback: mResumedActivity (Quest 2 / older firmware)
-        $line = $dumpLines | Select-String "mResumedActivity" | Select-Object -First 1
-        if ($line -match 'mResumedActivity.*?\s+([\w\.]+)/') {
-            return $Matches[1]
-        }
-
+        return (ConvertFrom-ForegroundActivityLines -Lines $dumpLines)
     } catch {
         Write-Log ($msg.AdbInfoFailed -f $headsetIP, $_) -Level ERROR
     }

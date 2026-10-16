@@ -338,6 +338,19 @@ function Invoke-HeadsetNetworkSweep {
     $target = @($networks | Where-Object { $_.HasDefaultGateway })
     if ($target.Count -eq 0) { $target = @($networks | Select-Object -First 1) }
 
+    # Addresses of known headsets whose live status shows ADB up AT that address: they
+    # cannot be "new", so they are not probed. Read ONCE per sweep (one query), not per IP.
+    # A known headset whose ADB is down stays probed - a DHCP swap may have put another
+    # device on its old address.
+    $knownUp = @{}
+    try {
+        foreach ($row in @(Invoke-DbQuery -Name 'status.merged')) {
+            if ($row.IPAddress -and ((ConvertTo-DbBool $row.ADBWifi) -eq 1)) { $knownUp[[string]$row.IPAddress] = $true }
+        }
+    } catch {
+        Write-Log ("Headset discovery: live status unavailable, probing every address - " + $_.Exception.Message) -Level DEBUG
+    }
+
     foreach ($net in $target) {
         Write-Log ($msg.Discovery.SweepStart -f $net.NetworkCIDR) -Level DEBUG
         $open = @()
@@ -353,17 +366,21 @@ function Invoke-HeadsetNetworkSweep {
             if (-not $ip) { continue }
             if (Test-UnknownIp $ip) { continue }
 
+            if ($knownUp.ContainsKey([string]$ip)) {
+                Write-Log ("Headset discovery: " + $ip + " is a known headset with ADB up - not probed.") -Level DEBUG
+                continue
+            }
+
             try {
                 $device = Get-AdbWifiDevice -headsetIP $ip -AdbPort $Port -adb $adb
                 if (-not $device) { continue }
 
-                $serial = (Invoke-AdbCmd -Device $device -Command "shell getprop ro.serialno" -adb $adb) | Select-Object -First 1
-                $model  = (Invoke-AdbCmd -Device $device -Command "shell getprop ro.product.model" -adb $adb) | Select-Object -First 1
-                $brand  = (Invoke-AdbCmd -Device $device -Command "shell getprop ro.product.brand" -adb $adb) | Select-Object -First 1
+                # ONE adb shell for serial + model + brand (was three).
+                $props = Get-AdbPropBatch -Device $device -Properties @('ro.serialno', 'ro.product.model', 'ro.product.brand') -adb $adb
 
-                $serial = ([string]$serial).Trim()
-                $model  = ([string]$model).Trim()
-                $brand  = ([string]$brand).Trim()
+                $serial = ([string]$props['ro.serialno']).Trim()
+                $model  = ([string]$props['ro.product.model']).Trim()
+                $brand  = ([string]$props['ro.product.brand']).Trim()
 
                 if (-not $serial) { continue }
                 if (-not (Test-DiscoveredHeadsetDevice -Brand $brand -Model $model)) {
