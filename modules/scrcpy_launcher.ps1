@@ -500,8 +500,13 @@ function Start-HeadsetPipeBridge {
         [Parameter(Mandatory)][string]$SafeName
     )
     $names = Get-HeadsetPipeNames -SafeName $SafeName
+    # The job host is its own powershell.exe with no name of its own. It writes its PID to
+    # data\bridge_<safe>.pid so the standalone reaper can kill it when main dies (S4-5);
+    # removed again when the bridge ends normally.
+    $bridgePidFile = Join-Path (Join-Path $global:ScriptPath 'data') ("bridge_{0}.pid" -f $SafeName)
     $job = Start-Job -Name "VrmBridge_$SafeName" -ScriptBlock {
-        param($pipeIn, $pipeOut)
+        param($pipeIn, $pipeOut, $pidFile)
+        try { [System.IO.File]::WriteAllText($pidFile, [string]$PID, (New-Object System.Text.UTF8Encoding($false))) } catch {}
         try {
             $srvIn  = New-Object System.IO.Pipes.NamedPipeServerStream(
                 $pipeIn,  [System.IO.Pipes.PipeDirection]::In,  1,
@@ -527,8 +532,9 @@ function Start-HeadsetPipeBridge {
         } finally {
             try { $srvIn.Dispose()  } catch {}
             try { $srvOut.Dispose() } catch {}
+            try { [System.IO.File]::Delete($pidFile) } catch {}
         }
-    } -ArgumentList $names.In, $names.Out
+    } -ArgumentList $names.In, $names.Out, $bridgePidFile
     return $job
 }
 
@@ -840,6 +846,8 @@ function Stop-HeadsetPipeline {
     if ($entry.Bridge) {
         try { Stop-Job   $entry.Bridge -ErrorAction SilentlyContinue } catch {}
         try { Remove-Job $entry.Bridge -Force -ErrorAction SilentlyContinue } catch {}
+        # A stopped job's finally may not have run: drop the reaper's pid file too.
+        try { [System.IO.File]::Delete((Join-Path (Join-Path $global:ScriptPath 'data') ("bridge_{0}.pid" -f $SafeName))) } catch {}
     }
     $global:HeadsetPipelines.Remove($SafeName)
 }
@@ -968,7 +976,7 @@ function start-screenCopy {
     }
 
     # Check that scrcpy exists
-    if (-not (Test-Path $scrcpy)) {
+    if (-not (Test-Path -LiteralPath $scrcpy)) {
         Write-Log -Message ($msg.Scrcpy.NotFound -f $scrcpyPath) -Level "ERROR"
         return
     }
@@ -978,7 +986,7 @@ function start-screenCopy {
         $timestamp_Today = Get-Date -Format "yyyy-MM-dd"
         $recordFolder = Join-Path -Path $global:scrcpyRecordFolder -ChildPath ("${timestamp_Today}\${displayName}")
 
-        if (-not (Test-Path $recordFolder)) {
+        if (-not (Test-Path -LiteralPath $recordFolder)) {
             New-Item -ItemType Directory -Path $recordFolder -Force | Out-Null
         }
         $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
@@ -1912,18 +1920,18 @@ function Install-ScrcpyDependencies {
     )
     # Create the scrcpy folder if it doesn't exist
     # scrcpy-server
-    if (-not (Test-Path -Path "C:\msys64\mingw64\share\scrcpy\scrcpy-server")) {
+    if (-not (Test-Path -LiteralPath "C:\msys64\mingw64\share\scrcpy\scrcpy-server")) {
         New-Item -Path "C:/msys64/mingw64/share/scrcpy/" -ItemType Directory -Force
-        Copy-Item -Path "$scrcpyFolder\scrcpy-server" -Destination "C:\msys64\mingw64\share\scrcpy\" -Force
+        Copy-Item -LiteralPath "$scrcpyFolder\scrcpy-server" -Destination "C:\msys64\mingw64\share\scrcpy\" -Force
         Write-Log $msg.Scrcpy.ServerFileCopied -Level INFO
     } else {
         #Write-Log "Scrcpy server file already exists." -Level DEBUG
     }
     # scrcpy.png
     $destinationPath = "C:/msys64/mingw64/share/icons/hicolor/256x256/apps/scrcpy.png"
-    if (-not (Test-Path -Path $destinationPath)) {
+    if (-not (Test-Path -LiteralPath $destinationPath)) {
         New-Item -Path ([System.IO.Path]::GetDirectoryName($destinationPath)) -ItemType Directory -Force
-        Copy-Item -Path "$scrcpyFolder\icon.png" -Destination $destinationPath -Force
+        Copy-Item -LiteralPath "$scrcpyFolder\icon.png" -Destination $destinationPath -Force
         Write-Log $msg.Scrcpy.IconFileCopied -Level INFO
     } else {
         #Write-Log "Scrcpy icon file already exists." -Level DEBUG

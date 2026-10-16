@@ -355,7 +355,7 @@ function Get-WifiNetworks {
     $path = Get-WifiNetworksPath
     if (-not (Test-Path -LiteralPath $path)) { return @() }
     try {
-        $encrypted = Get-Content -LiteralPath $path -Raw -ErrorAction Stop
+        $encrypted = Get-Content -LiteralPath $path -Raw -Encoding UTF8 -ErrorAction Stop
         if ([string]::IsNullOrWhiteSpace($encrypted)) { throw "empty" }
         $ss   = ConvertTo-SecureString $encrypted.Trim() -ErrorAction Stop
         $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($ss)

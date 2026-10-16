@@ -405,8 +405,8 @@ function Register-DiscoveredHeadset {
 
     # Load existing entries to avoid duplicates
     $existing = @()
-    if (Test-Path $CsvPath) {
-        $existing = Import-Csv -Path $CsvPath -Delimiter ";"
+    if (Test-Path -LiteralPath $CsvPath) {
+        $existing = Import-Csv -LiteralPath $CsvPath -Encoding UTF8 -Delimiter ";"
     }
 
     $alreadyKnown = $existing | Where-Object { $_.IPAddress -eq $Device.IPAddress -and $_.Port -eq $Device.Port }

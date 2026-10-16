@@ -1256,6 +1256,11 @@ function Start-VRMonitor {
                     try { Stop-MediaMtx } catch {}
                 } else {
                     Write-Host "VRMonitor: shutdown flag detected, exiting"
+                    # Graceful shutdown: the pipelines (ffmpeg, bridge, recording) live in THIS
+                    # job's $global:HeadsetPipelines, so main's own Stop-Scrcpy sees none. Tear
+                    # them down here, through their owner, so recordings are finalised (S4-5).
+                    # mediamtx is left to Invoke-AppShutdown.
+                    try { Stop-Scrcpy | Out-Null } catch { Write-Host ("VRMonitor: Stop-Scrcpy at shutdown failed: " + $_.Exception.Message) }
                 }
                 $sharedState["_stop_all"] = $true
                 $deadline = (Get-Date).AddSeconds(5)

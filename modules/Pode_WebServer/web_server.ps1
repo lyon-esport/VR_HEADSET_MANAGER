@@ -135,7 +135,7 @@ $adbPort    = 5555
 $apkPath    = $null
 $apkPackage = 'tdg.oculuswirelessadb'
 try {
-    $cfg = Get-Content $ConfigFilePath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json
+    $cfg = Get-Content -LiteralPath $ConfigFilePath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json
     if ($null -ne $cfg.WebServer.port)        { $port    = [int]$cfg.WebServer.port }
     if ($null -ne $cfg.WebServer.enabled)     { $enabled = [bool]$cfg.WebServer.enabled }
     if ($cfg.ADB.folder) {

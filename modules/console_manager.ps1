@@ -485,7 +485,7 @@ function Show-MainMenu {
                     Write-Host $msg.Refresh -ForegroundColor Red
                     # Reload all modules and config file
                     $scripts_init = Join-Path -Path $global:ScriptPath -ChildPath "\modules\scripts_init.ps1"
-                    if (Test-Path -Path $scripts_init) {
+                    if (Test-Path -LiteralPath $scripts_init) {
                         . $scripts_init
                     } else {
                         Write-Host "Error: The initialization script is missing!" -ForegroundColor Red
@@ -3099,9 +3099,9 @@ function Open-Folder {
     )
     
     # Normalize path and ensure it's treated as a directory
-    $normalizedPath = (Resolve-Path $FolderPath -ErrorAction SilentlyContinue).Path
+    $normalizedPath = (Resolve-Path -LiteralPath $FolderPath -ErrorAction SilentlyContinue).Path
     
-    if ($normalizedPath -and (Test-Path $normalizedPath -PathType Container)) {
+    if ($normalizedPath -and (Test-Path -LiteralPath $normalizedPath -PathType Container)) {
         # Use Start-Process with explorer.exe to reliably open the folder
         Start-Process explorer.exe -ArgumentList $normalizedPath
     }
@@ -3116,7 +3116,7 @@ function Open-File {
         [string]$filePath
     )
 
-    if (Test-Path -Path $filePath) {
+    if (Test-Path -LiteralPath $filePath) {
         Start-Process notepad.exe -ArgumentList "`"$filePath`""
     } else {
         Write-Log -Message ($msg.FileNotExist -f $filePath) -Level "ERROR"

@@ -107,10 +107,12 @@ Invoke-RegressionTest -Name 'every referenced named query exists on disk' -Test 
     $searchFiles = @(Get-DbStaticSourceFile) + @(Get-Item -LiteralPath $dbModule)
     foreach ($file in $searchFiles) {
         $text = Get-DbStaticCodeText -Path $file.FullName
-        foreach ($m in [regex]::Matches($text, "-Name\s+'([a-z0-9_]+\.[a-z0-9_]+)'")) {
+        # (?<!Get-JobFilePath\s): that helper also takes -Name, with a FILE name
+        # ('vrm_benchmark.json'), which is not a named query.
+        foreach ($m in [regex]::Matches($text, "(?<!Get-JobFilePath\s+)-Name\s+'([a-z0-9_]+\.[a-z0-9_]+)'")) {
             $referenced.Add($m.Groups[1].Value) | Out-Null
         }
-        foreach ($m in [regex]::Matches($text, '-Name\s+"([a-z0-9_]+\.[a-z0-9_]+)"')) {
+        foreach ($m in [regex]::Matches($text, '(?<!Get-JobFilePath\s+)-Name\s+"([a-z0-9_]+\.[a-z0-9_]+)"')) {
             $referenced.Add($m.Groups[1].Value) | Out-Null
         }
     }
@@ -133,6 +135,12 @@ Invoke-RegressionTest -Name 'no named query file is orphaned' -Test {
     $allText = New-Object System.Text.StringBuilder
     foreach ($file in (@(Get-DbStaticSourceFile) + @(Get-Item -LiteralPath $dbModule))) {
         [void]$allText.AppendLine((Get-DbStaticCodeText -Path $file.FullName))
+    }
+    # Test files count as callers too: a query kept for the harness (status.get, used by
+    # the concurrency stress loop) is not an orphan.
+    foreach ($tf in @(Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.ps1' -File)) {
+        if ($tf.Name -eq 'Test-DbStatic.ps1') { continue }
+        [void]$allText.AppendLine((Get-Content -LiteralPath $tf.FullName -Raw -Encoding UTF8))
     }
     $haystack = $allText.ToString()
 

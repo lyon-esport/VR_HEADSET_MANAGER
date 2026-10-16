@@ -721,11 +721,11 @@ function Install-OculusWirelessAdbApk {
     $packageName = $global:ADBWirelessActivatorPackageName
 
     # 1. Pre-flight verification
-    if (-not (Test-Path $adb)) {
+    if (-not (Test-Path -LiteralPath $adb)) {
         Write-Log ($msg.ADBNotFound -f $global:adbFolder) -Level ERROR
         return $false
     }
-    if (-not (Test-Path $apkPath)) {
+    if (-not (Test-Path -LiteralPath $apkPath)) {
         Write-Log ($msg.ApkNotFound -f $apkPath) -Level ERROR
         return $false
     }
@@ -852,7 +852,7 @@ function Enable-WiFiADB {
     )
 
     # 1. Initial verification
-    if (-not (Test-Path $adb)) {
+    if (-not (Test-Path -LiteralPath $adb)) {
         Write-Log ($msg.ADBExecutableNotFound -f $adb) -Level ERROR
         return $false
     }
@@ -1023,7 +1023,7 @@ function Get-AdbUsbDevice {
         [string]$adb = $global:adbPath
     )
 
-    if (-not (Test-Path $adb)) {
+    if (-not (Test-Path -LiteralPath $adb)) {
         Write-Log ($msg.ADBExecutableNotFound -f $adb) -Level ERROR
         return $null
     }
@@ -1354,7 +1354,7 @@ function Enable-AdbTcpIp {
         [string]$adb  = $global:adbPath
     )
 
-    if (-not $adb -or -not (Test-Path $adb)) {
+    if (-not $adb -or -not (Test-Path -LiteralPath $adb)) {
         return [PSCustomObject]@{ ok = $false; error = "ADB not found" }
     }
 
@@ -1613,7 +1613,7 @@ function Get-AdbWifiDevice {
 
     $DeviceId = "${headsetIP}:${AdbPort}"
 
-    if (-not (Test-Path $adb)) {
+    if (-not (Test-Path -LiteralPath $adb)) {
         Write-Log ($msg.ADBExecutableNotFound -f $adb) -Level ERROR
         return $null
     }
@@ -2062,7 +2062,7 @@ function Disconnect-ADBConnections {
         [string]$adb = $global:adbPath
     )
     try {
-        if (-not (Test-Path $adb)) {
+        if (-not (Test-Path -LiteralPath $adb)) {
             throw "ADB executable not found at $adb"
         }
         

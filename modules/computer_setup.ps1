@@ -328,7 +328,7 @@ function Unblock-ADBFirewallRule {
         [switch]$ReturnTask
     )
     $ruleName = "_[VR_HEADSET_MANAGER]ADB_Allowed"
-    if (-not (Test-Path -Path $AdbPath)) {
+    if (-not (Test-Path -LiteralPath $AdbPath)) {
         Write-Log ($msg.ADBExecutableNotFound -f $AdbPath) -Level ERROR
         return $false
     }

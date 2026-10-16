@@ -76,6 +76,43 @@ function Test-HttpClientAbort {
     return $false
 }
 
+# Helper: read a request body as UTF-8 text with a hard size cap (S6-2). A cap is robustness,
+# not auth (ADR-0014): an unbounded ReadToEnd() on the accept loop let one oversized or
+# endless POST pin the loop and the memory. ContentLength64 is checked first; a chunked
+# body (length -1) is counted while it is read, in 8 KB blocks. When the cap is exceeded
+# and -Response is given, the 413 {"ok":false,"error":"body too large"} answer is sent and
+# the response closed here, then an InvalidDataException('BODY_TOO_LARGE') is thrown so the
+# route stops (its own catch finds the response already closed and stays silent).
+# Example: $body = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
+function Read-RequestBody {
+    param(
+        [Parameter(Mandatory = $true)] $Request,
+        [int]$MaxBytes = 65536,
+        $Response = $null
+    )
+    $reject = {
+        if ($Response) {
+            Send-JsonResponse -Response $Response -StatusCode 413 -Body @{ ok = $false; error = 'body too large' }
+            Close-HttpResponse -Response $Response
+        }
+        throw [System.IO.InvalidDataException]::new('BODY_TOO_LARGE')
+    }
+    if ($Request.ContentLength64 -gt $MaxBytes) { & $reject }
+    $ms = [System.IO.MemoryStream]::new()
+    try {
+        $buf = [byte[]]::new(8192)
+        $in  = $Request.InputStream
+        while (($n = $in.Read($buf, 0, $buf.Length)) -gt 0) {
+            if (($ms.Length + $n) -gt $MaxBytes) { & $reject }
+            $ms.Write($buf, 0, $n)
+        }
+        $bytes = $ms.ToArray()
+    } finally { $ms.Dispose() }
+    $skip = 0
+    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) { $skip = 3 }
+    return [System.Text.Encoding]::UTF8.GetString($bytes, $skip, $bytes.Length - $skip)
+}
+
 function Get-KnownHeadsetsCached {
     # Cached @(Get-KnownHeadsets). Kept as an ORDERED ARRAY (not a hashtable) so the
     # registry's own row order - the drag-and-drop display order set by Set-HeadsetsOrder -
@@ -316,6 +353,11 @@ function Invoke-HttpRouteGuarded {
         $reqPath   = '?'
         try { $reqMethod = $Context.Request.HttpMethod; $reqPath = $Context.Request.Url.LocalPath } catch { }
         $reqLine = "Web server: request failed ($reqMethod $reqPath): " + $_.Exception.Message
+        if ($_.Exception -is [System.IO.InvalidDataException] -and $_.Exception.Message -eq 'BODY_TOO_LARGE') {
+            # Read-RequestBody already answered 413 and closed the response.
+            Write-Log $reqLine -Level DEBUG
+            return
+        }
         if (Test-HttpClientAbort -Exception $_.Exception) {
             Write-Log $reqLine -Level DEBUG
         } else {
@@ -348,9 +390,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/renameheadset  body: {"name":"Q3_BLUE","newname":"Q3 Red"}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/renameheadset') {
             try {
-                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body    = $reader.ReadToEnd()
-                $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json    = $body | ConvertFrom-Json
 
                 # name is the internal display_name (underscores), newname is raw
@@ -395,9 +435,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # Delegates to Set-HeadsetsOrder (headsets_manager.ps1) which saves CSV and regenerates HTML monitors.
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/reorderheadsets') {
             try {
-                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body    = $reader.ReadToEnd()
-                $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json    = $body | ConvertFrom-Json
 
                 if (-not $json.order -or $json.order.Count -eq 0) { throw "Empty order" }
@@ -432,9 +470,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/updateip  body: {"name":"Q3_BLUE","ip":"192.168.1.99"}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/updateip') {
             try {
-                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body    = $reader.ReadToEnd()
-                $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json    = $body | ConvertFrom-Json
 
                 $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
@@ -490,9 +526,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/recording  body: {"name":"Q3_BLUE","value":true}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/recording') {
             try {
-                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body    = $reader.ReadToEnd()
-                $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json    = $body | ConvertFrom-Json
 
                 $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
@@ -617,7 +651,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # scrcpy session in the new mode. Mirrors the CLI Config -> V sub-menu.
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/capture-mode') {
             try {
-                $body = (New-Object System.IO.StreamReader($request.InputStream)).ReadToEnd()
+                $body = (Read-RequestBody -Request $request -Response $response -MaxBytes 65536)
                 $j = $body | ConvertFrom-Json -ErrorAction Stop
                 $mode = "$($j.mode)"
                 if ($mode -notin @('StreamOnly','StreamAndLocalWindow','LocalWindow')) {
@@ -635,9 +669,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/removeheadset  body: {"name":"Q3_BLUE"}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/removeheadset') {
             try {
-                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body    = $reader.ReadToEnd()
-                $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json    = $body | ConvertFrom-Json
 
                 $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
@@ -671,9 +703,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/reboot  body: {"name":"Q3_BLUE"}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/reboot') {
             try {
-                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body    = $reader.ReadToEnd()
-                $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json    = $body | ConvertFrom-Json
                 $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
                 if (-not $safeName) { throw "Invalid headset name" }
@@ -706,9 +736,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/shutdown  body: {"name":"Q3_BLUE"}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/shutdown') {
             try {
-                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body    = $reader.ReadToEnd()
-                $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json    = $body | ConvertFrom-Json
                 $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
                 if (-not $safeName) { throw "Invalid headset name" }
@@ -744,9 +772,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
                 $filter          = $null
                 $alsoShutdownApp = $false
                 if ($request.HasEntityBody) {
-                    $reader  = New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)
-                    $bodyStr = $reader.ReadToEnd()
-                    $reader.Close()
+                    $bodyStr = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                     if ($bodyStr -and $bodyStr.Trim() -ne '') {
                         try {
                             $parsed = $bodyStr | ConvertFrom-Json
@@ -982,8 +1008,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/headset-screen-frame') {
             try {
                 if ($request.ContentLength64 -gt 4096) { throw "Request body too large" }
-                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body   = $reader.ReadToEnd(); $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 4096
                 $json   = $body | ConvertFrom-Json
                 $frameId = 0
                 if (-not [int]::TryParse([string]$json.id, [ref]$frameId) -or $frameId -le 0) { throw "INVALID_ID" }
@@ -1094,8 +1119,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -in @('/api/eye-merge/frame','/api/eye-merge/calibrate')) {
             try {
                 if ($request.ContentLength64 -gt 4096) { throw 'Request body too large' }
-                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body   = $reader.ReadToEnd(); $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 4096
                 $json   = $body | ConvertFrom-Json
                 $emId = 0
                 if (-not [int]::TryParse([string]$json.id, [ref]$emId) -or $emId -le 0) { throw 'Invalid or missing headset id.' }
@@ -1143,8 +1167,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -in @('/api/eye-merge/import','/api/eye-merge/enable')) {
             try {
                 if ($request.ContentLength64 -gt 262144) { throw 'Request body too large' }
-                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body   = $reader.ReadToEnd(); $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 262144
                 $json   = $body | ConvertFrom-Json
                 if ($request.Url.LocalPath -eq '/api/eye-merge/import') {
                     $emTarget = if ($json.model) { [string]$json.model } else { '' }
@@ -1175,8 +1198,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
                     [void][int]::TryParse([string]$request.QueryString['id'], [ref]$ipdId)
                 } else {
                     if ($request.ContentLength64 -gt 4096) { throw 'Request body too large' }
-                    $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                    $body   = $reader.ReadToEnd(); $reader.Close()
+                    $body = Read-RequestBody -Request $request -Response $response -MaxBytes 4096
                     $json   = $body | ConvertFrom-Json
                     [void][int]::TryParse([string]$json.id, [ref]$ipdId)
                     $ipdWant = [string]$json.ipd
@@ -1222,8 +1244,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/headset-diag/action') {
             try {
                 if ($request.ContentLength64 -gt 8192) { throw "Request body too large" }
-                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body   = $reader.ReadToEnd(); $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 8192
                 $json   = $body | ConvertFrom-Json
                 $diagId = 0
                 if (-not [int]::TryParse([string]$json.id, [ref]$diagId) -or $diagId -le 0) { throw "INVALID_ID" }
@@ -1259,8 +1280,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/headset-diag/command') {
             try {
                 if ($request.ContentLength64 -gt 8192) { throw "Request body too large" }
-                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body   = $reader.ReadToEnd(); $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 8192
                 $json   = $body | ConvertFrom-Json
                 $diagId = 0
                 if (-not [int]::TryParse([string]$json.id, [ref]$diagId) -or $diagId -le 0) { throw "INVALID_ID" }
@@ -1344,9 +1364,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
                 $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
                 if (-not $headset) { throw "Headset not found" }
 
-                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $bodyRaw = $reader.ReadToEnd()
-                $reader.Close()
+                $bodyRaw = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json = $bodyRaw | ConvertFrom-Json
 
                 $url  = "http://$($headset.IPAddress):8765/settings"
@@ -1425,8 +1443,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/kiosks/add-manual  body: {ip, name, port}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/kiosks/add-manual') {
             try {
-                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $bodyRaw = $reader.ReadToEnd(); $reader.Close()
+                $bodyRaw = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json = $bodyRaw | ConvertFrom-Json
                 $ip = ([string]$json.ip).Trim()
                 if (-not $ip) { throw "IP address is required" }
@@ -1447,8 +1464,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/kiosks/scan  body: {cidr, port}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/kiosks/scan') {
             try {
-                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $bodyRaw = $reader.ReadToEnd(); $reader.Close()
+                $bodyRaw = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json = $bodyRaw | ConvertFrom-Json
                 $cidr = ([string]$json.cidr).Trim()
                 if (-not $cidr) { throw "CIDR is required" }
@@ -1481,8 +1497,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/kiosks/update  body: {id, field, value}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/kiosks/update') {
             try {
-                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $bodyRaw = $reader.ReadToEnd(); $reader.Close()
+                $bodyRaw = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json = $bodyRaw | ConvertFrom-Json
                 if ($null -eq $json.id) { throw "id is required" }
                 if (-not $json.field) { throw "field is required" }
@@ -1501,8 +1516,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/kiosks/remove  body: {id}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/kiosks/remove') {
             try {
-                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $bodyRaw = $reader.ReadToEnd(); $reader.Close()
+                $bodyRaw = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json = $bodyRaw | ConvertFrom-Json
                 if ($null -eq $json.id) { throw "id is required" }
                 Remove-Kiosk -ID ([int]$json.id)
@@ -1520,8 +1534,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/kiosks/push  body: {id, url, confirmLocalhostReplacement}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/kiosks/push') {
             try {
-                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $bodyRaw = $reader.ReadToEnd(); $reader.Close()
+                $bodyRaw = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json = $bodyRaw | ConvertFrom-Json
                 if ($null -eq $json.id) { throw "id is required" }
                 $url = [string]$json.url
@@ -1570,8 +1583,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/kiosks/kill-browser  body: {id}  - stops the kiosk browser/session
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/kiosks/kill-browser') {
             try {
-                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $bodyRaw = $reader.ReadToEnd(); $reader.Close()
+                $bodyRaw = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json = $bodyRaw | ConvertFrom-Json
                 if ($null -eq $json.id) { throw "id is required" }
 
@@ -1654,8 +1666,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/kiosks/agent-report') {
             try {
                 if ($request.ContentLength64 -gt 8192) { throw "Report body too large" }
-                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $bodyRaw = $reader.ReadToEnd(); $reader.Close()
+                $bodyRaw = Read-RequestBody -Request $request -Response $response -MaxBytes 8192
                 $json = $bodyRaw | ConvertFrom-Json
 
                 $remoteIp = $request.RemoteEndPoint.Address.ToString()
@@ -1680,8 +1691,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/kiosks/power  body: {id, action}  action = reboot|shutdown|browser-restart
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/kiosks/power') {
             try {
-                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $bodyRaw = $reader.ReadToEnd(); $reader.Close()
+                $bodyRaw = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json = $bodyRaw | ConvertFrom-Json
                 if ($null -eq $json.id) { throw "id is required" }
                 $action = ([string]$json.action).Trim().ToLower()
@@ -1744,9 +1754,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/headset-settings/apply  body: {"name":"Q3_BLUE","settings":{...}}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/headset-settings/apply') {
             try {
-                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body   = $reader.ReadToEnd()
-                $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json     = $body | ConvertFrom-Json
                 $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
                 if (-not $safeName) { throw "Invalid headset name" }
@@ -1805,9 +1813,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/updateprofile  body: {"name":"Q3_BLUE","profile":"portrait-R-N-45-20"}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/updateprofile') {
             try {
-                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body    = $reader.ReadToEnd()
-                $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json    = $body | ConvertFrom-Json
 
                 # Validate headset name
@@ -1895,9 +1901,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/autorestart  body: {"name":"Q3_BLUE","value":true}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/autorestart') {
             try {
-                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body    = $reader.ReadToEnd()
-                $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json    = $body | ConvertFrom-Json
 
                 # Validate input - name must be a simple identifier (no path chars)
@@ -1938,9 +1942,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/stop-scrcpy  body: {"name":"Q3_BLUE"}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/stop-scrcpy') {
             try {
-                $reader   = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body     = $reader.ReadToEnd()
-                $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json     = $body | ConvertFrom-Json
                 $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
                 if (-not $safeName) { throw "Invalid headset name" }
@@ -2357,9 +2359,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/uninstallapp  body: {"name":"Q3_BLUE","package":"com.beatgames.beatsaber"}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/uninstallapp') {
             try {
-                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body    = $reader.ReadToEnd()
-                $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json     = $body | ConvertFrom-Json
                 $safeName = [regex]::Match(($json.name -replace ' ','_'), '^[\w\-]+$').Value
                 $safePkg  = [regex]::Match($json.package, '^[\w\.\-]+$').Value
@@ -2395,9 +2395,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/update-app  body: {"name":"Q3_RED","package":"com.beatgames.beatsaber"}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/update-app') {
             try {
-                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body    = $reader.ReadToEnd()
-                $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $parsed   = $body | ConvertFrom-Json
                 $safeName = [regex]::Match(($parsed.name -replace ' ','_'), '^[\w\-]+$').Value
                 $safePkg  = [regex]::Match($parsed.package, '^[\w\.\-]+$').Value
@@ -2422,8 +2420,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # Returns: {"usb":bool,"wifi":bool}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/headset-connection-check') {
             try {
-                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body = $reader.ReadToEnd(); $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json = $body | ConvertFrom-Json
                 $safeName = [regex]::Match(($json.name -replace ' ','_'), '^[\w\-]+$').Value
                 if (-not $safeName) { throw "Invalid headset name" }
@@ -2479,8 +2476,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/install-cancel  body: {"jobId":"xxx"}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/install-cancel') {
             try {
-                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body = $reader.ReadToEnd(); $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json  = $body | ConvertFrom-Json
                 $jobId = [regex]::Match([string]$json.jobId, '^[a-f0-9]+$').Value
                 if (-not $jobId) { throw "Invalid jobId" }
@@ -2533,7 +2529,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
                 }
                 # Start background job
                 [System.IO.File]::WriteAllText($script:resolveProgFile, '{"status":"queued"}')
-                $bodyRaw    = (New-Object System.IO.StreamReader($request.InputStream)).ReadToEnd()
+                $bodyRaw    = (Read-RequestBody -Request $request -Response $response -MaxBytes 65536)
                 $bodyObj    = try { $bodyRaw | ConvertFrom-Json } catch { $null }
                 $forceOnline = [bool]($bodyObj.forceOnline)
                 $script:resolveJob = Start-Job -ScriptBlock $resolveJobBlock -ArgumentList $ScriptPath, $script:resolveProgFile, $ConfigFilePath, $forceOnline
@@ -2602,7 +2598,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/benchmark/plan') {
             try {
                 if ($request.ContentLength64 -gt 65536) { throw "BODY_TOO_LARGE" }
-                $benchBody = try { (New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)).ReadToEnd() | ConvertFrom-Json } catch { $null }
+                $benchBody = try { (Read-RequestBody -Request $request -Response $response -MaxBytes 65536) | ConvertFrom-Json } catch { $null }
                 $benchId = 0
                 if (-not $benchBody -or -not [int]::TryParse([string]$benchBody.id, [ref]$benchId) -or $benchId -le 0) { throw "INVALID_ID" }
                 $benchHeadset = Get-HeadsetDiagTarget -Id $benchId
@@ -2645,7 +2641,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
                     $script:benchmarkJob = $null
                 }
                 if ($request.ContentLength64 -gt 65536) { throw "BODY_TOO_LARGE" }
-                $benchBody = try { (New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)).ReadToEnd() | ConvertFrom-Json } catch { $null }
+                $benchBody = try { (Read-RequestBody -Request $request -Response $response -MaxBytes 65536) | ConvertFrom-Json } catch { $null }
                 $benchId = 0
                 if (-not $benchBody -or -not [int]::TryParse([string]$benchBody.id, [ref]$benchId) -or $benchId -le 0) { throw "INVALID_ID" }
                 $benchHeadset = Get-HeadsetDiagTarget -Id $benchId
@@ -2694,7 +2690,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
                     $script:benchmarkJob = $null
                 }
                 if ($request.ContentLength64 -gt 8192) { throw "BODY_TOO_LARGE" }
-                $parBody = try { (New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)).ReadToEnd() | ConvertFrom-Json } catch { $null }
+                $parBody = try { (Read-RequestBody -Request $request -Response $response -MaxBytes 8192) | ConvertFrom-Json } catch { $null }
                 if (-not $parBody -or -not $parBody.settings -or $parBody.settings -isnot [System.Management.Automation.PSCustomObject]) { throw "INVALID_SETTINGS" }
                 $parIds = @()
                 foreach ($rawId in @($parBody.ids)) {
@@ -2815,7 +2811,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/benchmark/clear') {
             try {
                 if ($request.ContentLength64 -gt 4096) { throw "BODY_TOO_LARGE" }
-                $benchBody = try { (New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)).ReadToEnd() | ConvertFrom-Json } catch { $null }
+                $benchBody = try { (Read-RequestBody -Request $request -Response $response -MaxBytes 4096) | ConvertFrom-Json } catch { $null }
                 $benchModel = if ($benchBody) { [string]$benchBody.model } else { '' }
                 if ([string]::IsNullOrWhiteSpace($benchModel) -or $benchModel.Length -gt 100) { throw "INVALID_MODEL" }
                 Send-JsonResponse -Response $response -Body @{ ok = [bool](Clear-StreamBenchmarkResult -Model $benchModel) }
@@ -2835,7 +2831,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/benchmark/recommend') {
             try {
                 if ($request.ContentLength64 -gt 16384) { throw "BODY_TOO_LARGE" }
-                $benchBody = try { (New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)).ReadToEnd() | ConvertFrom-Json } catch { $null }
+                $benchBody = try { (Read-RequestBody -Request $request -Response $response -MaxBytes 16384) | ConvertFrom-Json } catch { $null }
                 if (-not $benchBody) { throw "INVALID_BODY" }
                 $benchModel = [string]$benchBody.model
                 if ($benchModel.Length -gt 100) { throw "INVALID_MODEL" }
@@ -2865,7 +2861,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/benchmark/apply') {
             try {
                 if ($request.ContentLength64 -gt 4096) { throw "BODY_TOO_LARGE" }
-                $benchBody = try { (New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)).ReadToEnd() | ConvertFrom-Json } catch { $null }
+                $benchBody = try { (Read-RequestBody -Request $request -Response $response -MaxBytes 4096) | ConvertFrom-Json } catch { $null }
                 if (-not $benchBody -or -not $benchBody.settings) { throw "INVALID_BODY" }
                 $benchModel = [string]$benchBody.model
                 if ([string]::IsNullOrWhiteSpace($benchModel) -or $benchModel.Length -gt 100) { throw "INVALID_MODEL" }
@@ -2905,8 +2901,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
                     Send-JsonResponse -Response $response -Body @{ status = 'no_internet' }
                     return
                 }
-                $bodyRaw = New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)
-                $bodyJson = $bodyRaw.ReadToEnd()
+                $bodyJson = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 try { $bodyObj = $bodyJson | ConvertFrom-Json } catch { $bodyObj = $null }
                 $script:updateVersionsHeadsetName = if ($bodyObj -and $bodyObj.headsetName) { $bodyObj.headsetName } else { $null }
                 [System.IO.File]::WriteAllText($script:updateVersionsProgFile, '{"status":"queued"}')
@@ -2948,8 +2943,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # Calls Update-InstalledAppsCache for a given headset. Used after update-app-versions completes.
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/refresh-headset-apps-cache') {
             try {
-                $bodyRaw  = New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)
-                $bodyJson = $bodyRaw.ReadToEnd()
+                $bodyJson = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $bodyObj  = try { $bodyJson | ConvertFrom-Json } catch { $null }
                 $hn = if ($bodyObj -and $bodyObj.headsetName) { [string]$bodyObj.headsetName } else { $null }
                 if (-not $hn) {
@@ -3039,13 +3033,39 @@ if ($request.HttpMethod -eq 'OPTIONS') {
                     $device = & $resolveDevice $headset
                     if (-not $device) { throw "Could not connect to headset via ADB" }
 
-                    # Read and save binary body
-                    $ms     = [System.IO.MemoryStream]::new()
-                    $buf    = [byte[]]::new(65536)
-                    $stream = $request.InputStream
-                    while (($read = $stream.Read($buf, 0, $buf.Length)) -gt 0) { $ms.Write($buf, 0, $read) }
-                    $tempPath = [System.IO.Path]::Combine($env:TEMP, "vrmapk_${safeName}_${safeFileName}")
-                    [System.IO.File]::WriteAllBytes($tempPath, $ms.ToArray())
+                    # Stream the body straight to a temp file (S6-2): never held in memory.
+                    # The cap is a constant (4 GB: an APK plus OBB-sized upload), enforced up
+                    # front on ContentLength64 and again while copying (a chunked body has
+                    # length -1). An over-cap upload leaves no partial file behind.
+                    $maxUploadBytes = 4GB
+                    if ($request.ContentLength64 -gt $maxUploadBytes) {
+                        Send-JsonResponse -Response $response -StatusCode 413 -Body @{ ok = $false; error = 'body too large' }
+                        return
+                    }
+                    $tempPath = Get-JobFilePath -Name "vrmapk_${safeName}_${safeFileName}"
+                    $received = [int64]0
+                    $tooBig   = $false
+                    $fs = [System.IO.FileStream]::new($tempPath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None, 1048576)
+                    try {
+                        $buf = [byte[]]::new(1048576)
+                        $in  = $request.InputStream
+                        while (($read = $in.Read($buf, 0, $buf.Length)) -gt 0) {
+                            $received += $read
+                            if ($received -gt $maxUploadBytes) { $tooBig = $true; break }
+                            $fs.Write($buf, 0, $read)
+                        }
+                    } catch {
+                        $fs.Dispose(); $fs = $null
+                        Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+                        throw
+                    } finally {
+                        if ($fs) { $fs.Dispose() }
+                    }
+                    if ($tooBig) {
+                        Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+                        Send-JsonResponse -Response $response -StatusCode 413 -Body @{ ok = $false; error = 'body too large' }
+                        return
+                    }
 
                     $pkgName     = [System.IO.Path]::GetFileNameWithoutExtension($safeFileName)
                     $pmOut       = Invoke-AdbCmd -Device $device -Command "shell pm list packages $pkgName"
@@ -3061,8 +3081,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
 
                 } else {
                     # Mode B or C: JSON body
-                    $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                    $body   = $reader.ReadToEnd(); $reader.Close()
+                    $body = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                     $json     = $body | ConvertFrom-Json
                     $safeName = [regex]::Match(($json.name -replace ' ','_'), '^[\w\-]+$').Value
                     if (-not $safeName) { throw "Invalid headset name" }
@@ -3077,7 +3096,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
                         # Mode B: overwrite-confirmed APK (temp file already on disk)
                         $safeTempId = [regex]::Match($json.tempId, '^vrmapk_[\w\-]+_[\w\.\-]+\.apk$').Value
                         if (-not $safeTempId) { throw "Invalid tempId" }
-                        $tempPath = [System.IO.Path]::Combine($env:TEMP, $safeTempId)
+                        $tempPath = Get-JobFilePath -Name $safeTempId
                         if (-not (Test-Path -LiteralPath $tempPath)) { throw "Temp file not found or expired" }
                         $pkgName  = [System.IO.Path]::GetFileNameWithoutExtension(([System.IO.Path]::GetFileName($safeTempId) -replace '^vrmapk_[\w\-]+_',''))
                         & $startJob $device.DeviceId $tempPath $false '' $pkgName $true
@@ -3175,9 +3194,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/launchapp  body: {"name":"Q3_BLUE","package":"com.beatgames.beatsaber"}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/launchapp') {
             try {
-                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body    = $reader.ReadToEnd()
-                $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json     = $body | ConvertFrom-Json
                 $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
                 $safePkg  = [regex]::Match($json.package, '^[\w\.\-]+$').Value
@@ -3212,9 +3229,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/togglefavorite  body: {"name":"Q3_BLUE","package":"com.pkg","displayName":"App","favorite":true}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/togglefavorite') {
             try {
-                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body    = $reader.ReadToEnd()
-                $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json     = $body | ConvertFrom-Json
                 $safePkg  = [regex]::Match($json.package, '^[\w\.\-]+$').Value
                 $safeName = [regex]::Match(($json.name -replace ' ','_'), '^[\w\-]+$').Value
@@ -3470,8 +3485,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/wifi-networks/upsert  - add or update a WiFi network {ssid, password}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/wifi-networks/upsert') {
             try {
-                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body   = $reader.ReadToEnd(); $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json   = $body | ConvertFrom-Json
                 $ssid        = ([string]$json.ssid).Trim()
                 $wifiPassword = ([string]$json.password).Trim()
@@ -3531,8 +3545,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/wifi-networks/delete  - remove a WiFi network {ssid}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/wifi-networks/delete') {
             try {
-                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body   = $reader.ReadToEnd(); $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json   = $body | ConvertFrom-Json
                 $ssid   = ([string]$json.ssid).Trim()
                 if (-not $ssid) { throw "SSID is required" }
@@ -3567,8 +3580,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/wifi-networks/set-preferred  - marks one SSID as preferred {ssid}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/wifi-networks/set-preferred') {
             try {
-                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body   = $reader.ReadToEnd(); $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json   = $body | ConvertFrom-Json
                 $ssid   = ([string]$json.ssid).Trim()
                 if (-not $ssid) { throw "SSID is required" }
@@ -3651,9 +3663,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/addheadset  body: {"name":"Q3 Blue","ip":"192.168.1.243","model":"Quest 3","serialNumber":"ABC123"}
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/addheadset') {
             try {
-                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body    = $reader.ReadToEnd()
-                $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json    = $body | ConvertFrom-Json
 
                 # Validate name: letters, numbers, spaces, hyphens, underscores (1-40 chars)
@@ -3730,8 +3740,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/headsets/register-by-serial') {
             try {
                 if ($request.ContentLength64 -gt 4096) { throw "Request body too large" }
-                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body   = $reader.ReadToEnd(); $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 4096
                 $json   = $body | ConvertFrom-Json
 
                 $safeSerial = ([string]$json.serialNumber).Trim()
@@ -3785,8 +3794,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/headsets/push-wifi') {
             try {
                 if ($request.ContentLength64 -gt 4096) { throw "Request body too large" }
-                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body   = $reader.ReadToEnd(); $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 4096
                 $json   = $body | ConvertFrom-Json
 
                 $safeSsid = ([string]$json.ssid).Trim()
@@ -3871,8 +3879,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
                 # JSON body reader: throws 'BODY_TOO_LARGE' / 'BAD_JSON'
                 $recReadBody = {
                     if ($request.ContentLength64 -gt 4096) { throw 'BODY_TOO_LARGE' }
-                    $rd = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                    $txt = $rd.ReadToEnd(); $rd.Close()
+                    $txt = Read-RequestBody -Request $request -Response $response -MaxBytes 4096
                     if ($txt.Length -gt 4096) { throw 'BODY_TOO_LARGE' }
                     try { $o = $txt | ConvertFrom-Json } catch { throw 'BAD_JSON' }
                     if ($null -eq $o) { throw 'BAD_JSON' }
@@ -4142,8 +4149,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/headsets/discovered/forget') {
             try {
                 if ($request.ContentLength64 -gt 4096) { throw "Request body too large" }
-                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body   = $reader.ReadToEnd(); $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 4096
                 $json   = $body | ConvertFrom-Json
 
                 $safeSerial = ([string]$json.serialNumber).Trim()
@@ -4323,7 +4329,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
                 if (-not $global:VQA_Enabled) {
                     Send-JsonResponse -Response $response -StatusCode 404 -Body @{ ok = $false; error = 'VQA disabled' }
                 } else {
-                    $bodyText = (New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)).ReadToEnd()
+                    $bodyText = (Read-RequestBody -Request $request -Response $response -MaxBytes 65536)
                     $body  = if ($bodyText) { try { $bodyText | ConvertFrom-Json } catch { $null } } else { $null }
                     $scope = if ($body -and $body.scope)  { [string]$body.scope }  else { 'all' }
                     $target= if ($body -and $body.target) { [string]$body.target } else { '' }
@@ -4360,7 +4366,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
                 if (-not $global:VQA_Enabled) {
                     Send-JsonResponse -Response $response -StatusCode 404 -Body @{ ok = $false; error = 'VQA disabled' }
                 } else {
-                    $bodyText = (New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)).ReadToEnd()
+                    $bodyText = (Read-RequestBody -Request $request -Response $response -MaxBytes 65536)
                     $body = if ($bodyText) { try { $bodyText | ConvertFrom-Json } catch { $null } } else { $null }
                     $section = if ($body -and $body.section) { [string]$body.section } else { '' }
                     if ($section -notin @('profiles','headsets','mediamtx')) {
@@ -4661,7 +4667,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
             try {
                 $versionFile = Join-Path $global:ScriptPath 'version.txt'
                 $versionStr  = if (Test-Path -LiteralPath $versionFile) {
-                    (Get-Content -LiteralPath $versionFile -Raw).Trim()
+                    (Get-Content -LiteralPath $versionFile -Raw -Encoding UTF8).Trim()
                 } else { 'unknown' }
                 Send-JsonResponse -Response $response -Body @{ app = 'VRHM'; version = $versionStr }
             } catch {
@@ -4748,8 +4754,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/appnames/save  - upsert a row (key = PackageName)
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/appnames/save') {
             try {
-                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body   = $reader.ReadToEnd(); $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json   = $body | ConvertFrom-Json
 
                 $pkg = ($json.PackageName -replace '[^\w\.\-]','').Trim()
@@ -4788,8 +4793,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/appnames/delete  - remove a row by PackageName
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/appnames/delete') {
             try {
-                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body   = $reader.ReadToEnd(); $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json   = $body | ConvertFrom-Json
 
                 $pkg = ($json.PackageName -replace '[^\w\.\-]','').Trim()
@@ -4840,7 +4844,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
                 $appNames     = Get-AppCatalogMap
                 $result = @()
                 if (Test-Path -LiteralPath $templatePath) {
-                    Import-Csv -LiteralPath $templatePath -Delimiter "," | ForEach-Object {
+                    Import-Csv -LiteralPath $templatePath -Encoding UTF8 -Delimiter "," | ForEach-Object {
                         if ($_.PackageName) {
                             $entry  = $appNames[$_.PackageName]
                             $result += @{
@@ -4871,15 +4875,14 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/defaultfavorites/toggle  - add or remove a package from the default favorites template
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/defaultfavorites/toggle') {
             try {
-                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body    = $reader.ReadToEnd(); $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json    = $body | ConvertFrom-Json
                 $safePkg = [regex]::Match($json.package, '^[\w\.\-]+$').Value
                 if (-not $safePkg) { throw "Invalid package" }
                 $templatePath = Join-Path $ScriptPath "templates\data\default_favorite_apps.csv"
                 $rows = @()
                 if (Test-Path -LiteralPath $templatePath) {
-                    $rows = @(Import-Csv -LiteralPath $templatePath -Delimiter ",")
+                    $rows = @(Import-Csv -LiteralPath $templatePath -Encoding UTF8 -Delimiter ",")
                 }
                 $addFav = [string]$json.favorite -eq 'True' -or [string]$json.favorite -eq 'true'
                 if ($addFav) {
@@ -4906,13 +4909,12 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/defaultfavorites/reorder  - reorder rows in the default favorites template
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/defaultfavorites/reorder') {
             try {
-                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body    = $reader.ReadToEnd(); $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json    = $body | ConvertFrom-Json
                 $templatePath = Join-Path $ScriptPath "templates\data\default_favorite_apps.csv"
                 $rowMap = @{}
                 if (Test-Path -LiteralPath $templatePath) {
-                    Import-Csv -LiteralPath $templatePath -Delimiter "," | ForEach-Object { if ($_.PackageName) { $rowMap[$_.PackageName] = $_ } }
+                    Import-Csv -LiteralPath $templatePath -Encoding UTF8 -Delimiter "," | ForEach-Object { if ($_.PackageName) { $rowMap[$_.PackageName] = $_ } }
                 }
                 $ordered = @()
                 foreach ($pkg in $json.packages) {
@@ -4936,8 +4938,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/favorites/reorder  - reorder per-headset favorites
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/favorites/reorder') {
             try {
-                $reader   = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body     = $reader.ReadToEnd(); $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $json     = $body | ConvertFrom-Json
                 $safeName = [regex]::Match(($json.name -replace ' ','_'), '^[\w\-]+$').Value
                 if (-not $safeName) { throw "Invalid name" }
@@ -5045,8 +5046,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         # API: POST /api/config/save  - validates and writes the posted JSON as config.json
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/config/save') {
             try {
-                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $body   = $reader.ReadToEnd(); $reader.Close()
+                $body = Read-RequestBody -Request $request -Response $response -MaxBytes 1048576
                 # Validate JSON before touching disk
                 $newCfg = $body | ConvertFrom-Json
                 $cfgFile = Join-Path $ScriptPath "config\config.json"
@@ -5284,9 +5284,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/ffmpeg-switch-version') {
             $lock = $null
             try {
-                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $bodyRaw = $reader.ReadToEnd()
-                $reader.Close()
+                $bodyRaw = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $body = $bodyRaw | ConvertFrom-Json
 
                 $sourcesFolder = Join-Path $ScriptPath "sources"
@@ -5384,9 +5382,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/mediamtx-switch-version') {
             $lock = $null
             try {
-                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $bodyRaw = $reader.ReadToEnd()
-                $reader.Close()
+                $bodyRaw = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $body = $bodyRaw | ConvertFrom-Json
 
                 $sourcesFolder = Join-Path $ScriptPath "sources"
@@ -5530,9 +5526,7 @@ if ($request.HttpMethod -eq 'OPTIONS') {
         if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/scrcpy-switch-version') {
             $lock = $null
             try {
-                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
-                $bodyRaw = $reader.ReadToEnd()
-                $reader.Close()
+                $bodyRaw = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
                 $body = $bodyRaw | ConvertFrom-Json
 
                 $sourcesFolder = Join-Path $ScriptPath "sources"

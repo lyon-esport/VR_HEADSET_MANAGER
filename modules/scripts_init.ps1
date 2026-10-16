@@ -29,7 +29,7 @@ if ((Split-Path $global:ScriptPath -Leaf) -ne "VR_HEADSET_MANAGER") {
 
 
 $ModulesPath = Join-Path -Path $global:ScriptPath -ChildPath "modules"
-    if (-not (Test-Path -Path $ModulesPath -PathType Container)) {
+    if (-not (Test-Path -LiteralPath $ModulesPath -PathType Container)) {
             Write-Warning "The script cannot continue without the modules folder $ModulesPath."
             return
     }
@@ -62,7 +62,7 @@ if (Test-Path -LiteralPath $vqaPreConfigPath) {
     }
 }
 
-$moduleFiles = Get-ChildItem -Path $ModulesPath -Filter "*.ps1" -File | Sort-Object Name |
+$moduleFiles = Get-ChildItem -LiteralPath $ModulesPath -Filter "*.ps1" -File | Sort-Object Name |
     Where-Object {
         $_.Name -notlike "*_init.ps1" -and
         $_.Name -notlike "headsets_dashboard.ps1" -and
@@ -181,9 +181,9 @@ $moduleFiles = Get-ChildItem -Path $ModulesPath -Filter "*.ps1" -File | Sort-Obj
                               Join-Path $translationsFolder "$($global:SelectedLanguage).psd1"
                           } else { $null }
 
-    if ($translationsLang -and (Test-Path $translationsLang)) {
+    if ($translationsLang -and (Test-Path -LiteralPath $translationsLang)) {
         $global:msg = Import-PowerShellDataFile -LiteralPath $translationsLang
-    } elseif (Test-Path $translationsEn) {
+    } elseif (Test-Path -LiteralPath $translationsEn) {
         if ($global:SelectedLanguage -and $global:SelectedLanguage -ne 'en-US') {
             Write-Host "Translations for '$($global:SelectedLanguage)' not found, falling back to English." -ForegroundColor Yellow
         }
@@ -469,11 +469,14 @@ function Invoke-AppShutdown {
     # 1. Signal VRMonitor to exit its loop before we tear down services.
     try { New-Item -ItemType File -Path $shutdownFlagPath -Force | Out-Null } catch { }
 
-    # 2. Wait for the job to leave Running. Refresh-timer + a small grace period.
+    # 2. Wait for the job to leave Running. Refresh-timer + a small grace period, plus
+    #    20 s because VRMonitor now tears its own pipelines down on the flag (S4-5) and a
+    #    recording ffmpeg gets up to 15 s to finalise its file. This is a ceiling only:
+    #    the loop ends as soon as the job stops.
     try {
         $job = Get-Job -Name "VRMonitor" -ErrorAction SilentlyContinue
         if ($job) {
-            $waitSec  = [int]$global:VRMonitor_refresh_timer + 2
+            $waitSec  = [int]$global:VRMonitor_refresh_timer + 2 + 20
             if ($waitSec -lt 4) { $waitSec = 4 }
             $deadline = (Get-Date).AddSeconds($waitSec)
             while ((Get-Date) -lt $deadline) {

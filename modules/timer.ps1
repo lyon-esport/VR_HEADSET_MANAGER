@@ -372,7 +372,7 @@ function Get-TimerStatus {
     $value = ''
     $filePath = Get-TimerFilePath -headsetId $headsetId
     if (Test-Path -LiteralPath $filePath) {
-        $value = (Get-Content -LiteralPath $filePath -Raw -ErrorAction SilentlyContinue)
+        $value = (Get-Content -LiteralPath $filePath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue)
         if ($value) { $value = $value.Trim() }
     }
 

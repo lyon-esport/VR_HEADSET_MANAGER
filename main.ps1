@@ -213,12 +213,12 @@ foreach ($staleFlag in @("data\shutdown.flag","data\reaper_exit.flag")) {
     }
 }
 
-#Start auto checks of headsets details
-Start-VRMonitor -VRMonitor_refresh_timer $global:VRMonitor_refresh_timer
-
-# Spawn the standalone reaper. Hidden background watchdog that kills orphan
-# services (mediamtx / web server / dashboard / scrcpy) if main dies without
-# running Invoke-AppShutdown (X button, crash, kill from Task Manager).
+# Spawn the standalone reaper BEFORE VRMonitor, so a crash between the two cannot
+# leave orphans. It only needs the main PID and the data\ folder (flags and pid
+# files are read when main dies, not at spawn). Hidden background watchdog that
+# kills orphan services (mediamtx / web server / dashboard / scrcpy / bridge jobs)
+# if main dies without running Invoke-AppShutdown (X button, crash, kill from
+# Task Manager).
 # Ctrl+C is handled below by the try/finally around the menu loop instead -
 # PowerShell still runs a wrapping finally block when Ctrl+C stops the
 # pipeline, so that path now goes through the same graceful Invoke-AppShutdown
@@ -234,6 +234,9 @@ if (Test-Path -LiteralPath $reaperScript) {
         "-ScriptPath","`"$global:ScriptPath`""
     ) -WindowStyle Hidden | Out-Null
 }
+
+#Start auto checks of headsets details
+Start-VRMonitor -VRMonitor_refresh_timer $global:VRMonitor_refresh_timer
 
 # Dashboard is a pure DISPLAY window now. Only spawn it when actually visible.
 if ($global:Dashboard_showConsole) {

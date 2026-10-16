@@ -23,7 +23,7 @@ Write-Host "ID du process parent: $parentPID"
 $global:ScriptPath = $ScriptPath
 $global:IsDashboardProcess = $true
 $scripts_init = Join-Path -Path $global:ScriptPath -ChildPath "\modules\scripts_init.ps1"
-if (-not (Test-Path -Path $scripts_init)) {
+if (-not (Test-Path -LiteralPath $scripts_init)) {
     Write-Host "Error: The initialization script is missing!" -ForegroundColor Red
     exit
 }
