@@ -1,0 +1,5844 @@
+# VR Headset Manager - web route surface (ADR-0019).
+#
+# The whole HTTP route chain lives here as Invoke-HttpRoute so the SAME code can run either
+# inline on the accept loop (web_server.ps1) or in the slow-lane worker runspace. Dot-sourced
+# by both; it holds functions only - nothing here runs at dot-source time except the lane
+# tables, which are plain data.
+#
+# Why a dot-sourced FILE and not a table of scriptblock handlers: a scriptblock carries the
+# SessionState it was created in, so passing one across a runspace boundary in PS 5.1 either
+# throws or silently binds to the wrong scope. Only the HttpListenerContext (a plain .NET
+# object) crosses the boundary; the code is dot-sourced into each runspace independently.
+#
+# Rules for everything below (see docs\adr\0019-tiered-request-lanes.md and ADR-0033):
+#   - A branch of Invoke-HttpRoute leaves with `return`, never `continue`: there is no loop
+#     here, and a stray `continue` would unwind into the CALLER's loop and leave the response
+#     unclosed.
+#   - Anything a slow route reads must exist in the worker too. The accept loop owns every
+#     piece of state that is bound to its own runspace: Start-Job handles ($script:installJobs,
+#     resolveJob, updateVersionsJob, benchmarkJob - Receive-Job/Remove-Job only work in the
+#     runspace that started the job), the recording download list and the SSE queue. Routes
+#     that touch them are therefore FAST, whatever they cost.
+#   - $global: state is per runspace too ($global:HeadsetPipelines, $global:DirectRecordings):
+#     a route that starts or stops a capture stays on the accept loop.
+
+# --- helpers shared by both lanes (moved verbatim from web_server.ps1) ---------------------
+# Helper: send a JSON response with proper status code, content-type and length.
+# Replaces dozens of hand-built '{"ok":true,...}' string concatenations.
+# - $Response is the [System.Net.HttpListenerResponse].
+# - $Body can be a hashtable, PSCustomObject, array, or any ConvertTo-Json target.
+#   Use $Raw if you have a pre-built JSON string.
+function Send-JsonResponse {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Response,
+        $Body = $null,
+        [int]$StatusCode = 200,
+        [string]$Raw = $null,
+        [int]$Depth = 6
+    )
+    try {
+        $json = if ($Raw) { $Raw } else { ConvertTo-Json -InputObject $Body -Compress -Depth $Depth }
+        if ($null -eq $json) { $json = 'null' }
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+
+        $Response.StatusCode      = $StatusCode
+        $Response.ContentType     = 'application/json; charset=utf-8'
+        $Response.Headers.Add('Access-Control-Allow-Origin', '*')
+        $Response.ContentLength64 = $bytes.Length
+        $Response.OutputStream.Write($bytes, 0, $bytes.Length)
+    } catch {
+        # last-resort: try to set 500 if headers not yet sent
+        try { $Response.StatusCode = 500 } catch {}
+    }
+}
+
+# Helper: close a response without letting the close throw (S1-1).
+# HttpListenerResponse.Close() raises HttpListenerException when the client has
+# already gone (tab closed, OBS source reloaded mid-transfer). Inside the accept
+# loop that exception used to unwind out of the while loop and stop the listener.
+function Close-HttpResponse {
+    param([Parameter(Mandatory = $true)] $Response)
+    try { $Response.Close() } catch {}
+}
+
+# Helper: $true when an exception (or any exception it wraps) is a client abort -
+# HttpListenerException 64 (network name no longer available), 995 (operation
+# aborted) or 1229 (connection reset/closed). PowerShell wraps .NET method errors
+# in MethodInvocationException, hence the walk down InnerException.
+function Test-HttpClientAbort {
+    param($Exception)
+    $e = $Exception
+    while ($e) {
+        if ($e -is [System.Net.HttpListenerException] -and @(64, 995, 1229) -contains $e.ErrorCode) { return $true }
+        $e = $e.InnerException
+    }
+    return $false
+}
+
+function Get-KnownHeadsetsCached {
+    # Cached @(Get-KnownHeadsets). Kept as an ORDERED ARRAY (not a hashtable) so the
+    # registry's own row order - the drag-and-drop display order set by Set-HeadsetsOrder -
+    # is preserved. ID is a stable identity, not a position, so it must not re-derive that
+    # order. Cached because the status endpoints resolve every request through the registry
+    # now that live status carries no identity columns (ADR-0016), and each headset overlay
+    # polls continuously.
+    #
+    # Keyed on the headsets change counter, NOT on a file mtime. This used to stat
+    # data\known_headsets.csv, and after the registry moved into the database
+    # (ADR-0017) that was wrong twice over: the mtime never changed again because
+    # nothing writes the file, so the cache could never refresh - and once the file
+    # stopped being created at all, the existence guard returned an empty list on
+    # every call, so the web UI showed no headsets whatsoever.
+    try {
+        $version = Get-DbTableVersion -Name 'headsets'
+    }
+    catch {
+        return @()
+    }
+
+    if (-not $script:knownHeadsetsCache -or $script:knownHeadsetsCacheMtime -ne $version) {
+        $script:knownHeadsetsCache      = @(Get-KnownHeadsets)
+        $script:knownHeadsetsCacheMtime = $version
+    }
+    return $script:knownHeadsetsCache
+}
+
+function Get-HeadsetInfosCache {
+    # Returns a hashtable of live-status rows keyed by headset ID as a string
+    # ($null when the status table cannot be read).
+    #
+    # Keyed on ID, never on Name (ADR-0016): status rows carry no identity columns, and a
+    # display name is a mutable label - joining on it made a rename or a DHCP address swap
+    # attach one headset's live status to another row until the next write cycle.
+    #
+    # The cache key is the table's change counter instead of a file mtime. Same purpose:
+    # every headset monitoring overlay polls at 1Hz, and the request loop is
+    # single-threaded, so without this it would spend most of its time re-reading rows
+    # that did not change. Get-DbTableVersion is one indexed scalar read, and the counter
+    # only moves when a trigger fires on an actual write.
+    try {
+        $version = Get-DbTableVersion -Name 'headset_status'
+    }
+    catch {
+        return $null
+    }
+
+    if (-not $script:headsetInfosCache -or $script:headsetInfosCacheMtime -ne $version) {
+        try {
+            $rows = @(Invoke-DbQuery -Name 'status.list')
+        }
+        catch {
+            return $null
+        }
+        $cache = @{}
+        foreach ($r in $rows) {
+            $key = [string]$r.ID
+            if (-not [string]::IsNullOrWhiteSpace($key)) { $cache[$key] = $r }
+        }
+        $script:headsetInfosCache      = $cache
+        $script:headsetInfosCacheMtime = $version
+    }
+    return $script:headsetInfosCache
+}
+
+function Get-PublishedUsbSnapshot {
+    # Returns the last USB snapshot VRMonitor published, or $null when nothing is
+    # cabled / nothing has been published yet. Never throws: a USB read must not
+    # be able to take down a request handler.
+    try {
+        $raw = Get-DbKeyValue -Key 'usb_device'
+        if (-not $raw) { return $null }
+        if ($raw -is [string]) {
+            if ($raw -eq 'null' -or [string]::IsNullOrWhiteSpace($raw)) { return $null }
+            return ($raw | ConvertFrom-Json)
+        }
+        return $raw
+    } catch {
+        return $null
+    }
+}
+
+
+# --- lane tables ---------------------------------------------------------------------------
+# 'slow'     : handed to the single worker runspace. Everything here touches ADB, the LAN, the
+#              internet, a child process or a human, and none of it keeps loop-bound state.
+# 'priority' : an operator "stop / kill / shutdown" command. NEVER queued behind slow work: it
+#              runs inline on the accept loop, and its handler must stay short (no waits on a
+#              human, no unbounded adb call).
+# anything else is 'fast' (inline). The default is deliberately fast, so a route added without
+# thinking about it keeps the pre-lane behaviour instead of queueing behind a download.
+$script:SlowRoutes = @{
+    '/api/browse-folder'                 = $true   # FolderBrowserDialog: waits for a human
+    '/api/ffmpeg-update'                 = $true   # GitHub download + unzip
+    '/api/mediamtx-update'               = $true
+    '/api/scrcpy-update'                 = $true
+    '/api/ffmpeg-check-update'           = $true   # GitHub API
+    '/api/mediamtx-check-update'         = $true
+    '/api/scrcpy-check-update'           = $true
+    '/api/gpu-list'                      = $true   # WMI + perf counters
+    '/api/wifi-detect'                   = $true   # netsh
+    '/api/kiosks/scan'                   = $true   # subnet sweep
+    '/api/kiosks/push'                   = $true   # CDP over HTTP
+    '/api/kiosks/kill-browser'           = $true
+    '/api/kiosks/cdp-info'               = $true
+    '/api/kiosks/power'                  = $true
+    '/api/companion-info'                = $true   # HTTP to the headset
+    '/api/companion-settings'            = $true
+    '/api/headset-screen-frame'          = $true   # scrcpy capture, 3-5 s
+    '/api/eye-merge/frame'               = $true
+    '/api/eye-merge/calibrate'           = $true
+    '/api/headset-diag'                  = $true   # adb sections, up to 7 s
+    '/api/headset-diag/action'           = $true
+    '/api/headset-diag/command'          = $true   # up to 20 s
+    '/api/headset-ipd'                   = $true   # may capture a frame
+    '/api/headset-settings'              = $true   # GET: adb reads, up to ~45 s when adb hangs
+    '/api/headset-settings/apply'        = $true
+    '/api/headset-firmware'              = $true
+    '/api/headset-storage'               = $true
+    '/api/foregroundapp'                 = $true
+    '/api/launchapp'                     = $true
+    '/api/uninstallapp'                  = $true
+    '/api/update-app'                    = $true
+    '/api/installedapps'                 = $true   # ?refresh=1 pulls the package list over adb
+    '/api/refresh-headset-apps-cache'    = $true
+    '/api/reboot'                        = $true
+    '/api/connectwifi'                   = $true
+    '/api/enablewifiadb'                 = $true   # adb tcpip re-enumerates USB, ~10 s
+    '/api/installadbwifiapk'             = $true
+    '/api/headsets/push-wifi'            = $true
+}
+
+$script:PriorityRoutes = @{
+    '/api/shutdown-all'    = $true   # power off the headsets (parallel adb, bounded)
+    '/api/shutdown'        = $true   # power off one headset
+    '/api/app-shutdown'    = $true   # -> Invoke-AppShutdown in the main process
+    '/api/app-restart'     = $true
+    '/api/host-shutdown'   = $true
+    '/api/restartwebserver' = $true
+    '/api/stop-scrcpy'     = $true   # the kill button
+    '/api/stop-scrcpy-all' = $true
+}
+
+# Paths after which config\config.json may have changed and Get-Config re-ran in the runspace
+# that served them. The OTHER runspace's $global: values are then stale (adb path after a
+# scrcpy update, streaming settings after a save): see Set-WebRouteConfigWritten.
+$script:ConfigWriterPattern = '^/api/(config/|[a-z]+-update$|[a-z]+-switch-version$|vqa/|eye-merge/|capture-mode$|benchmark/apply$|appnames/clear$)'
+
+function Get-MainProcessList {
+    # The main.ps1 console process(es): the one whose menu loop owns Invoke-AppShutdown, and
+    # the target of the keystroke injection behind /api/app-shutdown, /api/app-restart,
+    # /api/host-shutdown and shutdown-all's "also stop the app".
+    #
+    # It used to be a full Win32_Process table scan on EVERY such request (1-3 s of the accept
+    # loop, right when the operator asked to stop the app). The match is now done by WMI
+    # (a LIKE filter), and the answer is cached for the life of this runspace and re-validated
+    # by process id + start time, so the second call costs a Get-Process.
+    # Returns objects with a ProcessId property, oldest first. Never throws.
+    try {
+        if ($script:MainProcCache) {
+            $alive = $true
+            $p = Get-Process -Id $script:MainProcCache.ProcessId -ErrorAction SilentlyContinue
+            if (-not $p) { $alive = $false }
+            else { try { if ($p.StartTime -ne $script:MainProcCache.StartTime) { $alive = $false } } catch { $alive = $false } }
+            if ($alive) { return $script:MainProcCache }
+            $script:MainProcCache = $null
+        }
+        $found = @(Get-WmiObject Win32_Process -Filter "CommandLine LIKE '%main.ps1%'" -ErrorAction Stop |
+                   Where-Object { $_.CommandLine -match 'main\.ps1' -and [int]$_.ProcessId -ne $PID } |
+                   Sort-Object { $_.CreationDate })
+        if ($found.Count -gt 0) {
+            $st = $null
+            try { $st = (Get-Process -Id $found[0].ProcessId -ErrorAction Stop).StartTime } catch { }
+            if ($st) { $script:MainProcCache = [PSCustomObject]@{ ProcessId = [int]$found[0].ProcessId; StartTime = $st } }
+        }
+        return $found
+    } catch {
+        return @()
+    }
+}
+
+function Get-WebRouteLane {
+    # 'fast' | 'slow' | 'priority' for one request. Method is not part of the key - no path in
+    # the tables is fast under one verb and slow under another. A CORS preflight is always fast.
+    param(
+        [string]$Method,
+        [string]$Path
+    )
+    if ($Method -eq 'OPTIONS') { return 'fast' }
+    if ($script:PriorityRoutes.ContainsKey($Path)) { return 'priority' }
+    if ($script:SlowRoutes.ContainsKey($Path)) { return 'slow' }
+    return 'fast'
+}
+
+function Sync-WebRouteConfig {
+    # Called by a lane BEFORE it runs a request. Re-runs Get-Config when the OTHER lane changed
+    # the config since this one last looked. -State is the synchronized hashtable both lanes
+    # share (keys ConfigGeneration, ConfigWriter); -Lane is 'loop' or 'worker'.
+    param(
+        [Parameter(Mandatory = $true)] $State,
+        [Parameter(Mandatory = $true)] [string]$Lane
+    )
+    try {
+        $gen = [int]$State['ConfigGeneration']
+        if ($gen -eq [int]$script:WebRouteConfigSeen) { return }
+        $script:WebRouteConfigSeen = $gen
+        if ([string]$State['ConfigWriter'] -eq $Lane) { return }
+        Get-Config -ConfigFilePath $global:ConfigFilePath | Out-Null
+    } catch { }
+}
+
+function Set-WebRouteConfigWritten {
+    # Called by a lane AFTER a request: when the path can write config, bump the shared
+    # generation and record who did, so the other lane refreshes and this one does not.
+    param(
+        [Parameter(Mandatory = $true)] $State,
+        [Parameter(Mandatory = $true)] [string]$Lane,
+        [string]$Path
+    )
+    try {
+        if ($Path -and $Path -match $script:ConfigWriterPattern) {
+            $State['ConfigWriter']     = $Lane
+            $State['ConfigGeneration'] = [int]$State['ConfigGeneration'] + 1
+            $script:WebRouteConfigSeen = [int]$State['ConfigGeneration']
+        }
+    } catch { }
+}
+
+function Invoke-HttpRouteGuarded {
+    # Per-request guard (S1-1) for BOTH lanes: one failed request must never stop the listener
+    # or the worker. A client abort (64/995/1229) is routine and logged at DEBUG.
+    param([Parameter(Mandatory = $true)] $Context)
+    try {
+        Invoke-HttpRoute -Context $Context
+    } catch {
+        $reqMethod = '?'
+        $reqPath   = '?'
+        try { $reqMethod = $Context.Request.HttpMethod; $reqPath = $Context.Request.Url.LocalPath } catch { }
+        $reqLine = "Web server: request failed ($reqMethod $reqPath): " + $_.Exception.Message
+        if (Test-HttpClientAbort -Exception $_.Exception) {
+            Write-Log $reqLine -Level DEBUG
+        } else {
+            Write-Log $reqLine -Level WARNING
+        }
+        # Abort, not Close: the response state is unknown at this point.
+        try { $Context.Response.Abort() } catch { }
+    }
+}
+
+function Invoke-HttpRoute {
+    # The route chain. Reads (from the caller's scope, set by web_server.ps1 or by the worker):
+    # $adbPath $adbPort $apkPath $apkPackage $websitePath $mimeTypes $lanNetworks $PidFile
+    # $ScriptPath $ConfigFilePath, and - for the fast-only job routes - the *JobBlock variables.
+    param([Parameter(Mandatory = $true)] $Context)
+
+    $context  = $Context
+    $request  = $Context.Request
+    $response = $Context.Response
+
+if ($request.HttpMethod -eq 'OPTIONS') {
+            $response.Headers.Add('Access-Control-Allow-Origin', '*')
+            $response.Headers.Add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+            $response.Headers.Add('Access-Control-Allow-Headers', 'Content-Type')
+            $response.StatusCode = 204
+            Close-HttpResponse -Response $response
+            return
+        }
+
+        # API: POST /api/renameheadset  body: {"name":"Q3_BLUE","newname":"Q3 Red"}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/renameheadset') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body    = $reader.ReadToEnd()
+                $reader.Close()
+                $json    = $body | ConvertFrom-Json
+
+                # name is the internal display_name (underscores), newname is raw
+                $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+
+                $newName = $json.newname.Trim()
+                # Allow letters, digits, spaces, hyphens, underscores (1-40 chars)
+                if (-not ($newName -match '^[\w\s\-]{1,40}$')) { throw "Invalid new name" }
+
+                # Resolve old (display) name from the CSV and delegate to Rename-Headset
+                $rows   = Get-KnownHeadsets
+                $oldRow = $rows | Where-Object { ($_.Name -replace ' ', '_') -eq $safeName } | Select-Object -First 1
+                if (-not $oldRow) { throw "Headset not found" }
+
+                $ok = Rename-Headset -OldName $oldRow.Name -NewName $newName -headsets $rows
+                if ($ok) {
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes(('{"ok":true,"newname":' + ($newName | ConvertTo-Json -Compress) + '}'))
+                } else {
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"not found"}')
+                }
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/reorderheadsets  body: {"order":["Q3_BLUE","Q3_RED",...]}
+        # Delegates to Set-HeadsetsOrder (headsets_manager.ps1) which saves CSV and regenerates HTML monitors.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/reorderheadsets') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body    = $reader.ReadToEnd()
+                $reader.Close()
+                $json    = $body | ConvertFrom-Json
+
+                if (-not $json.order -or $json.order.Count -eq 0) { throw "Empty order" }
+
+                # Validate each name token
+                foreach ($tok in $json.order) {
+                    if ($tok -notmatch '^[\w\-]+$') { throw "Invalid name token: $tok" }
+                }
+
+                Set-HeadsetsOrder -OrderedDisplayNames ([string[]]$json.order)
+
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/updateip  body: {"name":"Q3_BLUE","ip":"192.168.1.99"}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/updateip') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body    = $reader.ReadToEnd()
+                $reader.Close()
+                $json    = $body | ConvertFrom-Json
+
+                $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+
+                $parsedIp = $null
+                if (-not [System.Net.IPAddress]::TryParse([string]$json.ip, [ref]$parsedIp) -or
+                    $parsedIp.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) {
+                    throw "Invalid IP address"
+                }
+                $safeIp = $parsedIp.ToString()
+
+                $rows   = Get-KnownHeadsets
+                $target = $rows | Where-Object { ($_.Name -replace ' ', '_') -eq $safeName } | Select-Object -First 1
+
+                if (-not $target) {
+                    $respBody = [ordered]@{ ok = $false; error = 'not found' }
+                }
+                elseif ($target.SerialNumber) {
+                    # Route through the serial-keyed writer so a manual IP correction cannot
+                    # leave two rows on the same address - the previous holder is released.
+                    $r = Set-HeadsetIdentity -SerialNumber $target.SerialNumber -IPAddress $safeIp -Source 'web'
+                    if ($r.Ok) {
+                        $respBody = [ordered]@{ ok = $true }
+                    } else {
+                        $respBody = [ordered]@{ ok = $false; error = [string]$r.Error }
+                    }
+                }
+                elseif ($rows | Where-Object { $_.IPAddress -eq $safeIp -and $_.ID -ne $target.ID }) {
+                    # Row has no serial yet (manual IP-only entry): still refuse a duplicate.
+                    $respBody = [ordered]@{ ok = $false; error = 'This IP address is already registered.' }
+                }
+                else {
+                    $target.IPAddress = $safeIp
+                    Save-Headsets -headsets $rows
+                    $respBody = [ordered]@{ ok = $true }
+                }
+                Send-JsonResponse -Response $response -Body $respBody
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/recording  body: {"name":"Q3_BLUE","value":true}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/recording') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body    = $reader.ReadToEnd()
+                $reader.Close()
+                $json    = $body | ConvertFrom-Json
+
+                $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+
+                $rows = Get-KnownHeadsets
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                if ($headset) {
+                    $newVal = if ([string]$json.value -eq 'True' -or [string]$json.value -eq 'true') { 'True' } else { 'False' }
+
+                    # Guard: block enabling when recording drive space is low
+                    if ($newVal -eq 'True') {
+                        $rdInfo = $null
+                        try {
+                            $monJson = Get-DbKeyValue -Key 'computer_monitoring'
+                            if ($monJson) { $rdInfo = $monJson.RecordingDrive }
+                        } catch {}
+                        if (-not $rdInfo) {
+                            try { $rdInfo = Get-RecordingDriveInfo } catch {}
+                        }
+                        if ($rdInfo -and $rdInfo.IsLow) {
+                            $lowBody = ('{"ok":false,"storageLow":true,"freeGB":' + $rdInfo.FreeGB + ',"minFreeGB":' + $rdInfo.MinFreeGB + ',"driveLetter":"' + $rdInfo.DriveLetter + '"}')
+                            $respBytes = [System.Text.Encoding]::UTF8.GetBytes($lowBody)
+                            $response.StatusCode      = 200
+                            $response.ContentType     = 'application/json; charset=utf-8'
+                            $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                            $response.ContentLength64 = $respBytes.Length
+                            $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+                            Close-HttpResponse -Response $response
+                            return
+                        }
+                    }
+
+                    $recordChanged = (([string]$headset.Record -eq 'True') -ne ($newVal -eq 'True'))
+                    Update-HeadsetField -headsets $rows -ID ([int]$headset.ID) -Field "Record" -NewValue $newVal
+                    # Turning recording on/off restarts the capture (the recording is a second
+                    # output of the same ffmpeg): mark it starting and apply it now.
+                    if ($recordChanged) { [void](Request-ScrcpyCheck -HeadsetId ([int]$headset.ID) -Reason 'recording toggled') }
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                } else {
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"not found"}')
+                }
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: GET /api/recording-drive  - returns RecordingDrive node from computer_monitoring.json
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/recording-drive') {
+            try {
+                $rdInfo = $null
+                try {
+                    $monJson = Get-DbKeyValue -Key 'computer_monitoring'
+                    if ($monJson) { $rdInfo = $monJson.RecordingDrive }
+                } catch {}
+                if (-not $rdInfo) {
+                    try { $rdInfo = Get-RecordingDriveInfo } catch {}
+                }
+                if ($rdInfo) {
+                    Send-JsonResponse -Response $response -Body $rdInfo
+                } else {
+                    Send-JsonResponse -Response $response -Body @{ error = 'unavailable' }
+                }
+            } catch {
+                try { Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = 'server error' } } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: GET /api/load-tier  - returns the current adaptive-monitoring tier so the
+        # browser can scale its own polling intervals (status, computer-stats) up under load.
+        # Tier and multiplier come from Get-LoadTier / Get-LoadMultiplier in utils.ps1; base
+        # values come from the live config-driven globals so the operator can re-tune in one place.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/load-tier') {
+            try {
+                $tier = try { Get-LoadTier } catch { 'idle' }
+                $mult = try { Get-LoadMultiplier -Tier $tier } catch { 1 }
+                $vrm  = if ($null -ne $global:VRMonitor_refresh_timer) { [int]$global:VRMonitor_refresh_timer } else { 5 }
+                $cm   = if ($null -ne $global:ComputerMonitoring_refresh_timer_sec) { [int]$global:ComputerMonitoring_refresh_timer_sec } else { 60 }
+                Send-JsonResponse -Response $response -Body @{
+                    ok       = $true
+                    loadTier = @{
+                        tier       = "$tier"
+                        multiplier = [int]$mult
+                        base       = @{ vrmonitor = $vrm; computer_monitoring = $cm }
+                    }
+                }
+            } catch {
+                try { Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = 'server error' } } catch {}
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: GET /api/capture-mode  - returns the current global capture mode
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/capture-mode') {
+            try {
+                Send-JsonResponse -Response $response -Body @{ ok = $true; mode = "$global:CaptureMode" }
+            } catch {
+                try { Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = 'server error' } } catch {}
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/capture-mode  body: {"mode":"StreamOnly|StreamAndLocalWindow|LocalWindow"}
+        # Switches global capture mode, persists to config.json, restarts any running
+        # scrcpy session in the new mode. Mirrors the CLI Config -> V sub-menu.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/capture-mode') {
+            try {
+                $body = (New-Object System.IO.StreamReader($request.InputStream)).ReadToEnd()
+                $j = $body | ConvertFrom-Json -ErrorAction Stop
+                $mode = "$($j.mode)"
+                if ($mode -notin @('StreamOnly','StreamAndLocalWindow','LocalWindow')) {
+                    Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = 'invalid mode' }
+                } else {
+                    $ok = [bool](Set-CaptureMode -Mode $mode)
+                    Send-JsonResponse -Response $response -Body @{ ok = $ok; mode = "$global:CaptureMode" }
+                }
+            } catch {
+                try { Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = "$($_.Exception.Message)" } } catch {}
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/removeheadset  body: {"name":"Q3_BLUE"}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/removeheadset') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body    = $reader.ReadToEnd()
+                $reader.Close()
+                $json    = $body | ConvertFrom-Json
+
+                $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+
+                $rows  = Get-KnownHeadsets
+                $match = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                if (-not $match) { throw "Headset not found" }
+                Remove-Headset -ID ([int]$match.ID)
+
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/reboot  body: {"name":"Q3_BLUE"}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/reboot') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body    = $reader.ReadToEnd()
+                $reader.Close()
+                $json    = $body | ConvertFrom-Json
+                $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+                $rows = Get-KnownHeadsets
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                if (-not $headset) { throw "Headset not found" }
+                $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort -adb $adbPath
+                if (-not $device) { throw "Could not connect to headset via ADB" }
+                Invoke-HeadsetReboot -Device $device -adb $adbPath | Out-Null
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/shutdown  body: {"name":"Q3_BLUE"}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/shutdown') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body    = $reader.ReadToEnd()
+                $reader.Close()
+                $json    = $body | ConvertFrom-Json
+                $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+                $rows = Get-KnownHeadsets
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                if (-not $headset) { throw "Headset not found" }
+                # Priority route: no connect / ping first, one bounded adb process (S6-1).
+                $shutdownRows = @(Invoke-HeadsetShutdownBatch -Headsets @($headset) -adb $adbPath -AdbPort $adbPort -TimeoutSec 6)
+                if ($shutdownRows.Count -eq 0 -or -not $shutdownRows[0].Ok) { throw "Could not shut the headset down via ADB" }
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/shutdown-all  - shuts down selected (or all) ADB-reachable headsets
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/shutdown-all') {
+            try {
+                $filter          = $null
+                $alsoShutdownApp = $false
+                if ($request.HasEntityBody) {
+                    $reader  = New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)
+                    $bodyStr = $reader.ReadToEnd()
+                    $reader.Close()
+                    if ($bodyStr -and $bodyStr.Trim() -ne '') {
+                        try {
+                            $parsed = $bodyStr | ConvertFrom-Json
+                            if ($parsed.headsets) { $filter = @($parsed.headsets) }
+                            if ($parsed.PSObject.Properties.Name -contains 'alsoShutdownApp') {
+                                $alsoShutdownApp = [bool]$parsed.alsoShutdownApp
+                            }
+                        } catch {}
+                    }
+                }
+                $rows = Get-KnownHeadsets
+                if ($filter) { $rows = $rows | Where-Object { $filter -contains ($_.Name -replace ' ', '_') } }
+                # Priority route (S6-1): every headset is powered off AT THE SAME TIME (one adb
+                # process each, no connect / ping first) and the whole batch is bounded, so an
+                # offline fleet no longer costs ~1 minute and nothing here waits for slow work.
+                $results = @()
+                foreach ($r in @(Invoke-HeadsetShutdownBatch -Headsets @($rows) -adb $adbPath -AdbPort $adbPort -TimeoutSec 8)) {
+                    $results += @{ name = ($r.Name -replace ' ', '_'); ok = [bool]$r.Ok }
+                }
+                $respJson  = if ($results.Count -gt 0) { ConvertTo-Json -InputObject @($results) -Compress } else { '[]' }
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes("{`"ok`":true,`"results`":$respJson}")
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                    $alsoShutdownApp = $false
+                } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+                # App shutdown injected AFTER response is flushed so the browser receives
+                # the JSON before the web server process begins its own teardown.
+                if ($alsoShutdownApp) {
+                    try {
+                        $mainProc = @(Get-MainProcessList) | Select-Object -First 1
+                        if ($mainProc) {
+                            $mainPid = [uint32]$mainProc.ProcessId
+                            [void][VrmConsoleInput]::InjectKeys($mainPid, '0', $true)
+                        }
+                    } catch {}
+                }
+            }
+            return
+        }
+
+        # API: GET /api/headset-status?id=<ID>   (legacy: ?name=<Name>)
+        # Lightweight status endpoint: reads known_headsets_infos.csv (written by VRMonitor) and
+        # returns the live data for one headset as JSON. No ADB call. Used by the monitoring overlay
+        # JS to update the DOM every second without re-downloading the full HTML page.
+        # The infos file is ID-keyed (ADR-0016). ?name= is still accepted because overlay HTML
+        # already loaded in an operator's OBS Browser source keeps requesting it; it is resolved
+        # to an ID through the registry, which is the authority on names.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/headset-status') {
+            try {
+                $rawId   = $request.QueryString['id']
+                $rawName = $request.QueryString['name']
+                if (-not $rawId -and -not $rawName) { throw "Missing id parameter" }
+
+                $headsetRow = $null
+                foreach ($h in @(Get-KnownHeadsetsCached)) {
+                    if ($rawId) {
+                        if ([string]$h.ID -eq [string]$rawId) { $headsetRow = $h; break }
+                    } elseif ($h.Name -eq $rawName) {
+                        $headsetRow = $h; break
+                    }
+                }
+                if (-not $headsetRow) {
+                    Send-JsonResponse -Response $response -StatusCode 404 -Body @{ error = 'Headset not found' }
+                    return
+                }
+
+                $infosCache = Get-HeadsetInfosCache
+                if (-not $infosCache) {
+                    Send-JsonResponse -Response $response -StatusCode 404 -Body @{ error = 'No monitoring data yet' }
+                    return
+                }
+                $row = $infosCache[[string]$headsetRow.ID]
+
+                if (-not $row) {
+                    Send-JsonResponse -Response $response -StatusCode 404 -Body @{ error = 'Headset not found' }
+                    return
+                }
+
+                $capSt = Get-ScrcpyCaptureState
+
+                # Parse raw CSV strings into typed values for the JS consumer
+                $battery    =if ($row.Battery -and $row.Battery -ne '-') { [int]($row.Battery -replace '\s*%','') } else { $null }
+                $battLeft   = if ($row.BatteryControllerLeft  -and $row.BatteryControllerLeft  -ne '-') { [int]($row.BatteryControllerLeft  -replace '\s*%','') } else { $null }
+                $battRight  = if ($row.BatteryControllerRight -and $row.BatteryControllerRight -ne '-') { [int]($row.BatteryControllerRight -replace '\s*%','') } else { $null }
+                $temp       = if ($row.Temp -and $row.Temp -ne '-') { [int]($row.Temp -replace ',','.') } else { $null }
+                $timeMin    = if ($row.TimeRemainingMin -and $row.TimeRemainingMin -ne '-' -and $row.TimeRemainingMin -ne '') { [int]$row.TimeRemainingMin } else { $null }
+
+                $result = @{
+                    id                   = [int]$headsetRow.ID
+                    name                 = $headsetRow.Name
+                    ping                 = [bool]($row.Ping -eq 'True')
+                    battery              = $battery
+                    battery_ctrl_left    = $battLeft
+                    battery_ctrl_right   = $battRight
+                    charging             = [bool]($row.Charging -eq 'True')
+                    temp                 = $temp
+                    power_state          = if ($row.PowerState -and $row.PowerState -ne '-') { $row.PowerState } else { '' }
+                    time_remaining_min   = $timeMin
+                    running_app          = if ($row.RunningApp)     { $row.RunningApp }     else { '' }
+                    running_app_icon     = if ($row.RunningAppIcon) { $row.RunningAppIcon } else { '' }
+                    # Capture state, for the video pages: running, starting right now (a mark set
+                    # by start-screenCopy / Request-ScrcpyCheck), and whether it will be restarted
+                    # by itself (auto-restart) - which tells "starting" from "stopped".
+                    scrcpy               = $(if ($capSt.Starting -contains [int]$headsetRow.ID) { $false } elseif ($capSt.Settling -contains [int]$headsetRow.ID) { $true } else { [bool]($row.SCRCPY -eq 'ok') })
+                    scrcpy_starting      = [bool](($capSt.Starting -contains [int]$headsetRow.ID) -or ($capSt.Announcing -contains [int]$headsetRow.ID))
+                    scrcpy_auto_restart  = [bool]($headsetRow.scrcpy_AutoRestart -eq 'True')
+                }
+                Send-JsonResponse -Response $response -Body $result
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ error = $_.Exception.Message }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: GET /api/headset-settings?name=Q3_BLUE  - reads current headset parameters via ADB
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/headset-settings') {
+            try {
+                $safeName = [regex]::Match($request.QueryString['name'], '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+                $rows    = Get-KnownHeadsetsCached
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                if (-not $headset) { throw "Headset not found" }
+                $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort -adb $adbPath
+                if (-not $device) { throw "Could not connect to headset via ADB" }
+
+                $brand = if ($headset.PSObject.Properties['Brand'] -and $headset.Brand) { $headset.Brand } else { (Get-HeadsetBrandModel -Device $device -adb $adbPath).Brand }
+                $screenTimeout    = Get-HeadsetScreenTimeout    -Device $device -adb $adbPath -Brand $brand
+                $sleepTimeout     = Get-HeadsetSleepTimeout     -Device $device -adb $adbPath -Brand $brand
+                $soundLevel       = Get-HeadsetSoundLevel       -Device $device -adb $adbPath
+                $brightness       = Get-HeadsetBrightness       -Device $device -adb $adbPath -Brand $brand
+                $blockUpdates     = Get-HeadsetUpdateBlockStatus -Device $device -adb $adbPath -Brand $brand
+                $refreshRate      = if ($brand -eq 'Pico') { $null } else { Get-HeadsetRefreshRate -Device $device -adb $adbPath }
+
+                Send-JsonResponse -Response $response -Body @{
+                    ok               = $true
+                    screenTimeout    = $screenTimeout
+                    sleepTimeout     = $sleepTimeout
+                    soundLevel       = $soundLevel
+                    brightness       = $brightness
+                    blockUpdates     = $blockUpdates
+                    refreshRate      = $refreshRate
+                    refreshRates     = @(Get-HeadsetRefreshRateChoices)
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: GET /api/headset-firmware?name=Q3_BLUE  - returns firmware version, build, and pending OTA
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/headset-firmware') {
+            try {
+                $safeName = [regex]::Match($request.QueryString['name'], '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+                $rows    = Get-KnownHeadsetsCached
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                if (-not $headset) { throw "Headset not found" }
+                $device  = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort -adb $adbPath
+                if (-not $device) { throw "Could not connect to headset via ADB" }
+
+                $brand = if ($headset.PSObject.Properties['Brand'] -and $headset.Brand) { $headset.Brand } else { (Get-HeadsetBrandModel -Device $device -adb $adbPath).Brand }
+                $fw = Get-HeadsetFirmwareInfo -Device $device -adb $adbPath -Brand $brand
+                Send-JsonResponse -Response $response -Body @{
+                    ok            = $true
+                    version       = $fw.Version
+                    build         = $fw.Build
+                    updateVersion = $fw.UpdateVersion
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: GET /api/headset-diag?id=3&section=firmware|health|wireless|usb|fleet|history|tls
+        # One DIAG page section for one headset (headset_diag.html). The page loads the sections
+        # SEQUENTIALLY: each ADB section is one combined adb shell call, and this listener is
+        # single-threaded, so a burst of parallel section requests would freeze every other page.
+        # All the logic is in modules\headset_diag.ps1 (Get-HeadsetDiagSection) - ADR-0023.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/headset-diag') {
+            try {
+                $diagId = 0
+                if (-not [int]::TryParse([string]$request.QueryString['id'], [ref]$diagId) -or $diagId -le 0) { throw "INVALID_ID" }
+                $diagSection = [string]$request.QueryString['section']
+                if (@('firmware','health','wireless','usb','fleet','history','tls') -notcontains $diagSection) { throw "INVALID_SECTION" }
+                $diagHeadset = Get-HeadsetDiagTarget -Id $diagId
+                if (-not $diagHeadset) { throw "UNKNOWN_HEADSET" }
+                $diagTransport = [string]$request.QueryString['transport']
+                if (@('Auto','USB','WiFi') -notcontains $diagTransport) { $diagTransport = 'Auto' }
+                $diagResult = Get-HeadsetDiagSection -Headset $diagHeadset -Section $diagSection -Transport $diagTransport
+                Send-JsonResponse -Response $response -Depth 8 -Body @{
+                    ok = [bool]$diagResult.ok; section = $diagResult.section; transport = $diagResult.transport
+                    error = $diagResult.error; data = $diagResult.data
+                    headset = @{ id = $diagHeadset.ID; name = $diagHeadset.Name; model = $diagHeadset.Model; brand = $diagHeadset.Brand; ip = $diagHeadset.IPAddress; serial = $diagHeadset.SerialNumber }
+                }
+            } catch {
+                $errMsg = switch -Regex ($_.Exception.Message) {
+                    'INVALID_ID'      { 'Invalid or missing headset id.' }
+                    'INVALID_SECTION' { 'Unknown DIAG section.' }
+                    'UNKNOWN_HEADSET' { 'This headset is not registered on this server.' }
+                    default           { $_.Exception.Message }
+                }
+                Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $errMsg }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/headset-screen-frame  body {"id":3,"transport":"Auto|USB|WiFi"}
+        # One full, uncropped scrcpy frame of a headset for the visual view editor
+        # (vrhm_config.html, Headset Profiles). Logic in Get-HeadsetScreenFrame (scrcpy_launcher.ps1).
+        # The PNG lands in website\generated\view_editor\, served at /view_editor/<file> by the
+        # generated\ fallback. Blocks this listener for a few seconds (scrcpy records ~3 s).
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/headset-screen-frame') {
+            try {
+                if ($request.ContentLength64 -gt 4096) { throw "Request body too large" }
+                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body   = $reader.ReadToEnd(); $reader.Close()
+                $json   = $body | ConvertFrom-Json
+                $frameId = 0
+                if (-not [int]::TryParse([string]$json.id, [ref]$frameId) -or $frameId -le 0) { throw "INVALID_ID" }
+                $frameHeadset = Get-HeadsetDiagTarget -Id $frameId
+                if (-not $frameHeadset) { throw "UNKNOWN_HEADSET" }
+                $frameTransport = if ($json.transport) { [string]$json.transport } else { 'Auto' }
+                if (@('Auto','USB','WiFi') -notcontains $frameTransport) { $frameTransport = 'Auto' }
+                $frame = Get-HeadsetScreenFrame -Headset $frameHeadset -Transport $frameTransport
+                $frameUrl = if ($frame.Ok) { "/view_editor/{0}?t={1}" -f (Split-Path -Path $frame.Path -Leaf), [DateTime]::UtcNow.Ticks } else { $null }
+                Send-JsonResponse -Response $response -Body @{
+                    ok = [bool]$frame.Ok; url = $frameUrl; width = $frame.Width; height = $frame.Height
+                    transport = $frame.Transport; model = [string]$frameHeadset.Model; name = [string]$frameHeadset.Name
+                    error = $frame.Error
+                }
+            } catch {
+                $errMsg = switch -Regex ($_.Exception.Message) {
+                    'INVALID_ID'      { 'Invalid or missing headset id.' }
+                    'UNKNOWN_HEADSET' { 'This headset is not registered on this server.' }
+                    default           { $_.Exception.Message }
+                }
+                Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $errMsg }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # ---- Eye merge (both lenses stitched into one view, ADR-0025). Logic in modules\eye_merge.ps1.
+        # GET /api/eye-merge?model=Quest%203 -> calibration status, merged crop of every view, export snippet.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/eye-merge') {
+            try {
+                $emModel = [string]$request.QueryString['model']
+                if (-not $emModel -or $emModel.Length -gt 100) { throw 'Missing or invalid model.' }
+                # ?ipd=58 : the lens position the calibration / views are read at (models with an `ipd` block).
+                $emIpd = [string]$request.QueryString['ipd']
+                if ($emIpd -notmatch '^\d{1,3}$') { $emIpd = '' }
+                $emProfile = Get-EyeMergeProfile -Model $emModel -IncludeDisabled -Ipd $emIpd
+                # light=1: status only (headsets_settings.html). The per-view automatic framing costs
+                # ~200 ms per view and the snippet is only needed by the Headset Profiles card.
+                $emLight = ([string]$request.QueryString['light'] -eq '1')
+                if ($emLight) {
+                    Send-JsonResponse -Response $response -Body @{
+                        ok = $true; model = $emModel
+                        calibrated = [bool]$emProfile
+                        enabled = [bool]($emProfile -and $emProfile.enabled -ne $false)
+                    }
+                    return
+                }
+                $emViews = @{}
+                if ($emProfile -and $emProfile.enabled -ne $false -and $global:scrcpyParameters.$emModel.views) {
+                    foreach ($v in $global:scrcpyParameters.$emModel.views.PSObject.Properties) {
+                        $c = Get-EyeMergeViewCrop -Model $emModel -View $v.Name -MergeProfile $emProfile -Ipd $emIpd
+                        if ($c) { $emViews[$v.Name] = @{ crop = ("{0}:{1}:{2}:{3}" -f $c.W, $c.H, $c.X, $c.Y); auto = [bool]$c.Auto; depth = (Get-EyeMergeViewDepth -Model $emModel -View $v.Name -MergeProfile $emProfile -Ipd $emIpd); baseEye = (Get-EyeMergeViewBaseEye -Model $emModel -View $v.Name -MergeProfile $emProfile -Ipd $emIpd) } }
+                    }
+                }
+                $emIpdCfg = Get-ModelIpdConfig -Model $emModel
+                $emIpdInfo = $null
+                if ($emIpdCfg) {
+                    $emCalibrated = @{}
+                    foreach ($pos in @($emIpdCfg.positions | ForEach-Object { [string]$_ })) {
+                        $emCalibrated[$pos] = [bool]($pos -eq [string]$emIpdCfg.default -and $global:scrcpyParameters.$emModel.eye_merge) -or [bool]($global:scrcpyParameters.$emModel.eye_merge_ipd -and $global:scrcpyParameters.$emModel.eye_merge_ipd.$pos)
+                    }
+                    $emIpdInfo = @{ positions = @($emIpdCfg.positions | ForEach-Object { [string]$_ }); default = [string]$emIpdCfg.default; autoDetect = ($emIpdCfg.auto_detect -ne $false); selected = $(if ($emIpd) { $emIpd } else { [string]$emIpdCfg.default }); calibrated = $emCalibrated }
+                }
+                Send-JsonResponse -Response $response -Body @{
+                    ok = $true; model = $emModel
+                    ipd = $emIpdInfo
+                    calibrated = [bool]$emProfile
+                    enabled = [bool]($emProfile -and $emProfile.enabled -ne $false)
+                    depthSupported = [bool]($emProfile -and $null -ne $emProfile.lens_focal_px)
+                    profile = $emProfile
+                    views = $emViews
+                    snippet = $(if ($emProfile) { Export-EyeMergeProfile -Model $emModel } else { $null })
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # GET /api/stream-mask?id=3 -> {ok,mask,url,width,height,reason}. Transparency mask of the
+        # headset's current stream when its view has "transparent_corners" (any eye, Get-StreamMask).
+        # The [video].html pages apply url with CSS mask-image; mask=false means "show the video as is".
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/stream-mask') {
+            try {
+                $smId = 0
+                if (-not [int]::TryParse([string]$request.QueryString['id'], [ref]$smId) -or $smId -le 0) { throw 'Invalid or missing headset id.' }
+                $smHeadset = @(Get-KnownHeadsetsCached) | Where-Object { [string]$_.ID -eq [string]$smId } | Select-Object -First 1
+                if (-not $smHeadset) { throw 'This headset is not registered on this server.' }
+                $sm = Get-StreamMask -Headset $smHeadset
+                Send-JsonResponse -Response $response -Body @{
+                    ok = [bool]$sm.Ok; mask = [bool]$sm.Mask; url = $sm.Url; width = $sm.Width; height = $sm.Height
+                    reason = $sm.Reason; error = $sm.Error
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; mask = $false; error = $_.Exception.Message }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # POST /api/eye-merge/frame  body {"id":3,"transport":"Auto|USB|WiFi","depth":0.75,"baseEye":"R","reuse":false}
+        # Same as /api/headset-screen-frame but returns the flat MERGED canvas the view editor's
+        # Merged tab draws on, at merge depth "depth" (metres, 0/absent = far) with main eye
+        # "baseEye" (L/R, absent = the calibration's). Blocks this listener
+        # for a few seconds (scrcpy records ~3 s); "reuse":true re-renders the last frame (~1 s).
+        # POST /api/eye-merge/calibrate  body {"id":3,"transport":"Auto","save":true}
+        # Measures the calibration of the headset's model (~3 s capture + ~2 s compute).
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -in @('/api/eye-merge/frame','/api/eye-merge/calibrate')) {
+            try {
+                if ($request.ContentLength64 -gt 4096) { throw 'Request body too large' }
+                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body   = $reader.ReadToEnd(); $reader.Close()
+                $json   = $body | ConvertFrom-Json
+                $emId = 0
+                if (-not [int]::TryParse([string]$json.id, [ref]$emId) -or $emId -le 0) { throw 'Invalid or missing headset id.' }
+                $emHeadset = Get-HeadsetDiagTarget -Id $emId
+                if (-not $emHeadset) { throw 'This headset is not registered on this server.' }
+                $emTransport = if ($json.transport) { [string]$json.transport } else { 'Auto' }
+                if (@('Auto','USB','WiFi') -notcontains $emTransport) { $emTransport = 'Auto' }
+                if ($request.Url.LocalPath -eq '/api/eye-merge/frame') {
+                    $emDepth = 0.0
+                    if ($null -ne $json.depth) { [void][double]::TryParse([string]$json.depth, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$emDepth) }
+                    $emBase = ([string]$json.baseEye).ToUpperInvariant()
+                    if ($emBase -notin @('L','R')) { $emBase = '' }
+                    $emIpd = [string]$json.ipd
+                    if ($emIpd -notmatch '^\d{1,3}$') { $emIpd = '' }
+                    $frame = Get-HeadsetMergedFrame -Headset $emHeadset -Transport $emTransport -DepthM $emDepth -BaseEye $emBase -ReuseFrame:([bool]$json.reuse) -Ipd $emIpd
+                    $frameUrl = if ($frame.Ok) { "/view_editor/{0}?t={1}" -f (Split-Path -Path $frame.Path -Leaf), [DateTime]::UtcNow.Ticks } else { $null }
+                    Send-JsonResponse -Response $response -Body @{
+                        ok = [bool]$frame.Ok; url = $frameUrl; width = $frame.Width; height = $frame.Height
+                        transport = $frame.Transport; model = [string]$emHeadset.Model; name = [string]$emHeadset.Name
+                        error = $frame.Error
+                    }
+                } else {
+                    $emIpd = [string]$json.ipd
+                    if ($emIpd -notmatch '^\d{1,3}$') { $emIpd = '' }
+                    $emThr = 0
+                    if ($null -ne $json.lensThreshold) { [void][int]::TryParse([string]$json.lensThreshold, [ref]$emThr); if ($emThr -lt 1 -or $emThr -gt 60) { $emThr = 0 } }
+                    $emFrames = 1
+                    if ($null -ne $json.frames) { [void][int]::TryParse([string]$json.frames, [ref]$emFrames); if ($emFrames -lt 1 -or $emFrames -gt 5) { $emFrames = 1 } }
+                    $cal = Invoke-EyeMergeCalibration -Headset $emHeadset -Transport $emTransport -Save:([bool]$json.save) -Ipd $emIpd -LensThreshold $emThr -Frames $emFrames
+                    $calUrl = if ($cal.PreviewPath) { "/eye_merge/{0}?t={1}" -f (Split-Path -Path $cal.PreviewPath -Leaf), [DateTime]::UtcNow.Ticks } else { $null }
+                    Send-JsonResponse -Response $response -Body @{
+                        ok = [bool]$cal.Ok; model = $cal.Model; score = $cal.Score; profile = $cal.Profile
+                        previewUrl = $calUrl; width = $cal.PreviewWidth; height = $cal.PreviewHeight
+                        saved = [bool]$cal.Saved; ipd = $cal.Ipd; error = $cal.Error
+                    }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # POST /api/eye-merge/import  body {"json":"<snippet>","model":"optional","includeCrops":true}
+        # POST /api/eye-merge/enable  body {"model":"Quest 3","enabled":false}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -in @('/api/eye-merge/import','/api/eye-merge/enable')) {
+            try {
+                if ($request.ContentLength64 -gt 262144) { throw 'Request body too large' }
+                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body   = $reader.ReadToEnd(); $reader.Close()
+                $json   = $body | ConvertFrom-Json
+                if ($request.Url.LocalPath -eq '/api/eye-merge/import') {
+                    $emTarget = if ($json.model) { [string]$json.model } else { '' }
+                    $imp = Import-EyeMergeProfile -Json ([string]$json.json) -Model $emTarget -IncludeViewCrops:([bool]$json.includeCrops)
+                    Send-JsonResponse -Response $response -Body @{ ok = [bool]$imp.Ok; model = $imp.Model; cropsApplied = $imp.CropsApplied; error = $imp.Error }
+                } else {
+                    $emModel = [string]$json.model
+                    if (-not $emModel) { throw 'Missing model.' }
+                    $done = Set-EyeMergeEnabled -Model $emModel -Enabled ([bool]$json.enabled)
+                    Send-JsonResponse -Response $response -Body @{ ok = [bool]$done; model = $emModel; enabled = [bool]$json.enabled; error = $(if ($done) { $null } else { 'No calibration for this model.' }) }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # ---- Lens position (IPD) of a headset, ADR-0030. Logic in headset_diag.ps1 (Get-HeadsetIpdInfo,
+        # Set-HeadsetIpd, Update-HeadsetIpd); the console counterpart is Show-SubMenu-HeadsetIpd.
+        # GET  /api/headset-ipd?id=3 -> {ok,supported,ipd,source,iadM,at,positions,default,autoDetect}
+        # POST /api/headset-ipd body {"id":3,"ipd":"58"|"auto","detect":false}
+        #   ipd = a configured position sets a MANUAL override (held until the lens is moved again);
+        #   ipd = "auto" (or detect:true) reads the headset's own lens log now and follows it.
+        if ($request.Url.LocalPath -eq '/api/headset-ipd' -and $request.HttpMethod -in @('GET','POST')) {
+            try {
+                $ipdId = 0; $ipdWant = ''; $ipdDetect = $false
+                if ($request.HttpMethod -eq 'GET') {
+                    [void][int]::TryParse([string]$request.QueryString['id'], [ref]$ipdId)
+                } else {
+                    if ($request.ContentLength64 -gt 4096) { throw 'Request body too large' }
+                    $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                    $body   = $reader.ReadToEnd(); $reader.Close()
+                    $json   = $body | ConvertFrom-Json
+                    [void][int]::TryParse([string]$json.id, [ref]$ipdId)
+                    $ipdWant = [string]$json.ipd
+                    $ipdDetect = ([bool]$json.detect) -or ($ipdWant -eq 'auto')
+                }
+                if ($ipdId -le 0) { throw 'Invalid or missing headset id.' }
+                $ipdHeadset = Get-HeadsetDiagTarget -Id $ipdId
+                if (-not $ipdHeadset) { throw 'This headset is not registered on this server.' }
+                $ipdCfg = Get-ModelIpdConfig -Model ([string]$ipdHeadset.Model)
+                if ($request.HttpMethod -eq 'POST' -and $ipdCfg) {
+                    $ipdDev = Resolve-HeadsetAdbDevice -Headset $ipdHeadset
+                    if ($ipdDetect) {
+                        if (-not $ipdDev) { throw 'The headset is not reachable over ADB.' }
+                        # "auto": drop a manual hold first so the log value is applied now.
+                        try { Remove-DbKeyValue -Key ("headset_ipd_{0}" -f $ipdId) } catch { }
+                        if ($script:HeadsetIpdMemo) { $script:HeadsetIpdMemo.Remove($ipdId) }
+                        $upd = Update-HeadsetIpd -Headset $ipdHeadset -Device $ipdDev
+                        if (-not $upd.Ipd) {
+                            # The headset log no longer holds the lens event: measure the lens pictures instead.
+                            $fromFrame = Find-HeadsetIpdFromFrame -Headset $ipdHeadset
+                            if (-not $fromFrame.Ok) { throw ("No lens position in the headset log ({0}) and the frame check failed: {1}" -f $upd.Reason, $fromFrame.Error) }
+                            [void](Set-HeadsetIpd -HeadsetId $ipdId -Ipd $fromFrame.Ipd -Source auto)
+                        }
+                    } else {
+                        if (@($ipdCfg.positions | ForEach-Object { [string]$_ }) -notcontains $ipdWant) { throw 'Unknown lens position.' }
+                        [void](Set-HeadsetIpd -HeadsetId $ipdId -Ipd $ipdWant -Source manual -Device $ipdDev)
+                    }
+                }
+                $info = Get-HeadsetIpdInfo -Headset $ipdHeadset
+                Send-JsonResponse -Response $response -Body @{
+                    ok = $true; supported = [bool]$info.Supported; ipd = $info.Ipd; source = $info.Source; iadM = $info.IadM
+                    at = $info.At; positions = @($info.Positions); default = $info.Default; autoDetect = [bool]$info.AutoDetect
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/headset-diag/action  body {"id":3,"action":"sync_clock","args":{...}}
+        # One dispatcher over a CLOSED list of actions (Invoke-HeadsetDiagActionByName refuses
+        # any other name). Same LAN-trust posture as the rest of the app (ADR-0014).
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/headset-diag/action') {
+            try {
+                if ($request.ContentLength64 -gt 8192) { throw "Request body too large" }
+                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body   = $reader.ReadToEnd(); $reader.Close()
+                $json   = $body | ConvertFrom-Json
+                $diagId = 0
+                if (-not [int]::TryParse([string]$json.id, [ref]$diagId) -or $diagId -le 0) { throw "INVALID_ID" }
+                $diagAction = ([string]$json.action).Trim()
+                if (-not $diagAction -or $diagAction.Length -gt 40) { throw "INVALID_ACTION" }
+                $diagHeadset = Get-HeadsetDiagTarget -Id $diagId
+                if (-not $diagHeadset) { throw "UNKNOWN_HEADSET" }
+                $diagTransport = if ($json.transport) { [string]$json.transport } else { 'Auto' }
+                if (@('Auto','USB','WiFi') -notcontains $diagTransport) { $diagTransport = 'Auto' }
+                $diagResult = Invoke-HeadsetDiagActionByName -Headset $diagHeadset -Action $diagAction -Arguments $json.args -Transport $diagTransport
+                Send-JsonResponse -Response $response -Depth 8 -Body @{
+                    ok = [bool]$diagResult.ok; action = $diagResult.action; transport = $diagResult.transport
+                    message = $diagResult.message; result = $diagResult.result
+                }
+            } catch {
+                $errMsg = switch -Regex ($_.Exception.Message) {
+                    'INVALID_ID'      { 'Invalid or missing headset id.' }
+                    'INVALID_ACTION'  { 'Invalid or missing action.' }
+                    'UNKNOWN_HEADSET' { 'This headset is not registered on this server.' }
+                    default           { $_.Exception.Message }
+                }
+                Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; message = $errMsg }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/headset-diag/command  body {"id":3,"command":"getprop ro.product.model"}
+        # The custom ADB shell panel: free text or a preset, shell only, refused when it matches
+        # the deny list, 20 s timeout, 64 KB output cap, every run logged. Goes through the same
+        # dispatcher as the other actions (action 'command').
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/headset-diag/command') {
+            try {
+                if ($request.ContentLength64 -gt 8192) { throw "Request body too large" }
+                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body   = $reader.ReadToEnd(); $reader.Close()
+                $json   = $body | ConvertFrom-Json
+                $diagId = 0
+                if (-not [int]::TryParse([string]$json.id, [ref]$diagId) -or $diagId -le 0) { throw "INVALID_ID" }
+                $diagCommand = ([string]$json.command).Trim()
+                if (-not $diagCommand) { throw "INVALID_COMMAND" }
+                $diagHeadset = Get-HeadsetDiagTarget -Id $diagId
+                if (-not $diagHeadset) { throw "UNKNOWN_HEADSET" }
+                $diagTransport = if ($json.transport) { [string]$json.transport } else { 'Auto' }
+                if (@('Auto','USB','WiFi') -notcontains $diagTransport) { $diagTransport = 'Auto' }
+                $diagResult = Invoke-HeadsetDiagActionByName -Headset $diagHeadset -Action 'command' -Arguments @{ command = $diagCommand } -Transport $diagTransport
+                $cmdOut = if ($diagResult.result) { $diagResult.result } else { $null }
+                Send-JsonResponse -Response $response -Depth 8 -Body @{
+                    ok = [bool]$diagResult.ok; transport = $diagResult.transport; message = $diagResult.message
+                    output    = $(if ($cmdOut) { $cmdOut.Output } else { '' })
+                    truncated = $(if ($cmdOut) { [bool]$cmdOut.Truncated } else { $false })
+                    blocked   = $(if ($cmdOut) { [bool]$cmdOut.Blocked } else { $false })
+                }
+            } catch {
+                $errMsg = switch -Regex ($_.Exception.Message) {
+                    'INVALID_ID'      { 'Invalid or missing headset id.' }
+                    'INVALID_COMMAND' { 'Type a command first.' }
+                    'UNKNOWN_HEADSET' { 'This headset is not registered on this server.' }
+                    default           { $_.Exception.Message }
+                }
+                Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; message = $errMsg; output = ''; truncated = $false; blocked = $false }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: GET /api/headset-diag/presets  - the operator-editable command presets plus the
+        # page timings, all from config (Diag.*). No headset involved, so it never touches ADB.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/headset-diag/presets') {
+            try {
+                Send-JsonResponse -Response $response -Body @{
+                    ok             = $true
+                    presets        = @(Get-HeadsetDiagPresets)
+                    autoRefreshSec = [int]$global:Diag_auto_refresh_sec
+                    cablePasses    = [int]$global:Diag_cable_test_passes
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: GET /api/companion-info?name=Q3_BLUE
+        # Calls GET http://<IP>:8765/info on the VRHM Companion app and returns the result.
+        # Returns {"ok":false,"companion":false} when the companion app is not running.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/companion-info') {
+            try {
+                $safeName = [regex]::Match($request.QueryString['name'], '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+                $rows    = Get-KnownHeadsetsCached
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                if (-not $headset) { throw "Headset not found" }
+                $info = Get-CompanionInfo -IP $headset.IPAddress
+                if ($null -ne $info) {
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; companion = $true; data = $info }
+                } else {
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; companion = $false }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/companion-settings?name=Q3_BLUE  body: {"auto_adb_wifi":bool}
+        # Forwards settings to the Companion app running on the headset.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/companion-settings') {
+            try {
+                $safeName = [regex]::Match($request.QueryString['name'], '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+                $rows    = Get-KnownHeadsets
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                if (-not $headset) { throw "Headset not found" }
+
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $bodyRaw = $reader.ReadToEnd()
+                $reader.Close()
+                $json = $bodyRaw | ConvertFrom-Json
+
+                $url  = "http://$($headset.IPAddress):8765/settings"
+                $resp2 = Invoke-RestMethod -Uri $url -Method POST -Body $bodyRaw `
+                             -ContentType "application/json" -TimeoutSec 3 -ErrorAction Stop
+                Send-JsonResponse -Response $response -Body @{ ok = [bool]$resp2.ok }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: GET /api/kiosks  - returns known kiosks merged with live status from data\kiosks_status.json
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/kiosks') {
+            try {
+                $kiosks = @(Get-KnownKiosks)
+                $statusList = @()
+                try {
+                    $statusList = @(Invoke-DbQuery -Name 'kiosk_status.list')
+                } catch {
+                    $statusList = @()
+                }
+                # Read the agent cache ONCE, not once per kiosk: this endpoint is
+                # polled every 4s by the browser.
+                $agentList = @(Get-KioskAgentReports)
+
+                # Index both lists by IP once (first row wins, as Select-Object -First 1 did).
+                $statusByIp = @{}
+                foreach ($s in $statusList) { $key = [string]$s.IPAddress; if (-not $statusByIp.ContainsKey($key)) { $statusByIp[$key] = $s } }
+                $agentByIp = @{}
+                foreach ($a in $agentList) { $key = [string]$a.IPAddress; if (-not $agentByIp.ContainsKey($key)) { $agentByIp[$key] = $a } }
+
+                $merged = $kiosks | ForEach-Object {
+                    $k = $_
+                    $st = $statusByIp[[string]$k.IPAddress]
+                    # Agent fields stay $null for basic (v1) kiosks, which never report.
+                    $ag = $agentByIp[[string]$k.IPAddress]
+                    [PSCustomObject]@{
+                        ID            = $k.ID
+                        Name          = $k.Name
+                        IPAddress     = $k.IPAddress
+                        Port          = $k.Port
+                        PushedURL     = $k.PushedURL
+                        LastPushedAt  = $k.LastPushedAt
+                        # Reachable/CdpOpen are INTEGER 0/1 in the table but were
+                        # real booleans in the JSON this replaced, and this is a
+                        # public API shape - convert rather than let 1/0 leak out.
+                        Reachable     = if ($st) { (ConvertTo-DbBool $st.Reachable) -eq 1 } else { $null }
+                        LatencyMs     = if ($st) { $st.LatencyMs } else { $null }
+                        CdpOpen       = if ($st) { (ConvertTo-DbBool $st.CdpOpen) -eq 1 }   else { $null }
+                        CurrentUrl    = if ($st) { $st.CurrentUrl } else { $null }
+                        Advanced      = ($null -ne $ag)
+                        AgentStale    = if ($ag) { [bool]$ag.IsStale }        else { $null }
+                        Hostname      = if ($ag) { $ag.Hostname }             else { $null }
+                        OSVersion     = if ($ag) { $ag.OS }                   else { $null }
+                        InterfaceType = if ($ag) { $ag.InterfaceType }        else { $null }
+                        InterfaceName = if ($ag) { $ag.InterfaceName }        else { $null }
+                        LinkSpeedMbps = if ($ag) { $ag.LinkSpeedMbps }        else { $null }
+                        BrowserInfo   = if ($ag) { $ag.Browser }              else { $null }
+                        UptimeSec     = if ($ag) { $ag.UptimeSec }            else { $null }
+                        AgentVersion  = if ($ag) { $ag.AgentVersion }         else { $null }
+                        LastReportAt  = if ($ag) { $ag.LastReportAt }         else { $null }
+                    }
+                }
+                Send-JsonResponse -Response $response -Body @{ ok = $true; kiosks = @($merged) }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/kiosks/add-manual  body: {ip, name, port}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/kiosks/add-manual') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $bodyRaw = $reader.ReadToEnd(); $reader.Close()
+                $json = $bodyRaw | ConvertFrom-Json
+                $ip = ([string]$json.ip).Trim()
+                if (-not $ip) { throw "IP address is required" }
+                $name = ([string]$json.name).Trim()
+                $port = if ($json.port) { [int]$json.port } else { 9222 }
+                Add-Kiosk -IPAddress $ip -Name $name -Port $port
+                Write-KioskLog "api add-manual ip=$ip name=$name port=$port result=success" -Level SUCCESS
+                Send-JsonResponse -Response $response -Body @{ ok = $true }
+            } catch {
+                Write-KioskLog "api add-manual result=failed error=$($_.Exception.Message)" -Level ERROR
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/kiosks/scan  body: {cidr, port}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/kiosks/scan') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $bodyRaw = $reader.ReadToEnd(); $reader.Close()
+                $json = $bodyRaw | ConvertFrom-Json
+                $cidr = ([string]$json.cidr).Trim()
+                if (-not $cidr) { throw "CIDR is required" }
+                $port = if ($json.port) { [int]$json.port } else { 9222 }
+                $result = @(Invoke-KioskScan -CIDR $cidr -Port $port)
+                Write-KioskLog "api scan cidr=$cidr port=$port discovered=$($result.Count) result=success" -Level SUCCESS
+                Send-JsonResponse -Response $response -Body @{ ok = $true; discovered = $result }
+            } catch {
+                Write-KioskLog "api scan result=failed error=$($_.Exception.Message)" -Level ERROR
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: GET /api/kiosks/networks  - list local private network interfaces for the scan interface-picker
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/kiosks/networks') {
+            try {
+                $networks = @(Get-PrivateNetworks)
+                Send-JsonResponse -Response $response -Body @{ ok = $true; networks = $networks }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/kiosks/update  body: {id, field, value}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/kiosks/update') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $bodyRaw = $reader.ReadToEnd(); $reader.Close()
+                $json = $bodyRaw | ConvertFrom-Json
+                if ($null -eq $json.id) { throw "id is required" }
+                if (-not $json.field) { throw "field is required" }
+                Update-KioskField -ID ([int]$json.id) -Field ([string]$json.field) -NewValue ([string]$json.value)
+                Write-KioskLog "api update id=$($json.id) field=$($json.field) result=success" -Level SUCCESS
+                Send-JsonResponse -Response $response -Body @{ ok = $true }
+            } catch {
+                Write-KioskLog "api update result=failed error=$($_.Exception.Message)" -Level ERROR
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/kiosks/remove  body: {id}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/kiosks/remove') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $bodyRaw = $reader.ReadToEnd(); $reader.Close()
+                $json = $bodyRaw | ConvertFrom-Json
+                if ($null -eq $json.id) { throw "id is required" }
+                Remove-Kiosk -ID ([int]$json.id)
+                Write-KioskLog "api remove id=$($json.id) result=success" -Level SUCCESS
+                Send-JsonResponse -Response $response -Body @{ ok = $true }
+            } catch {
+                Write-KioskLog "api remove result=failed error=$($_.Exception.Message)" -Level ERROR
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/kiosks/push  body: {id, url, confirmLocalhostReplacement}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/kiosks/push') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $bodyRaw = $reader.ReadToEnd(); $reader.Close()
+                $json = $bodyRaw | ConvertFrom-Json
+                if ($null -eq $json.id) { throw "id is required" }
+                $url = [string]$json.url
+                if (-not $url) { throw "url is required" }
+                $confirmReplace = [bool]$json.confirmLocalhostReplacement
+
+                $kiosk = Get-KnownKiosks | Where-Object { $_.ID -eq [int]$json.id } | Select-Object -First 1
+                if (-not $kiosk) {
+                    Send-JsonResponse -Response $response -StatusCode 404 -Body @{ ok = $false; error = "Kiosk not found" }
+                } else {
+                    $replacement = Resolve-LocalhostReplacement -Url $url
+
+                    if ($replacement.NeedsReplacement -and -not $confirmReplace) {
+                        Write-KioskLog "api push id=$($kiosk.ID) name=$($kiosk.Name) ip=$($kiosk.IPAddress) needsLocalhostReplacement suggested=$($replacement.SuggestedUrl)" -Level WARNING
+                        Send-JsonResponse -Response $response -Body @{
+                            ok                = $false
+                            needsConfirmation = $true
+                            suggestedUrl      = $replacement.SuggestedUrl
+                            suggestedIP       = $replacement.SuggestedIP
+                        }
+                    } else {
+                        $finalUrl = if ($replacement.NeedsReplacement -and $confirmReplace) { $replacement.SuggestedUrl } else { $url }
+
+                        $navResult = Invoke-CdpNavigate -IP $kiosk.IPAddress -Port ([int]$kiosk.Port) -Url $finalUrl
+
+                        if ($navResult.Success) {
+                            Update-KioskField -ID $kiosk.ID -Field 'PushedURL' -NewValue $finalUrl
+                            Update-KioskField -ID $kiosk.ID -Field 'LastPushedAt' -NewValue (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+                            Write-KioskLog "api push id=$($kiosk.ID) name=$($kiosk.Name) ip=$($kiosk.IPAddress) result=success url=$finalUrl" -Level SUCCESS
+                            Send-JsonResponse -Response $response -Body @{ ok = $true }
+                        } else {
+                            Write-KioskLog "api push id=$($kiosk.ID) name=$($kiosk.Name) ip=$($kiosk.IPAddress) result=failed error=$($navResult.Error)" -Level ERROR
+                            Send-JsonResponse -Response $response -Body @{ ok = $false; error = $navResult.Error }
+                        }
+                    }
+                }
+            } catch {
+                Write-KioskLog "api push result=failed error=$($_.Exception.Message)" -Level ERROR
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/kiosks/kill-browser  body: {id}  - stops the kiosk browser/session
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/kiosks/kill-browser') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $bodyRaw = $reader.ReadToEnd(); $reader.Close()
+                $json = $bodyRaw | ConvertFrom-Json
+                if ($null -eq $json.id) { throw "id is required" }
+
+                $kiosk = Get-KnownKiosks | Where-Object { $_.ID -eq [int]$json.id } | Select-Object -First 1
+                if (-not $kiosk) {
+                    Send-JsonResponse -Response $response -StatusCode 404 -Body @{ ok = $false; error = "Kiosk not found" }
+                } else {
+                    # An advanced kiosk auto-restarts its browser, so a raw CDP Browser.close
+                    # would just be undone by its watchdog. Stop the advanced session through
+                    # the agent; basic (v1) kiosks keep the original kill-only behaviour.
+                    $agent = Get-KioskAgentInfo -IPAddress $kiosk.IPAddress
+                    if ($agent -and -not $agent.IsStale) {
+                        $result = Invoke-KioskPowerAction -IPAddress $kiosk.IPAddress -Port ([int]$kiosk.Port) -Action 'agent-stop'
+                        if ($result.Success) {
+                            Write-KioskLog "kill-browser advanced id=$($kiosk.ID) name=$($kiosk.Name) ip=$($kiosk.IPAddress) result=queued method=$($result.Method) nonce=$($result.Nonce)" -Level SUCCESS
+                            Send-JsonResponse -Response $response -Body @{ ok = $true; restarted = $false; stopped = $true; method = $result.Method }
+                        } else {
+                            Write-KioskLog "kill-browser advanced id=$($kiosk.ID) name=$($kiosk.Name) ip=$($kiosk.IPAddress) result=failed method=$($result.Method) error=$($result.Error)" -Level ERROR
+                            Send-JsonResponse -Response $response -Body @{ ok = $false; error = $result.Error }
+                        }
+                    } else {
+                        $result = Close-KioskBrowser -IP $kiosk.IPAddress -Port ([int]$kiosk.Port)
+                        if ($result.Success) {
+                            Write-KioskLog "kill-browser basic id=$($kiosk.ID) name=$($kiosk.Name) ip=$($kiosk.IPAddress) result=success method=cdp" -Level SUCCESS
+                            Send-JsonResponse -Response $response -Body @{ ok = $true; restarted = $false }
+                        } else {
+                            Write-KioskLog "kill-browser basic id=$($kiosk.ID) name=$($kiosk.Name) ip=$($kiosk.IPAddress) result=failed method=cdp error=$($result.Error)" -Level ERROR
+                            Send-JsonResponse -Response $response -Body @{ ok = $false; error = $result.Error }
+                        }
+                    }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: GET /api/kiosks/cdp-info?id=  - returns live CDP info (Browser, webSocketDebuggerUrl) for one kiosk
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/kiosks/cdp-info') {
+            try {
+                $idRaw = $request.QueryString['id']
+                $safeId = [regex]::Match($idRaw, '^\d+$').Value
+                if (-not $safeId) { throw "Invalid kiosk id" }
+                $kiosk = Get-KnownKiosks | Where-Object { $_.ID -eq [int]$safeId } | Select-Object -First 1
+                if (-not $kiosk) {
+                    Send-JsonResponse -Response $response -Body @{ ok = $false; error = "Kiosk not found" }
+                } else {
+                    $info = Get-CdpInfo -IP $kiosk.IPAddress -Port ([int]$kiosk.Port)
+                    if ($null -ne $info) {
+                        Send-JsonResponse -Response $response -Body @{ ok = $true; cdp = $info }
+                    } else {
+                        Send-JsonResponse -Response $response -Body @{ ok = $false; error = "Unreachable or CDP not open" }
+                    }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/kiosks/agent-report  - heartbeat from an advanced kiosk (Start-KioskAgent.*)
+        #
+        # This is the only endpoint in the project that accepts a POST from a remote
+        # device rather than from the operator's browser. Security boundary:
+        #   - the record is keyed on the request's REMOTE ENDPOINT address; any "ip"
+        #     in the body is ignored, so a kiosk cannot impersonate another one or
+        #     collect another kiosk's queued command
+        #   - the body is size-capped here and every string field is length-capped in
+        #     Save-KioskAgentReport
+        #   - a first-time report from an unknown IP DOES auto-add a known_kiosks.csv
+        #     row (Register-KioskFromAgentReport), matching the same LAN-trust posture
+        #     already applied to headsets via /api/headsets/register-by-serial. A kiosk
+        #     the operator explicitly removed stays removed (Add-KioskAutoAddIgnore
+        #     denylist written by Remove-Kiosk) unless manually re-added.
+        # The response carries any pending operator command (deliver-once).
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/kiosks/agent-report') {
+            try {
+                if ($request.ContentLength64 -gt 8192) { throw "Report body too large" }
+                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $bodyRaw = $reader.ReadToEnd(); $reader.Close()
+                $json = $bodyRaw | ConvertFrom-Json
+
+                $remoteIp = $request.RemoteEndPoint.Address.ToString()
+                # An IPv4 client reaching an IPv6-capable listener shows up as ::ffff:a.b.c.d
+                if ($remoteIp -match '^::ffff:(\d+\.\d+\.\d+\.\d+)$') { $remoteIp = $Matches[1] }
+
+                Save-KioskAgentReport -IPAddress $remoteIp -Report $json | Out-Null
+
+                $reportedPort = if ($json.cdpPort) { [int]$json.cdpPort } else { 9222 }
+                Register-KioskFromAgentReport -IPAddress $remoteIp -Hostname (Get-TruncatedText $json.hostname 100) -Port $reportedPort | Out-Null
+
+                $pending = Get-PendingKioskCommand -IPAddress $remoteIp
+                Send-JsonResponse -Response $response -Body @{ ok = $true; command = $pending }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/kiosks/power  body: {id, action}  action = reboot|shutdown|browser-restart
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/kiosks/power') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $bodyRaw = $reader.ReadToEnd(); $reader.Close()
+                $json = $bodyRaw | ConvertFrom-Json
+                if ($null -eq $json.id) { throw "id is required" }
+                $action = ([string]$json.action).Trim().ToLower()
+                if ($action -notin @('reboot', 'shutdown', 'browser-restart')) {
+                    throw "action must be one of: reboot, shutdown, browser-restart"
+                }
+
+                $kiosk = Get-KnownKiosks | Where-Object { $_.ID -eq [int]$json.id } | Select-Object -First 1
+                if (-not $kiosk) {
+                    Send-JsonResponse -Response $response -StatusCode 404 -Body @{ ok = $false; error = "Kiosk not found" }
+                } else {
+                    $result = Invoke-KioskPowerAction -IPAddress $kiosk.IPAddress -Port ([int]$kiosk.Port) -Action $action
+                    if ($result.Success) {
+                        Write-Log "Kiosk power action '$action' sent to $($kiosk.Name) ($($kiosk.IPAddress)) via $($result.Method)." -Level SUCCESS
+                        Write-KioskLog "api power id=$($kiosk.ID) name=$($kiosk.Name) ip=$($kiosk.IPAddress) action=$action result=success method=$($result.Method) nonce=$($result.Nonce)" -Level SUCCESS
+                        Send-JsonResponse -Response $response -Body @{ ok = $true; method = $result.Method; nonce = $result.Nonce }
+                    } else {
+                        Write-KioskLog "api power id=$($kiosk.ID) name=$($kiosk.Name) ip=$($kiosk.IPAddress) action=$action result=failed method=$($result.Method) error=$($result.Error)" -Level ERROR
+                        Send-JsonResponse -Response $response -Body @{ ok = $false; error = $result.Error; method = $result.Method }
+                    }
+                }
+            } catch {
+                Write-KioskLog "api power result=failed error=$($_.Exception.Message)" -Level ERROR
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: GET /api/headset-storage?name=Q3_BLUE  - returns storage info via df /sdcard
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/headset-storage') {
+            try {
+                $safeName = [regex]::Match($request.QueryString['name'], '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+                $rows    = Get-KnownHeadsetsCached
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                if (-not $headset) { throw "Headset not found" }
+                $device  = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort -adb $adbPath
+                if (-not $device) { throw "Could not connect to headset via ADB" }
+
+                $s = Get-HeadsetStorageInfo -Device $device -adb $adbPath
+                if (-not $s) { throw "Could not read storage info" }
+                Send-JsonResponse -Response $response -Body @{
+                    ok          = $true
+                    totalGB     = $s.TotalGB
+                    usedGB      = $s.UsedGB
+                    freeGB      = $s.FreeGB
+                    usedPercent = $s.UsedPercent
+                    freePercent = $s.FreePercent
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/headset-settings/apply  body: {"name":"Q3_BLUE","settings":{...}}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/headset-settings/apply') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body   = $reader.ReadToEnd()
+                $reader.Close()
+                $json     = $body | ConvertFrom-Json
+                $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+                $rows    = Get-KnownHeadsets
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                if (-not $headset) { throw "Headset not found" }
+                $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort -adb $adbPath
+                if (-not $device) { throw "Could not connect to headset via ADB" }
+
+                $s = $json.settings
+                $brand = if ($headset.PSObject.Properties['Brand'] -and $headset.Brand) { $headset.Brand } else { (Get-HeadsetBrandModel -Device $device -adb $adbPath).Brand }
+                if ($null -ne $s.guardianMode) {
+                    Set-HeadsetGuardian -Device $device -adb $adbPath -Brand $brand | Out-Null
+                }
+
+                if ($null -ne $s.guardianPause) {
+                    Set-HeadsetGuardianPause -Device $device -Pause ([bool]$s.guardianPause) -adb $adbPath -Brand $brand | Out-Null
+                }
+
+                if ($null -ne $s.soundLevel) {
+                    Set-HeadsetSoundLevel -Device $device -Percent ([int]$s.soundLevel) -adb $adbPath | Out-Null
+                }
+
+                if ($null -ne $s.brightness) {
+                    Set-HeadsetBrightness -Device $device -Percent ([int]$s.brightness) -adb $adbPath -Brand $brand | Out-Null
+                }
+
+                if ($null -ne $s.proxOverride) {
+                    Set-HeadsetProximitySensorOverride -Device $device -adb $adbPath | Out-Null
+                }
+
+                if ($null -ne $s.displaySizeReset) {
+                    Reset-HeadsetDisplaySize -Device $device -adb $adbPath | Out-Null
+                }
+
+                if ($null -ne $s.blockUpdates) {
+                    Set-HeadsetUpdateBlocked -Device $device -Block ([bool]$s.blockUpdates) -adb $adbPath -Brand $brand | Out-Null
+                }
+
+                if ($null -ne $s.refreshRate) {
+                    $hz = 0
+                    if (-not [int]::TryParse([string]$s.refreshRate, [ref]$hz) -or $hz -notin @(Get-HeadsetRefreshRateChoices)) { throw "Invalid refresh rate" }
+                    if ($brand -eq 'Pico') { throw "Refresh rate is only supported on Meta Quest headsets" }
+                    if (-not (Set-HeadsetRefreshRate -Device $device -Hz $hz -adb $adbPath)) { throw "Could not set refresh rate" }
+                }
+
+                Send-JsonResponse -Response $response -Body @{ ok = $true }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/updateprofile  body: {"name":"Q3_BLUE","profile":"portrait-R-N-45-20"}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/updateprofile') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body    = $reader.ReadToEnd()
+                $reader.Close()
+                $json    = $body | ConvertFrom-Json
+
+                # Validate headset name
+                $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+
+                # Validate profile format: <viewname>-[L/R/M]-[D/N]-<posint>-<posint> (M = merged eyes)
+                # Also accept legacy 4-part format [L/R/M]-[D/N]-<posint>-<posint>
+                $safeProfile = [regex]::Match($json.profile, '^[\w]+-[LRM]-[DN]-\d+-\d+$').Value
+                if (-not $safeProfile) {
+                    # Try legacy format and auto-upgrade
+                    $legacy = [regex]::Match($json.profile, '^[LRM]-[DN]-\d+-\d+$').Value
+                    if ($legacy) { $safeProfile = "portrait-$legacy" } else { throw "Invalid profile format" }
+                }
+                $parts = $safeProfile -split '-'
+                if ([int]$parts[3] -lt 1 -or [int]$parts[4] -lt 1) { throw "FPS and bitrate must be positive" }
+
+                $rows = Get-KnownHeadsets
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                if ($headset) {
+                    $profileChanged = ([string]$headset.ScrcpyProfile -ne $safeProfile)
+                    Update-HeadsetField -headsets $rows -ID ([int]$headset.ID) -Field "ScrcpyProfile" -NewValue $safeProfile
+                    # A new profile restarts the running capture: mark it "starting" now and have the
+                    # monitor apply it at once (registry edge + this request), not on the slow tick.
+                    if ($profileChanged) { [void](Request-ScrcpyCheck -HeadsetId ([int]$headset.ID) -Reason 'profile changed') }
+                    # A merged view above 30 fps is saved, but the answer carries the CPU warning.
+                    $fpsAdvice = Get-EyeMergeFpsAdvice -ScrcpyProfile $safeProfile
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes((@{ ok = $true; warning = $(if ($fpsAdvice.Warn) { $fpsAdvice.Message } else { $null }) } | ConvertTo-Json -Compress))
+                } else {
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"not found"}')
+                }
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: GET /api/scrcpyviews?model=Quest+3  - returns view names for a headset model
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/scrcpyviews') {
+            try {
+                $modelParam = $request.QueryString['model']
+                $views = @('portrait','square','wide')
+                try {
+                    $liveConfig = Get-Content -LiteralPath $global:configFilePath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                    if ($modelParam -and $liveConfig.scrcpy.parameters.$modelParam -and $liveConfig.scrcpy.parameters.$modelParam.views) {
+                        $views = @($liveConfig.scrcpy.parameters.$modelParam.views.PSObject.Properties | Select-Object -ExpandProperty Name)
+                    }
+                } catch {}
+                # Built-in non-removable view available on every model.
+                if ('fullscreen' -notin $views) { $views += 'fullscreen' }
+                $json = $views | ConvertTo-Json -Compress
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('["portrait","square","wide"]')
+                    $response.StatusCode      = 200
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/autorestart  body: {"name":"Q3_BLUE","value":true}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/autorestart') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body    = $reader.ReadToEnd()
+                $reader.Close()
+                $json    = $body | ConvertFrom-Json
+
+                # Validate input - name must be a simple identifier (no path chars)
+                $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+
+                $rows = Get-KnownHeadsets
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                if ($headset) {
+                    $newVal = if ([string]$json.value -eq 'True' -or [string]$json.value -eq 'true') { 'True' } else { 'False' }
+                    Update-HeadsetField -headsets $rows -ID ([int]$headset.ID) -Field "scrcpy_AutoRestart" -NewValue $newVal
+                    # Turned ON: mark it starting right away (the monitor's registry edge starts it
+                    # within ~0.5 s, but the page should not wait for that to show it).
+                    if ($newVal -eq 'True') { [void](Request-ScrcpyCheck -HeadsetId ([int]$headset.ID) -Reason 'auto-restart enabled') }
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                } else {
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"not found"}')
+                }
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/stop-scrcpy  body: {"name":"Q3_BLUE"}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/stop-scrcpy') {
+            try {
+                $reader   = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body     = $reader.ReadToEnd()
+                $reader.Close()
+                $json     = $body | ConvertFrom-Json
+                $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+                $rows    = Get-KnownHeadsets
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                # NOTE: Send-JsonResponse takes an OBJECT (or -Raw text). Handing it a byte[] made it
+                # JSON-encode the bytes, so the page received [123,34,...] instead of {"ok":true},
+                # saw no "ok", and reverted its state as if the stop had failed (the "Starting"
+                # indicator vanishing after ~1 s and the stop button coming back).
+                if ($headset) {
+                    # Who asked: a stop always restarts a capture that has auto-restart ON, so an
+                    # unexpected restart must be attributable (client address + the page it came from).
+                    $stopFrom = try { [string]$request.RemoteEndPoint.Address } catch { '?' }
+                    $stopPage = try { if ($request.UrlReferrer) { [string]$request.UrlReferrer.AbsolutePath } else { '-' } } catch { '-' }
+                    Write-Log ("Stop scrcpy requested for {0} by {1} (page {2})" -f $headset.Name, $stopFrom, $stopPage) -Level INFO
+                    $stopped   = [bool](Stop-Scrcpy -HeadsetName $headset.Name -HeadsetIP $headset.IPAddress)
+                    $stopSafe  = Convert-Displayname $headset.Name
+
+                    # A stop that arrives while a start is IN FLIGHT (a restart just triggered by a
+                    # profile change, a toggle...) finds no process yet - and the capture would come
+                    # up right after it, so the stop would silently do nothing. Wait for that start
+                    # (at most 12 s: it is marked "starting"), then stop what it produced.
+                    if (-not $stopped) {
+                        $deadline = (Get-Date).AddSeconds(12)
+                        while ((Get-Date) -lt $deadline) {
+                            $st = Get-ScrcpyCaptureState
+                            if (Get-ScrcpyProcess -displayName $stopSafe -headsetIP $headset.IPAddress -headsetSerial $headset.SerialNumber) {
+                                $stopped = [bool](Stop-Scrcpy -HeadsetName $headset.Name -HeadsetIP $headset.IPAddress)
+                                Write-Log ("Stop scrcpy: {0} was starting - stopped it once it was up" -f $headset.Name) -Level INFO
+                                break
+                            }
+                            if (@($st.Starting) -notcontains [int]$headset.ID) { break }
+                            Start-Sleep -Milliseconds 400
+                        }
+                    }
+
+                    # Auto-restart ON means the capture comes back: do not leave that to the slow
+                    # tick. Mark it "starting" and have VRMonitor restart it as soon as it can.
+                    $restarting = @(Request-ScrcpyCheck -HeadsetId ([int]$headset.ID) -Reason 'capture stopped').Count -gt 0
+                    # ok = nothing is running for this headset any more (a stop of an already-stopped
+                    # capture is a success, not an error); stopped = something WAS running and was killed.
+                    $stillUp = [bool](Get-ScrcpyProcess -displayName $stopSafe -headsetIP $headset.IPAddress -headsetSerial $headset.SerialNumber)
+                    Send-JsonResponse -Response $response -Body @{ ok = (-not $stillUp); stopped = $stopped; restarting = $restarting } -StatusCode 200
+                } else {
+                    Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'not found' } -StatusCode 200
+                }
+            } catch {
+                try { Send-JsonResponse -Response $response -Raw '{"ok":false,"error":"server error"}' -StatusCode 500 } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/start-scrcpy-all - enables autorestart for all headsets (VRMonitor starts scrcpy)
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/start-scrcpy-all') {
+            try {
+                $rows = Get-KnownHeadsets
+                foreach ($row in $rows) {
+                    Update-HeadsetField -Id $row.ID -Field 'scrcpy_AutoRestart' -NewValue 'True'
+                }
+                [void](Request-ScrcpyCheck -All -Reason 'start all captures')
+                Send-JsonResponse -Response $response -Raw '{"ok":true}'
+            } catch {
+                try { Send-JsonResponse -Response $response -Raw '{"ok":false,"error":"server error"}' -StatusCode 500 } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/stop-scrcpy-all - disables autorestart for all headsets then kills all scrcpy
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/stop-scrcpy-all') {
+            try {
+                $rows = Get-KnownHeadsets
+                foreach ($row in $rows) {
+                    Update-HeadsetField -Id $row.ID -Field 'scrcpy_AutoRestart' -NewValue 'False'
+                }
+                Stop-Scrcpy
+                Send-JsonResponse -Response $response -Raw '{"ok":true}'
+            } catch {
+                try { Send-JsonResponse -Response $response -Raw '{"ok":false,"error":"server error"}' -StatusCode 500 } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: GET /api/headsets  - returns all known headsets as JSON (from Get-KnownHeadsets)
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/headsets') {
+            try {
+                $rows = Get-KnownHeadsetsCached
+                $items = [System.Collections.Generic.List[object]]::new()
+                foreach ($row in $rows) {
+                    $items.Add([ordered]@{
+                        ID                 = [int]$row.ID
+                        Name               = $row.Name
+                        IPAddress          = $row.IPAddress
+                        Model              = $row.Model
+                        Brand              = $row.Brand
+                        SerialNumber       = $row.SerialNumber
+                        ScrcpyProfile      = $row.ScrcpyProfile
+                        scrcpy_AutoRestart = $row.scrcpy_AutoRestart
+                        Record             = $row.Record
+                    })
+                }
+                # ONE serialisation for the whole list. -InputObject keeps a 0 or 1 row
+                # list a JSON array (the pipeline would unroll it).
+                $json = if ($items.Count -eq 0) { '[]' } else { ConvertTo-Json -InputObject $items.ToArray() -Compress -Depth 3 }
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: GET /api/headsets-status  - all headsets combined status (ping/scrcpy/adb/runningApp/model/autoRestart)
+        # Shared by video_monitor, headsets_monitoring, headsets_settings. Uses mtime caches so at most
+        # one CSV read per write cycle regardless of how many pages poll simultaneously.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/headsets-status') {
+            try {
+                # Live status, ID-keyed (ADR-0016). Shared mtime cache with /api/headset-status.
+                $infosCache = Get-HeadsetInfosCache
+                # Captures that are starting right now (scrcpy_starting kv row, see
+                # Get-ScrcpyCaptureState): pages show "starting" instead of a dead stream. While a
+                # capture is Starting, scrcpy is reported false whatever the monitor's SCRCPY flag
+                # says - that flag lags reality by several seconds, which made a just-killed
+                # capture look alive (and a started one look dead).
+                $capState     = Get-ScrcpyCaptureState
+                $startingSet  = @($capState.Starting)
+                $settlingSet  = @($capState.Settling)
+                $announceSet  = @($capState.Announcing)
+
+                # Build response: one entry per known headset (in CSV order) joined with live infos
+                $items = @(Get-KnownHeadsetsCached |
+                    ForEach-Object {
+                        $h    = $_
+                        $info = if ($infosCache) { $infosCache[[string]$h.ID] } else { $null }
+                        @{
+                            display_name          = Convert-Displayname $h.Name
+                            name                  = $h.Name
+                            id                    = [int]$h.ID
+                            ip_address            = if ($h.IPAddress) { $h.IPAddress } else { '' }
+                            ping                  = [bool]($info.Ping    -eq 'True')
+                            scrcpy                = $(if ($startingSet -contains [int]$h.ID) { $false } elseif ($settlingSet -contains [int]$h.ID) { $true } else { [bool]($info.SCRCPY -eq 'ok') })
+                            scrcpy_starting       = [bool](($startingSet -contains [int]$h.ID) -or ($announceSet -contains [int]$h.ID))
+                            adb                   = [bool]($info.ADBWifi -eq 'True')
+                            charging              = [bool]($info.Charging -eq 'True')
+                            charging_wattage      = if ($info.ChargingWattage -and $info.ChargingWattage -ne '-') { $info.ChargingWattage } else { '' }
+                            power_state           = if ($info.PowerState -and $info.PowerState -ne '-') { $info.PowerState } else { '' }
+                            time_remaining_min    = if ($info.TimeRemainingMin -and $info.TimeRemainingMin -ne '-') { $info.TimeRemainingMin } else { '' }
+                            battery               = if ($info.Battery -and $info.Battery -ne '-') { $info.Battery } else { '-' }
+                            battery_ctrl_left     = if ($info.BatteryControllerLeft  -and $info.BatteryControllerLeft  -ne '-') { $info.BatteryControllerLeft  } else { '-' }
+                            battery_ctrl_right    = if ($info.BatteryControllerRight -and $info.BatteryControllerRight -ne '-') { $info.BatteryControllerRight } else { '-' }
+                            temp                  = if ($info.Temp -and $info.Temp -ne '-') { $info.Temp } else { '-' }
+                            cpu_temp              = if ($info.CpuTemp -and $info.CpuTemp -ne '-') { $info.CpuTemp } else { '-' }
+                            adb_transport         = if ($info.AdbTransport -and $info.AdbTransport -ne '-') { $info.AdbTransport } else { '' }
+                            ipd                   = (Get-HeadsetIpdValue -Headset $h)
+                            running_app           = if ($info.RunningApp)     { $info.RunningApp }     else { '' }
+                            running_app_icon      = if ($info.RunningAppIcon) { $info.RunningAppIcon } else { '' }
+                            model                 = if ($h.Model -and $h.Model -ne '-') { $h.Model } else { '' }
+                            scrcpy_auto_restart   = [bool]($h.scrcpy_AutoRestart -eq 'True')
+                        }
+                    }
+                )
+                Send-JsonResponse -Response $response -Body $items
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ error = $_.Exception.Message }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: GET /api/battery-history?id=3&hours=24  - battery samples for one headset
+        # Backs the battery graph: the hover sparkline on headsets_monitoring.html and the
+        # full battery_history.html page. Read-only, DB-backed, no side effects.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/battery-history') {
+            try {
+                $rawId = $request.QueryString['id']
+                $idVal = 0
+                if (-not [int]::TryParse([string]$rawId, [ref]$idVal) -or $idVal -le 0) {
+                    Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = 'Missing or invalid id parameter' }
+                    return
+                }
+
+                # Only the four windows the UI offers. Anything else silently falls back to
+                # the widest one - this is a display window, not a command, so a stale link
+                # should still draw a graph rather than an error page.
+                $hoursVal = 24
+                $rawHours = [string]$request.QueryString['hours']
+                if ($rawHours -and @('1','3','12','24') -contains $rawHours) { $hoursVal = [int]$rawHours }
+
+                # An empty series is a VALID answer, not a 404: samples are only written when
+                # the level changes, so a headset that held steady across the whole window
+                # genuinely has nothing to return. The page says so in words.
+                $samples = @(Get-BatteryHistory -HeadsetId $idVal -Hours $hoursVal |
+                    ForEach-Object { @{ ts = [string]$_.ts; pct = [int]$_.pct } })
+
+                Send-JsonResponse -Response $response -Body @{
+                    ok             = $true
+                    id             = $idVal
+                    hours          = $hoursVal
+                    retentionHours = [int]$global:databaseBatteryHistoryHours
+                    nowUtc         = [datetime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+                    samples        = $samples
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: GET /api/metric-history?id=3&metric=temp&hours=24  - one metric's samples
+        # for one headset. Backs the metric graph: the hover sparkline on
+        # headsets_monitoring.html and the full metric_history.html page. Read-only,
+        # DB-backed, no side effects.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/metric-history') {
+            try {
+                $rawId = $request.QueryString['id']
+                $idVal = 0
+                if (-not [int]::TryParse([string]$rawId, [ref]$idVal) -or $idVal -le 0) {
+                    Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = 'Missing or invalid id parameter' }
+                    return
+                }
+
+                # Unknown metric falls back rather than 400s, for the same reason a bad
+                # window does: a stale or hand-typed link should still draw something.
+                $metricDefs = Get-HeadsetMetricDefinition
+                $metricVal  = [string]$request.QueryString['metric']
+                if (-not $metricVal -or -not $metricDefs.Contains($metricVal)) { $metricVal = 'battery' }
+
+                # The four windows the UI offers, plus 'all'. Anything else silently falls
+                # back to 24h - this is a display window, not a command.
+                #
+                # 'all' resolves HERE, from the live retention period, so "all records"
+                # always means "everything still kept" and the page never has to know the
+                # number. The response echoes the resolved numeric hours, which is what the
+                # chart pins its x scale to, so the chart needs no special case.
+                $retentionHours = if ($global:databaseMetricHistoryHours) { [int]$global:databaseMetricHistoryHours } else { 24 }
+                $hoursVal   = 24
+                $windowName = '24'
+                $rawHours   = [string]$request.QueryString['hours']
+                if ($rawHours -eq 'all') {
+                    $hoursVal   = $retentionHours
+                    $windowName = 'all'
+                } elseif ($rawHours -and @('1','3','12','24') -contains $rawHours) {
+                    $hoursVal   = [int]$rawHours
+                    $windowName = $rawHours
+                }
+
+                # An empty series is a VALID answer, not a 404: samples are only written when
+                # the value changes, so a headset that held steady across the whole window
+                # genuinely has nothing to return. The page says so in words.
+                $samples = @(Get-MetricHistory -HeadsetId $idVal -Metric $metricVal -Hours $hoursVal |
+                    ForEach-Object { @{ ts = [string]$_.ts; value = [double]$_.value } })
+
+                Send-JsonResponse -Response $response -Body @{
+                    ok             = $true
+                    id             = $idVal
+                    metric         = $metricVal
+                    unit           = [string]$metricDefs[$metricVal].Unit
+                    hours          = $hoursVal
+                    window         = $windowName
+                    retentionHours = $retentionHours
+                    nowUtc         = [datetime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+                    samples        = $samples
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: GET /api/favoriteapps?name=Q3_BLUE  - returns Meta Home + per-headset favorites as JSON
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/favoriteapps') {
+            try {
+                $rawQuery  = $request.Url.Query.TrimStart('?')
+                $nameParam = if ($rawQuery -match '(?:^|&)name=([^&]+)') { [Uri]::UnescapeDataString($Matches[1]) } else { '' }
+                $safeName  = [regex]::Match(($nameParam -replace ' ','_'), '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+
+                # favorites.list already joins the catalogue, so DisplayName and
+                # LocalIconPath arrive resolved; the second pass over
+                # known_apps.csv this used to do is gone.
+                $favList = @()
+                foreach ($r in @(Get-FavoriteApps -headsetName $safeName)) {
+                    if ($r.PackageName) {
+                        $favList += @{
+                            package       = $r.PackageName
+                            displayName   = $r.DisplayName
+                            localIconPath = $r.LocalIconPath
+                        }
+                    }
+                }
+                $json = ConvertTo-Json @($favList) -Compress
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+
+        # API: GET /api/installedapps?name=Q3_BLUE[&refresh=1][&resolveMissing=1][&includeSystem=1]
+        # Returns installed apps as JSON. Default: third-party only (cached). includeSystem=1: all apps (live).
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/installedapps') {
+            try {
+                $rawQuery       = $request.Url.Query.TrimStart('?')
+                $nameParam      = if ($rawQuery -match '(?:^|&)name=([^&]+)') { [Uri]::UnescapeDataString($Matches[1]) } else { '' }
+                $refresh        = ($rawQuery -match '(?:^|&)refresh=1')
+                $resolveMissing = ($rawQuery -match '(?:^|&)resolveMissing=1')
+                $includeSystem  = ($rawQuery -match '(?:^|&)includeSystem=1')
+                $safeName  = [regex]::Match(($nameParam -replace ' ','_'), '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+
+                $metaHomePkg  = 'com.oculus.vrshell'
+
+                # Load favorites
+                $favPkgs = @(Get-FavoriteApps -headsetName $safeName | Select-Object -ExpandProperty PackageName)
+
+                # Refresh cache from headset when requested (covers both includeSystem and default)
+                if ($refresh) {
+                    $rows    = Get-KnownHeadsetsCached
+                    $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                    if (-not $headset) { throw "Headset not found" }
+                    $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort
+                    if (-not $device) { throw "Could not connect to headset via ADB" }
+                    Update-InstalledAppsCache -Device $device -headsetName $headset.Name
+                }
+
+                # The cache read and the catalogue enrichment are one query now:
+                # installed.list_joined does the join the two Import-Csv calls
+                # here used to do by hand. "No cache yet" is an empty result
+                # rather than a missing file.
+                $cachedRows = @(Get-HeadsetInstalledAppsCached -headsetName $safeName)
+                if ($cachedRows.Count -gt 0) {
+                    $appList = @($cachedRows | ForEach-Object {
+                        $pkg = $_.PackageName
+                        $dn  = if ($_.DisplayName -and $_.DisplayName -ne $pkg) { $_.DisplayName } else { $pkg }
+                        $sz  = 0L
+                        if ($null -ne $_.SizeBytes) { [void][long]::TryParse([string]$_.SizeBytes, [ref]$sz) }
+                        @{ package = $pkg; displayName = $dn; localIconPath = $_.LocalIconPath; version = $_.Version; pendingVersion = $_.PendingVersion; storeVersion = $_.StoreVersion; sizeBytes = $sz; favorite = ($favPkgs -contains $pkg -or $pkg -eq $metaHomePkg); thirdParty = (ConvertTo-BoolField $_.ThirdParty) }
+                    } | Where-Object { $includeSystem -or $_.thirdParty } | Sort-Object { $_.displayName })
+                } else {
+                    $appNamesLookup = Get-AppCatalogMap
+                    # Fallback: live ADB call (no cache yet)
+                    $rows    = Get-KnownHeadsetsCached
+                    $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                    if (-not $headset) { throw "Headset not found" }
+                    $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort -adb $adbPath
+                    if (-not $device) { throw "Could not connect to headset via ADB" }
+                    $installedApps = Get-HeadsetInstalledApps -Device $device -ThirdPartyOnly:(-not $includeSystem) -adb $adbPath
+                    $appList = @($installedApps | ForEach-Object {
+                        $pkg   = $_.PackageName
+                        $entry = if ($appNamesLookup.ContainsKey($pkg)) { $appNamesLookup[$pkg] } else { $null }
+                        $dn    = if ($entry -and $entry.DisplayName -and $entry.DisplayName -ne $pkg) { $entry.DisplayName } elseif ($_.DisplayName -and $_.DisplayName -ne $pkg) { $_.DisplayName } else { $pkg }
+                        $icon  = if ($entry -and $entry.LocalIconPath) { $entry.LocalIconPath } elseif ($_.LocalIconPath) { $_.LocalIconPath } else { '' }
+                        @{ package = $pkg; displayName = $dn; localIconPath = $icon; version = $_.Version; pendingVersion = ''; storeVersion = ''; sizeBytes = 0L; favorite = ($favPkgs -contains $pkg -or $pkg -eq $metaHomePkg); thirdParty = [bool]$_.ThirdParty }
+                    } | Sort-Object { $_.displayName })
+                }
+
+                $json = ConvertTo-Json @($appList) -Compress
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('[]')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/uninstallapp  body: {"name":"Q3_BLUE","package":"com.beatgames.beatsaber"}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/uninstallapp') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body    = $reader.ReadToEnd()
+                $reader.Close()
+                $json     = $body | ConvertFrom-Json
+                $safeName = [regex]::Match(($json.name -replace ' ','_'), '^[\w\-]+$').Value
+                $safePkg  = [regex]::Match($json.package, '^[\w\.\-]+$').Value
+                if (-not $safeName -or -not $safePkg) { throw "Invalid input" }
+
+                $rows    = Get-KnownHeadsets
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                if (-not $headset) { throw "Headset not found" }
+                $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort
+                if (-not $device) { throw "Could not connect to headset via ADB" }
+                $ok = Uninstall-HeadsetApp -Device $device -PackageName $safePkg
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($(if ($ok) { '{"ok":true}' } else { '{"ok":false,"error":"Uninstall failed or app not found"}' }))
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errJson  = '{"ok":false,"error":' + ($_.Exception.Message | ConvertTo-Json) + '}'
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes($errJson)
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/update-app  body: {"name":"Q3_RED","package":"com.beatgames.beatsaber"}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/update-app') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body    = $reader.ReadToEnd()
+                $reader.Close()
+                $parsed   = $body | ConvertFrom-Json
+                $safeName = [regex]::Match(($parsed.name -replace ' ','_'), '^[\w\-]+$').Value
+                $safePkg  = [regex]::Match($parsed.package, '^[\w\.\-]+$').Value
+                if (-not $safeName -or -not $safePkg) { throw "Invalid parameters" }
+
+                $rows    = Get-KnownHeadsets
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                if (-not $headset) { throw "Headset not found" }
+                $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort
+                if (-not $device) { throw "Could not connect to headset via ADB" }
+                $ok = Start-HeadsetAppUpdate -Device $device -PackageName $safePkg -headsetName $headset.Name
+                Send-JsonResponse -Response $response -Body @{ ok = $ok }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/headset-connection-check  body: {"name":"Q3_Blue"}
+        # Returns: {"usb":bool,"wifi":bool}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/headset-connection-check') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body = $reader.ReadToEnd(); $reader.Close()
+                $json = $body | ConvertFrom-Json
+                $safeName = [regex]::Match(($json.name -replace ' ','_'), '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+
+                $rows    = Get-KnownHeadsets
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                if (-not $headset) { throw "Headset not found" }
+
+                # Read the published snapshot instead of shelling out. This route is
+                # polled every 5 s per open apps page, and it used to spawn an
+                # "adb devices" AND run Get-UsbDeviceSpeed - which walked the whole
+                # PnP tree, unfiltered and uncached - on every one of those polls.
+                $usbAvailable = $false
+                $usbSpeed     = $null
+                if ($headset.SerialNumber) {
+                    $snap = Get-PublishedUsbSnapshot
+                    if ($snap -and $snap.SerialNumber -eq $headset.SerialNumber) {
+                        $usbAvailable = $true
+                        $usbSpeed     = $snap.UsbSpeed
+                    }
+                }
+
+                $wifiAvailable = $false
+                if ($headset.IPAddress) {
+                    $wifiAvailable = (Test-Port -hostname $headset.IPAddress -port $adbPort).open
+                }
+
+                Send-JsonResponse -Response $response -Body @{ usb = $usbAvailable; usbSpeed = $usbSpeed; wifi = $wifiAvailable }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ error = $_.Exception.Message }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: GET /api/install-progress?jobId=xxx
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/install-progress') {
+            try {
+                $jobId = [regex]::Match($request.Url.Query, '[?&]?jobId=([a-f0-9]+)').Groups[1].Value
+                if (-not $jobId) { throw "Missing jobId" }
+                $pFile = Get-JobFilePath -Name "vrm_install_$jobId.json"
+                if (Test-Path -LiteralPath $pFile) {
+                    $raw = [System.IO.File]::ReadAllText($pFile)
+                    Send-JsonResponse -Response $response -Raw $raw
+                } else {
+                    Send-JsonResponse -Response $response -StatusCode 404 -Body @{ error = "Job not found" }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ error = $_.Exception.Message }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/install-cancel  body: {"jobId":"xxx"}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/install-cancel') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body = $reader.ReadToEnd(); $reader.Close()
+                $json  = $body | ConvertFrom-Json
+                $jobId = [regex]::Match([string]$json.jobId, '^[a-f0-9]+$').Value
+                if (-not $jobId) { throw "Invalid jobId" }
+
+                if ($script:installJobs.ContainsKey($jobId)) {
+                    $j = $script:installJobs[$jobId]
+                    try { Stop-Job  -Job $j -ErrorAction SilentlyContinue } catch {}
+                    try { Remove-Job -Job $j -Force -ErrorAction SilentlyContinue } catch {}
+                    $script:installJobs.Remove($jobId)
+                }
+
+                $pFile = Get-JobFilePath -Name "vrm_install_$jobId.json"
+                if (Test-Path -LiteralPath $pFile) {
+                    try {
+                        $prog = [System.IO.File]::ReadAllText($pFile) | ConvertFrom-Json
+                        if ($prog.adbPid -and $prog.adbPid -gt 0) {
+                            Stop-Process -Id $prog.adbPid -Force -ErrorAction SilentlyContinue
+                        }
+                    } catch {}
+                    [System.IO.File]::WriteAllText($pFile, '{"step":"cancelled","pct":0,"file":"","error":"","adbPid":0}')
+                }
+
+                Send-JsonResponse -Response $response -Body @{ ok = $true }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ error = $_.Exception.Message }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/resolve-app-names
+        # Starts a background job that fetches app metadata from MetaMetadata (GitHub).
+        # Guard: returns {status:"already_running"} if a job is active.
+        # Returns {status:"no_internet"} when github.com is unreachable.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/resolve-app-names') {
+            try {
+                # Guard: one job at a time
+                if ($script:resolveJob -and $script:resolveJob.State -in @('Running', 'NotStarted')) {
+                    Send-JsonResponse -Response $response -Body @{ status = 'already_running' }
+                    return
+                }
+                # Clean up finished job
+                if ($script:resolveJob) {
+                    try { Remove-Job -Job $script:resolveJob -Force -ErrorAction SilentlyContinue } catch {}
+                    $script:resolveJob = $null
+                }
+                # Internet check
+                if (-not (Test-InternetConnectivity)) {
+                    Send-JsonResponse -Response $response -Body @{ status = 'no_internet' }
+                    return
+                }
+                # Start background job
+                [System.IO.File]::WriteAllText($script:resolveProgFile, '{"status":"queued"}')
+                $bodyRaw    = (New-Object System.IO.StreamReader($request.InputStream)).ReadToEnd()
+                $bodyObj    = try { $bodyRaw | ConvertFrom-Json } catch { $null }
+                $forceOnline = [bool]($bodyObj.forceOnline)
+                $script:resolveJob = Start-Job -ScriptBlock $resolveJobBlock -ArgumentList $ScriptPath, $script:resolveProgFile, $ConfigFilePath, $forceOnline
+                Send-JsonResponse -Response $response -Body @{ status = 'started' }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ status = 'error'; error = $_.Exception.Message }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: GET /api/resolve-progress
+        # Returns the current status of the background app name resolution job.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/resolve-progress') {
+            try {
+                if (-not $script:resolveJob -and -not (Test-Path -LiteralPath $script:resolveProgFile)) {
+                    Send-JsonResponse -Response $response -Body @{ status = 'idle' }
+                } else {
+                    $raw = try { [System.IO.File]::ReadAllText($script:resolveProgFile) } catch { '{"status":"idle"}' }
+                    # No active job - only trust terminal statuses; stale running/queued -> idle
+                    if (-not $script:resolveJob) {
+                        $parsed = try { $raw | ConvertFrom-Json } catch { $null }
+                        if (-not $parsed -or $parsed.status -in @('running', 'queued')) { $raw = '{"status":"idle"}' }
+                    }
+                    $bytes = [System.Text.Encoding]::UTF8.GetBytes($raw)
+                    $response.StatusCode      = 200
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                    $response.ContentLength64 = $bytes.Length
+                    $response.OutputStream.Write($bytes, 0, $bytes.Length)
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ status = 'error' }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # ---- Stream benchmark (stream_benchmark.ps1, ADR-0026) ----
+        # GET /api/benchmark/options?id=<n> - what can be benchmarked on that headset + timing constants.
+        # Config and registry only (no ADB, no GPU probe), so it is safe on this listener.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/benchmark/options') {
+            try {
+                $benchId = 0
+                if (-not [int]::TryParse([string]$request.QueryString['id'], [ref]$benchId) -or $benchId -le 0) { throw "INVALID_ID" }
+                $benchHeadset = Get-HeadsetDiagTarget -Id $benchId
+                if (-not $benchHeadset) { throw "UNKNOWN_HEADSET" }
+                $benchOpts = Get-StreamBenchmarkOptions -Headset $benchHeadset
+                Send-JsonResponse -Response $response -Depth 10 -Body @{
+                    ok = $true
+                    headset = @{ id = $benchHeadset.ID; name = $benchHeadset.Name; model = $benchHeadset.Model }
+                    options = $benchOpts
+                    running = (Test-StreamBenchmarkActive)
+                }
+            } catch {
+                $errMsg = switch -Regex ($_.Exception.Message) {
+                    'INVALID_ID'      { 'Invalid or missing headset id.' }
+                    'UNKNOWN_HEADSET' { 'This headset is not registered on this server.' }
+                    default           { $_.Exception.Message }
+                }
+                Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $errMsg }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # POST /api/benchmark/plan {id, selection, measureSec} - the tests a selection expands to + the time estimate.
+        # Pure computation (config and registry), nothing is started.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/benchmark/plan') {
+            try {
+                if ($request.ContentLength64 -gt 65536) { throw "BODY_TOO_LARGE" }
+                $benchBody = try { (New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)).ReadToEnd() | ConvertFrom-Json } catch { $null }
+                $benchId = 0
+                if (-not $benchBody -or -not [int]::TryParse([string]$benchBody.id, [ref]$benchId) -or $benchId -le 0) { throw "INVALID_ID" }
+                $benchHeadset = Get-HeadsetDiagTarget -Id $benchId
+                if (-not $benchHeadset) { throw "UNKNOWN_HEADSET" }
+                $benchMeasure = 20
+                [void][int]::TryParse([string]$benchBody.measureSec, [ref]$benchMeasure)
+                if (@(10, 20, 40) -notcontains $benchMeasure) { $benchMeasure = 20 }
+                $benchRunning = @(Get-Process -Name 'scrcpy' -ErrorAction SilentlyContinue).Count
+                $benchPlan = New-StreamBenchmarkPlan -Headset $benchHeadset -Selection $benchBody.selection -MeasureSec $benchMeasure -RunningStreams $benchRunning
+                Send-JsonResponse -Response $response -Depth 10 -Body @{
+                    ok          = [bool]$benchPlan.Ok
+                    error       = $benchPlan.Error
+                    count       = $benchPlan.Count
+                    estimateSec = $benchPlan.EstimateSec
+                    fixedSec    = $benchPlan.FixedSec
+                    selection   = $benchPlan.Selection
+                    tests       = @($benchPlan.Tests)
+                }
+            } catch {
+                $errMsg = switch -Regex ($_.Exception.Message) {
+                    'INVALID_ID'      { 'Invalid or missing headset id.' }
+                    'UNKNOWN_HEADSET' { 'This headset is not registered on this server.' }
+                    'BODY_TOO_LARGE'  { 'Request too large.' }
+                    default           { $_.Exception.Message }
+                }
+                Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $errMsg }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # POST /api/benchmark/start {id, selection, measureSec} - one run at a time.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/benchmark/start') {
+            try {
+                if (($script:benchmarkJob -and $script:benchmarkJob.State -in @('Running', 'NotStarted')) -or (Test-StreamBenchmarkActive)) {
+                    Send-JsonResponse -Response $response -Body @{ ok = $false; status = 'already_running'; error = 'A benchmark is already running.' }
+                    return
+                }
+                if ($script:benchmarkJob) {
+                    try { Remove-Job -Job $script:benchmarkJob -Force -ErrorAction SilentlyContinue } catch {}
+                    $script:benchmarkJob = $null
+                }
+                if ($request.ContentLength64 -gt 65536) { throw "BODY_TOO_LARGE" }
+                $benchBody = try { (New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)).ReadToEnd() | ConvertFrom-Json } catch { $null }
+                $benchId = 0
+                if (-not $benchBody -or -not [int]::TryParse([string]$benchBody.id, [ref]$benchId) -or $benchId -le 0) { throw "INVALID_ID" }
+                $benchHeadset = Get-HeadsetDiagTarget -Id $benchId
+                if (-not $benchHeadset) { throw "UNKNOWN_HEADSET" }
+                $benchMeasure = 20
+                [void][int]::TryParse([string]$benchBody.measureSec, [ref]$benchMeasure)
+                if (@(10, 20, 40) -notcontains $benchMeasure) { $benchMeasure = 20 }
+                $benchRunning = @(Get-Process -Name 'scrcpy' -ErrorAction SilentlyContinue).Count
+                $benchPlan = New-StreamBenchmarkPlan -Headset $benchHeadset -Selection $benchBody.selection -MeasureSec $benchMeasure -RunningStreams $benchRunning
+                if (-not $benchPlan.Ok) { throw ("PLAN:" + $benchPlan.Error) }
+                $benchTests = @($benchPlan.Tests)
+                if ($benchTests.Count -eq 0) { throw "NO_TEST" }
+                $benchEta = [int]$benchPlan.EstimateSec
+                $cancelPath = Get-StreamBenchmarkCancelPath
+                if (Test-Path -LiteralPath $cancelPath) { Remove-Item -LiteralPath $cancelPath -Force -ErrorAction SilentlyContinue }
+                [System.IO.File]::WriteAllText($script:benchmarkProgFile, ('{{"status":"queued","etaSec":{0},"estimatedTotalSec":{0},"total":{1}}}' -f [int]$benchEta, $benchTests.Count))
+                $benchTestsJson = ($benchTests | ConvertTo-Json -Depth 6 -Compress)
+                if ($benchTests.Count -eq 1 -and $benchTestsJson -notmatch '^\[') { $benchTestsJson = '[' + $benchTestsJson + ']' }
+                $script:benchmarkJob = Start-Job -ScriptBlock $benchmarkJobBlock -ArgumentList $ScriptPath, $ConfigFilePath, $benchId, $benchTestsJson, $benchMeasure
+                Write-Log ("Web: stream benchmark started for {0} ({1} test(s), {2} s window)" -f $benchHeadset.Name, $benchTests.Count, $benchMeasure) -Level INFO
+                Send-JsonResponse -Response $response -Body @{ ok = $true; status = 'started'; etaSec = [int]$benchEta; total = $benchTests.Count }
+            } catch {
+                $errMsg = switch -Regex ($_.Exception.Message) {
+                    '^PLAN:'          { [string]$benchPlan.Error }
+                    'INVALID_ID'      { 'Invalid or missing headset id.' }
+                    'UNKNOWN_HEADSET' { 'This headset is not registered on this server.' }
+                    'NO_TEST'         { 'No valid test selected.' }
+                    'BODY_TOO_LARGE'  { 'Request too large.' }
+                    default           { $_.Exception.Message }
+                }
+                Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $errMsg }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # POST /api/benchmark/parallel {ids:[int], settings:{...}, measureSec} - same settings on several
+        # headsets at once. Shares the single-flight slot with /start.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/benchmark/parallel') {
+            try {
+                if (($script:benchmarkJob -and $script:benchmarkJob.State -in @('Running', 'NotStarted')) -or (Test-StreamBenchmarkActive)) {
+                    Send-JsonResponse -Response $response -Body @{ ok = $false; status = 'already_running'; error = 'A benchmark is already running.' }
+                    return
+                }
+                if ($script:benchmarkJob) {
+                    try { Remove-Job -Job $script:benchmarkJob -Force -ErrorAction SilentlyContinue } catch {}
+                    $script:benchmarkJob = $null
+                }
+                if ($request.ContentLength64 -gt 8192) { throw "BODY_TOO_LARGE" }
+                $parBody = try { (New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)).ReadToEnd() | ConvertFrom-Json } catch { $null }
+                if (-not $parBody -or -not $parBody.settings -or $parBody.settings -isnot [System.Management.Automation.PSCustomObject]) { throw "INVALID_SETTINGS" }
+                $parIds = @()
+                foreach ($rawId in @($parBody.ids)) {
+                    $parId = 0
+                    if (-not [int]::TryParse([string]$rawId, [ref]$parId) -or $parId -le 0) { throw "INVALID_ID" }
+                    if ($parIds -notcontains $parId) { $parIds += $parId }
+                }
+                if ($parIds.Count -eq 0) { throw "INVALID_ID" }
+                if ($parIds.Count -gt 32) { throw "TOO_MANY" }
+                $parNames = @()
+                foreach ($parId in $parIds) {
+                    $parHeadset = Get-HeadsetDiagTarget -Id $parId
+                    if (-not $parHeadset) { throw "UNKNOWN_HEADSET" }
+                    $parNames += $parHeadset.Name
+                }
+                $parMeasure = 20
+                [void][int]::TryParse([string]$parBody.measureSec, [ref]$parMeasure)
+                if (@(10, 20, 40) -notcontains $parMeasure) { $parMeasure = 20 }
+                $cancelPath = Get-StreamBenchmarkCancelPath
+                if (Test-Path -LiteralPath $cancelPath) { Remove-Item -LiteralPath $cancelPath -Force -ErrorAction SilentlyContinue }
+                [System.IO.File]::WriteAllText($script:benchmarkProgFile, ('{{"status":"queued","kind":"parallel","total":{0}}}' -f $parIds.Count))
+                $parSettingsJson = ($parBody.settings | ConvertTo-Json -Depth 5 -Compress)
+                $script:benchmarkJob = Start-Job -ScriptBlock $benchmarkParallelJobBlock -ArgumentList $ScriptPath, $ConfigFilePath, ($parIds -join ','), $parSettingsJson, $parMeasure
+                Write-Log ("Web: parallel stream check started on {0} headset(s) ({1}), {2} s window" -f $parIds.Count, ($parNames -join ', '), $parMeasure) -Level INFO
+                Send-JsonResponse -Response $response -Body @{ ok = $true; status = 'started'; total = $parIds.Count }
+            } catch {
+                $errMsg = switch -Regex ($_.Exception.Message) {
+                    'INVALID_ID'       { 'Invalid or missing headset id.' }
+                    'INVALID_SETTINGS' { 'Missing settings.' }
+                    'TOO_MANY'         { 'Too many headsets (maximum 32).' }
+                    'UNKNOWN_HEADSET'  { 'A headset is not registered on this server.' }
+                    'BODY_TOO_LARGE'   { 'Request too large.' }
+                    default            { $_.Exception.Message }
+                }
+                Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $errMsg }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # GET /api/benchmark/parallel/result - the last stored parallel check, result=null when none.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/benchmark/parallel/result') {
+            try {
+                Send-JsonResponse -Response $response -Depth 10 -Body @{ ok = $true; result = (Get-StreamBenchmarkParallelResult) }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # GET /api/benchmark/progress - the progress JSON as written by the run.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/benchmark/progress') {
+            try {
+                $raw = '{"status":"idle"}'
+                if (Test-Path -LiteralPath $script:benchmarkProgFile) {
+                    $raw = try { [System.IO.File]::ReadAllText($script:benchmarkProgFile, [System.Text.Encoding]::UTF8) } catch { '{"status":"idle"}' }
+                    $jobAlive = ($script:benchmarkJob -and $script:benchmarkJob.State -in @('Running', 'NotStarted'))
+                    if (-not $jobAlive -and -not (Test-StreamBenchmarkActive)) {
+                        # No run of ours and no pause flag: a running/queued file is a leftover.
+                        $parsed = try { $raw | ConvertFrom-Json } catch { $null }
+                        if (-not $parsed -or $parsed.status -in @('running', 'queued')) { $raw = '{"status":"idle"}' }
+                    }
+                }
+                Send-JsonResponse -Response $response -Raw $raw
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ status = 'error' }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # POST /api/benchmark/cancel - the run stops after its current step and restores the streams.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/benchmark/cancel') {
+            try {
+                Send-JsonResponse -Response $response -Body @{ ok = [bool](Stop-StreamBenchmark) }
+            } catch {
+                Send-JsonResponse -Response $response -Body @{ ok = $false; error = $_.Exception.Message } -StatusCode 500
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # GET /api/benchmark/result[?model=<m>] - the accumulated result of that model (default: the last
+        # benchmarked one), result=null when none.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/benchmark/result') {
+            try {
+                $benchModel = [string]$request.QueryString['model']
+                if ($benchModel.Length -gt 100) { $benchModel = $benchModel.Substring(0, 100) }
+                $benchRes = if ($benchModel) { Get-StreamBenchmarkResult -Model $benchModel } else { Get-StreamBenchmarkResult }
+                Send-JsonResponse -Response $response -Depth 12 -Body @{ ok = $true; result = $benchRes }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # GET /api/benchmark/result.csv - the same run as a CSV attachment (one line per test and GPU).
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/benchmark/result.csv') {
+            try {
+                $benchModel = [string]$request.QueryString['model']
+                if ($benchModel.Length -gt 100) { $benchModel = $benchModel.Substring(0, 100) }
+                $benchRes = if ($benchModel) { Get-StreamBenchmarkResult -Model $benchModel } else { Get-StreamBenchmarkResult }
+                if (-not $benchRes) {
+                    Send-JsonResponse -Response $response -StatusCode 404 -Body @{ ok = $false; error = 'No benchmark result yet.' }
+                } else {
+                    $csvBytes = [System.Text.Encoding]::UTF8.GetBytes((ConvertTo-StreamBenchmarkCsv -Result $benchRes))
+                    $csvName = 'vrhm_benchmark_{0}_{1}.csv' -f ($env:COMPUTERNAME -replace '[^A-Za-z0-9_-]', ''), (Get-Date -Format 'yyyyMMdd_HHmm')
+                    $response.StatusCode      = 200
+                    $response.ContentType     = 'text/csv; charset=utf-8'
+                    $response.AddHeader('Content-Disposition', ('attachment; filename="{0}"' -f $csvName))
+                    $response.ContentLength64 = $csvBytes.Length
+                    $response.OutputStream.Write($csvBytes, 0, $csvBytes.Length)
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # POST /api/benchmark/clear {model} - forgets the accumulated result of one model.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/benchmark/clear') {
+            try {
+                if ($request.ContentLength64 -gt 4096) { throw "BODY_TOO_LARGE" }
+                $benchBody = try { (New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)).ReadToEnd() | ConvertFrom-Json } catch { $null }
+                $benchModel = if ($benchBody) { [string]$benchBody.model } else { '' }
+                if ([string]::IsNullOrWhiteSpace($benchModel) -or $benchModel.Length -gt 100) { throw "INVALID_MODEL" }
+                Send-JsonResponse -Response $response -Body @{ ok = [bool](Clear-StreamBenchmarkResult -Model $benchModel) }
+            } catch {
+                $errMsg = switch -Regex ($_.Exception.Message) {
+                    'INVALID_MODEL'   { 'Invalid or missing model.' }
+                    'BODY_TOO_LARGE'  { 'Request too large.' }
+                    default           { $_.Exception.Message }
+                }
+                Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $errMsg }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # POST /api/benchmark/recommend {model, headsets, settings, maxCpu, maxGpu} - capacity estimate and
+        # up to 3 proposals computed from the stored result. Pure computation, no ADB.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/benchmark/recommend') {
+            try {
+                if ($request.ContentLength64 -gt 16384) { throw "BODY_TOO_LARGE" }
+                $benchBody = try { (New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)).ReadToEnd() | ConvertFrom-Json } catch { $null }
+                if (-not $benchBody) { throw "INVALID_BODY" }
+                $benchModel = [string]$benchBody.model
+                if ($benchModel.Length -gt 100) { throw "INVALID_MODEL" }
+                $benchRes = if ($benchModel) { Get-StreamBenchmarkResult -Model $benchModel } else { Get-StreamBenchmarkResult }
+                $benchHeadsets = 1
+                [void][int]::TryParse([string]$benchBody.headsets, [ref]$benchHeadsets)
+                $benchHeadsets = [Math]::Max(1, [Math]::Min(64, $benchHeadsets))
+                $benchMaxCpu = 0; [void][int]::TryParse([string]$benchBody.maxCpu, [ref]$benchMaxCpu)
+                $benchMaxGpu = 0; [void][int]::TryParse([string]$benchBody.maxGpu, [ref]$benchMaxGpu)
+                $benchRecArgs = @{ Result = $benchRes; Headsets = $benchHeadsets; MaxCpu = $benchMaxCpu; MaxGpu = $benchMaxGpu }
+                if ($benchBody.settings) { $benchRecArgs.Settings = $benchBody.settings }
+                Send-JsonResponse -Response $response -Depth 10 -Body @{ ok = $true; recommendation = (Get-StreamBenchmarkRecommendation @benchRecArgs) }
+            } catch {
+                $errMsg = switch -Regex ($_.Exception.Message) {
+                    'INVALID_BODY'    { 'Invalid request.' }
+                    'INVALID_MODEL'   { 'Invalid model.' }
+                    'BODY_TOO_LARGE'  { 'Request too large.' }
+                    default           { $_.Exception.Message }
+                }
+                Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $errMsg }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # POST /api/benchmark/apply {model, settings, headsetIds:[int], preview} - writes a proposal into the
+        # profile of the chosen headsets (preview:true only lists what would change).
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/benchmark/apply') {
+            try {
+                if ($request.ContentLength64 -gt 4096) { throw "BODY_TOO_LARGE" }
+                $benchBody = try { (New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)).ReadToEnd() | ConvertFrom-Json } catch { $null }
+                if (-not $benchBody -or -not $benchBody.settings) { throw "INVALID_BODY" }
+                $benchModel = [string]$benchBody.model
+                if ([string]::IsNullOrWhiteSpace($benchModel) -or $benchModel.Length -gt 100) { throw "INVALID_MODEL" }
+                # No headset ticked is allowed: the restream settings in config.json are still applied.
+                $benchIds = [int[]]@(@($benchBody.headsetIds) | Where-Object { $null -ne $_ } | ForEach-Object { [int]$_ })
+                $benchPreview = [bool]$benchBody.preview
+                $benchApply = Set-StreamBenchmarkRecommendation -Model $benchModel -Settings $benchBody.settings -HeadsetIds $benchIds -Preview:$benchPreview
+                Send-JsonResponse -Response $response -Depth 6 -Body @{
+                    ok = [bool]$benchApply.Ok; changes = @($benchApply.Changes); error = $benchApply.Error; preview = $benchPreview
+                }
+            } catch {
+                $errMsg = switch -Regex ($_.Exception.Message) {
+                    'INVALID_BODY'    { 'Invalid request.' }
+                    'INVALID_MODEL'   { 'Invalid or missing model.' }
+                    'BODY_TOO_LARGE'  { 'Request too large.' }
+                    default           { $_.Exception.Message }
+                }
+                Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $errMsg }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/update-app-versions
+        # Starts a background job that fetches LatestVersion from MetaMetadata for all packages in known_apps.csv.
+        # Returns {status:"started"|"already_running"|"no_internet"|"error"}.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/update-app-versions') {
+            try {
+                if ($script:updateVersionsJob -and $script:updateVersionsJob.State -in @('Running', 'NotStarted')) {
+                    Send-JsonResponse -Response $response -Body @{ status = 'already_running' }
+                    return
+                }
+                if ($script:updateVersionsJob) {
+                    try { Remove-Job -Job $script:updateVersionsJob -Force -ErrorAction SilentlyContinue } catch {}
+                    $script:updateVersionsJob = $null
+                }
+                if (-not (Test-InternetConnectivity)) {
+                    Send-JsonResponse -Response $response -Body @{ status = 'no_internet' }
+                    return
+                }
+                $bodyRaw = New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)
+                $bodyJson = $bodyRaw.ReadToEnd()
+                try { $bodyObj = $bodyJson | ConvertFrom-Json } catch { $bodyObj = $null }
+                $script:updateVersionsHeadsetName = if ($bodyObj -and $bodyObj.headsetName) { $bodyObj.headsetName } else { $null }
+                [System.IO.File]::WriteAllText($script:updateVersionsProgFile, '{"status":"queued"}')
+                $script:updateVersionsJob = Start-Job -ScriptBlock $updateVersionsJobBlock -ArgumentList $ScriptPath, $script:updateVersionsProgFile, $ConfigFilePath
+                Send-JsonResponse -Response $response -Body @{ status = 'started' }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ status = 'error'; error = $_.Exception.Message }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: GET /api/update-app-versions-progress
+        # Returns current status of the background update-versions job from progress file.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/update-app-versions-progress') {
+            try {
+                if (-not $script:updateVersionsJob -and -not (Test-Path -LiteralPath $script:updateVersionsProgFile)) {
+                    Send-JsonResponse -Response $response -Body @{ status = 'idle' }
+                } else {
+                    # Clean up finished job
+                    if ($script:updateVersionsJob -and $script:updateVersionsJob.State -notin @('Running', 'NotStarted')) {
+                        try { Remove-Job -Job $script:updateVersionsJob -Force -ErrorAction SilentlyContinue } catch {}
+                        $script:updateVersionsJob = $null
+                    }
+                    $raw = try { [System.IO.File]::ReadAllText($script:updateVersionsProgFile) } catch { '{"status":"idle"}' }
+                    $bytes = [System.Text.Encoding]::UTF8.GetBytes($raw)
+                    $response.StatusCode      = 200
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                    $response.ContentLength64 = $bytes.Length
+                    $response.OutputStream.Write($bytes, 0, $bytes.Length)
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ status = 'error' }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/refresh-headset-apps-cache
+        # Calls Update-InstalledAppsCache for a given headset. Used after update-app-versions completes.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/refresh-headset-apps-cache') {
+            try {
+                $bodyRaw  = New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)
+                $bodyJson = $bodyRaw.ReadToEnd()
+                $bodyObj  = try { $bodyJson | ConvertFrom-Json } catch { $null }
+                $hn = if ($bodyObj -and $bodyObj.headsetName) { [string]$bodyObj.headsetName } else { $null }
+                if (-not $hn) {
+                    Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = 'headsetName required' }
+                    return
+                }
+                $headset = Get-KnownHeadsets | Where-Object { $_.Name -eq $hn } | Select-Object -First 1
+                if (-not $headset) {
+                    Send-JsonResponse -Response $response -StatusCode 404 -Body @{ ok = $false; error = 'headset not found' }
+                    return
+                }
+                $device = try { Get-BestAdbDevice -headset $headset } catch { $null }
+                if (-not $device) {
+                    $device = try { Get-AdbWifiDevice -headsetIP $headset.IPAddress } catch { $null }
+                }
+                if (-not $device) {
+                    Send-JsonResponse -Response $response -StatusCode 503 -Body @{ ok = $false; error = 'device not reachable' }
+                    return
+                }
+                Update-InstalledAppsCache -Device $device -headsetName $hn
+                Send-JsonResponse -Response $response -Body @{ ok = $true }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/installapk
+        # Mode A (binary upload): Content-Type: application/octet-stream, headers X-Headset-Name + X-File-Name
+        # Mode B (overwrite confirm): JSON body {"name","tempId","overwrite":true}
+        # Mode C (local folder path): JSON body {"name","path"[,"overwrite":true]}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/installapk') {
+            try {
+                $contentType = $request.ContentType -replace ';.*','' | ForEach-Object { $_.Trim() }
+                $transport   = $request.Headers['X-Transport']  # 'usb', 'wifi', or empty (auto)
+
+                # Helper: resolve device by transport preference.
+                #
+                # USB is the DEFAULT when the cabled headset is the target one - this is
+                # the one place USB bandwidth genuinely pays, because an OBB push is
+                # multiple GB and WiFi ADB makes that painful. It used to require the
+                # client to opt in with X-Transport: usb, and re-shelled "adb devices"
+                # to check; the published snapshot already knows (ADR-0021).
+                # X-Transport is still honoured as an explicit override in both
+                # directions.
+                $resolveDevice = {
+                    param($headset2)
+                    if ($transport -eq 'wifi') {
+                        return Get-AdbWifiDevice -headsetIP $headset2.IPAddress -AdbPort $adbPort -adb $adbPath
+                    }
+                    if ($headset2.SerialNumber) {
+                        $snap = Get-PublishedUsbSnapshot
+                        if ($snap -and $snap.SerialNumber -eq $headset2.SerialNumber) {
+                            return [PSCustomObject]@{ DeviceId = $snap.DeviceId; ConnectionType = 'USB'; IP = $null; Port = $null }
+                        }
+                    }
+                    if ($transport -eq 'usb') {
+                        # Explicitly asked for USB but it is not the cabled headset - fall
+                        # through rather than silently installing over WiFi on a caller
+                        # that chose USB on purpose.
+                        return $null
+                    }
+                    return Get-BestAdbDevice -Headset $headset2 -AdbPort $adbPort -adb $adbPath
+                }
+
+                # Helper: start the install background job and respond with jobId
+                $startJob = {
+                    param($deviceId2, $installPath2, $isFolder2, $obbPath2, $pkgName2, $cleanupApk2)
+                    $jobId    = [guid]::NewGuid().ToString('N')
+                    $pFile    = Get-JobFilePath -Name "vrm_install_$jobId.json"
+                    [System.IO.File]::WriteAllText($pFile, '{"step":"queued","pct":0,"file":"","error":"","adbPid":0}')
+                    $job = Start-Job -ScriptBlock $installJobBlock -ArgumentList $adbPath, $deviceId2, $installPath2, $isFolder2, $obbPath2, $pkgName2, $pFile, $cleanupApk2
+                    $script:installJobs[$jobId] = $job
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; jobId = $jobId }
+                }
+
+                if ($contentType -eq 'application/octet-stream') {
+                    # Mode A: binary APK upload
+                    $safeNameRaw  = $request.Headers['X-Headset-Name']
+                    $safeFileName = [regex]::Match($request.Headers['X-File-Name'], '^[\w\.\-]+\.apk$').Value
+                    $safeName     = [regex]::Match(($safeNameRaw -replace ' ','_'), '^[\w\-]+$').Value
+                    if (-not $safeName -or -not $safeFileName) { throw "Invalid upload headers" }
+
+                    $rows    = Get-KnownHeadsets
+                    $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                    if (-not $headset) { throw "Headset not found" }
+                    $device = & $resolveDevice $headset
+                    if (-not $device) { throw "Could not connect to headset via ADB" }
+
+                    # Read and save binary body
+                    $ms     = [System.IO.MemoryStream]::new()
+                    $buf    = [byte[]]::new(65536)
+                    $stream = $request.InputStream
+                    while (($read = $stream.Read($buf, 0, $buf.Length)) -gt 0) { $ms.Write($buf, 0, $read) }
+                    $tempPath = [System.IO.Path]::Combine($env:TEMP, "vrmapk_${safeName}_${safeFileName}")
+                    [System.IO.File]::WriteAllBytes($tempPath, $ms.ToArray())
+
+                    $pkgName     = [System.IO.Path]::GetFileNameWithoutExtension($safeFileName)
+                    $pmOut       = Invoke-AdbCmd -Device $device -Command "shell pm list packages $pkgName"
+                    $isInstalled = $pmOut -ne $false -and ($pmOut -match "package:$([regex]::Escape($pkgName))")
+                    if ($isInstalled) {
+                        $verLine = (Invoke-AdbCmd -Device $device -Command "shell dumpsys package $pkgName" | Select-String 'versionName') | Select-Object -First 1
+                        $curVer  = if ($verLine -match 'versionName=(\S+)') { $Matches[1] } else { '' }
+                        $tempId  = "vrmapk_${safeName}_${safeFileName}"
+                        Send-JsonResponse -Response $response -Body @{ ok = $false; alreadyInstalled = $true; package = $pkgName; installedVersion = $curVer; tempId = $tempId }
+                    } else {
+                        & $startJob $device.DeviceId $tempPath $false '' $pkgName $true
+                    }
+
+                } else {
+                    # Mode B or C: JSON body
+                    $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                    $body   = $reader.ReadToEnd(); $reader.Close()
+                    $json     = $body | ConvertFrom-Json
+                    $safeName = [regex]::Match(($json.name -replace ' ','_'), '^[\w\-]+$').Value
+                    if (-not $safeName) { throw "Invalid headset name" }
+
+                    $rows    = Get-KnownHeadsets
+                    $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                    if (-not $headset) { throw "Headset not found" }
+                    $device = & $resolveDevice $headset
+                    if (-not $device) { throw "Could not connect to headset via ADB" }
+
+                    if ($json.tempId) {
+                        # Mode B: overwrite-confirmed APK (temp file already on disk)
+                        $safeTempId = [regex]::Match($json.tempId, '^vrmapk_[\w\-]+_[\w\.\-]+\.apk$').Value
+                        if (-not $safeTempId) { throw "Invalid tempId" }
+                        $tempPath = [System.IO.Path]::Combine($env:TEMP, $safeTempId)
+                        if (-not (Test-Path -LiteralPath $tempPath)) { throw "Temp file not found or expired" }
+                        $pkgName  = [System.IO.Path]::GetFileNameWithoutExtension(([System.IO.Path]::GetFileName($safeTempId) -replace '^vrmapk_[\w\-]+_',''))
+                        & $startJob $device.DeviceId $tempPath $false '' $pkgName $true
+
+                    } elseif ($json.path) {
+                        # Mode C: local folder/file path
+                        $rawPath = [string]$json.path
+                        if ($rawPath -match "`0" -or $rawPath.Trim() -eq '') { throw "Invalid path" }
+                        try { $safePath = [System.IO.Path]::GetFullPath($rawPath) } catch { throw "Invalid path" }
+                        if (-not $safePath) { throw "Invalid path" }
+                        $overwrite = [bool]$json.overwrite
+                        $isFolder  = Test-Path -LiteralPath $safePath -PathType Container
+
+                        # Find APK to determine package name
+                        $pkgName = if ($isFolder) {
+                            $apks = @(Get-ChildItem -LiteralPath $safePath -Filter '*.apk' -File -ErrorAction SilentlyContinue)
+                            if ($apks.Count -eq 0) { throw "No APK file found in folder" }
+                            [System.IO.Path]::GetFileNameWithoutExtension($apks[0].Name)
+                        } else {
+                            [System.IO.Path]::GetFileNameWithoutExtension($safePath)
+                        }
+
+                        # Pre-check: already installed?
+                        if (-not $overwrite) {
+                            $allApps     = Get-HeadsetInstalledApps -Device $device -ThirdPartyOnly:$false -adb $adbPath
+                            $isInstalled = [bool]($allApps | Where-Object { $_.PackageName -eq $pkgName })
+                            if ($isInstalled) {
+                                $verMatch = Invoke-AdbCmd -Device $device -Command "shell dumpsys package $pkgName" -adb $adbPath | Select-String 'versionName' | Select-Object -Last 1
+                                $curVer   = if ($verMatch -and "$verMatch" -match 'versionName=(\S+)') { $Matches[1] } else { '' }
+                                Send-JsonResponse -Response $response -Body @{ ok = $false; alreadyInstalled = $true; package = $pkgName; installedVersion = $curVer }
+                                return  # finally will close response
+                            }
+                        }
+
+                        $obbPath = if ($isFolder) { Join-Path $safePath $pkgName } else { '' }
+
+                        & $startJob $device.DeviceId $safePath $isFolder $obbPath $pkgName $false
+
+                    } else {
+                        throw "Missing tempId or path"
+                    }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: GET /api/foregroundapp?name=Q3_BLUE  - returns the package + display name + icon of the running app
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/foregroundapp') {
+            try {
+                $rawQuery  = $request.Url.Query.TrimStart('?')
+                $nameParam = if ($rawQuery -match '(?:^|&)name=([^&]+)') { [Uri]::UnescapeDataString($Matches[1]) } else { '' }
+                $safeName  = [regex]::Match(($nameParam -replace ' ','_'), '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid headset name" }
+
+                $rows    = Get-KnownHeadsetsCached
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                if (-not $headset) { throw "Headset not found" }
+
+                $device  = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort -adb $adbPath
+                $pkg     = if ($device) { Get-HeadsetForegroundApp -Device $device -adb $adbPath } else { $null }
+
+                $result  = @{ package = ''; displayName = ''; localIconPath = '' }
+                if ($pkg) {
+                    $result.package = $pkg
+                    # One row by primary key instead of scanning the whole
+                    # catalogue: this endpoint is polled per headset.
+                    $entry = @(Invoke-DbQuery -Name 'catalog.get' -Parameters @{ package_name = $pkg }) | Select-Object -First 1
+                    if ($entry) {
+                        if ($entry.DisplayName)   { $result.displayName   = $entry.DisplayName }
+                        if ($entry.LocalIconPath) { $result.localIconPath = $entry.LocalIconPath }
+                    }
+                    if (-not $result.displayName) { $result.displayName = $pkg }
+                }
+                $json      = $result | ConvertTo-Json -Compress
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $eb = [System.Text.Encoding]::UTF8.GetBytes('{"package":"","displayName":"","localIconPath":""}')
+                    $response.StatusCode = 200; $response.ContentType = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
+                } catch {}
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/launchapp  body: {"name":"Q3_BLUE","package":"com.beatgames.beatsaber"}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/launchapp') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body    = $reader.ReadToEnd()
+                $reader.Close()
+                $json     = $body | ConvertFrom-Json
+                $safeName = [regex]::Match($json.name, '^[\w\-]+$').Value
+                $safePkg  = [regex]::Match($json.package, '^[\w\.\-]+$').Value
+                if (-not $safeName -or -not $safePkg) { throw "Invalid input" }
+
+                $rows    = Get-KnownHeadsets
+                $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+                if (-not $headset) { throw "Headset not found" }
+                $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort -adb $adbPath
+                if (-not $device) { throw "Could not connect to headset via ADB" }
+                $ok = Invoke-HeadsetApp -Device $device -PackageName $safePkg -adb $adbPath
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($(if ($ok) { '{"ok":true}' } else { '{"ok":false}' }))
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/togglefavorite  body: {"name":"Q3_BLUE","package":"com.pkg","displayName":"App","favorite":true}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/togglefavorite') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body    = $reader.ReadToEnd()
+                $reader.Close()
+                $json     = $body | ConvertFrom-Json
+                $safePkg  = [regex]::Match($json.package, '^[\w\.\-]+$').Value
+                $safeName = [regex]::Match(($json.name -replace ' ','_'), '^[\w\-]+$').Value
+                if (-not $safePkg -or -not $safeName) { throw "Invalid input" }
+                $favRows = @(Get-FavoriteApps -headsetName $safeName)
+                $addFav  = [string]$json.favorite -eq 'True' -or [string]$json.favorite -eq 'true'
+                if ($addFav) {
+                    if (-not ($favRows | Where-Object { $_.PackageName -eq $safePkg })) {
+                        $favRows += [PSCustomObject]@{ PackageName = $safePkg; DisplayName = $json.displayName }
+                    }
+                } else {
+                    $favRows = @($favRows | Where-Object { $_.PackageName -ne $safePkg })
+                }
+                Save-FavoriteApps -favorites $favRows -headsetName $safeName
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: GET /api/detectusbheadset  - detects a USB-connected ADB device and returns its WiFi IP
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/detectusbheadset') {
+            try {
+                # Published snapshot, not a live probe: the full detail probe took
+                # ~450 ms and this listener loop is single-threaded, so running it
+                # here stalled every other request for its duration.
+                $usbInfo = Get-PublishedUsbSnapshot
+                $result = if ($usbInfo -and $usbInfo.IP -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') {
+                    @{ found = $true; ip = $usbInfo.IP; model = $usbInfo.Model }
+                } else {
+                    @{ found = $false; ip = ''; model = '' }
+                }
+                $jsonOut   = ConvertTo-Json $result -Compress
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonOut)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"found":false}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/enablewifiadb  - runs adb tcpip 5555 on the USB-connected headset
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/enablewifiadb') {
+            try {
+                # Claim USB: this runs adb tcpip, which re-enumerates the transport.
+                Set-UsbBusy -Seconds 45
+                $result = Enable-AdbTcpIp -AdbPort $adbPort -adb $adbPath
+                $json   = ConvertTo-Json $result -Compress
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/installadbwifiapk  - installs the WiFi ADB APK on the USB-connected headset
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/installadbwifiapk') {
+            try {
+                # Claim USB: Install-OculusWirelessAdbApk runs BOTH 'adb usb' and
+                # 'adb tcpip', so it bounces the transport twice.
+                Set-UsbBusy -Seconds 180
+                $device = Get-AdbUsbDeviceDetails -adb $adbPath
+                if (-not $device) {
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"No USB headset detected"}')
+                    $response.StatusCode = 200
+                    $response.ContentType = 'application/json; charset=utf-8'
+                    $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                    $response.ContentLength64 = $respBytes.Length
+                    $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+                } else {
+                    $ok = Install-OculusWirelessAdbApk -Device $device -adb $adbPath
+                    # Retrieve IP after install (tcpip was run inside Install-OculusWirelessAdbApk)
+                    $ip    = ''
+                    $model = ''
+                    $portOpen = $false
+                    $ipOutput = Invoke-AdbCmd -Device $device -Command "shell ip -f inet addr show wlan0" -adb $adbPath
+                    foreach ($line in $ipOutput) {
+                        if ($line -match 'inet\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/') { $ip = $Matches[1]; break }
+                    }
+                    $model = ((Invoke-AdbCmd -Device $device -Command "shell getprop ro.product.model" -adb $adbPath) -join '').Trim()
+                    if ($ip) { $portOpen = (Test-Port -hostname $ip -port $adbPort).open }
+                    $resultObj = @{ ok = [bool]$ok; model = $model; ip = $ip; port = $adbPort; portOpen = $portOpen; reinstalled = $true }
+                    $json = ConvertTo-Json $resultObj -Compress
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+                    $response.StatusCode      = 200
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                    $response.ContentLength64 = $respBytes.Length
+                    $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+                }
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/connectwifi  - connects USB device to the configured WiFi network
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/connectwifi') {
+            try {
+                # Claim USB: changing the headset's network changes its address.
+                Set-UsbBusy -Seconds 60
+                $result = @{ ok = $false; error = '' }
+                if (-not ($adbPath -and (Test-Path -LiteralPath $adbPath))) {
+                    $result.error = 'ADB not found.'
+                } else {
+                    $knownNetworks = Get-WifiNetworks
+                    $preferredNet  = $knownNetworks | Where-Object { $_.Preferred } | Select-Object -First 1
+                    if (-not $preferredNet) { $preferredNet = $knownNetworks | Select-Object -First 1 }
+                    if (-not $preferredNet) {
+                        $result.error = 'No WiFi network configured. Add one in vrhm_config.'
+                    } else {
+                    $wifiSsid = $preferredNet.SSID
+                    $wifiPwd  = $preferredNet.Password
+                    # Find USB device
+                    $usbDeviceId = (& $adbPath devices 2>&1 |
+                        Where-Object { $_ -match '^\S+\s+device$' -and $_ -notmatch '^\*' -and $_ -notmatch '^\d+\.\d+' } |
+                        Select-Object -First 1) -replace '\s+device$', ''
+                    if (-not $usbDeviceId) {
+                        $result.error = 'No USB device found.'
+                    } else {
+                        $usbDev    = [PSCustomObject]@{ DeviceId = $usbDeviceId; ConnectionType = 'USB'; IP = $null; Port = $null }
+                        $usbBrand  = (Get-HeadsetBrandModel -Device $usbDev -adb $adbPath).Brand
+                        $result.ok = Connect-HeadsetToWifi -Device $usbDev -Ssid $wifiSsid -Password $wifiPwd -Brand $usbBrand
+                        if (-not $result.ok) {
+                            if ($usbBrand -eq 'Pico') {
+                                $result.error = "WiFi picker opened on Pico headset - automated push is not supported (uid 2000 SecurityException). Complete the join on the headset for SSID '$wifiSsid'."
+                            } else {
+                                $result.error = 'WiFi connection failed.'
+                            }
+                        }
+                    }
+                    }
+                }
+                $jsonOut   = ConvertTo-Json $result -Compress
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonOut)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"Internal error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: GET /api/wifi-networks  - returns known WiFi networks (SSIDs only, passwords masked)
+        # API: GET /api/wifi-detect  - returns the PC's currently connected WiFi SSID and password
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/wifi-detect') {
+            try {
+                # Single call: Get-ComputerWifiInfo resolves SSID and password in
+                # one pass, instead of two independent netsh round-trips.
+                $wifiInfo = Get-ComputerWifiInfo
+                $payload  = @{
+                    ok          = $true
+                    ssid        = $(if ($wifiInfo) { $wifiInfo.Ssid } else { $null })
+                    password    = $(if ($wifiInfo) { $wifiInfo.Password } else { $null })
+                    profileName = $(if ($wifiInfo) { $wifiInfo.ProfileName } else { $null })
+                }
+                Send-JsonResponse -Response $response -Body $payload
+            } catch {
+                Send-JsonResponse -Response $response -Body @{ ok = $false; error = $_.Exception.Message } -StatusCode 500
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/wifi-networks') {
+            try {
+                # Skip any entry without an SSID: a nameless row is not selectable
+                # by anything downstream, and it renders as a blank, pushable choice
+                # in the remote toolbox's network list.
+                $networks  = @(Get-WifiNetworks) | Where-Object { $_ -and $_.SSID }
+                $result    = @($networks | ForEach-Object { @{ ssid = $_.SSID; passwordHint = '****'; preferred = $_.Preferred } })
+                $jsonOut   = ConvertTo-Json $result -Compress
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonOut)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"Internal error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/wifi-networks/upsert  - add or update a WiFi network {ssid, password}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/wifi-networks/upsert') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body   = $reader.ReadToEnd(); $reader.Close()
+                $json   = $body | ConvertFrom-Json
+                $ssid        = ([string]$json.ssid).Trim()
+                $wifiPassword = ([string]$json.password).Trim()
+                if (-not $ssid) { throw "SSID is required" }
+                $allowOverwrite = [bool]$json.allowOverwrite
+                $networks  = @(Get-WifiNetworks)
+                # -eq is case-insensitive in PowerShell: SSIDs are matched
+                # case-insensitively, the password comparison below is not.
+                $existing  = $networks | Where-Object { $_.SSID -eq $ssid }
+                $result    = $null
+                if ($existing) {
+                    if ($existing.Password -ceq $wifiPassword) {
+                        # Nothing would change - do not touch the encrypted store.
+                        $result = @{ ok = $true; message = 'unchanged'; duplicate = $true; ssid = $ssid }
+                    } elseif (-not $allowOverwrite) {
+                        # Known SSID with a different password: refuse silently
+                        # overwriting it. HTTP 200 - this is a confirmable
+                        # condition the caller must acknowledge, not an error.
+                        $result = @{ ok = $false; message = 'duplicate'; duplicate = $true; ssid = $ssid }
+                    }
+                }
+                if (-not $result) {
+                    if ($existing) {
+                        $existing.Password = $wifiPassword
+                        $message = "updated"
+                    } else {
+                        $isFirst = ($networks.Count -eq 0)
+                        $networks += [PSCustomObject]@{ SSID = $ssid; Password = $wifiPassword; Preferred = $isFirst }
+                        $message = "added"
+                    }
+                    Save-WifiNetworks -Networks $networks
+                    $result = @{ ok = $true; message = $message }
+                }
+                $jsonOut   = ConvertTo-Json $result -Compress
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonOut)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errMsg    = $_.Exception.Message
+                    $errBytes  = [System.Text.Encoding]::UTF8.GetBytes(("{`"ok`":false,`"error`":`"$errMsg`"}"))
+                    $response.StatusCode      = 400
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/wifi-networks/delete  - remove a WiFi network {ssid}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/wifi-networks/delete') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body   = $reader.ReadToEnd(); $reader.Close()
+                $json   = $body | ConvertFrom-Json
+                $ssid   = ([string]$json.ssid).Trim()
+                if (-not $ssid) { throw "SSID is required" }
+                $all      = @(Get-WifiNetworks)
+                $wasPreferred = [bool]($all | Where-Object { $_.SSID -eq $ssid -and $_.Preferred })
+                $networks = @($all | Where-Object { $_.SSID -ne $ssid })
+                if ($wasPreferred -and $networks.Count -gt 0) { $networks[0].Preferred = $true }
+                Save-WifiNetworks -Networks $networks
+                $jsonOut   = ConvertTo-Json @{ ok = $true } -Compress
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonOut)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errMsg    = $_.Exception.Message
+                    $errBytes  = [System.Text.Encoding]::UTF8.GetBytes(("{`"ok`":false,`"error`":`"$errMsg`"}"))
+                    $response.StatusCode      = 400
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/wifi-networks/set-preferred  - marks one SSID as preferred {ssid}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/wifi-networks/set-preferred') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body   = $reader.ReadToEnd(); $reader.Close()
+                $json   = $body | ConvertFrom-Json
+                $ssid   = ([string]$json.ssid).Trim()
+                if (-not $ssid) { throw "SSID is required" }
+                $networks = @(Get-WifiNetworks)
+                $found = $false
+                foreach ($n in $networks) { $n.Preferred = ($n.SSID -eq $ssid); if ($n.SSID -eq $ssid) { $found = $true } }
+                if (-not $found) { throw "SSID not found" }
+                Save-WifiNetworks -Networks $networks
+                $jsonOut   = ConvertTo-Json @{ ok = $true } -Compress
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonOut)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errMsg    = $_.Exception.Message
+                    $errBytes  = [System.Text.Encoding]::UTF8.GetBytes(("{`"ok`":false,`"error`":`"$errMsg`"}"))
+                    $response.StatusCode      = 400
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: GET /api/usbdeviceinfo  - returns full details of USB-connected ADB device
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/usbdeviceinfo') {
+            try {
+                # Last snapshot published by VRMonitor, the single USB owner.
+                $details = Get-PublishedUsbSnapshot
+                $result  = @{ found = $false; ip = ''; brand = ''; model = ''; serialNumber = ''; ssid = ''; expectedSsid = ''; ssidMatch = $false; wifiAdbOpen = $false; apkInstalled = $false; alreadyRegistered = $false }
+                if ($details) {
+                    $knownNetworks   = Get-WifiNetworks
+                    $preferredWifi   = $knownNetworks | Where-Object { $_.Preferred } | Select-Object -First 1
+                    if (-not $preferredWifi) { $preferredWifi = $knownNetworks | Select-Object -First 1 }
+                    $expectedSsidVal = if ($preferredWifi) { $preferredWifi.SSID } else { '' }
+                    $rows       = Get-KnownHeadsetsCached
+                    $alreadyReg = $false
+                    if ($details.SerialNumber) { $alreadyReg = [bool]($rows | Where-Object { $_.SerialNumber -eq $details.SerialNumber }) }
+                    if (-not $alreadyReg -and $details.IP) { $alreadyReg = [bool]($rows | Where-Object { $_.IPAddress -eq $details.IP }) }
+                    $result = @{
+                        found = $true; ip = $details.IP
+                        brand = if ($details.PSObject.Properties['Brand']) { $details.Brand } else { '' }
+                        model = $details.Model
+                        serialNumber = $details.SerialNumber; ssid = $details.WiFiSSID
+                        expectedSsid = $expectedSsidVal
+                        ssidMatch = (Test-SsidMatch -Reported $details.WiFiSSID -Expected $expectedSsidVal)
+                        wifiAdbOpen = $details.WifiAdbOpen
+                        apkInstalled = $details.ApkInstalled; alreadyRegistered = $alreadyReg
+                    }
+                }
+                $jsonOut   = ConvertTo-Json $result -Compress
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonOut)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"found":false}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/addheadset  body: {"name":"Q3 Blue","ip":"192.168.1.243","model":"Quest 3","serialNumber":"ABC123"}
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/addheadset') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body    = $reader.ReadToEnd()
+                $reader.Close()
+                $json    = $body | ConvertFrom-Json
+
+                # Validate name: letters, numbers, spaces, hyphens, underscores (1-40 chars)
+                $safeName = [regex]::Match($json.name.Trim(), '^[\w\s\-]{1,40}$').Value
+                if (-not $safeName) { throw "INVALID_NAME" }
+
+                # Validate IP format and octet range
+                $parsedIp2 = $null
+                if (-not [System.Net.IPAddress]::TryParse([string]$json.ip, [ref]$parsedIp2) -or
+                    $parsedIp2.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) {
+                    throw "INVALID_IP"
+                }
+                $safeIp = $parsedIp2.ToString()
+
+                $rows = @(Get-KnownHeadsets)
+
+                if ($rows | Where-Object { $_.IPAddress -eq $safeIp })   { throw "IP_DUPLICATE" }
+                if ($rows | Where-Object { $_.Name      -eq $safeName }) { throw "NAME_DUPLICATE" }
+
+                $safeModel  = if ($json.model)        { ([string]$json.model).Trim().Substring(0, [Math]::Min(([string]$json.model).Trim().Length, 60)) } else { '' }
+                $safeSerial = if ($json.serialNumber) { ([string]$json.serialNumber).Trim().Substring(0, [Math]::Min(([string]$json.serialNumber).Trim().Length, 40)) } else { '' }
+
+                # A serial is a permanent identity - creating a second row for a headset we
+                # already know would split its history and break identity healing. Moving a
+                # known headset to a new address is register-by-serial's job, not this route's.
+                if ($safeSerial -and ($rows | Where-Object { ([string]$_.SerialNumber).Trim() -eq $safeSerial })) { throw "SERIAL_DUPLICATE" }
+
+                Add-Headset -headsets $rows -IPAddress $safeIp -Name $safeName -Model $safeModel -SerialNumber $safeSerial
+
+                # An explicit operator add overrides an earlier "forget" from discovery.
+                if ($safeSerial -and (Get-Command Remove-HeadsetDiscoveryIgnore -ErrorAction SilentlyContinue)) {
+                    Remove-HeadsetDiscoveryIgnore -SerialNumber $safeSerial | Out-Null
+                }
+
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                $errMsg = switch -Regex ($_.Exception.Message) {
+                    'IP_DUPLICATE'     { '{"ok":false,"error":"This IP address is already registered."}' }
+                    'NAME_DUPLICATE'   { '{"ok":false,"error":"A headset with this name already exists."}' }
+                    'SERIAL_DUPLICATE' { '{"ok":false,"error":"This headset is already registered (same serial number)."}' }
+                    'INVALID_NAME'     { '{"ok":false,"error":"Invalid name. Use letters, numbers, spaces or hyphens."}' }
+                    'INVALID_IP'       { '{"ok":false,"error":"Invalid IP address."}' }
+                    default            { '{"ok":false,"error":"Server error."}' }
+                }
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes($errMsg)
+                    $response.StatusCode      = 200
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/headsets/register-by-serial  body: {"serialNumber":"...","ip":"...","name":"...","model":"..."}
+        #
+        # Adds a new headset, or updates an existing one's IP address, keyed by
+        # SerialNumber. Called by the remote Headset Toolbox (a standalone script a
+        # technician runs on a DIFFERENT PC than this server, website\headset-toolbox\
+        # Enable-HeadsetWifiAdb.ps1) after it enables WiFi ADB on a USB-connected
+        # headset, and by the console's equivalent "register by serial" option.
+        # Unlike /api/kiosks/agent-report, this DOES persist new inventory rows -
+        # that is the intended behavior here, matching this app's existing LAN-trust
+        # posture (no endpoint in this project requires authentication).
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/headsets/register-by-serial') {
+            try {
+                if ($request.ContentLength64 -gt 4096) { throw "Request body too large" }
+                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body   = $reader.ReadToEnd(); $reader.Close()
+                $json   = $body | ConvertFrom-Json
+
+                $safeSerial = ([string]$json.serialNumber).Trim()
+                if (-not $safeSerial -or $safeSerial.Length -gt 60) { throw "INVALID_SERIAL" }
+
+                $parsedIp = $null
+                if (-not [System.Net.IPAddress]::TryParse([string]$json.ip, [ref]$parsedIp) -or
+                    $parsedIp.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) {
+                    throw "INVALID_IP"
+                }
+                $safeIp = $parsedIp.ToString()
+
+                $safeName  = if ($json.name)  { ([string]$json.name).Trim().Substring(0, [Math]::Min(([string]$json.name).Trim().Length, 40)) } else { '' }
+                $safeModel = if ($json.model) { ([string]$json.model).Trim().Substring(0, [Math]::Min(([string]$json.model).Trim().Length, 60)) } else { '' }
+
+                $result = Set-HeadsetBySerial -SerialNumber $safeSerial -IPAddress $safeIp -Name $safeName -Model $safeModel
+
+                if ($result.Ok) {
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; action = $result.Action; id = $result.ID; name = $result.Name }
+                } else {
+                    Send-JsonResponse -Response $response -Body @{ ok = $false; error = $result.Error }
+                }
+            } catch {
+                $errMsg = switch -Regex ($_.Exception.Message) {
+                    'INVALID_SERIAL' { 'Invalid or missing serial number.' }
+                    'INVALID_IP'     { 'Invalid IP address.' }
+                    default          { $_.Exception.Message }
+                }
+                Send-JsonResponse -Response $response -Body @{ ok = $false; error = $errMsg }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/headsets/push-wifi  body: {"serialNumber":"...","ssid":"..."}
+        #
+        # Moves one known headset onto one of the WiFi networks THIS server holds
+        # the password for. The password never leaves the server: the push runs
+        # over the server's own ADB connection to the headset (USB when it is
+        # cabled here, WiFi ADB otherwise).
+        #
+        # The headset is scanned first, from its OWN radio - an SSID it cannot see
+        # (a 6 GHz-only network on an older headset, typically) is refused rather
+        # than pushed, because pushing it would drop the headset off the network
+        # with no way back. The reachable known networks come back in
+        # visibleKnown so the caller can offer an alternative.
+        #
+        # Called by the remote VRHM Headset Toolbox and by the console's
+        # per-headset WiFi action - same function behind both (ADR-0012).
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/headsets/push-wifi') {
+            try {
+                if ($request.ContentLength64 -gt 4096) { throw "Request body too large" }
+                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body   = $reader.ReadToEnd(); $reader.Close()
+                $json   = $body | ConvertFrom-Json
+
+                $safeSsid = ([string]$json.ssid).Trim()
+                if (-not $safeSsid -or $safeSsid.Length -gt 64) { throw "INVALID_SSID" }
+
+                $safeSerial = if ($json.serialNumber) { ([string]$json.serialNumber).Trim() } else { '' }
+                $safeName   = if ($json.name)         { ([string]$json.name).Trim() }         else { '' }
+                if ($safeSerial.Length -gt 60 -or $safeName.Length -gt 40) { throw "INVALID_HEADSET" }
+
+                $headsets = @(Get-KnownHeadsets)
+                $headset  = $null
+                if ($safeSerial) {
+                    $headset = $headsets | Where-Object { $_.SerialNumber -eq $safeSerial } | Select-Object -First 1
+                }
+                if (-not $headset -and $safeName) {
+                    $headset = $headsets | Where-Object { $_.Name -eq $safeName } | Select-Object -First 1
+                }
+                if (-not $headset) { throw "UNKNOWN_HEADSET" }
+
+                $push = Invoke-HeadsetWifiPush -Headset $headset -Ssid $safeSsid -AdbPort $adbPort -adb $adbPath
+
+                Send-JsonResponse -Response $response -Body @{
+                    ok           = [bool]$push.Ok
+                    visible      = $push.Visible
+                    pushed       = [bool]$push.Pushed
+                    visibleKnown = @($push.VisibleKnown)
+                    error        = $push.Error
+                }
+            } catch {
+                $errMsg = switch -Regex ($_.Exception.Message) {
+                    'INVALID_SSID'    { 'Invalid or missing WiFi network name.' }
+                    'INVALID_HEADSET' { 'Invalid headset identifier.' }
+                    'UNKNOWN_HEADSET' { 'This headset is not registered on this server.' }
+                    default           { $_.Exception.Message }
+                }
+                Send-JsonResponse -Response $response -Body @{ ok = $false; pushed = $false; visibleKnown = @(); error = $errMsg }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: GET /api/adb-tools
+        #
+        # adb.exe plus its two Windows USB DLLs, zipped, taken from the ADB folder
+        # THIS server runs. The remote toolbox (VRHM-Headset-Toolbox.exe) does not
+        # embed adb: it downloads it here on first use, so it can never drift from
+        # the build this server manages headsets with, and the binary stays small.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/adb-tools') {
+            try {
+                $zipPath = New-AdbToolsPackage
+                if (-not $zipPath -or -not (Test-Path -LiteralPath $zipPath)) {
+                    Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'adb tools are not available on this server.' } -StatusCode 404
+                } else {
+                    $zipInfo = Get-Item -LiteralPath $zipPath
+                    $response.StatusCode      = 200
+                    $response.ContentType     = 'application/zip'
+                    $response.AddHeader('Content-Disposition', 'attachment; filename="adb-tools.zip"')
+                    $response.ContentLength64 = $zipInfo.Length
+                    $stream = [System.IO.File]::OpenRead($zipPath)
+                    try { $stream.CopyTo($response.OutputStream) } finally { $stream.Dispose() }
+                }
+            } catch {
+                try { Send-JsonResponse -Response $response -Body @{ ok = $false; error = $_.Exception.Message } -StatusCode 500 } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: /api/recordings/* (ADR-0029) - recordings library: catalogue, keep flag,
+        # wipe, download of the original file, and low-res WHEP playback sessions.
+        # Backend: recordings_library.ps1 / recordings_playback.ps1. Bodies capped at 4096.
+        if ($request.Url.LocalPath -like '/api/recordings/*') {
+            $recDeferClose = $false
+            try {
+                $recPath = $request.Url.LocalPath
+                $recGet  = ($request.HttpMethod -eq 'GET')
+                $recPost = ($request.HttpMethod -eq 'POST')
+                try { Remove-IdleRecordingPlayback | Out-Null } catch {}
+
+                # JSON body reader: throws 'BODY_TOO_LARGE' / 'BAD_JSON'
+                $recReadBody = {
+                    if ($request.ContentLength64 -gt 4096) { throw 'BODY_TOO_LARGE' }
+                    $rd = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                    $txt = $rd.ReadToEnd(); $rd.Close()
+                    if ($txt.Length -gt 4096) { throw 'BODY_TOO_LARGE' }
+                    try { $o = $txt | ConvertFrom-Json } catch { throw 'BAD_JSON' }
+                    if ($null -eq $o) { throw 'BAD_JSON' }
+                    $o
+                }
+                $recQ = $request.QueryString
+
+                if ($recGet -and $recPath -eq '/api/recordings/headsets') {
+                    $rows = @(Get-RecordingHeadsets | ForEach-Object {
+                        @{ safeName = $_.SafeName; id = $_.ID; name = $_.Name; inRegistry = [bool]$_.InRegistry; count = $_.Count }
+                    })
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; headsets = $rows }
+
+                } elseif ($recGet -and $recPath -eq '/api/recordings/dates') {
+                    $sn = [string]$recQ['safeName']
+                    if ($sn.Length -gt 80) { throw 'BAD_INPUT' }
+                    $dates = if ($sn) { @(Get-RecordingDates -SafeName $sn) } else { @(Get-RecordingDates) }
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; dates = @($dates) }
+
+                } elseif ($recGet -and $recPath -eq '/api/recordings/list') {
+                    $sn   = [string]$recQ['safeName']
+                    $date = [string]$recQ['date']
+                    if ($date -notmatch '^\d{4}-\d{2}-\d{2}$') { throw 'BAD_INPUT' }
+                    if ($sn.Length -gt 80) { throw 'BAD_INPUT' }
+                    $fromH = 0; $toH = 24
+                    if ($recQ['from']) { [void][int]::TryParse([string]$recQ['from'], [ref]$fromH) }
+                    if ($recQ['to'])   { [void][int]::TryParse([string]$recQ['to'],   [ref]$toH) }
+                    $fromH = [Math]::Max(0, [Math]::Min(24, $fromH))
+                    $toH   = [Math]::Max(0, [Math]::Min(24, $toH))
+                    if ($fromH -ge $toH) { $fromH = 0; $toH = 24 }
+                    $recs = if ($recQ['all'] -eq '1') {
+                        @(Get-HeadsetRecordings -Date $date -FromHour $fromH -ToHour $toH -AllHeadsets)
+                    } else {
+                        if (-not $sn) { throw 'BAD_INPUT' }
+                        @(Get-HeadsetRecordings -SafeName $sn -Date $date -FromHour $fromH -ToHour $toH)
+                    }
+                    $pb = Test-RecordingPlaybackAvailable
+                    Send-JsonResponse -Depth 8 -Response $response -Body @{
+                        ok         = $true
+                        recordings = @($recs)
+                        playback   = @{ ok = [bool]$pb.Ok; reason = $pb.Reason }
+                    }
+
+                } elseif ($recPost -and $recPath -eq '/api/recordings/rescan') {
+                    $sync = Sync-RecordingCatalog -Force
+                    Send-JsonResponse -Response $response -Body @{
+                        ok = [bool]$sync.Ok; added = $sync.Added; closed = $sync.Closed; removed = $sync.Removed; error = $sync.Error
+                    }
+
+                } elseif ($recGet -and $recPath -eq '/api/recordings/download') {
+                    $rid = 0
+                    if (-not [int]::TryParse([string]$recQ['id'], [ref]$rid) -or $rid -le 0) { throw 'BAD_INPUT' }
+                    $row = @(Invoke-DbQuery -Name 'recordings.get' -Parameters @{ id = $rid }) | Select-Object -First 1
+                    if (-not $row -or -not $row.file_path -or -not (Test-Path -LiteralPath ([string]$row.file_path))) {
+                        Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'Recording not found.' } -StatusCode 404
+                    } else {
+                        $recFile = [string]$row.file_path
+                        $leaf    = ([System.IO.Path]::GetFileName($recFile)) -replace '[^A-Za-z0-9._-]', '_'
+                        $recInfo = Get-Item -LiteralPath $recFile
+                        $response.StatusCode      = 200
+                        $response.ContentType     = 'video/x-matroska'
+                        $response.AddHeader('Content-Disposition', ('attachment; filename="{0}"' -f $leaf))
+                        $response.ContentLength64 = $recInfo.Length
+                        # A recording is often several GB. A synchronous CopyTo would hold this
+                        # single-threaded accept loop for the whole transfer and freeze every other
+                        # page (live video wall included), so the copy runs asynchronously and the
+                        # response is closed later by Complete-PendingRecordingDownloads.
+                        $fs = [System.IO.FileStream]::new($recFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite, 81920, $true)
+                        $task = $fs.CopyToAsync($response.OutputStream, 81920)
+                        [void]$script:RecordingDownloads.Add(@{ Task = $task; Stream = $fs; Response = $response; File = $leaf })
+                        $recDeferClose = $true
+                    }
+
+                } elseif ($recPost -and $recPath -eq '/api/recordings/keep') {
+                    $j = & $recReadBody
+                    $rid = 0
+                    if (-not [int]::TryParse([string]$j.id, [ref]$rid) -or $rid -le 0) { throw 'BAD_INPUT' }
+                    $note = if ($null -ne $j.note) { [string]$j.note } else { '' }
+                    if ($note.Length -gt 500) { $note = $note.Substring(0, 500) }
+                    if (-not (Get-RecordingById -Id $rid)) {
+                        Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'Recording not found.' } -StatusCode 404
+                    } else {
+                        $keepVal = ($j.keep -eq $true -or [string]$j.keep -eq 'true' -or [string]$j.keep -eq '1')
+                        $okSet = Set-RecordingKeep -Id $rid -Keep $keepVal -Note $note
+                        Send-JsonResponse -Response $response -Body @{ ok = [bool]$okSet; id = $rid; keep = $keepVal }
+                    }
+
+                } elseif ($recPost -and $recPath -eq '/api/recordings/delete') {
+                    $j = & $recReadBody
+                    $rid = 0
+                    if (-not [int]::TryParse([string]$j.id, [ref]$rid) -or $rid -le 0) { throw 'BAD_INPUT' }
+                    $d = Remove-Recording -Id $rid
+                    $code = if ($d.Ok) { 200 } elseif ($d.Error -eq 'Recording not found.') { 404 } elseif ($d.Refused) { 409 } else { 500 }
+                    Send-JsonResponse -Response $response -StatusCode $code -Body @{
+                        ok = [bool]$d.Ok; id = $rid; refused = [bool]$d.Refused; fileName = $d.FileName; error = $d.Error
+                    }
+
+                } elseif ($recPost -and $recPath -eq '/api/recordings/wipe') {
+                    $j = & $recReadBody
+                    $mode = [string]$j.mode
+                    if ($mode -notin @('older', 'date')) { throw 'BAD_INPUT' }
+                    $sn = if ($j.safeName) { [string]$j.safeName } else { '' }
+                    if ($sn.Length -gt 80) { throw 'BAD_INPUT' }
+                    # Safety: anything but an explicit false is a preview.
+                    $preview = -not ($j.preview -eq $false -or [string]$j.preview -eq 'false')
+                    $wargs = @{ Preview = [switch]$preview }
+                    if ($sn) { $wargs.SafeName = $sn }
+                    if ($mode -eq 'older') {
+                        $days = 0
+                        if (-not [int]::TryParse([string]$j.days, [ref]$days) -or $days -lt 1) { throw 'BAD_INPUT' }
+                        $wargs.OlderThanDays = $days
+                    } else {
+                        if ([string]$j.date -notmatch '^\d{4}-\d{2}-\d{2}$') { throw 'BAD_INPUT' }
+                        $wargs.Date = [string]$j.date
+                    }
+                    $w = Remove-OldRecordings @wargs
+                    Send-JsonResponse -Depth 8 -Response $response -Body @{
+                        ok = [bool]$w.Ok; count = $w.Count; bytes = $w.Bytes; kept = $w.Kept; deleted = $w.Deleted
+                        failed = @($w.Failed | ForEach-Object { @{ id = $_.Id; file = $_.File; error = $_.Error } })
+                        items  = @($w.Items | ForEach-Object { @{ id = $_.Id; fileName = $_.FileName; start = $_.Start; sizeBytes = $_.SizeBytes } })
+                        preview = $preview; error = $w.Error
+                    }
+
+                } elseif ($recPost -and $recPath -eq '/api/recordings/play') {
+                    $j = & $recReadBody
+                    $rid = 0
+                    if (-not [int]::TryParse([string]$j.id, [ref]$rid) -or $rid -le 0) { throw 'BAD_INPUT' }
+                    $off = 0.0
+                    if ($null -ne $j.offset) { [void][double]::TryParse([string]$j.offset, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$off) }
+                    if ($off -lt 0) { $off = 0.0 }
+                    $spd = 1
+                    if ($null -ne $j.speed) { [void][int]::TryParse([string]$j.speed, [ref]$spd) }
+                    if ($spd -notin @(1, 2, 4)) { throw 'BAD_INPUT' }
+                    if (-not (Get-RecordingById -Id $rid)) {
+                        Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'Recording not found.' } -StatusCode 404
+                    } else {
+                        $p = Start-RecordingPlayback -RecordingId $rid -OffsetSec $off -Speed $spd -HostName ([string]$request.Url.Host)
+                        Send-JsonResponse -Response $response -Body @{
+                            ok = [bool]$p.Ok; token = $p.Token; whepUrl = $p.WhepUrl; offsetSec = $p.OffsetSec; speed = $p.Speed; error = $p.Error
+                        }
+                    }
+
+                } elseif ($recPost -and ($recPath -eq '/api/recordings/play-stop' -or $recPath -eq '/api/recordings/play-ping')) {
+                    $j = & $recReadBody
+                    $tok = [string]$j.token
+                    if ($tok -notmatch '^[0-9a-f]{8}$') { throw 'BAD_INPUT' }
+                    if ($recPath -eq '/api/recordings/play-stop') {
+                        $r = Stop-RecordingPlayback -Token $tok
+                        Send-JsonResponse -Response $response -Body @{ ok = $true; stopped = [bool]$r }
+                    } else {
+                        $alive = Update-RecordingPlaybackHeartbeat -Token $tok
+                        Send-JsonResponse -Response $response -Body @{ ok = $true; alive = [bool]$alive }
+                    }
+
+                } else {
+                    Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'Unknown recordings endpoint.' } -StatusCode 404
+                }
+            } catch {
+                $m = $_.Exception.Message
+                $code = if ($m -in @('BODY_TOO_LARGE', 'BAD_JSON', 'BAD_INPUT')) { 400 } else { 500 }
+                $txt = switch ($m) {
+                    'BODY_TOO_LARGE' { 'Request body too large.' }
+                    'BAD_JSON'       { 'Invalid JSON body.' }
+                    'BAD_INPUT'      { 'Invalid or missing parameter.' }
+                    default          { $m }
+                }
+                try { Send-JsonResponse -Response $response -Body @{ ok = $false; error = $txt } -StatusCode $code } catch {}
+            } finally {
+                if (-not $recDeferClose) { Close-HttpResponse -Response $response }
+            }
+            return
+        }
+
+        # API: GET /api/adb-wifi-apk/info
+        #
+        # What the APK download IS, without downloading it: the package name the
+        # remote toolbox needs to ask a headset "do you already have this?", plus
+        # the file name and size. Without it the toolbox would have to download
+        # ~14 MB just to find out the app is already installed, or hardcode a
+        # package name that config.apk.adbWirelessActivatorPackageName is free to
+        # change.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/adb-wifi-apk/info') {
+            try {
+                $apkPresent = [bool]($apkPath -and (Test-Path -LiteralPath $apkPath))
+                $payload = @{
+                    ok          = $true
+                    available   = $apkPresent
+                    packageName = $apkPackage
+                    fileName    = $(if ($apkPresent) { (Get-Item -LiteralPath $apkPath).Name } else { $null })
+                    sizeBytes   = $(if ($apkPresent) { (Get-Item -LiteralPath $apkPath).Length } else { 0 })
+                }
+                Send-JsonResponse -Response $response -Body $payload
+            } catch {
+                Send-JsonResponse -Response $response -Body @{ ok = $false; error = $_.Exception.Message } -StatusCode 500
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: GET /api/adb-wifi-apk
+        #
+        # The WiFi ADB helper APK, streamed from sources\ (the folder and file
+        # name both come from config.apk.*). The remote toolbox downloads it and
+        # runs "adb install" itself, so the APK is never embedded in the toolbox
+        # binary and always matches what this server ships.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/adb-wifi-apk') {
+            try {
+                if (-not $apkPath -or -not (Test-Path -LiteralPath $apkPath)) {
+                    Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'The WiFi ADB APK is not present on this server.' } -StatusCode 404
+                } else {
+                    $apkInfo = Get-Item -LiteralPath $apkPath
+                    $response.StatusCode      = 200
+                    $response.ContentType     = 'application/vnd.android.package-archive'
+                    $response.AddHeader('Content-Disposition', ('attachment; filename="{0}"' -f $apkInfo.Name))
+                    $response.ContentLength64 = $apkInfo.Length
+                    $stream = [System.IO.File]::OpenRead($apkPath)
+                    try { $stream.CopyTo($response.OutputStream) } finally { $stream.Dispose() }
+                }
+            } catch {
+                try { Send-JsonResponse -Response $response -Body @{ ok = $false; error = $_.Exception.Message } -StatusCode 500 } catch {}
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: GET /api/headsets/discovered
+        #
+        # Devices the background LAN sweep found whose serial is NOT in known_headsets.csv,
+        # waiting for an operator decision. Feeds the "Discovered devices" button and its
+        # sub-page in headsets_settings.html. Read-only - nothing here is ever auto-added.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/headsets/discovered') {
+            try {
+                $devices = @()
+                if (Get-Command Get-PendingDiscoveredHeadsets -ErrorAction SilentlyContinue) {
+                    $devices = @(Get-PendingDiscoveredHeadsets | ForEach-Object {
+                        @{
+                            serialNumber = [string]$_.SerialNumber
+                            ip           = [string]$_.IPAddress
+                            model        = [string]$_.Model
+                            brand        = [string]$_.Brand
+                            firstSeen    = [string]$_.FirstSeen
+                            lastSeen     = [string]$_.LastSeen
+                        }
+                    })
+                }
+                Send-JsonResponse -Response $response -Body @{
+                    ok      = $true
+                    enabled = [bool]$global:HeadsetDiscovery_enabled
+                    count   = $devices.Count
+                    devices = $devices
+                }
+            } catch {
+                Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'Server error.'; devices = @(); count = 0 }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/headsets/discovered/forget  body: {"serialNumber":"..."}
+        #
+        # Permanently stops proposing a discovered device. Keyed on the SERIAL, never the
+        # IP, so it stays forgotten when DHCP moves it. A later manual add (USB, scan,
+        # /api/addheadset) still works and clears the denylist entry.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/headsets/discovered/forget') {
+            try {
+                if ($request.ContentLength64 -gt 4096) { throw "Request body too large" }
+                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body   = $reader.ReadToEnd(); $reader.Close()
+                $json   = $body | ConvertFrom-Json
+
+                $safeSerial = ([string]$json.serialNumber).Trim()
+                if (-not $safeSerial -or $safeSerial.Length -gt 60) { throw "INVALID_SERIAL" }
+
+                if (Add-HeadsetDiscoveryIgnore -SerialNumber $safeSerial) {
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; serialNumber = $safeSerial }
+                } else {
+                    Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'Could not update the ignore list.' }
+                }
+            } catch {
+                $errMsg = switch -Regex ($_.Exception.Message) {
+                    'INVALID_SERIAL' { 'Invalid or missing serial number.' }
+                    default          { 'Server error.' }
+                }
+                Send-JsonResponse -Response $response -Body @{ ok = $false; error = $errMsg }
+            } finally {
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/restartmediamtx
+        # mediamtx and the captures publishing to it belong to VRMonitor (ADR-0032): ask it to
+        # restart mediamtx together with every running capture (a mediamtx restart breaks every
+        # publisher anyway). Answers at once; the restart runs on VRMonitor's next fast tick.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/restartmediamtx') {
+            try {
+                $reqId = Request-StreamRestart -MediaMtx -Reason 'mediamtx restart (web)'
+                if (-not $reqId) { throw 'restart request not written' }
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true,"requested":true}')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/app-shutdown
+        # Injects '0' + Enter into the main process console input so Show-MainMenu triggers Invoke-AppShutdown.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/app-shutdown') {
+            try {
+                $mainProcs = @(Get-MainProcessList)
+                if ($mainProcs.Count -eq 0) { throw 'Main process not found' }
+                if ($mainProcs.Count -gt 1) { Write-Log "app-shutdown: multiple main.ps1 processes found ($($mainProcs.Count)), using first" -Level WARNING }
+                $mainPid = [uint32]$mainProcs[0].ProcessId
+                [void][VrmConsoleInput]::InjectKeys($mainPid, '0', $true)
+                Send-JsonResponse -Response $response -Raw '{"ok":true}'
+            } catch {
+                try { Send-JsonResponse -Response $response -Raw '{"ok":false,"error":"server error"}' -StatusCode 500 } catch {}
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/app-restart
+        # Injects '00' + Enter into the main process console input so Show-MainMenu
+        # triggers the '00' case (relaunch main.ps1, then Invoke-AppShutdown on the old instance).
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/app-restart') {
+            try {
+                $mainProcs = @(Get-MainProcessList)
+                if ($mainProcs.Count -eq 0) { throw 'Main process not found' }
+                if ($mainProcs.Count -gt 1) { Write-Log "app-restart: multiple main.ps1 processes found ($($mainProcs.Count)), using first" -Level WARNING }
+                $mainPid = [uint32]$mainProcs[0].ProcessId
+                $injected = [VrmConsoleInput]::InjectKeys($mainPid, '00', $true)
+                if (-not $injected) { throw "Could not attach to the console of main.ps1 (PID $mainPid)" }
+                Write-Log "app-restart: '00' injected into main.ps1 console (PID $mainPid)" -Level INFO
+                Send-JsonResponse -Response $response -Raw '{"ok":true}'
+            } catch {
+                Write-Log ("app-restart failed: " + $_.Exception.Message) -Level ERROR
+                try { Send-JsonResponse -Response $response -Raw '{"ok":false,"error":"server error"}' -StatusCode 500 } catch {}
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/host-shutdown
+        # Injects '000' + Enter into the main process console input so Show-MainMenu triggers the
+        # '000' case (schedule shutdown.exe on the host PC, then Invoke-AppShutdown), followed by
+        # 'YES' + Enter for that case's own confirmation prompt. The browser-side modal already
+        # collected an explicit, dedicated confirmation before calling this endpoint, so the console
+        # prompt here is only a safety net for someone at the physical keyboard - not a second gate
+        # for the web operator.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/host-shutdown') {
+            try {
+                $mainProcs = @(Get-MainProcessList)
+                if ($mainProcs.Count -eq 0) { throw 'Main process not found' }
+                if ($mainProcs.Count -gt 1) { Write-Log "host-shutdown: multiple main.ps1 processes found ($($mainProcs.Count)), using first" -Level WARNING }
+                $mainPid = [uint32]$mainProcs[0].ProcessId
+                [void][VrmConsoleInput]::InjectKeys($mainPid, '000', $true)
+                [void][VrmConsoleInput]::InjectKeys($mainPid, 'YES', $true)
+                Write-Log "host-shutdown: requested via web API" -Level WARNING
+                Send-JsonResponse -Response $response -Raw '{"ok":true}'
+            } catch {
+                try { Send-JsonResponse -Response $response -Raw '{"ok":false,"error":"server error"}' -StatusCode 500 } catch {}
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/restartwebserver
+        # Sends a success response then kills this server process after a short delay.
+        # Does NOT relaunch itself: Start-VRMonitor's watchdog already calls Start-WebServer
+        # on every slow-path tick (modules/headsets_monitoring.ps1) and detects/relaunches a
+        # dead server through its own single, already-guarded code path (the same mechanism
+        # that makes the server come back after a main-menu reload). Having this endpoint also
+        # relaunch directly used to race that watchdog: both sides could see the pid file as
+        # dead at the same time and each spawn a competing process, and the loser's
+        # HttpListener.Start() would fail while deleting the pid file behind the winner,
+        # causing the watchdog to spawn yet another competitor in a loop that never settled.
+        # Killing only, and letting the watchdog be the sole relauncher, removes that race.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/restartwebserver') {
+            try {
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+                Close-HttpResponse -Response $response
+
+                # The killer also releases data\webserver.pid once the process is gone:
+                # Stop-Process -Force skips our finally block, so nobody else would.
+                # A stale lock is no longer fatal (Start-WebServer identity-checks it),
+                # but clearing it lets the watchdog relaunch on its very next tick
+                # without logging a stale-PID warning.
+                $killCmd = "Start-Sleep -Milliseconds 800; " +
+                           "Stop-Process -Id $PID -Force -ErrorAction SilentlyContinue"
+                if ($PidFile) {
+                    $killCmd += "; Start-Sleep -Milliseconds 200; " +
+                                "if (-not (Get-Process -Id $PID -ErrorAction SilentlyContinue)) { " +
+                                "Remove-Item -LiteralPath '$PidFile' -Force -ErrorAction SilentlyContinue }"
+                }
+                Start-Process powershell.exe -ArgumentList @(
+                    '-NoProfile', '-Command', $killCmd
+                ) -WindowStyle Hidden
+                return
+            } catch {
+                try { $response.Close() } catch {}
+            }
+            return
+        }
+
+        # API: GET /api/vqa/status - returns whether Video Quality Automation is enabled and the 3 per-section
+        # auto-apply flags. The legacy enabled_vqo is included as a derived OR for any consumer that still reads it.
+        # Always available so the web UI can decide whether to render the VQA section, even when VQA is disabled.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/vqa/status') {
+            try {
+                $derivedVqo = ($global:VQA_AutoApplyProfiles -or $global:VQA_AutoApplyHeadsets -or $global:VQA_AutoApplyMediaMtx)
+                Send-JsonResponse -Response $response -Body @{
+                    enabled              = [bool]$global:VQA_Enabled
+                    auto_apply_profiles  = [bool]$global:VQA_AutoApplyProfiles
+                    auto_apply_headsets  = [bool]$global:VQA_AutoApplyHeadsets
+                    auto_apply_mediamtx  = [bool]$global:VQA_AutoApplyMediaMtx
+                    enabled_vqo          = [bool]$derivedVqo
+                    cpu_max_threshold    = if ($global:VQA_Enabled) { [int]$global:VQA_CpuMaxThreshold }        else { $null }
+                    gpu_max_threshold    = if ($global:VQA_Enabled) { [int]$global:VQA_GpuMaxThreshold }        else { $null }
+                    cpu_mitigation       = if ($global:VQA_Enabled) { [int]$global:VQA_CpuMitigationThreshold } else { $null }
+                    gpu_mitigation       = if ($global:VQA_Enabled) { [int]$global:VQA_GpuMitigationThreshold } else { $null }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/vqa/apply  - Applies the latest VQR recommendation. Body: { scope, target }.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/vqa/apply') {
+            try {
+                if (-not $global:VQA_Enabled) {
+                    Send-JsonResponse -Response $response -StatusCode 404 -Body @{ ok = $false; error = 'VQA disabled' }
+                } else {
+                    $bodyText = (New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)).ReadToEnd()
+                    $body  = if ($bodyText) { try { $bodyText | ConvertFrom-Json } catch { $null } } else { $null }
+                    $scope = if ($body -and $body.scope)  { [string]$body.scope }  else { 'all' }
+                    $target= if ($body -and $body.target) { [string]$body.target } else { '' }
+                    $ok = Invoke-VqaApply -Scope $scope -Target $target
+                    Send-JsonResponse -Response $response -Body @{ ok = [bool]$ok }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/vqa/restore  - Reverts to operator baseline, skipping fields edited manually since apply.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/vqa/restore') {
+            try {
+                if (-not $global:VQA_Enabled) {
+                    Send-JsonResponse -Response $response -StatusCode 404 -Body @{ ok = $false; error = 'VQA disabled' }
+                } else {
+                    $ok = Reset-VqaToOriginals
+                    Send-JsonResponse -Response $response -Body @{ ok = [bool]$ok }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/vqa/toggle-auto-apply
+        # Body: { section: "profiles" | "headsets" | "mediamtx", enabled: bool }
+        # Persists to config.json via Set-VqaAutoApply (which also arms the cooldown).
+        # Returns the full 3-section state + derived_vqo so the UI can paint all buttons at once.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/vqa/toggle-auto-apply') {
+            try {
+                if (-not $global:VQA_Enabled) {
+                    Send-JsonResponse -Response $response -StatusCode 404 -Body @{ ok = $false; error = 'VQA disabled' }
+                } else {
+                    $bodyText = (New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)).ReadToEnd()
+                    $body = if ($bodyText) { try { $bodyText | ConvertFrom-Json } catch { $null } } else { $null }
+                    $section = if ($body -and $body.section) { [string]$body.section } else { '' }
+                    if ($section -notin @('profiles','headsets','mediamtx')) {
+                        Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = "section must be 'profiles', 'headsets' or 'mediamtx'" }
+                    } else {
+                        $current = switch ($section) {
+                            'profiles' { $global:VQA_AutoApplyProfiles }
+                            'headsets' { $global:VQA_AutoApplyHeadsets }
+                            'mediamtx' { $global:VQA_AutoApplyMediaMtx }
+                        }
+                        $newVal = if ($body -and $null -ne $body.enabled) { [bool]$body.enabled } else { -not [bool]$current }
+                        Set-VqaAutoApply -Section $section -Enabled $newVal | Out-Null
+                        $derivedVqo = ($global:VQA_AutoApplyProfiles -or $global:VQA_AutoApplyHeadsets -or $global:VQA_AutoApplyMediaMtx)
+                        Send-JsonResponse -Response $response -Body @{
+                            ok                  = $true
+                            auto_apply_profiles = [bool]$global:VQA_AutoApplyProfiles
+                            auto_apply_headsets = [bool]$global:VQA_AutoApplyHeadsets
+                            auto_apply_mediamtx = [bool]$global:VQA_AutoApplyMediaMtx
+                            derived_vqo         = [bool]$derivedVqo
+                        }
+                    }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/vqa/toggle-vqo  - DEPRECATED. The single master VQO flag has been
+        # replaced by 3 per-section flags. The header badge is now derived from those.
+        # Returns 410 Gone with a hint so old clients fail loudly.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/vqa/toggle-vqo') {
+            try {
+                Send-JsonResponse -Response $response -StatusCode 410 -Body @{
+                    ok    = $false
+                    error = 'toggle-vqo is deprecated; use POST /api/vqa/toggle-auto-apply with { section, enabled }'
+                }
+            } catch { } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: GET /api/computer-monitoring - the latest hardware snapshot.
+        # Replaces the pages reading data\computer_monitoring.json directly off
+        # disk; the body is the same object that file used to hold.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/computer-monitoring') {
+            try {
+                # The stored JSON text is sent as is: parsing it only to serialise it
+                # again was the whole cost of this poll.
+                $snapshotRaw = $null
+                try { $snapshotRaw = Get-DbKeyValueRaw -Key 'computer_monitoring' } catch { }
+                if ($snapshotRaw) {
+                    Send-JsonResponse -Response $response -Raw $snapshotRaw
+                } else {
+                    # 404, not an empty object: the page must be able to tell
+                    # "no snapshot yet" from "a snapshot with no CPU in it".
+                    Send-JsonResponse -Response $response -StatusCode 404 -Body @{ ok = $false; error = 'no snapshot yet' }
+                }
+            } catch {
+                try { Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = 'server error' } } catch {}
+            } finally {
+                try { $response.Close() } catch {}
+            }
+            return
+        }
+
+        # API: GET /api/vqa/recommendation - the latest VQR recommendation.
+        # Replaces the pages reading data\vqa_recommendation.json directly.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/vqa/recommendation') {
+            try {
+                $rec = $null
+                try { $rec = Get-DbKeyValue -Key 'vqa_recommendation' } catch { }
+                if ($rec) {
+                    Send-JsonResponse -Response $response -Body $rec
+                } else {
+                    # 404 mirrors the old behaviour of the file simply not
+                    # existing before the first VQR cycle of a session.
+                    Send-JsonResponse -Response $response -StatusCode 404 -Body @{ ok = $false; error = 'no recommendation yet' }
+                }
+            } catch {
+                try { Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = 'server error' } } catch {}
+            } finally {
+                try { $response.Close() } catch {}
+            }
+            return
+        }
+
+        # API: POST /api/computer-monitoring/force-refresh
+        # Creates a flag file read by the VRMonitor loop (separate process) to trigger an immediate refresh.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/computer-monitoring/force-refresh') {
+            try {
+                $flagFile = Join-Path -Path $global:ScriptPath -ChildPath "data\computer_monitoring_forcerefresh.flag"
+                [System.IO.File]::WriteAllText($flagFile, '')
+                Send-JsonResponse -Response $response -Body @{ ok = $true }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: GET /api/openconfig  - opens config.json in the default editor (Notepad)
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/openconfig') {
+            try {
+                $cfgFile = [System.IO.Path]::GetFullPath((Join-Path $ScriptPath "config\config.json"))
+                if (Test-Path -LiteralPath $cfgFile) {
+                    Start-Process notepad.exe -ArgumentList "`"$cfgFile`""
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                } else {
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"config.json not found"}')
+                }
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: GET /api/openfolder?target=logs|config|records  - opens folder in Explorer
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/openfolder') {
+            try {
+                $target = [System.Web.HttpUtility]::ParseQueryString($request.Url.Query)['target']
+                $recordsFolder = try {
+                    $c = Get-Content -LiteralPath $global:ConfigFilePath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json
+                    if ($c.scrcpy -and $c.scrcpy.recordFolder) { [string]$c.scrcpy.recordFolder } else { $null }
+                } catch { $null }
+                $folderMap = @{
+                    'logs'    = (Join-Path $global:ScriptPath "logs")
+                    'config'  = (Join-Path $global:ScriptPath "config")
+                    'records' = $recordsFolder
+                }
+                $folder = $folderMap[$target]
+                if ($folder -and [System.IO.Directory]::Exists($folder)) {
+                    Start-Process explorer.exe -ArgumentList "`"$folder`""
+                    Send-JsonResponse -Response $response -Body @{ ok = $true } -StatusCode 200
+                } else {
+                    Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'folder not found' } -StatusCode 200
+                }
+            } catch {
+                Send-JsonResponse -Response $response -Body @{ ok = $false; error = $_.Exception.Message } -StatusCode 500
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/browse-folder  - opens native Windows folder picker, returns selected path
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/browse-folder') {
+            try {
+                $tmp = [System.IO.Path]::GetTempFileName()
+                $ps  = "Add-Type -AssemblyName System.Windows.Forms;" +
+                       "`$d = New-Object System.Windows.Forms.FolderBrowserDialog;" +
+                       "`$d.Description = 'Select recording folder';" +
+                       "`$d.ShowNewFolderButton = `$true;" +
+                       "if (`$d.ShowDialog() -eq 'OK') { [System.IO.File]::WriteAllText('$tmp', `$d.SelectedPath, [System.Text.Encoding]::UTF8) } " +
+                       "else { [System.IO.File]::WriteAllText('$tmp', '', [System.Text.Encoding]::UTF8) }"
+                Start-Process powershell.exe -ArgumentList @('-NoProfile', '-Command', $ps) -WindowStyle Hidden -Wait
+                $chosen = [System.IO.File]::ReadAllText($tmp, [System.Text.Encoding]::UTF8).Trim()
+                Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue
+                if ($chosen) {
+                    $escaped = $chosen.Replace('\','\\').Replace('"','\"')
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes("{`"ok`":true,`"path`":`"$escaped`"}")
+                } else {
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true,"cancelled":true,"path":""}')
+                }
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: GET /api/logs/sources - every log file in the log folder, classified by
+        # family (main program / mediamtx / web server / scrcpy / ffmpeg push / kiosk).
+        # Feeds the log-type and log-file dropdowns on help.html. Sorted by family, then
+        # newest first, so the first entry of a type is the one to select by default.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/logs/sources') {
+            try {
+                $sourceRows = @(Get-LogSources | ForEach-Object {
+                    @{
+                        id        = $_.Id
+                        type      = $_.Type
+                        typeLabel = $_.TypeLabel
+                        label     = $_.Label
+                        size      = $_.SizeBytes
+                        lastWrite = $_.LastWrite
+                    }
+                })
+                Send-JsonResponse -Response $response -Body @{ ok = $true; sources = $sourceRows }
+            } catch {
+                Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'server error' } -StatusCode 500
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: GET /api/logs?file=<name>&n=200
+        # Returns the last N lines of one log file as a bare JSON array (the shape
+        # help.html and the non-regression suite already expect).
+        # 'file' is a source id from /api/logs/sources; without it the newest main
+        # program log is served, which is the original file-less behaviour.
+        # Get-LogTail reads from the END of the file - the log folder holds files of
+        # hundreds of MB and this request loop is single-threaded.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/logs') {
+            try {
+                $logQuery = [System.Web.HttpUtility]::ParseQueryString($request.Url.Query)
+                $qn       = $logQuery['n']
+                $maxLines = if ($qn -and $qn -match '^\d+$') { [int]$qn } else { 200 }
+                if ($maxLines -gt 2000) { $maxLines = 2000 }
+
+                $logSources = @(Get-LogSources)
+                $logSource  = $null
+                $qFile      = $logQuery['file']
+                if ($qFile) {
+                    # Only ids the enumerator itself produced are accepted, so an
+                    # arbitrary path can never reach Get-LogTail.
+                    $logSource = $logSources | Where-Object { $_.Id -eq $qFile } | Select-Object -First 1
+                }
+                if (-not $logSource) {
+                    $logSource = $logSources | Where-Object { $_.Type -eq 'main' } | Select-Object -First 1
+                }
+
+                # NOT '$lines = if (...) { @(...) }': an if-block unrolls its output, so a
+                # single-line result would arrive as a bare string and $lines[0] would be
+                # its first character. Assign the wrapped call directly.
+                $lines = @()
+                if ($logSource) {
+                    $lines = @(Get-LogTail -Name $logSource.Id -MaxLines $maxLines -Encoding $logSource.Encoding)
+                }
+
+                # ConvertTo-Json emits a bare string for a one-element array, and
+                # help.html requires Array.isArray - so wrap that case by hand.
+                $rawJson = if ($lines.Count -eq 0) { '[]' }
+                           elseif ($lines.Count -eq 1) { '[' + (ConvertTo-Json -InputObject $lines[0] -Compress) + ']' }
+                           else { ConvertTo-Json -InputObject $lines -Compress }
+                Send-JsonResponse -Response $response -Raw $rawJson
+            } catch {
+                Send-JsonResponse -Response $response -Raw '[]' -StatusCode 500
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # Proxy: GET /proxy/mediamtx/* -> forwards to localhost MediaMTX API (avoids CORS/auth)
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -match '^/proxy/mediamtx(/.*)$') {
+            try {
+                $mtxPath  = $Matches[1]
+                $mtxQuery = $request.Url.Query
+                $mtxPort  = if ($global:mediamtxApiPort) { $global:mediamtxApiPort } else { 9997 }
+                $mtxUrl   = "http://127.0.0.1:$mtxPort$mtxPath$mtxQuery"
+                # HttpWebRequest with hard timeouts so a stalled mediamtx cannot
+                # freeze the single-threaded request loop for the OS default ~100s.
+                $req = [System.Net.HttpWebRequest]::Create($mtxUrl)
+                $req.Method            = 'GET'
+                $req.Accept            = 'application/json'
+                $req.Timeout           = 1500
+                $req.ReadWriteTimeout  = 1500
+                $resp   = $req.GetResponse()
+                $stream = $resp.GetResponseStream()
+                $reader = [System.IO.StreamReader]::new($stream)
+                $body   = $reader.ReadToEnd()
+                $reader.Close(); $stream.Close(); $resp.Close()
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errMsg = '{"error":"mediamtx unreachable or returned an error"}'
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes($errMsg)
+                    $response.StatusCode      = 502
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: GET /api/version  - returns the application version string from version.txt
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/version') {
+            try {
+                $versionFile = Join-Path $global:ScriptPath 'version.txt'
+                $versionStr  = if (Test-Path -LiteralPath $versionFile) {
+                    (Get-Content -LiteralPath $versionFile -Raw).Trim()
+                } else { 'unknown' }
+                Send-JsonResponse -Response $response -Body @{ app = 'VRHM'; version = $versionStr }
+            } catch {
+                try { Send-JsonResponse -Response $response -Body @{ app = 'VRHM'; version = 'unknown' } } catch {}
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: GET /api/appinfo  - returns port info and useful URLs for the topbar Help section
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/appinfo') {
+            try {
+                # Cache for 10s - Get-Process is slow under high CPU load and this
+                # endpoint is polled by the topbar from every open page.
+                if (-not $script:appInfoCache -or
+                    ((Get-Date) - $script:appInfoCacheAt).TotalSeconds -gt 10) {
+                    $script:appInfoCache = @{
+                        webServerPort      = $port
+                        mediamtxHlsPort    = if ($global:mediamtxHlsPort)    { $global:mediamtxHlsPort }    else { 8888 }
+                        mediamtxRtspPort   = if ($global:mediamtxRtspPort)   { $global:mediamtxRtspPort }   else { 8554 }
+                        mediamtxWebrtcPort = if ($global:mediamtxWebrtcPort) { $global:mediamtxWebrtcPort } else { 8889 }
+                        mediamtxApiPort    = if ($global:mediamtxApiPort)    { $global:mediamtxApiPort }    else { 9997 }
+                        webServerPid       = $PID
+                        mediamtxPid        = (Get-MediaMtxProcess | Select-Object -First 1 -ExpandProperty Id)
+                    }
+                    $script:appInfoCacheAt = Get-Date
+                }
+                $info      = $script:appInfoCache
+                $jsonOut   = ConvertTo-Json $info -Compress
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonOut)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{}')
+                    $response.StatusCode      = 500
+                    $response.ContentType     = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $errBytes.Length
+                    $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+                } catch {}
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # -- Known Apps Management API ---------------------------------------------
+
+        # API: GET /api/appnames  - returns the whole app catalogue as JSON.
+        # Note this endpoint is PascalCase while every other app endpoint is
+        # camelCase; known_apps_manager.html depends on that, so it is preserved.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/appnames') {
+            try {
+                $appObjects = @(@(Invoke-DbQuery -Name 'catalog.list') |
+                    ForEach-Object {
+                        [PSCustomObject]@{
+                            PackageName   = [string]$_.PackageName
+                            DisplayName   = [string]$_.DisplayName
+                            IconUrl       = [string]$_.IconUrl
+                            LocalIconPath = [string]$_.LocalIconPath
+                            ThirdParty    = ConvertTo-BoolField $_.ThirdParty
+                        }
+                    })
+                $appsJson = $appObjects | ConvertTo-Json -Compress -Depth 2
+                if ($appObjects.Count -eq 0) { $appsJson = '[]' }
+                elseif ($appObjects.Count -eq 1) { $appsJson = '[' + $appsJson + ']' }
+                $json = '{"apps":' + $appsJson + '}'
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $eb = [System.Text.Encoding]::UTF8.GetBytes('{"apps":[]}')
+                    $response.StatusCode = 200; $response.ContentType = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
+                } catch {}
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/appnames/save  - upsert a row (key = PackageName)
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/appnames/save') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body   = $reader.ReadToEnd(); $reader.Close()
+                $json   = $body | ConvertFrom-Json
+
+                $pkg = ($json.PackageName -replace '[^\w\.\-]','').Trim()
+                if (-not $pkg) { throw "Invalid PackageName" }
+
+                # One row written, not the whole catalogue rewritten. LatestVersion
+                # is preserved because the editor UI does not expose it and must
+                # not clear what Update-AppCacheOnline resolved.
+                $existing = @(Invoke-DbQuery -Name 'catalog.get' -Parameters @{ package_name = $pkg }) | Select-Object -First 1
+                $latest   = if ($existing) { [string]$existing.LatestVersion } else { '' }
+                Invoke-DbNonQuery -Name 'catalog.upsert' -Parameters @{
+                    package_name    = $pkg
+                    display_name    = [string]$json.DisplayName
+                    icon_url        = [string]$json.IconUrl
+                    local_icon_path = [string]$json.LocalIconPath
+                    third_party     = (ConvertTo-DbBool $json.ThirdParty)
+                    latest_version  = $latest
+                } | Out-Null
+
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $eb = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode = 500; $response.ContentType = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
+                } catch {}
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/appnames/delete  - remove a row by PackageName
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/appnames/delete') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body   = $reader.ReadToEnd(); $reader.Close()
+                $json   = $body | ConvertFrom-Json
+
+                $pkg = ($json.PackageName -replace '[^\w\.\-]','').Trim()
+                if (-not $pkg) { throw "Invalid PackageName" }
+
+                # One DELETE. The old path rewrote every surviving row, and its
+                # empty-catalogue branch wrote a header naming the long-retired
+                # "Type" column - a schema the readers no longer understood.
+                Invoke-DbNonQuery -Name 'catalog.delete' -Parameters @{ package_name = $pkg } | Out-Null
+
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $eb = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode = 500; $response.ContentType = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
+                } catch {}
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/appnames/clear  - empty the catalogue and re-seed from template
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/appnames/clear') {
+            try {
+                $ok = Clear-AppNamesCache
+                $clearBody = if ($ok) { [ordered]@{ ok = $true } } else { [ordered]@{ ok = $false; error = 'Clear failed - check server logs' } }
+                Send-JsonResponse -Response $response -Body $clearBody
+            } catch {
+                try {
+                    Send-JsonResponse -Response $response -Body ([ordered]@{ ok = $false; error = [string]$_ }) -StatusCode 500
+                } catch {}
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: GET /api/defaultfavorites  - returns ordered rows from the default favorites template
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/defaultfavorites') {
+            try {
+                # The template stays a FILE - it is a shipped, operator-editable
+                # seed, and /api/defaultfavorites/toggle and /reorder still write
+                # it in place. Only the catalogue lookup moved to the database.
+                $templatePath = Join-Path $ScriptPath "templates\data\default_favorite_apps.csv"
+                $appNames     = Get-AppCatalogMap
+                $result = @()
+                if (Test-Path -LiteralPath $templatePath) {
+                    Import-Csv -LiteralPath $templatePath -Delimiter "," | ForEach-Object {
+                        if ($_.PackageName) {
+                            $entry  = $appNames[$_.PackageName]
+                            $result += @{
+                                package       = $_.PackageName
+                                displayName   = if ($entry -and $entry.DisplayName) { $entry.DisplayName } else { $_.DisplayName }
+                                localIconPath = if ($entry -and $entry.LocalIconPath) { $entry.LocalIconPath } else { '' }
+                            }
+                        }
+                    }
+                }
+                $json      = ConvertTo-Json @($result) -Compress
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $eb = [System.Text.Encoding]::UTF8.GetBytes('[]')
+                    $response.StatusCode = 500; $response.ContentType = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
+                } catch {}
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/defaultfavorites/toggle  - add or remove a package from the default favorites template
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/defaultfavorites/toggle') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body    = $reader.ReadToEnd(); $reader.Close()
+                $json    = $body | ConvertFrom-Json
+                $safePkg = [regex]::Match($json.package, '^[\w\.\-]+$').Value
+                if (-not $safePkg) { throw "Invalid package" }
+                $templatePath = Join-Path $ScriptPath "templates\data\default_favorite_apps.csv"
+                $rows = @()
+                if (Test-Path -LiteralPath $templatePath) {
+                    $rows = @(Import-Csv -LiteralPath $templatePath -Delimiter ",")
+                }
+                $addFav = [string]$json.favorite -eq 'True' -or [string]$json.favorite -eq 'true'
+                if ($addFav) {
+                    if (-not ($rows | Where-Object { $_.PackageName -eq $safePkg })) {
+                        $rows += [PSCustomObject]@{ PackageName = $safePkg; DisplayName = [string]$json.displayName }
+                    }
+                } else {
+                    $rows = @($rows | Where-Object { $_.PackageName -ne $safePkg })
+                }
+                $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+                $sb = [System.Text.StringBuilder]::new()
+                $null = $sb.AppendLine('"PackageName","DisplayName"')
+                foreach ($r in $rows) { $null = $sb.AppendLine('"' + ($r.PackageName -replace '"','""') + '","' + ($r.DisplayName -replace '"','""') + '"') }
+                [System.IO.File]::WriteAllText($templatePath, $sb.ToString().TrimEnd(), $utf8NoBom)
+                Send-JsonResponse -Response $response -Body ([ordered]@{ ok = $true })
+            } catch {
+                try {
+                    Send-JsonResponse -Response $response -Body ([ordered]@{ ok = $false; error = [string]$_ }) -StatusCode 500
+                } catch {}
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/defaultfavorites/reorder  - reorder rows in the default favorites template
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/defaultfavorites/reorder') {
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body    = $reader.ReadToEnd(); $reader.Close()
+                $json    = $body | ConvertFrom-Json
+                $templatePath = Join-Path $ScriptPath "templates\data\default_favorite_apps.csv"
+                $rowMap = @{}
+                if (Test-Path -LiteralPath $templatePath) {
+                    Import-Csv -LiteralPath $templatePath -Delimiter "," | ForEach-Object { if ($_.PackageName) { $rowMap[$_.PackageName] = $_ } }
+                }
+                $ordered = @()
+                foreach ($pkg in $json.packages) {
+                    $safePkg = [regex]::Match($pkg, '^[\w\.\-]+$').Value
+                    if ($safePkg -and $rowMap.ContainsKey($safePkg)) { $ordered += $rowMap[$safePkg] }
+                }
+                $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+                $sb = [System.Text.StringBuilder]::new()
+                $null = $sb.AppendLine('"PackageName","DisplayName"')
+                foreach ($r in $ordered) { $null = $sb.AppendLine('"' + ($r.PackageName -replace '"','""') + '","' + ($r.DisplayName -replace '"','""') + '"') }
+                [System.IO.File]::WriteAllText($templatePath, $sb.ToString().TrimEnd(), $utf8NoBom)
+                Send-JsonResponse -Response $response -Body ([ordered]@{ ok = $true })
+            } catch {
+                try {
+                    Send-JsonResponse -Response $response -Body ([ordered]@{ ok = $false; error = [string]$_ }) -StatusCode 500
+                } catch {}
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/favorites/reorder  - reorder per-headset favorites
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/favorites/reorder') {
+            try {
+                $reader   = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body     = $reader.ReadToEnd(); $reader.Close()
+                $json     = $body | ConvertFrom-Json
+                $safeName = [regex]::Match(($json.name -replace ' ','_'), '^[\w\-]+$').Value
+                if (-not $safeName) { throw "Invalid name" }
+                $favMap = @{}
+                @(Get-FavoriteApps -headsetName $safeName) | ForEach-Object { if ($_.PackageName) { $favMap[$_.PackageName] = $_ } }
+                $ordered = @()
+                foreach ($pkg in $json.packages) {
+                    $safePkg = [regex]::Match($pkg, '^[\w\.\-]+$').Value
+                    if ($safePkg -and $favMap.ContainsKey($safePkg)) { $ordered += $favMap[$safePkg] }
+                }
+                Save-FavoriteApps -favorites $ordered -headsetName $safeName
+                Send-JsonResponse -Response $response -Body ([ordered]@{ ok = $true })
+            } catch {
+                try {
+                    Send-JsonResponse -Response $response -Body ([ordered]@{ ok = $false; error = [string]$_ }) -StatusCode 500
+                } catch {}
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: GET /api/config  - returns config.json content as JSON
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/config') {
+            try {
+                $cfgFile = Join-Path $ScriptPath "config\config.json"
+                if (Test-Path -LiteralPath $cfgFile) {
+                    # Read-ConfigFileText opens with Delete sharing; retried briefly so a read that
+                    # lands on a Write-ConfigJson swap does not hand the page an error.
+                    $raw = $null
+                    for ($cfgTry = 1; $cfgTry -le 5; $cfgTry++) {
+                        try { $raw = Read-ConfigFileText -Path $cfgFile; break }
+                        catch { if ($cfgTry -eq 5) { throw }; Start-Sleep -Milliseconds (50 * $cfgTry) }
+                    }
+                    # Strip UTF-8 BOM if present so JSON.parse() succeeds in the browser
+                    if ($raw -and $raw[0] -eq [char]0xFEFF) { $raw = $raw.Substring(1) }
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes($raw)
+                    $response.StatusCode = 200
+                } else {
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{}')
+                    $response.StatusCode = 404
+                }
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $eb = [System.Text.Encoding]::UTF8.GetBytes('{}')
+                    $response.StatusCode = 500; $response.ContentType = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
+                } catch {}
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: GET /api/config/defaults  - returns templates/config/config.json content as JSON
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/config/defaults') {
+            try {
+                $tplFile = Join-Path $ScriptPath "templates\config\config.json"
+                if (Test-Path -LiteralPath $tplFile) {
+                    $raw = Get-Content -LiteralPath $tplFile -Raw -Encoding UTF8
+                    if ($raw -and $raw[0] -eq [char]0xFEFF) { $raw = $raw.Substring(1) }
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes($raw)
+                    $response.StatusCode = 200
+                } else {
+                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{}')
+                    $response.StatusCode = 404
+                }
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $eb = [System.Text.Encoding]::UTF8.GetBytes('{}')
+                    $response.StatusCode = 500; $response.ContentType = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
+                } catch {}
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: GET /api/server-info  - returns server local IPs so the client can detect local access
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/server-info') {
+            try {
+                $ips = @('127.0.0.1', 'localhost') + @($lanNetworks | ForEach-Object { $_.IPAddress })
+                Send-JsonResponse -Response $response -Body @{ localIPs = $ips } -StatusCode 200
+            } catch {
+                Send-JsonResponse -Response $response -Body @{ localIPs = @('127.0.0.1', 'localhost') } -StatusCode 200
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: GET /api/gpu-list  - returns installed GPUs (index + model) via Get-GpuInfo,
+        # feeds the "Graphics Card" dropdown in vrhm_config.html (Performance.GPU_Index)
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/gpu-list') {
+            try {
+                $gpus = @(Get-GpuInfo) | ForEach-Object { @{ index = $_.Index; model = $_.Model } }
+                Send-JsonResponse -Response $response -Body @{ ok = $true; gpus = @($gpus) }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/config/save  - validates and writes the posted JSON as config.json
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/config/save') {
+            try {
+                $reader = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $body   = $reader.ReadToEnd(); $reader.Close()
+                # Validate JSON before touching disk
+                $newCfg = $body | ConvertFrom-Json
+                $cfgFile = Join-Path $ScriptPath "config\config.json"
+
+                # Snapshot the live-applicable mediamtx streaming fields against
+                # the in-memory globals BEFORE writing. If any change, VRMonitor is
+                # asked to restart mediamtx and the running captures (below) so the
+                # new framerate / bitrate / re-encode flag / codec take effect
+                # without an app restart.
+                $oldFps      = $global:mediamtxFramerate
+                $oldBw       = $global:mediamtxBitrate
+                $oldReencode = [bool]$global:mediamtxReencode
+                $oldCodec    = if ($global:mediamtxCodec) { $global:mediamtxCodec } else { 'h264' }
+                $newFps      = $null; $newBw = $null; $newReencode = $false; $newCodec = 'h264'
+                if ($newCfg -and $newCfg.mediamtx) {
+                    $newFps      = $newCfg.mediamtx.stream_framerate
+                    $newBw       = $newCfg.mediamtx.stream_bitrate
+                    $newReencode = [bool]$newCfg.mediamtx.reencode_in_ffmpeg
+                    $newCodec    = if ($newCfg.mediamtx.codec) { $newCfg.mediamtx.codec } else { 'h264' }
+                }
+                $streamingChanged = ($newFps -ne $oldFps) -or ($newBw -ne $oldBw) -or ($newReencode -ne $oldReencode) -or ($newCodec -ne $oldCodec)
+
+                # Snapshot Capture Mode against the in-memory global BEFORE writing.
+                # Performance.Capture_Mode is not live-applied by a plain config
+                # write: the running captures must be restarted in the new mode
+                # (and mediamtx when the LocalWindow boundary is crossed), which
+                # the restart request below asks VRMonitor to do - the same thing
+                # Set-CaptureMode does for the dedicated /api/capture-mode endpoint.
+                $oldCaptureMode = $global:CaptureMode
+                $newCaptureMode = $null
+                if ($newCfg -and $newCfg.Performance) { $newCaptureMode = $newCfg.Performance.Capture_Mode }
+                $captureModeChanged = $newCaptureMode -and ($newCaptureMode -ne $oldCaptureMode) -and ($newCaptureMode -in @('StreamOnly','StreamAndLocalWindow','LocalWindow'))
+
+                # Snapshot of the capture settings (scrcpy section: view crops/angles, codec, buffers,
+                # eye merge calibration) before and after: a running capture is built from them, and
+                # the monitor would only notice a change on its next slow tick.
+                if ($null -eq $newCfg) { throw "The posted configuration is empty." }
+                $oldCaptureSig = ''
+                $newCaptureSig = if ($newCfg -and $newCfg.scrcpy) { ($newCfg.scrcpy | ConvertTo-Json -Depth 20 -Compress) } else { '' }
+
+                # Snapshot read and write under the config lock, so another writer cannot slip in
+                # between; the posted text is written as-is (atomic swap, UTF-8 without BOM).
+                $saveLock = Enter-VqaLock -TimeoutMs 5000
+                try {
+                    try {
+                        $oldCfgObj = Read-ConfigJson -ConfigFilePath $cfgFile -NonInteractive
+                        if ($oldCfgObj -and $oldCfgObj.scrcpy) { $oldCaptureSig = ($oldCfgObj.scrcpy | ConvertTo-Json -Depth 20 -Compress) }
+                    } catch {}
+                    Write-ConfigJson -Object $body -Path $cfgFile
+                } finally {
+                    if ($saveLock) { Exit-VqaLock -Stream $saveLock }
+                }
+
+                if ($oldCaptureSig -ne $newCaptureSig) {
+                    # -NoMark: most of these edits (another model's view, a new view) restart nothing;
+                    # the watchdog marks a capture "starting" itself when it really restarts one.
+                    [void](Request-ScrcpyCheck -All -NoMark -Reason 'capture settings changed')
+                }
+
+                # Streams and mediamtx belong to VRMonitor (ADR-0032): this request only ASKS, in
+                # ONE request (a second one written before VRMonitor's next 500 ms fast tick would
+                # replace the first). VRMonitor reloads config, stops the running captures, restarts
+                # mediamtx when the streaming fields changed (or the LocalWindow boundary was crossed:
+                # its YAML differs) and starts the captures again - the ffmpeg push re-reads the new
+                # framerate / bitrate / re-encode / codec globals, and the new mode applies. The
+                # response no longer waits for it: mediamtx = a mediamtx restart was requested,
+                # scrcpy = the headsets whose capture runs now and will be restarted, requested =
+                # a restart request was written, pending = it could not be written.
+                $restarted = @{ mediamtx = $false; scrcpy = @(); pending = $false; captureMode = $false; requested = $false }
+                if ($streamingChanged -or $captureModeChanged) {
+                    # This process's globals (capture mode, streaming fields) follow the saved file.
+                    try { $null = Get-Config -ConfigFilePath $cfgFile } catch { }
+                    $crossedBoundary = $captureModeChanged -and (($oldCaptureMode -eq 'LocalWindow') -ne ($newCaptureMode -eq 'LocalWindow'))
+                    $wantMtx = [bool]($streamingChanged -or $crossedBoundary)
+                    $reasons = @()
+                    if ($streamingChanged)   { $reasons += 'mediamtx streaming settings changed' }
+                    if ($captureModeChanged) { $reasons += ("capture mode {0} -> {1}" -f $oldCaptureMode, $newCaptureMode) }
+                    $reqId = Request-StreamRestart -MediaMtx:$wantMtx -Reason ('config save: ' + ($reasons -join ', '))
+                    if ($reqId) {
+                        $restarted.requested   = $true
+                        $restarted.mediamtx    = $wantMtx
+                        $restarted.captureMode = [bool]$captureModeChanged
+                        $runningNames = @()
+                        foreach ($row in (Get-KnownHeadsetsCached)) {
+                            if (Get-ScrcpyProcess -displayName (Convert-Displayname $row.Name) -headsetIP $row.IPAddress -headsetSerial $row.SerialNumber) { $runningNames += $row.Name }
+                        }
+                        $restarted.scrcpy = $runningNames
+                    } else {
+                        $restarted.pending = $true
+                        Write-Log "config/save: the stream restart request could not be written - restart the streams or the app." -Level WARNING
+                    }
+                }
+                $respObj = @{ ok = $true; restarted = $restarted }
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes(($respObj | ConvertTo-Json -Compress -Depth 4))
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                Send-JsonResponse -Response $response -Body @{ ok = $false; error = $_.Exception.Message } -StatusCode 400
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/config/reset  - archives config.json with timestamp, copies template
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/config/reset') {
+            try {
+                $cfgFile = Join-Path $ScriptPath "config\config.json"
+                $tplFile = Join-Path $ScriptPath "templates\config\config.json"
+                if (-not (Test-Path -LiteralPath $tplFile)) { throw "Template file not found" }
+                $tplRaw = Get-Content -LiteralPath $tplFile -Raw -Encoding UTF8
+                if ($null -eq ($tplRaw | ConvertFrom-Json)) { throw "Template file is empty" }
+                $resetLock = Enter-VqaLock -TimeoutMs 5000
+                try {
+                    if (Test-Path -LiteralPath $cfgFile) {
+                        $stamp   = Get-Date -Format 'yyyy.MM.dd-HH.mm'
+                        $cfgDir  = [System.IO.Path]::GetDirectoryName($cfgFile)
+                        $archive = Join-Path $cfgDir "config_$stamp.json"
+                        Copy-Item -LiteralPath $cfgFile -Destination $archive -Force
+                    }
+                    Write-ConfigJson -Object $tplRaw -Path $cfgFile
+                } finally {
+                    if ($resetLock) { Exit-VqaLock -Stream $resetLock }
+                }
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                try {
+                    $eb = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+                    $response.StatusCode = 500; $response.ContentType = 'application/json; charset=utf-8'
+                    $response.ContentLength64 = $eb.Length; $response.OutputStream.Write($eb, 0, $eb.Length)
+                } catch {}
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: GET /api/ffmpeg-version - installed ffmpeg version (local, fast, no network call)
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/ffmpeg-version') {
+            try {
+                $installedVersion = Get-FfmpegVersion
+                Send-JsonResponse -Response $response -Body @{ ok = $true; installedVersion = $installedVersion }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/ffmpeg-check-update - queries GitHub for the latest ffmpeg release
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/ffmpeg-check-update') {
+            try {
+                $installedVersion = Get-FfmpegVersion
+                $latest = Get-LatestFfmpegVersion
+                if (-not $latest) {
+                    Send-JsonResponse -Response $response -StatusCode 502 -Body @{ ok = $false; error = "Could not reach GitHub to check the latest ffmpeg version." }
+                } else {
+                    $updateAvailable = ($installedVersion -ne $latest.Version)
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; installedVersion = $installedVersion; latestVersion = $latest.Version; updateAvailable = $updateAvailable }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/ffmpeg-update - downloads the latest ffmpeg build into a NEW versioned
+        # folder under sources\ffmpeg\ (previously installed versions are left on disk
+        # untouched), points config.ffmpeg.folder (+ templates\config\config.json, since this is
+        # a real update) at it. Does NOT restart mediamtx/scrcpy in-process - nothing running
+        # uses the new binary until the application is restarted. Synchronous: the download
+        # itself only takes a few seconds to ~1 minute, so no background job/progress-poll is
+        # needed.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/ffmpeg-update') {
+            $lock = $null
+            try {
+                $lock = Enter-VqaLock -TimeoutMs 3000
+                if (-not $lock) {
+                    Send-JsonResponse -Response $response -StatusCode 409 -Body @{ ok = $false; pending = $true; error = "Another config change is in progress. Please retry shortly." }
+                    Close-HttpResponse -Response $response
+                    return
+                }
+
+                $result = Update-FfmpegBinary -SourcesFolder (Join-Path $ScriptPath "sources")
+                if ($result.Success) {
+                    try {
+                        Set-FfmpegFolderConfig -RelativeFolder $result.Folder -UpdateTemplate:(Test-DevVersion)
+                    } catch {
+                        Write-Log ("ffmpeg-update: Set-FfmpegFolderConfig failed: " + $_.Exception.Message) -Level WARNING
+                        $result.Success = $false
+                        $result.Error = "Downloaded but failed to update config.json: " + $_.Exception.Message
+                    }
+                }
+                $devSync = $false
+                if ($result.Success) { $devSync = (Sync-DevBinaryTracking -Binary ffmpeg -RelativeFolder $result.Folder).Dev }
+
+                if ($result.Success) {
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; newVersion = $result.Version; folder = $result.Folder; requiresRestart = $true; devSync = $devSync }
+                } else {
+                    Send-JsonResponse -Response $response -StatusCode 502 -Body @{ ok = $false; error = $result.Error }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                if ($lock) { Exit-VqaLock -Stream $lock }
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: GET /api/ffmpeg-list-versions - lists all ffmpeg version folders present under
+        # sources\ffmpeg\ (old versions are never deleted by /api/ffmpeg-update, so more than
+        # one can coexist)
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/ffmpeg-list-versions') {
+            try {
+                $versions = Get-FfmpegInstalledVersions | ForEach-Object {
+                    @{ version = $_.Version; folder = $_.RelativeFolder; active = $_.IsActive }
+                }
+                Send-JsonResponse -Response $response -Body @{ ok = $true; versions = @($versions) }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/ffmpeg-switch-version - body {"folder":"ffmpeg\\ffmpeg-8.1.2"}
+        # Repoints config.ffmpeg.folder at an already-installed version folder (no download -
+        # the folder must already exist on disk, and templates\config\config.json is left
+        # untouched - a version switch is a rollback/per-instance choice, not a new baseline).
+        # Does NOT restart mediamtx/scrcpy in-process - the operator is told the change applies
+        # on next application restart.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/ffmpeg-switch-version') {
+            $lock = $null
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $bodyRaw = $reader.ReadToEnd()
+                $reader.Close()
+                $body = $bodyRaw | ConvertFrom-Json
+
+                $sourcesFolder = Join-Path $ScriptPath "sources"
+                $ffmpegRoot    = Join-Path $sourcesFolder "ffmpeg"
+                $requestedFolder = Join-Path $sourcesFolder ([string]$body.folder)
+                $resolved = Test-RequestPath -Path $requestedFolder -Root $ffmpegRoot
+                if (-not $resolved -or -not (Test-Path -LiteralPath (Join-Path $resolved "ffmpeg.exe"))) {
+                    Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = "Invalid or missing ffmpeg version folder." }
+                    Close-HttpResponse -Response $response
+                    return
+                }
+                $relFolder = Join-Path "ffmpeg" (Split-Path -Path $resolved -Leaf)
+
+                $lock = Enter-VqaLock -TimeoutMs 3000
+                if (-not $lock) {
+                    Send-JsonResponse -Response $response -StatusCode 409 -Body @{ ok = $false; pending = $true; error = "Another config change is in progress. Please retry shortly." }
+                    Close-HttpResponse -Response $response
+                    return
+                }
+
+                $switchOk = $true
+                $switchError = $null
+                try {
+                    Set-FfmpegFolderConfig -RelativeFolder $relFolder
+                } catch {
+                    Write-Log ("ffmpeg-switch-version: Set-FfmpegFolderConfig failed: " + $_.Exception.Message) -Level WARNING
+                    $switchOk = $false
+                    $switchError = $_.Exception.Message
+                }
+
+                if ($switchOk) {
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; newVersion = (Get-FfmpegVersion); folder = $relFolder; requiresRestart = $true }
+                } else {
+                    Send-JsonResponse -Response $response -StatusCode 502 -Body @{ ok = $false; error = $switchError }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                if ($lock) { Exit-VqaLock -Stream $lock }
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: GET /api/mediamtx-version - installed mediamtx version (parsed from the
+        # active folder name, local/fast, no network call)
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/mediamtx-version') {
+            try {
+                $installedVersion = Get-MediaMtxVersion
+                Send-JsonResponse -Response $response -Body @{ ok = $true; installedVersion = $installedVersion }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/mediamtx-check-update - queries GitHub for the latest mediamtx release
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/mediamtx-check-update') {
+            try {
+                $installedVersion = Get-MediaMtxVersion
+                $latest = Get-LatestMediaMtxVersion
+                if (-not $latest) {
+                    Send-JsonResponse -Response $response -StatusCode 502 -Body @{ ok = $false; error = "Could not reach GitHub to check the latest mediamtx version." }
+                } else {
+                    $updateAvailable = ($installedVersion -ne $latest.Version)
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; installedVersion = $installedVersion; latestVersion = $latest.Version; updateAvailable = $updateAvailable }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: GET /api/mediamtx-list-versions - lists all mediamtx version folders
+        # present under sources\MediaMTX\ (old versions are never deleted by
+        # /api/mediamtx-update, so more than one can coexist)
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/mediamtx-list-versions') {
+            try {
+                $versions = Get-MediaMtxInstalledVersions | ForEach-Object {
+                    @{ version = $_.Version; folder = $_.RelativeFolder; active = $_.IsActive }
+                }
+                Send-JsonResponse -Response $response -Body @{ ok = $true; versions = @($versions) }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/mediamtx-switch-version - body {"folder":"MediaMTX\\mediamtx_v1.19.2_windows_amd64"}
+        # Repoints config.mediamtx.folder at an already-installed version folder (no download -
+        # the folder must already exist on disk, and templates\config\config.json is left
+        # untouched - a version switch is a rollback/per-instance choice, not a new baseline).
+        # Does NOT restart mediamtx/scrcpy in-process - the operator is told the change applies
+        # on next application restart.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/mediamtx-switch-version') {
+            $lock = $null
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $bodyRaw = $reader.ReadToEnd()
+                $reader.Close()
+                $body = $bodyRaw | ConvertFrom-Json
+
+                $sourcesFolder = Join-Path $ScriptPath "sources"
+                $mediamtxRoot  = Join-Path $sourcesFolder "MediaMTX"
+                $requestedFolder = Join-Path $sourcesFolder ([string]$body.folder)
+                $resolved = Test-RequestPath -Path $requestedFolder -Root $mediamtxRoot
+                if (-not $resolved -or -not (Test-Path -LiteralPath (Join-Path $resolved "mediamtx.exe"))) {
+                    Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = "Invalid or missing mediamtx version folder." }
+                    Close-HttpResponse -Response $response
+                    return
+                }
+                $relFolder = Join-Path "MediaMTX" (Split-Path -Path $resolved -Leaf)
+
+                $lock = Enter-VqaLock -TimeoutMs 3000
+                if (-not $lock) {
+                    Send-JsonResponse -Response $response -StatusCode 409 -Body @{ ok = $false; pending = $true; error = "Another config change is in progress. Please retry shortly." }
+                    Close-HttpResponse -Response $response
+                    return
+                }
+
+                $switchOk = $true
+                $switchError = $null
+                try {
+                    Set-MediaMtxFolderConfig -RelativeFolder $relFolder
+                } catch {
+                    Write-Log ("mediamtx-switch-version: Set-MediaMtxFolderConfig failed: " + $_.Exception.Message) -Level WARNING
+                    $switchOk = $false
+                    $switchError = $_.Exception.Message
+                }
+
+                if ($switchOk) {
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; newVersion = (Get-MediaMtxVersion); folder = $relFolder; requiresRestart = $true }
+                } else {
+                    Send-JsonResponse -Response $response -StatusCode 502 -Body @{ ok = $false; error = $switchError }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                if ($lock) { Exit-VqaLock -Stream $lock }
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/mediamtx-update - downloads the latest mediamtx build into a NEW
+        # versioned folder under sources\MediaMTX\ (the previously installed version's folder +
+        # files are left on disk untouched), points config.json's mediamtx.folder (+
+        # templates\config\config.json, since this is a real update) at the new folder. Does NOT
+        # restart mediamtx/scrcpy in-process - nothing running uses the new binary until the
+        # application is restarted. Synchronous, same shape as /api/ffmpeg-update.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/mediamtx-update') {
+            $lock = $null
+            try {
+                $lock = Enter-VqaLock -TimeoutMs 3000
+                if (-not $lock) {
+                    Send-JsonResponse -Response $response -StatusCode 409 -Body @{ ok = $false; pending = $true; error = "Another config change is in progress. Please retry shortly." }
+                    Close-HttpResponse -Response $response
+                    return
+                }
+
+                $result = Update-MediaMtxBinary -SourcesFolder (Join-Path $ScriptPath "sources")
+                if ($result.Success) {
+                    try {
+                        Set-MediaMtxFolderConfig -RelativeFolder $result.Folder -UpdateTemplate:(Test-DevVersion)
+                    } catch {
+                        Write-Log ("mediamtx-update: Set-MediaMtxFolderConfig failed: " + $_.Exception.Message) -Level WARNING
+                        $result.Success = $false
+                        $result.Error = "Downloaded but failed to update config.json: " + $_.Exception.Message
+                    }
+                }
+                $devSync = $false
+                if ($result.Success) { $devSync = (Sync-DevBinaryTracking -Binary mediamtx -RelativeFolder $result.Folder).Dev }
+
+                if ($result.Success) {
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; newVersion = $result.Version; folder = $result.Folder; requiresRestart = $true; devSync = $devSync }
+                } else {
+                    Send-JsonResponse -Response $response -StatusCode 502 -Body @{ ok = $false; error = $result.Error }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                if ($lock) { Exit-VqaLock -Stream $lock }
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: GET /api/scrcpy-version - installed scrcpy version (parsed from the
+        # active folder name, local/fast, no network call)
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/scrcpy-version') {
+            try {
+                $installedVersion = Get-ScrcpyVersion
+                Send-JsonResponse -Response $response -Body @{ ok = $true; installedVersion = $installedVersion }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/scrcpy-check-update - queries GitHub for the latest official
+        # scrcpy release (NOTE: this project ships a patched "no flickering" build -
+        # the official release is the only public source, so an update replaces it)
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/scrcpy-check-update') {
+            try {
+                $installedVersion = Get-ScrcpyVersion
+                $latest = Get-LatestScrcpyVersion
+                if (-not $latest) {
+                    Send-JsonResponse -Response $response -StatusCode 502 -Body @{ ok = $false; error = "Could not reach GitHub to check the latest scrcpy version." }
+                } else {
+                    $updateAvailable = ($installedVersion -ne $latest.Version)
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; installedVersion = $installedVersion; latestVersion = $latest.Version; updateAvailable = $updateAvailable }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: GET /api/scrcpy-list-versions - lists all scrcpy version folders
+        # present under sources\scrcpy\ (old versions are never deleted by
+        # /api/scrcpy-update, so more than one can coexist)
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/scrcpy-list-versions') {
+            try {
+                $versions = Get-ScrcpyInstalledVersions | ForEach-Object {
+                    @{ version = $_.Version; folder = $_.RelativeFolder; active = $_.IsActive }
+                }
+                Send-JsonResponse -Response $response -Body @{ ok = $true; versions = @($versions) }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        # API: POST /api/scrcpy-switch-version - body {"folder":"scrcpy\\scrcpy-win64-v4.1"}
+        # Repoints config.scrcpy.folder AND config.ADB.folder at an already-installed version
+        # folder (no download - the folder must already exist on disk, and
+        # templates\config\config.json is left untouched - a version switch is a
+        # rollback/per-instance choice, not a new baseline). Does NOT restart
+        # scrcpy/adb-server in-process - the operator is told the change applies on next
+        # application restart. mediamtx is untouched.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/scrcpy-switch-version') {
+            $lock = $null
+            try {
+                $reader  = [System.IO.StreamReader]::new($request.InputStream, [System.Text.Encoding]::UTF8)
+                $bodyRaw = $reader.ReadToEnd()
+                $reader.Close()
+                $body = $bodyRaw | ConvertFrom-Json
+
+                $sourcesFolder = Join-Path $ScriptPath "sources"
+                $scrcpyRoot    = Join-Path $sourcesFolder "scrcpy"
+                $requestedFolder = Join-Path $sourcesFolder ([string]$body.folder)
+                $resolved = Test-RequestPath -Path $requestedFolder -Root $scrcpyRoot
+                if (-not $resolved -or -not (Test-Path -LiteralPath (Join-Path $resolved "scrcpy.exe"))) {
+                    Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = "Invalid or missing scrcpy version folder." }
+                    Close-HttpResponse -Response $response
+                    return
+                }
+                $relFolder = Join-Path "scrcpy" (Split-Path -Path $resolved -Leaf)
+
+                $lock = Enter-VqaLock -TimeoutMs 3000
+                if (-not $lock) {
+                    Send-JsonResponse -Response $response -StatusCode 409 -Body @{ ok = $false; pending = $true; error = "Another config change is in progress. Please retry shortly." }
+                    Close-HttpResponse -Response $response
+                    return
+                }
+
+                $switchOk = $true
+                $switchError = $null
+                try {
+                    Set-ScrcpyAdbFolderConfig -RelativeFolder $relFolder
+                } catch {
+                    Write-Log ("scrcpy-switch-version: Set-ScrcpyAdbFolderConfig failed: " + $_.Exception.Message) -Level WARNING
+                    $switchOk = $false
+                    $switchError = $_.Exception.Message
+                }
+
+                if ($switchOk) {
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; newVersion = (Get-ScrcpyVersion); folder = $relFolder; requiresRestart = $true }
+                } else {
+                    Send-JsonResponse -Response $response -StatusCode 502 -Body @{ ok = $false; error = $switchError }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                if ($lock) { Exit-VqaLock -Stream $lock }
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # API: POST /api/scrcpy-update - downloads the latest official scrcpy build (bundles
+        # adb.exe) into a NEW folder under sources\scrcpy\ (consolidating any legacy top-level
+        # scrcpy folder into sources\scrcpy\ too - moved, not deleted), points config.json's
+        # scrcpy.folder AND ADB.folder (+ templates\config\config.json, since this is a real
+        # update) at the new folder. Does NOT restart scrcpy/adb-server in-process - nothing
+        # running uses the new binaries until the application is restarted. mediamtx is
+        # untouched (scrcpy/adb are independent of it). Synchronous, same shape as
+        # /api/ffmpeg-update and /api/mediamtx-update.
+        if ($request.HttpMethod -eq 'POST' -and $request.Url.LocalPath -eq '/api/scrcpy-update') {
+            $lock = $null
+            try {
+                $lock = Enter-VqaLock -TimeoutMs 3000
+                if (-not $lock) {
+                    Send-JsonResponse -Response $response -StatusCode 409 -Body @{ ok = $false; pending = $true; error = "Another config change is in progress. Please retry shortly." }
+                    Close-HttpResponse -Response $response
+                    return
+                }
+
+                $result = Update-ScrcpyBinary -SourcesFolder (Join-Path $ScriptPath "sources")
+                if ($result.Success) {
+                    try {
+                        Set-ScrcpyAdbFolderConfig -RelativeFolder $result.Folder -UpdateTemplate:(Test-DevVersion)
+                    } catch {
+                        Write-Log ("scrcpy-update: Set-ScrcpyAdbFolderConfig failed: " + $_.Exception.Message) -Level WARNING
+                        $result.Success = $false
+                        $result.Error = "Downloaded but failed to update config.json: " + $_.Exception.Message
+                    }
+                }
+                $devSync = $false
+                if ($result.Success) { $devSync = (Sync-DevBinaryTracking -Binary scrcpy -RelativeFolder $result.Folder).Dev }
+
+                if ($result.Success) {
+                    Send-JsonResponse -Response $response -Body @{ ok = $true; newVersion = $result.Version; folder = $result.Folder; requiresRestart = $true; devSync = $devSync }
+                } else {
+                    Send-JsonResponse -Response $response -StatusCode 502 -Body @{ ok = $false; error = $result.Error }
+                }
+            } catch {
+                Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+            } finally {
+                if ($lock) { Exit-VqaLock -Stream $lock }
+                Close-HttpResponse -Response $response
+            }
+            return
+        }
+
+        # -- /end Known Apps Management API ---------------------------------------
+
+        # API: GET /api/timer?id=<headsetID>&action=... OR ?name=<displayName>&action=...
+        # All actions use GET so Stream Deck and browser links work without POST/CORS setup.
+        if ($request.HttpMethod -eq 'GET' -and $request.Url.LocalPath -eq '/api/timer') {
+            try {
+                $rawQuery = $request.Url.Query.TrimStart('?')
+                $qParams  = @{}
+                foreach ($pair in $rawQuery -split '&') {
+                    $kv = $pair -split '=', 2
+                    if ($kv.Count -eq 2) { $qParams[[Uri]::UnescapeDataString($kv[0])] = [Uri]::UnescapeDataString($kv[1]) }
+                }
+
+                $headsetId = 0
+                if ($qParams.ContainsKey('id') -and $qParams['id'] -match '^\d+$') {
+                    $headsetId = [int]$qParams['id']
+                } elseif ($qParams.ContainsKey('name') -and $qParams['name'] -ne '') {
+                    $safeName = Convert-Displayname $qParams['name']
+                    $matched = @(Get-KnownHeadsetsCached) | Where-Object { (Convert-Displayname $_.Name) -eq $safeName } | Select-Object -First 1
+                    if ($matched) { $headsetId = [int]$matched.ID }
+                }
+                $action = if ($qParams.ContainsKey('action')) { $qParams['action'].ToLower() } else { '' }
+
+                if ($headsetId -le 0 -or -not $action) { throw 'Missing id or action' }
+
+                $respJson = '{"ok":false,"error":"unknown action"}'
+
+                # Any action but status can change what status answers: drop the memo.
+                if ($action -ne 'status' -and $script:timerStatusMemo) { $script:timerStatusMemo.Remove($headsetId) }
+
+                switch ($action) {
+                    'start' {
+                        Start-HeadsetTimer -headsetId $headsetId
+                        $respJson = '{"ok":true}'
+                    }
+                    'stop' {
+                        Stop-HeadsetTimer -headsetId $headsetId
+                        $respJson = '{"ok":true}'
+                    }
+                    'pause' {
+                        $pauseOk = Suspend-HeadsetTimer -headsetId $headsetId
+                        $respJson = if ($pauseOk -ne $false) { '{"ok":true}' } else { '{"ok":false,"error":"timer not found"}' }
+                    }
+                    'resume' {
+                        $resumeOk = Resume-HeadsetTimer -headsetId $headsetId
+                        $respJson = if ($resumeOk -ne $false) { '{"ok":true}' } else { '{"ok":false,"error":"timer not found or not paused"}' }
+                    }
+                    'reset' {
+                        Stop-HeadsetTimer -headsetId $headsetId
+                        $respJson = '{"ok":true}'
+                    }
+                    'status' {
+                        # Two pollers in the same second (page + [timer] overlay) share one computation.
+                        if (-not $script:timerStatusMemo) { $script:timerStatusMemo = @{} }
+                        $memo = $script:timerStatusMemo[$headsetId]
+                        $nowMs = [Environment]::TickCount
+                        if ($memo -and [int]($nowMs - $memo.At) -ge 0 -and [int]($nowMs - $memo.At) -lt 500) {
+                            $respJson = $memo.Json
+                            break
+                        }
+                        $st = Get-TimerStatus -headsetId $headsetId
+                        $activeStr = if ($st.active)  { 'true' } else { 'false' }
+                        $pausedStr = if ($st.paused)  { 'true' } else { 'false' }
+                        $valueJson = $st.value  | ConvertTo-Json
+                        $modeJson  = $st.mode   | ConvertTo-Json
+                        $respJson  = '{"ok":true,"active":' + $activeStr +
+                                     ',"paused":' + $pausedStr +
+                                     ',"value":'   + $valueJson +
+                                     ',"minutes":' + $st.minutes +
+                                     ',"seconds":' + $st.seconds +
+                                     ',"mode":'    + $modeJson + '}'
+                        $script:timerStatusMemo[$headsetId] = @{ At = $nowMs; Json = $respJson }
+                    }
+                    'config' {
+                        $min  = if ($qParams.ContainsKey('minutes') -and $qParams['minutes'] -match '^\d+$') { [int]$qParams['minutes'] } else { 5 }
+                        $sec  = if ($qParams.ContainsKey('seconds') -and $qParams['seconds'] -match '^\d+$') { [int]$qParams['seconds'] } else { 0 }
+                        $mode = if ($qParams.ContainsKey('mode')    -and $qParams['mode'] -match '^(dec|inc)$') { $qParams['mode'] } else { 'dec' }
+                        Set-TimerConfig -headsetId $headsetId -minutes $min -seconds $sec -mode $mode
+                        $respJson = '{"ok":true}'
+                    }
+                }
+
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($respJson)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+            } catch {
+                Send-JsonResponse -Response $response -Body @{ ok = $false; error = $_.Exception.Message } -StatusCode 400
+            } finally { Close-HttpResponse -Response $response }
+            return
+        }
+
+        $staticHeadersSent = $false
+        $staticAborted     = $false
+        try {
+            # Resolve URL path to a file.
+            # /data/*.csv  -> served from <ScriptPath>\data\  (read-only CSV export)
+            # everything else -> served from <ScriptPath>\website\
+            $urlPath = [Uri]::UnescapeDataString($request.Url.LocalPath).TrimStart('/').Replace('/', [System.IO.Path]::DirectorySeparatorChar)
+            if ([string]::IsNullOrEmpty($urlPath)) { $urlPath = 'video_monitor.html' }
+
+            if ($urlPath.StartsWith("data" + [System.IO.Path]::DirectorySeparatorChar)) {
+                # The data folder is no longer web-readable. It used to serve
+                # .csv/.json straight off disk, which is how the monitoring and
+                # VQA pages read their state; both now go through an API that
+                # returns the same shape from the database. Refusing the whole
+                # prefix keeps a stale legacy_* copy from being served too.
+                $response.StatusCode = 403
+                Close-HttpResponse -Response $response
+                return
+            } else {
+                $resolvedFile    = [System.IO.Path]::GetFullPath((Join-Path $websitePath $urlPath))
+                $resolvedBase    = [System.IO.Path]::GetFullPath($websitePath)
+                # Prevent path traversal outside websitePath
+                if (-not $resolvedFile.StartsWith($resolvedBase)) {
+                    $response.StatusCode = 403
+                    Close-HttpResponse -Response $response
+                    return
+                }
+                # Transparent fallback: if not found at website root, try website/generated/
+                if (-not [System.IO.File]::Exists($resolvedFile)) {
+                    $generatedBase = [System.IO.Path]::GetFullPath((Join-Path $websitePath "generated"))
+                    $fallback      = [System.IO.Path]::GetFullPath((Join-Path $generatedBase $urlPath))
+                    if ($fallback.StartsWith($generatedBase) -and [System.IO.File]::Exists($fallback)) {
+                        $resolvedFile = $fallback
+                    }
+                }
+            }
+
+            if ([System.IO.File]::Exists($resolvedFile)) {
+                $ext      = [System.IO.Path]::GetExtension($resolvedFile).ToLower()
+                $mime     = if ($mimeTypes.ContainsKey($ext)) { $mimeTypes[$ext] } else { 'application/octet-stream' }
+                $fileInfo = New-Object System.IO.FileInfo($resolvedFile)
+                # HTTP dates have no sub-second part: truncate, or every conditional request misses.
+                $mtimeRaw = $fileInfo.LastWriteTimeUtc
+                # [DateTime]::new, NOT New-Object DateTime(a - b, kind): New-Object parses its
+                # arguments in command mode, where the comma binds tighter than the minus, so
+                # that form subtracted an array and every static file answered 500 (TEST9).
+                $mtime    = [DateTime]::new($mtimeRaw.Ticks - ($mtimeRaw.Ticks % [TimeSpan]::TicksPerSecond), [DateTimeKind]::Utc)
+                $lastMod  = $mtime.ToString('R', [System.Globalization.CultureInfo]::InvariantCulture)
+
+                # Cache lifetime: generated pages and HTML always revalidate; bundled
+                # assets that practically never change may be reused without asking.
+                $generatedRoot = [System.IO.Path]::GetFullPath((Join-Path $websitePath 'generated')) + [System.IO.Path]::DirectorySeparatorChar
+                $assetsRoot    = [System.IO.Path]::GetFullPath((Join-Path $websitePath 'assets')) + [System.IO.Path]::DirectorySeparatorChar
+                $cacheControl  = 'no-cache'
+                if (-not $resolvedFile.StartsWith($generatedRoot, [System.StringComparison]::OrdinalIgnoreCase) -and
+                    $resolvedFile.StartsWith($assetsRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $sep = [System.IO.Path]::DirectorySeparatorChar
+                    if ($resolvedFile.StartsWith($assetsRoot + 'app_icons' + $sep, [System.StringComparison]::OrdinalIgnoreCase) -or
+                        $resolvedFile.StartsWith($assetsRoot + 'vendor' + $sep, [System.StringComparison]::OrdinalIgnoreCase)) {
+                        $cacheControl = 'public, max-age=86400'
+                    } elseif ($ext -eq '.js' -or $ext -eq '.css') {
+                        $cacheControl = 'public, max-age=300'
+                    }
+                }
+
+                $notModified = $false
+                $ims = $request.Headers['If-Modified-Since']
+                if ($ims) {
+                    $imsDate = [DateTime]::MinValue
+                    if ([DateTime]::TryParseExact($ims.Trim(), 'r', [System.Globalization.CultureInfo]::InvariantCulture,
+                            [System.Globalization.DateTimeStyles]::AdjustToUniversal -bor [System.Globalization.DateTimeStyles]::AssumeUniversal, [ref]$imsDate)) {
+                        if ($mtime -le $imsDate) { $notModified = $true }
+                    }
+                }
+
+                if ($notModified) {
+                    $response.StatusCode = 304
+                    $response.Headers.Add('Last-Modified', $lastMod)
+                    $response.Headers.Add('Cache-Control', $cacheControl)
+                    $staticHeadersSent = $true
+                } elseif ($fileInfo.Length -gt 1MB) {
+                    $response.StatusCode        = 200
+                    $response.ContentType       = $mime
+                    $response.ContentLength64   = $fileInfo.Length
+                    $response.Headers.Add('Last-Modified', $lastMod)
+                    $response.Headers.Add('Cache-Control', $cacheControl)
+                    $staticHeadersSent = $true
+                    $fs = [System.IO.File]::Open($resolvedFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete)
+                    try { $fs.CopyTo($response.OutputStream, 81920) } finally { $fs.Dispose() }
+                } else {
+                    $bytes = [System.IO.File]::ReadAllBytes($resolvedFile)
+                    $response.StatusCode        = 200
+                    $response.ContentType       = $mime
+                    $response.ContentLength64   = $bytes.Length
+                    $response.Headers.Add('Last-Modified', $lastMod)
+                    $response.Headers.Add('Cache-Control', $cacheControl)
+                    $staticHeadersSent = $true
+                    $response.OutputStream.Write($bytes, 0, $bytes.Length)
+                }
+            } else {
+                $response.StatusCode = 404
+                $msg404 = [System.Text.Encoding]::UTF8.GetBytes("404 Not Found: $urlPath")
+                $response.ContentType     = 'text/plain; charset=utf-8'
+                $response.ContentLength64 = $msg404.Length
+                $staticHeadersSent = $true
+                $response.OutputStream.Write($msg404, 0, $msg404.Length)
+            }
+        } catch {
+            # Once the body write has started the headers are on the wire and setting
+            # StatusCode throws (client abort mid-transfer): drop the connection instead.
+            $staticLine = "Web server: static file failed (/" + $request.Url.LocalPath.TrimStart('/') + "): " + $_.Exception.Message
+            if (Test-HttpClientAbort -Exception $_.Exception) {
+                Write-Log $staticLine -Level DEBUG
+            } else {
+                Write-Log $staticLine -Level WARNING
+            }
+            if ($staticHeadersSent) {
+                $staticAborted = $true
+                try { $response.Abort() } catch {}
+            } else {
+                try { $response.StatusCode = 500 } catch {}
+            }
+        } finally {
+            if (-not $staticAborted) { Close-HttpResponse -Response $response }
+        }
+}

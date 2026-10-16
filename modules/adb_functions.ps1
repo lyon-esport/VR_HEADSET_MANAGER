@@ -2177,6 +2177,134 @@ function Invoke-HeadsetShutdown {
 }
 
 
+function Get-HeadsetShutdownTarget {
+    <#
+    .SYNOPSIS
+    The adb -s target of a known headset for a power-off, WITHOUT any network I/O.
+
+    .DESCRIPTION
+    Same order as Resolve-HeadsetAdbDevice (USB serial when the headset is in the published
+    cabled set and USB is not held by an operator action, else IP:port, honouring
+    ADB.prefer_usb), but it never runs "adb connect" or a ping: a power-off must start at
+    once, and an address the adb server does not know simply makes adb fail fast with
+    "device not found". Returns $null when the row has neither a serial nor a usable address.
+
+    .EXAMPLE
+    Get-HeadsetShutdownTarget -Headset $row    # @{ DeviceId = '1WMHH...'; ConnectionType = 'USB' }
+    #>
+    param (
+        [Parameter(Mandatory=$true)] $Headset,
+        [int]$AdbPort = 0
+    )
+    if ($AdbPort -le 0) { $AdbPort = if ($global:adbPort_default) { [int]$global:adbPort_default } else { 5555 } }
+
+    $serial = if ($Headset.SerialNumber) { ([string]$Headset.SerialNumber).Trim() } else { '' }
+    if ($serial -eq '-') { $serial = '' }
+    $ip = if ($Headset.IPAddress -and -not (Test-UnknownIp $Headset.IPAddress)) { [string]$Headset.IPAddress } else { '' }
+
+    $usbFirst = if ($null -ne $global:ADB_prefer_usb) { [bool]$global:ADB_prefer_usb } else { $true }
+    $usb = $null
+    if ($serial) {
+        $busy = $false
+        if (Get-Command Test-UsbBusy -ErrorAction SilentlyContinue) { $busy = Test-UsbBusy }
+        if (-not $busy -and @(Get-PublishedUsbDevices | Where-Object { $_.Serial -eq $serial }).Count -gt 0) {
+            $usb = [PSCustomObject]@{ DeviceId = $serial; ConnectionType = 'USB' }
+        }
+    }
+    $wifi = if ($ip) { [PSCustomObject]@{ DeviceId = (Get-DeviceId -IPAddress $ip -AdbPort $AdbPort); ConnectionType = 'WiFi' } } else { $null }
+
+    if ($usbFirst) { if ($usb) { return $usb }; return $wifi }
+    if ($wifi) { return $wifi }
+    return $usb
+}
+
+
+function Invoke-HeadsetShutdownBatch {
+    <#
+    .SYNOPSIS
+    Powers off several headsets AT THE SAME TIME, with a hard overall deadline.
+
+    .DESCRIPTION
+    One "adb -s <target> shell reboot -p" process per headset, all started before any is
+    awaited, so the cost is the slowest headset and not the sum - an offline fleet used to
+    take ~1 minute because each one waited out its own connect timeout in turn. Targets come
+    from Get-HeadsetShutdownTarget (no network I/O). Anything still running at -TimeoutSec
+    is killed and reported as failed. Returns one row per headset, in input order:
+    @{ID; Name; Ok; Transport; Error}.
+
+    Invoke-AppShutdown ends with Stop-AdbServer, which would cut a power-off still in flight:
+    a caller that shuts the app down afterwards must use the returned rows (this function
+    only returns once every process has exited or was killed).
+
+    .EXAMPLE
+    $r = Invoke-HeadsetShutdownBatch -Headsets @(Get-KnownHeadsets) -TimeoutSec 6
+    #>
+    param (
+        [Parameter(Mandatory=$true)] [AllowEmptyCollection()] [object[]]$Headsets,
+        [string]$adb = $global:adbPath,
+        [int]$AdbPort = 0,
+        [ValidateRange(1, 60)] [int]$TimeoutSec = 8
+    )
+
+    $items = New-Object System.Collections.ArrayList
+    foreach ($h in @($Headsets)) {
+        $row = [ordered]@{ ID = $h.ID; Name = [string]$h.Name; Ok = $false; Transport = ''; Error = ''; Process = $null }
+        try {
+            if (-not $adb -or -not (Test-Path -LiteralPath $adb)) { throw 'adb not found' }
+            $target = Get-HeadsetShutdownTarget -Headset $h -AdbPort $AdbPort
+            if (-not $target) { throw 'no usable address' }
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName               = $adb
+            $psi.Arguments              = '-s "{0}" shell reboot -p' -f $target.DeviceId
+            $psi.UseShellExecute        = $false
+            $psi.CreateNoWindow         = $true
+            $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError  = $true
+            $row.Process   = [System.Diagnostics.Process]::Start($psi)
+            $row.Transport = $target.ConnectionType
+            Write-Log ($msg.HeadsetShuttingDown -f $target.DeviceId) -Level INFO
+        } catch {
+            $row.Error = $_.Exception.Message
+        }
+        [void]$items.Add($row)
+    }
+
+    $watch = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($watch.Elapsed.TotalSeconds -lt $TimeoutSec) {
+        $running = @($items | Where-Object { $_.Process -and -not $_.Process.HasExited })
+        if ($running.Count -eq 0) { break }
+        Start-Sleep -Milliseconds 50
+    }
+
+    $results = foreach ($row in $items) {
+        $p = $row.Process
+        if ($p) {
+            try {
+                if (-not $p.HasExited) {
+                    try { $p.Kill() } catch { }
+                    $row.Error = 'timeout'
+                } else {
+                    $stderr = ''
+                    try { $stderr = $p.StandardError.ReadToEnd() } catch { }
+                    # A device that powers off mid-command can make adb exit non-zero with
+                    # "closed"; that is a success. A missing / unauthorized / offline device
+                    # is the failure worth reporting.
+                    if ($p.ExitCode -eq 0 -or $stderr -match 'closed') {
+                        $row.Ok = $true
+                    } else {
+                        $row.Error = if ($stderr) { $stderr.Trim() } else { "adb exit code $($p.ExitCode)" }
+                    }
+                }
+            } catch { $row.Error = $_.Exception.Message }
+            try { $p.Dispose() } catch { }
+        }
+        Write-Log ("Shutdown: {0} => ok={1}{2}" -f $row.Name, $row.Ok, $(if ($row.Error) { " ($($row.Error))" } else { '' })) -Level INFO
+        [PSCustomObject]@{ ID = $row.ID; Name = $row.Name; Ok = $row.Ok; Transport = $row.Transport; Error = $row.Error }
+    }
+    return @($results)
+}
+
+
 function Invoke-HeadsetApp {
     <#
     .SYNOPSIS

@@ -858,9 +858,4 @@
     });
   };
 
-  // Placeholder kept for compatibility (modal moved to vrhm_config.html)
-  function _openLogsModal() {
-    // Moved to vrhm_config.html
-  }
-
 }());

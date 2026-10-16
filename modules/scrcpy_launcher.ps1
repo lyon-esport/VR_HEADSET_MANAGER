@@ -475,6 +475,8 @@ function Complete-DirectRecording {
     Complete-DirectRecording -SafeName 'Q3_BLUE'
     #>
     param([Parameter(Mandatory)][string]$SafeName)
+    # The session is over: its LocalWindow launch stamp (Get-ScrcpyLaunchStamp) goes with it.
+    if ($script:ScrcpyLaunchState) { $script:ScrcpyLaunchState.Remove($SafeName) }
     $path = $global:DirectRecordings[$SafeName]
     if (-not $path) { return }
     $global:DirectRecordings.Remove($SafeName)
@@ -1001,6 +1003,12 @@ function start-screenCopy {
     $captureMode = if ($global:CaptureMode) { $global:CaptureMode } else { 'StreamOnly' }
     $usePipe = ($captureMode -in @('StreamOnly','StreamAndLocalWindow'))
 
+    # Desired-state stamp of this launch (after the merge block, so a rejected merge gives the same
+    # key the watchdog will compute). Stored with the session; the watchdog compares stamps instead
+    # of parsing scrcpy's command line.
+    $launchStamp = Get-ScrcpyLaunchStamp -Model ([string]$headsetModel) -ScrcpyProfile $scrcpyProfile -Ipd $lensIpd -Recording ([bool]$recording) -CaptureMode $captureMode
+    $launchTransport = [string]$captureDevice.ConnectionType
+
     if ($captureMode -eq 'LocalWindow') {
         # No streaming - GPU SDL is fine here. File recording (if any)
         # uses scrcpy's native --record directly.
@@ -1018,9 +1026,7 @@ function start-screenCopy {
         $arguments = "-s $adb_device $options --window-title=$displayName $renderArg $pipeArgs"
     }
     # Verbosity from config scrcpy.log_level (default 'info' = scrcpy's own default, so no
-    # flag is added). Appended AFTER the profile options on purpose: Watch-ScrcpyProcesses
-    # finds the expected options as one contiguous run inside the command line, which an
-    # extra flag at the end cannot break.
+    # flag is added). It is part of the launch stamp (Get-ScrcpyLaunchStamp), so a change restarts the session.
     if ($global:scrcpyLogLevel -and $global:scrcpyLogLevel -ne 'info') {
         $arguments += " --verbosity=$($global:scrcpyLogLevel)"
     }
@@ -1059,7 +1065,10 @@ function start-screenCopy {
     }
 
     # scrcpy is launched. LocalWindow has no pipeline to wait for: its window is the result.
-    if (-not $usePipe) { $startHoldSec = 2 }
+    if (-not $usePipe) {
+        $startHoldSec = 2
+        $script:ScrcpyLaunchState[$displayName] = @{ LaunchStamp = $launchStamp.Stamp; StampParts = $launchStamp.Parts; Transport = $launchTransport }
+    }
 
     # Windowed LocalWindow mode: scrcpy itself writes the recording. Remember the file so it can be
     # checked once the session is over (Complete-DirectRecording).
@@ -1108,6 +1117,9 @@ function start-screenCopy {
                 Recording      = [bool]$recording
                 RecordFile     = $ffmpegRecord
                 EyeMergeKey    = $eyeMergeKey
+                LaunchStamp    = $launchStamp.Stamp
+                StampParts     = $launchStamp.Parts
+                Transport      = $launchTransport
                 MediaMtxPid    = $mediaMtxPid
                 StartedAt      = (Get-Date)
             }
@@ -1132,6 +1144,60 @@ function start-screenCopy {
 
 
 
+
+# Per-session launch state of a LocalWindow capture (no pipeline entry exists for it), keyed by the
+# safe display name: @{ LaunchStamp; StampParts; Transport }. Pipe modes keep the same fields in
+# $global:HeadsetPipelines[<name>].
+if (-not $script:ScrcpyLaunchState) { $script:ScrcpyLaunchState = @{} }
+
+function Get-ScrcpyLaunchStamp {
+    <#
+    .SYNOPSIS
+    The "desired state" of one capture: everything that must restart a running session when it
+    changes, as one string plus its named components.
+
+    .DESCRIPTION
+    start-screenCopy stores the stamp it launched with; Watch-ScrcpyProcesses rebuilds it and
+    compares, instead of parsing scrcpy's command line. Components: args (exact
+    ConvertTo-ScrcpyArguments output), merge (Resolve-EyeMergeUse key, '' when not merging),
+    rec, mode (capture mode), loglevel, reencode (re-encode, codec, fps, bitrate, GPU choice).
+    The transport is NOT part of it: Get-ScrcpyTransportDecision owns that decision.
+    The GPU choice is the config (GPU_Acceleration/GPU_Index), never a Get-GpuEncoder probe.
+
+    .EXAMPLE
+    $s = Get-ScrcpyLaunchStamp -Model 'Quest 3' -ScrcpyProfile 'square-R-N-45-20' -Ipd '' -Recording $false -CaptureMode 'StreamOnly'
+    $s.Stamp; $s.Parts.args
+    #>
+    param(
+        [Parameter(Mandatory=$true)] [string]$Model,
+        [Parameter(Mandatory=$true)] [string]$ScrcpyProfile,
+        [string]$Ipd = '',
+        [bool]$Recording = $false,
+        [string]$CaptureMode = 'StreamOnly'
+    )
+
+    $argsText = [string](ConvertTo-ScrcpyArguments -headsetModel $Model -scrcpyProfile $ScrcpyProfile -ipd $Ipd)
+    $mergeKey = ''
+    $use = Resolve-EyeMergeUse -Model $Model -ScrcpyProfile $ScrcpyProfile -Ipd $Ipd
+    if ($use -and $use.Use) { $mergeKey = [string]$use.Key }
+
+    $reencode = [bool]$global:mediamtxReencode
+    $encText = 'copy'
+    if ($reencode) {
+        $encText = 'enc:{0}:{1}:{2}:{3}:{4}' -f $global:mediamtxCodec, $global:mediamtxFramerate, $global:mediamtxBitrate, [bool]$global:GPU_Acceleration, $global:GPU_Index
+    }
+
+    $parts = [ordered]@{
+        args     = ($argsText -replace '\s+', ' ').Trim()
+        merge    = $mergeKey
+        rec      = [bool]$Recording
+        mode     = $CaptureMode
+        loglevel = [string]$global:scrcpyLogLevel
+        reencode = $encText
+    }
+    $stamp = (($parts.GetEnumerator() | ForEach-Object { '{0}={1}' -f $_.Key, $_.Value }) -join '|')
+    return @{ Stamp = $stamp; Parts = $parts }
+}
 
 function Get-ScrcpyTransportDecision {
     <#
@@ -1159,22 +1225,20 @@ function Get-ScrcpyTransportDecision {
     The cabled set is VRMonitor published snapshot, so this costs no adb.exe.
 
     .EXAMPLE
-    $d = Get-ScrcpyTransportDecision -Headset $headset -CommandLine $cmdLine -Recording $false
+    $d = Get-ScrcpyTransportDecision -Headset $headset -CurrentTransport 'WiFi' -Recording $false
     if ($d.Restart) { Write-Log $d.Reason }
     #>
     param(
         [Parameter(Mandatory=$true)] $Headset,
-        [string]$CommandLine,
+        # Transport the session was launched with, as stored by start-screenCopy ('USB' or
+        # 'WiFi'). Empty (adopted session, unknown) = no decision.
+        [string]$CurrentTransport = '',
         [bool]$Recording = $false
     )
 
     $d = [PSCustomObject]@{ Restart = $false; Reason = ''; Current = '-'; Preferred = '-' }
-    if (-not $CommandLine) { return $d }
-    if ($CommandLine -match '-s\s+\x22?([^\s\x22]+)') {
-        $d.Current = $(if ($Matches[1] -match ':') { 'WiFi' } else { 'USB' })
-    } else {
-        return $d
-    }
+    if ($CurrentTransport -notin @('USB','WiFi')) { return $d }
+    $d.Current = $CurrentTransport
 
     $busy = $false
     if (Get-Command Test-UsbBusy -ErrorAction SilentlyContinue) { $busy = Test-UsbBusy }
@@ -1658,70 +1722,48 @@ function Watch-ScrcpyProcesses {
                 $headsetProfile = if ($headset.ScrcpyProfile) { $headset.ScrcpyProfile } else { "R-N-45-20" }
                 start-screenCopy -displayName $headset.Name -headsetIP $headset.IPAddress -recording (ConvertTo-BoolField $headset.Record) -scrcpyProfile $headsetProfile
             } else {
-                # scrcpy is running - check if parameters have changed
+                # scrcpy is running - has the desired state changed since it was launched?
+                # Compared as one stamp (Get-ScrcpyLaunchStamp) stored by start-screenCopy, never by
+                # parsing scrcpy's command line.
                 $shouldRestart = $false
                 $headsetProfile = if ($headset.ScrcpyProfile) { $headset.ScrcpyProfile } else { "R-N-45-20" }
                 $expectedRecording = ($headset.Record -eq "True")
+                $headsetModel = $headsetInfos.Model
+                $safeName = Convert-Displayname $headset.Name
 
-                $cimProc = Get-CimInstance Win32_Process -Filter "ProcessId = $($runningScrcpyProcess_forThisheadset.Id)" -ErrorAction SilentlyContinue
-                $cmdLine = $cimProc.CommandLine
-                if ($cimProc) { $cimProc.Dispose() }
+                $pipeline = $global:HeadsetPipelines[$safeName]
+                $launchState = if ($pipeline) { $pipeline } else { $script:ScrcpyLaunchState[$safeName] }
+                $storedStamp = if ($launchState) { [string]$launchState.LaunchStamp } else { '' }
+                $storedTransport = ''
 
-                # Check recording option mismatch only when we could actually read the command line.
-                # If $cmdLine is null (process vanished from WMI), skip the check to avoid a
-                # spurious restart caused by $false -ne $true when recording is expected.
-                # In pipe mode, scrcpy's --record always points to a named pipe (streaming);
-                # the recording file is written by ffmpeg as a second output. The cmdline does
-                # NOT carry that file, so we compare against the pipeline registry instead.
-                $inPipeMode = $cmdLine -and ($cmdLine -match '--record=\\\\\.\\pipe\\')
-                if ($inPipeMode) {
-                    $safeName = Convert-Displayname $headset.Name
-                    $pipeline = $global:HeadsetPipelines[$safeName]
-                    $currentRecording = if ($pipeline) { [bool]$pipeline.Recording } else { $false }
-                    if ($currentRecording -ne $expectedRecording) {
-                        Write-Log ($msg.Scrcpy.RecordingChanged -f $headset.Name) -Level INFO
-                        $shouldRestart = $true
-                    }
-                    # Merged view: the scrcpy command line is identical to 'fullscreen' (no crop), so
-                    # a switch to/from merged, a recalibration or a new merged crop only shows in the
-                    # pipeline registry. Only compared when this process owns the pipeline entry.
-                    if (-not $shouldRestart -and $pipeline) {
-                        $wantedMerge = Resolve-EyeMergeUse -Model $headsetInfos.Model -ScrcpyProfile $headsetProfile -Ipd (Get-HeadsetIpdValue -HeadsetId ([int]$headset.ID) -Model ([string]$headsetInfos.Model))
-                        $wantedKey   = if ($wantedMerge.Use) { $wantedMerge.Key } else { '' }
-                        $runningKey  = if ($pipeline.EyeMergeKey) { [string]$pipeline.EyeMergeKey } else { '' }
-                        if ($wantedKey -ne $runningKey) {
-                            Write-Log ("Merged view settings changed for {0} - restarting the stream." -f $headset.Name) -Level INFO
-                            $shouldRestart = $true
+                if ($headsetModel -and "$headsetModel" -ne '-') {
+                    $lensIpd = Get-HeadsetIpdValue -HeadsetId ([int]$headset.ID) -Model ([string]$headsetModel)
+                    $captureModeNow = if ($global:CaptureMode) { $global:CaptureMode } else { 'StreamOnly' }
+                    $expected = Get-ScrcpyLaunchStamp -Model ([string]$headsetModel) -ScrcpyProfile $headsetProfile -Ipd $lensIpd -Recording $expectedRecording -CaptureMode $captureModeNow
+                    if (-not $storedStamp) {
+                        # Started before this build, or by another process: adopt the current
+                        # expectation instead of restarting a stream that may be fine.
+                        $adopted = @{ LaunchStamp = $expected.Stamp; StampParts = $expected.Parts; Transport = '' }
+                        if ($pipeline) {
+                            $pipeline.LaunchStamp = $expected.Stamp
+                            $pipeline.StampParts  = $expected.Parts
+                            if (-not $pipeline.ContainsKey('Transport')) { $pipeline.Transport = '' }
+                        } else {
+                            $script:ScrcpyLaunchState[$safeName] = $adopted
                         }
-                    }
-                } else {
-                    $hasRecord = if ($cmdLine) { [bool]($cmdLine -match '--record=(?!\\\\\.\\pipe\\)') } else { $expectedRecording }
-                    if ($hasRecord -ne $expectedRecording) {
-                        Write-Log ($msg.Scrcpy.RecordingChanged -f $headset.Name) -Level INFO
-                        $shouldRestart = $true
-                    }
-                }
-
-                # Check scrcpy options and profile mismatch
-                if (-not $shouldRestart) {
-                    $headsetModel = $headsetInfos.Model
-                    $expectedOptions = ConvertTo-ScrcpyArguments -headsetModel $headsetModel -scrcpyProfile $headsetProfile -ipd (Get-HeadsetIpdValue -HeadsetId ([int]$headset.ID) -Model ([string]$headsetModel))
-                    if ($expectedOptions -ne "") {
-                        # Strip pipe-mode args (added by start-screenCopy on top of ConvertTo-ScrcpyArguments
-                        # output) from the cmdline before comparison, otherwise the watchdog will see them as
-                        # "options changed" and restart-loop every cycle.
-                        $cmdLineForCompare = $cmdLine
-                        $cmdLineForCompare = $cmdLineForCompare -replace '--record=\\\\\.\\pipe\\\S+', ''
-                        $cmdLineForCompare = $cmdLineForCompare -replace '--record-format=\S+', ''
-                        $cmdLineForCompare = $cmdLineForCompare -replace '--video-codec-options=\S+', ''
-                        $cmdLineForCompare = $cmdLineForCompare -replace '--no-window', ''
-                        $cmdLineForCompare = $cmdLineForCompare -replace '--no-playback', ''
-                        $cmdLineForCompare = $cmdLineForCompare -replace '--render-driver=\S+', ''
-                        $cmdLineForCompare = $cmdLineForCompare -replace '--window-title=\S+', ''
-                        $normalizedCmdLine = ($cmdLineForCompare -replace '\s+', ' ').Trim()
-                        $normalizedOptions = ($expectedOptions -replace '\s+', ' ').Trim()
-                        if ($normalizedCmdLine -notlike "*$normalizedOptions*") {
-                            Write-Log ($msg.Scrcpy.OptionsChanged -f $headset.Name, $headsetModel) -Level INFO
+                        Write-Log ("Watchdog: adopted the running capture of {0} (no launch stamp)." -f $headset.Name) -Level DEBUG
+                    } else {
+                        $storedTransport = if ($launchState.Transport) { [string]$launchState.Transport } else { '' }
+                        if ($storedStamp -ne $expected.Stamp) {
+                            $oldParts = $launchState.StampParts
+                            $changed = @($expected.Parts.Keys | Where-Object { -not $oldParts -or ([string]$oldParts[$_] -ne [string]$expected.Parts[$_]) })
+                            if ($changed.Count -eq 1 -and $changed[0] -eq 'rec') {
+                                Write-Log ($msg.Scrcpy.RecordingChanged -f $headset.Name) -Level INFO
+                            } elseif ($changed -contains 'merge') {
+                                Write-Log ("Merged view settings changed for {0} - restarting the stream." -f $headset.Name) -Level INFO
+                            } else {
+                                Write-Log (($msg.Scrcpy.OptionsChanged -f $headset.Name, $headsetModel) + " (" + ($changed -join ',') + ")") -Level INFO
+                            }
                             $shouldRestart = $true
                         }
                     }
@@ -1732,7 +1774,7 @@ function Watch-ScrcpyProcesses {
                 # re-resolves the transport anyway. See Get-ScrcpyTransportDecision for the
                 # three scrcpy.usb_switch_mode behaviours.
                 if (-not $shouldRestart) {
-                    $transportDecision = Get-ScrcpyTransportDecision -Headset $headset -CommandLine $cmdLine -Recording $expectedRecording
+                    $transportDecision = Get-ScrcpyTransportDecision -Headset $headset -CurrentTransport $storedTransport -Recording $expectedRecording
                     if ($transportDecision.Restart) {
                         Write-Log $transportDecision.Reason -Level INFO
                         $shouldRestart = $true

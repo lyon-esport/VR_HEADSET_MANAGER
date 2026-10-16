@@ -716,7 +716,6 @@
           _lpTimer = setTimeout(function() {
             _lpTimer = null;
             _longPressed = true;
-            _lastTapTime = 0;
             doReset();
           }, 800);
         }

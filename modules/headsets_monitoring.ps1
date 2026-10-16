@@ -1247,6 +1247,13 @@ function Start-VRMonitor {
                 if (-not (Test-Path -LiteralPath $shutdownFlagPath)) {
                     Write-Host "VRMonitor: parent process ($parentPID) has exited - signaling reaper"
                     try { New-Item -ItemType File -Path $shutdownFlagPath -Force | Out-Null } catch {}
+                    # Main died without Invoke-AppShutdown. The reaper only cleans what exists
+                    # when it notices (it polls every 2 s, then exits), so anything this job
+                    # started after that - typically mediamtx from the startup watchdog when
+                    # main is killed during boot - would be orphaned with its pid file. Stop
+                    # our own services here; both helpers are no-ops when nothing runs.
+                    try { Stop-Scrcpy }   catch {}
+                    try { Stop-MediaMtx } catch {}
                 } else {
                     Write-Host "VRMonitor: shutdown flag detected, exiting"
                 }

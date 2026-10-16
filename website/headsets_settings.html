@@ -32,10 +32,10 @@
       overflow-x: hidden;
     }
 
-    /* â"€â"€ Page content â"€â"€ */
+    /* -- Page content -- */
     .page { padding: 24px; }
 
-    /* â"€â"€ Cards grid â"€â"€ */
+    /* -- Cards grid -- */
     .cards-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
@@ -637,7 +637,7 @@
     .rm-confirm-btn:hover:not(:disabled) { background: rgba(239,68,68,0.25); }
     .rm-confirm-btn:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
 
-    /* â"€â"€ Enable WiFi ADB modal â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€ */
+    /* -- Enable WiFi ADB modal ------------------------------------------------- */
     .wifi-modal-box {
       background: #1a1a1a; border: 1px solid #333; border-radius: 10px;
       width: 100%; max-width: 460px; padding: 22px 24px;
@@ -665,7 +665,7 @@
     [data-theme="light"] .wifi-step-row   { color: #666; }
     [data-theme="light"] .wifi-hint       { color: #aaa; }
 
-    /* â"€â"€ Add headset modal â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€ */
+    /* -- Add headset modal ----------------------------------------------------- */
     .add-modal-box {
       background: #1a1a1a; border: 1px solid #333; border-radius: 10px;
       width: 100%; max-width: 400px; padding: 22px 24px;
@@ -723,7 +723,7 @@
     .disc-type { font-size: 11px; color: #888; }
     [data-theme="light"] .disc-type { color: #666; }
 
-    /* â"€â"€ New Devices modal sections â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€ */
+    /* -- New Devices modal sections ------------------------------------------- */
     .ndm-section {
       margin-top: 12px; padding-top: 10px;
       border-top: 1px solid #252525;
@@ -745,7 +745,7 @@
     [data-theme="light"] .ndm-action-btn  { background: #f5f5f5; border-color: #e0e0e0; color: #333; }
     [data-theme="light"] .ndm-action-btn:hover:not(:disabled) { background: #ebebeb; border-color: #ccc; }
 
-    /* â"€â"€ Light mode â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€ */
+    /* -- Light mode ----------------------------------------------------------- */
     [data-theme="light"] {
       --bg:          #f0f0f0;
       --muted:       #999;
@@ -1296,20 +1296,7 @@
       return isUnknownIp(ip) ? 'IP unknown' : ip;
     }
 
-    function parseCsvText(text, delimiter) {
-      text = text.replace(/^\uFEFF/, '');
-      var lines = text.trim().split(/\r?\n/);
-      if (lines.length < 2) return [];
-      var headers = lines[0].split(delimiter).map(function(h) { return h.replace(/^"|"$/g, '').trim(); });
-      return lines.slice(1).map(function(line) {
-        var cols = line.split(delimiter).map(function(c) { return c.replace(/^"|"$/g, '').trim(); });
-        var obj = {};
-        headers.forEach(function(h, i) { obj[h] = cols[i] !== undefined ? cols[i] : ''; });
-        return obj;
-      });
-    }
-
-    // â"€â"€ Filter / visibility â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+    // -- Filter / visibility --------------------------------------------------
     function setHeadsetVisible(dn, show) {
       headsetVisible[dn] = show;
       var card = document.querySelector('.headset-card[data-display="' + dn + '"]');
@@ -2100,7 +2087,7 @@
       cardsBuilt = true;
     }
 
-    // â"€â"€ IP error helper â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+    // -- IP error helper ------------------------------------------------------
     function showIpError(input, msg, isWarn) {
       clearIpError(input);
       input.style.borderColor = isWarn ? 'var(--charging)' : 'var(--ping-ko)';
@@ -2116,7 +2103,7 @@
       if (existing) { clearTimeout(existing._clearTimer); existing.remove(); }
     }
 
-    // â"€â"€ Status dots update â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+    // -- Status dots update ---------------------------------------------------
     // ---- Lens position (IPD, ADR-0030): shown only for models that report one (Quest 2). ----
     var _ipdPositions = {};   // headset id -> ['58','63','68'], loaded once per headset
     var _ipdSource    = {};   // dn -> 'auto' | 'manual' | 'default'
@@ -2234,7 +2221,7 @@
       });
     }
 
-    // â"€â"€ CSV polling â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+    // -- CSV polling ----------------------------------------------------------
     function pollHeadsetsCsv() {
       return fetch(HEADSETS_API_PATH + '?_=' + Date.now())
         .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
@@ -2386,7 +2373,7 @@
       } catch (e) {}
     }
 
-    // â"€â"€ Power modal â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+    // -- Power modal ----------------------------------------------------------
     var _powerAction = null;
     var _powerDn     = null;
 
@@ -2660,7 +2647,7 @@
       });
     });
 
-    // -- Profile modal â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+    // -- Profile modal --------------------------------------------------------
     var _editingProfileDn = null;
 
     function openProfileModal(dn) {
@@ -3140,7 +3127,7 @@
       .catch(function() { btn.disabled = false; });
     });
 
-    // â"€â"€ Boot â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+    // -- Boot -----------------------------------------------------------------
     var _headsetFilter = (new URLSearchParams(location.search)).get('headset') || '';
 
     // Check recording drive space on page load and show banner if low
@@ -3456,7 +3443,7 @@
 
     VRHM.poll(pollTimerDisplays, { intervalMs: 1000, maxBackoffMs: 10000, immediate: false });
 
-    // Manage New Devices modal â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+    // Manage New Devices modal ---------------------------------------------
     var _ndmData = null;  // USB device details from /api/usbdeviceinfo
     var _ndmIp   = '';    // IP used for add-headset flow
 
@@ -3491,14 +3478,14 @@
       body.innerHTML   = '';
       footer.innerHTML = '';
 
-      // â"€â"€ Detecting â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+      // -- Detecting ----------------------------------------------------------
       if (step === 'detecting') {
         _ndmSetTitle('Manage New Devices');
         body.innerHTML = '<div class="wifi-step-row">' + _spinSvg + 'Detecting USB headset...</div>';
         footer.innerHTML = '<button class="pm-btn" id="ndm-btn-cancel">Cancel</button>';
         document.getElementById('ndm-btn-cancel').addEventListener('click', closeNewDevicesModal);
 
-      // â"€â"€ Main view â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+      // -- Main view ----------------------------------------------------------
       } else if (step === 'main') {
         _ndmSetTitle('Manage New Devices');
         var html = '';
@@ -3652,7 +3639,7 @@
         });
         document.getElementById('ndm-btn-close').addEventListener('click', closeNewDevicesModal);
 
-      // â"€â"€ Add headset: manual IP â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+      // -- Add headset: manual IP ---------------------------------------------
       } else if (step === 'add-ip') {
         _ndmSetTitle('Add Headset');
         body.innerHTML =
@@ -3678,7 +3665,7 @@
           _ndmIp = ip; renderNdmStep('add-name');
         });
 
-      // â"€â"€ Add headset: name â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+      // -- Add headset: name --------------------------------------------------
       } else if (step === 'add-name') {
         _ndmSetTitle('Add Headset');
         body.innerHTML =
@@ -3712,12 +3699,12 @@
           submitNdmAddHeadset(_ndmIp, name);
         });
 
-      // â"€â"€ Add headset: saving â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+      // -- Add headset: saving ------------------------------------------------
       } else if (step === 'add-saving') {
         _ndmSetTitle('Add Headset');
         body.innerHTML = '<div class="wifi-step-row">' + _spinSvg + 'Adding headset...</div>';
 
-      // â"€â"€ Add headset: success â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+      // -- Add headset: success -----------------------------------------------
       } else if (step === 'add-success') {
         _ndmSetTitle('Headset Added');
         body.innerHTML =
@@ -3729,7 +3716,7 @@
           location.reload();
         });
 
-      // â"€â"€ Add headset: error â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+      // -- Add headset: error -------------------------------------------------
       } else if (step === 'add-error') {
         _ndmSetTitle('Add Headset');
         body.innerHTML =
@@ -3742,12 +3729,12 @@
         document.getElementById('ndm-btn-err-back').addEventListener('click', function() { renderNdmStep('add-name'); });
         document.getElementById('ndm-btn-err-close').addEventListener('click', closeNewDevicesModal);
 
-      // â"€â"€ Enable WiFi ADB: busy â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+      // -- Enable WiFi ADB: busy ----------------------------------------------
       } else if (step === 'enabling-tcpip') {
         _ndmSetTitle('Enable WiFi ADB');
         body.innerHTML = '<div class="wifi-step-row">' + _spinSvg + 'Enabling TCP/IP mode... this may take a few seconds.</div>';
 
-      // â"€â"€ Enable WiFi ADB: success â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+      // -- Enable WiFi ADB: success -------------------------------------------
       } else if (step === 'success-tcpip') {
         _ndmSetTitle('Enable WiFi ADB');
         body.innerHTML =
@@ -3765,7 +3752,7 @@
         document.getElementById('ndm-btn-back').addEventListener('click', function() { renderNdmStep('main'); });
         document.getElementById('ndm-btn-done').addEventListener('click', closeNewDevicesModal);
 
-      // â"€â"€ Install APK: busy â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+      // -- Install APK: busy --------------------------------------------------
       } else if (step === 'installing') {
         _ndmSetTitle('Install ADB WiFi App');
         var isReinstall = data && data.reinstall;
@@ -3773,7 +3760,7 @@
           '<div class="wifi-step-row">' + _spinSvg + (isReinstall ? 'Reinstalling' : 'Installing') + ' ADB WiFi app... this may take ~15 seconds.</div>' +
           '<div class="wifi-hint">The app will be installed, permissions granted, and WiFi ADB enabled automatically.</div>';
 
-      // â"€â"€ Install APK: success â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+      // -- Install APK: success -----------------------------------------------
       } else if (step === 'success-install') {
         _ndmSetTitle('Install ADB WiFi App');
         body.innerHTML =
@@ -3793,7 +3780,7 @@
         document.getElementById('ndm-btn-back').addEventListener('click', function() { renderNdmStep('main'); });
         document.getElementById('ndm-btn-done').addEventListener('click', closeNewDevicesModal);
 
-      // â"€â"€ General error â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+      // -- General error ------------------------------------------------------
       } else if (step === 'error') {
         body.innerHTML =
           '<div class="wifi-step-row" style="color:#ef4444">' + _warnSvg +
