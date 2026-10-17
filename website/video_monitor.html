@@ -237,8 +237,6 @@
       transition: background 0.15s, color 0.15s, border-color 0.15s;
     }
     .cell-action-btn:hover { background: rgba(59,130,246,0.75); color: #fff; border-color: rgba(59,130,246,0.6); }
-    .cell-action-btn.ar-on { background: rgba(34,197,94,0.28); color: #22c55e; border-color: rgba(34,197,94,0.5); }
-    .cell-action-btn.ar-on:hover { background: rgba(34,197,94,0.50); }
 
     /* Cast-to-kiosk button - only shown once at least one kiosk screen is registered */
     .cell-action-btn.cast-btn { display: none; }
@@ -480,7 +478,6 @@
     [data-theme="light"] .running-app-name               { color: rgba(0,0,0,0.85); }
     [data-theme="light"] .cell-action-btn                { background: rgba(255,255,255,0.65); color: rgba(0,0,0,0.55); border-color: rgba(0,0,0,0.12); }
     [data-theme="light"] .cell-action-btn:hover          { background: rgba(59,130,246,0.75); color: #fff; border-color: rgba(59,130,246,0.6); }
-    [data-theme="light"] .cell-action-btn.ar-on          { background: rgba(34,197,94,0.20); color: #16a34a; border-color: rgba(34,197,94,0.4); }
 
     /* ------ Empty state ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ */
     #empty-msg {
@@ -969,34 +966,6 @@
         });
     }
 
-    function updateAutoRestartButtons() {
-      document.querySelectorAll('.autorestart-btn').forEach(function(btn) {
-        var dn = btn.dataset.cellHeadset;
-        var on = autoRestartState[dn] || false;
-        btn.classList.toggle('ar-on', on);
-        btn.title = 'Auto-restart scrcpy: ' + (on ? 'ON' : 'OFF');
-      });
-    }
-
-    function toggleAutoRestart(dn) {
-      var newVal = !autoRestartState[dn];
-      autoRestartState[dn] = newVal;
-      updateAutoRestartButtons();
-      fetch('/api/autorestart', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: dn, value: newVal })
-      })
-      .then(function(r) { return r.json(); })
-      .then(function(j) {
-        if (!j.ok) { autoRestartState[dn] = !newVal; updateAutoRestartButtons(); return; }
-        // Capture was just requested: VRMonitor starts scrcpy within ~1 s, so poll now
-        // and keep polling fast until the stream shows (see captureStarting()).
-        if (newVal) { delete _pendingSince[dn]; kickStatusLoop(); }
-      })
-      .catch(function() { autoRestartState[dn] = !newVal; updateAutoRestartButtons(); });
-    }
-
     // ------ Fast status polling while a capture is starting -----------------------------------
     // A cell only loads its [video].html once the status poll reports scrcpy=true. The normal
     // cadence is refresh_timer x load multiplier (5 s, up to 25 s under load), which was most of
@@ -1007,7 +976,6 @@
     var FAST_STATUS_MS     = 1000;
     var FAST_STATUS_MAX_MS = 60000;
     var _pendingSince      = {};    // display name -> ms timestamp the pending state was first seen
-    var _statusLoopFn      = null;  // runNow() of the status poller, set once it is bootstrapped
 
     function captureStarting() {
       var now = Date.now(), fast = false;
@@ -1021,17 +989,9 @@
       return fast;
     }
 
-    // Run the status loop now instead of waiting for its timer. VRHM.poll's runNow() queues
-    // one more run behind a poll already in flight - never a second polling chain.
-    function kickStatusLoop() {
-      if (!_statusLoopFn) return;
-      _statusLoopFn();
-    }
 
 
     document.getElementById('grid').addEventListener('click', function(e) {
-      var arBtn = e.target.closest('.autorestart-btn');
-      if (arBtn) { toggleAutoRestart(arBtn.dataset.cellHeadset); return; }
       var launchBtn = e.target.closest('.launch-app-btn');
       if (launchBtn) { openLaunchModal(launchBtn.dataset.launchApp); return; }
       var castBtn = e.target.closest('.cast-btn');
@@ -1056,7 +1016,6 @@
           });
           headsetStatus = newStatus;
           updateRunningApps();
-          updateAutoRestartButtons();
           if (!initialFilterApplied) {
             initialFilterApplied = true;
             if (document.body.classList.contains('hidetopbar') || filterIds.length) {
@@ -1583,11 +1542,6 @@
               '<line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>' +
             '</svg>' +
           '</a>' +
-          '<button class="cell-action-btn autorestart-btn" data-cell-headset="' + dn + '" title="Auto-restart scrcpy: OFF" aria-label="Toggle auto-restart">' +
-            '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
-              '<polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.55"/>' +
-            '</svg>' +
-          '</button>' +
           '<a class="cell-action-btn" href="headsets_settings.html?headset=' + dn + '" title="Headset settings" aria-label="Headset settings">' +
             '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
               '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/>' +
@@ -1871,7 +1825,6 @@
           var statusPoller = VRHM.poll(function() {
             return Promise.all([pollHeadsetsStatus(), refreshLoadTier(), refreshCaptureMode()]);
           }, { intervalMs: function() { return captureStarting() ? FAST_STATUS_MS : nextStatusDelay(); } });
-          _statusLoopFn = function() { statusPoller.runNow(); };
         }
         refreshLoadTier().finally(startStatusLoop);
         // Push (ADR-0020): a status write (scrcpy started/stopped, ADB up/down) re-runs the

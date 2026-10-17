@@ -115,6 +115,11 @@ function Invoke-RouteEnablewifiadb {
             $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
         } catch {}
     } finally {
+        # Shrink the USB claim (S9 follow-up, TEST23 section 30): it was left for its full
+        # 45/60/180 s after the request ended, and the VRMonitor USB watcher yields for as
+        # long as it is held - no detection, no IP heal. 10 s still covers the transport
+        # re-enumeration that adb tcpip / adb usb cause.
+        Set-UsbBusy -Seconds 10
         Close-HttpResponse -Response $response
     }
     return
@@ -168,6 +173,11 @@ function Invoke-RouteInstalladbwifiapk {
             $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
         } catch {}
     } finally {
+        # Shrink the USB claim (S9 follow-up, TEST23 section 30): it was left for its full
+        # 45/60/180 s after the request ended, and the VRMonitor USB watcher yields for as
+        # long as it is held - no detection, no IP heal. 10 s still covers the transport
+        # re-enumeration that adb tcpip / adb usb cause.
+        Set-UsbBusy -Seconds 10
         Close-HttpResponse -Response $response
     }
     return

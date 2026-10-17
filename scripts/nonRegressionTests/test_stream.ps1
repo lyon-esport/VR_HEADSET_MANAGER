@@ -1068,3 +1068,43 @@ function Stop-NrtHeadsetStream {
     }
     return $false
 }
+
+function Wait-NrtHeadsetRebooted {
+    <#
+    .SYNOPSIS
+        After a reboot request, waits for the headset to go DOWN and then come BACK (ping + ADB
+        port). Returns @{ Back; Down; ElapsedSec } and never hangs: -TimeoutSec bounds the whole wait.
+
+    .DESCRIPTION
+        Phase 1 proves the reboot really happened (reachable -> unreachable, max -DownTimeoutSec),
+        so a pre-reboot reading is never mistaken for a post-reboot one. Phase 2 waits for the
+        headset to answer again. Back=$false means the headset did not return in time (for example
+        because wireless ADB is not persistent across a reboot and no cable lets the app re-enable it).
+
+    .EXAMPLE
+        $r = Wait-NrtHeadsetRebooted -IPAddress '10.0.0.5' -AdbPort 5555 -TimeoutSec 240
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$IPAddress,
+        [int]$AdbPort = 5555,
+        [int]$TimeoutSec = 240,
+        [int]$DownTimeoutSec = 60
+    )
+
+    $start    = Get-Date
+    $deadline = $start.AddSeconds($TimeoutSec)
+    $down     = $false
+
+    $downDeadline = $start.AddSeconds($DownTimeoutSec)
+    while ((Get-Date) -lt $downDeadline) {
+        if (-not (Test-NrtHeadsetReachable -IPAddress $IPAddress -AdbPort $AdbPort -TimeoutMs 1000)) { $down = $true; break }
+        Start-Sleep -Seconds 2
+    }
+
+    $back = $false
+    while ((Get-Date) -lt $deadline) {
+        if (Test-NrtHeadsetReachable -IPAddress $IPAddress -AdbPort $AdbPort -TimeoutMs 1500) { $back = $true; break }
+        Start-Sleep -Seconds 3
+    }
+    return @{ Back = $back; Down = $down; ElapsedSec = [int]((Get-Date) - $start).TotalSeconds }
+}

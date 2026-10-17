@@ -75,6 +75,14 @@
     and headset-driven sections SKIP. Unlike -Unattended it keeps the launch
     menu and the end-of-run question.
 
+.PARAMETER PhysicalUsb
+    Use the REAL USB cable for the unplug / replug checks (section 85) instead of cutting the
+    link by software. By default the harness disables and re-enables the headset's USB device
+    through Windows PnP (Disable-PnpDevice / Enable-PnpDevice, needs an ELEVATED PowerShell), which
+    the app sees exactly like a pulled cable and which wears no connector. If it cannot (not
+    elevated, device not found) it asks the operator as before. With -PhysicalUsb only ONE real
+    unplug/replug cycle is requested per run; the other cycles stay software.
+
 .PARAMETER AutoApproveSetup
     Auto-approves the app's first-boot computer setup (firewall rules, URL ACL,
     Windows Defender exclusion) so a new release folder starts with no keypress.
@@ -131,6 +139,7 @@ param(
     [switch]$AllowDestructive,
     [switch]$Unattended,
     [switch]$NoHeadset,
+    [switch]$PhysicalUsb,
     [switch]$AutoApproveSetup,
     [switch]$RestoreOnly,
     [switch]$KeepSandbox,
@@ -476,6 +485,7 @@ $global:TestRun.HeadsetName = $HeadsetName
 # Sections 50/60 use this to decide whether prompting for a headset is allowed.
 $global:TestRun.Unattended = [bool]$Unattended
 $global:TestRun.NoHeadset  = [bool]$NoHeadset
+$global:TestRun.PhysicalUsb = [bool]$PhysicalUsb
 $global:TestRun.DevRoot = $devRoot
 
 Write-Host ''
@@ -640,6 +650,8 @@ try {
 }
 finally {
     # Teardown always runs, including on Ctrl+C.
+    # Never leave a headset's USB device disabled by a software unplug.
+    if (Get-Command Restore-NrtUsbLink -ErrorAction SilentlyContinue) { Restore-NrtUsbLink }
     if ($AutoApproveSetup) { Remove-Item Env:\VRHM_AUTO_APPROVE_SETUP -ErrorAction SilentlyContinue }
     if ((-not $keepAppRunning) -and (Get-Command Stop-SandboxApp -ErrorAction SilentlyContinue)) {
         try { Stop-SandboxApp -TargetRoot $target | Out-Null } catch { }

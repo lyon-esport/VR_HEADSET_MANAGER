@@ -219,3 +219,124 @@ function Select-TestHeadset {
     $choice = Read-TestMenuChoice -Prompt '  Select' -Accept $accept -Default '1'
     return $Candidates[[int]$choice - 1]
 }
+
+# ---------------------------------------------------------------------------
+# Software USB link control (replaces "unplug / replug the cable" prompts)
+# ---------------------------------------------------------------------------
+
+function Test-NrtElevated {
+    <# $true when this PowerShell is elevated (Disable-PnpDevice needs it). #>
+    try {
+        return ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch { return $false }
+}
+
+function Get-NrtUsbPnpDevice {
+    <#
+    .SYNOPSIS
+        The PnP composite USB device of ONE headset (Meta VID 2833 / Pico VID 2D40), or $null.
+
+    .DESCRIPTION
+        Matched on the serial number first. Without a serial it only answers when exactly one
+        headset-vendor device is present, so another headset is never disabled by mistake.
+        Interface children (MI_xx) are excluded: disabling the composite parent is what makes the
+        ADB transport vanish exactly like a pulled cable.
+
+    .EXAMPLE
+        $dev = Get-NrtUsbPnpDevice -Serial '2G0YC5ZG1W00ZJ'
+    #>
+    param([string]$Serial = '')
+
+    try {
+        $all = @(Get-PnpDevice -PresentOnly -ErrorAction Stop | Where-Object {
+            $_.InstanceId -match '^USB\\VID_(2833|2D40)&PID_[0-9A-F]{4}\\' -and $_.InstanceId -notmatch '&MI_'
+        })
+    } catch { return $null }
+
+    if ($Serial) {
+        $hit = @($all | Where-Object { $_.InstanceId -like ('*\' + $Serial) })
+        if ($hit.Count -eq 1) { return $hit[0] }
+        return $null
+    }
+    if ($all.Count -eq 1) { return $all[0] }
+    return $null
+}
+
+function Set-NrtUsbLink {
+    <#
+    .SYNOPSIS
+        Cuts (Out) or restores (In) the USB link of a headset from software, instead of asking the
+        operator to pull the cable. Returns $true on success, $false when it cannot be done (not
+        elevated, device not found, PnP error) so the caller falls back to the operator prompt.
+
+    .EXAMPLE
+        if (Set-NrtUsbLink -State Out -Serial $headset.SerialNumber) { ... }
+    #>
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet('Out', 'In')][string]$State,
+        [string]$Serial = ''
+    )
+
+    if (-not (Test-NrtElevated)) { return $false }
+
+    try {
+        if ($State -eq 'Out') {
+            $dev = Get-NrtUsbPnpDevice -Serial $Serial
+            if (-not $dev) { return $false }
+            Disable-PnpDevice -InstanceId $dev.InstanceId -Confirm:$false -ErrorAction Stop
+            if (-not $global:TestRun.DisabledUsb.Contains($dev.InstanceId)) { $global:TestRun.DisabledUsb.Add($dev.InstanceId) }
+            return $true
+        }
+        $ids = @($global:TestRun.DisabledUsb)
+        if ($ids.Count -eq 0) { return $false }
+        foreach ($id in $ids) { Enable-PnpDevice -InstanceId $id -Confirm:$false -ErrorAction Stop }
+        $global:TestRun.DisabledUsb.Clear()
+        return $true
+    } catch {
+        Write-Host ("  Software USB {0} failed: {1}" -f $State.ToLower(), $_.Exception.Message) -ForegroundColor DarkGray
+        return $false
+    }
+}
+
+function Restore-NrtUsbLink {
+    <# Re-enables every USB device this run disabled. Safe to call any time (finally blocks, teardown). #>
+    try {
+        if ($global:TestRun -and $global:TestRun.DisabledUsb -and $global:TestRun.DisabledUsb.Count -gt 0) {
+            [void](Set-NrtUsbLink -State In)
+        }
+    } catch { }
+}
+
+function Invoke-NrtCableStep {
+    <#
+    .SYNOPSIS
+        One "cable out" / "cable back in" step. Software PnP first; the operator prompt only when
+        software cannot do it or the run asked for the real cable (-PhysicalUsb / -Physical).
+
+    .DESCRIPTION
+        Returns 'software', 'physical' or 'declined'. 'declined' must become Skip-Test.
+        -Message is the operator text used for the physical case.
+
+    .EXAMPLE
+        $how = Invoke-NrtCableStep -Direction Unplug -Serial $h.SerialNumber -Message 'UNPLUG the cable, then press Enter.'
+    #>
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet('Unplug', 'Plug')][string]$Direction,
+        [Parameter(Mandatory = $true)][string]$Message,
+        [string]$Serial = '',
+        [switch]$Physical
+    )
+
+    $wantPhysical = ($Physical -and $global:TestRun -and $global:TestRun.PhysicalUsb)
+    if (-not $wantPhysical -and -not ($global:TestRun -and $global:TestRun.NoHeadset)) {
+        $state = if ($Direction -eq 'Unplug') { 'Out' } else { 'In' }
+        if (Set-NrtUsbLink -State $state -Serial $Serial) {
+            Write-Host ("  USB link {0} by software (no cable handling)." -f $(if ($state -eq 'Out') { 'cut' } else { 'restored' })) -ForegroundColor DarkGray
+            Start-Sleep -Seconds 2
+            return 'software'
+        }
+        Write-Host '  Software USB control unavailable (needs an elevated PowerShell and a matching USB device) - asking the operator.' -ForegroundColor DarkGray
+    }
+    if (Wait-OperatorAction -Message $Message) { return 'physical' }
+    return 'declined'
+}

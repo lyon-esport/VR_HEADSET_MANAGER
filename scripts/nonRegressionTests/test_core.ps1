@@ -95,6 +95,8 @@ function Initialize-TestRun {
         NoHeadset        = $false
         AutoApproveSetup = $false
         DevRoot          = ''
+        PhysicalUsb      = $false
+        DisabledUsb      = (New-Object System.Collections.Generic.List[string])
     }
     return $global:TestRun
 }

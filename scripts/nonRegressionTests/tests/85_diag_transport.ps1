@@ -18,8 +18,8 @@
                              second headset skip, and the action tests run on headset A)
 
     The section SKIPs (never FAILs) when they are absent, mirroring how sections 50
-    and 60 stay green with no headset configured. Steps that need a person (unplug
-    the cable, reboot a headset, confirm a message is visible) go through
+    and 60 stay green with no headset configured. Steps that need a person (confirm a message is visible) go through
+    
     Wait-OperatorAction and are skipped when the run is -Unattended or at Light depth.
 
     What this proves, in order:
@@ -438,9 +438,15 @@ Invoke-RegressionTest -Name 'Unplugging the cable falls back to WiFi, and replug
     # finally block always asks for the cable to be replugged.
     $problems = New-Object System.Collections.Generic.List[string]
     $cableOut = $false
+    $physicalOut = $false
     try {
-        if (-not (Wait-OperatorAction -Message ("UNPLUG the USB cable of headset {0} now, leave it unplugged, then press Enter." -f (Get-Nrt85HeadsetLabel -Headset $nrtA)))) { Skip-Test 'operator declined the unplug step' }
+        # The cable is cut by SOFTWARE (PnP disable) unless -PhysicalUsb asks for the real cable,
+        # in which case only this first cycle is physical. See Invoke-NrtCableStep.
+        $how = Invoke-NrtCableStep -Direction Unplug -Physical -Serial ([string]$nrtA.SerialNumber) -Message ("UNPLUG the USB cable of headset {0} now, leave it unplugged, then press Enter." -f (Get-Nrt85HeadsetLabel -Headset $nrtA))
+        if ($how -eq 'declined') { Skip-Test 'operator declined the unplug step' }
         $cableOut = $true
+        $physicalOut = ($how -eq 'physical')
+        Add-TestEvidence ("cable cut by: {0}" -f $how)
 
         # 1. Function first: ADB must keep working at once, and over WiFi.
         $r = Invoke-Nrt85Command -Id $nrtA.ID -Command 'getprop ro.product.model'
@@ -469,8 +475,17 @@ Invoke-RegressionTest -Name 'Unplugging the cable falls back to WiFi, and replug
 
         foreach ($mode in $modes) {
             if (-not (Set-Nrt85UsbSwitchMode -Mode $mode)) { $problems.Add(("could not set scrcpy.usb_switch_mode = {0}" -f $mode)) }
-            if (-not (Wait-OperatorAction -Message ("PLUG the USB cable of headset {0} back in (mode: {1}), accept the prompt if shown, then press Enter." -f (Get-Nrt85HeadsetLabel -Headset $nrtA), $mode))) { Skip-Test 'operator declined the replug step' }
+            # Only the first replug can be the real cable (the first unplug was the physical one).
+            $plugMsg = "PLUG the USB cable of headset {0} back in (mode: {1}), then press Enter." -f (Get-Nrt85HeadsetLabel -Headset $nrtA), $mode
+            if ($physicalOut -and $mode -eq $modes[0]) {
+                $how = Invoke-NrtCableStep -Direction Plug -Physical -Serial ([string]$nrtA.SerialNumber) -Message $plugMsg
+            } else {
+                $how = Invoke-NrtCableStep -Direction Plug -Serial ([string]$nrtA.SerialNumber) -Message $plugMsg
+            }
+            if ($how -eq 'declined') { Skip-Test 'operator declined the replug step' }
             $cableOut = $false
+            $physicalOut = $false
+            Add-TestEvidence ("mode {0}: cable restored by {1}" -f $mode, $how)
             $s = Wait-Nrt85Transport -Id $nrtA.ID -Want 'USB' -Timeout 60
             Add-TestEvidence ("mode {0}: adb_transport='{1}'" -f $mode, $s.adb_transport)
             if ([string]$s.adb_transport -ne 'USB') { $problems.Add(("not back on USB within 60 s in mode {0} (badge '{1}')" -f $mode, $s.adb_transport)) }
@@ -483,14 +498,19 @@ Invoke-RegressionTest -Name 'Unplugging the cable falls back to WiFi, and replug
                 if ($mode -ne 'next_start' -and $onWifi)      { $problems.Add(("the capture did not move to USB in mode {0}" -f $mode)) }
             }
             if ($mode -ne $modes[-1]) {
-                if (-not (Wait-OperatorAction -Message ("UNPLUG the USB cable of headset {0} again for the next mode, then press Enter." -f (Get-Nrt85HeadsetLabel -Headset $nrtA)))) { Skip-Test 'operator declined' }
+                $how = Invoke-NrtCableStep -Direction Unplug -Serial ([string]$nrtA.SerialNumber) -Message ("UNPLUG the USB cable of headset {0} again for the next mode, then press Enter." -f (Get-Nrt85HeadsetLabel -Headset $nrtA))
+                if ($how -eq 'declined') { Skip-Test 'operator declined' }
                 $cableOut = $true
+                $physicalOut = ($how -eq 'physical')
                 $null = Wait-Nrt85Transport -Id $nrtA.ID -Want 'WiFi' -Timeout 45
             }
         }
     } finally {
         Set-Nrt85UsbSwitchMode -Mode 'stable' | Out-Null
-        if ($cableOut) {
+        # A device disabled by software is always re-enabled here; only a really pulled cable
+        # needs the operator.
+        Restore-NrtUsbLink
+        if ($cableOut -and $physicalOut) {
             $null = Wait-OperatorAction -Message ("The test is ending with the cable still OUT. PLUG the USB cable of headset {0} back in, then press Enter." -f (Get-Nrt85HeadsetLabel -Headset $nrtA))
         }
     }
@@ -511,8 +531,19 @@ Invoke-RegressionTest -Name 'ADB over TLS: record what the headset offers (evide
         $c = Invoke-Nrt85Action -Id $nrtT.ID -Action 'tls_connect' -ActionArgs @{ port = [int]$t.Json.data.MdnsPort }
         Add-TestEvidence ("connect: ok={0} {1}" -f $c.Json.ok, $c.Json.message)
     }
-    if ($unattended -or $depth -ne 'Full') { Skip-Test 'the reboot step needs a person (Full depth, attended)' }
-    if (-not (Wait-OperatorAction -Message ("REBOOT headset {0}, wait until it is back on WiFi, then press Enter." -f (Get-Nrt85HeadsetLabel -Headset $nrtT)) -Hint 'Records whether Wireless debugging survives a reboot - the whole point of the experiment.')) { Skip-Test 'operator declined the reboot step' }
+    if ($depth -ne 'Full') { Skip-Test 'the reboot step runs at Full depth only' }
+    # Reboot over ADB (no operator): POST /api/reboot takes the underscore form of the name, then
+    # wait for the headset to go down and come back. Records whether Wireless debugging survives.
+    $rebootName = ([string]$nrtT.Name) -replace ' ', '_'
+    $rb = Invoke-VrmApi -Path '/api/reboot' -Method POST -Body @{ name = $rebootName } -TimeoutSec 60
+    Add-TestEvidence ("reboot requested for {0}: HTTP {1} ok={2}" -f $rebootName, $rb.StatusCode, $rb.Json.ok)
+    if (-not ($rb.Ok -and $rb.Json.ok)) { Skip-Test 'the reboot request was refused (headset not reachable over ADB)' }
+    $wait = Wait-NrtHeadsetRebooted -IPAddress ([string]$nrtT.IPAddress) -AdbPort $nrt85Ports.Adb -TimeoutSec 240
+    Add-TestEvidence ("went down={0}  back={1}  after {2} s" -f $wait.Down, $wait.Back, $wait.ElapsedSec)
+    if (-not $wait.Back) {
+        Add-TestEvidence 'the headset did not answer on WiFi ADB within 240 s (wireless ADB does not survive the reboot, or the headset is still booting)'
+        Skip-Test 'headset not back on WiFi ADB within 240 s - nothing to compare after the reboot'
+    }
     Start-Sleep -Seconds 20
     $t2 = Invoke-Nrt85Diag -Id $nrtT.ID -Section 'tls'
     Add-TestEvidence ("after reboot: enabled={0} raw={1} mdnsPort={2}" -f $t2.Json.data.Enabled, $t2.Json.data.RawValue, $t2.Json.data.MdnsPort)
