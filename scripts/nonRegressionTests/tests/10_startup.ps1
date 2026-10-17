@@ -106,6 +106,28 @@ Invoke-RegressionTest -Name 'ffmpeg acquisition path is shipped' -Test {
         'binary_updates.ps1 ships without Update-FfmpegBinary - the ffmpeg updater is missing'
 }
 
+Invoke-RegressionTest -Name 'ADB modules ship split (S9-2)' -Test {
+    # S9-2 split adb_functions.ps1 by concern. A leftover adb_functions.ps1 would still be
+    # dot-sourced by the scripts_init.ps1 glob and redefine functions with older copies.
+    $split = [ordered]@{
+        'adb_transport.ps1'       = 'Invoke-AdbCmd'
+        'adb_telemetry.ps1'       = 'Get-HeadsetBatteryStatus'
+        'adb_apps.ps1'            = 'Update-InstalledAppsCache'
+        'adb_device_settings.ps1' = 'Invoke-HeadsetWifiPush'
+        'companion_api.ps1'       = 'Get-CompanionInfo'
+    }
+    foreach ($file in $split.Keys) {
+        $path = Join-Path $target ("modules\" + $file)
+        Assert-FileExists $path ("modules\" + $file)
+        $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+        Assert-True ($text -match ('function\s+' + $split[$file] + '\b')) `
+            ("{0} ships without {1}" -f $file, $split[$file])
+    }
+    $old = Join-Path $target 'modules\adb_functions.ps1'
+    Assert-True (-not (Test-Path -LiteralPath $old)) `
+        'modules\adb_functions.ps1 is still present - it would override the S9-2 split modules'
+}
+
 Invoke-RegressionTest -Name 'Wireless-ADB activator APK is bundled' -Test {
     $cfg = Read-JsonFileUtf8 -Path $paths.TemplateConfig
     Assert-NotNull $cfg.apk.adbWirelessActivatorFolder 'apk.adbWirelessActivatorFolder'

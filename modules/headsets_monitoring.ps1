@@ -693,8 +693,10 @@ function Start-VRMonitor {
             # OF ITS OWN. A connection is never shared between runspaces - the
             # module refuses that explicitly, because a native SQLite handle used
             # from two threads corrupts memory silently.
-            # wifi_store.ps1: adb_functions / headset_diag call Get-WifiNetworks (S9-1 split).
-            foreach ($mod in @("logging.ps1","config_files_loader.ps1","utils.ps1","wifi_store.ps1","network_scanner.ps1","adb_functions.ps1","database.ps1","usb_manager.ps1","headset_diag.ps1","headsets_monitoring.ps1")) {
+            # wifi_store.ps1: adb_transport / adb_device_settings / headset_diag call Get-WifiNetworks (S9-1 split).
+            # adb_*.ps1 (S9-2 split of adb_functions.ps1): transport + telemetry for the poll,
+            # apps for Update-InstalledAppsCache, device_settings for headset_diag (updater, WiFi).
+            foreach ($mod in @("logging.ps1","config_files_loader.ps1","utils.ps1","wifi_store.ps1","network_scanner.ps1","adb_transport.ps1","adb_telemetry.ps1","adb_apps.ps1","adb_device_settings.ps1","database.ps1","usb_manager.ps1","headset_diag.ps1","headsets_monitoring.ps1")) {
                 $f = Join-Path $modPath $mod
                 if (Test-Path -LiteralPath $f) { . $f }
             }
@@ -985,8 +987,9 @@ function Start-VRMonitor {
             $global:ConfigFilePath = $configFilePath
             $modPath = Join-Path $scriptPath "modules"
             # database.ps1: this runspace opens a connection of its own (never shared).
-            # wifi_store.ps1: adb_functions calls Get-WifiNetworks (S9-1 split).
-            foreach ($mod in @("logging.ps1","config_files_loader.ps1","utils.ps1","wifi_store.ps1","network_scanner.ps1","adb_functions.ps1","database.ps1","headsets_discovery.ps1")) {
+            # wifi_store.ps1: adb_transport calls Get-WifiNetworks (S9-1 split).
+            # adb_transport.ps1: the only part of the former adb_functions.ps1 the sweep uses (S9-2).
+            foreach ($mod in @("logging.ps1","config_files_loader.ps1","utils.ps1","wifi_store.ps1","network_scanner.ps1","adb_transport.ps1","database.ps1","headsets_discovery.ps1")) {
                 $f = Join-Path $modPath $mod
                 if (Test-Path -LiteralPath $f) { . $f }
             }

@@ -623,6 +623,15 @@ function Start-HeadsetPipeBridge {
             # may open pipe-in; 'data' = scrcpy wrote its first bytes (the Matroska header with
             # the codec extradata), so ffmpeg can be started.
             Write-Output 'listening'
+            # Bounded waits in 500 ms slices, never a bare EndWaitForConnection: a scrcpy killed
+            # before it opened pipe-in (or an ffmpeg that never opens pipe-out) left this job
+            # blocked in a .NET call that Stop-Job cannot interrupt, and the caller's Stop-Job
+            # froze the VRMonitor loop for ~2 min (TEST25 section 50). Giving up runs the
+            # finally below, which disposes both servers and removes the pid file.
+            $inDeadline = (Get-Date).AddSeconds(60)
+            while (-not $arIn.AsyncWaitHandle.WaitOne(500)) {
+                if ((Get-Date) -gt $inDeadline) { return }
+            }
             $srvIn.EndWaitForConnection($arIn)
             $buf = New-Object byte[] 4096
             # Read the first chunk BEFORE ffmpeg connects: it is held here and written first once
@@ -631,6 +640,10 @@ function Start-HeadsetPipeBridge {
             $first = $srvIn.Read($buf, 0, $buf.Length)
             if ($first -le 0) { return }
             Write-Output 'data'
+            $outDeadline = (Get-Date).AddSeconds(30)
+            while (-not $arOut.AsyncWaitHandle.WaitOne(500)) {
+                if ((Get-Date) -gt $outDeadline) { return }
+            }
             $srvOut.EndWaitForConnection($arOut)
             try { $srvOut.Write($buf, 0, $first); $srvOut.Flush() } catch { return }
             while ($true) {
@@ -679,6 +692,44 @@ function Wait-HeadsetPipeBridgeSignal {
     } finally {
         $sw.Stop()
     }
+}
+
+# Tears down one pipe bridge job WITHOUT waiting on it. Stop-Job on a job blocked in a .NET call
+# cannot interrupt it and waited ~2 min on the VRMonitor thread (TEST25 section 50), so the job
+# host process is killed first through the PID it wrote to data\bridge_<safe>.pid (S4-5 contract,
+# also used by reaper.ps1); Remove-Job -Force then returns at once. Without a pid file it falls
+# back to Stop-Job, which the bridge's 500 ms waits make interruptible. Removes the pid file and
+# logs the time taken. Never throws.
+# Example: Stop-HeadsetPipeBridgeJob -Job $entry.Bridge -SafeName 'Q3_RED'
+function Stop-HeadsetPipeBridgeJob {
+    param(
+        $Job,
+        [Parameter(Mandatory)][string]$SafeName
+    )
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $pidFile = Join-Path (Join-Path $global:ScriptPath 'data') ("bridge_{0}.pid" -f $SafeName)
+    $killed = $false
+    try {
+        if (Test-Path -LiteralPath $pidFile) {
+            $raw = [System.IO.File]::ReadAllText($pidFile, (New-Object System.Text.UTF8Encoding($false))).Trim()
+            $hostPid = 0
+            if ([int]::TryParse($raw, [ref]$hostPid) -and $hostPid -gt 0 -and $hostPid -ne $PID) {
+                $proc = Get-Process -Id $hostPid -ErrorAction SilentlyContinue
+                # Only a PowerShell host: a stale pid file must never kill a recycled PID of something else.
+                if ($proc -and $proc.ProcessName -in @('powershell', 'pwsh')) {
+                    Stop-Process -Id $hostPid -Force -ErrorAction SilentlyContinue
+                    try { [void]$proc.WaitForExit(2000) } catch { }
+                    $killed = $true
+                }
+            }
+        }
+    } catch { }
+    if ($Job) {
+        if (-not $killed) { try { Stop-Job $Job -ErrorAction SilentlyContinue } catch { } }
+        try { Remove-Job $Job -Force -ErrorAction SilentlyContinue } catch { }
+    }
+    try { [System.IO.File]::Delete($pidFile) } catch { }
+    Write-Log ("Stop-HeadsetPipeBridgeJob: bridge of {0} removed in {1} ms ({2})" -f $SafeName, $sw.ElapsedMilliseconds, $(if ($killed) { 'host killed' } else { 'Stop-Job' })) -Level DEBUG
 }
 
 # Quotes/escapes a single argument for ProcessStartInfo.Arguments (a single
@@ -987,10 +1038,8 @@ function Stop-HeadsetPipeline {
         try { $entry.FfmpegErrorWriter.Dispose() } catch {}
     }
     if ($entry.Bridge) {
-        try { Stop-Job   $entry.Bridge -ErrorAction SilentlyContinue } catch {}
-        try { Remove-Job $entry.Bridge -Force -ErrorAction SilentlyContinue } catch {}
-        # A stopped job's finally may not have run: drop the reaper's pid file too.
-        try { [System.IO.File]::Delete((Join-Path (Join-Path $global:ScriptPath 'data') ("bridge_{0}.pid" -f $SafeName))) } catch {}
+        # Never Stop-Job directly: see Stop-HeadsetPipeBridgeJob (it also drops the pid file).
+        Stop-HeadsetPipeBridgeJob -Job $entry.Bridge -SafeName $SafeName
     }
     $global:HeadsetPipelines.Remove($SafeName)
 }
@@ -1221,7 +1270,7 @@ function start-screenCopy {
 			-RedirectStandardError  (Join-Path -Path $global:logFolder -ChildPath ("{0}_{1}_StandardError.txt" -f $displayName, $sessionStamp))
 	} catch {
         Write-Log -Message ($msg.Scrcpy.LaunchError -f $_.Exception.Message) -Level "ERROR"
-        if ($bridgeJob) { try { Stop-Job $bridgeJob -EA SilentlyContinue; Remove-Job $bridgeJob -Force -EA SilentlyContinue } catch {} }
+        if ($bridgeJob) { Stop-HeadsetPipeBridgeJob -Job $bridgeJob -SafeName $displayName }
 		return
     }
 
@@ -1294,7 +1343,7 @@ function start-screenCopy {
         } catch {
             Write-Log ("Failed to start ffmpeg push for {0}: {1}" -f $displayName, $_.Exception.Message) -Level "ERROR"
             try { Stop-Process -Id $scrcpyProc.Id -Force -EA SilentlyContinue } catch {}
-            if ($bridgeJob) { try { Stop-Job $bridgeJob -EA SilentlyContinue; Remove-Job $bridgeJob -Force -EA SilentlyContinue } catch {} }
+            if ($bridgeJob) { Stop-HeadsetPipeBridgeJob -Job $bridgeJob -SafeName $displayName }
         }
     }
 

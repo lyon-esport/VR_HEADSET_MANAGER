@@ -1,6 +1,6 @@
 @{
     # ==========================================
-    # adb_functions.ps1
+    # adb_*.ps1 (adb_transport, adb_telemetry, adb_apps, adb_device_settings)
     # ==========================================
     FeatureNotImplemented = "This feature is not yet implemented"
     NoHeadsetToAdd = "No headset detected to add!"
@@ -538,7 +538,7 @@
 
     # Copy WiFi parameters from the host computer
 
-    # adb_functions.ps1 - headset settings
+    # adb_device_settings.ps1 - headset settings
     SettingSoundLevel       = "Setting sound level to {0}% on {1}"
     SettingBrightness       = "Setting brightness to {0}% on {1}"
     SettingGuardianMode    = "Setting guardian mode to {0} on {1}"

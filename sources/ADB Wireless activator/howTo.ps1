@@ -1,7 +1,7 @@
 <#
 Manual reference notes - NOT executed by the application.
 The app does all of this automatically via Install-OculusWirelessAdbApk
-(modules\adb_functions.ps1). Kept here for manual recovery / debugging.
+(modules\adb_transport.ps1). Kept here for manual recovery / debugging.
 
 adb install app-debug.apk
 adb shell pm grant tdg.oculuswirelessadb android.permission.WRITE_SECURE_SETTINGS

@@ -1,6 +1,6 @@
 @{
     # ==========================================
-    # adb_functions.ps1
+    # adb_*.ps1 (adb_transport, adb_telemetry, adb_apps, adb_device_settings)
     # ==========================================
     FeatureNotImplemented = "Cette fonctionnalite n'est pas encore implementee"
     NoHeadsetToAdd = "Aucun casque detecte a ajouter !"
@@ -537,7 +537,7 @@
 
     # Copie des parametres WiFi de l'ordinateur hote
 
-    # adb_functions.ps1 - parametres du casque
+    # adb_device_settings.ps1 - parametres du casque
     SettingSoundLevel       = "Reglage du volume sonore a {0}% sur {1}"
     SettingBrightness       = "Reglage de la luminosite a {0}% sur {1}"
     SettingGuardianMode    = "Mode guardian defini a {0} sur {1}"
