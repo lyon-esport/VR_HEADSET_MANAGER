@@ -1094,57 +1094,6 @@ function Show-SubMenu-RemoveHeadset {     # Check whether headsets exist in the 
     }
 } # OK
 
-function Show-SubMenu-ManageHeadset { #CHOICE 4
-    Clear-Host
-    Start-Sleep -Milliseconds 200
-    Write-Host $msg.ManageHeadset -BackgroundColor Green -ForegroundColor DarkBlue
-    Write-Host $msg.InstallOculusApp
-    Write-Host $msg.EnableWifiADBOnly
-    Write-Host $msg.InstallApp
-    Write-Host $msg.LaunchApp
-    Write-Host $msg.KillApp
-    Write-Host $msg.UninstallApp
-    Write-Host $msg.Headset.WifiMenuEntry
-    Write-Host $msg.Headset.FrameMenuEntry
-    Write-Host $msg.Headset.RefreshMenuEntry
-
-    Write-Host $msg.ReturnPreviousMenu
-    $userInput = $(Read-Host $msg.YourChoice).ToUpper() #ToUpper = Convert user input to uppercase for case-insensitive comparison
-
-    if ($userInput -eq '1') {
-        Write-Host $msg.InstallOculusTitle
-        Install-OculusWirelessAdbApk
-    }
-    
-    elseif ($userInput -eq '2') {
-        Write-Host $msg.StartWifiADB
-        Enable-WiFiADB
-    }
-    elseif ($userInput -eq '7') {
-        Show-SubMenu-PushHeadsetWifi
-    }
-    elseif ($userInput -eq '8') {
-        Show-SubMenu-CaptureHeadsetFrame
-    }
-    elseif ($userInput -eq '9') {
-        Show-SubMenu-HeadsetRefreshRate
-    }
-    elseif ($userInput -in ('3','4','5','6')) {
-        Write-Host $msg.AppManager
-        Write-Log $msg.NotDeveloped -Level WARNING
-                    #list headsets
-                    #create a function get-headsetInstalledApps
-                    #create a function start-headsetInstalledApp
-    }
-    elseif ($userInput -eq '0') {
-        Write-Log -Message $msg.ReturnPrevious -Level "INFO"
-    }
-    else {
-        Write-Log -Message $msg.UnrecognizedOption -Level "ERROR"
-        Write-Log -Message $msg.ReturnMainMenu -Level "INFO"
-    }
-} # TODO
-
 function Show-SubMenu-PushHeadsetWifi {
     <#
     .SYNOPSIS

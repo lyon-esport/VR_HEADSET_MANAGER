@@ -53,9 +53,12 @@ function Write-MdnsLog {
     $params = $colorMap[$Level]
     Write-Host $logEntry @params
 
-    # Append to a local log file next to this script
-    $logFile = Join-Path -Path $PSScriptRoot -ChildPath "mdns_scanner.log"
-    [System.IO.File]::AppendAllText($logFile, [string]$logEntry + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))
+    # Append to mdns_scanner.log in the app log folder (purged by Remove-OldLogFiles). It used
+    # to be written next to this script, i.e. inside modules\, which ships whole in a release.
+    $logDir = if ($global:logFolder -and (Test-Path -LiteralPath $global:logFolder)) { $global:logFolder } else { $null }
+    if (-not $logDir) { return }
+    $logFile = Join-Path -Path $logDir -ChildPath "mdns_scanner.log"
+    try { [System.IO.File]::AppendAllText($logFile, [string]$logEntry + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false))) } catch { }
 }
 
 # --- DNS Packet Parser --------------------------------------------------------

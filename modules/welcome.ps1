@@ -146,7 +146,11 @@ function Invoke-WelcomeSetup {
     # Early-load the modules needed for port-conflict resolution during the
     # port prompts (steps 3-4). The auth phase (step 6) re-uses the same
     # modules. Order matters: utils -> logging -> console_manager -> computer_setup.
+    # port_tools (Resolve-PortConflict) and binary_updates (Invoke-FfmpegDownload ->
+    # Update-FfmpegBinary) were split out of utils.ps1 by S9-1.
     . (Join-Path $global:ScriptPath "modules\utils.ps1")
+    . (Join-Path $global:ScriptPath "modules\port_tools.ps1")
+    . (Join-Path $global:ScriptPath "modules\binary_updates.ps1")
     . (Join-Path $global:ScriptPath "modules\logging.ps1")
     . (Join-Path $global:ScriptPath "modules\console_manager.ps1")
     . (Join-Path $global:ScriptPath "modules\computer_setup.ps1")

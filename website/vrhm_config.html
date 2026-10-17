@@ -1805,7 +1805,6 @@
         + '<td class="pro-td-actions">'
         + '<button class="pro-icon-btn" data-action="visual-edit-view" data-view="' + proEsc(vn) + '" title="Edit visually on a headset frame">&#9635;</button>'
         + '<button class="pro-icon-btn" data-action="duplicate-view" data-view="' + proEsc(vn) + '" title="Duplicate this view (added below as ' + proEsc(vn) + '_copy)">&#10697;</button>'
-        + '<button class="pro-icon-btn" data-action="edit-view" data-view="' + proEsc(vn) + '" title="Edit">&#9998;</button>'
         + '<button class="pro-icon-btn pro-icon-del" data-action="delete-view" data-view="' + proEsc(vn) + '" title="Delete">&#10005;</button>'
         + '</td></tr>';
     }
@@ -2149,7 +2148,28 @@
                eyes: { L: { rect: null, angle: 0 }, R: { rect: null, angle: 0 }, M: { rect: null, angle: 0 } },
                frames: { raw: { img: null, W: 0, H: 0 }, M: { img: null, W: 0, H: 0 } },
                mergeEnabled: false, depth: 0, depthSupported: false, mergedFrom: 0, baseEye: 'R',
-               drag: null, pending: null, hover: null, headsets: [] };
+               drag: null, pending: null, hover: null, headsets: [],
+               ipdPos: '', ipdDx: { L: 0, R: 0 } };
+    }
+
+    // Lens positions (ADR-0030): views.<v>.left_eye/right_eye.crop are stored for the DEFAULT lens
+    // position, and the server shifts them by lens_cx[pos] - lens_cx[default] when the headset sits
+    // at another position (Get-ModelTemplateForIpd). A frame captured at another position therefore
+    // shows the stored crops shifted by that amount, and a drawn rectangle is shifted back on Apply -
+    // otherwise the shift is applied twice. Rounding mirrors .NET Math.Round (half to even).
+    function vveRoundHalfEven(v) {
+      var r = Math.round(v);
+      if (Math.abs(v % 1) === 0.5 && r % 2 !== 0) r -= 1;
+      return r;
+    }
+    function vveIpdShift(model, pos) {
+      var zero = { L: 0, R: 0 };
+      var ic = model && _proData[model] && _proData[model].ipd;
+      if (!ic || !pos || !ic.lens_cx || String(pos) === String(ic['default'])) return zero;
+      var at = ic.lens_cx[String(pos)], def = ic.lens_cx[String(ic['default'])];
+      if (!at || !def) return zero;
+      return { L: vveRoundHalfEven(Number(at.L) - Number(def.L)) || 0,
+               R: vveRoundHalfEven(Number(at.R) - Number(def.R)) || 0 };
     }
 
     function vveFrameKey(eye) { return eye === 'M' ? 'M' : 'raw'; }
@@ -2286,6 +2306,20 @@
             _vve.frames[fk] = { img: img, W: img.naturalWidth, H: img.naturalHeight };
             if (mergedTab) _vve.mergedFrom = id;      // a depth change re-renders this headset's frame
             if (vveFrameKey(_vve.eye) === fk) { _vve.img = img; _vve.W = img.naturalWidth; _vve.H = img.naturalHeight; }
+            var ipdNote = '';
+            if (!mergedTab) {
+              // Move the L/R rectangles from the previous frame's lens position to this one.
+              var hs = (_vve.headsets || []).filter(function(h) { return String(h.id) === String(id); })[0];
+              var pos = (hs && hs.ipd) ? String(hs.ipd) : '';
+              var nd = vveIpdShift(j.model || _vve.model, pos);
+              ['L', 'R'].forEach(function(e) { if (_vve.eyes[e].rect) _vve.eyes[e].rect.x += nd[e] - _vve.ipdDx[e]; });
+              _vve.ipdDx = nd; _vve.ipdPos = (nd.L || nd.R) ? pos : '';
+              if (_vve.ipdPos) {
+                var icfg = _proData[j.model || _vve.model].ipd;
+                ipdNote = 'Lens position ' + pos + ' mm: the rectangles are shown at this position and saved for the default '
+                  + icfg['default'] + ' mm position (shift L ' + nd.L + ' px, R ' + nd.R + ' px).';
+              }
+            }
             var saved = { img: _vve.img, W: _vve.W, H: _vve.H };
             _vve.img = img; _vve.W = img.naturalWidth; _vve.H = img.naturalHeight;   // vveNorm clamps to these
             (mergedTab ? ['M'] : ['L', 'R']).forEach(function(e) { if (_vve.eyes[e].rect) _vve.eyes[e].rect = vveNorm(_vve.eyes[e].rect); });
@@ -2299,6 +2333,7 @@
                 note = 'The new view will be added to model "' + j.model + '".';
               }
             }
+            if (ipdNote) note = note ? (note + ' ' + ipdNote) : ipdNote;
             document.getElementById('vve-note').textContent = note;
             vveUpdateModelLabel();
             if (!mergedTab) vveLoadMergeState();     // the model may have changed with this frame
@@ -2679,6 +2714,13 @@
       showToast('Copied to the ' + (_vve.eye === 'L' ? 'right' : 'left') + ' eye - adjust it if needed.', 2500);
     }
 
+    // The L/R rectangle as stored in config: at the default lens position (see vveIpdShift).
+    function vveBaseRect(eye) {
+      var r = _vve.eyes[eye].rect;
+      if (!r) return null;
+      return { w: r.w, h: r.h, x: Math.max(0, r.x - (_vve.ipdDx[eye] || 0)), y: r.y };
+    }
+
     function vveApply() {
       if (!_vve) return;
       var name = sanitizeViewName((document.getElementById('vve-name').value || '').trim());
@@ -2699,8 +2741,9 @@
       var wasDefault = !!((editing && mdl.views[editing] && mdl.views[editing].default) || (mdl.views[name] && mdl.views[name].default));
       var isFirst = Object.keys(mdl.views).length === 0;
       var val = {
-        left_eye:  { crop: vveCropStr(_vve.eyes.L.rect), angle: _vve.eyes.L.angle || 0 },
-        right_eye: { crop: vveCropStr(_vve.eyes.R.rect), angle: _vve.eyes.R.angle || 0 }
+        // Stored for the default lens position: undo the shift of the frame's position (see vveIpdShift).
+        left_eye:  { crop: vveCropStr(vveBaseRect('L')), angle: _vve.eyes.L.angle || 0 },
+        right_eye: { crop: vveCropStr(vveBaseRect('R')), angle: _vve.eyes.R.angle || 0 }
       };
       // Merged framing (eye merge): only written when drawn; absent = automatic framing.
       if (_vve.eyes.M.rect) val.merged = { crop: vveCropStr(_vve.eyes.M.rect) };

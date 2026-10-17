@@ -58,7 +58,8 @@
     menu - passing the run parameters is enough.
 
     End of run: unless -Unattended, the harness asks what to do with the app it
-    started: [Enter] keep it running and close the test window (default),
+    started: [Enter] keep it running (restarting it first if a section shut it
+    down) and close the test window (default),
     [Q] or [K] stop it, [R] retry chosen sections without restarting.
 
     Generated data is NEVER deleted. At the end of a run the test folder keeps its
@@ -580,7 +581,27 @@ try {
         $endChoice = Read-TestMenuChoice -Prompt '  Select' -Accept @('', 'Q', 'K', 'R') -Default ''
 
         if ($endChoice -eq 'Q' -or $endChoice -eq 'K') { break }
-        if ($endChoice -eq '') { $keepAppRunning = $true; break }
+        if ($endChoice -eq '') {
+            # A section may have shut the app down (or it crashed): the operator asked to
+            # keep it running, so bring it back. Confirm-SandboxApp never starts a second instance.
+            $keepAppRunning = $true
+            try {
+                $mainUp = @(Get-VrmProcessInventory -UnderRoot $target | Where-Object { $_.Role -eq 'main' })
+                if ($mainUp.Count -eq 0) {
+                    Write-Host ''
+                    Write-Host '  The app is not running - restarting it...' -ForegroundColor Yellow
+                    if (-not (Confirm-SandboxApp -TargetRoot $target)) {
+                        Write-Host '  WARNING: the app could not be restarted (see its logs in the test folder).' -ForegroundColor Yellow
+                        $keepAppRunning = $false
+                    }
+                }
+            }
+            catch {
+                Write-Host ("  WARNING: restart failed: {0}" -f $_.Exception.Message) -ForegroundColor Yellow
+                $keepAppRunning = $false
+            }
+            break
+        }
 
         # Retry: pick sections, drop their earlier results so the new verdict
         # replaces the old one, then loop.

@@ -216,6 +216,7 @@ function Get-UsbDeviceSnapshot {
         $cmdStatus = Invoke-AdbCmd -Device $usbDevice -Command "shell cmd wifi status" -adb $adb -SilentOnFail
         if ($cmdStatus -ne $false) {
             foreach ($line in @($cmdStatus)) {
+                if ($line -match 'Wifi is connected to "([^"]+)"') { $ssid = $Matches[1]; break }
                 if ($line -match '\bssid="([^"]+)"') { $ssid = $Matches[1]; break }
                 if ($line -match '\bSSID:\s+([^,\s]+)') {
                     $candidate = $Matches[1].Trim().Trim('"')
@@ -257,6 +258,7 @@ function Get-UsbDeviceSnapshot {
             ApkInstalled   = $apkInstalled
             UsbSpeed       = (Get-UsbDeviceSpeed -Serial $deviceId)
             Port           = $null
+            ReadAt         = (Get-Date)
         }
     } catch {
         Write-Log ($msg.ADBExecutionFailed -f $_.Exception.Message) -Level ERROR
@@ -549,7 +551,12 @@ function Update-UsbWatchState {
         # published yet, or a Partial record left behind by an onboarding that
         # could not read over USB because tcpip had just dropped the transport.
         $pub = $SharedState['_usb_device']
-        if ($script:UsbLastSerial -ne $serial -or -not $pub -or $pub.Partial) {
+        # An empty SSID while WiFi ADB is up is a read that raced a WiFi flap (right after
+        # tcpip or a reconnect); without a retry it stayed empty for as long as the cable did.
+        # Retried at most every 30 s so a headset that really has no SSID costs nothing.
+        $ssidRetry = $pub -and -not $pub.WiFiSSID -and $pub.WifiAdbOpen -and
+            ((-not $pub.ReadAt) -or (((Get-Date) - $pub.ReadAt).TotalSeconds -ge 30))
+        if ($script:UsbLastSerial -ne $serial -or -not $pub -or $pub.Partial -or $ssidRetry) {
             $script:UsbLastSerial = $serial
             $pub = Get-UsbDeviceSnapshot -AdbPort $AdbPort -adb $adb -Presence $presence
             $SharedState['_usb_device'] = $pub

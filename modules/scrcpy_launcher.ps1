@@ -350,6 +350,9 @@ function ConvertTo-ScrcpyArguments {
 # Returns the running scrcpy process whose window title matches $displayName,
 # or $null if none found. $displayName must be in window-title form (spaces -> underscores).
 # Only considers processes launched from this app's scrcpy folder to avoid killing foreign scrcpy instances.
+# -Census (Get-ProcessCensus): same matching, but the owned scrcpy list and the command lines come
+# from that one snapshot instead of a Win32_Process query per untitled scrcpy. A census whose CIM
+# query failed (Ok = $false) is ignored and the live lookup runs, as without -Census.
 function Get-ScrcpyProcess {
     param(
         [Parameter(Mandatory=$true)]
@@ -357,10 +360,17 @@ function Get-ScrcpyProcess {
         [string]$headsetIP = '',
         # A USB launch carries -s <serial> instead of -s ip:port, so the serial identifies the
         # session just as well as the address does.
-        [string]$headsetSerial = ''
+        [string]$headsetSerial = '',
+        [hashtable]$Census = $null
     )
-    $ownedProcs = Get-Process -Name "scrcpy" -ErrorAction SilentlyContinue |
-        Where-Object { $_.Path -like "$($global:scrcpyFolder)\scrcpy.exe" }
+    $useCensus = ($null -ne $Census) -and $Census.Ok
+    if ($useCensus) {
+        # Skip a census entry that ended since the snapshot (HasExited reads the open handle, no query).
+        $ownedProcs = @($Census.Scrcpy | Where-Object { try { -not $_.HasExited } catch { $true } })
+    } else {
+        $ownedProcs = Get-Process -Name "scrcpy" -ErrorAction SilentlyContinue |
+            Where-Object { $_.Path -like "$($global:scrcpyFolder)\scrcpy.exe" }
+    }
 
     # Primary: match by window title (works when window is on the active virtual desktop)
     $byTitle = $ownedProcs | Where-Object { $_.MainWindowTitle -eq $displayName } | Select-Object -First 1
@@ -369,15 +379,102 @@ function Get-ScrcpyProcess {
     # Fallback: match by command line - handles windows on inactive virtual desktops
     # where MainWindowTitle is empty. Requires either displayName or headsetIP in the cmdline.
     return $ownedProcs | Where-Object {
-        $cimProc = Get-CimInstance Win32_Process -Filter "ProcessId = $($_.Id)" -ErrorAction SilentlyContinue
-        $cmdLine = $cimProc.CommandLine
-        if ($cimProc) { $cimProc.Dispose() }
-        if (-not $cmdLine) { return $false }
-        if ($headsetIP -and $cmdLine -match [regex]::Escape($headsetIP)) { return $true }
-        if ($headsetSerial -and $headsetSerial -ne '-' -and $cmdLine -match ('-s\s+\x22?' + [regex]::Escape($headsetSerial) + '(?:\x22|\s|$)')) { return $true }
-        if ($cmdLine -match [regex]::Escape($displayName)) { return $true }
-        return $false
+        if ($useCensus) {
+            $entry   = $Census.ByPid[[int]$_.Id]
+            $cmdLine = if ($entry) { $entry.CommandLine } else { $null }
+        } else {
+            $cimProc = Get-CimInstance Win32_Process -Filter "ProcessId = $($_.Id)" -ErrorAction SilentlyContinue
+            $cmdLine = $cimProc.CommandLine
+            if ($cimProc) { $cimProc.Dispose() }
+        }
+        # Exact -s target / --window-title value (utils.ps1): a substring match let
+        # 192.168.1.24 claim the session of 192.168.1.244, and Q3_RED the one of Q3_RED2.
+        return (Test-ScrcpyCommandLineTarget -CommandLine $cmdLine -IPAddress $headsetIP `
+                    -Serial $headsetSerial -DisplayName $displayName)
     } | Select-Object -First 1
+}
+
+function Get-ProcessCensus {
+    <#
+    .SYNOPSIS
+    ONE Win32_Process query for the processes the app cares about (scrcpy, ffmpeg, mediamtx,
+    powershell), taken once per VRMonitor slow tick (S3-4).
+
+    .DESCRIPTION
+    Returns @{ Ok; At; ByPid; Scrcpy }:
+      ByPid  - hashtable [int]PID -> @{ Name; CommandLine; ParentProcessId; ExecutablePath }
+      Scrcpy - the OWNED scrcpy processes (Get-Process objects, path under $global:scrcpyFolder,
+               the same ownership rule as Get-ScrcpyProcess), so the window-title match still works.
+    Ok = $false when the CIM query failed: consumers then fall back to their live lookup.
+    A process started after the census is not in it; callers that start captures (start-screenCopy)
+    keep their own live "already running" guard. Never throws.
+
+    .EXAMPLE
+    $census = Get-ProcessCensus
+    Get-ScrcpyProcess -displayName 'Q3_RED' -headsetIP '192.168.1.244' -Census $census
+    #>
+    $census = @{ Ok = $false; At = (Get-Date); ByPid = @{}; Scrcpy = @() }
+    try {
+        $rows = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop `
+            -Filter "Name='scrcpy.exe' OR Name='ffmpeg.exe' OR Name='mediamtx.exe' OR Name='powershell.exe'")
+        foreach ($r in $rows) {
+            $census.ByPid[[int]$r.ProcessId] = @{
+                Name            = [string]$r.Name
+                CommandLine     = [string]$r.CommandLine
+                ParentProcessId = [int]$r.ParentProcessId
+                ExecutablePath  = [string]$r.ExecutablePath
+            }
+            $r.Dispose()
+        }
+        $census.Ok = $true
+    } catch {
+        Write-Log ("Get-ProcessCensus: Win32_Process query failed: " + $_.Exception.Message) -Level DEBUG
+        return $census
+    }
+    $census.Scrcpy = @(Get-Process -Name "scrcpy" -ErrorAction SilentlyContinue |
+        Where-Object { $census.ByPid.ContainsKey([int]$_.Id) -and $_.Path -like "$($global:scrcpyFolder)\scrcpy.exe" })
+    return $census
+}
+
+function Get-ScrcpyPidMap {
+    <#
+    .SYNOPSIS
+    Headset ID -> scrcpy PID of every running capture, for the per-headset poll runspaces (S3-4).
+
+    .DESCRIPTION
+    Built from a Get-ProcessCensus snapshot with the Get-ScrcpyProcess matching rules (window
+    title, -s ip:port, -s <serial>, display name in the command line), then completed with the
+    pipelines THIS process started (live, no query), so a capture started after the census is
+    listed too. VRMonitor publishes the result as $sharedState['_scrcpy_pids']; stage 1 of each
+    poll runspace then only checks that PID with Get-Process -Id. Keys are the headset ID as a
+    string, values [int] PIDs. Returns a NEW hashtable (never mutated after publishing).
+    A census that failed (Ok = $false) gives $null: nothing reliable to publish.
+
+    .EXAMPLE
+    $sharedState['_scrcpy_pids'] = Get-ScrcpyPidMap -Census (Get-ProcessCensus) -KnownHeadsets @(Get-KnownHeadsets)
+    #>
+    param(
+        [hashtable]$Census,
+        [object[]]$KnownHeadsets = @()
+    )
+    if (-not $Census -or -not $Census.Ok) { return $null }
+    $map = @{}
+    foreach ($h in $KnownHeadsets) {
+        if (-not $h -or -not $h.Name -or (Test-UnknownIp $h.IPAddress)) { continue }
+        $safe = Convert-Displayname $h.Name
+        $proc = $null
+        # A pipeline this process started is authoritative and live: it also covers a capture the
+        # watchdog restarted after the census was taken (the census still lists the old PID).
+        if ($global:HeadsetPipelines -and $global:HeadsetPipelines.ContainsKey($safe)) {
+            $sp = $global:HeadsetPipelines[$safe].ScrcpyProcess
+            try { if ($sp -and -not $sp.HasExited) { $proc = $sp } } catch { }
+        }
+        if (-not $proc) {
+            try { $proc = Get-ScrcpyProcess -displayName $safe -headsetIP $h.IPAddress -headsetSerial $h.SerialNumber -Census $Census } catch { }
+        }
+        if ($proc) { $map[[string]$h.ID] = [int]$proc.Id }
+    }
+    return $map
 }
 
 # -------------------------------------------------------------------
@@ -1738,7 +1835,10 @@ function Watch-ScrcpyProcesses {
         # Also restart a running capture whose pipeline broke under it (dead ffmpeg push or bridge,
         # mediamtx restarted, path not published): Get-HeadsetPipelineFaults. Passed by the
         # VRMonitor slow tick only, so mediamtx's path list is read once per slow tick.
-        [switch]$CheckPipelineHealth
+        [switch]$CheckPipelineHealth,
+        # Get-ProcessCensus snapshot (VRMonitor, S3-4): the running-capture check reads it instead of
+        # a Win32_Process query per untitled scrcpy. Omitted = live lookup, as before.
+        [hashtable]$Census = $null
     )
 
     # A stream benchmark is running (stream_benchmark.ps1, ADR-0026): it owns the capture of
@@ -1775,7 +1875,7 @@ function Watch-ScrcpyProcesses {
         if (-not $headsetInfos) { $headsetInfos = Get-KnownHeadsetInfos $headset }
         if (ConvertTo-BoolField $headsetInfos.ADBWifi) {
             Write-Log ($msg.Scrcpy.CheckProcess -f $headset.Name, $headset.IPAddress) -Level DEBUG
-            $runningScrcpyProcess_forThisheadset = Get-ScrcpyProcess -displayName (Convert-Displayname $headset.Name) -headsetIP $headset.IPAddress -headsetSerial $headset.SerialNumber
+            $runningScrcpyProcess_forThisheadset = Get-ScrcpyProcess -displayName (Convert-Displayname $headset.Name) -headsetIP $headset.IPAddress -headsetSerial $headset.SerialNumber -Census $Census
 
             Write-Log ($msg.Scrcpy.ProcessFound -f $runningScrcpyProcess_forThisheadset) -Level DEBUG
             if (-not $runningScrcpyProcess_forThisheadset) {

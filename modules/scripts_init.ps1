@@ -390,10 +390,22 @@ function Get-WebServerProcess {
     # A blank result means the CIM query itself was unavailable, NOT that the PID is
     # foreign: in that case skip this check and let the port probe decide, rather than
     # declaring a healthy server dead and restart-looping it.
-    $cmdLine = $null
-    try {
-        $cmdLine = (Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $storedPid" -ErrorAction SilentlyContinue).CommandLine
-    } catch { }
+    # Memo (S3-4): once a PID was confirmed as web_server.ps1, the same PID with the same
+    # StartTime is the same process, so the CIM query is skipped (it ran on every slow tick).
+    $cmdLine   = $null
+    $startTime = $null
+    try { $startTime = $proc.StartTime } catch { }
+    $memo = $script:WebServerIdentityMemo
+    if ($memo -and $memo.Pid -eq $storedPid -and $null -ne $startTime -and $memo.StartTime -eq $startTime) {
+        $cmdLine = $memo.CommandLine
+    } else {
+        try {
+            $cmdLine = (Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $storedPid" -ErrorAction SilentlyContinue).CommandLine
+        } catch { }
+        if ($cmdLine -and $cmdLine -match 'web_server\.ps1' -and $null -ne $startTime) {
+            $script:WebServerIdentityMemo = @{ Pid = $storedPid; StartTime = $startTime; CommandLine = $cmdLine }
+        }
+    }
     if ($cmdLine -and $cmdLine -notmatch 'web_server\.ps1') { return $null }
 
     # 3. Serving - skipped during the startup grace window

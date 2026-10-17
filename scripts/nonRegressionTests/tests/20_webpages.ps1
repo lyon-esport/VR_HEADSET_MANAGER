@@ -661,11 +661,15 @@ function Get-NrtCensusRoute {
 Invoke-RegressionTest -Name 'Route census: every /api route the pages call is routed' -Test {
     $routes  = @(Get-NrtCensusRoute -Root $global:TestRun.TargetRoot)
     Assert-True ($routes.Count -gt 0) 'no /api literal found under website\ - extraction is broken'
+    # The router is web_server.ps1 + web_routes.ps1 (table) + routes\routes_<domain>.ps1
+    # (handlers, S9-3): read every .ps1 under modules\Pode_WebServer, so a further split
+    # needs no edit here.
     $routerText = ''
-    foreach ($rf in @('web_server.ps1', 'web_routes.ps1')) {
-        $rp = Join-Path (Join-Path $global:TestRun.TargetRoot 'modules\Pode_WebServer') $rf
-        if (Test-Path -LiteralPath $rp) { $routerText += [System.IO.File]::ReadAllText($rp, [System.Text.Encoding]::UTF8) }
+    $routerDir  = Join-Path $global:TestRun.TargetRoot 'modules\Pode_WebServer'
+    foreach ($rf in @(Get-ChildItem -LiteralPath $routerDir -Filter '*.ps1' -Recurse -File -ErrorAction SilentlyContinue)) {
+        $routerText += [System.IO.File]::ReadAllText($rf.FullName, [System.Text.Encoding]::UTF8)
     }
+    Assert-True (Test-Path -LiteralPath (Join-Path $routerDir 'routes\routes_static.ps1')) 'route handler files missing under modules\Pode_WebServer\routes - release packing is broken'
     Assert-True ($routerText.Length -gt 0) 'web server source not found under modules\Pode_WebServer'
     $tested  = 0
     $skipped = @()

@@ -24,6 +24,10 @@
 
 # --- Core modules ---
 /modules/
+# Web route handlers (S9-3): web_routes.ps1 dot-sources every routes\routes_<domain>.ps1 and
+# refuses to load when one is missing. Already covered by /modules/ (recursive); listed so
+# the dependency is visible. Never exclude it: exclusions win, and the web server would not start.
+/modules/Pode_WebServer/routes/
 
 # --- Config template (not the runtime config) ---
 /templates/

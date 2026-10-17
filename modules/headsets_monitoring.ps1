@@ -693,7 +693,8 @@ function Start-VRMonitor {
             # OF ITS OWN. A connection is never shared between runspaces - the
             # module refuses that explicitly, because a native SQLite handle used
             # from two threads corrupts memory silently.
-            foreach ($mod in @("logging.ps1","config_files_loader.ps1","utils.ps1","network_scanner.ps1","adb_functions.ps1","database.ps1","usb_manager.ps1","headset_diag.ps1","headsets_monitoring.ps1")) {
+            # wifi_store.ps1: adb_functions / headset_diag call Get-WifiNetworks (S9-1 split).
+            foreach ($mod in @("logging.ps1","config_files_loader.ps1","utils.ps1","wifi_store.ps1","network_scanner.ps1","adb_functions.ps1","database.ps1","usb_manager.ps1","headset_diag.ps1","headsets_monitoring.ps1")) {
                 $f = Join-Path $modPath $mod
                 if (Test-Path -LiteralPath $f) { . $f }
             }
@@ -984,7 +985,8 @@ function Start-VRMonitor {
             $global:ConfigFilePath = $configFilePath
             $modPath = Join-Path $scriptPath "modules"
             # database.ps1: this runspace opens a connection of its own (never shared).
-            foreach ($mod in @("logging.ps1","config_files_loader.ps1","utils.ps1","network_scanner.ps1","adb_functions.ps1","database.ps1","headsets_discovery.ps1")) {
+            # wifi_store.ps1: adb_functions calls Get-WifiNetworks (S9-1 split).
+            foreach ($mod in @("logging.ps1","config_files_loader.ps1","utils.ps1","wifi_store.ps1","network_scanner.ps1","adb_functions.ps1","database.ps1","headsets_discovery.ps1")) {
                 $f = Join-Path $modPath $mod
                 if (Test-Path -LiteralPath $f) { . $f }
             }
@@ -1109,7 +1111,8 @@ function Start-VRMonitor {
             $global:ConfigFilePath = $configFilePath
             $modPath = Join-Path $scriptPath "modules"
             # database.ps1: this runspace opens a connection of its own (never shared).
-            foreach ($mod in @("logging.ps1","config_files_loader.ps1","utils.ps1","database.ps1")) {
+            # hardware_monitoring.ps1: the samplers, Update-ComputerMonitoring and the load tiers (S9-1 split).
+            foreach ($mod in @("logging.ps1","config_files_loader.ps1","utils.ps1","hardware_monitoring.ps1","database.ps1")) {
                 $f = Join-Path $modPath $mod
                 if (Test-Path -LiteralPath $f) { . $f }
             }
@@ -1274,16 +1277,24 @@ function Start-VRMonitor {
             if ($eagerIds.Count -eq $eagerWaitRows.Count) { break }
             Start-Sleep -Milliseconds 250
         } while ((Get-Date) -lt $eagerDeadline)
+        # One process census (S3-4) for the eager pass, then the first headset ID -> scrcpy PID
+        # map for the poll runspaces' stage 1 (they fall back to their own scan until it exists).
+        $census = $null
+        try { $census = Get-ProcessCensus } catch { }
         if ($eagerIds.Count -gt 0) {
-            try { Watch-ScrcpyProcesses -HeadsetId $eagerIds -HeadsetInfo $eagerInfoByIp } catch { Write-Log ("VRMonitor: scrcpy watchdog (eager) failed: " + $_.Exception.Message) -Level WARNING }
+            try { Watch-ScrcpyProcesses -HeadsetId $eagerIds -HeadsetInfo $eagerInfoByIp -Census $census } catch { Write-Log ("VRMonitor: scrcpy watchdog (eager) failed: " + $_.Exception.Message) -Level WARNING }
         }
+        try {
+            $pidMap = Get-ScrcpyPidMap -Census $census -KnownHeadsets $knownHeadsets
+            if ($null -ne $pidMap) { $sharedState['_scrcpy_pids'] = $pidMap }
+        } catch { }
         try { Start-WebServer }        catch { Write-Log ("VRMonitor: web server watchdog (eager) failed: " + $_.Exception.Message) -Level WARNING }
 
         # NOTE: no GPU encoder pre-warm here. It was tried and removed: the probe has no
         # timeout and took 60 s on a fresh release (Intel QSV), holding this loop - and so
         # the computer-monitoring snapshot, the status export and every watchdog - for that
         # whole minute. Get-GpuEncoder now caches its result for the life of the process
-        # (utils.ps1), so only the first capture pays for the probe.
+        # (gpu_encoding.ps1), so only the first capture pays for the probe.
 
         # Tick guard bookkeeping. The fast and slow paths each run inside a try/catch so one
         # terminating error (SQLITE_BUSY after retries, a module bug) loses one tick instead
@@ -1509,7 +1520,15 @@ function Start-VRMonitor {
                     Write-Log ("VRMonitor: capture requested or settings changed for headset id(s) {0} - checking scrcpy now" -f ($scrcpyEdgeIds -join ',')) -Level DEBUG
                     # mediamtx before scrcpy (publisher ordering - see the eager block above).
                     try { Start-MediaMtx } catch { Write-Log ("VRMonitor: mediamtx watchdog (trigger) failed: " + $_.Exception.Message) -Level WARNING }
-                    try { Watch-ScrcpyProcesses -HeadsetId $scrcpyEdgeIds -HeadsetInfo $infoByIp } catch { Write-Log ("VRMonitor: scrcpy start trigger failed: " + $_.Exception.Message) -Level WARNING }
+                    # Edge only (rare): one census for the check, then republish the PID map so stage 1
+                    # sees a capture started here without waiting for the slow tick (S3-4).
+                    $census = $null
+                    try { $census = Get-ProcessCensus } catch { }
+                    try { Watch-ScrcpyProcesses -HeadsetId $scrcpyEdgeIds -HeadsetInfo $infoByIp -Census $census } catch { Write-Log ("VRMonitor: scrcpy start trigger failed: " + $_.Exception.Message) -Level WARNING }
+                    try {
+                        $pidMap = Get-ScrcpyPidMap -Census $census -KnownHeadsets $knownHeadsets
+                        if ($null -ne $pidMap) { $sharedState['_scrcpy_pids'] = $pidMap }
+                    } catch { }
                 }
 
                 # Fingerprint of key display fields - triggers CSV/HTML write on any change.
@@ -1810,7 +1829,15 @@ function Start-VRMonitor {
                     # Only this slow-tick pass checks pipeline health: a capture whose ffmpeg push,
                     # bridge or mediamtx publisher died under a running scrcpy is restarted here.
                     try { Start-MediaMtx }         catch { Write-Log ("VRMonitor: mediamtx watchdog failed: " + $_.Exception.Message) -Level WARNING }
-                    try { Watch-ScrcpyProcesses -HeadsetInfo $infoByIp -CheckPipelineHealth } catch { Write-Log ("VRMonitor: scrcpy watchdog failed: " + $_.Exception.Message) -Level WARNING }
+                    # ONE Win32_Process query for the whole tick (S3-4): the watchdog, the PID map the
+                    # poll runspaces read every second, and VQA all match against this snapshot.
+                    $census = $null
+                    try { $census = Get-ProcessCensus } catch { }
+                    try { Watch-ScrcpyProcesses -HeadsetInfo $infoByIp -CheckPipelineHealth -Census $census } catch { Write-Log ("VRMonitor: scrcpy watchdog failed: " + $_.Exception.Message) -Level WARNING }
+                    try {
+                        $pidMap = Get-ScrcpyPidMap -Census $census -KnownHeadsets $knownHeadsets
+                        if ($null -ne $pidMap) { $sharedState['_scrcpy_pids'] = $pidMap }
+                    } catch { Write-Log ("VRMonitor: scrcpy PID map failed: " + $_.Exception.Message) -Level DEBUG }
                     try { Start-WebServer }        catch { Write-Log ("VRMonitor: web server watchdog failed: " + $_.Exception.Message) -Level WARNING }
 
                     # Computer monitoring runs in its own runspace (S3-2), which also honours the
@@ -1858,7 +1885,7 @@ function Start-VRMonitor {
                         $m = try { Get-LoadMultiplier } catch { 1 }
                         if ($vqrTickCounter % $m -eq 0) {
                             try {
-                                Invoke-VideoQualityRecommendation | Out-Null
+                                Invoke-VideoQualityRecommendation -Census $census | Out-Null
                                 if ($global:VQA_EnabledVQO) { Invoke-VideoQualityOptimizer }
                             } catch {
                                 Write-Log ("VQA: cycle failed: " + $_.Exception.Message) -Level WARNING
@@ -2164,6 +2191,24 @@ function Get-HeadsetInfoStage1Reachability {
     elseif ($wifiOpen)                                  { $out.AdbTransport = "WiFi" }
     $out.ADBWifi = ($usbCabled -or $wifiOpen)
 
+    # Inside VRMonitor (S3-4): the slow tick publishes headset ID -> scrcpy PID in
+    # $sharedState['_scrcpy_pids'] from ONE process census. Once it exists, this check is a
+    # Get-Process -Id on that PID only - no scrcpy enumeration, no WMI, every second.
+    $pidMap = $null
+    $shared = Get-Variable -Name sharedState -ValueOnly -ErrorAction SilentlyContinue
+    if ($shared -is [hashtable]) { $pidMap = $shared['_scrcpy_pids'] }
+    if ($pidMap -is [hashtable]) {
+        $mapPid = $pidMap[[string]$knownHeadset.ID]
+        if ($mapPid) {
+            $alive = Get-Process -Id $mapPid -ErrorAction SilentlyContinue
+            try {
+                if ($alive -and $alive.ProcessName -eq 'scrcpy' -and -not $alive.HasExited) { $out.SCRCPY = "OK" }
+            } catch { }
+        }
+        return $out
+    }
+
+    # Outside VRMonitor, or before its first census: the original scan.
     # Fast path: check cached scrcpy PID (avoids WMI on every cycle)
     $cachedPid = $script:ScrcpyPidCache[$IPAddress]
     if ($cachedPid) {
@@ -2194,9 +2239,9 @@ function Get-HeadsetInfoStage1Reachability {
                             $cmdLine = $cimProc.CommandLine
                             $cimProc.Dispose()
                             # A WiFi launch carries -s ip:port; a USB launch carries
-                            # -s <serial>. Either one means this headset session.
-                            if ($cmdLine -match ([regex]::Escape($IPAddress) + "(:$ADBPort)?") -or
-                                ($usbSerial -and $usbSerial -ne '-' -and $cmdLine -match ('-s\s+\x22?' + [regex]::Escape($usbSerial) + '(?:\x22|\s|$)'))) {
+                            # -s <serial>. Either one means this headset session (exact
+                            # argument match, so .24 never claims the session of .244).
+                            if (Test-ScrcpyCommandLineTarget -CommandLine $cmdLine -IPAddress $IPAddress -Serial $usbSerial) {
                                 $matched = $true
                             }
                         }

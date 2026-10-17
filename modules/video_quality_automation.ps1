@@ -59,6 +59,9 @@ function Get-ClampedValue {
 #                     @{Name; SerialOrIp; Model; Profile; ParsedProfile}
 #   MediaMtx      - @{Framerate; BitrateMbps} (Bitrate parsed from "6M" -> 6)
 function Get-VqaInputs {
+    # -Census (Get-ProcessCensus, passed by the VRMonitor slow tick, S3-4): running sessions are
+    # matched against that one snapshot instead of a Win32_Process query per headset.
+    param([hashtable]$Census = $null)
     $snap = $null
     try {
         $snap = Get-DbKeyValue -Key 'computer_monitoring'
@@ -90,7 +93,7 @@ function Get-VqaInputs {
         $name = $h.Name
         if (-not $name) { continue }
         $displayName = $name -replace ' ', '_'
-        $proc = Get-ScrcpyProcess -displayName $displayName -headsetIP $h.IPAddress
+        $proc = Get-ScrcpyProcess -displayName $displayName -headsetIP $h.IPAddress -Census $Census
         if ($proc) {
             $profileStr = if ($h.ScrcpyProfile) { $h.ScrcpyProfile } else { 'portrait-R-N-45-20' }
             $parsed     = ConvertFrom-ScrcpyProfile -Profile $profileStr
@@ -313,7 +316,8 @@ function Get-VqaMediaMtxRecommendation {
 # is 'none' the helpers naturally return Recommended==Current rows (no math),
 # so the UI tables stay populated with current values.
 function Invoke-VideoQualityRecommendation {
-    $inputs = Get-VqaInputs
+    param([hashtable]$Census = $null)
+    $inputs = Get-VqaInputs -Census $Census
     if (-not $inputs) {
         Write-Log "VQR: no computer_monitoring snapshot, skipping." -Level DEBUG
         return $null

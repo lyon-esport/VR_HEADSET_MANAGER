@@ -98,11 +98,12 @@ Invoke-RegressionTest -Name 'ffmpeg acquisition path is shipped' -Test {
     Assert-True ($welcomeText -match 'Invoke-FfmpegDownload') `
         'welcome.ps1 ships without Invoke-FfmpegDownload - a fresh install could never obtain ffmpeg'
 
-    $utils = Join-Path $target 'modules\utils.ps1'
-    Assert-FileExists $utils 'modules\utils.ps1'
-    $utilsText = Get-Content -LiteralPath $utils -Raw -Encoding UTF8
-    Assert-True ($utilsText -match 'function\s+Update-FfmpegBinary') `
-        'utils.ps1 ships without Update-FfmpegBinary - the ffmpeg updater is missing'
+    # S9-1 moved the binary updaters out of utils.ps1 into binary_updates.ps1.
+    $updaters = Join-Path $target 'modules\binary_updates.ps1'
+    Assert-FileExists $updaters 'modules\binary_updates.ps1'
+    $updatersText = Get-Content -LiteralPath $updaters -Raw -Encoding UTF8
+    Assert-True ($updatersText -match 'function\s+Update-FfmpegBinary') `
+        'binary_updates.ps1 ships without Update-FfmpegBinary - the ffmpeg updater is missing'
 }
 
 Invoke-RegressionTest -Name 'Wireless-ADB activator APK is bundled' -Test {

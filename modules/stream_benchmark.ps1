@@ -552,14 +552,14 @@ function New-StreamBenchmarkPlan {
 # ---------------------------------------------------------------------------
 
 function Initialize-StreamBenchmarkCpuType {
-    <# Compiles the GetSystemTimes wrapper once per process. The type lives in utils.ps1 (Initialize-CpuTimesType), shared with the computer monitor. #>
+    <# Compiles the GetSystemTimes wrapper once per process. The type lives in hardware_monitoring.ps1 (Initialize-CpuTimesType), shared with the computer monitor. #>
     param()
     return (Initialize-CpuTimesType)
 }
 
 
 function Get-StreamBenchmarkCpuPercent {
-    <# Whole-PC CPU % between two VrhmCpuTimes snapshots (kernel time includes idle). See Get-CpuTimesPercent (utils.ps1). #>
+    <# Whole-PC CPU % between two VrhmCpuTimes snapshots (kernel time includes idle). See Get-CpuTimesPercent (hardware_monitoring.ps1). #>
     param($From, $To)
     return (Get-CpuTimesPercent -From $From -To $To)
 }
@@ -581,7 +581,7 @@ function New-StreamBenchmarkSampler {
     param()
     $s = @{ Gpus = @(); Single = $false; ExcludeLuid = $null; Engine = $null; Memory = $null
             Cores = [Math]::Max(1, [Environment]::ProcessorCount); Prev = $null; BridgePids = @() }
-    # Same adapter / PCI filter / LUID rules as Get-GpuInfo: one implementation (utils.ps1).
+    # Same adapter / PCI filter / LUID rules as Get-GpuInfo: one implementation (hardware_monitoring.ps1).
     try {
         $layout = Get-GpuLayout
         if ($layout) {
@@ -686,7 +686,7 @@ function Measure-StreamBenchmarkSample {
     if ($span -le 0) { $span = 0.001 }
 
     # GPU engines, bucketed [luid][engine type] = summed % over the interval (same helpers
-    # and vendor rules as Get-GpuInfo, utils.ps1).
+    # and vendor rules as Get-GpuInfo, hardware_monitoring.ps1).
     $map = Get-GpuEngineDeltaMap -Previous $prev.Util -Current $now.Util
     $clip = { param($x) [Math]::Round([Math]::Min(100.0, [Math]::Max(0.0, $x)), 1) }
     $gpus = foreach ($g in $Sampler.Gpus) {

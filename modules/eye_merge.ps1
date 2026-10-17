@@ -592,6 +592,58 @@ function ConvertTo-EyeMergePolygon {
     return ($pairs -join ' ')
 }
 
+# Horizontal centre of a lens outline (flat x,y int[], eye-local pixels): the median middle of the
+# horizontal chords whose BOTH ends are inside the eye image. A lens wider than its eye image (Quest 2:
+# ~1820 px in a 1832 px eye at 58 mm) is cut at one side, so the bounding-box middle is pulled away
+# from the real centre - measured 37 / 50 px off at 58 mm, which shifted every view crop by as much.
+# Falls back to the bounding-box middle when no chord is clear of the border.
+# Example: Get-EyeMergeLensCentreX -Points $polyL -EyeWidth 1832
+function Get-EyeMergeLensCentreX {
+    param([int[]]$Points, [int]$EyeWidth)
+    $n = [int]($Points.Count / 2)
+    if ($n -lt 3) { return $null }
+    $xs = for ($k = 0; $k -lt $n; $k++) { $Points[2 * $k] }
+    $ys = for ($k = 0; $k -lt $n; $k++) { $Points[2 * $k + 1] }
+    $bx = $xs | Measure-Object -Minimum -Maximum; $by = $ys | Measure-Object -Minimum -Maximum
+    $edge = 12            # outlines are pulled in a few px: a vertex this close to the border is a cut
+    # Per half (top / bottom) of the outline: chord middles and widths. Dark scene content touching
+    # the rim (a dark panel at 58 mm on a Quest 2) bites a notch that SHORTENS chords on one side and
+    # pulls their middles away (852 instead of 903 px). When the halves disagree, the half with the
+    # wider chords is the clean one.
+    $midY = ([double]$by.Minimum + [double]$by.Maximum) / 2
+    $half = @{ T = (New-Object System.Collections.Generic.List[double]); B = (New-Object System.Collections.Generic.List[double]) }
+    $wid  = @{ T = (New-Object System.Collections.Generic.List[double]); B = (New-Object System.Collections.Generic.List[double]) }
+    for ($y = [double]$by.Minimum + 4; $y -le [double]$by.Maximum - 4; $y += 8) {
+        $lo = [double]::MaxValue; $hi = [double]::MinValue
+        for ($k = 0; $k -lt $n; $k++) {
+            $j = ($k + 1) % $n
+            $y1 = [double]$ys[$k]; $y2 = [double]$ys[$j]
+            if (($y1 -le $y -and $y2 -gt $y) -or ($y2 -le $y -and $y1 -gt $y)) {
+                $x = [double]$xs[$k] + ($y - $y1) * ([double]$xs[$j] - [double]$xs[$k]) / ($y2 - $y1)
+                if ($x -lt $lo) { $lo = $x }; if ($x -gt $hi) { $hi = $x }
+            }
+        }
+        if ($hi -lt $lo) { continue }
+        if ($lo -le $edge -or $hi -ge $EyeWidth - 1 - $edge) { continue }
+        if (($hi - $lo) -lt $EyeWidth / 4) { continue }      # lens tip: too short to be reliable
+        $h = if ($y -lt $midY) { 'T' } else { 'B' }
+        $half[$h].Add(($lo + $hi) / 2); $wid[$h].Add($hi - $lo)
+    }
+    $median = { param($list) $a = $list.ToArray(); [Array]::Sort($a); $a[[int]($a.Count / 2)] }
+    $mids = New-Object System.Collections.Generic.List[double]
+    foreach ($h in 'T', 'B') { foreach ($v in $half[$h]) { $mids.Add($v) } }
+    if ($mids.Count -lt 5) { return [Math]::Round(([double]$bx.Minimum + [double]$bx.Maximum) / 2.0, 1) }
+    $centre = & $median $mids
+    if ($half.T.Count -ge 5 -and $half.B.Count -ge 5) {
+        $mT = & $median $half.T; $mB = & $median $half.B
+        if ([Math]::Abs($mT - $mB) -gt 10) {
+            $wT = ($wid.T | Measure-Object -Average).Average; $wB = ($wid.B | Measure-Object -Average).Average
+            $centre = if ($wT -gt $wB) { $mT } else { $mB }
+        }
+    }
+    return [Math]::Round($centre, 1)
+}
+
 
 # Convex hull of a lens outline (flat x,y int[] -> flat x,y int[], counter-clockwise). A lens picture
 # is convex, and scene content can only ever make the measured outline SMALLER (a dark shadow touching
@@ -1285,9 +1337,7 @@ function Invoke-EyeMergeCalibration {
         # Centres of the two lens pictures (bounding-box middle of each outline, eye-local px).
         $lensCx = @{}
         foreach ($side in @(@('L', $polyL), @('R', $polyR))) {
-            $xs = for ($k = 0; $k -lt $side[1].Count; $k += 2) { $side[1][$k] }
-            $mm = $xs | Measure-Object -Minimum -Maximum
-            $lensCx[$side[0]] = [Math]::Round(($mm.Minimum + $mm.Maximum) / 2.0, 1)
+            $lensCx[$side[0]] = Get-EyeMergeLensCentreX -Points $side[1] -EyeWidth $ew
         }
         $res.LensCx = $lensCx
         $cal = [ordered]@{
@@ -1387,9 +1437,7 @@ function Find-HeadsetIpdFromFrame {
             $m = [VrhmEyeMerge]::LensMask($bgr, $fw, $fh, $side[1], $ew, $thr)
             $poly = [VrhmEyeMerge]::MaskPolygon($m, $ew, $fh, 256)
             if ($poly.Count -lt 16) { $res.Error = 'No lens picture in the frame - the headset display is off or the capture is blocked (protected content on screen).'; return $res }
-            $xs = for ($k = 0; $k -lt $poly.Count; $k += 2) { $poly[$k] }
-            $mm = $xs | Measure-Object -Minimum -Maximum
-            $c[$side[0]] = ($mm.Minimum + $mm.Maximum) / 2.0
+            $c[$side[0]] = Get-EyeMergeLensCentreX -Points $poly -EyeWidth $ew
         }
         $res.Centres = $c
         $best = $null; $bestD = [double]::MaxValue; $second = [double]::MaxValue
@@ -1672,7 +1720,11 @@ function Get-StreamMask {
         if (-not (Initialize-EyeMergeType)) { $res.Ok = $false; $res.Error = 'Image helper unavailable.'; return $res }
 
         $cal = Get-EyeMergeProfile -Model $model -IncludeDisabled -Ipd $ipd
-        $inset = if ($cal -and $cal.inset_px) { [Math]::Min(40, [int]$cal.inset_px) } else { 8 }
+        # Fixed inset, same as the merged mask below. NOT eye_merge.inset_px: that value is measured
+        # for the merge seam (one eye darker than the other, 180-290 px on a Quest 2) and every
+        # recalibration rewrote it, while the real edge darkening is ~25 px (Quest 2) to ~50 px
+        # (Quest 3). Using it hid up to 64 px of good picture in the corners.
+        $inset = 8
         $dir = Join-Path $global:ScriptPath 'website\generated\stream_mask'
         if (-not (Test-Path -LiteralPath $dir)) { [void][System.IO.Directory]::CreateDirectory($dir) }
 

@@ -1,10 +1,10 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Tests Get-CpuInfo, Get-RamInfo and Get-GpuInfo from modules/utils.ps1.
+    Tests Get-CpuInfo, Get-RamInfo and Get-GpuInfo from modules/hardware_monitoring.ps1.
 
 .DESCRIPTION
-    Dot-sources utils.ps1 (no full app init required), calls each hardware
+    Dot-sources utils.ps1 + hardware_monitoring.ps1 (no full app init required), calls each hardware
     function, pretty-prints the returned objects, and reports PASS/WARN/FAIL.
 
 .PARAMETER ModulesRoot
@@ -32,6 +32,13 @@ if (-not (Test-Path -LiteralPath $utilsPath)) {
     exit 2
 }
 . $utilsPath
+# The hardware samplers moved to hardware_monitoring.ps1 (S9-1 split of utils.ps1).
+$hwPath = Join-Path $ModulesRoot 'hardware_monitoring.ps1'
+if (-not (Test-Path -LiteralPath $hwPath)) {
+    Write-Host "ERROR: hardware_monitoring.ps1 not found at: $hwPath" -ForegroundColor Red
+    exit 2
+}
+. $hwPath
 
 # ---------------------------------------------------------------------------
 # Helpers

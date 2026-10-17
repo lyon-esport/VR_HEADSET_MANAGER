@@ -114,16 +114,36 @@
       flex: 0 0 auto;
       min-width: 0;
       max-width: 100%;
-      order: 0;
+      /* Display order = registry order. Set per cell by JS (--pos), never by moving the
+         cell in the DOM: moving an element that holds an iframe reloads it (stream cut). */
+      order: var(--pos, 0);
     }
     .cell.hidden { display: none; }
+
+    /* Drag-and-drop reorder (grip button in .cell-actions) */
+    /* Top-left corner of the cell, above the status overlay; shown on hover like .cell-actions */
+    .cell-action-btn.drag-handle-btn {
+      position: absolute;
+      top: 8px; left: 8px;
+      z-index: 30;
+      cursor: grab;
+      opacity: 0;
+      transition: opacity 0.15s, background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    .cell:hover .drag-handle-btn { opacity: 1; }
+    .cell-action-btn.drag-handle-btn:active { cursor: grabbing; }
+    /* Iframes swallow dragover/drop events: let them reach the cells while dragging */
+    #grid.reordering iframe { pointer-events: none; }
+    .cell.dragging { opacity: 0.5; }
+    .cell.drag-over { outline: 2px solid rgba(59,130,246,0.85); outline-offset: -2px; }
+    body.hidetopbar .drag-handle-btn { display: none; }
 
     /* Compact offline tile - no video stream, monitoring frame fills cell */
     .cell.no-stream {
       flex: 0 0 auto;
       width: min(240px, 100%);
       aspect-ratio: unset;
-      order: 1;
+      order: calc(var(--pos, 0) + 100000);
     }
     .cell.no-stream .video-frame    { display: none; }
     .cell.no-stream .status-wrapper { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 3px; }
@@ -131,7 +151,7 @@
     .cell.no-stream .running-app    { display: none !important; }
 
     /* Flex row-break: forces streaming cells into their own row above offline tiles */
-    .stream-break { order: 0; flex: 0 0 100%; height: 0; }
+    .stream-break { order: 99999; flex: 0 0 100%; height: 0; }
 
     /* Full-cell video iframe */
     .video-frame {
@@ -1210,7 +1230,9 @@
       var innerW = availW - padding * 2;
       var innerH = availH - padding * 2;
 
-      var streamCells = Array.from(document.querySelectorAll('#grid .cell:not(.hidden):not(.no-stream)'));
+      // Sorted by display position: the flex rows follow the CSS order, not the DOM order.
+      var streamCells = Array.from(document.querySelectorAll('#grid .cell:not(.hidden):not(.no-stream)'))
+        .sort(function(a, b) { return cellPos(a) - cellPos(b); });
       var N = streamCells.length;
       if (N === 0) return;
 
@@ -1536,11 +1558,24 @@
       cell.className = 'cell' + (statusVisible ? '' : ' status-hidden') + (timerGlobalVisible ? '' : ' timer-hidden');
       cell.dataset.name    = name;
       cell.dataset.display = dn;
+      cell.dataset.id      = id;
+      // Reorder by drag and drop only on the full wall: a ?filterid= wall shows a subset, and
+      // saving a subset would push every other headset to the end of the registry.
+      var dragHandle = filterIds.length ? '' :
+          // A span, not a button: Firefox does not start a drag from a <button>.
+          '<span class="cell-action-btn drag-handle-btn" draggable="true" data-drag-cell="' + dn + '" title="Drag to reorder" aria-label="Drag to reorder">' +
+            '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none">' +
+              '<circle cx="9" cy="5" r="1.8"/><circle cx="15" cy="5" r="1.8"/>' +
+              '<circle cx="9" cy="12" r="1.8"/><circle cx="15" cy="12" r="1.8"/>' +
+              '<circle cx="9" cy="19" r="1.8"/><circle cx="15" cy="19" r="1.8"/>' +
+            '</svg>' +
+          '</span>';
       cell.innerHTML =
         '<iframe class="video-frame" src="' + dn + '[video].html" allow="autoplay" scrolling="no"></iframe>' +
         '<div class="status-wrapper">' +
           '<iframe class="status-frame" src="' + dn + '[monitoring].html" scrolling="no"></iframe>' +
         '</div>' +
+        dragHandle +
         '<div class="cell-actions">' +
           '<a class="cell-action-btn" href="' + dn + '[video].html" target="_blank" title="Open fullscreen" aria-label="Open fullscreen">' +
             '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
@@ -1607,13 +1642,14 @@
           }
           // lastHeadsetsSignature above stays on the UNFILTERED rows (checkHeadsetListChanged
           // compares against the unfiltered API list); only the cells built are filtered/ordered.
-          applyIdFilter(rows).forEach(function(row) {
+          applyIdFilter(rows).forEach(function(row, pos) {
             var name = (row['Name'] || '').trim();
             var id   = String(row['ID'] || '').trim();
             if (!name) return;
             var dn = toDisplayName(name);
             autoRestartState[dn] = String(row['scrcpy_AutoRestart'] || '').toLowerCase() === 'true';
             var cell = buildCellHTML(name, dn, id);
+            setCellPos(cell, pos);
             grid.insertBefore(cell, breakEl);
             var fr = cell.querySelector('.status-frame');
             if (fr) fr.addEventListener('load', function() { detectFrameHeight(fr, cell); });
@@ -1628,14 +1664,161 @@
     // no change until this notices the list itself differs from what was last built - then it
     // just reloads, which is simple and safe since the page already restores wall mode
     // (?hidetopbar=1) and the live-only filter from the URL/server on every load.
+    // A change of ORDER only (same ID:Name set) is applied in place through applyOrder, so a
+    // reorder done in headsets_settings.html does not reload the page and cut every stream.
     function checkHeadsetListChanged() {
       if (lastHeadsetsSignature === null) return; // buildGrid() hasn't captured a baseline yet
       return VRHM.fetchJson('/api/headsets')
         .then(function(rows) {
           if (!rows) return;
-          if (headsetsSignature(rows) !== lastHeadsetsSignature) location.reload();
+          var sig = headsetsSignature(rows);
+          if (sig === lastHeadsetsSignature) return;
+          var sameSet = sig.split('|').sort().join('|') === lastHeadsetsSignature.split('|').sort().join('|');
+          if (!sameSet) { location.reload(); return; }
+          lastHeadsetsSignature = sig;
+          if (filterIds.length) return; // a ?filterid= wall keeps the order of its URL
+          applyOrder(rows.map(function(r) { return toDisplayName((r['Name'] || '').trim()); }));
         });   // a failure rejects: the poller backs off and tries again
     }
+
+    // ------ Display order (CSS order through --pos, never a DOM move) ----------------------------
+    function cellPos(cell) {
+      var p = parseInt(cell.dataset.pos, 10);
+      return isNaN(p) ? 0 : p;
+    }
+    function setCellPos(cell, pos) {
+      cell.dataset.pos = String(pos);
+      cell.style.setProperty('--pos', String(pos));
+    }
+    function getOrderedCells() {
+      return Array.from(document.querySelectorAll('#grid .cell'))
+        .sort(function(a, b) { return cellPos(a) - cellPos(b); });
+    }
+    // Puts the cells in the order of `displayNames`; cells not listed keep their relative
+    // order after the listed ones. Also reorders the Headsets filter dropdown (no iframe there).
+    function applyOrder(displayNames) {
+      var rank = {};
+      displayNames.forEach(function(dn, i) { if (!(dn in rank)) rank[dn] = i; });
+      var cells = getOrderedCells();
+      cells.sort(function(a, b) {
+        var ra = (a.dataset.display in rank) ? rank[a.dataset.display] : displayNames.length + cellPos(a);
+        var rb = (b.dataset.display in rank) ? rank[b.dataset.display] : displayNames.length + cellPos(b);
+        return ra - rb;
+      });
+      cells.forEach(function(cell, i) { setCellPos(cell, i); });
+      var panel = document.getElementById('headsets-filter-panel');
+      if (panel) {
+        cells.forEach(function(cell) {
+          var item = panel.querySelector('.headsets-filter-item[data-headset="' + cell.dataset.display + '"]');
+          if (item) panel.appendChild(item);
+        });
+      }
+      applyAll();
+    }
+    // The signature checkHeadsetListChanged expects after a local reorder: the tokens of the
+    // last one (built from the unfiltered /api/headsets rows), re-sorted into the cell order.
+    function reorderedSignature(sig) {
+      if (sig === null) return sig;
+      var rank = {};
+      getOrderedCells().forEach(function(c, i) { rank[c.dataset.id] = i; });
+      var tokens = sig.split('|');
+      var big = tokens.length + 100000;
+      return tokens.map(function(t, i) { return { t: t, i: i }; })
+        .sort(function(a, b) {
+          var ida = a.t.split(':')[0], idb = b.t.split(':')[0];
+          var ra = (ida in rank) ? rank[ida] : big + a.i;
+          var rb = (idb in rank) ? rank[idb] : big + b.i;
+          return ra - rb;
+        })
+        .map(function(x) { return x.t; }).join('|');
+    }
+
+    // ------ Drag and drop reorder (grip button of each cell) ------------------------------------
+    // Same registry order as the drag and drop of headsets_settings.html (/api/reorderheadsets),
+    // so both pages and a page refresh agree. Disabled on a ?filterid= wall (no grip rendered).
+    (function() {
+      var grid = document.getElementById('grid');
+      var dragSrc = null;
+
+      function clearDragOver() {
+        grid.querySelectorAll('.cell.drag-over').forEach(function(c) { c.classList.remove('drag-over'); });
+      }
+
+      grid.addEventListener('dragstart', function(e) {
+        var handle = e.target.closest && e.target.closest('.drag-handle-btn');
+        if (!handle || filterIds.length) return;
+        var cell = handle.closest('.cell');
+        if (!cell) return;
+        dragSrc = cell;
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', cell.dataset.display);
+        try { e.dataTransfer.setDragImage(cell, 20, 20); } catch (err) {}
+        // Defer the classes: changing pointer-events / opacity inside dragstart itself can
+        // make some browsers cancel the drag.
+        setTimeout(function() {
+          if (!dragSrc) return;
+          grid.classList.add('reordering');
+          dragSrc.classList.add('dragging');
+        }, 0);
+      });
+
+      grid.addEventListener('dragover', function(e) {
+        if (!dragSrc) return;
+        var target = e.target.closest && e.target.closest('.cell');
+        if (!target || target === dragSrc) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        if (!target.classList.contains('drag-over')) { clearDragOver(); target.classList.add('drag-over'); }
+      });
+
+      grid.addEventListener('dragleave', function(e) {
+        var target = e.target.closest && e.target.closest('.cell');
+        if (target && !target.contains(e.relatedTarget)) target.classList.remove('drag-over');
+      });
+
+      grid.addEventListener('drop', function(e) {
+        if (!dragSrc) return;
+        var target = e.target.closest && e.target.closest('.cell');
+        if (!target || target === dragSrc) return;
+        e.preventDefault();
+        clearDragOver();
+        var src = dragSrc;
+        var before = getOrderedCells();
+        var previousNames = before.map(function(c) { return c.dataset.display; });
+        // Same rule as headsets_settings.html: dragging forward lands after the target,
+        // dragging backward lands before it.
+        var cells = before.filter(function(c) { return c !== src; });
+        var ti = cells.indexOf(target);
+        if (before.indexOf(src) < before.indexOf(target)) ti += 1;
+        cells.splice(ti, 0, src);
+        var order = cells.map(function(c) { return c.dataset.display; });
+        applyOrder(order);
+        var previousSig = lastHeadsetsSignature;
+        // Set now, so a list check running before the save answers does not reload the page.
+        lastHeadsetsSignature = reorderedSignature(previousSig);
+        fetch('/api/reorderheadsets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ order: order })
+        }).then(function(r) {
+          if (!r.ok) throw new Error(r.status);
+          return r.json();
+        }).then(function(j) {
+          if (!j || !j.ok) throw new Error('save failed');
+        }).catch(function() {
+          // Not saved: put the previous order back so the page matches the registry.
+          lastHeadsetsSignature = previousSig;
+          applyOrder(previousNames);
+        });
+      });
+
+      grid.addEventListener('dragend', function() {
+        grid.classList.remove('reordering');
+        if (dragSrc) dragSrc.classList.remove('dragging');
+        clearDragOver();
+        dragSrc = null;
+      });
+    })();
 
     // ------ Boot ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     TopBar.initCompact();
