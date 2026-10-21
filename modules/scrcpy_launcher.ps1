@@ -482,8 +482,8 @@ function Get-ScrcpyPidMap {
 #
 # Architecture: scrcpy records its H.264 stream to a Windows named pipe;
 # ffmpeg reads from a paired pipe and pushes RTSP to mediamtx with -c copy.
-# A tiny PowerShell background job acts as the named-pipe SERVER on both
-# ends (scrcpy and ffmpeg both connect as CLIENTS), so the byte stream
+# An in-process C# relay thread (VrhmPipeBridge, ADR-0035) acts as the named-pipe
+# SERVER on both ends (scrcpy and ffmpeg both connect as CLIENTS), so the byte stream
 # flows scrcpy -> pipeIn -> bridge -> pipeOut -> ffmpeg -> mediamtx without
 # any re-encoding. CPU cost is near-zero compared to the legacy gdigrab+
 # libx264 path.
@@ -498,7 +498,7 @@ if (-not (Get-Variable -Name HeadsetPipelines -Scope Global -ErrorAction Silentl
 
 # Pipeline health check (Get-HeadsetPipelineFaults, run by the slow-tick watchdog): a pipeline can
 # break while its scrcpy keeps running - ffmpeg exits on a broken pipe when mediamtx restarts, the
-# bridge job dies - and the stream then answers 404 with nothing to restart it. Per safe display
+# bridge thread ends - and the stream then answers 404 with nothing to restart it. Per safe display
 # name: PathMisses = consecutive checks with the mediamtx path missing or not ready, Restarts =
 # times of the automatic restarts (rate limit), GaveUpUntil = end of the current give-up period.
 if (-not (Get-Variable -Name HeadsetPipelineHealth -Scope Global -ErrorAction SilentlyContinue)) {
@@ -514,6 +514,66 @@ $script:PipelineHealthWindowMin   = 5    # ...within this sliding window, then E
 # the path lives in $global:HeadsetPipelines[<name>].RecordFile instead.
 if (-not (Get-Variable -Name DirectRecordings -Scope Global -ErrorAction SilentlyContinue)) {
     $global:DirectRecordings = @{}
+}
+
+# Machine-wide lock around the START of a scrcpy client (launch -> its server connected). On Windows
+# several scrcpy clients started at the same moment can listen on the SAME local port (scrcpy's
+# port range plus SO_REUSEADDR), and a headset's server then connects to another headset's client.
+# Seen 2026-10-18 with two captures started in parallel by the capture workers (ADR-0036): Q2
+# Dragon's server got "Connection refused" and its stream carried Q3 BLUE's picture (recording
+# 1580x1580 instead of the 1408x1408 crop, 20 Mb/s twice instead of 20 + 6). Starts were safe before
+# only because they were serial. A named mutex, so it also covers the benchmark job, the console and
+# a second install on this PC. Returns the held mutex, or $null when it could not be taken within
+# -TimeoutSec (the start then proceeds unlocked, WARNING). Pair with Exit-ScrcpyLaunchLock, on the
+# SAME thread.
+# Example: $lock = Enter-ScrcpyLaunchLock -Name 'Q3_RED'; try { ... } finally { Exit-ScrcpyLaunchLock -Lock $lock }
+function Enter-ScrcpyLaunchLock {
+    param([string]$Name = '', [int]$TimeoutSec = 30)
+    $m = $null
+    try {
+        $m = New-Object System.Threading.Mutex($false, 'Global\VRHM_ScrcpyLaunch')
+        $got = $false
+        try { $got = $m.WaitOne($TimeoutSec * 1000) } catch [System.Threading.AbandonedMutexException] { $got = $true }
+        if ($got) { return $m }
+        Write-Log ("scrcpy launch lock not obtained within {0} s for {1} - starting without it." -f $TimeoutSec, $Name) -Level WARNING
+        $m.Dispose()
+    } catch {
+        Write-Log ("scrcpy launch lock unavailable for {0}: {1}" -f $Name, $_.Exception.Message) -Level WARNING
+        if ($m) { try { $m.Dispose() } catch { } }
+    }
+    return $null
+}
+
+# Releases what Enter-ScrcpyLaunchLock returned ($null is fine). Never throws.
+# Example: Exit-ScrcpyLaunchLock -Lock $lock
+function Exit-ScrcpyLaunchLock {
+    param($Lock)
+    if (-not $Lock) { return }
+    try { $Lock.ReleaseMutex() } catch { }
+    try { $Lock.Dispose() } catch { }
+}
+
+# Snapshot of a table's keys, safe while another runspace writes to it. In VRMonitor the capture
+# tables ($global:HeadsetPipelines, DirectRecordings, ScrcpyLaunchState, EyeMergeRejected) are
+# synchronized hashtables shared with the capture workers (S3-5 Step B): a single read or write
+# is atomic, but ENUMERATING .Keys is not - a worker adding an entry mid-loop throws "Collection
+# was modified". Copying under the table's SyncRoot (the lock its writes take) avoids that, and
+# costs nothing for a plain hashtable. Returns @() for $null. Never throws.
+# Example: foreach ($k in (Get-SyncTableKeys -Table $global:HeadsetPipelines)) { ... }
+function Get-SyncTableKeys {
+    param($Table)
+    if ($null -eq $Table) { return @() }
+    $keys = @()
+    $locked = $false
+    try {
+        [System.Threading.Monitor]::Enter($Table.SyncRoot)
+        $locked = $true
+        $keys = @($Table.Keys)
+    } catch {
+    } finally {
+        if ($locked) { [System.Threading.Monitor]::Exit($Table.SyncRoot) }
+    }
+    return $keys
 }
 
 function Complete-RecordingFile {
@@ -573,7 +633,7 @@ function Complete-DirectRecording {
     #>
     param([Parameter(Mandatory)][string]$SafeName)
     # The session is over: its LocalWindow launch stamp (Get-ScrcpyLaunchStamp) goes with it.
-    if ($script:ScrcpyLaunchState) { $script:ScrcpyLaunchState.Remove($SafeName) }
+    if ($global:ScrcpyLaunchState) { $global:ScrcpyLaunchState.Remove($SafeName) }
     $path = $global:DirectRecordings[$SafeName]
     if (-not $path) { return }
     $global:DirectRecordings.Remove($SafeName)
@@ -588,86 +648,326 @@ function Get-HeadsetPipeNames {
     }
 }
 
-# Starts a PowerShell job hosting two named-pipe servers and relaying bytes
-# from In (scrcpy writes) to Out (ffmpeg reads). Returns the job object.
-# The job blocks on WaitForConnection until both clients are attached, then
-# loops on Read/Write. It exits cleanly when the writer (scrcpy) disconnects.
+# In-process pipe bridge (ADR-0035, supersedes ADR-0003). scrcpy records into the named pipe
+# vrm_<safe>_in and ffmpeg reads vrm_<safe>_out; both are pipe CLIENTS, so a server pair must sit
+# between them. It used to be a Start-Job per stream (a whole powershell.exe, 60-100 MB, ~0.5-1 s
+# to start, an interpreted 4 KB copy loop). It is now a C# class compiled once per process: one
+# background thread per stream, in whichever process calls start-screenCopy (VRMonitor normally,
+# the benchmark job or the console otherwise). Every wait of that thread also waits on a stop
+# event, so Stop() works from ANY thread and returns at once; the thread is a background thread,
+# so a dying process never waits for it and the OS closes both pipes (ffmpeg then sees EOF).
+# Changing this C# source needs a restart of the process that compiled it (Add-Type cannot reload).
+$script:PipeBridgeCsharp = @'
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.IO.Pipes;
+using System.Runtime.InteropServices;
+using System.Threading;
+
+public sealed class VrhmPipeBridge
+{
+    [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr OpenThread(uint access, bool inherit, uint threadId);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool GetThreadTimes(IntPtr h, out long creation, out long exit, out long kernel, out long user);
+    [DllImport("kernel32.dll")] private static extern bool CloseHandle(IntPtr h);
+    private const uint ThreadQueryLimitedInformation = 0x0800;
+
+    private static readonly object RegistryLock = new object();
+    private static readonly List<VrhmPipeBridge> LiveBridges = new List<VrhmPipeBridge>();
+    private static double endedCpuSeconds = 0.0;
+
+    private readonly NamedPipeServerStream srvIn;
+    private readonly NamedPipeServerStream srvOut;
+    private readonly ManualResetEvent stopEvent = new ManualResetEvent(false);
+    private readonly int readSize;
+    private readonly int inTimeoutMs;
+    private readonly int outTimeoutMs;
+    private readonly Thread thread;
+    private IntPtr threadHandle = IntPtr.Zero;
+    private long bytesCopied = 0;
+    private volatile bool hasData = false;
+    private volatile bool stopRequested = false;
+    private volatile string state = "Running";
+    private volatile string error = "";
+    private int nativeThreadId = 0;
+
+    public string Name { get; private set; }
+    public string PipeIn { get; private set; }
+    public string PipeOut { get; private set; }
+    public DateTime StartedUtc { get; private set; }
+    public DateTime EndedUtc { get; private set; }
+
+    // Both pipe servers are created HERE, on the caller's thread: when the constructor returns
+    // they exist (so scrcpy may open pipe-in), and a name still in use throws to the caller.
+    public VrhmPipeBridge(string name, string pipeIn, string pipeOut, int pipeBufferBytes, int readBytes, int inTimeoutMs, int outTimeoutMs)
+    {
+        Name = name; PipeIn = pipeIn; PipeOut = pipeOut;
+        this.readSize = Math.Max(4096, readBytes);
+        this.inTimeoutMs = inTimeoutMs;
+        this.outTimeoutMs = outTimeoutMs;
+        srvIn = new NamedPipeServerStream(pipeIn, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous, pipeBufferBytes, pipeBufferBytes);
+        try
+        {
+            srvOut = new NamedPipeServerStream(pipeOut, PipeDirection.Out, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous, pipeBufferBytes, pipeBufferBytes);
+        }
+        catch { srvIn.Dispose(); throw; }
+        StartedUtc = DateTime.UtcNow;
+        thread = new Thread(Run);
+        thread.IsBackground = true;
+        thread.Name = "VrmBridge_" + name;
+        lock (RegistryLock) { LiveBridges.Add(this); }
+        thread.Start();
+    }
+
+    public bool IsAlive { get { return thread.IsAlive; } }
+    public bool Listening { get { return true; } }
+    public bool HasData { get { return hasData; } }
+    public string State { get { return state; } }
+    public string Error { get { return error; } }
+    public long BytesCopied { get { return Interlocked.Read(ref bytesCopied); } }
+    public int NativeThreadId { get { return nativeThreadId; } }
+
+    // CPU time used by this bridge's thread so far (kernel + user), in seconds.
+    public double CpuSeconds { get { lock (RegistryLock) { return ReadCpuLocked(); } } }
+
+    private double ReadCpuLocked()
+    {
+        if (threadHandle == IntPtr.Zero) { return 0.0; }
+        long c, e, k, u;
+        if (!GetThreadTimes(threadHandle, out c, out e, out k, out u)) { return 0.0; }
+        return (k + u) / 1e7;
+    }
+
+    // Asks the thread to stop and waits at most joinMs for it (0 = do not wait). Never throws.
+    public bool Stop(int joinMs)
+    {
+        stopRequested = true;
+        try { stopEvent.Set(); } catch { }
+        if (joinMs <= 0) { return !thread.IsAlive; }
+        try { return thread.Join(joinMs); } catch { return false; }
+    }
+
+    // CPU seconds of every bridge this process ever ran (ended ones included), so a caller can
+    // take deltas between two readings: the benchmark's "bridge" process entry.
+    public static double TotalCpuSeconds()
+    {
+        lock (RegistryLock)
+        {
+            double sum = endedCpuSeconds;
+            foreach (VrhmPipeBridge b in LiveBridges) { sum += b.ReadCpuLocked(); }
+            return sum;
+        }
+    }
+
+    public static int LiveCount() { lock (RegistryLock) { return LiveBridges.Count; } }
+
+    // Stops every bridge of this process (shutdown safety net). Returns how many were asked.
+    public static int StopAll(int joinMs)
+    {
+        VrhmPipeBridge[] all;
+        lock (RegistryLock) { all = LiveBridges.ToArray(); }
+        foreach (VrhmPipeBridge b in all) { b.Stop(0); }
+        if (joinMs > 0)
+        {
+            DateTime deadline = DateTime.UtcNow.AddMilliseconds(joinMs);
+            foreach (VrhmPipeBridge b in all)
+            {
+                int left = (int)(deadline - DateTime.UtcNow).TotalMilliseconds;
+                if (left <= 0) { break; }
+                try { b.thread.Join(left); } catch { }
+            }
+        }
+        return all.Length;
+    }
+
+    // Waits for h or the stop event. True only when h was signalled.
+    private bool WaitOrStop(WaitHandle h, int timeoutMs)
+    {
+        int r = WaitHandle.WaitAny(new WaitHandle[] { h, stopEvent }, timeoutMs < 0 ? Timeout.Infinite : timeoutMs);
+        return r == 0;
+    }
+
+    // One read: bytes read, 0 at end of stream, -1 when stopped.
+    private int ReadOrStop(byte[] buf)
+    {
+        IAsyncResult ar = srvIn.BeginRead(buf, 0, buf.Length, null, null);
+        if (!WaitOrStop(ar.AsyncWaitHandle, -1)) { return -1; }
+        try { return srvIn.EndRead(ar); } catch (IOException) { return 0; }
+    }
+
+    // One write: false when stopped or when the reader (ffmpeg) is gone.
+    private bool WriteOrStop(byte[] buf, int count)
+    {
+        IAsyncResult ar;
+        try { ar = srvOut.BeginWrite(buf, 0, count, null, null); } catch (IOException) { return false; }
+        if (!WaitOrStop(ar.AsyncWaitHandle, -1)) { return false; }
+        try { srvOut.EndWrite(ar); } catch (IOException) { return false; }
+        Interlocked.Add(ref bytesCopied, count);
+        return true;
+    }
+
+    private void Run()
+    {
+        string endState = "Completed";
+        try
+        {
+            nativeThreadId = (int)GetCurrentThreadId();
+            IntPtr h = OpenThread(ThreadQueryLimitedInformation, false, (uint)nativeThreadId);
+            lock (RegistryLock) { threadHandle = h; }
+            // Accept both connections IN PARALLEL: waiting for pipe-in alone would let scrcpy
+            // fill the pipe-in buffer and fail before ffmpeg could connect.
+            IAsyncResult arIn = srvIn.BeginWaitForConnection(null, null);
+            IAsyncResult arOut = srvOut.BeginWaitForConnection(null, null);
+            if (!WaitOrStop(arIn.AsyncWaitHandle, inTimeoutMs))
+            {
+                endState = stopRequested ? "Stopped" : "Failed";
+                if (!stopRequested) { error = "scrcpy did not open the input pipe in time"; }
+                return;
+            }
+            srvIn.EndWaitForConnection(arIn);
+            byte[] buf = new byte[readSize];
+            // The first chunk (Matroska header + codec extradata) is read BEFORE ffmpeg connects
+            // and written first once it has: nothing is lost or reordered.
+            int first = ReadOrStop(buf);
+            if (first < 0) { endState = "Stopped"; return; }
+            // scrcpy opened the pipe and closed it without a byte: ffmpeg then reads an empty
+            // input ("EBML header parsing failed"). Said here so the health fault names the cause.
+            if (first == 0) { error = "scrcpy closed the input pipe before sending any data"; return; }
+            hasData = true;
+            if (!WaitOrStop(arOut.AsyncWaitHandle, outTimeoutMs))
+            {
+                endState = stopRequested ? "Stopped" : "Failed";
+                if (!stopRequested) { error = "ffmpeg did not open the output pipe in time"; }
+                return;
+            }
+            srvOut.EndWaitForConnection(arOut);
+            if (!WriteOrStop(buf, first)) { endState = stopRequested ? "Stopped" : "Completed"; return; }
+            while (true)
+            {
+                int n = ReadOrStop(buf);
+                if (n < 0) { endState = "Stopped"; break; }
+                if (n == 0) { break; }
+                if (!WriteOrStop(buf, n)) { if (stopRequested) { endState = "Stopped"; } break; }
+            }
+        }
+        catch (Exception ex)
+        {
+            endState = stopRequested ? "Stopped" : "Failed";
+            if (!stopRequested) { error = ex.GetType().Name + ": " + ex.Message; }
+        }
+        finally
+        {
+            // Disposing the servers aborts any pending I/O and closes both pipes: ffmpeg sees EOF.
+            try { srvIn.Dispose(); } catch { }
+            try { srvOut.Dispose(); } catch { }
+            lock (RegistryLock)
+            {
+                endedCpuSeconds += ReadCpuLocked();
+                if (threadHandle != IntPtr.Zero) { CloseHandle(threadHandle); threadHandle = IntPtr.Zero; }
+                LiveBridges.Remove(this);
+            }
+            EndedUtc = DateTime.UtcNow;
+            state = endState;
+        }
+    }
+}
+
+// Copies a process's stderr lines to a log file from the .NET event thread (S3-5 Step B). It
+// replaced Register-ObjectEvent -Action, whose action runs only in the runspace that registered
+// it, and only while that runspace processes events: a capture started by a worker runspace
+// that then went idle would stop draining ffmpeg's stderr, and ffmpeg blocks once that pipe is
+// full. Attach right after Process.Start (it starts the async read); Dispose after CancelErrorRead.
+// Same encoding as the writer it replaced (Encoding.UTF8, with a BOM).
+public sealed class VrhmStderrSink : IDisposable
+{
+    private readonly StreamWriter writer;
+    private readonly object gate = new object();
+    private bool closed = false;
+
+    private VrhmStderrSink(StreamWriter w) { writer = w; }
+
+    public static VrhmStderrSink Attach(System.Diagnostics.Process process, string path)
+    {
+        StreamWriter w = new StreamWriter(path, false, new System.Text.UTF8Encoding(true));
+        w.AutoFlush = true;
+        VrhmStderrSink sink = new VrhmStderrSink(w);
+        process.ErrorDataReceived += sink.OnData;
+        process.BeginErrorReadLine();
+        return sink;
+    }
+
+    private void OnData(object sender, System.Diagnostics.DataReceivedEventArgs e)
+    {
+        if (string.IsNullOrEmpty(e.Data)) { return; }
+        lock (gate)
+        {
+            if (closed) { return; }
+            try { writer.WriteLine(e.Data); } catch { }
+        }
+    }
+
+    public void Dispose()
+    {
+        lock (gate)
+        {
+            if (closed) { return; }
+            closed = true;
+            try { writer.Dispose(); } catch { }
+        }
+    }
+}
+'@
+
+$script:PipeBridgePipeBufferBytes = 1048576   # kernel buffer of each pipe server (as the job had)
+$script:PipeBridgeReadBytes       = 262144    # copy buffer (the job read 4 KB at a time)
+$script:PipeBridgeInTimeoutSec    = 60        # scrcpy must open pipe-in within this
+$script:PipeBridgeOutTimeoutSec   = 30        # ffmpeg must open pipe-out within this, after the first data
+
+# Compiles VrhmPipeBridge once per process. $true when the type is available, $false (ERROR logged)
+# when the compile failed. Example: if (Initialize-PipeBridgeType) { [VrhmPipeBridge]::LiveCount() }
+function Initialize-PipeBridgeType {
+    # Both classes come from the one source: a process that compiled an older source without
+    # VrhmStderrSink keeps that type until it restarts (Add-Type cannot reload).
+    if (('VrhmPipeBridge' -as [type]) -and ('VrhmStderrSink' -as [type])) { return $true }
+    if ('VrhmPipeBridge' -as [type]) {
+        Write-Log 'Pipe bridge: this process holds an older build of the relay helper (no VrhmStderrSink) - restart it.' -Level ERROR
+        return $false
+    }
+    try {
+        Add-Type -TypeDefinition $script:PipeBridgeCsharp -Language CSharp -ErrorAction Stop
+        return $true
+    } catch {
+        Write-Log ("Pipe bridge: could not compile the relay helper: {0}" -f $_.Exception.Message) -Level ERROR
+        return $false
+    }
+}
+
+# Starts the in-process pipe bridge of one headset (ADR-0035): two named-pipe servers relaying
+# bytes from In (scrcpy writes) to Out (ffmpeg reads) on a background thread. Returns the
+# VrhmPipeBridge object (IsAlive, State, HasData, BytesCopied, CpuSeconds, Error). Throws when the
+# helper cannot be compiled or a pipe name is still in use (start-screenCopy logs it and gives up).
+# The bridge ends on its own when scrcpy disconnects, or after the 60 s / 30 s connect timeouts.
+# Example: $b = Start-HeadsetPipeBridge -SafeName 'Q3_RED'
 function Start-HeadsetPipeBridge {
     param(
         [Parameter(Mandatory)][string]$SafeName
     )
+    if (-not (Initialize-PipeBridgeType)) { throw 'the pipe bridge helper could not be compiled' }
     $names = Get-HeadsetPipeNames -SafeName $SafeName
-    # The job host is its own powershell.exe with no name of its own. It writes its PID to
-    # data\bridge_<safe>.pid so the standalone reaper can kill it when main dies (S4-5);
-    # removed again when the bridge ends normally.
-    $bridgePidFile = Join-Path (Join-Path $global:ScriptPath 'data') ("bridge_{0}.pid" -f $SafeName)
-    $job = Start-Job -Name "VrmBridge_$SafeName" -ScriptBlock {
-        param($pipeIn, $pipeOut, $pidFile)
-        try { [System.IO.File]::WriteAllText($pidFile, [string]$PID, (New-Object System.Text.UTF8Encoding($false))) } catch {}
-        try {
-            $srvIn  = New-Object System.IO.Pipes.NamedPipeServerStream(
-                $pipeIn,  [System.IO.Pipes.PipeDirection]::In,  1,
-                [System.IO.Pipes.PipeTransmissionMode]::Byte,
-                [System.IO.Pipes.PipeOptions]::Asynchronous, 1048576, 1048576)
-            $srvOut = New-Object System.IO.Pipes.NamedPipeServerStream(
-                $pipeOut, [System.IO.Pipes.PipeDirection]::Out, 1,
-                [System.IO.Pipes.PipeTransmissionMode]::Byte,
-                [System.IO.Pipes.PipeOptions]::Asynchronous, 1048576, 1048576)
-            # Accept both connections IN PARALLEL via async begin/end. If we wait
-            # sequentially (In first, then Out), scrcpy fills the pipe-in kernel
-            # buffer and errors out long before ffmpeg gets a chance to connect.
-            $arIn  = $srvIn.BeginWaitForConnection($null, $null)
-            $arOut = $srvOut.BeginWaitForConnection($null, $null)
-            # Readiness signals for the parent (Wait-HeadsetPipeBridgeSignal reads the job's
-            # Output collection, no Receive-Job): 'listening' = both pipe servers exist, so scrcpy
-            # may open pipe-in; 'data' = scrcpy wrote its first bytes (the Matroska header with
-            # the codec extradata), so ffmpeg can be started.
-            Write-Output 'listening'
-            # Bounded waits in 500 ms slices, never a bare EndWaitForConnection: a scrcpy killed
-            # before it opened pipe-in (or an ffmpeg that never opens pipe-out) left this job
-            # blocked in a .NET call that Stop-Job cannot interrupt, and the caller's Stop-Job
-            # froze the VRMonitor loop for ~2 min (TEST25 section 50). Giving up runs the
-            # finally below, which disposes both servers and removes the pid file.
-            $inDeadline = (Get-Date).AddSeconds(60)
-            while (-not $arIn.AsyncWaitHandle.WaitOne(500)) {
-                if ((Get-Date) -gt $inDeadline) { return }
-            }
-            $srvIn.EndWaitForConnection($arIn)
-            $buf = New-Object byte[] 4096
-            # Read the first chunk BEFORE ffmpeg connects: it is held here and written first once
-            # pipe-out is connected, so nothing is lost or reordered. Later bytes wait in the
-            # pipe-in kernel buffer exactly as before.
-            $first = $srvIn.Read($buf, 0, $buf.Length)
-            if ($first -le 0) { return }
-            Write-Output 'data'
-            $outDeadline = (Get-Date).AddSeconds(30)
-            while (-not $arOut.AsyncWaitHandle.WaitOne(500)) {
-                if ((Get-Date) -gt $outDeadline) { return }
-            }
-            $srvOut.EndWaitForConnection($arOut)
-            try { $srvOut.Write($buf, 0, $first); $srvOut.Flush() } catch { return }
-            while ($true) {
-                $n = $srvIn.Read($buf, 0, $buf.Length)
-                if ($n -le 0) { break }
-                try { $srvOut.Write($buf, 0, $n); $srvOut.Flush() } catch { break }
-            }
-        } finally {
-            try { $srvIn.Dispose()  } catch {}
-            try { $srvOut.Dispose() } catch {}
-            try { [System.IO.File]::Delete($pidFile) } catch {}
-        }
-    } -ArgumentList $names.In, $names.Out, $bridgePidFile
-    return $job
+    return [VrhmPipeBridge]::new($SafeName, $names.In, $names.Out, $script:PipeBridgePipeBufferBytes,
+        $script:PipeBridgeReadBytes, ($script:PipeBridgeInTimeoutSec * 1000), ($script:PipeBridgeOutTimeoutSec * 1000))
 }
 
-# Waits until the pipe bridge job of Start-HeadsetPipeBridge has emitted -Signal ('listening' or
-# 'data'), polling its Output collection every -PollMs, for at most -TimeoutMs. Returns early
-# (with $false) when the bridge job ended, or when -Process (scrcpy) exited. Replaces the fixed
-# 500 ms / 3000 ms sleeps of start-screenCopy (S3-5): the caller proceeds at the cap exactly as
-# it did after the old sleep. Returns $true when the signal was seen. Never throws.
+# Waits until the pipe bridge reports -Signal ('listening': both pipe servers exist, true as soon
+# as Start-HeadsetPipeBridge returned; 'data': scrcpy wrote its first bytes, so ffmpeg can be
+# started), polling every -PollMs for at most -TimeoutMs. Returns early (with $false) when the
+# bridge ended, or when -Process (scrcpy) exited. The caller proceeds at the cap exactly as it did
+# after the old fixed sleeps (S3-5). Returns $true when the signal was seen. Never throws.
+# Example: Wait-HeadsetPipeBridgeSignal -Bridge $b -Signal 'data' -TimeoutMs 3000 -PollMs 100 -Process $scrcpyProc
 function Wait-HeadsetPipeBridgeSignal {
     param(
-        [Parameter(Mandatory)]$Job,
+        [Parameter(Mandatory)][Alias('Job')]$Bridge,
         [Parameter(Mandatory)][ValidateSet('listening','data')][string]$Signal,
         [int]$TimeoutMs = 1000,
         [int]$PollMs = 50,
@@ -675,13 +975,10 @@ function Wait-HeadsetPipeBridgeSignal {
     )
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     try {
-        $child = $null
         while ($true) {
-            if (-not $child -and $Job.ChildJobs -and $Job.ChildJobs.Count -gt 0) { $child = $Job.ChildJobs[0] }
-            if ($child) {
-                foreach ($o in @($child.Output)) { if ([string]$o -eq $Signal) { return $true } }
-                if ($child.State -notin @('NotStarted','Running')) { return $false }
-            }
+            if ($Signal -eq 'listening' -and $Bridge.Listening) { return $true }
+            if ($Signal -eq 'data' -and $Bridge.HasData) { return $true }
+            if (-not $Bridge.IsAlive) { return $false }
             if ($Process) { try { if ($Process.HasExited) { return $false } } catch { } }
             if ($sw.ElapsedMilliseconds -ge $TimeoutMs) { return $false }
             Start-Sleep -Milliseconds $PollMs
@@ -694,42 +991,41 @@ function Wait-HeadsetPipeBridgeSignal {
     }
 }
 
-# Tears down one pipe bridge job WITHOUT waiting on it. Stop-Job on a job blocked in a .NET call
-# cannot interrupt it and waited ~2 min on the VRMonitor thread (TEST25 section 50), so the job
-# host process is killed first through the PID it wrote to data\bridge_<safe>.pid (S4-5 contract,
-# also used by reaper.ps1); Remove-Job -Force then returns at once. Without a pid file it falls
-# back to Stop-Job, which the bridge's 500 ms waits make interruptible. Removes the pid file and
-# logs the time taken. Never throws.
-# Example: Stop-HeadsetPipeBridgeJob -Job $entry.Bridge -SafeName 'Q3_RED'
-function Stop-HeadsetPipeBridgeJob {
+# Stops one pipe bridge WITHOUT blocking the caller: signals its thread and waits at most -JoinMs
+# (default 200) for it. The thread notices the stop at once (every wait includes the stop event),
+# so the join is normally a few ms; a thread still running past it is a background thread that
+# disposes both pipes as it ends. Callable from any thread. Logs the time taken. Never throws.
+# Example: Stop-HeadsetPipeBridge -Bridge $entry.Bridge -SafeName 'Q3_RED'
+function Stop-HeadsetPipeBridge {
     param(
-        $Job,
-        [Parameter(Mandatory)][string]$SafeName
+        $Bridge,
+        [Parameter(Mandatory)][string]$SafeName,
+        [int]$JoinMs = 200
     )
+    if (-not $Bridge) { return }
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    $pidFile = Join-Path (Join-Path $global:ScriptPath 'data') ("bridge_{0}.pid" -f $SafeName)
-    $killed = $false
-    try {
-        if (Test-Path -LiteralPath $pidFile) {
-            $raw = [System.IO.File]::ReadAllText($pidFile, (New-Object System.Text.UTF8Encoding($false))).Trim()
-            $hostPid = 0
-            if ([int]::TryParse($raw, [ref]$hostPid) -and $hostPid -gt 0 -and $hostPid -ne $PID) {
-                $proc = Get-Process -Id $hostPid -ErrorAction SilentlyContinue
-                # Only a PowerShell host: a stale pid file must never kill a recycled PID of something else.
-                if ($proc -and $proc.ProcessName -in @('powershell', 'pwsh')) {
-                    Stop-Process -Id $hostPid -Force -ErrorAction SilentlyContinue
-                    try { [void]$proc.WaitForExit(2000) } catch { }
-                    $killed = $true
-                }
-            }
-        }
-    } catch { }
-    if ($Job) {
-        if (-not $killed) { try { Stop-Job $Job -ErrorAction SilentlyContinue } catch { } }
-        try { Remove-Job $Job -Force -ErrorAction SilentlyContinue } catch { }
-    }
-    try { [System.IO.File]::Delete($pidFile) } catch { }
-    Write-Log ("Stop-HeadsetPipeBridgeJob: bridge of {0} removed in {1} ms ({2})" -f $SafeName, $sw.ElapsedMilliseconds, $(if ($killed) { 'host killed' } else { 'Stop-Job' })) -Level DEBUG
+    $ended = $false
+    try { $ended = [bool]$Bridge.Stop($JoinMs) } catch { }
+    $copied = 0
+    try { $copied = [long]$Bridge.BytesCopied } catch { }
+    Write-Log ("Stop-HeadsetPipeBridge: bridge of {0} stopped in {1} ms (ended={2}, {3} MB relayed)" -f $SafeName, $sw.ElapsedMilliseconds, $ended, [Math]::Round($copied / 1MB, 1)) -Level DEBUG
+}
+
+# Stops every pipe bridge of THIS process, tracked or not (shutdown safety net used by
+# Stop-Scrcpy when it stops everything). Returns how many were stopped. Never throws.
+# Example: Stop-AllHeadsetPipeBridges
+function Stop-AllHeadsetPipeBridges {
+    param([int]$JoinMs = 500)
+    if (-not ('VrhmPipeBridge' -as [type])) { return 0 }
+    try { return [int][VrhmPipeBridge]::StopAll($JoinMs) } catch { return 0 }
+}
+
+# CPU seconds used by every pipe bridge thread of THIS process since it started (ended bridges
+# included), for delta measurements; 0 when no bridge was ever started. Never throws.
+# Example: Get-HeadsetPipeBridgeCpuSeconds
+function Get-HeadsetPipeBridgeCpuSeconds {
+    if (-not ('VrhmPipeBridge' -as [type])) { return 0.0 }
+    try { return [double][VrhmPipeBridge]::TotalCpuSeconds() } catch { return 0.0 }
 }
 
 # Quotes/escapes a single argument for ProcessStartInfo.Arguments (a single
@@ -915,17 +1211,21 @@ function Start-FfmpegStreamPush {
     $proc.StartInfo = $psi
     $null = $proc.Start()
 
-    $errWriter = [System.IO.StreamWriter]::new($logErr, $false, [System.Text.Encoding]::UTF8)
-    $errWriter.AutoFlush = $true
-    $errSub = Register-ObjectEvent -InputObject $proc -EventName ErrorDataReceived -MessageData $errWriter -Action {
-        if ($EventArgs.Data) { $Event.MessageData.WriteLine($EventArgs.Data) }
+    # stderr -> log file on the .NET event thread (VrhmStderrSink), not Register-ObjectEvent: an
+    # event action runs only in the runspace that registered it, so a capture started by a
+    # worker runspace (S3-5 Step B) would stop draining stderr once that runspace went idle, and
+    # ffmpeg blocks when the pipe is full. Start-HeadsetPipeBridge compiled the type already;
+    # the check is for a caller that streams without a bridge.
+    if (-not (Initialize-PipeBridgeType)) {
+        try { $proc.Kill() } catch { }
+        throw 'the stderr helper (VrhmStderrSink) is not available'
     }
-    $proc.BeginErrorReadLine()
+    $errWriter = [VrhmStderrSink]::Attach($proc, $logErr)
 
     return @{
         Process              = $proc
         ErrorWriter          = $errWriter
-        ErrorSubscriptionId  = $errSub.Id
+        ErrorSubscriptionId  = $null
     }
 }
 
@@ -980,7 +1280,7 @@ function Set-CaptureMode {
     return $true
 }
 
-# Tears down the bridge job + ffmpeg push for one headset. Called by Stop-Scrcpy.
+# Tears down the bridge + ffmpeg push for one headset. Called by Stop-Scrcpy.
 function Stop-HeadsetPipeline {
     param([Parameter(Mandatory)][string]$SafeName)
     $entry = $global:HeadsetPipelines[$SafeName]
@@ -1038,8 +1338,8 @@ function Stop-HeadsetPipeline {
         try { $entry.FfmpegErrorWriter.Dispose() } catch {}
     }
     if ($entry.Bridge) {
-        # Never Stop-Job directly: see Stop-HeadsetPipeBridgeJob (it also drops the pid file).
-        Stop-HeadsetPipeBridgeJob -Job $entry.Bridge -SafeName $SafeName
+        # Signals the in-process bridge thread and returns at once (never blocks the caller).
+        Stop-HeadsetPipeBridge -Bridge $entry.Bridge -SafeName $SafeName
     }
     $global:HeadsetPipelines.Remove($SafeName)
 }
@@ -1077,7 +1377,7 @@ function start-screenCopy {
         # for nothing - the guard alone prevents the second instance, and every caller runs at most
         # once per tick. Say whether this process owns the session, for diagnosis.
         $owned = ($global:HeadsetPipelines -and $global:HeadsetPipelines.ContainsKey($displayName)) -or
-                 ($script:ScrcpyLaunchState -and $script:ScrcpyLaunchState.ContainsKey($displayName))
+                 ($global:ScrcpyLaunchState -and $global:ScrcpyLaunchState.ContainsKey($displayName))
         Write-Log -Message ($msg.Scrcpy.AlreadyRunning -f $displayName) -Level WARNING
         Write-Log ("start-screenCopy: {0} already running, session owned by this process: {1}" -f $displayName, [bool]$owned) -Level DEBUG
         return
@@ -1242,18 +1542,17 @@ function start-screenCopy {
 
     # Pipe modes: start the bridge BEFORE scrcpy so the pipe-in server is listening.
     # Defensively clear any leftover pipeline entry first - if a previous scrcpy died
-    # but its bridge job or ffmpeg push was still tracked, the named-pipe server names
+    # but its bridge or ffmpeg push was still tracked, the named-pipe server names
     # would still be in use and a fresh bridge would fail to create.
-    $bridgeJob = $null
+    $bridge = $null
     if ($usePipe) {
         Stop-HeadsetPipeline -SafeName $displayName
         try {
-            $bridgeJob = Start-HeadsetPipeBridge -SafeName $displayName
-            # Wait for the job to create both pipe-server objects (it emits 'listening'), at most
-            # 1 s: scrcpy opens pipe-in only after it has connected to the device, which takes
-            # longer than that, so proceeding at the cap is what the old fixed 500 ms did.
+            $bridge = Start-HeadsetPipeBridge -SafeName $displayName
+            # The in-process bridge creates both pipe servers before Start-HeadsetPipeBridge
+            # returns, so 'listening' is immediate; the wait stays as a cheap sanity check.
             $bridgeWait = [System.Diagnostics.Stopwatch]::StartNew()
-            $bridgeReady = Wait-HeadsetPipeBridgeSignal -Job $bridgeJob -Signal 'listening' -TimeoutMs 1000
+            $bridgeReady = Wait-HeadsetPipeBridgeSignal -Bridge $bridge -Signal 'listening' -TimeoutMs 1000
             Write-Log ("start-screenCopy: pipe bridge for {0} listening={1} after {2} ms" -f $displayName, $bridgeReady, $bridgeWait.ElapsedMilliseconds) -Level DEBUG
         } catch {
             Write-Log -Message ("Failed to start pipe bridge for {0}: {1}" -f $displayName, $_.Exception.Message) -Level "ERROR"
@@ -1264,20 +1563,30 @@ function start-screenCopy {
     # Per-session scrcpy logs (same reason as the ffmpeg one in Start-FfmpegStreamPush): a
     # restart must not overwrite the output of the session that just failed.
     $sessionStamp = Get-Date -Format 'yyyyMMdd_HHmmss_fff'
+    # Held until this scrcpy's server has connected (first data, or a window): see Enter-ScrcpyLaunchLock.
+    $launchLock = Enter-ScrcpyLaunchLock -Name $displayName
     try {
         $scrcpyProc = Start-Process $scrcpy -ArgumentList $arguments -PassThru -NoNewWindow `
 			-RedirectStandardOutput (Join-Path -Path $global:logFolder -ChildPath ("{0}_{1}_StandardOutput.txt" -f $displayName, $sessionStamp)) `
 			-RedirectStandardError  (Join-Path -Path $global:logFolder -ChildPath ("{0}_{1}_StandardError.txt" -f $displayName, $sessionStamp))
 	} catch {
         Write-Log -Message ($msg.Scrcpy.LaunchError -f $_.Exception.Message) -Level "ERROR"
-        if ($bridgeJob) { Stop-HeadsetPipeBridgeJob -Job $bridgeJob -SafeName $displayName }
+        Exit-ScrcpyLaunchLock -Lock $launchLock
+        if ($bridge) { Stop-HeadsetPipeBridge -Bridge $bridge -SafeName $displayName }
 		return
     }
 
     # scrcpy is launched. LocalWindow has no pipeline to wait for: its window is the result.
     if (-not $usePipe) {
+        # Window mode has no pipe to watch: the lock is held until the window exists (at most 6 s).
+        $winWait = [System.Diagnostics.Stopwatch]::StartNew()
+        while ($winWait.ElapsedMilliseconds -lt 6000) {
+            try { $scrcpyProc.Refresh(); if ($scrcpyProc.HasExited -or $scrcpyProc.MainWindowHandle -ne [IntPtr]::Zero) { break } } catch { break }
+            Start-Sleep -Milliseconds 100
+        }
+        Exit-ScrcpyLaunchLock -Lock $launchLock; $launchLock = $null
         $startHoldSec = 2
-        $script:ScrcpyLaunchState[$displayName] = @{ LaunchStamp = $launchStamp.Stamp; StampParts = $launchStamp.Parts; Transport = $launchTransport }
+        $global:ScrcpyLaunchState[$displayName] = @{ LaunchStamp = $launchStamp.Stamp; StampParts = $launchStamp.Parts; Transport = $launchTransport }
     }
 
     # Windowed LocalWindow mode: scrcpy itself writes the recording. Remember the file so it can be
@@ -1299,7 +1608,10 @@ function start-screenCopy {
         # (S3-5); wait for that, 100 ms period, at most the 3 s the old fixed sleep took. A scrcpy
         # that exits, or a bridge that ends, stops the wait early (ffmpeg then fails as before).
         $dataWait = [System.Diagnostics.Stopwatch]::StartNew()
-        $dataReady = Wait-HeadsetPipeBridgeSignal -Job $bridgeJob -Signal 'data' -TimeoutMs 3000 -PollMs 100 -Process $scrcpyProc
+        # 6 s, not 3: the launch lock is held until scrcpy's server has connected, and ffmpeg
+        # cannot open the pipe before the first bytes anyway (EBML header parsing failed).
+        $dataReady = Wait-HeadsetPipeBridgeSignal -Bridge $bridge -Signal 'data' -TimeoutMs 6000 -PollMs 100 -Process $scrcpyProc
+        Exit-ScrcpyLaunchLock -Lock $launchLock; $launchLock = $null
         Write-Log ("start-screenCopy: first scrcpy data for {0} seen={1} after {2} ms" -f $displayName, $dataReady, $dataWait.ElapsedMilliseconds) -Level DEBUG
         try {
             $pathName = (ConvertTo-RestreamPathName -HeadsetName $displayName)
@@ -1320,7 +1632,7 @@ function start-screenCopy {
             }
             $ffmpegPush = Start-FfmpegStreamPush -SafeName $displayName -RtspUrl $rtspUrl -RecordFile $ffmpegRecord -SourceCodec $sourceCodec -EyeMerge $eyeMergeMaps -ProgressFile $ffmpegProgressFile
             $global:HeadsetPipelines[$displayName] = @{
-                Bridge              = $bridgeJob
+                Bridge              = $bridge
                 ScrcpyProcess       = $scrcpyProc
                 FfmpegProcess       = $ffmpegPush.Process
                 FfmpegErrorWriter   = $ffmpegPush.ErrorWriter
@@ -1343,11 +1655,12 @@ function start-screenCopy {
         } catch {
             Write-Log ("Failed to start ffmpeg push for {0}: {1}" -f $displayName, $_.Exception.Message) -Level "ERROR"
             try { Stop-Process -Id $scrcpyProc.Id -Force -EA SilentlyContinue } catch {}
-            if ($bridgeJob) { Stop-HeadsetPipeBridgeJob -Job $bridgeJob -SafeName $displayName }
+            if ($bridge) { Stop-HeadsetPipeBridge -Bridge $bridge -SafeName $displayName }
         }
     }
 
     } finally {
+        Exit-ScrcpyLaunchLock -Lock $launchLock
         # Every exit path ends here: success holds the "starting" mark a few seconds, anything
         # else (ADB unreachable, scrcpy missing, ffmpeg failed to start) clears it at once.
         if ($startingId -gt 0) {
@@ -1362,8 +1675,11 @@ function start-screenCopy {
 
 # Per-session launch state of a LocalWindow capture (no pipeline entry exists for it), keyed by the
 # safe display name: @{ LaunchStamp; StampParts; Transport }. Pipe modes keep the same fields in
-# $global:HeadsetPipelines[<name>].
-if (-not $script:ScrcpyLaunchState) { $script:ScrcpyLaunchState = @{} }
+# $global:HeadsetPipelines[<name>]. A global (not $script:) so the VRMonitor capture workers can
+# share it (Start-ScrcpyCaptureWorkers injects the same synchronized table into each worker).
+if (-not (Get-Variable -Name ScrcpyLaunchState -Scope Global -ErrorAction SilentlyContinue) -or $null -eq $global:ScrcpyLaunchState) {
+    $global:ScrcpyLaunchState = @{}
+}
 
 function Get-ScrcpyLaunchStamp {
     <#
@@ -1675,7 +1991,7 @@ function Get-HeadsetPipelineFault {
     .DESCRIPTION
     Broken when ANY of:
       - the ffmpeg push has exited;
-      - the pipe bridge job is no longer Running;
+      - the pipe bridge thread has ended (IsAlive false);
       - mediamtx runs under another PID than the one the pipeline published to (it restarted and
         the RTSP session went with it);
       - the mediamtx path is missing or not ready on PipelineHealthPathMisses (2) checks in a row
@@ -1713,8 +2029,14 @@ function Get-HeadsetPipelineFault {
         }
     }
     if ($Pipeline.Bridge) {
-        $bridgeState = [string]$Pipeline.Bridge.State
-        if ($bridgeState -ne 'Running') { return ("the pipe bridge job is {0}" -f $bridgeState) }
+        $bridgeAlive = $false
+        try { $bridgeAlive = [bool]$Pipeline.Bridge.IsAlive } catch { }
+        if (-not $bridgeAlive) {
+            $bridgeState = '?'; $bridgeError = ''
+            try { $bridgeState = [string]$Pipeline.Bridge.State; $bridgeError = [string]$Pipeline.Bridge.Error } catch { }
+            if ($bridgeError) { return ("the pipe bridge is {0} ({1})" -f $bridgeState, $bridgeError) }
+            return ("the pipe bridge is {0}" -f $bridgeState)
+        }
     }
     $startPid = [int]$Pipeline.MediaMtxPid
     if ($MediaMtxPid -gt 0 -and $startPid -gt 0 -and $MediaMtxPid -ne $startPid) {
@@ -1782,7 +2104,7 @@ function Get-HeadsetPipelineFaults {
         # Pipelines that can be judged: scrcpy still running (a dead scrcpy is the watchdog's
         # ordinary restart) and past the start grace.
         $candidates = @()
-        foreach ($key in @($global:HeadsetPipelines.Keys)) {
+        foreach ($key in @(Get-SyncTableKeys -Table $global:HeadsetPipelines)) {
             $entry = $global:HeadsetPipelines[$key]
             if (-not $entry -or $entry.CaptureMode -eq 'LocalWindow') { continue }
             $scrcpyAlive = $false
@@ -1871,6 +2193,405 @@ function Approve-HeadsetPipelineRestart {
 }
 
 
+# -------------------------------------------------------------------
+# Capture workers (S3-5 Step B, ADR-0036). A capture start (adb probes, eye-merge tables, bridge,
+# scrcpy, the wait for scrcpy's first data, the ffmpeg push) and a restart (closing the old
+# session, up to 15 s of ffmpeg grace to finalise a recording, then the start) used to run on
+# the VRMonitor thread, one headset after another: starting 6 headsets froze the 500 ms fast
+# path for 25 s or more. VRMonitor now opens a small RunspacePool (Start-ScrcpyCaptureWorkers)
+# and the watchdog SUBMITS the work (Submit-ScrcpyCaptureJob); the fast path drains finished
+# jobs (Update-ScrcpyCaptureWorkers). Without a pool (console, benchmark job, web server) the
+# job runs inline, exactly as before.
+#
+# Rules that keep it safe:
+#   - The capture tables ($global:HeadsetPipelines, DirectRecordings, ScrcpyLaunchState,
+#     EyeMergeRejected) are synchronized hashtables injected into every worker, so a pipeline a
+#     worker starts is seen by the loop (health check, PID map, stamps, Stop-Scrcpy). Enumerate
+#     them with Get-SyncTableKeys.
+#   - ONE job per headset at a time; the loop never touches a busy headset (the watchdog skips
+#     it; Stop-Scrcpy cancels the job instead of tearing the pipeline down under it, and the job
+#     undoes its own start when it sees the cancel).
+#   - Everything a pipeline holds is thread-agnostic: Process objects, the in-process bridge
+#     (ADR-0035) and the stderr sink (VrhmStderrSink) - no Start-Job, no Register-ObjectEvent.
+# -------------------------------------------------------------------
+$script:CaptureWorkerMax     = 2     # concurrent starts (each one is mostly waiting on adb / scrcpy)
+$script:CaptureJobWarnSec    = 120   # a job older than this is logged once (WARNING)
+$script:CaptureJobStopSec    = 300   # ...and asked to stop (ERROR); the headset is then free again
+$script:CaptureWorkerTables  = @('HeadsetPipelines', 'DirectRecordings', 'ScrcpyLaunchState', 'EyeMergeRejected')
+
+# Runs in a worker runspace (as script text, so scripts_init.ps1 dot-sources into the runspace's
+# GLOBAL scope and stays loaded for the next job of that runspace). The first job of a runspace
+# loads the modules (~5-7 s), which is why Start-ScrcpyCaptureWorkers sends warm-up jobs at once.
+$script:CaptureWorkerScript = @'
+param($Job)
+$sw = [System.Diagnostics.Stopwatch]::StartNew()
+if (-not (Get-Command Invoke-ScrcpyCaptureJob -ErrorAction SilentlyContinue)) {
+    # Nobody reads this runspace's streams: keep Write-Host records out of memory (as VRMonitor does).
+    $global:PSDefaultParameterValues['Write-Host:InformationAction'] = 'Ignore'
+    # Same role as the VRMonitor job: Worker database connection, no web server / setup / VQA init.
+    $global:IsVRMonitorJob        = $true
+    $global:IsScrcpyCaptureWorker = $true
+    . (Join-Path $global:ScriptPath 'modules\scripts_init.ps1')
+}
+if ($Job.Mode -eq 'Warm') {
+    $ok = [bool](Get-Command Invoke-ScrcpyCaptureJob -ErrorAction SilentlyContinue)
+    if ($ok) { $ok = [bool](Initialize-PipeBridgeType) }
+    # The first re-encoding start of this runspace would pay the encoder probe (Get-GpuEncoder
+    # caches per runspace); pay it here, off every start.
+    if ($ok -and $global:mediamtxReencode -and $global:CaptureMode -ne 'LocalWindow' -and (Get-Command Get-GpuEncoder -ErrorAction SilentlyContinue)) {
+        try { [void](Get-GpuEncoder) } catch { }
+    }
+    return @{ Ok = $ok; Warm = $true; Cancelled = $false; Error = $(if ($ok) { '' } else { 'modules did not load' }); DurationMs = $sw.ElapsedMilliseconds }
+}
+$Job.InWorker = $true
+Invoke-ScrcpyCaptureJob -Job $Job
+'@
+
+<#
+.SYNOPSIS
+    Runs ONE capture job: a start, or a restart (close the running session -ScrcpyPid, tear its
+    pipeline down, then start). Called by a capture worker, or inline by Submit-ScrcpyCaptureJob
+    when the process has no worker pool. A job whose Cancel flag is set before the start does
+    nothing; one cancelled while it started stops what it started (Stop-Scrcpy for that headset).
+    Returns @{Ok;Warm;Cancelled;Error;DurationMs}. Never throws.
+.EXAMPLE
+    Invoke-ScrcpyCaptureJob -Job @{ HeadsetId = 3; Name = 'Q3 BLUE'; IPAddress = '192.168.1.243'; Mode = 'Start'; Recording = $false; Profile = 'square-R-N-45-20'; ScrcpyPid = 0; Cancel = $false }
+#>
+function Invoke-ScrcpyCaptureJob {
+    param([Parameter(Mandatory)]$Job)
+    $sw  = [System.Diagnostics.Stopwatch]::StartNew()
+    $res = @{ Ok = $false; Warm = $false; Cancelled = $false; Error = ''; DurationMs = 0 }
+    $hid = [int]$Job.HeadsetId
+    try {
+        $safe = Convert-Displayname ([string]$Job.Name)
+        if ($Job.Cancel) {
+            $res.Cancelled = $true
+            if ($hid -gt 0) { Set-ScrcpyStartingState -HeadsetId $hid -Clear }
+            return $res
+        }
+        if ($Job.InWorker) {
+            # A worker keeps its own globals: follow a config change the loop already reloaded.
+            if ((Get-Command Test-ConfigChanged -ErrorAction SilentlyContinue) -and (Test-ConfigChanged)) {
+                try { Get-Config -ConfigFilePath $global:ConfigFilePath | Out-Null } catch { }
+            }
+        }
+        # Capture mode straight from config.json, in case Set-CaptureMode wrote it after the last
+        # Get-Config (this used to be done by the watchdog right before start-screenCopy).
+        # Read-ConfigJson: literal path, UTF-8, and retried across a Write-ConfigJson swap.
+        try {
+            $freshJson = Read-ConfigJson -ConfigFilePath (Join-Path $global:ScriptPath 'config\config.json') -NonInteractive
+            if ($freshJson -and $freshJson.Performance -and $freshJson.Performance.Capture_Mode) {
+                $global:CaptureMode = $freshJson.Performance.Capture_Mode
+            }
+        } catch { }
+
+        if ($Job.Mode -eq 'Restart') {
+            $old = $null
+            if ([int]$Job.ScrcpyPid -gt 0) {
+                $old = Get-Process -Id ([int]$Job.ScrcpyPid) -ErrorAction SilentlyContinue
+                if ($old -and $old.ProcessName -ne 'scrcpy') { $old = $null }
+            }
+            if ($old) {
+                # Same rule as Stop-Scrcpy: only a scrcpy that HAS a window can be closed politely,
+                # and only a window that ignored the request deserves the "may be incomplete" warning.
+                $hadWindow = ($old.MainWindowHandle -ne [IntPtr]::Zero)
+                $closed = $hadWindow -and $old.CloseMainWindow()
+                if ($closed) { [void]$old.WaitForExit(10000) }
+                if (-not $old.HasExited) {
+                    if ($hadWindow) { Write-Log ($msg.Scrcpy.StopTimeout -f $Job.Name) -Level WARNING }
+                    Stop-Process -Id $old.Id -Force -ErrorAction SilentlyContinue
+                    try { [void]$old.WaitForExit(1000) } catch { }
+                }
+            }
+            Complete-DirectRecording -SafeName $safe
+            # Tear the old pipeline down HERE (ffmpeg, bridge, and the old recording file is
+            # finalised) rather than only inside start-screenCopy, which skips it when the headset
+            # no longer answers ADB. No-op when no pipeline is held for it.
+            Stop-HeadsetPipeline -SafeName $safe
+            if ($Job.Cancel) {
+                $res.Cancelled = $true
+                if ($hid -gt 0) { Set-ScrcpyStartingState -HeadsetId $hid -Clear }
+                $res.Ok = $true
+                return $res
+            }
+        }
+
+        start-screenCopy -displayName ([string]$Job.Name) -headsetIP ([string]$Job.IPAddress) -recording ([bool]$Job.Recording) -scrcpyProfile ([string]$Job.Profile)
+
+        # Read Cancel and mark the job Done in ONE step, under the job's lock: a stop that comes
+        # after this point is not handed to the job any more (Request-ScrcpyCaptureCancel checks
+        # Done under the same lock) and tears the capture down itself. Without it a stop landing
+        # between the check and the end of the job was lost and the stream kept running.
+        $undo = $false
+        [System.Threading.Monitor]::Enter($Job.SyncRoot)
+        try { $undo = [bool]$Job.Cancel; $Job.Done = $true } finally { [System.Threading.Monitor]::Exit($Job.SyncRoot) }
+        if ($undo) {
+            # A stop (benchmark, restart request, shutdown) arrived while this was starting: the
+            # loop left this headset to us, so undo the start here.
+            Write-Log ("Capture job for {0}: stop requested during the start - stopping it again." -f $Job.Name) -Level INFO
+            try { [void](Stop-Scrcpy -HeadsetName ([string]$Job.Name) -HeadsetIP ([string]$Job.IPAddress)) } catch { }
+            $res.Cancelled = $true
+        }
+        $res.Ok = $true
+    } catch {
+        $res.Error = $_.Exception.Message
+        Write-Log ("Capture job ({0}) for {1} failed: {2}" -f $Job.Mode, $Job.Name, $_.Exception.Message) -Level WARNING
+        if ($hid -gt 0) { try { Set-ScrcpyStartingState -HeadsetId $hid -Clear } catch { } }
+    } finally {
+        try { $Job.Done = $true } catch { }
+        $res.DurationMs = $sw.ElapsedMilliseconds
+    }
+    return $res
+}
+
+<#
+.SYNOPSIS
+    Opens the capture worker pool of THIS process (VRMonitor only): converts the capture tables
+    to synchronized hashtables, injects them into a RunspacePool of -MaxWorkers runspaces and
+    sends one warm-up job per runspace (module load + encoder probe, off the loop). Idempotent.
+    Returns $true when the pool is up; on $false every job runs inline (the old behaviour).
+.EXAMPLE
+    Start-ScrcpyCaptureWorkers -MaxWorkers 2
+#>
+function Start-ScrcpyCaptureWorkers {
+    param([int]$MaxWorkers = $script:CaptureWorkerMax)
+    if ($global:ScrcpyCaptureWorkers) { return $true }
+    $MaxWorkers = [Math]::Max(1, [Math]::Min(8, $MaxWorkers))
+    try {
+        foreach ($n in $script:CaptureWorkerTables) {
+            $cur = $null
+            $v = Get-Variable -Name $n -Scope Global -ErrorAction SilentlyContinue
+            if ($v) { $cur = $v.Value }
+            if ($null -eq $cur) { $cur = @{} }
+            if (-not $cur.IsSynchronized) { $cur = [hashtable]::Synchronized($cur) }
+            Set-Variable -Name $n -Scope Global -Value $cur
+        }
+        $iss = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
+        foreach ($n in @($script:CaptureWorkerTables + @('ScriptPath', 'ConfigFilePath', 'logFolder', 'logFile'))) {
+            $val = (Get-Variable -Name $n -Scope Global -ErrorAction SilentlyContinue).Value
+            $iss.Variables.Add([System.Management.Automation.Runspaces.SessionStateVariableEntry]::new($n, $val, ''))
+        }
+        $pool = [runspacefactory]::CreateRunspacePool(1, $MaxWorkers, $iss, $Host)
+        $pool.Open()
+        $global:ScrcpyCaptureWorkers = @{ Pool = $pool; Max = $MaxWorkers; Jobs = @{}; Seq = 0; OpenedAt = (Get-Date) }
+        for ($i = 1; $i -le $MaxWorkers; $i++) {
+            $job = [hashtable]::Synchronized(@{ HeadsetId = 0; Name = "warm$i"; Mode = 'Warm'; Cancel = $false })
+            $ps = [powershell]::Create()
+            $ps.RunspacePool = $pool
+            [void]$ps.AddScript($script:CaptureWorkerScript).AddArgument($job)
+            $global:ScrcpyCaptureWorkers.Jobs["warm$i"] = @{ PS = $ps; Handle = $ps.BeginInvoke(); Job = $job; SubmittedAt = (Get-Date); Warned = $false; Stopping = $false }
+        }
+        Write-Log ("Capture workers: pool of {0} opened (warming up)." -f $MaxWorkers) -Level INFO
+        return $true
+    } catch {
+        Write-Log ("Capture workers: could not open the pool, captures start on the loop thread: {0}" -f $_.Exception.Message) -Level WARNING
+        $global:ScrcpyCaptureWorkers = $null
+        return $false
+    }
+}
+
+<#
+.SYNOPSIS
+    Starts or restarts the capture of one headset. With a worker pool (VRMonitor) the job is
+    queued and this returns at once: 'queued', or 'busy' when a job for that headset is already
+    in flight (nothing is queued). Without a pool it runs inline and returns 'inline'.
+    -Mode Restart closes the running session -ScrcpyPid first.
+.EXAMPLE
+    Submit-ScrcpyCaptureJob -Headset $row -Mode Restart -Recording $true -ScrcpyProfile 'square-R-N-45-20' -ScrcpyPid 4242 -Reason 'profile changed'
+#>
+function Submit-ScrcpyCaptureJob {
+    param(
+        [Parameter(Mandatory)]$Headset,
+        [ValidateSet('Start', 'Restart')][string]$Mode = 'Start',
+        [bool]$Recording = $false,
+        [string]$ScrcpyProfile = 'R-N-45-20',
+        [int]$ScrcpyPid = 0,
+        [string]$Reason = ''
+    )
+    $hid = 0
+    [void][int]::TryParse([string]$Headset.ID, [ref]$hid)
+    $job = [hashtable]::Synchronized(@{
+        HeadsetId = $hid; Name = [string]$Headset.Name; IPAddress = [string]$Headset.IPAddress
+        Mode = $Mode; Recording = $Recording; Profile = $ScrcpyProfile; ScrcpyPid = $ScrcpyPid
+        Reason = $Reason; Cancel = $false; InWorker = $false
+    })
+    $w = $global:ScrcpyCaptureWorkers
+    if (-not $w -or $hid -le 0) {
+        [void](Invoke-ScrcpyCaptureJob -Job $job)
+        return 'inline'
+    }
+    $key = [string]$hid
+    if ($w.Jobs.ContainsKey($key)) {
+        Write-Log ("Capture job for {0} not queued: one is already in flight." -f $Headset.Name) -Level DEBUG
+        return 'busy'
+    }
+    # Announce it now: the job may wait for a free worker, and the pages must show "starting".
+    Set-ScrcpyStartingState -HeadsetId $hid
+    try {
+        $ps = [powershell]::Create()
+        $ps.RunspacePool = $w.Pool
+        [void]$ps.AddScript($script:CaptureWorkerScript).AddArgument($job)
+        $handle = $ps.BeginInvoke()
+    } catch {
+        Write-Log ("Capture workers: queueing {0} failed ({1}) - running it on the loop thread." -f $Headset.Name, $_.Exception.Message) -Level WARNING
+        try { $ps.Dispose() } catch { }
+        [void](Invoke-ScrcpyCaptureJob -Job $job)
+        return 'inline'
+    }
+    $w.Seq++
+    $w.Jobs[$key] = @{ PS = $ps; Handle = $handle; Job = $job; SubmittedAt = (Get-Date); Warned = $false; Stopping = $false }
+    Write-Log ("Capture job #{0} queued: {1} {2}{3}" -f $w.Seq, $Mode, $Headset.Name, $(if ($Reason) { " ($Reason)" } else { '' })) -Level DEBUG
+    return 'queued'
+}
+
+<#
+.SYNOPSIS
+    Drains the capture worker pool: collects every finished job (logs its outcome and errors,
+    frees the headset) and flags jobs that run too long (WARNING after 120 s, stop asked after
+    300 s). Called by the VRMonitor fast path every tick; costs nothing when no job is in flight.
+    Returns one @{HeadsetId;Name;Mode;Ok;Cancelled;Error;DurationMs} per finished capture job
+    (warm-ups excluded). A warm-up that failed closes the pool: captures then start inline.
+.EXAMPLE
+    $done = @(Update-ScrcpyCaptureWorkers)
+#>
+function Update-ScrcpyCaptureWorkers {
+    $w = $global:ScrcpyCaptureWorkers
+    if (-not $w -or $w.Jobs.Count -eq 0) { return @() }
+    $done = @()
+    $warmFailed = $false
+    foreach ($key in @($w.Jobs.Keys)) {
+        $e = $w.Jobs[$key]
+        $job = $e.Job
+        if ($e.Handle.IsCompleted) {
+            $r = $null
+            try { $r = @($e.PS.EndInvoke($e.Handle)) | Select-Object -Last 1 } catch { $r = @{ Ok = $false; Error = $_.Exception.Message } }
+            foreach ($er in @($e.PS.Streams.Error | Select-Object -First 3)) {
+                Write-Log ("Capture job ({0}) for {1}: {2}" -f $job.Mode, $job.Name, $er.ToString()) -Level WARNING
+            }
+            try { $e.PS.Dispose() } catch { }
+            $w.Jobs.Remove($key)
+            $ok = $false; $cancelled = $false; $err = ''; $ms = [int]((Get-Date) - $e.SubmittedAt).TotalMilliseconds
+            if ($r) {
+                try { $ok = [bool]$r.Ok; $cancelled = [bool]$r.Cancelled; $err = [string]$r.Error; if ($null -ne $r.DurationMs) { $ms = [int]$r.DurationMs } } catch { }
+            }
+            if ($job.Mode -eq 'Warm') {
+                if ($ok) { Write-Log ("Capture workers: {0} ready after {1} ms." -f $job.Name, $ms) -Level DEBUG }
+                else { $warmFailed = $true; Write-Log ("Capture workers: warm-up {0} failed: {1}" -f $job.Name, $err) -Level ERROR }
+                continue
+            }
+            Write-Log ("Capture job {0} for {1} done in {2} ms (ok={3}{4}{5})" -f $job.Mode, $job.Name, $ms, $ok, $(if ($cancelled) { ', cancelled' } else { '' }), $(if ($err) { ", $err" } else { '' })) -Level DEBUG
+            $done += [PSCustomObject]@{ HeadsetId = [int]$job.HeadsetId; Name = [string]$job.Name; Mode = [string]$job.Mode; Ok = $ok; Cancelled = $cancelled; Error = $err; DurationMs = $ms }
+        } else {
+            $age = ((Get-Date) - $e.SubmittedAt).TotalSeconds
+            if ($age -gt $script:CaptureJobWarnSec -and -not $e.Warned) {
+                $e.Warned = $true
+                Write-Log ("Capture job {0} for {1} still running after {2} s." -f $job.Mode, $job.Name, [int]$age) -Level WARNING
+            }
+            if ($age -gt $script:CaptureJobStopSec -and -not $e.Stopping) {
+                $e.Stopping = $true
+                $job.Cancel = $true
+                Write-Log ("Capture job {0} for {1} stuck for {2} s - asking it to stop." -f $job.Mode, $job.Name, [int]$age) -Level ERROR
+                try { [void]$e.PS.BeginStop($null, $null) } catch { }
+            }
+        }
+    }
+    if ($warmFailed) {
+        Write-Log 'Capture workers: closing the pool - captures start on the loop thread from now on.' -Level ERROR
+        Stop-ScrcpyCaptureWorkers -TimeoutSec 0
+    }
+    return $done
+}
+
+<#
+.SYNOPSIS
+    $true while a capture job for the headset (-HeadsetId) is in flight in this process.
+.EXAMPLE
+    if (Test-ScrcpyCaptureBusy -HeadsetId 3) { 'busy' }
+#>
+function Test-ScrcpyCaptureBusy {
+    param([int]$HeadsetId)
+    $w = $global:ScrcpyCaptureWorkers
+    return [bool]($w -and $HeadsetId -gt 0 -and $w.Jobs.ContainsKey([string]$HeadsetId))
+}
+
+<#
+.SYNOPSIS
+    Number of capture jobs in flight in this process (warm-ups excluded). 0 without a pool.
+.EXAMPLE
+    if ((Get-ScrcpyCaptureBusyCount) -eq 0) { Confirm-StreamBenchmarkPause -RunId $id }
+#>
+function Get-ScrcpyCaptureBusyCount {
+    $w = $global:ScrcpyCaptureWorkers
+    if (-not $w) { return 0 }
+    return @($w.Jobs.Values | Where-Object { $_.Job.Mode -ne 'Warm' }).Count
+}
+
+<#
+.SYNOPSIS
+    Sets the Cancel flag of the in-flight capture jobs of -SafeName (or of all of them) and
+    returns the safe names concerned. The job undoes its own start when it sees the flag, so the
+    caller must leave those headsets alone (Stop-Scrcpy skips their teardown). @() without a pool.
+.EXAMPLE
+    Request-ScrcpyCaptureCancel -SafeName 'Q3_RED'
+#>
+function Request-ScrcpyCaptureCancel {
+    param([string]$SafeName = '')
+    $w = $global:ScrcpyCaptureWorkers
+    if (-not $w) { return @() }
+    $names = @()
+    foreach ($e in @($w.Jobs.Values)) {
+        if ($e.Job.Mode -eq 'Warm') { continue }
+        $n = Convert-Displayname ([string]$e.Job.Name)
+        if ($SafeName -and $n -ne $SafeName) { continue }
+        # Only a job that has not passed its last cancel check takes the stop over (same lock
+        # as the check in Invoke-ScrcpyCaptureJob). A finished job not drained yet is left out:
+        # the caller tears that headset down itself.
+        $claimed = $false
+        [System.Threading.Monitor]::Enter($e.Job.SyncRoot)
+        try { if (-not $e.Job.Done) { $e.Job.Cancel = $true; $claimed = $true } } finally { [System.Threading.Monitor]::Exit($e.Job.SyncRoot) }
+        if ($claimed) { $names += $n }
+    }
+    if ($names.Count -gt 0) { Write-Log ("Capture workers: cancel requested for {0}" -f ($names -join ', ')) -Level DEBUG }
+    return $names
+}
+
+<#
+.SYNOPSIS
+    Closes the capture worker pool (VRMonitor shutdown): cancels every job, waits at most
+    -TimeoutSec for them (a cancelled job undoes its own start), then disposes the pool. Jobs
+    still running are asked to stop. Never throws.
+.EXAMPLE
+    Stop-ScrcpyCaptureWorkers -TimeoutSec 8
+#>
+function Stop-ScrcpyCaptureWorkers {
+    param([int]$TimeoutSec = 8)
+    $w = $global:ScrcpyCaptureWorkers
+    if (-not $w) { return }
+    try {
+        foreach ($e in @($w.Jobs.Values)) { $e.Job.Cancel = $true }
+        $deadline = (Get-Date).AddSeconds([Math]::Max(0, $TimeoutSec))
+        while ((Get-Date) -lt $deadline -and @($w.Jobs.Values | Where-Object { -not $_.Handle.IsCompleted }).Count -gt 0) {
+            Start-Sleep -Milliseconds 100
+        }
+        foreach ($key in @($w.Jobs.Keys)) {
+            $e = $w.Jobs[$key]
+            if (-not $e.Handle.IsCompleted) {
+                Write-Log ("Capture workers: job {0} for {1} still running at close - stopping it." -f $e.Job.Mode, $e.Job.Name) -Level WARNING
+                try { [void]$e.PS.BeginStop($null, $null) } catch { }
+            } else {
+                try { [void]$e.PS.EndInvoke($e.Handle) } catch { }
+                try { $e.PS.Dispose() } catch { }
+            }
+        }
+        $w.Jobs.Clear()
+        try { [void]$w.Pool.BeginClose($null, $null) } catch { }
+    } catch {
+    } finally {
+        $global:ScrcpyCaptureWorkers = $null
+    }
+}
+
+
 function Watch-ScrcpyProcesses {
     param(
         # IP -> live info record, as the VRMonitor per-headset runspaces publish it in
@@ -1917,6 +2638,14 @@ function Watch-ScrcpyProcesses {
     foreach ($headset in $knownHeadsets_with_autorestart) {
         Write-Log ($msg.Scrcpy.CheckHeadset -f $headset.Name, $headset.IPAddress) -Level DEBUG
 
+        # A capture worker is starting or restarting this headset (S3-5 Step B): its scrcpy,
+        # pipeline and stamp are in motion, so judging it now would only queue a second job.
+        # The next pass after the job ends sees the result.
+        if (Test-ScrcpyCaptureBusy -HeadsetId ([int]$headset.ID)) {
+            Write-Log ("Watchdog: {0} skipped, a capture job is in flight." -f $headset.Name) -Level DEBUG
+            continue
+        }
+
         $headsetInfos = $null
         if ($HeadsetInfo -and $HeadsetInfo.ContainsKey([string]$headset.IPAddress)) {
             $headsetInfos = $HeadsetInfo[[string]$headset.IPAddress]
@@ -1928,17 +2657,10 @@ function Watch-ScrcpyProcesses {
 
             Write-Log ($msg.Scrcpy.ProcessFound -f $runningScrcpyProcess_forThisheadset) -Level DEBUG
             if (-not $runningScrcpyProcess_forThisheadset) {
-                # Re-read capture mode from config.json to avoid a stale mode when
-                # Set-CaptureMode fires between the slow-path Get-Config and this watchdog.
-                # Read-ConfigJson: literal path, UTF-8, and retried across a Write-ConfigJson swap.
-                try {
-                    $freshJson = Read-ConfigJson -ConfigFilePath (Join-Path $global:ScriptPath "config\config.json") -NonInteractive
-                    if ($freshJson -and $freshJson.Performance -and $freshJson.Performance.Capture_Mode) {
-                        $global:CaptureMode = $freshJson.Performance.Capture_Mode
-                    }
-                } catch {}
+                # Queued to a capture worker in VRMonitor, inline elsewhere (Submit-ScrcpyCaptureJob).
+                # The job re-reads the capture mode from config.json right before the start.
                 $headsetProfile = if ($headset.ScrcpyProfile) { $headset.ScrcpyProfile } else { "R-N-45-20" }
-                start-screenCopy -displayName $headset.Name -headsetIP $headset.IPAddress -recording (ConvertTo-BoolField $headset.Record) -scrcpyProfile $headsetProfile
+                [void](Submit-ScrcpyCaptureJob -Headset $headset -Mode Start -Recording (ConvertTo-BoolField $headset.Record) -ScrcpyProfile $headsetProfile -Reason 'not running')
             } else {
                 # scrcpy is running - has the desired state changed since it was launched?
                 # Compared as one stamp (Get-ScrcpyLaunchStamp) stored by start-screenCopy, never by
@@ -1950,7 +2672,7 @@ function Watch-ScrcpyProcesses {
                 $safeName = Convert-Displayname $headset.Name
 
                 $pipeline = $global:HeadsetPipelines[$safeName]
-                $launchState = if ($pipeline) { $pipeline } else { $script:ScrcpyLaunchState[$safeName] }
+                $launchState = if ($pipeline) { $pipeline } else { $global:ScrcpyLaunchState[$safeName] }
                 $storedStamp = if ($launchState) { [string]$launchState.LaunchStamp } else { '' }
                 $storedTransport = ''
 
@@ -1967,7 +2689,7 @@ function Watch-ScrcpyProcesses {
                             $pipeline.StampParts  = $expected.Parts
                             if (-not $pipeline.ContainsKey('Transport')) { $pipeline.Transport = '' }
                         } else {
-                            $script:ScrcpyLaunchState[$safeName] = $adopted
+                            $global:ScrcpyLaunchState[$safeName] = $adopted
                         }
                         Write-Log ("Watchdog: adopted the running capture of {0} (no launch stamp)." -f $headset.Name) -Level DEBUG
                     } else {
@@ -2016,25 +2738,11 @@ function Watch-ScrcpyProcesses {
                     # operator must see "starting", not a dead stream.
                     Set-ScrcpyStartingState -HeadsetId ([int]$headset.ID)
                     Write-Log ($msg.Scrcpy.Restarting -f $headset.Name) -Level INFO
-                    # Send WM_CLOSE so scrcpy can finalise any recording file before exiting
-                    # Same rule as Stop-Scrcpy: only a scrcpy that HAS a window can be closed politely, and
-                    # only a window that ignored the request deserves the "may be incomplete" warning.
-                    $hadWindow = ($runningScrcpyProcess_forThisheadset.MainWindowHandle -ne [IntPtr]::Zero)
-                    $closed = $hadWindow -and $runningScrcpyProcess_forThisheadset.CloseMainWindow()
-                    if ($closed) {
-                        $runningScrcpyProcess_forThisheadset.WaitForExit(10000) | Out-Null
-                    }
-                    if (-not $runningScrcpyProcess_forThisheadset.HasExited) {
-                        if ($hadWindow) { Write-Log ($msg.Scrcpy.StopTimeout -f $headset.Name) -Level WARNING }
-                        Stop-Process -Id $runningScrcpyProcess_forThisheadset.Id -Force -ErrorAction SilentlyContinue
-                        try { [void]$runningScrcpyProcess_forThisheadset.WaitForExit(1000) } catch { }
-                    }
-                    Complete-DirectRecording -SafeName (Convert-Displayname $headset.Name)
-                    # Tear the old pipeline down HERE (ffmpeg, bridge, and the old recording file is
-                    # finalised) rather than only inside start-screenCopy, which skips it when the
-                    # headset no longer answers ADB. No-op when this process holds no pipeline for it.
-                    Stop-HeadsetPipeline -SafeName (Convert-Displayname $headset.Name)
-                    start-screenCopy -displayName $headset.Name -headsetIP $headset.IPAddress -recording $expectedRecording -scrcpyProfile $headsetProfile
+                    # Closing the old session (WM_CLOSE / kill), tearing its pipeline down (up to 15 s
+                    # of ffmpeg grace to finalise a recording) and the new start all run in the job
+                    # (Invoke-ScrcpyCaptureJob), on a capture worker in VRMonitor.
+                    [void](Submit-ScrcpyCaptureJob -Headset $headset -Mode Restart -Recording $expectedRecording -ScrcpyProfile $headsetProfile `
+                        -ScrcpyPid ([int](@($runningScrcpyProcess_forThisheadset)[0].Id)) -Reason 'restart')
                 } else {
                     # The running session already matches: a "starting" mark set by
                     # Request-ScrcpyCheck for this headset would otherwise linger until it expires.
@@ -2058,8 +2766,17 @@ function Stop-Scrcpy {
         [string]$HeadsetIP   = ''
     )
 
+    # A capture job in flight (VRMonitor capture workers, S3-5 Step B) owns its headset until it
+    # ends: cancel it and leave that headset's teardown to the job, which stops what it started.
+    # Tearing the pipeline down here at the same time would finalise the recording twice.
+    $busyNames = @(Request-ScrcpyCaptureCancel -SafeName $(if ($HeadsetName) { Convert-Displayname $HeadsetName } else { '' }))
+
     if ($HeadsetName) {
         $displayName = Convert-Displayname $HeadsetName
+        if ($busyNames -contains $displayName) {
+            Write-Log ("Stop-Scrcpy: {0} is being started by a capture job - the job will stop it." -f $displayName) -Level INFO
+            return $true
+        }
         $procs = @(Get-ScrcpyProcess -displayName $displayName -headsetIP $HeadsetIP)
         if (-not $procs) {
             # scrcpy already gone (crashed or exited on its own) - still tear
@@ -2073,7 +2790,13 @@ function Stop-Scrcpy {
     } else {
         $procs = @(Get-Process -Name "scrcpy" -ErrorAction SilentlyContinue |
                    Where-Object { $_.Path -like "$($global:scrcpyFolder)\scrcpy.exe" })
-        if (-not $procs) { return $true }
+        if (-not $procs) {
+            # No scrcpy left, but a pipeline whose scrcpy died may still hold its ffmpeg and its
+            # in-process bridge: stopping "everything" must leave none of them (ADR-0035).
+            foreach ($key in @(Get-SyncTableKeys -Table $global:HeadsetPipelines)) { if ($busyNames -notcontains $key) { Stop-HeadsetPipeline -SafeName $key } }
+            if ($busyNames.Count -eq 0) { [void](Stop-AllHeadsetPipeBridges) }
+            return $true
+        }
     }
 
     foreach ($proc in $procs) {
@@ -2100,10 +2823,12 @@ function Stop-Scrcpy {
         $safe = Convert-Displayname $HeadsetName
         Stop-HeadsetPipeline -SafeName $safe
     } else {
-        foreach ($key in @($global:HeadsetPipelines.Keys)) { Stop-HeadsetPipeline -SafeName $key }
+        foreach ($key in @(Get-SyncTableKeys -Table $global:HeadsetPipelines)) { if ($busyNames -notcontains $key) { Stop-HeadsetPipeline -SafeName $key } }
+        # Safety net: a bridge no pipeline entry tracks any more (a start that failed half-way).
+        if ($busyNames.Count -eq 0) { [void](Stop-AllHeadsetPipeBridges) }
     }
     if ($HeadsetName) { Complete-DirectRecording -SafeName (Convert-Displayname $HeadsetName) }
-    else { foreach ($key in @($global:DirectRecordings.Keys)) { Complete-DirectRecording -SafeName $key } }
+    else { foreach ($key in @(Get-SyncTableKeys -Table $global:DirectRecordings)) { if ($busyNames -notcontains $key) { Complete-DirectRecording -SafeName $key } } }
 
     if ($HeadsetName) {
         Write-Log ($msg.Scrcpy.StopForHeadset -f (Convert-Displayname $HeadsetName)) -Level INFO

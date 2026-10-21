@@ -397,6 +397,26 @@
     # Import-PowerShellDataFile enforces a hard 500 key/value-pair limit on a single
     # hashtable literal and the top-level table is at that limit. Use $msg.Discovery.*
     # ==========================================
+    Binaries = @{
+        MissingTitle   = "Missing program file: {0}"
+        MissingPath    = "Expected at: {0}"
+        OptDownload    = "[1] Download the latest version from the internet (default)"
+        OptPath        = "[2] Select the path of an existing copy"
+        OptStop        = "[3] Stop the application"
+        Choice         = "Your choice (Enter = 1)"
+        Downloading    = "Downloading {0} - please wait..."
+        DownloadOk     = "{0} {1} installed in {2}"
+        DownloadFailed = "Download failed: {0}"
+        AskPath        = "Folder (or exe) of an existing {0} copy"
+        PathInvalid    = "Not usable: {0} not found in that location."
+        CopyFailed     = "Could not copy the folder: {0}"
+        Copied         = "Copied to {0}"
+        NoDownload     = "No download source exists for {0}."
+        Stopping       = "Application stopped at the operator's request."
+        NonInteractive = "Missing program file(s) and no console to ask: exiting."
+        StillMissing   = "Program file(s) still missing after recovery: exiting."
+        FfprobeMissing = "ffprobe.exe not found next to ffmpeg ({0}). Optional; it comes with the ffmpeg download."
+    }
     Discovery = @{
         # --- Set-HeadsetIdentity ---
         IdentityMoved         = "Headset '{0}' moved: {1} -> {2} (source: {3})"

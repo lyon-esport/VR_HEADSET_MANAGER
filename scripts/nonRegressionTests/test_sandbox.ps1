@@ -527,6 +527,30 @@ function Test-SandboxPreconditions {
 # ---------------------------------------------------------------------------
 # Provisioning
 # ---------------------------------------------------------------------------
+function Copy-SandboxFfprobe {
+    <#
+    .SYNOPSIS
+        Copies ffprobe.exe from the dev ffmpeg folder next to the sandbox ffmpeg.exe when it is
+        missing there. The app never uses ffprobe; the section-60 stream content checks do.
+        A real install gets it from the first-run ffmpeg download. Never throws.
+    #>
+    param([string]$FfmpegTarget, [string]$FfmpegFolder, [string]$DevRoot)
+    try {
+        if (-not $DevRoot -or -not $FfmpegTarget) { return }
+        $probeTarget = Join-Path (Split-Path -Parent $FfmpegTarget) 'ffprobe.exe'
+        if (Test-Path -LiteralPath $probeTarget) { return }
+        $probeDev = Join-Path $DevRoot ('sources\' + $FfmpegFolder + '\ffprobe.exe')
+        if (-not (Test-Path -LiteralPath $probeDev)) { return }
+        $dir = Split-Path -Parent $probeTarget
+        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        Write-Host '  Supplying ffprobe.exe to the sandbox (stream content checks)...' -ForegroundColor DarkGray
+        Copy-Item -LiteralPath $probeDev -Destination $probeTarget -Force
+    }
+    catch {
+        Write-Host ("  WARNING: could not copy ffprobe.exe: {0}" -f $_.Exception.Message) -ForegroundColor Yellow
+    }
+}
+
 function Initialize-SandboxConfig {
     <#
     .SYNOPSIS
@@ -639,6 +663,7 @@ function Initialize-SandboxConfig {
             Write-Host '  WARNING: no ffmpeg.exe available - streaming sections will fail.' -ForegroundColor Yellow
         }
     }
+    Copy-SandboxFfprobe -FfmpegTarget $targetFfmpeg -FfmpegFolder $ffmpegFolder -DevRoot $DevRoot
 
     return $config
 }
@@ -961,6 +986,7 @@ function Confirm-SandboxApp {
                 Write-Host '  WARNING: no ffmpeg.exe available - the app will not start.' -ForegroundColor Yellow
             }
         }
+        Copy-SandboxFfprobe -FfmpegTarget $ffTarget -FfmpegFolder $ffFolder -DevRoot $DevRoot
     }
 
     $webPort = Get-SandboxWebPort -TargetRoot $TargetRoot

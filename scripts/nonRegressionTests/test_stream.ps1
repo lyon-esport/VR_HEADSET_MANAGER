@@ -128,6 +128,69 @@ function Wait-NrtCandidatesReachable {
     }
 }
 
+function Invoke-NrtShutdownHeadsets {
+    <#
+    .SYNOPSIS
+        Powers off every headset adb can reach (end of an unattended run, -ShutdownHeadsetsAtEnd).
+        Returns @(@{Serial;Model;Target;Ok;Detail}).
+
+    .DESCRIPTION
+        The sandbox registry is empty at the end of a run, so the app's /api/shutdown-all would
+        reach nothing: the harness drives adb itself, with the release's own adb.exe (from the
+        sandbox config, else the template). One `adb devices` listing; each transport is
+        identified by ro.serialno so a headset seen both on USB and WiFi is powered off ONCE
+        (USB preferred); only Quest / Pico devices are touched (a phone on the bench is left
+        alone). `reboot -p` per headset with a 15 s cap. Must run BEFORE the app is stopped:
+        the app's shutdown ends this install's adb server. Never throws.
+
+    .EXAMPLE
+        Invoke-NrtShutdownHeadsets -TargetRoot $target
+    #>
+    param([Parameter(Mandatory = $true)][string]$TargetRoot)
+
+    $out = New-Object System.Collections.Generic.List[object]
+    # The harness runs with 'Stop': adb's stderr ("daemon not running; starting now") would
+    # become a terminating error. This runs after the app stopped its adb server.
+    $ErrorActionPreference = 'Continue'
+    try {
+        $paths = Get-SandboxPaths -TargetRoot $TargetRoot
+        $cfgPath = if (Test-Path -LiteralPath $paths.ConfigFile) { $paths.ConfigFile } else { $paths.TemplateConfig }
+        $cfg = Get-Content -LiteralPath $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $adb = Join-Path (Join-Path $paths.SourcesFolder ([string]$cfg.ADB.folder)) 'adb.exe'
+        if (-not (Test-Path -LiteralPath $adb)) {
+            $out.Add([PSCustomObject]@{ Serial = ''; Model = ''; Target = ''; Ok = $false; Detail = "adb.exe not found: $adb" })
+            return $out.ToArray()
+        }
+        & $adb start-server 2>&1 | Out-Null
+        $ids = @(& $adb devices 2>$null | Where-Object { $_ -match '^(\S+)\s+device$' } | ForEach-Object { ($_ -split '\s+')[0] })
+        $bySerial = @{}
+        foreach ($id in $ids) {
+            $serial = ([string](& $adb -s $id shell getprop ro.serialno 2>$null | Select-Object -First 1)).Trim()
+            $model  = ([string](& $adb -s $id shell getprop ro.product.model 2>$null | Select-Object -First 1)).Trim()
+            $brand  = ([string](& $adb -s $id shell getprop ro.product.brand 2>$null | Select-Object -First 1)).Trim()
+            if (-not $serial) { continue }
+            if (("{0} {1}" -f $brand, $model) -notmatch '(?i)quest|oculus|meta|pico') { continue }
+            $isUsb = ($id -notmatch ':')
+            if (-not $bySerial.ContainsKey($serial) -or ($isUsb -and $bySerial[$serial].Target -match ':')) {
+                $bySerial[$serial] = @{ Target = $id; Model = $model }
+            }
+        }
+        foreach ($serial in $bySerial.Keys) {
+            $t = $bySerial[$serial]
+            $ok = $false; $detail = ''
+            try {
+                $p = Start-Process -FilePath $adb -ArgumentList @('-s', $t.Target, 'shell', 'reboot', '-p') -PassThru -WindowStyle Hidden
+                if ($p.WaitForExit(15000)) { $ok = $true; $detail = 'power-off sent' }
+                else { try { $p.Kill() } catch { }; $detail = 'timeout' }
+            } catch { $detail = $_.Exception.Message }
+            $out.Add([PSCustomObject]@{ Serial = $serial; Model = $t.Model; Target = $t.Target; Ok = $ok; Detail = $detail })
+        }
+    } catch {
+        $out.Add([PSCustomObject]@{ Serial = ''; Model = ''; Target = ''; Ok = $false; Detail = $_.Exception.Message })
+    }
+    return $out.ToArray()
+}
+
 function Invoke-NrtEnableUsbWifiAdb {
     <#
     .SYNOPSIS

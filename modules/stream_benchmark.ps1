@@ -13,7 +13,7 @@
 # HOW IT STAYS OUT OF THE WATCHDOG'S WAY
 # --------------------------------------
 # Every other stream is stopped for the run. The VRMonitor process owns the running
-# pipelines (bridge jobs, $global:HeadsetPipelines), so it must stop them itself:
+# pipelines (in-process bridges, $global:HeadsetPipelines), so it must stop them itself:
 # the benchmark sets an EXPIRING pause flag (app_kv row benchmark_active), VRMonitor
 # sees its rising edge, stops its streams, acknowledges (benchmark_ack) and keeps
 # Watch-ScrcpyProcesses, Update-ComputerMonitoring and VQA quiet until it clears.
@@ -63,7 +63,7 @@ $script:BenchMaxTests       = 200
 # the INT overload when the first argument is an int literal and truncates the double. It turned
 # every sub-second process CPU delta into 0 (adb / bridge / NVENC ffmpeg always read 0 %) and
 # rounded GPU percentages and load deltas. Always write 0.0 / 100.0 when the value is a double.
-# Processes of the capture chain, by name (the pipe bridge job is tracked by PID).
+# Processes of the capture chain, by name (the pipe bridge is a thread of this process, ADR-0035).
 $script:BenchProcNames      = @('adb', 'scrcpy', 'ffmpeg', 'mediamtx')
 # Concurrent NVENC sessions a GeForce driver allows (8 on current drivers; professional cards
 # are not limited). Caps the headset count of an NVIDIA-encoded recommendation.
@@ -580,7 +580,7 @@ function New-StreamBenchmarkSampler {
     #>
     param()
     $s = @{ Gpus = @(); Single = $false; ExcludeLuid = $null; Engine = $null; Memory = $null
-            Cores = [Math]::Max(1, [Environment]::ProcessorCount); Prev = $null; BridgePids = @() }
+            Cores = [Math]::Max(1, [Environment]::ProcessorCount); Prev = $null }
     # Same adapter / PCI filter / LUID rules as Get-GpuInfo: one implementation (hardware_monitoring.ps1).
     try {
         $layout = Get-GpuLayout
@@ -619,14 +619,12 @@ function Read-StreamBenchmarkSnapshot {
         }
         $snap.Proc[$n] = @{ Cpu = $cpu; MemMB = [Math]::Round($mem / 1MB, 1) }
     }
-    # The pipe bridge is a PowerShell job: no name of its own, tracked by PID
-    # (Set-StreamBenchmarkBridgePids after each stream start).
-    $cpu = 0.0; $mem = 0.0
-    foreach ($bp in @($Sampler.BridgePids)) {
-        $p = Get-Process -Id $bp -ErrorAction SilentlyContinue
-        if ($p) { try { $cpu += $p.TotalProcessorTime.TotalSeconds; $mem += $p.WorkingSet64 } catch { } }
-    }
-    $snap.Proc['bridge'] = @{ Cpu = $cpu; MemMB = [Math]::Round($mem / 1MB, 1) }
+    # The pipe bridge is a thread of THIS process (ADR-0035), not a process: its CPU is the
+    # cumulative thread time of every bridge this process ran (Get-HeadsetPipeBridgeCpuSeconds),
+    # and it has no working set of its own (a few MB of buffers inside this process), so 0.
+    $cpu = 0.0
+    if (Get-Command Get-HeadsetPipeBridgeCpuSeconds -ErrorAction SilentlyContinue) { $cpu = [double](Get-HeadsetPipeBridgeCpuSeconds) }
+    $snap.Proc['bridge'] = @{ Cpu = $cpu; MemMB = 0.0 }
     return $snap
 }
 
@@ -634,17 +632,12 @@ function Read-StreamBenchmarkSnapshot {
 function Set-StreamBenchmarkBridgePids {
     <#
     .SYNOPSIS
-    Points the sampler at the pipe bridge job(s) of the stream(s) just started: the
-    powershell.exe children of THIS process (Start-HeadsetPipeBridge uses Start-Job). Resets
-    the sampler interval so a process appearing mid-interval is not counted from zero.
+    Called after each stream start. Resets the sampler interval so a process appearing
+    mid-interval (scrcpy, ffmpeg) is not counted from zero. The name is historical: the pipe
+    bridge used to be a powershell.exe child found here by PID; it is now a thread of this
+    process (ADR-0035), read by Read-StreamBenchmarkSnapshot with no PID to look up.
     #>
     param([Parameter(Mandatory = $true)]$Sampler)
-    $pids = @()
-    try {
-        $pids = @(Get-CimInstance Win32_Process -Filter ("ParentProcessId={0}" -f $PID) -ErrorAction Stop |
-            Where-Object { $_.Name -eq 'powershell.exe' -or $_.Name -eq 'pwsh.exe' } | ForEach-Object { [int]$_.ProcessId })
-    } catch { }
-    $Sampler.BridgePids = $pids
     $Sampler.Prev = Read-StreamBenchmarkSnapshot -Sampler $Sampler
 }
 

@@ -83,6 +83,13 @@
     elevated, device not found) it asks the operator as before. With -PhysicalUsb only ONE real
     unplug/replug cycle is requested per run; the other cycles stay software.
 
+.PARAMETER ShutdownHeadsetsAtEnd
+    When the run is over (also after a failure or Ctrl+C), power off every Quest / Pico headset
+    adb can reach - USB and WiFi, each headset once - with the release's own adb.exe, BEFORE the
+    app is stopped. The result is a line per headset in the console and in the report
+    (section "END"). Meant for a walk-away run: combine with -Unattended, which already closes the
+    app at the end, so app and headsets are both off when nobody is there.
+
 .PARAMETER AutoApproveSetup
     Auto-approves the app's first-boot computer setup (firewall rules, URL ACL,
     Windows Defender exclusion) so a new release folder starts with no keypress.
@@ -140,6 +147,7 @@ param(
     [switch]$Unattended,
     [switch]$NoHeadset,
     [switch]$PhysicalUsb,
+    [switch]$ShutdownHeadsetsAtEnd,
     [switch]$AutoApproveSetup,
     [switch]$RestoreOnly,
     [switch]$KeepSandbox,
@@ -653,6 +661,23 @@ finally {
     # Never leave a headset's USB device disabled by a software unplug.
     if (Get-Command Restore-NrtUsbLink -ErrorAction SilentlyContinue) { Restore-NrtUsbLink }
     if ($AutoApproveSetup) { Remove-Item Env:\VRHM_AUTO_APPROVE_SETUP -ErrorAction SilentlyContinue }
+    # Headsets off BEFORE the app: the app's shutdown ends this install's adb server.
+    if ($ShutdownHeadsetsAtEnd -and $target -and (Get-Command Invoke-NrtShutdownHeadsets -ErrorAction SilentlyContinue)) {
+        Write-Host ''
+        Write-Host '  Powering off the headsets (-ShutdownHeadsetsAtEnd)...' -ForegroundColor Cyan
+        $offList = @(Invoke-NrtShutdownHeadsets -TargetRoot $target)
+        if ($offList.Count -eq 0) { $offList = @([PSCustomObject]@{ Serial = ''; Model = ''; Target = ''; Ok = $true; Detail = 'no headset reachable over adb' }) }
+        foreach ($o in $offList) {
+            $label = if ($o.Serial) { "{0} {1} via {2}" -f $o.Model, $o.Serial, $o.Target } else { 'headsets' }
+            Write-Host ("    {0}: {1}" -f $label, $o.Detail) -ForegroundColor $(if ($o.Ok) { 'Green' } else { 'Yellow' })
+            if ($global:TestRun -and $global:TestRun.Results) {
+                $global:TestRun.Results.Add([PSCustomObject]@{
+                    Section = 'END'; Name = ("Power off {0}" -f $label); Status = $(if ($o.Ok) { 'PASS' } else { 'WARN' })
+                    Detail = $o.Detail; Evidence = @(); Warnings = @(); Duration = [TimeSpan]::Zero; Override = $false; At = Get-Date
+                }) | Out-Null
+            }
+        }
+    }
     if ((-not $keepAppRunning) -and (Get-Command Stop-SandboxApp -ErrorAction SilentlyContinue)) {
         try { Stop-SandboxApp -TargetRoot $target | Out-Null } catch { }
     }

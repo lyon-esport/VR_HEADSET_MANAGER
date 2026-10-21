@@ -665,3 +665,110 @@ function Sync-DevBinaryTracking {
     }
     return $out
 }
+
+# Console recovery for ONE missing program binary at startup (S8-7). Offers [1] download the
+# latest (default), [2] select the path of an existing copy, [3] stop. -Binary is the DOWNLOAD
+# unit: scrcpy (also supplies adb.exe), mediamtx, ffmpeg, or sqlite (no download source, only
+# [2] and [3]). A selected folder (or exe) is COPIED into sources\<parent>\<name>\ unless it is
+# already under sources\, so the config keeps a relative path like a download does. The config
+# is updated with Set-*FolderConfig (never -UpdateTemplate). Console only: the caller must have
+# checked that input is not redirected. Returns @{Ok;Action('download'|'path'|'stop');Folder;Error}.
+# Example: $r = Resolve-MissingBinary -Binary scrcpy
+function Resolve-MissingBinary {
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet('scrcpy', 'mediamtx', 'ffmpeg', 'sqlite')][string]$Binary
+    )
+    $sources = Join-Path $global:ScriptPath 'sources'
+    $spec = switch ($Binary) {
+        'scrcpy'   { @{ Parent = 'scrcpy';   Required = @('scrcpy.exe', 'adb.exe');                                  ConfigPaths = @('scrcpy.folder', 'ADB.folder'); Download = $true } }
+        'mediamtx' { @{ Parent = 'MediaMTX'; Required = @('mediamtx.exe');                                          ConfigPaths = @('mediamtx.folder');             Download = $true } }
+        'ffmpeg'   { @{ Parent = 'ffmpeg';   Required = @('ffmpeg.exe');                                            ConfigPaths = @('ffmpeg.folder');               Download = $true } }
+        'sqlite'   { @{ Parent = 'sqlite';   Required = @('System.Data.SQLite.dll', 'x64\SQLite.Interop.dll');      ConfigPaths = @('database.folder');             Download = $false } }
+    }
+
+    while ($true) {
+        Write-Host ""
+        Write-Host (" " + ((Get-MessageString -Key 'Binaries.MissingTitle') -f $Binary)) -ForegroundColor Yellow
+        if ($spec.Download) { Write-Host (" " + (Get-MessageString -Key 'Binaries.OptDownload')) }
+        Write-Host (" " + (Get-MessageString -Key 'Binaries.OptPath'))
+        Write-Host (" " + (Get-MessageString -Key 'Binaries.OptStop'))
+        $choice = (Read-Host (" " + (Get-MessageString -Key 'Binaries.Choice'))).Trim()
+        if ($choice -eq '' -and $spec.Download) { $choice = '1' }
+
+        if ($choice -eq '3') {
+            return @{ Ok = $false; Action = 'stop'; Folder = $null; Error = $null }
+        }
+
+        if ($choice -eq '1') {
+            if (-not $spec.Download) {
+                Write-Host (" " + ((Get-MessageString -Key 'Binaries.NoDownload') -f $Binary)) -ForegroundColor Red
+                continue
+            }
+            Write-Host (" " + ((Get-MessageString -Key 'Binaries.Downloading') -f $Binary))
+            $res = switch ($Binary) {
+                'scrcpy'   { Update-ScrcpyBinary   -SourcesFolder $sources }
+                'mediamtx' { Update-MediaMtxBinary -SourcesFolder $sources }
+                'ffmpeg'   { Update-FfmpegBinary   -SourcesFolder $sources }
+            }
+            if (-not $res -or -not $res.Success) {
+                $why = if ($res -and $res.Error) { $res.Error } else { 'unknown error' }
+                Write-Host (" " + ((Get-MessageString -Key 'Binaries.DownloadFailed') -f $why)) -ForegroundColor Red
+                Write-Log "Resolve-MissingBinary: download of $Binary failed: $why" -Level WARNING
+                continue
+            }
+            try {
+                Set-BinaryFolderConfig -ConfigPaths $spec.ConfigPaths -RelativeFolder $res.Folder
+            } catch {
+                Write-Host (" " + ((Get-MessageString -Key 'Binaries.DownloadFailed') -f $_.Exception.Message)) -ForegroundColor Red
+                continue
+            }
+            Write-Host (" " + ((Get-MessageString -Key 'Binaries.DownloadOk') -f $Binary, $res.Version, $res.Folder)) -ForegroundColor Green
+            Write-Log "Resolve-MissingBinary: $Binary $($res.Version) downloaded to $($res.Folder)" -Level INFO
+            return @{ Ok = $true; Action = 'download'; Folder = $res.Folder; Error = $null }
+        }
+
+        if ($choice -eq '2') {
+            $typed = (Read-Host (" " + ((Get-MessageString -Key 'Binaries.AskPath') -f $Binary))).Trim().Trim('"')
+            if (-not $typed -or -not (Test-Path -LiteralPath $typed)) {
+                Write-Host (" " + ((Get-MessageString -Key 'Binaries.PathInvalid') -f $spec.Required[0])) -ForegroundColor Red
+                continue
+            }
+            $dir = if (Test-Path -LiteralPath $typed -PathType Leaf) { Split-Path -LiteralPath $typed -Parent } else { $typed }
+            # An exe/dll chosen inside x64\ (SQLite.Interop.dll): the version folder is one level up.
+            if ($Binary -eq 'sqlite' -and (Split-Path -Leaf $dir) -ieq 'x64') { $dir = Split-Path -LiteralPath $dir -Parent }
+            $dir = (Get-Item -LiteralPath $dir).FullName.TrimEnd('\')
+            $absent = @($spec.Required | Where-Object { -not (Test-Path -LiteralPath (Join-Path $dir $_)) })
+            if ($absent.Count -gt 0) {
+                Write-Host (" " + ((Get-MessageString -Key 'Binaries.PathInvalid') -f ($absent -join ', '))) -ForegroundColor Red
+                continue
+            }
+
+            # Already under sources\: use as is. Otherwise copy it in, same layout as a download.
+            $sourcesFull = (Get-Item -LiteralPath $sources).FullName.TrimEnd('\') + '\'
+            if (($dir + '\').StartsWith($sourcesFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $target = $dir
+            } else {
+                $target = Join-Path (Join-Path $sources $spec.Parent) (Split-Path -Leaf $dir)
+                if (-not (Test-Path -LiteralPath $target)) {
+                    try {
+                        New-Item -ItemType Directory -Path (Split-Path -LiteralPath $target -Parent) -Force | Out-Null
+                        Copy-Item -LiteralPath $dir -Destination $target -Recurse -Force -ErrorAction Stop
+                    } catch {
+                        Write-Host (" " + ((Get-MessageString -Key 'Binaries.CopyFailed') -f $_.Exception.Message)) -ForegroundColor Red
+                        continue
+                    }
+                    Write-Host (" " + ((Get-MessageString -Key 'Binaries.Copied') -f $target)) -ForegroundColor Green
+                }
+            }
+            $rel = $target.Substring($sourcesFull.Length)
+            try {
+                Set-BinaryFolderConfig -ConfigPaths $spec.ConfigPaths -RelativeFolder $rel
+            } catch {
+                Write-Host (" " + ((Get-MessageString -Key 'Binaries.CopyFailed') -f $_.Exception.Message)) -ForegroundColor Red
+                continue
+            }
+            Write-Log "Resolve-MissingBinary: $Binary set to $rel (operator-selected path)" -Level INFO
+            return @{ Ok = $true; Action = 'path'; Folder = $rel; Error = $null }
+        }
+    }
+}

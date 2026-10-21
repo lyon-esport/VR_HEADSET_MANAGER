@@ -667,6 +667,31 @@ if (-not $global:IsWebServerProcess -and -not $global:IsDashboardProcess -and -n
     # confusing error deep inside firewall setup, ADB, or scrcpy launch.
     $binaryCheck = Test-RequiredBinaries
     if (-not $binaryCheck.Ok) {
+        # S8-7: offer download / select path / stop for each missing binary instead of exiting.
+        # Needs a real console: redirected input (harness, scheduled start) keeps the old exit,
+        # and VRHM_AUTO_APPROVE_SETUP deliberately does NOT auto-download.
+        $interactive = $false
+        try { $interactive = (-not [Console]::IsInputRedirected) -and ($Host.Name -eq 'ConsoleHost') } catch { }
+        if ($interactive -and (Get-Command Resolve-MissingBinary -ErrorAction SilentlyContinue)) {
+            $units = @($binaryCheck.Missing | ForEach-Object {
+                switch -Regex ($_.ExeName) {
+                    '^(adb|scrcpy)\.exe$' { 'scrcpy' }
+                    '^mediamtx\.exe$'     { 'mediamtx' }
+                    '^ffmpeg\.exe$'       { 'ffmpeg' }
+                    default               { 'sqlite' }
+                }
+            } | Select-Object -Unique)
+            $stopped = $false
+            foreach ($unit in $units) {
+                $r = Resolve-MissingBinary -Binary $unit
+                if ($r.Action -eq 'stop') { $stopped = $true; Write-Log (Get-MessageString -Key 'Binaries.Stopping') -Level ERROR; break }
+            }
+            if (-not $stopped) { $binaryCheck = Test-RequiredBinaries }
+        } else {
+            Write-Log (Get-MessageString -Key 'Binaries.NonInteractive') -Level ERROR
+        }
+    }
+    if (-not $binaryCheck.Ok) {
         Write-Host ""
         Write-Host "=================================================================" -ForegroundColor Red
         Write-Host " $($msg.CriticalBinariesMissingTitle)" -ForegroundColor Red
@@ -685,6 +710,9 @@ if (-not $global:IsWebServerProcess -and -not $global:IsDashboardProcess -and -n
         exit 1
     }
 
+    if ($global:mediamtxEnabled -and $global:ffmpegFolder -and -not (Test-Path -LiteralPath (Join-Path $global:ffmpegFolder 'ffprobe.exe'))) {
+        Write-Log ((Get-MessageString -Key 'Binaries.FfprobeMissing') -f $global:ffmpegFolder) -Level WARNING
+    }
     if (Get-Command Add-StartupStage -ErrorAction SilentlyContinue) { Add-StartupStage -Name 'catalog/VQA/adb tools + network/binaries check' }
     Confirm-AppPortsAvailable
     if (Get-Command Add-StartupStage -ErrorAction SilentlyContinue) { Add-StartupStage -Name 'port check' }

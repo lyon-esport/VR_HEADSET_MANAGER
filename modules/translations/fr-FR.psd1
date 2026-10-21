@@ -396,6 +396,26 @@
     # Kiosk plus bas - Import-PowerShellDataFile impose une limite stricte de 500
     # paires cle/valeur par table de hachage. Utiliser $msg.Discovery.*
     # ==========================================
+    Binaries = @{
+        MissingTitle   = "Fichier programme manquant : {0}"
+        MissingPath    = "Attendu a : {0}"
+        OptDownload    = "[1] Telecharger la derniere version sur internet (defaut)"
+        OptPath        = "[2] Choisir le chemin d'une copie existante"
+        OptStop        = "[3] Arreter l'application"
+        Choice         = "Votre choix (Entree = 1)"
+        Downloading    = "Telechargement de {0} - patientez..."
+        DownloadOk     = "{0} {1} installe dans {2}"
+        DownloadFailed = "Echec du telechargement : {0}"
+        AskPath        = "Dossier (ou exe) d'une copie existante de {0}"
+        PathInvalid    = "Inutilisable : {0} introuvable a cet endroit."
+        CopyFailed     = "Copie du dossier impossible : {0}"
+        Copied         = "Copie dans {0}"
+        NoDownload     = "Aucune source de telechargement pour {0}."
+        Stopping       = "Application arretee a la demande de l'operateur."
+        NonInteractive = "Fichier(s) programme manquant(s) et pas de console pour demander : arret."
+        StillMissing   = "Fichier(s) programme toujours manquant(s) apres la reparation : arret."
+        FfprobeMissing = "ffprobe.exe introuvable a cote de ffmpeg ({0}). Facultatif ; il vient avec le telechargement de ffmpeg."
+    }
     Discovery = @{
         # --- Set-HeadsetIdentity ---
         IdentityMoved         = "Casque '{0}' deplace : {1} -> {2} (source : {3})"

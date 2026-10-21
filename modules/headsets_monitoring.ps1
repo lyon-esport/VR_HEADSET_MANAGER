@@ -261,7 +261,8 @@ function Invoke-StreamRestartRequest {
             if (-not ($wasRunning[[string]$h.ID] -or $forceRun)) { continue }
             try {
                 $prof = if ($h.ScrcpyProfile) { $h.ScrcpyProfile } else { 'R-N-45-20' }
-                start-screenCopy -displayName $h.Name -headsetIP $h.IPAddress -recording (ConvertTo-BoolField $h.Record) -scrcpyProfile $prof
+                # Queued to a capture worker (S3-5 Step B): the loop does not wait for the start.
+                [void](Submit-ScrcpyCaptureJob -Headset $h -Mode Start -Recording (ConvertTo-BoolField $h.Record) -ScrcpyProfile $prof -Reason ("restart request: " + $Request.reason))
                 $res.Started += $h.Name
             } catch {
                 Write-Log ("VRMonitor: restarting {0} failed: {1}" -f $h.Name, $_.Exception.Message) -Level WARNING
@@ -1232,6 +1233,14 @@ function Start-VRMonitor {
         # the very first tick always reloads, whatever the counter happens to be.
         $lastRegistryVersion = -1
 
+        # Capture workers (S3-5 Step B, ADR-0036): stream starts and restarts run in a small
+        # RunspacePool so this loop never waits on one. Opened FIRST: each worker loads the
+        # modules (~5-7 s) while the poll runspaces start, so it is ready by the eager start.
+        # On failure every capture job runs inline on this thread, as before.
+        try { [void](Start-ScrcpyCaptureWorkers) } catch { Write-Log ("VRMonitor: capture workers failed to start: " + $_.Exception.Message) -Level WARNING }
+        # Stream benchmark run id whose acknowledgement waits for the in-flight capture jobs.
+        $benchAckPending = ''
+
         # Eager first load + immediate runspace start so the first real poll lands within
         # a few seconds of job start instead of waiting one full slow-tick.
         $knownHeadsets = @(Get-KnownHeadsets)
@@ -1325,6 +1334,7 @@ function Start-VRMonitor {
                     # started after that - typically mediamtx from the startup watchdog when
                     # main is killed during boot - would be orphaned with its pid file. Stop
                     # our own services here; both helpers are no-ops when nothing runs.
+                    try { Stop-ScrcpyCaptureWorkers -TimeoutSec 3 } catch {}
                     try { Stop-Scrcpy }   catch {}
                     try { Stop-MediaMtx } catch {}
                 } else {
@@ -1332,7 +1342,9 @@ function Start-VRMonitor {
                     # Graceful shutdown: the pipelines (ffmpeg, bridge, recording) live in THIS
                     # job's $global:HeadsetPipelines, so main's own Stop-Scrcpy sees none. Tear
                     # them down here, through their owner, so recordings are finalised (S4-5).
-                    # mediamtx is left to Invoke-AppShutdown.
+                    # mediamtx is left to Invoke-AppShutdown. Capture jobs in flight are cancelled
+                    # first and given a few seconds to undo their own start (S3-5 Step B).
+                    try { Stop-ScrcpyCaptureWorkers -TimeoutSec 8 } catch { }
                     try { Stop-Scrcpy | Out-Null } catch { Write-Host ("VRMonitor: Stop-Scrcpy at shutdown failed: " + $_.Exception.Message) }
                 }
                 $sharedState["_stop_all"] = $true
@@ -1379,6 +1391,9 @@ function Start-VRMonitor {
             }
 
             $tickErrors = @{ 'fast tick' = $null }   # guarded step -> error text, $null = ran cleanly
+            # Fast-path duration (S3-5): logged at DEBUG only when a tick is slow (> 600 ms), so
+            # a stream start that still lands on this thread shows up in the log.
+            $fastTickSw = [System.Diagnostics.Stopwatch]::StartNew()
             try {
                 # ---- FAST PATH (every 500ms) ----
                 # Pick up registry changes immediately instead of waiting for the slow
@@ -1426,6 +1441,25 @@ function Start-VRMonitor {
                     }
                 }
 
+                # ---- FAST PATH: finished capture jobs (S3-5 Step B, ADR-0036) ----
+                # Starts and restarts run on the capture workers; collect the finished ones here.
+                # A job cancelled by a stop (restart request, benchmark) leaves its headset with
+                # nothing running: forget its edge so the trigger below starts it again when it
+                # should. Any finished job changes which scrcpy runs, so the PID map the poll
+                # runspaces read is republished at once (one census, only on those ticks).
+                $captureDone = @()
+                try { $captureDone = @(Update-ScrcpyCaptureWorkers) } catch { Write-Log ("VRMonitor: capture worker drain failed: " + $_.Exception.Message) -Level WARNING }
+                if ($captureDone.Count -gt 0) {
+                    # Only a cancel re-arms the edge: a job that FAILED is retried by the slow tick, never every 500 ms.
+                    foreach ($cd in $captureDone) { if ($cd.Cancelled) { $scrcpyEdgeState.Remove([string]$cd.HeadsetId) } }
+                    $census = $null
+                    try { $census = Get-ProcessCensus } catch { }
+                    try {
+                        $pidMap = Get-ScrcpyPidMap -Census $census -KnownHeadsets $knownHeadsets
+                        if ($null -ne $pidMap) { $sharedState['_scrcpy_pids'] = $pidMap }
+                    } catch { }
+                }
+
                 # ---- FAST PATH: stream benchmark pause (ADR-0026) ----
                 # A benchmark (stream_benchmark.ps1, another process) raises an expiring app_kv
                 # flag. This process owns the running pipelines, so IT stops them, on the flag's
@@ -1439,12 +1473,20 @@ function Start-VRMonitor {
                     if ($benchState.RunId -ne $benchRunId) {
                         Write-Log ("VRMonitor: stream benchmark {0} started - stopping every stream until it ends." -f $benchState.RunId) -Level INFO
                         try { Stop-Scrcpy | Out-Null } catch { Write-Log ("VRMonitor: stopping streams for the benchmark failed: " + $_.Exception.Message) -Level WARNING }
-                        Confirm-StreamBenchmarkPause -RunId $benchState.RunId
-                        $benchRunId = $benchState.RunId
+                        $benchRunId      = $benchState.RunId
+                        $benchAckPending = $benchState.RunId
+                    }
+                    # Acknowledge only once no capture job is in flight: Stop-Scrcpy cancelled them,
+                    # and a job still undoing its start holds the headset's pipe names, which the
+                    # benchmark's own test stream needs (it waits up to 60 s for this ack).
+                    if ($benchAckPending -and (Get-ScrcpyCaptureBusyCount) -eq 0) {
+                        Confirm-StreamBenchmarkPause -RunId $benchAckPending
+                        $benchAckPending = ''
                     }
                 } elseif ($benchRunId) {
                     Write-Log "VRMonitor: stream benchmark over - restarting the normal streams." -Level INFO
                     $benchRunId      = ''
+                    $benchAckPending = ''
                     $scrcpyEdgeState = @{}
                 }
                 # The computer monitoring runspace pauses on this (its WMI/counter reads would land
@@ -1727,6 +1769,9 @@ function Start-VRMonitor {
                 $lastFingerprint      = ""
                 $lastKioskFingerprint = ""
             }
+            if ($fastTickSw.ElapsedMilliseconds -gt 600) {
+                Write-Log ("VRMonitor fast tick took {0} ms (capture jobs in flight: {1})" -f $fastTickSw.ElapsedMilliseconds, (Get-ScrcpyCaptureBusyCount)) -Level DEBUG
+            }
 
             # ---- SLOW PATH (every refresh_timer seconds) ----
             $slowCounter++
@@ -1765,25 +1810,30 @@ function Start-VRMonitor {
                         Write-Log ("VRMonitor: USB tick failed: " + $_.Exception.Message) -Level WARNING
                     }
 
-                    # Companion apps: discovery runs in its own runspace (S3-1, no blocking UDP
-                    # receive here). Apply what it published: heals IP drift by serial.
-                    try {
-                        Sync-CompanionDiscoveryRunspace -registry ([ref]$companionRunspace) -sharedState $sharedState `
-                            -scriptPath $global:ScriptPath -configFilePath $global:ConfigFilePath `
-                            -pollBlock $companionPollBlock
-                        if ($sharedState["_companion_results"]) {
-                            $companions = @($sharedState["_companion_results"])
-                            $sharedState["_companion_results"] = $null
-                            foreach ($c in $companions) {
-                                if ($c.Serial -and $c.IP) {
-                                    Set-HeadsetIdentity -SerialNumber $c.Serial -IPAddress $c.IP `
-                                                        -Model $c.Model -Source 'companion' | Out-Null
-                                }
-                            }
-                        }
-                    } catch {
-                        Write-Log ("VRMonitor: companion discovery failed: " + $_.Exception.Message) -Level DEBUG
-                    }
+                    # COMPANION DISCOVERY DISABLED (operator, 2026-10-18): the companion app is paused and
+                    # will be reworked. Its UDP bind on 5556 also failed every 5 s here ("only one usage of
+                    # each socket address"; the port was held by this very process). To re-enable, remove the
+                    # leading '#| ' markers of the block below. Nothing else changes: Sync-CompanionDiscoveryRunspace,
+                    # Invoke-CompanionDiscovery, $companionPollBlock and the shutdown handling stay in place.
+#|                     # Companion apps: discovery runs in its own runspace (S3-1, no blocking UDP
+#|                     # receive here). Apply what it published: heals IP drift by serial.
+#|                     try {
+#|                         Sync-CompanionDiscoveryRunspace -registry ([ref]$companionRunspace) -sharedState $sharedState `
+#|                             -scriptPath $global:ScriptPath -configFilePath $global:ConfigFilePath `
+#|                             -pollBlock $companionPollBlock
+#|                         if ($sharedState["_companion_results"]) {
+#|                             $companions = @($sharedState["_companion_results"])
+#|                             $sharedState["_companion_results"] = $null
+#|                             foreach ($c in $companions) {
+#|                                 if ($c.Serial -and $c.IP) {
+#|                                     Set-HeadsetIdentity -SerialNumber $c.Serial -IPAddress $c.IP `
+#|                                                         -Model $c.Model -Source 'companion' | Out-Null
+#|                                 }
+#|                             }
+#|                         }
+#|                     } catch {
+#|                         Write-Log ("VRMonitor: companion discovery failed: " + $_.Exception.Message) -Level DEBUG
+#|                     }
 
                     # Background LAN discovery: start/stop to match the config toggle, then
                     # drain whatever the sweep runspace published. Applying the results here

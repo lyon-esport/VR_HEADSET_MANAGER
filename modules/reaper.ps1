@@ -11,9 +11,10 @@
 #   mediamtx.pid         Start-MediaMtx                 | reaper, Get-MediaMtxProcess                  | Stop-MediaMtx, reaper
 #   dashboard.pid        main.ps1 / Show-MainMenu       | reaper                                       | dashboard on exit, reaper
 #   mdns_responder.pid   Start-MdnsResponder            | reaper                                       | Stop-MdnsResponder, reaper
-#   bridge_<safe>.pid    the pipe bridge job host itself (Start-HeadsetPipeBridge, its own $PID)
-#                        | reaper (kills every bridge_*.pid)                                          | the job's finally, Stop-HeadsetPipeline, reaper
 # scrcpy / ffmpeg / adb have no PID file: matched by exe path under sources\.
+# The pipe bridge is a thread of the process that started the stream (ADR-0035): it dies with
+# that process, so there is nothing to reap. A bridge_<safe>.pid left by an older build is only
+# deleted, never used to kill (its PID may have been recycled).
 # Spawned by main.ps1 BEFORE Start-VRMonitor; it needs only the main PID and these paths.
 
 param(
@@ -69,9 +70,9 @@ while ($true) {
     if (-not (Get-Process -Id $MainPid -ErrorAction SilentlyContinue)) {
         # Main died ungracefully. Reap and exit.
         foreach ($f in $pidFiles) { Stop-ByPidFile -Path $f }
-        # Pipe bridge job hosts (powershell.exe, one per stream) keep the relay file open.
+        # Leftover pid files of the former per-stream bridge process: delete only (see header).
         foreach ($b in @(Get-ChildItem -LiteralPath $dataFolder -Filter 'bridge_*.pid' -File -ErrorAction SilentlyContinue)) {
-            Stop-ByPidFile -Path $b.FullName
+            Remove-Item -LiteralPath $b.FullName -Force -ErrorAction SilentlyContinue
         }
         # scrcpy, ffmpeg and adb have no PID file (Stop-Scrcpy / Stop-AdbServer tear
         # these down on a graceful exit); on a crash, reap them the same way, by exe
