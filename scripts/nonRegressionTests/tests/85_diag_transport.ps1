@@ -116,9 +116,35 @@ $nrtB = Resolve-Nrt85Headset -Name $env:VRHM_TEST_WIFI_HEADSET -IpOverride $env:
 # with a reason, and the action tests run on the cabled one ($nrtT).
 $nrtT = if ($nrtB) { $nrtB } else { $nrtA }
 
+# Preflight (hardware). A headset left PnP-disabled by an earlier killed run is re-enabled first.
+$nrt85Healed = @(Restore-NrtStaleUsbLink)
+$nrt85UsbOk  = $false
+$nrt85UsbWhy = 'headset A not configured'
+if ($nrtA) {
+    $nrt85Vis    = Test-NrtUsbHeadsetVisible -Serial ([string]$nrtA.SerialNumber)
+    $nrt85UsbOk  = [bool]$nrt85Vis.Visible
+    $nrt85UsbWhy = [string]$nrt85Vis.Reason
+}
+Write-Host ("  Preflight: USB headset A visible = {0} ({1}); stale USB devices re-enabled = {2}" -f $nrt85UsbOk, $nrt85UsbWhy, $nrt85Healed.Count) -ForegroundColor DarkGray
+
+# Headset B that does not answer is treated as absent: its tests skip instead of failing, and the
+# action tests fall back to headset A.
+if ($nrtB -and -not (Test-NrtHeadsetReachable -IPAddress ([string]$nrtB.IPAddress) -AdbPort (Get-NrtSandboxPorts -TargetRoot $target).Adb)) {
+    Write-Host ("  Preflight: headset B '{0}' ({1}) does not answer - treated as absent." -f $nrtB.Name, $nrtB.IPAddress) -ForegroundColor DarkGray
+    $nrtB = $null
+    $nrtT = $nrtA
+}
+
 function Assert-Nrt85Headsets {
     if (-not $nrtA) {
         Skip-Test 'set VRHM_TEST_USB_HEADSET to the name of a registered headset cabled over USB'
+    }
+}
+
+function Assert-Nrt85Usb {
+    Assert-Nrt85Headsets
+    if (-not $nrt85UsbOk) {
+        Skip-Test ("headset A is not visible on USB ({0}): plug the cable, or run from an elevated PowerShell" -f $nrt85UsbWhy)
     }
 }
 
@@ -178,7 +204,7 @@ Invoke-RegressionTest -Name 'WiFi ADB is available on the cabled headset (enable
 }
 
 Invoke-RegressionTest -Name 'The cabled headset reports AdbTransport USB' -Test {
-    Assert-Nrt85Headsets
+    Assert-Nrt85Usb
     $s = Wait-Nrt85Transport -Id $nrtA.ID -Want 'USB' -Timeout 60
     Add-TestEvidence ("adb_transport = '{0}'  adb = {1}  ping = {2}  scrcpy = {3}  ip = {4}" -f $s.adb_transport, $s.adb, $s.ping, $s.scrcpy, $s.ip_address)
     Assert-Equal 'USB' ([string]$s.adb_transport) 'headset A transport'
@@ -192,7 +218,7 @@ Invoke-RegressionTest -Name 'The WiFi-only headset reports AdbTransport WiFi' -T
 }
 
 Invoke-RegressionTest -Name 'An ADB command on the cabled headset runs over USB' -Test {
-    Assert-Nrt85Headsets
+    Assert-Nrt85Usb
     $r = Invoke-Nrt85Command -Id $nrtA.ID -Command 'getprop ro.product.model'
     Add-TestEvidence ("transport: {0}  output: {1}" -f $r.Json.transport, $r.Json.output)
     Assert-True ($r.Ok -and $r.Json.ok) 'the command must succeed'
@@ -255,7 +281,7 @@ Invoke-RegressionTest -Name 'The fleet comparison lists both headsets' -Test {
 }
 
 Invoke-RegressionTest -Name 'The USB section exists only for the cabled headset' -Test {
-    Assert-Nrt85Headsets
+    Assert-Nrt85Usb
     $a = (Invoke-Nrt85Diag -Id $nrtA.ID -Section 'usb').Json.data
     Add-TestEvidence ("A: OnUsb={0} speed={1}" -f $a.OnUsb, $a.Speed)
     Assert-True ([bool]$a.OnUsb) 'headset A is on USB'
@@ -267,7 +293,7 @@ Invoke-RegressionTest -Name 'The USB section exists only for the cabled headset'
 }
 
 Invoke-RegressionTest -Name 'The cable test runs on the cabled headset and is refused on the other' -Test {
-    Assert-Nrt85Headsets
+    Assert-Nrt85Usb
     if ($nrtB) {
         $b = Invoke-Nrt85Action -Id $nrtB.ID -Action 'cable_test'
         Add-TestEvidence ("B: ok={0} message={1}" -f $b.Json.ok, $b.Json.message)
@@ -381,7 +407,7 @@ Invoke-RegressionTest -Name 'A player message is posted to the headset notificat
 # ---------------------------------------------------------------------------
 
 Invoke-RegressionTest -Name 'A cabled headset can be asked over WiFi, and WiFi first really uses its WiFi link' -Test {
-    Assert-Nrt85Headsets
+    Assert-Nrt85Usb
     # No second headset and no setting change: the DIAG API takes a transport, which only changes
     # which link is tried FIRST (the other stays the fallback). That is enough to prove the WiFi
     # path of a cabled headset. Changing ADB.prefer_usb through the config API would NOT work
@@ -423,7 +449,7 @@ function Set-Nrt85UsbSwitchMode {
 }
 
 Invoke-RegressionTest -Name 'Unplugging the cable falls back to WiFi, and replugging returns to USB' -Test {
-    Assert-Nrt85Headsets
+    Assert-Nrt85Usb
     if ($unattended -or $depth -eq 'Light') { Skip-Test 'needs a person to unplug and replug the cable' }
 
     $beforeCmd = Get-Nrt85ScrcpyCmdLine

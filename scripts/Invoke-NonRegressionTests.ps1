@@ -660,6 +660,7 @@ finally {
     # Teardown always runs, including on Ctrl+C.
     # Never leave a headset's USB device disabled by a software unplug.
     if (Get-Command Restore-NrtUsbLink -ErrorAction SilentlyContinue) { Restore-NrtUsbLink }
+    if (Get-Command Restore-NrtStaleUsbLink -ErrorAction SilentlyContinue) { $null = Restore-NrtStaleUsbLink }
     if ($AutoApproveSetup) { Remove-Item Env:\VRHM_AUTO_APPROVE_SETUP -ErrorAction SilentlyContinue }
     # Headsets off BEFORE the app: the app's shutdown ends this install's adb server.
     if ($ShutdownHeadsetsAtEnd -and $target -and (Get-Command Invoke-NrtShutdownHeadsets -ErrorAction SilentlyContinue)) {

@@ -262,6 +262,76 @@ function Get-NrtUsbPnpDevice {
     return $null
 }
 
+function Get-NrtDisabledUsbFile {
+    <# Where the InstanceIds this harness disabled are remembered across processes. #>
+    return (Join-Path $PSScriptRoot 'usb_disabled.json')
+}
+
+function Save-NrtDisabledUsbIds {
+    <# Writes (or, with no ids, deletes) the persisted list. UTF-8 without BOM. Never throws. #>
+    param([string[]]$Ids = @())
+    try {
+        $file = Get-NrtDisabledUsbFile
+        if (@($Ids).Count -eq 0) {
+            if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue }
+            return
+        }
+        [System.IO.File]::WriteAllText($file, (ConvertTo-Json -InputObject @($Ids)), (New-Object System.Text.UTF8Encoding($false)))
+    } catch { }
+}
+
+function Restore-NrtStaleUsbLink {
+    <#
+    .SYNOPSIS
+        Re-enables a headset USB device left disabled by an EARLIER run (killed before its teardown).
+
+    .DESCRIPTION
+        Enables (a) the ids remembered in usb_disabled.json and (b) any present Meta/Pico composite
+        USB device whose Windows problem code says "disabled" (22). Needs an elevated shell; does
+        nothing otherwise. Returns the InstanceIds it re-enabled. Never throws.
+
+    .EXAMPLE
+        $healed = @(Restore-NrtStaleUsbLink)
+    #>
+    $healed = New-Object System.Collections.Generic.List[string]
+    try {
+        if (-not (Test-NrtElevated)) { return @() }
+        $ids = New-Object System.Collections.Generic.List[string]
+        $file = Get-NrtDisabledUsbFile
+        if (Test-Path -LiteralPath $file) {
+            $raw = Get-Content -LiteralPath $file -Raw -Encoding UTF8
+            if ($raw) { foreach ($i in @(ConvertFrom-Json -InputObject $raw)) { if ($i) { $ids.Add([string]$i) } } }
+        }
+        foreach ($d in @(Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object {
+            $_.InstanceId -match '^USB\\VID_(2833|2D40)&PID_[0-9A-F]{4}\\' -and $_.InstanceId -notmatch '&MI_' -and $_.Status -ne 'OK'
+        })) {
+            $prob = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_ProblemCode' -ErrorAction SilentlyContinue).Data
+            if ($prob -eq 22 -and -not $ids.Contains($d.InstanceId)) { $ids.Add($d.InstanceId) }
+        }
+        foreach ($id in $ids) {
+            try { Enable-PnpDevice -InstanceId $id -Confirm:$false -ErrorAction Stop; $healed.Add($id) } catch { }
+        }
+        Save-NrtDisabledUsbIds -Ids @()
+        if ($healed.Count -gt 0) { Start-Sleep -Seconds 5 }
+    } catch { }
+    return @($healed)
+}
+
+function Test-NrtUsbHeadsetVisible {
+    <#
+    .SYNOPSIS
+        Is this headset's USB device present and healthy in Windows? Returns @{Visible;Reason}.
+
+    .EXAMPLE
+        $v = Test-NrtUsbHeadsetVisible -Serial '1WMHH8242N0366'
+    #>
+    param([string]$Serial = '')
+    $dev = Get-NrtUsbPnpDevice -Serial $Serial
+    if (-not $dev) { return @{ Visible = $false; Reason = 'no matching Meta/Pico USB device present in Windows (cable out or device disabled)' } }
+    if ([string]$dev.Status -ne 'OK') { return @{ Visible = $false; Reason = ("USB device status is '{0}'" -f $dev.Status) } }
+    return @{ Visible = $true; Reason = 'USB device present, status OK' }
+}
+
 function Set-NrtUsbLink {
     <#
     .SYNOPSIS
@@ -283,14 +353,17 @@ function Set-NrtUsbLink {
         if ($State -eq 'Out') {
             $dev = Get-NrtUsbPnpDevice -Serial $Serial
             if (-not $dev) { return $false }
-            Disable-PnpDevice -InstanceId $dev.InstanceId -Confirm:$false -ErrorAction Stop
+            # Persist BEFORE disabling: a run killed while the device is out must still be healable.
             if (-not $global:TestRun.DisabledUsb.Contains($dev.InstanceId)) { $global:TestRun.DisabledUsb.Add($dev.InstanceId) }
+            Save-NrtDisabledUsbIds -Ids @($global:TestRun.DisabledUsb)
+            Disable-PnpDevice -InstanceId $dev.InstanceId -Confirm:$false -ErrorAction Stop
             return $true
         }
         $ids = @($global:TestRun.DisabledUsb)
         if ($ids.Count -eq 0) { return $false }
         foreach ($id in $ids) { Enable-PnpDevice -InstanceId $id -Confirm:$false -ErrorAction Stop }
         $global:TestRun.DisabledUsb.Clear()
+        Save-NrtDisabledUsbIds -Ids @()
         return $true
     } catch {
         Write-Host ("  Software USB {0} failed: {1}" -f $State.ToLower(), $_.Exception.Message) -ForegroundColor DarkGray
