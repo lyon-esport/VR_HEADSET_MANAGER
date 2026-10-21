@@ -533,11 +533,61 @@ function Sync-KioskRunspaces {
     }
 }
 
+function Close-HeadsetRunspaceEntry {
+    <#
+    .SYNOPSIS
+    Releases one poll runspace WITHOUT ever blocking the VRMonitor loop.
+
+    .DESCRIPTION
+    PowerShell.Dispose() on a running pipeline stops it synchronously and waits. A poll runspace
+    stuck in an uninterruptible call (an adb.exe wait on a wedged USB/WiFi transport) held the
+    whole slow tick for 399 s in a real run (TEST27): no runspace was started for a headset added
+    meanwhile, and its status stayed empty. A finished runspace is disposed at once; one that is
+    still running gets an asynchronous stop (BeginStop returns immediately) and is parked in
+    $global:ZombieHeadsetRunspaces until Clear-ZombieHeadsetRunspaces sees it finish.
+
+    .EXAMPLE
+    Close-HeadsetRunspaceEntry -Entry $runspaceRegistry.Value[$ip] -Ip $ip
+    #>
+    param(
+        [Parameter(Mandatory = $true)]$Entry,
+        [string]$Ip = ''
+    )
+    if ($Entry.Handle.IsCompleted) {
+        try { $Entry.PS.Dispose() }       catch {}
+        try { $Entry.Runspace.Dispose() } catch {}
+        return
+    }
+    try { [void]$Entry.PS.BeginStop($null, $null) } catch {}
+    if (-not $global:ZombieHeadsetRunspaces) { $global:ZombieHeadsetRunspaces = New-Object System.Collections.ArrayList }
+    [void]$global:ZombieHeadsetRunspaces.Add($Entry)
+    Write-Log ("VRMonitor: runspace for $Ip did not stop within 5 s - stopping it in the background") -Level WARNING
+}
+
+function Clear-ZombieHeadsetRunspaces {
+    <#
+    .SYNOPSIS
+    Disposes the parked runspaces (see Close-HeadsetRunspaceEntry) whose pipeline has now ended.
+    Cheap and non-blocking: a still-running one is left for the next call.
+
+    .EXAMPLE
+    Clear-ZombieHeadsetRunspaces
+    #>
+    if (-not $global:ZombieHeadsetRunspaces -or $global:ZombieHeadsetRunspaces.Count -eq 0) { return }
+    foreach ($z in @($global:ZombieHeadsetRunspaces)) {
+        if ($z.Handle.IsCompleted) {
+            try { $z.PS.Dispose() }       catch {}
+            try { $z.Runspace.Dispose() } catch {}
+            $global:ZombieHeadsetRunspaces.Remove($z)
+        }
+    }
+}
+
 function Sync-HeadsetRunspaces {
     <#
     .SYNOPSIS
     Diffs $runspaceRegistry against $knownHeadsets.
-    Stops runspaces for removed headsets (signal + wait up to 5s + dispose).
+    Stops runspaces for removed headsets (signal + wait up to 5s, then dispose or park it in the background if still running).
     Starts runspaces for new headsets.
     #>
     param(
@@ -551,6 +601,7 @@ function Sync-HeadsetRunspaces {
     # A row whose address is unknown (released to a 127.0.0.x placeholder by
     # Set-HeadsetIdentity, or never filled in) has nothing to poll. Filtering it out here
     # means no runspace is spawned for it at all - no ping, no port test, no ADB.
+    Clear-ZombieHeadsetRunspaces
     $knownHeadsets = @($knownHeadsets | Where-Object { -not (Test-UnknownIp $_.IPAddress) })
     $currentIPs = @($knownHeadsets | ForEach-Object { $_.IPAddress })
 
@@ -576,8 +627,7 @@ function Sync-HeadsetRunspaces {
             while (-not $entry.Handle.IsCompleted -and (Get-Date) -lt $deadline) {
                 Start-Sleep -Milliseconds 200
             }
-            try { $entry.PS.Dispose() }       catch {}
-            try { $entry.Runspace.Dispose() } catch {}
+            Close-HeadsetRunspaceEntry -Entry $entry -Ip $ip
             $runspaceRegistry.Value.Remove($ip)
             $sharedState.Remove("_stop_$ip")
             $sharedState.Remove($ip)
