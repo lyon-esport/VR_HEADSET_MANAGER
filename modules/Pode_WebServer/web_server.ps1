@@ -131,6 +131,9 @@ public class VrmConsoleInput {
 $port       = 8080
 $enabled    = $true
 $adbPath    = $null
+# Classic WiFi ADB port (ADB.adbPort_default). This literal is ONLY the last-resort value for a
+# config.json that cannot be read below: this file runs before Get-Config (and Get-ClassicAdbPort)
+# is available, and the read right below replaces it in every normal start.
 $adbPort    = 5555
 $apkPath    = $null
 $apkPackage = 'tdg.oculuswirelessadb'

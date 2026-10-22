@@ -17,8 +17,39 @@ function Get-DeviceId {
         [string]$IPAddress,
         [int]$AdbPort = $global:adbPort_default
     )
-    if (-not $AdbPort) { $AdbPort = 5555 }
+    if (-not $AdbPort) { $AdbPort = Get-ClassicAdbPort }
     return ("{0}:{1}" -f $IPAddress, $AdbPort)
+}
+
+
+function Test-AdbDeviceIdIsTls {
+    <#
+    .SYNOPSIS
+    True when an "adb devices" id is one of adb's own mDNS-named TLS transports
+    ("adb-<serial>-<rand>._adb-tls-connect._tcp"), which VRHM never uses (ADR-0034 rule 4).
+    .EXAMPLE
+    Test-AdbDeviceIdIsTls 'adb-1WMHH8242N0366-f4JCQ1._adb-tls-connect._tcp'    # $true
+    #>
+    param([string]$Id)
+    if ([string]::IsNullOrWhiteSpace($Id)) { return $false }
+    return [bool]($Id -match '\._adb-tls-connect\._tcp' -or $Id -match '^adb-')
+}
+
+
+function Test-AdbDeviceIdIsUsb {
+    <#
+    .SYNOPSIS
+    True when an "adb devices" id is a USB transport: no ':' (that is ip:port, WiFi) and not an
+    mDNS-named TLS id (which also has no ':' and used to be misread as USB, i.e. fired "adb tcpip"
+    at a headset that is only on WiFi). The ONE classification rule (S10-3).
+    .EXAMPLE
+    Test-AdbDeviceIdIsUsb '2G0YC5ZG1W00ZJ'          # $true
+    Test-AdbDeviceIdIsUsb '192.168.1.243:5555'      # $false
+    #>
+    param([string]$Id)
+    if ([string]::IsNullOrWhiteSpace($Id)) { return $false }
+    if ($Id -match ':') { return $false }
+    return (-not (Test-AdbDeviceIdIsTls -Id $Id))
 }
 
 
@@ -218,17 +249,31 @@ function Invoke-AdbCmd {
     # Whatever happens next, this cable entry has just failed: stop every later lookup in this
     # process from choosing it until it is re-plugged (see Get-PublishedUsbDevices).
     if ($Device.ConnectionType -eq 'USB') { Register-UsbTransportFailure -Serial ([string]$Device.DeviceId) }
-    if ($Device.ConnectionType -eq 'USB' -and $Device.PSObject.Properties['HeadsetIP'] -and $Device.HeadsetIP) {
-        $fbPort = if ($Device.PSObject.Properties['HeadsetPort'] -and $Device.HeadsetPort) { [int]$Device.HeadsetPort } else { [int]$global:adbPort_default }
-        $wifiDev = Get-AdbWifiDevice -headsetIP $Device.HeadsetIP -AdbPort $fbPort -adb $adb
+    $hasHeadsetIp = ($Device.PSObject.Properties['HeadsetIP'] -and $Device.HeadsetIP)
+    $hasSerial    = ($Device.PSObject.Properties['SerialNumber'] -and $Device.SerialNumber)
+    if ($Device.ConnectionType -eq 'USB' -and ($hasHeadsetIp -or $hasSerial)) {
+        $fbPort = if ($Device.PSObject.Properties['HeadsetPort'] -and $Device.HeadsetPort) { [int]$Device.HeadsetPort } else { Get-ClassicAdbPort }
+        $wifiDev = $null
+        if (Get-Command Resolve-HeadsetWifiDevice -ErrorAction SilentlyContinue) {
+            # Every enabled WiFi mode in preference order (ADR-0034): a TLS-only headset is
+            # reachable here too. Still ONE fallback for this call.
+            $fbHeadset = [PSCustomObject]@{
+                Name         = $deviceId
+                SerialNumber = $(if ($hasSerial) { [string]$Device.SerialNumber } else { [string]$Device.DeviceId })
+                IPAddress    = $(if ($hasHeadsetIp) { [string]$Device.HeadsetIP } else { '' })
+            }
+            $wifiDev = Resolve-HeadsetWifiDevice -Headset $fbHeadset -ClassicPort $fbPort -adb $adb
+        } elseif ($hasHeadsetIp) {
+            $wifiDev = Get-AdbWifiDevice -headsetIP $Device.HeadsetIP -AdbPort $fbPort -adb $adb
+        }
         if ($wifiDev) {
             Write-Log ((Get-MessageString -Key 'Diag.FallbackToWifi' -Fallback 'USB transport lost for {0} - retrying over WiFi ({1}).') -f $deviceId, $wifiDev.DeviceId) -Level WARNING
             # Tell the CALLER what really answered. The device object it passed in is shared by
             # reference, so update it in place: otherwise a caller that reports the transport
             # (the DIAG page, the status badge) keeps saying USB for a command that went over
             # WiFi, and later calls with the same object would retry the dead cable first.
-            foreach ($p in 'DeviceId', 'ConnectionType', 'IP', 'Port') {
-                $Device | Add-Member -NotePropertyName $p -NotePropertyValue $wifiDev.$p -Force
+            foreach ($p in 'DeviceId', 'ConnectionType', 'IP', 'Port', 'WifiMode') {
+                if ($wifiDev.PSObject.Properties[$p]) { $Device | Add-Member -NotePropertyName $p -NotePropertyValue $wifiDev.$p -Force }
             }
             $Device   = $wifiDev
             $deviceId = $wifiDev.DeviceId
@@ -241,22 +286,43 @@ function Invoke-AdbCmd {
         # Transport already re-established by Get-AdbWifiDevice; go straight to attempt 2.
     } elseif ($Device.ConnectionType -eq 'WiFi') {
         $ip   = $Device.IP
-        $port = if ($Device.Port) { $Device.Port } else { $global:adbPort_default }
+        $port = if ($Device.Port) { $Device.Port } else { Get-ClassicAdbPort }
 
+        # 1. Same endpoint: most drops are an 'offline' transport on a port that still listens,
+        #    and a plain reconnect repairs them.
+        $isConnected = $false
         $portOpen = (Test-Port -hostname $ip -port $port).open
-        if (-not $portOpen) {
-            $pingOk = Test-Connection -ComputerName $ip -Count 1 -Quiet -ErrorAction SilentlyContinue
-            if (-not $pingOk) {
-                throw ($msg.AdbCmdPingFailed -f $ip)
-            }
-            throw ($msg.AdbCmdPortClosed -f $ip, $port)
+        if ($portOpen) {
+            # Bounded: this recovery branch runs on every failed command of a repeating poll.
+            $null = Invoke-Adb -Arguments @('connect', $deviceId) -Adb $adb -TimeoutSeconds 10
+            $isConnected = [bool]((Invoke-Adb -Arguments @('devices') -Adb $adb -TimeoutSeconds 5).StdOut |
+                Where-Object { $_ -match ("^" + [regex]::Escape($deviceId) + "\s+device$") })
         }
 
-        # Bounded: this recovery branch runs on every failed command of a repeating poll.
-        $null = Invoke-Adb -Arguments @('connect', $deviceId) -Adb $adb -TimeoutSeconds 10
-        $isConnected = [bool]((Invoke-Adb -Arguments @('devices') -Adb $adb -TimeoutSeconds 5).StdOut |
-            Where-Object { $_ -match ("^" + [regex]::Escape($deviceId) + "\s+device$") })
+        # 2. ADR-0034: retry ONCE over the other enabled WiFi mode (classic <-> TLS), and tell the
+        #    caller in place, like the USB->WiFi fallback above. Never chained: a call that already
+        #    fell back from USB does not reach this branch.
+        if (-not $isConnected -and (Get-Command Get-AdbWifiModeFallbackDevice -ErrorAction SilentlyContinue)) {
+            $altDev = Get-AdbWifiModeFallbackDevice -Device $Device -adb $adb
+            if ($altDev) {
+                Write-Log ("WiFi ADB {0} lost for {1} - retrying over {2} ({3})" -f (Get-AdbWifiDeviceMode -Device $Device), $deviceId, $altDev.WifiMode, $altDev.DeviceId) -Level WARNING
+                foreach ($p in 'DeviceId', 'IP', 'Port', 'WifiMode') {
+                    $Device | Add-Member -NotePropertyName $p -NotePropertyValue $altDev.$p -Force
+                }
+                $deviceId    = $altDev.DeviceId
+                $argv[1]     = $deviceId
+                $isConnected = $true
+            }
+        }
+
         if (-not $isConnected) {
+            if (-not $portOpen) {
+                $pingOk = Test-Connection -ComputerName $ip -Count 1 -Quiet -ErrorAction SilentlyContinue
+                if (-not $pingOk) {
+                    throw ($msg.AdbCmdPingFailed -f $ip)
+                }
+                throw ($msg.AdbCmdPortClosed -f $ip, $port)
+            }
             throw ($msg.AdbCmdWifiNotConnected -f $deviceId)
         }
 
@@ -267,7 +333,7 @@ function Invoke-AdbCmd {
             $serial = (($devicesOutput | Where-Object { $_ -match 'unauthorized' } | Select-Object -First 1) -split "`t")[0].Trim()
             throw ($msg.AdbCmdUsbUnauthorized -f $serial)
         }
-        if (-not ($devicesOutput | Where-Object { $_ -match "`tdevice$" -and $_ -notmatch ':' })) {
+        if (-not ($devicesOutput | Where-Object { $_ -match "`tdevice$" -and (Test-AdbDeviceIdIsUsb -Id (($_ -split "`t")[0].Trim())) })) {
             throw ($msg.AdbCmdUsbNotDetected)
         }
 
@@ -547,7 +613,7 @@ function Install-OculusWirelessAdbApk {
 
         # 7. Activate TCP/IP
         Write-Log ($msg.ActivatingWifiAdbMode) -Level INFO
-        Invoke-AdbCmd -Device $Device -Command "tcpip 5555" -adb $adb | Out-Null
+        Invoke-AdbCmd -Device $Device -Command ("tcpip {0}" -f (Get-ClassicAdbPort)) -adb $adb | Out-Null
         Start-Sleep -Seconds 2
 
         return $true
@@ -616,7 +682,7 @@ function Enable-WiFiADB {
     - Verifies the port is open
 
     .PARAMETER AdbPort
-    Port to use for ADB (default: 5555)
+    Port to use for ADB (default: config ADB.adbPort_default)
 
     .EXAMPLE
     Enable-WiFiADB -AdbPort 5555
@@ -807,7 +873,8 @@ function Get-AdbUsbDevice {
     for ($i = 1; $i -le $MaxAttempts; $i++) {
         try {
             $usbLine = & $adb devices |
-                Where-Object { $_ -match "`tdevice$" -and $_ -notmatch ":" }
+                Where-Object { $_ -match "`tdevice$" -and (Test-AdbDeviceIdIsUsb -Id (($_ -split "`t")[0].Trim())) } |
+                Select-Object -First 1
             if ($usbLine) {
                 $serial = ($usbLine -split "`t")[0].Trim()
                 Write-Log ($msg.UsbAdbDeviceDetected) -Level SUCCESS
@@ -1025,9 +1092,15 @@ function Resolve-HeadsetAdbDevice {
       USB   USB first, WiFi if the headset is not cabled
       WiFi  WiFi first, USB if the WiFi transport cannot be established
 
+    WiFi has two modes (ADR-0034): classic (registry address + ADB.adbPort_default) and ADB over
+    TLS (the published endpoint of the serial). They are tried in the order of
+    ADB.wifi_preferred_mode, the second being the fallback (Resolve-HeadsetWifiDevice in
+    adb_wifi_modes.ps1). -AdbPort is the CLASSIC port (0 = config).
+
     The returned object carries SerialNumber, HeadsetIP and HeadsetPort next to the usual
-    DeviceId / ConnectionType / IP / Port. Invoke-AdbCmd uses HeadsetIP to retry once over
-    WiFi if a USB device's cable drops mid-command. $null when neither transport works.
+    DeviceId / ConnectionType / IP / Port, plus WifiMode ('Classic' or 'TLS') for a WiFi device.
+    Invoke-AdbCmd uses them to retry once over WiFi if a USB device's cable drops mid-command,
+    and once over the other WiFi mode when a WiFi transport fails. $null when nothing works.
 
     LAN discovery, the network scanner and USB onboarding deliberately do NOT use this:
     they act on a device that is not (yet) a known headset.
@@ -1043,7 +1116,7 @@ function Resolve-HeadsetAdbDevice {
         [int]$AdbPort = 0
     )
 
-    if ($AdbPort -le 0) { $AdbPort = if ($global:adbPort_default) { [int]$global:adbPort_default } else { 5555 } }
+    if ($AdbPort -le 0) { $AdbPort = Get-ClassicAdbPort }
 
     $serial = if ($Headset.SerialNumber) { ([string]$Headset.SerialNumber).Trim() } else { '' }
     if ($serial -eq '-') { $serial = '' }
@@ -1068,12 +1141,18 @@ function Resolve-HeadsetAdbDevice {
         }
     }
     $newWifi = {
+        # Mode-aware (ADR-0034): every enabled WiFi mode, preferred first.
+        if (Get-Command Resolve-HeadsetWifiDevice -ErrorAction SilentlyContinue) {
+            return (Resolve-HeadsetWifiDevice -Headset $Headset -ClassicPort $AdbPort -adb $adb)
+        }
+        # adb_wifi_modes.ps1 not loaded in this runspace: classic only, the pre-S10-3 behaviour.
         if (-not $ip) { return $null }
         $d = Get-AdbWifiDevice -headsetIP $ip -AdbPort $AdbPort -adb $adb
         if (-not $d) { return $null }
         $d | Add-Member -NotePropertyName SerialNumber -NotePropertyValue $serial -Force
         $d | Add-Member -NotePropertyName HeadsetIP    -NotePropertyValue $ip     -Force
         $d | Add-Member -NotePropertyName HeadsetPort  -NotePropertyValue $AdbPort -Force
+        $d | Add-Member -NotePropertyName WifiMode     -NotePropertyValue 'Classic' -Force
         return $d
     }
 
@@ -1100,7 +1179,9 @@ function Get-BestAdbDevice {
     param (
         [Parameter(Mandatory=$true)] $Headset,
         [string]$adb = $global:adbPath,
-        [int]$AdbPort = 5555
+        # 0 = the classic port from config (Get-ClassicAdbPort). It used to default to a literal
+        # 5555, which silently ignored ADB.adbPort_default for every caller that passed nothing.
+        [int]$AdbPort = 0
     )
 
     return Resolve-HeadsetAdbDevice -Headset $Headset -adb $adb -AdbPort $AdbPort
@@ -1137,7 +1218,7 @@ function Enable-AdbTcpIp {
         $usbLine  = $null
         $deadline = (Get-Date).AddSeconds(15)
         while ($true) {
-            $usbLine = & $adb devices 2>$null | Where-Object { $_ -match "`tdevice$" -and $_ -notmatch ':' }
+            $usbLine = & $adb devices 2>$null | Where-Object { $_ -match "`tdevice$" -and (Test-AdbDeviceIdIsUsb -Id (($_ -split "`t")[0].Trim())) } | Select-Object -First 1
             if ($usbLine -or (Get-Date) -ge $deadline) { break }
             Start-Sleep -Milliseconds 500
         }
@@ -1367,15 +1448,22 @@ function Get-AdbWifiDevice {
     to any device function (Get-HeadsetBatteryStatus, Invoke-HeadsetReboot, etc.).
     .EXAMPLE
     Get-AdbWifiDevice -headsetIP "192.168.1.243" -AdbPort 5555
+
+    -Quiet logs the failure lines at DEBUG instead of WARNING/ERROR: Resolve-HeadsetWifiDevice
+    passes it for every WiFi mode but the last one it tries (ADR-0034), so a headset reachable
+    only in its second mode does not log a failure on every resolution.
     #>
     param (
         [Parameter(Mandatory=$true)]
         [string]$headsetIP,
         [int]$AdbPort = $global:adbPort_default,
-        [string]$adb  = $global:adbPath
+        [string]$adb  = $global:adbPath,
+        [switch]$Quiet
     )
 
+    if (-not $AdbPort) { $AdbPort = Get-ClassicAdbPort }
     $DeviceId = "${headsetIP}:${AdbPort}"
+    $failLevel = if ($Quiet) { 'DEBUG' } else { 'WARNING' }
 
     if (-not (Test-Path -LiteralPath $adb)) {
         Write-Log ($msg.ADBExecutableNotFound -f $adb) -Level ERROR
@@ -1396,14 +1484,14 @@ function Get-AdbWifiDevice {
 
     $pingOk = Test-Connection -ComputerName $headsetIP -Count 1 -Quiet -ErrorAction SilentlyContinue
     if (-not $pingOk) {
-        Write-Log ($msg.AdbWifiPingFailed -f $headsetIP) -Level WARNING
+        Write-Log ($msg.AdbWifiPingFailed -f $headsetIP) -Level $failLevel
         return $null
     }
 
     $portOpen = (Test-Port -hostname $headsetIP -port $AdbPort).open
     if (-not $portOpen) {
-        Write-Log ($msg.AdbWifiPortClosed -f $AdbPort, $headsetIP) -Level WARNING
-        Write-Log ($msg.AdbWifiDevModeHint) -Level WARNING
+        Write-Log ($msg.AdbWifiPortClosed -f $AdbPort, $headsetIP) -Level $failLevel
+        if (-not $Quiet) { Write-Log ($msg.AdbWifiDevModeHint) -Level WARNING }
         return $null
     }
 
@@ -1416,11 +1504,11 @@ function Get-AdbWifiDevice {
             Write-Log ($msg.AdbWifiConnected -f $DeviceId) -Level SUCCESS
             return [PSCustomObject]@{ DeviceId = $DeviceId; ConnectionType = 'WiFi'; IP = $headsetIP; Port = $AdbPort }
         } else {
-            Write-Log ($msg.AdbWifiConnectFailed -f $DeviceId, ($connectOutput -join " ")) -Level ERROR
+            Write-Log ($msg.AdbWifiConnectFailed -f $DeviceId, ($connectOutput -join " ")) -Level $(if ($Quiet) { 'DEBUG' } else { 'ERROR' })
             return $null
         }
     } catch {
-        Write-Log ($msg.AdbWifiConnectFailed -f $DeviceId, $_) -Level ERROR
+        Write-Log ($msg.AdbWifiConnectFailed -f $DeviceId, $_) -Level $(if ($Quiet) { 'DEBUG' } else { 'ERROR' })
         return $null
     }
 }

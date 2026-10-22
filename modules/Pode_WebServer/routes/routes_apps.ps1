@@ -465,6 +465,10 @@ function Invoke-RouteInstallapk {
         $resolveDevice = {
             param($headset2)
             if ($transport -eq 'wifi') {
+                # WiFi only, in either WiFi ADB mode (ADR-0034), never a USB fallback.
+                if (Get-Command Resolve-HeadsetWifiDevice -ErrorAction SilentlyContinue) {
+                    return Resolve-HeadsetWifiDevice -Headset $headset2 -ClassicPort $adbPort -adb $adbPath
+                }
                 return Get-AdbWifiDevice -headsetIP $headset2.IPAddress -AdbPort $adbPort -adb $adbPath
             }
             if ($headset2.SerialNumber) {

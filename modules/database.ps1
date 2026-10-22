@@ -1478,6 +1478,7 @@ function Import-LegacyDataFiles {
                 PowerState             = [string](Get-LegacyField $r 'PowerState' '-')
                 TimeRemainingMin       = [string](Get-LegacyField $r 'TimeRemainingMin' '-')
                 AdbTransport           = [string](Get-LegacyField $r 'AdbTransport' '-')
+                AdbWifiMode            = [string](Get-LegacyField $r 'AdbWifiMode' '-')
                 SCRCPY                 = [string](Get-LegacyField $r 'SCRCPY' '-')
                 RunningApp             = [string](Get-LegacyField $r 'RunningApp' '-')
                 RunningAppIcon         = [string](Get-LegacyField $r 'RunningAppIcon' '')

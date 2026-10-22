@@ -96,6 +96,7 @@ function Set-TestStatus {
         GpuTemp                = '-'
         SkinTemp               = '-'
         AdbTransport           = '-'
+        AdbWifiMode            = '-'
         BatteryControllerLeft  = '-'
         BatteryControllerRight = '-'
         PowerState             = '-'
@@ -335,7 +336,7 @@ Invoke-RegressionTest -Name 'a battery burst does not abort the whole status bat
         foreach ($pair in @(@{ Id = $idA; Pct = '89' }, @{ Id = $idB; Pct = '49' })) {
             $rows += @{
                 ID = $pair.Id; Ping = 1; ADBWifi = 1; Battery = $pair.Pct
-                Charging = '-'; ChargingWattage = '-'; Temp = '-'; CpuTemp = '-'; GpuTemp = '-'; SkinTemp = '-'; AdbTransport = '-'
+                Charging = '-'; ChargingWattage = '-'; Temp = '-'; CpuTemp = '-'; GpuTemp = '-'; SkinTemp = '-'; AdbTransport = '-'; AdbWifiMode = '-'
                 BatteryControllerLeft = '-'; BatteryControllerRight = '-'
                 PowerState = '-'; TimeRemainingMin = '-'
                 SCRCPY = '-'; RunningApp = '-'; RunningAppIcon = ''
@@ -476,7 +477,7 @@ Invoke-RegressionTest -Name 'an offline headset writes a valid row through the b
         # is exactly the case that would fail if the write path bound it raw.
         $row = @{
             ID = $id; Ping = (ConvertTo-DbBool $false); ADBWifi = (ConvertTo-DbBool $false)
-            Battery = '-'; Charging = '-'; ChargingWattage = '-'; Temp = '-'; CpuTemp = '-'; GpuTemp = '-'; SkinTemp = '-'; AdbTransport = '-'
+            Battery = '-'; Charging = '-'; ChargingWattage = '-'; Temp = '-'; CpuTemp = '-'; GpuTemp = '-'; SkinTemp = '-'; AdbTransport = '-'; AdbWifiMode = '-'
             BatteryControllerLeft = '-'; BatteryControllerRight = '-'
             PowerState = '-'; TimeRemainingMin = '-'
             SCRCPY = '-'; RunningApp = '-'; RunningAppIcon = ''
@@ -518,7 +519,7 @@ Invoke-RegressionTest -Name 'a failed statement does not poison the query for th
         # every row and is what the monitor actually calls.
         $good = @{
             ID = $id; Ping = 1; ADBWifi = 1; Battery = '66'
-            Charging = '-'; ChargingWattage = '-'; Temp = '-'; CpuTemp = '-'; GpuTemp = '-'; SkinTemp = '-'; AdbTransport = '-'
+            Charging = '-'; ChargingWattage = '-'; Temp = '-'; CpuTemp = '-'; GpuTemp = '-'; SkinTemp = '-'; AdbTransport = '-'; AdbWifiMode = '-'
             BatteryControllerLeft = '-'; BatteryControllerRight = '-'
             PowerState = '-'; TimeRemainingMin = '-'
             SCRCPY = '-'; RunningApp = '-'; RunningAppIcon = ''

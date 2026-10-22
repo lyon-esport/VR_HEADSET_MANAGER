@@ -328,6 +328,26 @@
   .topbar-brand     { padding: 0 10px; }
 }
 
+/* ── Auto-fit (TopBar.initAutoFit in topbar.js): measured, not fixed breakpoints ── */
+.topbar.tb-tight .topbar-btn-label,
+.topbar.tb-tight .topbar-title,
+.topbar.tb-tight .shutdown-all-label { display: none; }
+.topbar.tb-tight .topbar-brand .topbar-btn-label { display: inline; }
+.topbar.tb-tight .topbar-btn,
+.topbar.tb-tight .actions-btn,
+.topbar.tb-tight .topbar-brand,
+.topbar.tb-tight .headset-filter-compact-btn { padding: 0 10px; }
+.topbar.tb-min .topbar-brand .topbar-btn-label,
+.topbar.tb-min #topbar-vqa-warning-label { display: none !important; }
+.topbar.tb-min .topbar-btn,
+.topbar.tb-min .actions-btn,
+.topbar.tb-min .topbar-brand,
+.topbar.tb-min .headset-filter-compact-btn { padding: 0 7px; }
+
+/* Dropdowns never leave the viewport */
+.actions-dropdown, .headset-menu-dropdown { max-width: calc(100vw - 8px); }
+.headset-menu:focus-within .headset-menu-dropdown { display: block; }
+
 @media (max-width: 400px) {
   .topbar-btn       { padding: 0 8px; }
   .actions-btn      { padding: 0 8px; }

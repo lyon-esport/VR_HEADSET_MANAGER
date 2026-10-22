@@ -520,7 +520,6 @@
     #shutdown-all-btn { margin-right: 8px; }
     .shutdown-all-topbar-btn svg { flex-shrink: 0; }
     [data-theme="light"] .shutdown-all-topbar-btn    { background: rgba(239,68,68,0.07); }
-    @media (max-width: 950px) { .shutdown-all-label { display: none; } }
 
     #empty-msg {
       padding: 60px;
@@ -2166,6 +2165,8 @@
         var adbLabel = document.querySelector('[data-dot-adb="' + dn + '"] .status-dot-label');
         if (adbLabel) {
           var tr = s.adb && s.transport ? s.transport : '';
+          // WiFi ADB mode (ADR-0034): 'WiFi (TLS)' / 'WiFi (Classic)'.
+          if (tr === 'WiFi' && s.wifiMode) { tr += ' (' + s.wifiMode + ')'; }
           adbLabel.textContent = tr ? 'ADB ' + tr : 'ADB';
           adbLabel.parentNode.title = tr ? 'ADB over ' + tr : 'ADB';
         }
@@ -2344,6 +2345,7 @@
               ping:           !!item.ping,
               adb:            !!item.adb,
               transport:      item.adb_transport || '',
+              wifiMode:       item.adb_wifi_mode || '',
               scrcpy:         scrcpy,
               starting:       !scrcpy && (srvStarting || !!hint),
               model:          item.model || '',

@@ -393,6 +393,8 @@ function Invoke-RouteHeadsetStatus {
             id                   = [int]$headsetRow.ID
             name                 = $headsetRow.Name
             ping                 = [bool]($row.Ping -eq 'True')
+            adb_transport        = if ($row.AdbTransport -and $row.AdbTransport -ne '-') { $row.AdbTransport } else { '' }
+            adb_wifi_mode        = if ($row.AdbWifiMode  -and $row.AdbWifiMode  -ne '-') { $row.AdbWifiMode }  else { '' }
             battery              = $battery
             battery_ctrl_left    = $battLeft
             battery_ctrl_right   = $battRight
@@ -739,7 +741,9 @@ function Invoke-RouteHeadsetsStatus {
                     temp                  = if ($info.Temp -and $info.Temp -ne '-') { $info.Temp } else { '-' }
                     cpu_temp              = if ($info.CpuTemp -and $info.CpuTemp -ne '-') { $info.CpuTemp } else { '-' }
                     adb_transport         = if ($info.AdbTransport -and $info.AdbTransport -ne '-') { $info.AdbTransport } else { '' }
-                    ipd                   = (Get-HeadsetIpdValue -Headset $h)
+                    # WiFi ADB mode (ADR-0034, migration 009): Classic / TLS, '' when WiFi ADB is not up.
+                    adb_wifi_mode         = if ($info.AdbWifiMode -and $info.AdbWifiMode -ne '-') { $info.AdbWifiMode } else { '' }
+                    ipd                = (Get-HeadsetIpdValue -Headset $h)
                     running_app           = if ($info.RunningApp)     { $info.RunningApp }     else { '' }
                     running_app_icon      = if ($info.RunningAppIcon) { $info.RunningAppIcon } else { '' }
                     model                 = if ($h.Model -and $h.Model -ne '-') { $h.Model } else { '' }

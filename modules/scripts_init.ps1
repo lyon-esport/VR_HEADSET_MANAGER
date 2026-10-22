@@ -264,6 +264,11 @@ if (Get-Command Initialize-Database -ErrorAction SilentlyContinue) {
             try { Set-DbKeyValue -Key 'usb_devices' -Value '[]' }
             catch { Write-Log ("Could not clear the published USB device set: " + $_.Exception.Message) -Level WARNING }
 
+            # Same for the published ADB-over-TLS endpoints (ADR-0034): the TLS port changes at every
+            # adbd restart, so a port from the previous run is never trusted; discovery republishes.
+            try { Set-DbKeyValue -Key 'adb_tls_endpoints' -Value '[]' }
+            catch { Write-Log ("Could not clear the published ADB TLS endpoints: " + $_.Exception.Message) -Level WARNING }
+
             # Recordings catalogue (ADR-0029): bring the database in line with the record folder at every start -
             # imports new files, closes sessions a crash left open, drops rows whose file was deleted.
             if (Get-Command Sync-RecordingCatalog -ErrorAction SilentlyContinue) {

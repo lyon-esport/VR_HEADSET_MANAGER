@@ -190,7 +190,8 @@ function Invoke-HeadsetWifiPush {
         [Parameter(Mandatory = $true)][object]$Headset,
         [Parameter(Mandatory = $true)][string]$Ssid,
         [switch]$Force,
-        [int]$AdbPort = 5555,
+        # Classic WiFi ADB port; 0 = config (Get-ClassicAdbPort, via the resolver).
+        [int]$AdbPort = 0,
         [string]$adb = $global:adbPath
     )
 
@@ -310,7 +311,7 @@ function Get-HeadsetShutdownTarget {
         [Parameter(Mandatory=$true)] $Headset,
         [int]$AdbPort = 0
     )
-    if ($AdbPort -le 0) { $AdbPort = if ($global:adbPort_default) { [int]$global:adbPort_default } else { 5555 } }
+    if ($AdbPort -le 0) { $AdbPort = Get-ClassicAdbPort }
 
     $serial = if ($Headset.SerialNumber) { ([string]$Headset.SerialNumber).Trim() } else { '' }
     if ($serial -eq '-') { $serial = '' }
@@ -325,7 +326,25 @@ function Get-HeadsetShutdownTarget {
             $usb = [PSCustomObject]@{ DeviceId = $serial; ConnectionType = 'USB' }
         }
     }
-    $wifi = if ($ip) { [PSCustomObject]@{ DeviceId = (Get-DeviceId -IPAddress $ip -AdbPort $AdbPort); ConnectionType = 'WiFi' } } else { $null }
+    $wifi = $null
+    if (Get-Command Resolve-HeadsetWifiEndpoint -ErrorAction SilentlyContinue) {
+        # WiFi mode (ADR-0034), still without network I/O: the mode the monitor last saw answer
+        # (live status, one row read) first, then the configured order. Each endpoint is a
+        # lookup only (registry address, or the published TLS endpoint of the serial).
+        $order = @(Get-AdbWifiModeOrder)
+        try {
+            $live = @(Invoke-DbQuery -Name 'status.get' -Parameters @{ headset_id = [int]$Headset.ID }) | Select-Object -First 1
+            if ($live -and $order -contains [string]$live.AdbWifiMode) {
+                $order = @([string]$live.AdbWifiMode) + @($order | Where-Object { $_ -ne [string]$live.AdbWifiMode })
+            }
+        } catch { }
+        foreach ($m in $order) {
+            $ep = Resolve-HeadsetWifiEndpoint -Headset $Headset -Mode $m -ClassicPort $AdbPort
+            if ($ep) { $wifi = [PSCustomObject]@{ DeviceId = ('{0}:{1}' -f $ep.Ip, $ep.Port); ConnectionType = 'WiFi'; WifiMode = $ep.Mode }; break }
+        }
+    } elseif ($ip) {
+        $wifi = [PSCustomObject]@{ DeviceId = (Get-DeviceId -IPAddress $ip -AdbPort $AdbPort); ConnectionType = 'WiFi' }
+    }
 
     if ($usbFirst) { if ($usb) { return $usb }; return $wifi }
     if ($wifi) { return $wifi }

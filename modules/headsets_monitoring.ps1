@@ -747,7 +747,8 @@ function Start-VRMonitor {
             # wifi_store.ps1: adb_transport / adb_device_settings / headset_diag call Get-WifiNetworks (S9-1 split).
             # adb_*.ps1 (S9-2 split of adb_functions.ps1): transport + telemetry for the poll,
             # apps for Update-InstalledAppsCache, device_settings for headset_diag (updater, WiFi).
-            foreach ($mod in @("logging.ps1","config_files_loader.ps1","utils.ps1","wifi_store.ps1","network_scanner.ps1","adb_transport.ps1","adb_telemetry.ps1","adb_apps.ps1","adb_device_settings.ps1","database.ps1","usb_manager.ps1","headset_diag.ps1","headsets_monitoring.ps1")) {
+            # adb_wifi_modes.ps1 (ADR-0034, S10-3): the mode-aware resolver and stage 1 probe.
+            foreach ($mod in @("logging.ps1","config_files_loader.ps1","utils.ps1","wifi_store.ps1","network_scanner.ps1","adb_transport.ps1","adb_wifi_modes.ps1","adb_telemetry.ps1","adb_apps.ps1","adb_device_settings.ps1","database.ps1","usb_manager.ps1","headset_diag.ps1","headsets_monitoring.ps1")) {
                 $f = Join-Path $modPath $mod
                 if (Test-Path -LiteralPath $f) { . $f }
             }
@@ -835,6 +836,15 @@ function Start-VRMonitor {
                     # --- Stage 1: reachability (every tick) ---
                     $s1 = Get-HeadsetInfoStage1Reachability -knownHeadset $liveHeadset
                     foreach ($k in $s1.Keys) { $workingInfo.$k = $s1[$k] }
+                    # Stage 1 names the first WiFi mode whose port answers; the memoised device
+                    # names the one that really carries the ADB calls (they differ when a port
+                    # answers but adb refuses it). Keep the latter so the column does not flip
+                    # between the two every second.
+                    $cachedDev = $pollDeviceCache.Device
+                    if ($workingInfo.ADBWifi -and $workingInfo.AdbWifiMode -ne '-' -and $cachedDev -and
+                        $cachedDev.ConnectionType -eq 'WiFi' -and $cachedDev.PSObject.Properties['WifiMode'] -and $cachedDev.WifiMode) {
+                        $workingInfo.AdbWifiMode = [string]$cachedDev.WifiMode
+                    }
 
                     # --- Stage 2/3: identity, battery, foreground app (every refresh_timer) ---
                     $timer = if ($sharedState["_refresh_timer"]) { [int]$sharedState["_refresh_timer"] } else { 5 }
@@ -850,8 +860,12 @@ function Start-VRMonitor {
                             if (-not $device) {
                                 $workingInfo.ADBWifi      = $false
                                 $workingInfo.AdbTransport = "-"
+                                $workingInfo.AdbWifiMode  = "-"
                             } else {
                                 $workingInfo.AdbTransport = $device.ConnectionType
+                                if ($device.ConnectionType -eq 'WiFi' -and $device.PSObject.Properties['WifiMode'] -and $device.WifiMode) {
+                                    $workingInfo.AdbWifiMode = [string]$device.WifiMode
+                                }
 
                                 # --- Stage 2: identity + battery ---
                                 $pollData = @{}
@@ -917,6 +931,7 @@ function Start-VRMonitor {
                         $workingInfo.GpuTemp                = "-"
                         $workingInfo.SkinTemp               = "-"
                         $workingInfo.AdbTransport           = "-"
+                        $workingInfo.AdbWifiMode            = "-"
                         $workingInfo.BatteryControllerLeft  = "-"
                         $workingInfo.BatteryControllerRight = "-"
                         $workingInfo.PowerState             = "-"
@@ -1040,7 +1055,7 @@ function Start-VRMonitor {
             # database.ps1: this runspace opens a connection of its own (never shared).
             # wifi_store.ps1: adb_transport calls Get-WifiNetworks (S9-1 split).
             # adb_transport.ps1: the only part of the former adb_functions.ps1 the sweep uses (S9-2).
-            foreach ($mod in @("logging.ps1","config_files_loader.ps1","utils.ps1","wifi_store.ps1","network_scanner.ps1","adb_transport.ps1","database.ps1","headsets_discovery.ps1")) {
+            foreach ($mod in @("logging.ps1","config_files_loader.ps1","utils.ps1","wifi_store.ps1","network_scanner.ps1","adb_transport.ps1","adb_wifi_modes.ps1","database.ps1","headsets_discovery.ps1")) {
                 $f = Join-Path $modPath $mod
                 if (Test-Path -LiteralPath $f) { . $f }
             }
@@ -1631,7 +1646,7 @@ function Start-VRMonitor {
                 # more but stay in the fingerprint: they gate the Update-HeadsetField write-back
                 # and the Set-HeadsetIdentity queueing in the block below.
                 $fp = ($knownHeadsetsInfo | ForEach-Object {
-                    "$($_.ID)|$($_.Ping)|$($_.ADBWifi)|$($_.Battery)|$($_.Charging)|$($_.ChargingWattage)|$($_.Temp)|$($_.CpuTemp)|$($_.GpuTemp)|$($_.SkinTemp)|$($_.BatteryControllerLeft)|$($_.BatteryControllerRight)|$($_.PowerState)|$($_.TimeRemainingMin)|$($_.AdbTransport)|$($_.SCRCPY)|$($_.Brand)|$($_.Model)|$($_.SerialNumber)|$($_.RunningApp)"
+                    "$($_.ID)|$($_.Ping)|$($_.ADBWifi)|$($_.Battery)|$($_.Charging)|$($_.ChargingWattage)|$($_.Temp)|$($_.CpuTemp)|$($_.GpuTemp)|$($_.SkinTemp)|$($_.BatteryControllerLeft)|$($_.BatteryControllerRight)|$($_.PowerState)|$($_.TimeRemainingMin)|$($_.AdbTransport)|$($_.AdbWifiMode)|$($_.SCRCPY)|$($_.Brand)|$($_.Model)|$($_.SerialNumber)|$($_.RunningApp)"
                 }) -join '~'
 
                 if ($fp -ne $lastFingerprint -and $knownHeadsets.Count -gt 0) {
@@ -1759,6 +1774,7 @@ function Start-VRMonitor {
                                 PowerState             = [string](Get-StatusFieldOrDash $info.PowerState)
                                 TimeRemainingMin       = [string](Get-StatusFieldOrDash $info.TimeRemainingMin)
                                 AdbTransport           = [string](Get-StatusFieldOrDash $info.AdbTransport)
+                                AdbWifiMode            = [string](Get-StatusFieldOrDash $info.AdbWifiMode)
                                 SCRCPY                 = [string](Get-StatusFieldOrDash $info.SCRCPY)
                                 RunningApp             = [string](Get-StatusFieldOrDash $info.RunningApp)
                                 RunningAppIcon         = [string]$(if ($null -eq $info.RunningAppIcon) { '' } else { $info.RunningAppIcon })
@@ -2208,6 +2224,9 @@ function Get-HeadsetInfosCsvColumn {
         # AdbTransport (migration 007): USB or WiFi - which transport the monitor
         # is using for this headset right now, a dash when neither answers.
         "AdbTransport",
+        # AdbWifiMode (migration 009, ADR-0034): Classic or TLS - which WiFi ADB mode
+        # answers, a dash when WiFi ADB is not up.
+        "AdbWifiMode",
         "SCRCPY",
         "RunningApp",
         "RunningAppIcon"
@@ -2237,6 +2256,7 @@ function New-DefaultHeadsetInfo {
         PowerState       = "-"
         TimeRemainingMin = "-"
         AdbTransport     = "-"
+        AdbWifiMode      = "-"
         BatteryHistory   = ""
         SCRCPY           = "-"
         Brand            = ""
@@ -2248,14 +2268,16 @@ function New-DefaultHeadsetInfo {
 }
 
 function Get-HeadsetInfoStage1Reachability {
-    # Stage 1 (fast, no ADB connection): ping + ADB port + local scrcpy process scan.
+    # Stage 1 (fast, no ADB connection): ping + WiFi ADB ports + local scrcpy process scan.
     # Target latency: <2s. Lets the UI flip Ping/ADBWifi/SCRCPY immediately.
+    # -ADBPort is the CLASSIC port; 0 (the default, what the poll runspace passes) = config.
     param(
         [Parameter(Mandatory=$true)][PSCustomObject]$knownHeadset,
-        [int]$ADBPort = 5555,
+        [int]$ADBPort = 0,
         [int]$PingTimeout = 1000
     )
-    $out = @{ Ping = $false; ADBWifi = $false; AdbTransport = "-"; SCRCPY = "-" }
+    if ($ADBPort -le 0) { $ADBPort = Get-ClassicAdbPort }
+    $out = @{ Ping = $false; ADBWifi = $false; AdbTransport = "-"; AdbWifiMode = "-"; SCRCPY = "-" }
     $IPAddress = $knownHeadset.IPAddress
 
     # Defensive: Sync-HeadsetRunspaces already skips rows with an unknown address, but a
@@ -2273,10 +2295,17 @@ function Get-HeadsetInfoStage1Reachability {
         $ping.Dispose()
     }
 
+    # WiFi ADB in either mode (ADR-0034): classic port open, or the published TLS endpoint of
+    # the serial answering. TCP probes only, preferred mode first, so a classic headset with the
+    # default config costs the one probe it always did (and only after a ping, as before).
     $wifiOpen = $false
-    if ($out.Ping) {
+    if (Get-Command Test-HeadsetWifiAdbUp -ErrorAction SilentlyContinue) {
+        $w = Test-HeadsetWifiAdbUp -Headset $knownHeadset -ClassicPort $ADBPort -PingOk ([bool]$out.Ping) -TimeoutMs 400
+        if ($w.Up) { $wifiOpen = $true; $out.AdbWifiMode = [string]$w.Mode }
+    } elseif ($out.Ping) {
         if ((Test-Port -hostname $IPAddress -port $ADBPort -timeout 400).open) {
             $wifiOpen = $true
+            $out.AdbWifiMode = 'Classic'
         }
     }
 
@@ -2469,6 +2498,13 @@ function Get-HeadsetPollDevice {
         if ($valid -and $dev.ConnectionType -eq 'USB'  -and (-not $cabled -or $busy)) { $valid = $false }
         if ($valid -and $dev.ConnectionType -eq 'WiFi' -and $cabled -and $preferUsb -and -not $busy) { $valid = $false }
         if ($valid -and $Cache.IP -ne [string]$Headset.IPAddress) { $valid = $false }
+        # A TLS device is only good while its published endpoint is unchanged: the TLS port
+        # moves at every adbd restart (ADR-0034), and the old one would just fail once.
+        if ($valid -and $dev.ConnectionType -eq 'WiFi' -and $dev.PSObject.Properties['WifiMode'] -and $dev.WifiMode -eq 'TLS' -and
+            $serial -and (Get-Command Find-AdbTlsEndpointBySerial -ErrorAction SilentlyContinue)) {
+            $ep = Find-AdbTlsEndpointBySerial -Serial $serial
+            if (-not $ep -or ('{0}:{1}' -f $ep.Ip, $ep.Port) -ne [string]$dev.DeviceId) { $valid = $false }
+        }
         if ($valid) { return $dev }
         $Cache.Clear()
     }
@@ -2627,7 +2663,8 @@ function Get-KnownHeadsetInfos {
         [Parameter(Mandatory=$true)]
         [PSCustomObject]$knownHeadset,
 
-        [int]$ADBPort = 5555,
+        # The CLASSIC WiFi ADB port; 0 = config (Get-ClassicAdbPort).
+        [int]$ADBPort = 0,
 
         [int]$PingTimeout = 1000,
 
@@ -2644,9 +2681,13 @@ function Get-KnownHeadsetInfos {
     if (-not $device) {
         $result.ADBWifi = $false
         $result.AdbTransport = "-"
+        $result.AdbWifiMode  = "-"
         return $result
     }
     $result.AdbTransport = $device.ConnectionType
+    if ($device.ConnectionType -eq 'WiFi' -and $device.PSObject.Properties['WifiMode'] -and $device.WifiMode) {
+        $result.AdbWifiMode = [string]$device.WifiMode
+    }
 
     $pollData = @{}
     $s2 = Get-HeadsetInfoStage2Identity -knownHeadset $knownHeadset -Device $device -adb $adb -PollData $pollData

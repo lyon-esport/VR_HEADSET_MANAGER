@@ -125,7 +125,7 @@
     // Compact filter dropdown shell — always visible
     compactDropdownHTML:
       '<div class="headset-filter-compact" id="headset-filter-compact">' +
-        '<button class="headset-filter-compact-btn" id="headset-filter-compact-toggle">' +
+        '<button class="headset-filter-compact-btn" id="headset-filter-compact-toggle" title="Filters">' +
           '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
             '<rect x="2" y="3" width="20" height="14" rx="2"/><polyline points="8 21 12 17 16 21"/>' +
           '</svg>' +
@@ -346,7 +346,7 @@
 
     configMenuHTML:
       '<div class="actions-menu" id="actions-menu">' +
-        '<button class="actions-btn" id="actions-toggle">' +
+        '<button class="actions-btn" id="actions-toggle" title="Config">' +
           '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
             '<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>' +
           '</svg>' +
@@ -525,6 +525,38 @@
 
   // Auto-init the VQA warning chip for every page that loads topbar.js.
   TopBar.initVqaWarning();
+
+  // Auto-fit: when the bar overflows, hide labels progressively (tb-tight, then tb-min)
+  // so the right-hand buttons (Config dropdown) always stay on screen and clickable.
+  TopBar.initAutoFit = function () {
+    var raf = 0;
+    function fit() {
+      var bar = document.querySelector('.topbar');
+      if (!bar) return;
+      bar.classList.remove('tb-tight', 'tb-min');
+      var over = function () { return bar.scrollWidth > bar.clientWidth + 1; };
+      if (!over()) return;
+      bar.classList.add('tb-tight');
+      if (!over()) return;
+      bar.classList.add('tb-min');
+    }
+    function schedule() {
+      if (raf) return;
+      raf = requestAnimationFrame(function () { raf = 0; fit(); });
+    }
+    function boot() {
+      var bar = document.querySelector('.topbar');
+      if (!bar) return;
+      fit();
+      if (window.ResizeObserver) new ResizeObserver(schedule).observe(document.documentElement);
+      window.addEventListener('resize', schedule);
+      window.addEventListener('load', schedule);
+      if (document.fonts && document.fonts.ready) document.fonts.ready.then(schedule);
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+    else boot();
+  };
+  TopBar.initAutoFit();
 
   // Auto-highlight the topbar button/dropdown item matching the current page.
   document.addEventListener('DOMContentLoaded', function () {

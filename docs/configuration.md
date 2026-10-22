@@ -59,6 +59,8 @@ Levels: `DEBUG` < `INFO` < `SUCCESS` < `WARNING` < `ERROR` < `NONE`.
 |---|---|---|
 | `refresh_timer` | `5` | Headset polling interval in seconds |
 | `showConsole` | `false` | Open a separate live dashboard console window |
+| `networkDiscovery.enabled` | `true` | Background LAN sweep that finds headsets whose serial is not registered yet (proposed in "Discovered devices") and heals an address that changed (DHCP). Applies on the next monitor cycle, no restart |
+| `networkDiscovery.interval_sec` | `60` | Seconds between two sweeps (minimum 10) |
 
 ### `ComputerMonitoring`
 
@@ -73,7 +75,10 @@ All thresholds and switches of the automatic quality mitigation — explained in
 | Key | Default | Description |
 |---|---|---|
 | `folder` | `scrcpy\scrcpy-win64-v...` | scrcpy/ADB binaries folder inside `sources\` (the scrcpy release bundles `adb.exe`, so this always holds the same value as `scrcpy.folder`) |
-| `adbPort_default` | `5555` | Default ADB WiFi port |
+| `adbPort_default` | `5555` | Classic WiFi ADB (tcpip) port, 1-65535 (an invalid value falls back to 5555) |
+| `wifi_classic_enabled` | `true` | Search for headsets on classic WiFi ADB (`adb tcpip`). If both WiFi modes are disabled, classic is forced back on with a warning |
+| `wifi_tls_enabled` | `true` | Search for headsets advertising ADB over TLS (Wireless debugging, random port found through mDNS) |
+| `wifi_preferred_mode` | `classic` | `classic` or `tls`. The other mode is the automatic fallback; a headset reachable only in the other mode is moved to the preferred one. A preferred mode that is disabled yields to the other one. The three `wifi_*` keys apply on the next monitor cycle, no restart (see ADR-0034) |
 | `prefer_usb` | `true` | When a known headset is cabled to this PC, use USB for every ADB call and for the scrcpy capture, and fall back to WiFi when the cable drops. `false` keeps everything on WiFi. Takes effect after an application restart |
 
 Each scrcpy version lives in its own folder under `sources\scrcpy\`, so several can coexist; this key selects the active one. Switch versions from the web UI (Configuration -> Advanced) rather than editing it by hand.

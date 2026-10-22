@@ -39,8 +39,11 @@ function Invoke-RouteHeadsetConnectionCheck {
             }
         }
 
+        # Either WiFi ADB mode (ADR-0034): classic port, or the published TLS endpoint answering.
         $wifiAvailable = $false
-        if ($headset.IPAddress) {
+        if (Get-Command Test-HeadsetWifiAdbUp -ErrorAction SilentlyContinue) {
+            $wifiAvailable = [bool](Test-HeadsetWifiAdbUp -Headset $headset -ClassicPort $adbPort).Up
+        } elseif ($headset.IPAddress) {
             $wifiAvailable = (Test-Port -hostname $headset.IPAddress -port $adbPort).open
         }
 
@@ -89,7 +92,7 @@ function Invoke-RouteDetectusbheadset {
     return
 }
 
-# API: POST /api/enablewifiadb  - runs adb tcpip 5555 on the USB-connected headset
+# API: POST /api/enablewifiadb  - runs adb tcpip <classic port> on the USB-connected headset
 function Invoke-RouteEnablewifiadb {
     # POST /api/enablewifiadb
     param([Parameter(Mandatory = $true)] $Context)

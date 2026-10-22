@@ -1423,7 +1423,10 @@ function start-screenCopy {
         return
     }
     $adb_device = $captureDevice.DeviceId
-    Write-Log ("scrcpy capture for {0} over {1} ({2})" -f $displayName, $captureDevice.ConnectionType, $adb_device) -Level INFO
+    # WiFi mode of the capture (ADR-0034): 'Classic' / 'TLS', '' over USB. Stored with the launch
+    # state for diagnosis; the restart decision still keys on Transport (USB/WiFi) only.
+    $launchWifiMode = if ($captureDevice.ConnectionType -eq 'WiFi' -and $captureDevice.PSObject.Properties['WifiMode']) { [string]$captureDevice.WifiMode } else { '' }
+    Write-Log ("scrcpy capture for {0} over {1}{2} ({3})" -f $displayName, $captureDevice.ConnectionType, $(if ($launchWifiMode) { " $launchWifiMode" } else { '' }), $adb_device) -Level INFO
     $headsetModel   = Get-HeadsetModel -Device $captureDevice
     Write-Log -Message ($msg.Scrcpy.ModelDetected -f $headsetModel) -Level "INFO"
     $modelTemplate  = $global:scrcpyParameters.$headsetModel
@@ -1586,7 +1589,7 @@ function start-screenCopy {
         }
         Exit-ScrcpyLaunchLock -Lock $launchLock; $launchLock = $null
         $startHoldSec = 2
-        $global:ScrcpyLaunchState[$displayName] = @{ LaunchStamp = $launchStamp.Stamp; StampParts = $launchStamp.Parts; Transport = $launchTransport }
+        $global:ScrcpyLaunchState[$displayName] = @{ LaunchStamp = $launchStamp.Stamp; StampParts = $launchStamp.Parts; Transport = $launchTransport; WifiMode = $launchWifiMode }
     }
 
     # Windowed LocalWindow mode: scrcpy itself writes the recording. Remember the file so it can be
@@ -1647,6 +1650,7 @@ function start-screenCopy {
                 LaunchStamp    = $launchStamp.Stamp
                 StampParts     = $launchStamp.Parts
                 Transport      = $launchTransport
+                WifiMode       = $launchWifiMode
                 MediaMtxPid    = $mediaMtxPid
                 StartedAt      = (Get-Date)
             }

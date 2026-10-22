@@ -385,7 +385,7 @@ Invoke-RegressionTest -Name 'the monitor fast-path write fits inside its tick' -
         for ($i = 1; $i -le $script:PerfHeadsets; $i++) {
             $rows += @{
                 ID = $i; Ping = 1; ADBWifi = 1; Battery = '77'
-                Charging = '-'; ChargingWattage = '-'; Temp = '-'; CpuTemp = '-'; GpuTemp = '-'; SkinTemp = '-'; AdbTransport = '-'
+                Charging = '-'; ChargingWattage = '-'; Temp = '-'; CpuTemp = '-'; GpuTemp = '-'; SkinTemp = '-'; AdbTransport = '-'; AdbWifiMode = '-'
                 BatteryControllerLeft = '-'; BatteryControllerRight = '-'
                 PowerState = '-'; TimeRemainingMin = '-'
                 SCRCPY = '-'; RunningApp = '-'; RunningAppIcon = ''

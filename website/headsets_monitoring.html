@@ -640,7 +640,7 @@
           '<td><strong>' + esc(r['name'] || '') + '</strong></td>' +
           '<td style="font-family:monospace;font-size:12px">' + esc(r['ip_address'] || '') + '</td>' +
           '<td class="center">' + pill(pingOk ? 'OK' : 'KO', pingOk ? 'pill-green' : 'pill-red') + '</td>' +
-          '<td class="center">' + pill(adbOk  ? ('OK' + (r['adb_transport'] ? ' ' + r['adb_transport'] : '')) : 'KO', adbOk  ? 'pill-green' : 'pill-red') + '</td>' +
+          '<td class="center">' + pill(adbOk  ? ('OK' + (r['adb_transport'] ? ' ' + r['adb_transport'] + (r['adb_transport'] === 'WiFi' && r['adb_wifi_mode'] ? ' (' + r['adb_wifi_mode'] + ')' : '') : '')) : 'KO', adbOk  ? 'pill-green' : 'pill-red') + '</td>' +
           '<td class="center">' + pill(scrcpyOk ? 'OK' : 'OFF', scrcpyOk ? 'pill-blue' : 'pill-orange') + '</td>' +
           '<td class="center">' + chargingCell + '</td>' +
           '<td class="center">' + powerPill + '</td>' +

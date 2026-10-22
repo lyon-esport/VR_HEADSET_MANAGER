@@ -484,6 +484,30 @@ function Write-ConfigJson {
 }
 
 #################
+# CLASSIC WIFI ADB PORT (ADR-0034)
+# Lives here because every process and runspace that talks to adb loads utils.ps1,
+# including the network scanner and the poll runspaces.
+#################
+function Get-ClassicAdbPort {
+    <#
+    .SYNOPSIS
+    The port of the classic WiFi ADB mode ("adb tcpip <port>"): config ADB.adbPort_default.
+
+    .DESCRIPTION
+    The ONE place a missing or out-of-range value falls back to adb's own default (5555), so
+    no caller carries a literal port of its own (S10-3). Get-Config already clamps the value;
+    this guard covers a runspace or job that never ran it. Never throws.
+
+    .EXAMPLE
+    $port = Get-ClassicAdbPort    # 5555 with the default config
+    #>
+    $p = 0
+    try { if ($null -ne $global:adbPort_default) { $p = [int]$global:adbPort_default } } catch { $p = 0 }
+    if ($p -lt 1 -or $p -gt 65535) { $p = 5555 }
+    return $p
+}
+
+#################
 # UNKNOWN / PLACEHOLDER IP ADDRESSES
 # Lives here rather than in headsets_manager.ps1 because the per-headset VRMonitor
 # runspaces import utils.ps1 but not headsets_manager.ps1, and the reachability stage

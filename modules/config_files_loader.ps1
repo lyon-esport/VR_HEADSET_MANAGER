@@ -323,10 +323,34 @@ function Get-Config {
 
     $global:adbFolder = Join-Path -Path $sourcesPath -ChildPath $configContent.ADB.folder
     $global:adbPath = Join-Path -Path $global:adbFolder -ChildPath "adb.exe"
-    $global:adbPort_default = $configContent.ADB.adbPort_default
+    # Classic WiFi ADB port. It had no guard: a missing or out-of-range value reached every adb connect.
+    $adbPortDefault = 5555
+    if ($null -ne $configContent.ADB.adbPort_default) {
+        try { $adbPortDefault = [int]$configContent.ADB.adbPort_default } catch { $adbPortDefault = 5555 }
+    }
+    if ($adbPortDefault -lt 1 -or $adbPortDefault -gt 65535) { $adbPortDefault = 5555 }
+    $global:adbPort_default = $adbPortDefault
     # USB-first transport: when a known headset is cabled to THIS PC, every ADB call and the
     # scrcpy capture prefer the USB transport and fall back to WiFi when the cable drops.
     $global:ADB_prefer_usb = if ($null -ne $configContent.ADB.prefer_usb) { [bool]$configContent.ADB.prefer_usb } else { $true }
+
+    # WiFi ADB modes (ADR-0034): classic "adb tcpip" (port adbPort_default) and ADB over TLS
+    # (Wireless debugging). Both can be searched; one is preferred and the other is the fallback.
+    # Applied on the next config reload (slow tick), no restart.
+    $global:ADB_wifi_classic_enabled = if ($null -ne $configContent.ADB.wifi_classic_enabled) { [bool]$configContent.ADB.wifi_classic_enabled } else { $true }
+    $global:ADB_wifi_tls_enabled     = if ($null -ne $configContent.ADB.wifi_tls_enabled)     { [bool]$configContent.ADB.wifi_tls_enabled }     else { $true }
+    $wifiPreferred = if ($configContent.ADB.wifi_preferred_mode) { ([string]$configContent.ADB.wifi_preferred_mode).Trim().ToLowerInvariant() } else { 'classic' }
+    if ($wifiPreferred -ne 'classic' -and $wifiPreferred -ne 'tls') { $wifiPreferred = 'classic' }
+    $global:ADB_wifi_preferred_mode = $wifiPreferred
+    if (-not $global:ADB_wifi_classic_enabled -and -not $global:ADB_wifi_tls_enabled) {
+        # Both off would leave no way to reach a headset over WiFi: classic is forced back on.
+        $global:ADB_wifi_classic_enabled = $true
+        Write-Log "ADB.wifi_classic_enabled and ADB.wifi_tls_enabled are both false - classic WiFi ADB forced on" -Level WARNING
+    }
+    # A preferred mode that is disabled yields to the other one.
+    $global:ADB_wifi_effective_preferred = $wifiPreferred
+    if ($wifiPreferred -eq 'classic' -and -not $global:ADB_wifi_classic_enabled) { $global:ADB_wifi_effective_preferred = 'tls' }
+    elseif ($wifiPreferred -eq 'tls' -and -not $global:ADB_wifi_tls_enabled)     { $global:ADB_wifi_effective_preferred = 'classic' }
 
 
     $global:Monitoring_headsetTemplate = Join-Path -Path $global:ScriptPath -ChildPath ("\website\template\"+$configContent.Monitoring.HeadsetTemplate)

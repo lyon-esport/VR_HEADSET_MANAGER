@@ -53,7 +53,10 @@
     "ADB":  {
                 "folder":  "scrcpy\\scrcpy-win64-v5.0.1",
                 "adbPort_default":  5555,
-                "prefer_usb":  true
+                "prefer_usb":  true,
+                "wifi_classic_enabled":  true,
+                "wifi_tls_enabled":  true,
+                "wifi_preferred_mode":  "classic"
             },
     "scrcpy":  {
                    "folder":  "scrcpy\\scrcpy-win64-v5.0.1",

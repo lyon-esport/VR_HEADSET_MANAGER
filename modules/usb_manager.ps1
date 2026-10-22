@@ -67,6 +67,12 @@ function Get-AdbUsbPresence {
     'unauthorized' are explicitly not live, and are reported so the caller can
     react differently to each.
 
+    Ids are classified with ONE rule (Test-AdbDeviceIdIsUsb, S10-3): "ip:port" is WiFi
+    (classic or TLS, VRHM always connects with an explicit ip:port), adb's own mDNS-named
+    TLS ids ("adb-<serial>-<rand>._adb-tls-connect._tcp") go to TlsTransports and are
+    never taken for a cable - they have no ':' and used to be, which fired "adb tcpip" at a
+    headset that was only on WiFi (ADR-0034 rule 4). Everything else is USB.
+
     .EXAMPLE
     $p = Get-AdbUsbPresence
     if ($p.Serial -and ($p.WifiTransports -contains '192.168.1.243:5555')) { ... }
@@ -79,6 +85,8 @@ function Get-AdbUsbPresence {
         Unauthorized   = $false
         WifiTransports = @()
         OfflineWifi    = @()
+        # adb's mDNS-named TLS transports (any state). Reported, never used (ADR-0034 rule 4).
+        TlsTransports  = @()
         # EVERY cabled transport, whatever its state - Serial/State above keep describing
         # only the first one (onboarding stays single-device), but the USB-first transport
         # needs to know about all of them: with two headsets cabled, each must resolve to
@@ -95,6 +103,7 @@ function Get-AdbUsbPresence {
     $live    = @()
     $offline = @()
     $usbAll  = @()
+    $tls     = @()
     foreach ($line in $lines) {
         if ($line -notmatch "`t") { continue }
         $parts = $line -split "`t"
@@ -103,6 +112,10 @@ function Get-AdbUsbPresence {
 
         if ($id -match ':') {
             if ($state -eq 'device') { $live += $id } else { $offline += $id }
+            continue
+        }
+        if (-not (Test-AdbDeviceIdIsUsb -Id $id)) {
+            $tls += [PSCustomObject]@{ Id = $id; State = $state }
             continue
         }
 
@@ -120,6 +133,7 @@ function Get-AdbUsbPresence {
     $out.WifiTransports = $live
     $out.OfflineWifi    = $offline
     $out.UsbDevices     = $usbAll
+    $out.TlsTransports  = $tls
     return $out
 }
 
@@ -237,6 +251,8 @@ function Get-UsbDeviceSnapshot {
         }
 
         # No second "adb devices" here - the listing we were handed already knows.
+        # CLASSIC mode only (S10-3): WifiAdbOpen feeds the tcpip onboarding memo, and a headset
+        # reachable only over TLS still needs "adb tcpip" to open the classic port.
         $wifiAdbOpen = $false
         if ($ip) { $wifiAdbOpen = ($Presence.WifiTransports -contains "${ip}:${AdbPort}") }
 
@@ -546,6 +562,8 @@ function Update-UsbWatchState {
     $memo   = $script:UsbMemo[$serial]
 
     # ---- 1. Known, and its transport is live: the whole tick costs one listing ----
+    # "Live" means the CLASSIC endpoint ip:<AdbPort> (S10-3): a TLS-only transport is not
+    # "WifiAdbOpen" for this memo - moving between modes is VRMonitor's switch (S10-5), not ours.
     if ($memo -and $memo.Ip -and ($presence.WifiTransports -contains ("{0}:{1}" -f $memo.Ip, $AdbPort))) {
         # Re-read only when there is a reason to: a different headset, nothing
         # published yet, or a Partial record left behind by an onboarding that

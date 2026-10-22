@@ -363,7 +363,7 @@ function Test-PortForCidr {
     The CIDR notation of the network to scan (e.g.: "192.168.1.0/24")
 
     .PARAMETER Port
-    The port to test (default: 5555)
+    The port to test (default 0 = the classic WiFi ADB port from config, Get-ClassicAdbPort)
 
     .PARAMETER Timeout
     Per-host timeout in milliseconds (default: 500ms)
@@ -382,7 +382,7 @@ function Test-PortForCidr {
         [Parameter(Mandatory=$true)]
         [string]$CIDR,
 
-        [int]$Port = 5555,
+        [int]$Port = 0,
 
         [ValidateRange(100,5000)]
         [int]$Timeout = 500,
@@ -392,6 +392,8 @@ function Test-PortForCidr {
 
         [switch]$AllowLarge
     )
+
+    if ($Port -lt 1 -or $Port -gt 65535) { $Port = Get-ClassicAdbPort }
 
     # Refuse oversized networks BEFORE expanding them (Get-IpRange is slow on a /16)
     if ($CIDR -match '/(\d{1,2})$') {

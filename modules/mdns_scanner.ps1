@@ -93,7 +93,7 @@ function Read-DnsName {
         # Pointer compression (top 2 bits = 11)
         if (($length -band 0xC0) -eq 0xC0) {
             if ($nextOffset -eq -1) { $nextOffset = $Offset + 2 }
-            $Offset = (($length -band 0x3F) -shl 8) -bor $Data[$Offset + 1]
+            $Offset = (([int]$length -band 0x3F) -shl 8) -bor [int]$Data[$Offset + 1]
             continue
         }
 
@@ -121,14 +121,14 @@ function Read-MdnsPacket {
 
     if ($Data.Length -lt 12) { return $records }
 
-    $answerCount     = ($Data[6]  -shl 8) -bor $Data[7]
-    $additionalCount = ($Data[10] -shl 8) -bor $Data[11]
+    $answerCount     = ([int]$Data[6]  -shl 8) -bor [int]$Data[7]
+    $additionalCount = ([int]$Data[10] -shl 8) -bor [int]$Data[11]
     $totalRecords    = $answerCount + $additionalCount
 
     $offset = 12
 
     # Skip question section
-    $questionCount = ($Data[4] -shl 8) -bor $Data[5]
+    $questionCount = ([int]$Data[4] -shl 8) -bor [int]$Data[5]
     for ($q = 0; $q -lt $questionCount -and $offset -lt $Data.Length; $q++) {
         $parsed = Read-DnsName -Data $Data -Offset $offset
         $offset = $parsed.NextOffset + 4
@@ -140,8 +140,8 @@ function Read-MdnsPacket {
 
         if ($offset + 10 -gt $Data.Length) { break }
 
-        $type     = ($Data[$offset]     -shl 8) -bor $Data[$offset + 1]
-        $rdLength = ($Data[$offset + 8] -shl 8) -bor $Data[$offset + 9]
+        $type     = ([int]$Data[$offset]     -shl 8) -bor [int]$Data[$offset + 1]
+        $rdLength = ([int]$Data[$offset + 8] -shl 8) -bor [int]$Data[$offset + 9]
         $offset  += 10
 
         if ($offset + $rdLength -gt $Data.Length) { break }
@@ -156,7 +156,7 @@ function Read-MdnsPacket {
             }
             33 {
                 # SRV - priority(2) + weight(2) + port(2) + target hostname
-                $port    = ($rdData[4] -shl 8) -bor $rdData[5]
+                $port    = ([int]$rdData[4] -shl 8) -bor [int]$rdData[5]
                 $target  = Read-DnsName -Data $Data -Offset ($offset + 6)
                 $records += @{ Type = "SRV"; Name = $nameResult.Name; Port = $port; Target = $target.Name }
             }
