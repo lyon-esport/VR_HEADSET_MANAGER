@@ -982,8 +982,8 @@
         { path: 'ADB.wifi_tls_enabled', label: 'Search ADB over TLS (Wireless debugging)', type: 'boolean',
           desc: 'Look for headsets that advertise ADB over TLS (Wireless debugging, random port found through mDNS). This mode survives a reboot when the headset runs the auto-enable app. The PC must have been authorised once over USB (Always allow). Takes effect on the next monitor cycle, no restart.' },
         { path: 'ADB.wifi_preferred_mode', label: 'Preferred WiFi ADB mode', type: 'select',
-          options: [{value:'classic',label:'Classic (tcpip)'},{value:'tls',label:'TLS (Wireless debugging)'}],
-          desc: 'The other mode is the automatic fallback; a headset reachable only in the other mode is switched to the preferred one. A preferred mode that is disabled above yields to the other one. Takes effect on the next monitor cycle, no restart.' },
+          options: [{value:'auto',label:'No preference (classic first)'},{value:'classic',label:'Classic (tcpip)'},{value:'tls',label:'TLS (Wireless debugging)'}],
+          desc: 'No preference (default): each headset is reached in whatever mode answers, classic first when both do, and nothing is switched. Classic or TLS: a headset reachable only in the other mode is switched to the preferred one (classic is enabled on the port above, or Wireless debugging is turned on), then screen casting and every ADB request use it; the other mode stays the automatic fallback, and is kept when the preferred one cannot be enabled. A running capture moves according to the USB switch mode (stable: never while recording). Only one mode enabled above = no preference. Takes effect on the next monitor cycle, no restart.' },
         { path: 'ADB.prefer_usb', label: 'Prefer USB', type: 'boolean',
           desc: 'When a known headset is cabled to this PC, use the USB transport for every ADB call and for the scrcpy capture, and fall back to WiFi automatically when the cable drops. Disable to always use WiFi. Requires restart.' },
         { type: 'subgroup', label: 'MediaMTX (Restreaming)' },
@@ -1183,7 +1183,10 @@
       { path: 'Monitoring.VideoTemplate',     label: 'Video Template' },
       { path: 'apk.adbWirelessActivatorFolder',     label: 'APK Source Folder' },
       { path: 'apk.adbWirelessActivatorApk',        label: 'APK File Name' },
-      { path: 'apk.adbWirelessActivatorPackageName', label: 'APK Package Name' }
+      { path: 'apk.adbWirelessActivatorPackageName', label: 'APK Package Name' },
+      { path: 'apk.adbAutoEnableFolder',            label: 'Auto-enable APK Source Folder' },
+      { path: 'apk.adbAutoEnableApk',               label: 'Auto-enable APK File Name' },
+      { path: 'apk.adbAutoEnablePackageName',       label: 'Auto-enable APK Package Name' }
     ];
 
     // Renders a "<Label> / installed version / check-for-update / update" row,

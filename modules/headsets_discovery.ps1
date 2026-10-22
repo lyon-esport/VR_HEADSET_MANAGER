@@ -325,84 +325,185 @@ function Invoke-HeadsetNetworkSweep {
     )
 
     $results = @()
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    # Endpoint set of this pass for the runspace block to hand to the main thread (the return
+    # value stays the hit array). $null = TLS part did not run, nothing to publish.
+    $script:LastSweepTlsEndpoints = $null
     if (-not (Test-Path -LiteralPath $adb)) {
         Write-Log ($msg.ADBExecutableNotFound -f $adb) -Level WARNING
         return $results
     }
 
-    $networks = @(Get-PrivateNetworks)
-    if ($networks.Count -eq 0) { return $results }
+    $doClassic = [bool]$global:ADB_wifi_classic_enabled
+    $doTls     = [bool]$global:ADB_wifi_tls_enabled
+    if (-not $doClassic -and -not $doTls) { $doClassic = $true }   # the loader forces this too
 
-    # Prefer the interface holding the default route - that is the LAN the headsets are
-    # on. Scanning every private interface would multiply the sweep duration.
-    $target = @($networks | Where-Object { $_.HasDefaultGateway })
-    if ($target.Count -eq 0) { $target = @($networks | Select-Object -First 1) }
-
-    # Addresses of known headsets whose live status shows ADB up AT that address: they
-    # cannot be "new", so they are not probed. Read ONCE per sweep (one query), not per IP.
-    # A known headset whose ADB is down stays probed - a DHCP swap may have put another
-    # device on its old address.
+    # Known headsets whose live status shows ADB up (in ANY WiFi mode): they cannot be "new",
+    # so they are not probed. Keyed by address for the classic sweep and by serial for the TLS
+    # part. Read ONCE per sweep (one query). A known headset whose ADB is down stays probed - a
+    # DHCP swap may have put another device on its old address.
     $knownUp = @{}
+    $knownUpSerial = @{}
     try {
         foreach ($row in @(Invoke-DbQuery -Name 'status.merged')) {
-            if ($row.IPAddress -and ((ConvertTo-DbBool $row.ADBWifi) -eq 1)) { $knownUp[[string]$row.IPAddress] = $true }
+            if ((ConvertTo-DbBool $row.ADBWifi) -ne 1) { continue }
+            if ($row.IPAddress) { $knownUp[[string]$row.IPAddress] = $true }
+            if ($row.SerialNumber -and ([string]$row.SerialNumber) -ne '-') { $knownUpSerial[[string]$row.SerialNumber] = $true }
         }
     } catch {
         Write-Log ("Headset discovery: live status unavailable, probing every address - " + $_.Exception.Message) -Level DEBUG
     }
 
-    foreach ($net in $target) {
-        Write-Log ($msg.Discovery.SweepStart -f $net.NetworkCIDR) -Level DEBUG
-        $open = @()
-        try {
-            $open = @(Test-PortForCidr -CIDR $net.NetworkCIDR -Port $Port -Timeout $Timeout)
-        } catch {
-            Write-Log ($msg.Discovery.SweepFailed -f $_.Exception.Message) -Level WARNING
-            continue
-        }
+    # ---- Classic part: port sweep of the LAN holding the default route ----
+    if ($doClassic) {
+        $networks = @(Get-PrivateNetworks)
+        # Prefer the interface holding the default route - that is the LAN the headsets are
+        # on. Scanning every private interface would multiply the sweep duration.
+        $target = @($networks | Where-Object { $_.HasDefaultGateway })
+        if ($target.Count -eq 0) { $target = @($networks | Select-Object -First 1) }
 
-        foreach ($hit in $open) {
-            $ip = if ($hit.IPAddress) { $hit.IPAddress } else { $hit.hostname }
-            if (-not $ip) { continue }
-            if (Test-UnknownIp $ip) { continue }
-
-            if ($knownUp.ContainsKey([string]$ip)) {
-                Write-Log ("Headset discovery: " + $ip + " is a known headset with ADB up - not probed.") -Level DEBUG
+        foreach ($net in $target) {
+            Write-Log ($msg.Discovery.SweepStart -f $net.NetworkCIDR) -Level DEBUG
+            $open = @()
+            try {
+                $open = @(Test-PortForCidr -CIDR $net.NetworkCIDR -Port $Port -Timeout $Timeout)
+            } catch {
+                Write-Log ($msg.Discovery.SweepFailed -f $_.Exception.Message) -Level WARNING
                 continue
             }
 
-            try {
-                $device = Get-AdbWifiDevice -headsetIP $ip -AdbPort $Port -adb $adb
-                if (-not $device) { continue }
+            foreach ($hit in $open) {
+                $ip = if ($hit.IPAddress) { $hit.IPAddress } else { $hit.hostname }
+                if (-not $ip) { continue }
+                if (Test-UnknownIp $ip) { continue }
 
-                # ONE adb shell for serial + model + brand (was three).
+                if ($knownUp.ContainsKey([string]$ip)) {
+                    Write-Log ("Headset discovery: " + $ip + " is a known headset with ADB up - not probed.") -Level DEBUG
+                    continue
+                }
+
+                try {
+                    $device = Get-AdbWifiDevice -headsetIP $ip -AdbPort $Port -adb $adb
+                    if (-not $device) { continue }
+
+                    # ONE adb shell for serial + model + brand (was three).
+                    $props = Get-AdbPropBatch -Device $device -Properties @('ro.serialno', 'ro.product.model', 'ro.product.brand') -adb $adb
+
+                    $serial = ([string]$props['ro.serialno']).Trim()
+                    $model  = ([string]$props['ro.product.model']).Trim()
+                    $brand  = ([string]$props['ro.product.brand']).Trim()
+
+                    if (-not $serial) { continue }
+                    if (-not (Test-DiscoveredHeadsetDevice -Brand $brand -Model $model)) {
+                        Write-Log ("Headset discovery: " + $ip + " speaks ADB but is not a headset (" + $brand + " " + $model + ") - ignored.") -Level DEBUG
+                        continue
+                    }
+
+                    $results += @{
+                        IPAddress    = $ip
+                        SerialNumber = $serial
+                        Model        = $model
+                        Brand        = $brand
+                        Mode         = 'Classic'
+                        SeenAt       = (Get-Date).ToString("s")
+                    }
+                    Write-Log ($msg.Discovery.Found -f $serial, $model, $ip) -Level DEBUG
+                } catch {
+                    Write-Log ("Headset discovery: probe of " + $ip + " failed - " + $_.Exception.Message) -Level DEBUG
+                }
+            }
+        }
+    }
+    $classicCount = @($results).Count
+
+    # ---- TLS part: ONE "adb mdns services" call, identity straight from the instance name ----
+    $tlsServices = @()
+    if ($doTls) {
+        $tlsServices = @(Get-AdbTlsServices)
+        $script:LastSweepTlsEndpoints = @($tlsServices | ForEach-Object {
+            [PSCustomObject]@{ Serial = $_.Serial; Ip = $_.Ip; Port = $_.Port }
+        })
+
+        $alreadyHit = @{}
+        foreach ($r in $results) { $alreadyHit[[string]$r.SerialNumber] = $true }
+        $skippedAuth = @{}
+
+        foreach ($svc in $tlsServices) {
+            $mdnsSerial = [string]$svc.Serial
+            if (-not $svc.Ip -or -not $svc.Port) { continue }
+            if (Test-UnknownIp $svc.Ip) { continue }
+            if ($mdnsSerial -and ($alreadyHit.ContainsKey($mdnsSerial) -or $knownUpSerial.ContainsKey($mdnsSerial))) { continue }
+            if ($mdnsSerial -and $skippedAuth.ContainsKey($mdnsSerial)) { continue }
+
+            $deviceId = '{0}:{1}' -f $svc.Ip, $svc.Port
+            try {
+                Invoke-Adb -Arguments @('connect', $deviceId) -Adb $adb -TimeoutSeconds 10 | Out-Null
+                $devList = Invoke-Adb -Arguments @('devices') -Adb $adb -TimeoutSeconds 5
+                $line = @($devList.StdOut | Where-Object { $_ -match ('^' + [regex]::Escape($deviceId) + '\s') }) | Select-Object -First 1
+                if (-not $line -or ([string]$line) -notmatch '\sdevice\s*$') {
+                    $skippedAuth[$mdnsSerial] = $true
+                    Write-Log ("Headset discovery: " + $mdnsSerial + " at " + $deviceId + " advertises ADB over TLS but this PC is not authorised (needs USB authorisation once) - skipped.") -Level DEBUG
+                    continue
+                }
+
+                $device = [PSCustomObject]@{ DeviceId = $deviceId; ConnectionType = 'WiFi'; IP = $svc.Ip; Port = [int]$svc.Port; WifiMode = 'TLS' }
                 $props = Get-AdbPropBatch -Device $device -Properties @('ro.serialno', 'ro.product.model', 'ro.product.brand') -adb $adb
 
                 $serial = ([string]$props['ro.serialno']).Trim()
+                if (-not $serial) { $serial = $mdnsSerial }
                 $model  = ([string]$props['ro.product.model']).Trim()
                 $brand  = ([string]$props['ro.product.brand']).Trim()
 
                 if (-not $serial) { continue }
                 if (-not (Test-DiscoveredHeadsetDevice -Brand $brand -Model $model)) {
-                    Write-Log ("Headset discovery: " + $ip + " speaks ADB but is not a headset (" + $brand + " " + $model + ") - ignored.") -Level DEBUG
+                    Write-Log ("Headset discovery: " + $deviceId + " speaks ADB over TLS but is not a headset (" + $brand + " " + $model + ") - ignored.") -Level DEBUG
                     continue
                 }
 
                 $results += @{
-                    IPAddress    = $ip
+                    IPAddress    = [string]$svc.Ip
                     SerialNumber = $serial
                     Model        = $model
                     Brand        = $brand
+                    Mode         = 'TLS'
                     SeenAt       = (Get-Date).ToString("s")
                 }
-                Write-Log ($msg.Discovery.Found -f $serial, $model, $ip) -Level DEBUG
+                Write-Log ($msg.Discovery.Found -f $serial, $model, $svc.Ip) -Level DEBUG
             } catch {
-                Write-Log ("Headset discovery: probe of " + $ip + " failed - " + $_.Exception.Message) -Level DEBUG
+                Write-Log ("Headset discovery: TLS probe of " + $deviceId + " failed - " + $_.Exception.Message) -Level DEBUG
             }
         }
     }
 
+    $results = @(Merge-DiscoveredHeadsetHits -Hits $results)
+    $tlsCount = @($results | Where-Object { $_.Mode -eq 'TLS' }).Count
+    Write-Log ($msg.Discovery.SweepModes -f $classicCount, $tlsCount, @($tlsServices).Count, $sw.ElapsedMilliseconds) -Level DEBUG
+
     return $results
+}
+
+
+function Merge-DiscoveredHeadsetHits {
+    <#
+    .SYNOPSIS
+    Collapses sweep hits to one per serial number: the FIRST hit of a serial wins, so a
+    headset found in both WiFi modes appears once (classic hits are collected first).
+    .EXAMPLE
+    $one = @(Merge-DiscoveredHeadsetHits -Hits @(@{SerialNumber='A';Mode='Classic'}, @{SerialNumber='A';Mode='TLS'}))
+    #>
+    param([array]$Hits = @())
+
+    $seen = @{}
+    $out = @()
+    foreach ($h in $Hits) {
+        if (-not $h) { continue }
+        $key = [string]$h.SerialNumber
+        if (-not $key) { continue }
+        if ($seen.ContainsKey($key)) { continue }
+        $seen[$key] = $true
+        $out += $h
+    }
+    return $out
 }
 
 

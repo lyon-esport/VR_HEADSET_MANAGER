@@ -186,6 +186,38 @@ function Invoke-RouteInstalladbwifiapk {
     return
 }
 
+# API: POST /api/installadbautoenable  - installs and configures the ADB auto-enable app (S10-6)
+function Invoke-RouteInstalladbautoenable {
+    # POST /api/installadbautoenable
+    param([Parameter(Mandatory = $true)] $Context)
+    $response = $Context.Response
+
+    try {
+        # Claim USB: the final classic step runs 'adb tcpip', which re-enumerates the transport.
+        Set-UsbBusy -Seconds 180
+        $device = Get-AdbUsbDeviceDetails -adb $adbPath
+        if (-not $device) {
+            Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'No USB headset detected' }
+        } else {
+            $r = Install-AdbAutoEnableApk -Device $device -adb $adbPath
+            Send-JsonResponse -Response $response -Body @{
+                ok          = [bool]$r.Ok
+                model       = [string]$device.Model
+                reinstalled = [bool]$r.Reinstalled
+                steps       = @($r.Steps)
+                error       = [string]$r.Error
+            }
+        }
+    } catch {
+        try { Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'server error' } -StatusCode 500 } catch {}
+    } finally {
+        # Same shrink as the other USB-mutating routes: the watcher yields while the claim is held.
+        Set-UsbBusy -Seconds 10
+        Close-HttpResponse -Response $response
+    }
+    return
+}
+
 # API: GET /api/usbdeviceinfo  - returns full details of USB-connected ADB device
 function Invoke-RouteUsbdeviceinfo {
     # GET /api/usbdeviceinfo
@@ -195,7 +227,7 @@ function Invoke-RouteUsbdeviceinfo {
     try {
         # Last snapshot published by VRMonitor, the single USB owner.
         $details = Get-PublishedUsbSnapshot
-        $result  = @{ found = $false; ip = ''; brand = ''; model = ''; serialNumber = ''; ssid = ''; expectedSsid = ''; ssidMatch = $false; wifiAdbOpen = $false; apkInstalled = $false; alreadyRegistered = $false }
+        $result  = @{ found = $false; ip = ''; brand = ''; model = ''; serialNumber = ''; ssid = ''; expectedSsid = ''; ssidMatch = $false; wifiAdbOpen = $false; apkInstalled = $false; autoEnableInstalled = $false; alreadyRegistered = $false }
         if ($details) {
             $knownNetworks   = Get-WifiNetworks
             $preferredWifi   = $knownNetworks | Where-Object { $_.Preferred } | Select-Object -First 1
@@ -213,7 +245,9 @@ function Invoke-RouteUsbdeviceinfo {
                 expectedSsid = $expectedSsidVal
                 ssidMatch = (Test-SsidMatch -Reported $details.WiFiSSID -Expected $expectedSsidVal)
                 wifiAdbOpen = $details.WifiAdbOpen
-                apkInstalled = $details.ApkInstalled; alreadyRegistered = $alreadyReg
+                apkInstalled = $details.ApkInstalled
+                autoEnableInstalled = [bool]($details.PSObject.Properties['AutoEnableInstalled'] -and $details.AutoEnableInstalled)
+                alreadyRegistered = $alreadyReg
             }
         }
         $jsonOut   = ConvertTo-Json $result -Compress

@@ -249,6 +249,7 @@ $script:SlowRoutes = @{
     '/api/connectwifi'                   = $true
     '/api/enablewifiadb'                 = $true   # adb tcpip re-enumerates USB, ~10 s
     '/api/installadbwifiapk'             = $true
+    '/api/installadbautoenable'          = $true   # adb install + grants + tcpip, ~15 s
     '/api/headsets/push-wifi'            = $true
 }
 
@@ -467,6 +468,7 @@ foreach ($routeRow in @(
     ,@('GET',   '/api/detectusbheadset',                  'Invoke-RouteDetectusbheadset')
     ,@('POST',  '/api/enablewifiadb',                     'Invoke-RouteEnablewifiadb')
     ,@('POST',  '/api/installadbwifiapk',                 'Invoke-RouteInstalladbwifiapk')
+    ,@('POST',  '/api/installadbautoenable',              'Invoke-RouteInstalladbautoenable')
     ,@('POST',  '/api/connectwifi',                       'Invoke-RouteConnectwifi')
     ,@('GET',   '/api/wifi-detect',                       'Invoke-RouteWifiDetect')
     ,@('GET',   '/api/wifi-networks',                     'Invoke-RouteWifiNetworks')

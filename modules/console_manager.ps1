@@ -515,6 +515,7 @@ function Show-SubMenu-AddHeadset { #CHOICE 2
     Write-Host $msg.LaunchAppMenu
     Write-Host "`t 6. Enable Wifi ADB on a connected headset"
     Write-Host "`t 7. Register/update headset by serial number (USB)"
+    Write-Host $msg.AdbWifi.AutoEnableMenuOption
     # Only advertise discovered devices when there are actually some waiting.
     $pendingDiscovered = @()
     if (Get-Command Get-PendingDiscoveredHeadsets -ErrorAction SilentlyContinue) {
@@ -582,6 +583,26 @@ function Show-SubMenu-AddHeadset { #CHOICE 2
         }
         '8' {
             Show-SubMenu-DiscoveredHeadsets
+        }
+        '9' {
+            $usbInfo = Get-AdbUsbDeviceDetails
+            if (-not $usbInfo) {
+                Write-Host $msg.AdbWifi.AutoEnableNoUsb -ForegroundColor Yellow
+            } else {
+                # Holds the USB claim: the last step (adb tcpip) re-enumerates the transport.
+                Set-UsbBusy -Seconds 180
+                try {
+                    $r = Install-AdbAutoEnableApk -Device $usbInfo
+                    foreach ($s in $r.Steps) {
+                        $c = if ($s.Ok) { 'Green' } else { 'Red' }
+                        Write-Host ("  {0,-22} {1}" -f $s.Name, $s.Detail) -ForegroundColor $c
+                    }
+                    if ($r.Ok) { Write-Host $msg.AdbWifi.AutoEnableDone -ForegroundColor Green }
+                    else { Write-Host $r.Error -ForegroundColor Red }
+                } finally {
+                    Set-UsbBusy -Seconds 10
+                }
+            }
         }
         '0' {
             Write-Log -Message $msg.ReturnPrevious -Level "INFO"
@@ -2568,6 +2589,7 @@ function Show-SubMenu-Config {
             default                { "$global:CaptureMode" }
         }
         Write-Host "  V. Video Capture Mode  - Currently: $captureLabel"
+        Write-Host ($msg.AdbWifi.MenuOption -f $(switch ([string]$global:ADB_wifi_effective_preferred) { 'tls' { 'TLS' } 'classic' { 'classic' } default { $msg.AdbWifi.MenuNoPreference } }))
         if ($global:VQA_Enabled) {
             Write-Host "  Q. Video Quality Automation (VQR / VQO)"
         }
@@ -2578,6 +2600,7 @@ function Show-SubMenu-Config {
         switch ($choice) {
             'W' { Show-SubMenu-WifiNetworks }
             'V' { Show-SubMenu-CaptureMode }
+            'A' { Show-SubMenu-AdbWifiModes }
             'Q' {
                 if ($global:VQA_Enabled -and (Get-Command Show-SubMenu-Monitoring -ErrorAction SilentlyContinue)) {
                     Show-SubMenu-Monitoring
@@ -2624,6 +2647,72 @@ function Show-SubMenu-Config {
                 }
             }
             '0' { return }
+        }
+    } while ($true)
+}
+
+
+function Show-SubMenu-AdbWifiModes {
+    # Console counterpart of the ADB WiFi modes card of vrhm_config.html (ADR-0034, ADR-0012):
+    # toggle classic / TLS and pick the preferred mode. Writes config.json like the web save
+    # (VQA lock + Write-ConfigJson) and reloads the globals; VRMonitor follows on its next slow
+    # tick (Test-ConfigChanged), no restart.
+    do {
+        Clear-Host
+        Write-Host ""
+        Write-Host $msg.AdbWifi.MenuTitle -ForegroundColor Cyan
+        Write-Host ""
+        $onText = { param($v) if ($v) { $msg.AdbWifi.MenuEnabled } else { $msg.AdbWifi.MenuDisabled } }
+        Write-Host ($msg.AdbWifi.MenuClassic -f (& $onText $global:ADB_wifi_classic_enabled), (Get-ClassicAdbPort))
+        Write-Host ($msg.AdbWifi.MenuTls -f (& $onText $global:ADB_wifi_tls_enabled))
+        # auto = no preference (ADR-0037); the "in use" value is auto too when one mode is disabled.
+        $modeText = { param($v) switch ([string]$v) { 'tls' { 'TLS' } 'classic' { 'classic' } default { $msg.AdbWifi.MenuNoPreference } } }
+        $prefText = & $modeText $global:ADB_wifi_preferred_mode
+        $effText  = & $modeText $global:ADB_wifi_effective_preferred
+        Write-Host ($msg.AdbWifi.MenuPreferred -f $prefText, $effText)
+        Write-Host ""
+        Write-Host $msg.AdbWifi.MenuHint -ForegroundColor DarkGray
+        Write-Host ""
+        Write-Host "  0. Back"
+        Write-Host ""
+        $choice = (Read-Host $msg.EnterChoice).Trim().ToUpper()
+        if ($choice -eq '0') { return }
+        if ($choice -notin @('1', '2', '3')) { continue }
+
+        $cfgPath = if ($global:ConfigFilePath) { $global:ConfigFilePath } else { Join-Path $global:ScriptPath "config\config.json" }
+        $saved = $false
+        $cfgLock = Enter-VqaLock -TimeoutMs 5000
+        try {
+            $cfg = Read-ConfigJson -ConfigFilePath $cfgPath -NonInteractive
+            if ($cfg) {
+                if ($null -eq $cfg.ADB) { $cfg | Add-Member -NotePropertyName ADB -NotePropertyValue ([PSCustomObject]@{}) }
+                # Toggle from the file just read (the web page may have changed it since this
+                # process last ran Get-Config), with the loader's defaults when a key is absent.
+                $curClassic = if ($null -ne $cfg.ADB.wifi_classic_enabled) { [bool]$cfg.ADB.wifi_classic_enabled } else { $true }
+                $curTls     = if ($null -ne $cfg.ADB.wifi_tls_enabled)     { [bool]$cfg.ADB.wifi_tls_enabled }     else { $true }
+                $curPref    = if ($cfg.ADB.wifi_preferred_mode) { ([string]$cfg.ADB.wifi_preferred_mode).Trim().ToLowerInvariant() } else { 'auto' }
+                switch ($choice) {
+                    '1' { $cfg.ADB | Add-Member -NotePropertyName wifi_classic_enabled -NotePropertyValue (-not $curClassic) -Force }
+                    '2' { $cfg.ADB | Add-Member -NotePropertyName wifi_tls_enabled     -NotePropertyValue (-not $curTls) -Force }
+                    '3' {
+                        # Cycles auto -> classic -> tls -> auto.
+                        $nextPref = switch ($curPref) { 'auto' { 'classic' } 'classic' { 'tls' } default { 'auto' } }
+                        $cfg.ADB | Add-Member -NotePropertyName wifi_preferred_mode -NotePropertyValue $nextPref -Force
+                    }
+                }
+                Write-ConfigJson -Object $cfg -Path $cfgPath -Depth 20
+                $saved = $true
+            }
+        } catch {
+            Write-Host ($msg.AdbWifi.MenuSaveFailed -f $_.Exception.Message) -ForegroundColor Red
+        } finally {
+            if ($cfgLock) { Exit-VqaLock -Stream $cfgLock }
+        }
+        if ($saved) {
+            Get-Config -ConfigFilePath $cfgPath | Out-Null
+            Write-Host ""
+            Write-Host $msg.AdbWifi.MenuSaved -ForegroundColor Green
+            Read-Host $msg.PressEnterToContinue | Out-Null
         }
     } while ($true)
 }

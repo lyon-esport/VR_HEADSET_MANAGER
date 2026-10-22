@@ -188,7 +188,8 @@ $sectionRegistry = @(
     [PSCustomObject]@{ Id = 70; Title = 'Monitoring';            File = '70_monitoring.ps1';       Light = 1; Standard = 3;  Full = 5;  Operator = $false }
     [PSCustomObject]@{ Id = 80; Title = 'Apps manager';          File = '80_apps.ps1';             Light = 0; Standard = 4;  Full = 8;  Operator = $true  }
     [PSCustomObject]@{ Id = 85; Title = 'DIAG and USB transport'; File = '85_diag_transport.ps1';   Light = 0; Standard = 6;  Full = 12; Operator = $true  }
-    [PSCustomObject]@{ Id = 90; Title = 'Shutdown and reaper';   File = '90_shutdown.ps1';         Light = 1; Standard = 2;  Full = 3;  Operator = $false }
+    [PSCustomObject]@{ Id = 86; Title = 'ADB WiFi modes';        File = '86_wifi_modes.ps1';       Light = 1; Standard = 3;  Full = 5;  Operator = $false }
+    [PSCustomObject]@{ Id = 90; Title = 'Shutdown and reaper';  File = '90_shutdown.ps1';         Light = 1; Standard = 2;  Full = 3;  Operator = $false }
 )
 
 function ConvertTo-SectionIdList {

@@ -851,6 +851,19 @@ function Start-VRMonitor {
                     if ([datetime]::Now -ge $nextStatsAt) {
                         $nextStatsAt = [datetime]::Now.AddSeconds($timer)
 
+                        # Follow config edits (one file stat when nothing changed, S3-3), like the
+                        # other VRMonitor runspaces. Without it this runspace kept the WiFi ADB mode
+                        # order it started with (ADR-0034): after the preferred mode was changed it
+                        # reported the old mode while VRMonitor used the new one, and the capture
+                        # was moved back and forth. The memoised device is dropped so the next
+                        # resolution follows the new order at once.
+                        try {
+                            if (Test-ConfigChanged -ConfigFilePath $configFilePath) {
+                                Get-Config -ConfigFilePath $configFilePath | Out-Null
+                                $pollDeviceCache.Clear()
+                            }
+                        } catch { }
+
                         if ($workingInfo.ADBWifi) {
                             # USB when the headset is cabled here, WiFi otherwise (and WiFi
                             # again the moment the cable drops - Invoke-AdbCmd retries once).
@@ -1088,6 +1101,10 @@ function Start-VRMonitor {
                     Write-Log ($msg.Discovery.SweepFailed -f $_.Exception.Message) -Level WARNING
                 }
                 $duration = [Math]::Round(((Get-Date) - $started).TotalSeconds, 1)
+
+                # TLS endpoints of this pass (null when the TLS toggle is off): the main thread
+                # publishes them (single writer of the adb_tls_endpoints row). Latest pass only.
+                $sharedState["_tls_endpoints"] = @{ Endpoints = @($script:LastSweepTlsEndpoints); Run = ($null -ne $script:LastSweepTlsEndpoints) }
 
                 # Append rather than overwrite: the main loop may not have drained the
                 # previous batch yet, and losing a hit would delay healing by a full cycle.
@@ -1876,6 +1893,18 @@ function Start-VRMonitor {
                         Write-Log ("VRMonitor: USB tick failed: " + $_.Exception.Message) -Level WARNING
                     }
 
+                    # WiFi ADB modes (ADR-0034, S10-5): refresh the published TLS endpoints and move
+                    # a headset reachable only in the non-preferred mode onto the preferred one. Non
+                    # blocking (a tick issues the command, the next ones confirm it); after the USB
+                    # tick so a cabled headset is already in the published set (USB wins).
+                    if (-not $benchRunId -and (Get-Command Update-AdbWifiModeState -ErrorAction SilentlyContinue)) {
+                        try {
+                            [void](Update-AdbWifiModeState -KnownHeadsets $knownHeadsets -HeadsetInfo $infoByIp -ScrcpyPids $sharedState['_scrcpy_pids'])
+                        } catch {
+                            Write-Log ("VRMonitor: WiFi ADB mode tick failed: " + $_.Exception.Message) -Level WARNING
+                        }
+                    }
+
                     # COMPANION DISCOVERY DISABLED (operator, 2026-10-18): the companion app is paused and
                     # will be reworked. Its UDP bind on 5556 also failed every 5 s here ("only one usage of
                     # each socket address"; the port was held by this very process). To re-enable, remove the
@@ -1908,6 +1937,14 @@ function Start-VRMonitor {
                         Sync-HeadsetDiscoveryRunspace -registry ([ref]$discoveryRunspace) -sharedState $sharedState `
                             -scriptPath $global:ScriptPath -configFilePath $global:ConfigFilePath `
                             -pollBlock $discoveryPollBlock
+
+                        $tlsPass = $sharedState["_tls_endpoints"]
+                        if ($tlsPass) {
+                            $sharedState["_tls_endpoints"] = $null
+                            if ($tlsPass.Run) {
+                                try { Publish-AdbTlsEndpoints -Endpoints @($tlsPass.Endpoints | Where-Object { $_ }) | Out-Null } catch { }
+                            }
+                        }
 
                         if ($sharedState["_discovery_results"]) {
                             $discovered = @($sharedState["_discovery_results"])
@@ -2505,6 +2542,10 @@ function Get-HeadsetPollDevice {
             $ep = Find-AdbTlsEndpointBySerial -Serial $serial
             if (-not $ep -or ('{0}:{1}' -f $ep.Ip, $ep.Port) -ne [string]$dev.DeviceId) { $valid = $false }
         }
+        # A device on the fallback WiFi mode is dropped as soon as the preferred mode answers
+        # (ADR-0037), so the poll follows a mode switch within one cycle, not 2 x refresh_timer.
+        if ($valid -and (Get-Command Test-AdbWifiPreferredModeBack -ErrorAction SilentlyContinue) -and
+            (Test-AdbWifiPreferredModeBack -Device $dev -Headset $Headset)) { $valid = $false }
         if ($valid) { return $dev }
         $Cache.Clear()
     }

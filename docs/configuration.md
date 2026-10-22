@@ -43,6 +43,12 @@ File names of the headset registry (`known_headsets.csv`) and app catalog (`know
 
 Location and package name of the bundled [oculus-wireless-adb](https://github.com/thedroidgeek/oculus-wireless-adb) APK that VRHM can install on a headset to enable ADB over WiFi without a cable.
 
+| Key | Default | Description |
+|---|---|---|
+| `adbAutoEnableFolder` | `ADB Wireless activator` | Folder under `sources\` holding the ADB auto-enable app APK. Falls back to `adbWirelessActivatorFolder` when absent |
+| `adbAutoEnableApk` | `eu.project_simple.adbautoenable-3.0.0.apk` | APK file name installed by "Install ADB auto-enable app" (web Manage New Devices, console Add menu option 9). It restores Wireless debugging at every headset boot |
+| `adbAutoEnablePackageName` | `eu.project_simple.adbautoenable` | Android package name, used to detect whether the app is already installed on the headset |
+
 ### `Logging`
 
 | Key | Default | Description |
@@ -76,9 +82,9 @@ All thresholds and switches of the automatic quality mitigation — explained in
 |---|---|---|
 | `folder` | `scrcpy\scrcpy-win64-v...` | scrcpy/ADB binaries folder inside `sources\` (the scrcpy release bundles `adb.exe`, so this always holds the same value as `scrcpy.folder`) |
 | `adbPort_default` | `5555` | Classic WiFi ADB (tcpip) port, 1-65535 (an invalid value falls back to 5555) |
-| `wifi_classic_enabled` | `true` | Search for headsets on classic WiFi ADB (`adb tcpip`). If both WiFi modes are disabled, classic is forced back on with a warning |
-| `wifi_tls_enabled` | `true` | Search for headsets advertising ADB over TLS (Wireless debugging, random port found through mDNS) |
-| `wifi_preferred_mode` | `classic` | `classic` or `tls`. The other mode is the automatic fallback; a headset reachable only in the other mode is moved to the preferred one. A preferred mode that is disabled yields to the other one. The three `wifi_*` keys apply on the next monitor cycle, no restart (see ADR-0034) |
+| `wifi_classic_enabled` | `true` | Search for headsets on classic WiFi ADB (`adb tcpip`). If both WiFi modes are disabled, classic is forced back on with a warning. Also controls the background LAN discovery: when off, the port sweep does not run. Without it a headset on another subnet or VLAN is not found by discovery |
+| `wifi_tls_enabled` | `true` | Search for headsets advertising ADB over TLS (Wireless debugging, random port found through mDNS). Also controls the background LAN discovery: when off, mDNS is not queried and no TLS endpoint is published. mDNS only crosses ONE layer-2 segment, so a headset on another VLAN is found by IP only, in classic mode. A TLS headset this PC was never authorised for (USB authorisation once) is skipped, not reported as an error |
+| `wifi_preferred_mode` | `auto` | `auto` (no preference), `classic` or `tls`. **auto**: each headset is reached in whatever mode answers, classic first when both do, and nothing is ever switched. **classic** / **tls**: a headset reachable only in the other mode is switched to the preferred one (`adb tcpip <adbPort_default>` over the TLS session, or Wireless debugging turned on over classic); screen casting and every ADB request then use it, the other mode staying the automatic fallback. A preferred mode that cannot be enabled on a headset is given up after 3 attempts (one warning, shown on the DIAG page) until the preference changes, the headset reboots or the app restarts. A running capture follows `scrcpy.usb_switch_mode` (`stable`: never while recording). With only one mode enabled there is nothing to prefer. The three `wifi_*` keys apply on the next monitor cycle, no restart; a change re-checks every headset at once (ADR-0034, ADR-0037) |
 | `prefer_usb` | `true` | When a known headset is cabled to this PC, use USB for every ADB call and for the scrcpy capture, and fall back to WiFi when the cable drops. `false` keeps everything on WiFi. Takes effect after an application restart |
 
 Each scrcpy version lives in its own folder under `sources\scrcpy\`, so several can coexist; this key selects the active one. Switch versions from the web UI (Configuration -> Advanced) rather than editing it by hand.

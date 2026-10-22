@@ -1478,7 +1478,35 @@ function Get-HeadsetDiagSection {
         }
         'health'   { $d = Get-HeadsetDiagHealth   -Device $device; $res.data = $d; $res.ok = [bool]$d.Ok; $res.error = $d.Error }
         'wireless' { $d = Get-HeadsetDiagWireless -Device $device; $res.data = $d; $res.ok = [bool]$d.Ok; $res.error = $d.Error }
-        'tls'      { $d = Get-HeadsetAdbTlsStatus -Device $device -HeadsetIp ([string]$Headset.IPAddress); $res.data = $d; $res.ok = [bool]$d.Ok; $res.error = $d.Error }
+        'tls'      {
+            $d = Get-HeadsetAdbTlsStatus -Device $device -HeadsetIp ([string]$Headset.IPAddress)
+            # The WiFi ADB mode the monitor sees answering now (live status, S10-5), and the preferred one.
+            $liveMode = '-'
+            try {
+                $live = @(Invoke-DbQuery -Name 'status.get' -Parameters @{ headset_id = [int]$Headset.ID }) | Select-Object -First 1
+                if ($live -and $live.AdbWifiMode) { $liveMode = [string]$live.AdbWifiMode }
+            } catch { }
+            # '' = no preference (ADR-0037). SwitchState: why VRMonitor left this headset on its
+            # fallback mode (published by Update-AdbWifiModeState), $null when nothing to report.
+            $pref = Get-AdbWifiPreferredMode
+            $switchState = $null
+            if ($Headset.SerialNumber -and (Get-Command Get-AdbWifiModeSwitchStatus -ErrorAction SilentlyContinue)) {
+                $switchState = Get-AdbWifiModeSwitchStatus -Serial ([string]$Headset.SerialNumber).Trim() -Published
+            }
+            $d | Add-Member -NotePropertyName SwitchState -NotePropertyValue $switchState -Force
+            $d | Add-Member -NotePropertyName AdbWifiMode -NotePropertyValue $liveMode -Force
+            $aeInstalled = $null
+            try {
+                $aePkg = [string]$global:ADBAutoEnablePackageName
+                if ($aePkg -match '^[A-Za-z0-9._]+$') {
+                    $aeRes = Invoke-HeadsetDiagAction -Device $device -Script ("pm list packages | grep -e {0}; true" -f $aePkg)
+                    if ($aeRes.Ok) { $aeInstalled = [bool]@($aeRes.Output -split "`r?`n" | Where-Object { $_.Trim() -eq "package:$aePkg" }).Count }
+                }
+            } catch { }
+            $d | Add-Member -NotePropertyName AutoEnableInstalled -NotePropertyValue $aeInstalled -Force
+            $d | Add-Member -NotePropertyName PreferredWifiMode -NotePropertyValue ([string]$pref) -Force
+            $res.data = $d; $res.ok = [bool]$d.Ok; $res.error = $d.Error
+        }
     }
     # Read it AGAIN: if the cable dropped mid-call, Invoke-AdbCmd retried over WiFi and updated this
     # device object, so this is the transport that really answered, not the one chosen at the start.
@@ -1522,7 +1550,7 @@ function Invoke-HeadsetDiagActionByName {
     $arg = { param($n) if ($null -eq $Arguments) { return $null }; if ($Arguments -is [System.Collections.IDictionary]) { return $Arguments[$n] }; $p = $Arguments.PSObject.Properties[$n]; if ($p) { return $p.Value } else { return $null } }
     $known = @('bluetooth_on','bluetooth_off','bluetooth_settings','sync_clock','reset_dns','updater_disable','updater_enable','updater_open_settings',
                'app_enable','app_disable','player_message','send_text','recover_wake','recover_home','recover_restart_shell',
-               'recover_restart_systemux','cable_test','wifi_speed_test','tls_enable','tls_disable','tls_connect','command','wifi_scan','wifi_switch')
+               'recover_restart_systemux','cable_test','wifi_speed_test','tls_enable','tls_disable','tls_connect','command','wifi_scan','wifi_switch','autoenable_install','autoenable_uninstall')
     if ($known -notcontains $Action) { $res.message = ('Unknown action: ' + $Action); return $res }
 
     Write-Log ("DIAG action '{0}' on headset '{1}'" -f $Action, $Headset.Name) -Level INFO
@@ -1564,6 +1592,11 @@ function Invoke-HeadsetDiagActionByName {
             'recover_home'             { Invoke-HeadsetRecovery -Device $device -Action 'Home' }
             'recover_restart_shell'    { Invoke-HeadsetRecovery -Device $device -Action 'RestartShell' }
             'recover_restart_systemux' { Invoke-HeadsetRecovery -Device $device -Action 'RestartSystemUX' }
+            'autoenable_install'       {
+                # adb tcpip (last step, classic mode) re-enumerates USB: hold the claim like the other USB-mutating routes.
+                try { Set-UsbBusy -Seconds 180; Install-AdbAutoEnableApk -Device $device } finally { Set-UsbBusy -Seconds 10 }
+            }
+            'autoenable_uninstall'     { Uninstall-AdbAutoEnableApk -Device $device }
             'tls_enable'               { Enable-HeadsetAdbTls -Device $device }
             'tls_disable'              { Disable-HeadsetAdbTls -Device $device }
             'tls_connect'              { $p = 0; [void][int]::TryParse([string](& $arg 'port'), [ref]$p); Connect-HeadsetAdbTls -IP ([string]$Headset.IPAddress) -Port $p }

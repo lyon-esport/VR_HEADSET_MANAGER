@@ -198,6 +198,7 @@ function Get-UsbDeviceSnapshot {
     #>
     param(
         [string]$PackageName = $global:ADBWirelessActivatorPackageName,
+        [string]$AutoEnablePackageName = $global:ADBAutoEnablePackageName,
         [int]$AdbPort        = $global:adbPort_default,
         [string]$adb         = $global:adbPath,
         $Presence            = $null
@@ -256,10 +257,17 @@ function Get-UsbDeviceSnapshot {
         $wifiAdbOpen = $false
         if ($ip) { $wifiAdbOpen = ($Presence.WifiTransports -contains "${ip}:${AdbPort}") }
 
+        # ONE pm list call answers both app checks (WiFi ADB app + ADB auto-enable app, S10-6).
         $apkInstalled = $false
-        if ($PackageName) {
-            $pmResult = Invoke-AdbCmd -Device $usbDevice -Command "shell pm list packages $PackageName" -adb $adb -SilentOnFail
-            $apkInstalled = $pmResult -ne $false -and [bool]($pmResult | Where-Object { $_ -match "package:$([regex]::Escape($PackageName))" })
+        $autoEnableInstalled = $false
+        $pkgNames = @(@($PackageName, $AutoEnablePackageName) | Where-Object { $_ -and $_ -match '^[A-Za-z0-9._]+$' })
+        if ($pkgNames.Count -gt 0) {
+            $grepArgs = ($pkgNames | ForEach-Object { "-e $_" }) -join ' '
+            $pmResult = Invoke-AdbCmd -Device $usbDevice -Command "pm list packages | grep $grepArgs; true" -ShellScript -adb $adb -SilentOnFail
+            if ($pmResult -ne $false) {
+                if ($PackageName) { $apkInstalled = [bool](@($pmResult) | Where-Object { $_ -match "^package:$([regex]::Escape($PackageName))\s*$" }) }
+                if ($AutoEnablePackageName) { $autoEnableInstalled = [bool](@($pmResult) | Where-Object { $_ -match "^package:$([regex]::Escape($AutoEnablePackageName))\s*$" }) }
+            }
         }
 
         return [PSCustomObject]@{
@@ -272,6 +280,7 @@ function Get-UsbDeviceSnapshot {
             WiFiSSID       = $ssid
             WifiAdbOpen    = $wifiAdbOpen
             ApkInstalled   = $apkInstalled
+            AutoEnableInstalled = $autoEnableInstalled
             UsbSpeed       = (Get-UsbDeviceSpeed -Serial $deviceId)
             Port           = $null
             ReadAt         = (Get-Date)
@@ -695,6 +704,7 @@ function Update-UsbWatchState {
             WiFiSSID       = ''
             WifiAdbOpen    = $result.WifiAdbUp
             ApkInstalled   = $false
+            AutoEnableInstalled = $false
             UsbSpeed       = $null
             Port           = $null
             Partial        = $true      # a later tick replaces this with a full read

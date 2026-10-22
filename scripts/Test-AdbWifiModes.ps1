@@ -297,6 +297,261 @@ Assert-Case 'id: empty is not USB' (-not (Test-AdbDeviceIdIsUsb ''))
 $cl = 'scrcpy.exe -s 192.168.1.242:38987 --crop=1:1:0:0 --window-title=Q2'
 Assert-Case 'scrcpy: -s ip:<TLS port> matches the headset' (Test-ScrcpyCommandLineTarget -CommandLine $cl -IPAddress '192.168.1.242')
 Assert-Case 'scrcpy: TLS port does not match a prefix IP' (-not (Test-ScrcpyCommandLineTarget -CommandLine $cl -IPAddress '192.168.1.24'))
+# S10-4: sweep merge (same serial found in both modes -> one result, first = classic wins).
+. (Join-Path $root 'modules\headsets_discovery.ps1')
+$m = @(Merge-DiscoveredHeadsetHits -Hits @(
+    @{ SerialNumber = 'A'; Mode = 'Classic'; IPAddress = '10.0.0.1' },
+    @{ SerialNumber = 'B'; Mode = 'TLS'; IPAddress = '10.0.0.2' },
+    @{ SerialNumber = 'A'; Mode = 'TLS'; IPAddress = '10.0.0.1' },
+    @{ SerialNumber = ''; Mode = 'TLS' }))
+Assert-Case 'sweep merge: same serial in both modes -> one result' ($m.Count -eq 2)
+Assert-Case 'sweep merge: classic hit kept for the duplicated serial' (($m | Where-Object { $_.SerialNumber -eq 'A' }).Mode -eq 'Classic')
+Assert-Case 'sweep merge: TLS-only serial kept with Mode TLS' (($m | Where-Object { $_.SerialNumber -eq 'B' }).Mode -eq 'TLS')
+Assert-Case 'sweep merge: empty input -> empty' (@(Merge-DiscoveredHeadsetHits -Hits @()).Count -eq 0)
+
+# ------------------------------------------------------------------ S10-5: switch to the preferred mode
+$script:mdnsText = @(); $script:mdnsOk = $true; $script:adbCalls = @(); $script:checks = @(); $script:identity = @(); $script:tlsEnables = @()
+$script:propSerial = '1WMHH8242N0366'
+function Invoke-Adb { param([string[]]$Arguments, [string]$Adb, [int]$TimeoutSeconds = 15)
+    $script:adbCalls += ($Arguments -join ' ')
+    if ($Arguments[0] -eq 'mdns') { return @{ ExitCode = $(if ($script:mdnsOk) { 0 } else { 1 }); StdOut = @($script:mdnsText); StdErr = @(); Ok = $script:mdnsOk } }
+    return @{ ExitCode = 0; StdOut = @(); StdErr = @(); Ok = $true }
+}
+function Get-AdbPropBatch { param($Device, [string[]]$Properties, [switch]$IncludeWlanIp, [int]$TimeoutSeconds = 10, [string]$adb) return @{ 'ro.serialno' = $script:propSerial } }
+function Enable-HeadsetAdbTls { param($Device) $script:tlsEnables += $Device.DeviceId; return [PSCustomObject]@{ Ok = $true; Output = ''; Error = $null } }
+function Request-ScrcpyCheck { param([int[]]$HeadsetId, [switch]$All, [switch]$NoMark, [string]$Reason) $script:checks += ('{0}|{1}' -f ($HeadsetId -join ','), [bool]$NoMark); return $HeadsetId }
+function Set-HeadsetIdentity { param($SerialNumber, $IPAddress, $Source) $script:identity += ('{0}|{1}' -f $SerialNumber, $IPAddress) }
+function Reset-SwitchState {
+    Reset-TlsState
+    $script:AdbWifiSwitchMemo = $null; $script:AdbTlsPolledAt = $null; $script:AdbTlsFastUntil = $null; $script:AdbTlsMisses = $null; $script:AdbWifiCaptureState = $null
+    $script:AdbWifiPrefSig = $null; $script:AdbWifiSwitchStateLast = $null
+    $script:adbCalls = @(); $script:checks = @(); $script:identity = @(); $script:tlsEnables = @(); $script:logLines = @()
+    $script:usbSet = @(); $script:openPorts = @(); $script:upEndpoints = @(); $script:mdnsOk = $true
+}
+$mdnsQ2 = { param($port) @('List of discovered mdns services', ('adb-1WMHH8242N0366-f4JCQ1' + "`t" + '_adb-tls-connect._tcp' + "`t" + '192.168.1.242:' + $port)) }
+$infoTls     = @{ '192.168.1.242' = [PSCustomObject]@{ ID = 2; AdbWifiMode = 'TLS';     SCRCPY = '-' } }
+$infoClassic = @{ '192.168.1.242' = [PSCustomObject]@{ ID = 2; AdbWifiMode = 'Classic'; SCRCPY = '-' } }
+$t0 = [datetime]::UtcNow
+$global:scrcpyUsbSwitchMode = 'stable'; $global:scrcpyUsbSwitchStableSec = 10; $global:ADB_prefer_usb = $true
+
+# Pure decision table.
+Set-Modes $true $true 'classic'
+$dd = { param($info, $o) $p = @{ Headset = $q2Row; Info = $info }; foreach ($k in $o.Keys) { $p[$k] = $o[$k] }; Get-AdbWifiModeSwitchDecision @p }
+Assert-Case 'decide: TLS, classic preferred -> ToClassic' ((& $dd $infoTls['192.168.1.242'] @{}).Action -eq 'ToClassic')
+Assert-Case 'decide: already on classic -> none' ((& $dd $infoClassic['192.168.1.242'] @{}).Action -eq 'none')
+Assert-Case 'decide: not reachable over WiFi -> none' ((& $dd ([PSCustomObject]@{ AdbWifiMode = '-' }) @{}).Action -eq 'none')
+Assert-Case 'decide: cabled + prefer_usb -> none' ((& $dd $infoTls['192.168.1.242'] @{ Cabled = $true }).Action -eq 'none')
+$global:ADB_prefer_usb = $false
+Assert-Case 'decide: cabled without prefer_usb -> ToClassic' ((& $dd $infoTls['192.168.1.242'] @{ Cabled = $true }).Action -eq 'ToClassic')
+$global:ADB_prefer_usb = $true
+Assert-Case 'decide: USB busy -> none' ((& $dd $infoTls['192.168.1.242'] @{ UsbBusy = $true }).Action -eq 'none')
+Assert-Case 'decide: benchmark -> none' ((& $dd $infoTls['192.168.1.242'] @{ Benchmark = $true }).Action -eq 'none')
+Assert-Case 'decide: shutting down -> none' ((& $dd $infoTls['192.168.1.242'] @{ ShuttingDown = $true }).Action -eq 'none')
+$cap = & $dd $infoTls['192.168.1.242'] @{ Capturing = $true; SwitchMode = 'stable' }
+Assert-Case 'decide: capturing + stable -> deferred' ($cap.Action -eq 'none' -and $cap.Deferred)
+Assert-Case 'decide: capturing + next_start -> deferred' ((& $dd $infoTls['192.168.1.242'] @{ Capturing = $true; SwitchMode = 'next_start' }).Action -eq 'none')
+Assert-Case 'decide: capturing + immediate -> ToClassic' ((& $dd $infoTls['192.168.1.242'] @{ Capturing = $true; SwitchMode = 'immediate' }).Action -eq 'ToClassic')
+Assert-Case 'decide: backoff not over -> none' ((& $dd $infoTls['192.168.1.242'] @{ Memo = @{ NextAt = $t0.AddSeconds(30) }; Now = $t0 }).Action -eq 'none')
+Assert-Case 'decide: no serial -> none' ((Get-AdbWifiModeSwitchDecision -Headset ([PSCustomObject]@{ ID = 9; Name = 'X'; IPAddress = '10.0.0.9'; SerialNumber = '-' }) -Info $infoTls['192.168.1.242']).Action -eq 'none')
+Set-Modes $true $false 'classic'
+Assert-Case 'decide: only one mode enabled -> none' ((& $dd $infoTls['192.168.1.242'] @{}).Action -eq 'none')
+Set-Modes $true $true 'tls'
+Assert-Case 'decide: classic, TLS preferred -> ToTLS' ((& $dd $infoClassic['192.168.1.242'] @{}).Action -eq 'ToTLS')
+Assert-Case 'decide: capturing does not block ToTLS' ((& $dd $infoClassic['192.168.1.242'] @{ Capturing = $true }).Action -eq 'ToTLS')
+
+# TLS -> classic: issue on one tick, confirm on the next, TLS re-published on its new port.
+Set-Modes $true $true 'classic'
+Reset-SwitchState
+$script:mdnsText = & $mdnsQ2 38987; $script:upEndpoints = @('192.168.1.242:38987')
+$r = Update-AdbWifiModeState -KnownHeadsets @($q2Row) -HeadsetInfo $infoTls -ScrcpyPids @{} -Now $t0
+Assert-Case 'switch: TLS endpoint published by the refresh' ((Find-AdbTlsEndpointBySerial -Serial '1WMHH8242N0366' -MaxAgeSec 0).Port -eq 38987)
+Assert-Case 'switch: tcpip issued over the TLS session' ($r.Issued -contains 'Q2' -and $script:adbCalls -contains '-s 192.168.1.242:38987 tcpip 5555') ($script:adbCalls -join ' ; ')
+Assert-Case 'switch: no INFO yet (not confirmed)' (@($script:logLines | Where-Object { $_ -like 'INFO|Switched*' }).Count -eq 0)
+$script:mdnsText = & $mdnsQ2 34941; $script:openPorts = @('192.168.1.242:5555'); $script:upEndpoints = @('192.168.1.242:5555', '192.168.1.242:34941')
+$r = Update-AdbWifiModeState -KnownHeadsets @($q2Row) -HeadsetInfo $infoTls -ScrcpyPids @{} -Now $t0.AddSeconds(2)
+Assert-Case 'switch: confirmed once classic answers with the right serial' ($r.Switched -contains 'Q2')
+Assert-Case 'switch: one INFO line' (@($script:logLines | Where-Object { $_ -like 'INFO|Switched Q2 from TLS to classic*' }).Count -eq 1) ($script:logLines -join ' / ')
+Assert-Case 'switch: watchdog nudged with -NoMark' ($script:checks -contains '2|True')
+Assert-Case 'switch: fast refresh re-published the NEW TLS port' ((Find-AdbTlsEndpointBySerial -Serial '1WMHH8242N0366' -MaxAgeSec 0).Port -eq 34941)
+Assert-Case 'switch: registry address unchanged -> no identity write' ($script:identity.Count -eq 0)
+$script:adbCalls = @()
+$r = Update-AdbWifiModeState -KnownHeadsets @($q2Row) -HeadsetInfo $infoClassic -ScrcpyPids @{} -Now $t0.AddSeconds(4)
+Assert-Case 'switch: now on classic -> nothing issued (no flapping)' ($r.Issued.Count -eq 0 -and -not ($script:adbCalls -match 'tcpip'))
+
+# Capturing headset: stable defers (one DEBUG line), immediate issues.
+Reset-SwitchState
+$script:mdnsText = & $mdnsQ2 38987; $script:upEndpoints = @('192.168.1.242:38987')
+$r = Update-AdbWifiModeState -KnownHeadsets @($q2Row) -HeadsetInfo $infoTls -ScrcpyPids @{ '2' = 4242 } -Now $t0
+$r2 = Update-AdbWifiModeState -KnownHeadsets @($q2Row) -HeadsetInfo $infoTls -ScrcpyPids @{ '2' = 4242 } -Now $t0.AddSeconds(6)
+Assert-Case 'capture + stable: tcpip not issued' ($r.Issued.Count -eq 0 -and $r2.Issued.Count -eq 0 -and -not ($script:adbCalls -match 'tcpip'))
+Assert-Case 'capture + stable: one DEBUG line only' (@($script:logLines | Where-Object { $_ -like 'DEBUG|*waits until the capture stops*' }).Count -eq 1)
+$global:scrcpyUsbSwitchMode = 'immediate'
+$r = Update-AdbWifiModeState -KnownHeadsets @($q2Row) -HeadsetInfo $infoTls -ScrcpyPids @{ '2' = 4242 } -Now $t0.AddSeconds(12)
+Assert-Case 'capture + immediate: tcpip issued' ($r.Issued -contains 'Q2')
+$global:scrcpyUsbSwitchMode = 'stable'
+
+# Not confirmed in time -> failure; retry after 60 s; after 3 failures the preferred mode is given
+# up (ONE WARNING) until the preference changes or the headset drops off WiFi ADB and comes back.
+Reset-SwitchState
+$script:mdnsText = & $mdnsQ2 38987; $script:upEndpoints = @('192.168.1.242:38987')
+[void](Update-AdbWifiModeState -KnownHeadsets @($q2Row) -HeadsetInfo $infoTls -Now $t0)
+$r = Update-AdbWifiModeState -KnownHeadsets @($q2Row) -HeadsetInfo $infoTls -Now $t0.AddSeconds(16)
+Assert-Case 'give-up: not confirmed within 15 s -> failed' ($r.Failed -contains 'Q2')
+$r = Update-AdbWifiModeState -KnownHeadsets @($q2Row) -HeadsetInfo $infoTls -Now $t0.AddSeconds(40)
+Assert-Case 'give-up: no retry before 60 s' ($r.Issued.Count -eq 0)
+$r = Update-AdbWifiModeState -KnownHeadsets @($q2Row) -HeadsetInfo $infoTls -Now $t0.AddSeconds(80)
+Assert-Case 'give-up: retried after 60 s' ($r.Issued -contains 'Q2')
+[void](Update-AdbWifiModeState -KnownHeadsets @($q2Row) -HeadsetInfo $infoTls -Now $t0.AddSeconds(100))
+Assert-Case 'give-up: no WARNING after two failures' (@($script:logLines | Where-Object { $_ -like 'WARNING|*' }).Count -eq 0) ($script:logLines -join ' / ')
+[void](Update-AdbWifiModeState -KnownHeadsets @($q2Row) -HeadsetInfo $infoTls -Now $t0.AddSeconds(170))
+[void](Update-AdbWifiModeState -KnownHeadsets @($q2Row) -HeadsetInfo $infoTls -Now $t0.AddSeconds(190))
+$m = $script:AdbWifiSwitchMemo['1WMHH8242N0366']
+Assert-Case 'give-up: third failure -> given up, ONE WARNING' ($m.Unavailable -and @($script:logLines | Where-Object { $_ -like 'WARNING|*cannot be enabled on Q2*' }).Count -eq 1) ($script:logLines -join ' / ')
+$r = Update-AdbWifiModeState -KnownHeadsets @($q2Row) -HeadsetInfo $infoTls -Now $t0.AddSeconds(5000)
+Assert-Case 'give-up: no more attempts, even much later' ($r.Issued.Count -eq 0)
+$st = Get-AdbWifiModeSwitchStatus -Serial '1WMHH8242N0366' -Published
+Assert-Case 'give-up: state published for DIAG' ($st -and $st.Unavailable -and $st.Reason -eq 'not confirmed in time')
+# Reboot edge: off WiFi ADB, then back -> tried again.
+$infoDown = @{ '192.168.1.242' = [PSCustomObject]@{ ID = 2; AdbWifiMode = '-'; SCRCPY = '-' } }
+[void](Update-AdbWifiModeState -KnownHeadsets @($q2Row) -HeadsetInfo $infoDown -Now $t0.AddSeconds(5010))
+$r = Update-AdbWifiModeState -KnownHeadsets @($q2Row) -HeadsetInfo $infoTls -Now $t0.AddSeconds(5020)
+Assert-Case 'give-up: back on WiFi ADB after a drop -> tried again' ($r.Issued -contains 'Q2' -and -not $script:AdbWifiSwitchMemo['1WMHH8242N0366'].Unavailable)
+$script:openPorts = @('192.168.1.242:5555'); $script:upEndpoints += '192.168.1.242:5555'
+$r = Update-AdbWifiModeState -KnownHeadsets @($q2Row) -HeadsetInfo $infoTls -Now $t0.AddSeconds(5022)
+Assert-Case 'give-up: success resets the failures' ($r.Switched -contains 'Q2' -and $script:AdbWifiSwitchMemo['1WMHH8242N0366'].Failures -eq 0)
+Assert-Case 'give-up: published state cleared after success' ($null -eq (Get-AdbWifiModeSwitchStatus -Serial '1WMHH8242N0366' -Published))
+Reset-SwitchState
+[void](Update-AdbWifiModeState -KnownHeadsets @($q2Row) -HeadsetInfo $infoTls -Now $t0)
+Assert-Case 'switch: no TLS session to issue over -> failure, nothing sent' (-not ($script:adbCalls -match 'tcpip') -and $script:AdbWifiSwitchMemo['1WMHH8242N0366'].Failures -eq 1)
+Reset-SwitchState
+$script:mdnsText = & $mdnsQ2 38987; $script:upEndpoints = @('192.168.1.242:38987'); $script:usbSet = @([PSCustomObject]@{ Serial = '1WMHH8242N0366'; State = 'device'; Since = 'x' })
+$r = Update-AdbWifiModeState -KnownHeadsets @($q2Row) -HeadsetInfo $infoTls -Now $t0
+Assert-Case 'switch: cabled headset left to USB' ($r.Issued.Count -eq 0)
+
+# classic -> TLS.
+Set-Modes $true $true 'tls'
+Reset-SwitchState
+$script:upEndpoints = @('192.168.1.242:5555'); $script:mdnsText = @('List of discovered mdns services')
+$r = Update-AdbWifiModeState -KnownHeadsets @($q2Row) -HeadsetInfo $infoClassic -Now $t0
+Assert-Case 'to TLS: Wireless debugging enabled over classic' ($r.Issued -contains 'Q2' -and $script:tlsEnables -contains '192.168.1.242:5555')
+$script:mdnsText = & $mdnsQ2 40001; $script:openPorts = @('192.168.1.242:40001'); $script:upEndpoints += '192.168.1.242:40001'
+$r = Update-AdbWifiModeState -KnownHeadsets @($q2Row) -HeadsetInfo $infoClassic -Now $t0.AddSeconds(2)
+Assert-Case 'to TLS: confirmed once advertised and connected' ($r.Switched -contains 'Q2')
+Assert-Case 'to TLS: INFO line' (@($script:logLines | Where-Object { $_ -like 'INFO|Switched Q2 from classic to TLS*' }).Count -eq 1)
+Set-Modes $true $true 'classic'
+
+# TLS refresh: throttled, and a serial is dropped only after two missed polls.
+Reset-SwitchState
+$script:mdnsText = & $mdnsQ2 38987
+[void](Update-AdbTlsEndpointsFromMdns -Now $t0)
+$script:adbCalls = @()
+[void](Update-AdbTlsEndpointsFromMdns -Now $t0.AddSeconds(2))
+Assert-Case 'refresh: throttled to every 5 s' ($script:adbCalls.Count -eq 0)
+$script:mdnsText = @('List of discovered mdns services')
+[void](Update-AdbTlsEndpointsFromMdns -Now $t0.AddSeconds(6))
+Assert-Case 'refresh: one miss keeps the endpoint' ($null -ne (Find-AdbTlsEndpointBySerial -Serial '1WMHH8242N0366' -MaxAgeSec 0))
+$script:mdnsOk = $false
+[void](Update-AdbTlsEndpointsFromMdns -Force -Now $t0.AddSeconds(12))
+Assert-Case 'refresh: a failed adb call is not a miss' ($null -ne (Find-AdbTlsEndpointBySerial -Serial '1WMHH8242N0366' -MaxAgeSec 0))
+$script:mdnsOk = $true
+[void](Update-AdbTlsEndpointsFromMdns -Force -Now $t0.AddSeconds(18))
+Assert-Case 'refresh: second miss drops it' ($null -eq (Find-AdbTlsEndpointBySerial -Serial '1WMHH8242N0366' -MaxAgeSec 0))
+$global:ADB_wifi_tls_enabled = $false; $script:adbCalls = @()
+[void](Update-AdbTlsEndpointsFromMdns -Force -Now $t0.AddSeconds(30))
+Assert-Case 'refresh: TLS disabled -> no adb mdns' ($script:adbCalls.Count -eq 0)
+Set-Modes $true $true 'classic'
+
+# Running capture vs its WiFi mode.
+Reset-SwitchState
+$script:kv['adb_tls_endpoints'] = ConvertTo-Json -Compress -InputObject @([PSCustomObject]@{ Serial = '1WMHH8242N0366'; Ip = '192.168.1.242'; Port = 34941; Seen = [datetime]::UtcNow.ToString('o') })
+$c = Get-AdbWifiCaptureModeDecision -Headset $q2Row -CurrentWifiMode TLS -CurrentEndpoint '192.168.1.242:38987' -LiveWifiMode Classic -SwitchMode next_start
+Assert-Case 'capture: TLS port moved (adbd restarted) -> restart at once' ($c.Restart -and $c.Dead)
+$script:openPorts = @()
+$c1 = Get-AdbWifiCaptureModeDecision -Headset $q2Row -CurrentWifiMode Classic -CurrentEndpoint '192.168.1.242:5555' -LiveWifiMode Classic
+$c2 = Get-AdbWifiCaptureModeDecision -Headset $q2Row -CurrentWifiMode Classic -CurrentEndpoint '192.168.1.242:5555' -LiveWifiMode Classic
+Assert-Case 'capture: one closed probe is not enough, two are' (-not $c1.Restart -and $c2.Restart -and $c2.Dead)
+$script:openPorts = @('192.168.1.242:34941', '192.168.1.242:5555')
+$ep = '192.168.1.242:34941'
+Assert-Case 'capture: on fallback, immediate -> restart' ((Get-AdbWifiCaptureModeDecision -Headset $q2Row -CurrentWifiMode TLS -CurrentEndpoint $ep -LiveWifiMode Classic -SwitchMode immediate).Restart)
+Assert-Case 'capture: on fallback, next_start -> never' (-not (Get-AdbWifiCaptureModeDecision -Headset $q2Row -CurrentWifiMode TLS -CurrentEndpoint $ep -LiveWifiMode Classic -SwitchMode next_start).Restart)
+$script:AdbWifiCaptureState = $null
+Assert-Case 'capture: stable, recording -> no restart' (-not (Get-AdbWifiCaptureModeDecision -Headset $q2Row -CurrentWifiMode TLS -CurrentEndpoint $ep -LiveWifiMode Classic -SwitchMode stable -StableSec 10 -Recording $true -Now $t0).Restart)
+Assert-Case 'capture: stable, before stable_sec -> no restart' (-not (Get-AdbWifiCaptureModeDecision -Headset $q2Row -CurrentWifiMode TLS -CurrentEndpoint $ep -LiveWifiMode Classic -SwitchMode stable -StableSec 10 -Now $t0.AddSeconds(5)).Restart)
+Assert-Case 'capture: stable, after stable_sec -> restart' ((Get-AdbWifiCaptureModeDecision -Headset $q2Row -CurrentWifiMode TLS -CurrentEndpoint $ep -LiveWifiMode Classic -SwitchMode stable -StableSec 10 -Now $t0.AddSeconds(11)).Restart)
+Assert-Case 'capture: same mode -> no restart' (-not (Get-AdbWifiCaptureModeDecision -Headset $q2Row -CurrentWifiMode Classic -CurrentEndpoint '192.168.1.242:5555' -LiveWifiMode Classic -SwitchMode immediate).Restart)
+
+# Regression (2026-10-22, dev app): preferred changed to TLS while the app ran; the poll runspace
+# kept classic first, so the live status said Classic while the capture ran on the preferred TLS.
+# The capture was restarted every ~20 s and the switch to TLS re-issued every ~40 s.
+Set-Modes $true $true 'tls'
+$script:AdbWifiCaptureState = $null
+Assert-Case 'loop: capture on preferred TLS, stale live Classic -> no restart' (-not (Get-AdbWifiCaptureModeDecision -Headset $q2Row -CurrentWifiMode TLS -CurrentEndpoint $ep -LiveWifiMode Classic -SwitchMode immediate).Restart)
+Reset-SwitchState
+$script:mdnsText = & $mdnsQ2 40001; $script:openPorts = @('192.168.1.242:40001', '192.168.1.242:5555'); $script:upEndpoints = @('192.168.1.242:5555', '192.168.1.242:40001')
+$r = Update-AdbWifiModeState -KnownHeadsets @($q2Row) -HeadsetInfo $infoClassic -Now $t0
+Assert-Case 'loop: TLS already answering, stale live Classic -> nothing issued' ($r.Issued.Count -eq 0 -and $script:tlsEnables.Count -eq 0)
+Set-Modes $true $true 'classic'
+Reset-SwitchState
+$script:mdnsText = & $mdnsQ2 38987; $script:openPorts = @('192.168.1.242:5555'); $script:upEndpoints = @('192.168.1.242:38987', '192.168.1.242:5555')
+$r = Update-AdbWifiModeState -KnownHeadsets @($q2Row) -HeadsetInfo $infoTls -ScrcpyPids @{} -Now $t0
+Assert-Case 'loop: classic already answering, stale live TLS -> no tcpip' ($r.Issued.Count -eq 0 -and -not ($script:adbCalls -match 'tcpip'))
+
+# ------------------------------------------------------------------ ADR-0037: 'auto' = no preference
+Set-Modes $true $true 'auto'
+Assert-Case 'auto: order is Classic, TLS' ((@(Get-AdbWifiModeOrder) -join ',') -eq 'Classic,TLS')
+Assert-Case 'auto: no preferred mode' ((Get-AdbWifiPreferredMode) -eq '')
+Set-Modes $true $true 'tls';     Assert-Case 'preferred: tls -> TLS' ((Get-AdbWifiPreferredMode) -eq 'TLS')
+Set-Modes $true $true 'classic'; Assert-Case 'preferred: classic -> Classic' ((Get-AdbWifiPreferredMode) -eq 'Classic')
+Set-Modes $true $false 'classic'; Assert-Case 'preferred: one mode enabled -> none' ((Get-AdbWifiPreferredMode) -eq '')
+Remove-Variable -Name ADB_wifi_classic_enabled, ADB_wifi_tls_enabled, ADB_wifi_preferred_mode, ADB_wifi_effective_preferred -Scope Global -ErrorAction SilentlyContinue
+Assert-Case 'preferred: no globals -> none' ((Get-AdbWifiPreferredMode) -eq '')
+Set-Modes $true $true 'auto'
+Assert-Case 'auto: TLS headset -> no switch' ((Get-AdbWifiModeSwitchDecision -Headset $q2Row -Info $infoTls['192.168.1.242']).Action -eq 'none')
+Reset-SwitchState
+$script:mdnsText = & $mdnsQ2 38987; $script:upEndpoints = @('192.168.1.242:38987')
+$r = Update-AdbWifiModeState -KnownHeadsets @($q2Row) -HeadsetInfo $infoTls -Now $t0
+Assert-Case 'auto: nothing issued, TLS still refreshed' ($r.Issued.Count -eq 0 -and $null -ne (Find-AdbTlsEndpointBySerial -Serial '1WMHH8242N0366' -MaxAgeSec 0))
+$script:AdbWifiCaptureState = $null; $script:openPorts = @('192.168.1.242:38987', '192.168.1.242:5555')
+Assert-Case 'auto: a capture on TLS is not moved' (-not (Get-AdbWifiCaptureModeDecision -Headset $q2Row -CurrentWifiMode TLS -CurrentEndpoint '192.168.1.242:38987' -LiveWifiMode Classic -SwitchMode immediate).Restart)
+$script:openPorts = @()
+$c1 = Get-AdbWifiCaptureModeDecision -Headset $q2Row -CurrentWifiMode TLS -CurrentEndpoint '192.168.1.242:38987' -LiveWifiMode Classic
+$c2 = Get-AdbWifiCaptureModeDecision -Headset $q2Row -CurrentWifiMode TLS -CurrentEndpoint '192.168.1.242:38987' -LiveWifiMode Classic
+Assert-Case 'auto: a dead endpoint still restarts the capture' ($c2.Restart -and $c2.Dead)
+
+# Preference change = trigger: memos reset (a given-up headset is tried again), watchdog nudged.
+Set-Modes $true $true 'classic'
+Reset-SwitchState
+$script:mdnsText = & $mdnsQ2 38987; $script:upEndpoints = @('192.168.1.242:38987')
+[void](Update-AdbWifiModeState -KnownHeadsets @($q2Row) -HeadsetInfo $infoTls -Now $t0)
+$m = Get-AdbWifiSwitchMemo -Serial '1WMHH8242N0366'; $m.Pending = $null; $m.Unavailable = $true; $m.Failures = 3
+$r = Update-AdbWifiModeState -KnownHeadsets @($q2Row) -HeadsetInfo $infoTls -Now $t0.AddSeconds(30)
+Assert-Case 'pref change: none -> given-up headset stays put' ($r.Issued.Count -eq 0 -and -not $r.PreferenceChanged)
+$script:checks = @(); $script:logLines = @()
+Set-Modes $true $true 'tls'
+[void](Update-AdbWifiModeState -KnownHeadsets @($q2Row) -HeadsetInfo $infoTls -Now $t0.AddSeconds(32))
+Set-Modes $true $true 'classic'
+$r = Update-AdbWifiModeState -KnownHeadsets @($q2Row) -HeadsetInfo $infoTls -Now $t0.AddSeconds(34)
+Assert-Case 'pref change: detected and every capture re-checked' ($r.PreferenceChanged -and @($script:checks | Where-Object { $_ -like '*|True' }).Count -ge 1) ($script:checks -join ';')
+Assert-Case 'pref change: given-up headset tried again at once' ($r.Issued -contains 'Q2')
+Assert-Case 'pref change: one INFO line per change' (@($script:logLines | Where-Object { $_ -like 'INFO|WiFi ADB mode settings changed*' }).Count -eq 2) ($script:logLines -join ' / ')
+
+# /api/config/save validation of the ADB section.
+Assert-Case 'config: auto/classic/tls accepted' ((Test-AdbWifiModeConfig -Adb ([PSCustomObject]@{ wifi_preferred_mode = 'AUTO'; wifi_classic_enabled = $true; wifi_tls_enabled = $false; adbPort_default = 5555 })) -eq '')
+Assert-Case 'config: unknown preferred mode refused' ((Test-AdbWifiModeConfig -Adb ([PSCustomObject]@{ wifi_preferred_mode = 'usb' })) -ne '')
+Assert-Case 'config: non-boolean toggle refused' ((Test-AdbWifiModeConfig -Adb ([PSCustomObject]@{ wifi_tls_enabled = 'yes' })) -ne '')
+Assert-Case 'config: bad classic port refused' ((Test-AdbWifiModeConfig -Adb ([PSCustomObject]@{ adbPort_default = 70000 })) -ne '')
+Assert-Case 'config: missing section is valid' ((Test-AdbWifiModeConfig -Adb $null) -eq '')
+
+# Poll memo: a device on the fallback mode is dropped once the preferred mode answers.
+$tlsDev = [PSCustomObject]@{ DeviceId = '192.168.1.242:38987'; ConnectionType = 'WiFi'; IP = '192.168.1.242'; Port = 38987; WifiMode = 'TLS' }
+$script:openPorts = @('192.168.1.242:5555')
+Assert-Case 'memo: fallback device, preferred classic answers -> drop' (Test-AdbWifiPreferredModeBack -Device $tlsDev -Headset $q2Row)
+$script:openPorts = @()
+Assert-Case 'memo: preferred classic closed -> keep' (-not (Test-AdbWifiPreferredModeBack -Device $tlsDev -Headset $q2Row))
+Set-Modes $true $true 'auto'; $script:openPorts = @('192.168.1.242:5555')
+Assert-Case 'memo: no preference -> keep' (-not (Test-AdbWifiPreferredModeBack -Device $tlsDev -Headset $q2Row))
+Set-Modes $true $true 'classic'
+
 Write-Host ''
 Write-Host ("{0} case(s), {1} failed" -f $script:count, $script:fails)
 if ($script:fails -gt 0) { exit 1 } else { exit 0 }

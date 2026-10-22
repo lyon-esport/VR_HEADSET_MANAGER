@@ -7,7 +7,10 @@
     "apk":  {
                 "adbWirelessActivatorFolder":  "ADB Wireless activator",
                 "adbWirelessActivatorApk":  "tdg.oculuswirelessadb-1.3.apk",
-                "adbWirelessActivatorPackageName":  "tdg.oculuswirelessadb"
+                "adbWirelessActivatorPackageName":  "tdg.oculuswirelessadb",
+                "adbAutoEnableFolder":  "ADB Wireless activator",
+                "adbAutoEnableApk":  "eu.project_simple.adbautoenable-3.0.0.apk",
+                "adbAutoEnablePackageName":  "eu.project_simple.adbautoenable"
             },
     "Logging":  {
                     "Comment-possibleValues":  "DEBUG,INFO,SUCCESS,WARNING,ERROR,NONE",
@@ -56,7 +59,7 @@
                 "prefer_usb":  true,
                 "wifi_classic_enabled":  true,
                 "wifi_tls_enabled":  true,
-                "wifi_preferred_mode":  "classic"
+                "wifi_preferred_mode":  "auto"
             },
     "scrcpy":  {
                    "folder":  "scrcpy\\scrcpy-win64-v5.0.1",

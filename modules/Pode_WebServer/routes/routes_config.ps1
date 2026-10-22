@@ -255,6 +255,20 @@ function Invoke-RouteConfigSave {
         # eye merge calibration) before and after: a running capture is built from them, and
         # the monitor would only notice a change on its next slow tick.
         if ($null -eq $newCfg) { throw "The posted configuration is empty." }
+
+        # WiFi ADB modes (ADR-0037): refuse an invalid value instead of writing it, and remember
+        # the section so THIS lane reloads its globals below when it changed (the other lane does
+        # through ConfigGeneration; without the reload this lane kept resolving headsets with the
+        # previous mode order).
+        if (Get-Command Test-AdbWifiModeConfig -ErrorAction SilentlyContinue) {
+            $adbErr = Test-AdbWifiModeConfig -Adb $newCfg.ADB
+            if ($adbErr) {
+                Send-JsonResponse -Response $response -Body @{ ok = $false; error = $adbErr } -StatusCode 400
+                return
+            }
+        }
+        $newAdbSig = if ($newCfg.ADB) { ($newCfg.ADB | ConvertTo-Json -Depth 6 -Compress) } else { '' }
+        $oldAdbSig = ''
         $oldCaptureSig = ''
         $newCaptureSig = if ($newCfg -and $newCfg.scrcpy) { ($newCfg.scrcpy | ConvertTo-Json -Depth 20 -Compress) } else { '' }
 
@@ -265,10 +279,17 @@ function Invoke-RouteConfigSave {
             try {
                 $oldCfgObj = Read-ConfigJson -ConfigFilePath $cfgFile -NonInteractive
                 if ($oldCfgObj -and $oldCfgObj.scrcpy) { $oldCaptureSig = ($oldCfgObj.scrcpy | ConvertTo-Json -Depth 20 -Compress) }
+                if ($oldCfgObj -and $oldCfgObj.ADB)    { $oldAdbSig     = ($oldCfgObj.ADB | ConvertTo-Json -Depth 6 -Compress) }
             } catch {}
             Write-ConfigJson -Object $body -Path $cfgFile
         } finally {
             if ($saveLock) { Exit-VqaLock -Stream $saveLock }
+        }
+
+        if ($oldAdbSig -ne $newAdbSig) {
+            # The ADB section (WiFi ADB modes, classic port) changed: this lane's resolver follows
+            # at once. VRMonitor notices on its next slow tick (Update-AdbWifiModeState).
+            try { $null = Get-Config -ConfigFilePath $cfgFile } catch { }
         }
 
         if ($oldCaptureSig -ne $newCaptureSig) {

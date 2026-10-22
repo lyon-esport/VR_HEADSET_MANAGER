@@ -1056,7 +1056,7 @@ function Invoke-StreamBenchmark {
                     }
                     try {
                         start-screenCopy -headsetIP ([string]$Headset.IPAddress) -displayName ([string]$Headset.Name) -recording $false `
-                            -scrcpyProfile $scrcpyProfile -ffmpegProgressFile $ffProgress
+                            -scrcpyProfile $scrcpyProfile -ffmpegProgressFile $ffProgress -headsetId ([int]$Headset.ID)
                     } finally {
                         if ($origTpl) { Set-StreamBenchmarkModelTemplate -Model $model -Template $origTpl }
                     }
@@ -1347,7 +1347,7 @@ function Invoke-StreamBenchmarkParallel {
             }
             try {
                 start-screenCopy -headsetIP ([string]$h.IPAddress) -displayName ([string]$h.Name) -recording $false `
-                    -scrcpyProfile (ConvertTo-ScrcpyProfile -View $view -Eye $eye -AudioDup $false -Fps $fps -BitrateMbps $mb) -ffmpegProgressFile $prog
+                    -scrcpyProfile (ConvertTo-ScrcpyProfile -View $view -Eye $eye -AudioDup $false -Fps $fps -BitrateMbps $mb) -ffmpegProgressFile $prog -headsetId ([int]$h.ID)
             } finally {
                 if ($origTpls.ContainsKey($model)) { Set-StreamBenchmarkModelTemplate -Model $model -Template $origTpls[$model] }
             }

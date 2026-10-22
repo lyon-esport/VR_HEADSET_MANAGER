@@ -429,6 +429,7 @@
         # --- Background network discovery ---
         SweepStart            = "Headset discovery: scanning {0}..."
         SweepDone             = "Headset discovery: {0} device(s) found in {1}s."
+        SweepModes            = "Headset discovery: classic={0}, TLS={1} (mDNS services: {2}), sweep took {3} ms."
         SweepFailed           = "Headset discovery sweep failed: {0}"
         Found                 = "Headset discovery: {0} ({1}) at {2}"
         UnknownDevice         = "Headset discovery: unknown device {0} ({1}) at {2} - waiting for operator."
@@ -965,5 +966,33 @@
         Expired          = "Timer expired for headset {0}"
         FilesInitialized = "Timer files initialized ({0} headsets)"
         FolderCreated    = "Timer folder created: {0}"
+    }
+
+    AdbWifi = @{
+        AutoEnableMenuOption  = "	 9. Install ADB auto-enable app on a USB headset"
+        AutoEnableNoUsb       = "No USB headset detected."
+        AutoEnableApkMissing  = "ADB auto-enable APK not found: {0}"
+        AutoEnableInstalling  = "Installing the ADB auto-enable app on {0} ..."
+        AutoEnableStep        = "ADB auto-enable app - {0}: {1}"
+        AutoEnableDone        = "ADB auto-enable app installed and configured. WiFi ADB over TLS will be re-enabled at every boot."
+        AutoEnableUninstalled = "ADB auto-enable app uninstalled from {0}."
+        AutoEnableFailed      = "ADB auto-enable app: one or more steps failed - {0}"
+        Switched              = "Switched {0} from {1} to {2} WiFi ADB."
+        PreferredUnavailable  = "{2} WiFi ADB cannot be enabled on {0} ({3}): it stays on {1} until the preferred mode changes, the headset reboots or the app restarts."
+        PreferenceChanged     = "WiFi ADB mode settings changed (preferred: {0}) - re-checking every headset and capture."
+        MenuNoPreference      = "no preference (classic first)"
+        SwitchDeferred        = "{0} is on TLS WiFi ADB while capturing: the switch to classic waits until the capture stops (scrcpy.usb_switch_mode = {1})."
+        ScrcpyModeSwitch      = "WiFi ADB of {0} is now {2} - moving the capture from {1}."
+        ScrcpyEndpointLost    = "WiFi ADB endpoint {1} of {0} is gone - restarting the capture."
+        MenuOption            = "  A. ADB WiFi modes  - Preferred: {0}"
+        MenuTitle             = "  === ADB WiFi modes ==="
+        MenuClassic           = "  1. Classic (adb tcpip, port {1})  - {0}"
+        MenuTls               = "  2. ADB over TLS (Wireless debugging)  - {0}"
+        MenuPreferred         = "  3. Preferred mode  - {0} (in use: {1})"
+        MenuHint              = "  The preferred mode is used whenever the headset answers in it; the other mode is the fallback."
+        MenuEnabled           = "enabled"
+        MenuDisabled          = "disabled"
+        MenuSaved             = "ADB WiFi modes saved. VRMonitor applies them on its next slow tick."
+        MenuSaveFailed        = "ADB WiFi modes: config.json not updated - {0}"
     }
 }

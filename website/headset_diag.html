@@ -230,6 +230,8 @@
             <button class="dg-btn" type="button" id="btn-tls-enable" data-confirm="Turn Wireless debugging on for this headset?">Enable on headset</button>
             <button class="dg-btn" type="button" id="btn-tls-disable">Disable on headset</button>
             <button class="dg-btn" type="button" id="btn-tls-connect" disabled>Connect to mDNS port</button>
+            <button class="dg-btn" type="button" id="btn-ae-install" data-confirm="Install the ADB auto-enable app on this headset (grants permissions, enables its accessibility service, may run adb tcpip)?">Install ADB auto-enable app</button>
+            <button class="dg-btn" type="button" id="btn-ae-uninstall" data-confirm="Uninstall the ADB auto-enable app from this headset? Wireless debugging will no longer be re-enabled at boot.">Uninstall app</button>
           </div>
           <div id="tls-result" class="dg-muted"></div>
         </div>
@@ -612,10 +614,20 @@
         if (!res.ok) { $('tls-result').innerHTML = '<span style="color:var(--bad)">' + esc(res.error || 'Failed.') + '</span>'; return; }
         lastTls = res.data;
         $('tls-result').innerHTML = kvBlock([
+          kv('WiFi ADB mode in use', (res.data.AdbWifiMode && res.data.AdbWifiMode !== '-') ? esc(res.data.AdbWifiMode) + (res.data.PreferredWifiMode && res.data.AdbWifiMode !== res.data.PreferredWifiMode ? ' <span class="dg-muted">(fallback, preferred: ' + esc(res.data.PreferredWifiMode) + ')</span>' : '') : '<span class="dg-muted">none</span>'),
+          kv('Preferred WiFi ADB mode', res.data.PreferredWifiMode ? esc(res.data.PreferredWifiMode) : '<span class="dg-muted">no preference (whatever answers, classic first)</span>'),
+          (res.data.SwitchState && res.data.SwitchState.Unavailable)
+            ? kv('Mode switch', badge('given up', 'bad') + ' ' + esc(res.data.SwitchState.Reason || '') + ' <span class="dg-muted">(retried after a preference change, a reboot or an app restart)</span>')
+            : (res.data.SwitchState && (res.data.SwitchState.Pending || res.data.SwitchState.Failures))
+              ? kv('Mode switch', res.data.SwitchState.Pending ? 'in progress' : esc(res.data.SwitchState.Failures) + ' failed attempt(s), retrying')
+              : '',
           kv('Wireless debugging', res.data.Enabled ? badge('on', 'good') : badge('off', '')),
-          kv('mDNS connect port', res.data.MdnsPort ? esc(res.data.MdnsPort) : '<span class="dg-muted">not advertised</span>')
+          kv('mDNS connect port', res.data.MdnsPort ? esc(res.data.MdnsPort) : '<span class="dg-muted">not advertised</span>'),
+          kv('Auto-enable app', res.data.AutoEnableInstalled === true ? badge('installed', 'good') : (res.data.AutoEnableInstalled === false ? badge('not installed', '') : '<span class="dg-muted">unknown</span>'))
         ]);
         $('btn-tls-connect').disabled = !res.data.MdnsPort;
+        $('btn-ae-install').textContent = res.data.AutoEnableInstalled === true ? 'Reinstall ADB auto-enable app' : 'Install ADB auto-enable app';
+        $('btn-ae-uninstall').disabled = res.data.AutoEnableInstalled === false;
       });
     }
 
@@ -724,6 +736,8 @@
       $('shell-preset').addEventListener('change', function () { if (this.value) { $('shell-cmd').value = this.value; } });
       $('btn-tls-status').addEventListener('click', checkTls);
       $('btn-tls-disable').addEventListener('click', tlsOff);
+      $('btn-ae-install').addEventListener('click', function () { act('autoenable_install', {}, $('btn-ae-install').getAttribute('data-confirm')).then(checkTls); });
+      $('btn-ae-uninstall').addEventListener('click', function () { act('autoenable_uninstall', {}, $('btn-ae-uninstall').getAttribute('data-confirm')).then(checkTls); });
       $('btn-tls-warn-off').addEventListener('click', tlsOff);
       $('btn-tls-enable').addEventListener('click', function () { act('tls_enable', {}, $('btn-tls-enable').getAttribute('data-confirm')).then(function (res) { if (res && res.ok) { setTlsWarning(true); } }); });
       $('btn-tls-connect').addEventListener('click', function () {

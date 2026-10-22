@@ -425,7 +425,12 @@ function Invoke-RouteRefreshHeadsetAppsCache {
         }
         $device = try { Get-BestAdbDevice -headset $headset } catch { $null }
         if (-not $device) {
-            $device = try { Get-AdbWifiDevice -headsetIP $headset.IPAddress } catch { $null }
+            # Mode-aware WiFi retry (ADR-0034): preferred WiFi mode first, the other as fallback.
+            # The bare classic call stays only for a process without adb_wifi_modes.ps1.
+            $device = try {
+                if (Get-Command Resolve-HeadsetWifiDevice -ErrorAction SilentlyContinue) { Resolve-HeadsetWifiDevice -Headset $headset }
+                else { Get-AdbWifiDevice -headsetIP $headset.IPAddress }
+            } catch { $null }
         }
         if (-not $device) {
             Send-JsonResponse -Response $response -StatusCode 503 -Body @{ ok = $false; error = 'device not reachable' }

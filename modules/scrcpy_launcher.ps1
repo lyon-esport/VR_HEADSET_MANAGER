@@ -1365,7 +1365,13 @@ function start-screenCopy {
         [string]$transport = 'Auto',
 
         # Stream benchmark only: passed to Start-FfmpegStreamPush -ProgressFile.
-        [string]$ffmpegProgressFile = ''
+        [string]$ffmpegProgressFile = '',
+
+        # Permanent registry id (ADR-0016), when the caller has it (capture jobs, benchmark). The
+        # row is then found by id rather than by address, so the serial - which the USB transport
+        # AND the TLS WiFi mode are keyed on (ADR-0034) - is known even when the registry address
+        # is stale. 0 = look the row up by -headsetIP, as before.
+        [int]$headsetId = 0
 
     )
 
@@ -1393,7 +1399,9 @@ function start-screenCopy {
     # keyed on; a caller that only has an address still works, it just never gets USB.
     # Resolve-HeadsetAdbDevice replaces the old port probe + "adb connect" for the WiFi case
     # (Get-AdbWifiDevice does both) and costs no adb.exe at all for the USB case.
-    $knownRow = @(Get-KnownHeadsets) | Where-Object { $_.IPAddress -eq $headsetIP } | Select-Object -First 1
+    $knownRow = $null
+    if ($headsetId -gt 0) { $knownRow = @(Get-KnownHeadsets) | Where-Object { [string]$_.ID -eq [string]$headsetId } | Select-Object -First 1 }
+    if (-not $knownRow) { $knownRow = @(Get-KnownHeadsets) | Where-Object { $_.IPAddress -eq $headsetIP } | Select-Object -First 1 }
     if (-not $knownRow) { $knownRow = [PSCustomObject]@{ Name = $displayName; IPAddress = $headsetIP; SerialNumber = '' } }
 
     # Tell every page this capture is starting (app_kv, cross-process). The mark is cleared in the
@@ -1423,9 +1431,11 @@ function start-screenCopy {
         return
     }
     $adb_device = $captureDevice.DeviceId
-    # WiFi mode of the capture (ADR-0034): 'Classic' / 'TLS', '' over USB. Stored with the launch
-    # state for diagnosis; the restart decision still keys on Transport (USB/WiFi) only.
+    # WiFi mode and endpoint of the capture (ADR-0034): 'Classic' / 'TLS' and 'ip:port', '' over USB.
+    # Stored with the launch state (not in the stamp): Get-ScrcpyTransportDecision restarts a WiFi
+    # session whose endpoint died or whose mode is no longer the one that answers (S10-5).
     $launchWifiMode = if ($captureDevice.ConnectionType -eq 'WiFi' -and $captureDevice.PSObject.Properties['WifiMode']) { [string]$captureDevice.WifiMode } else { '' }
+    $launchWifiEndpoint = if ($captureDevice.ConnectionType -eq 'WiFi') { [string]$adb_device } else { '' }
     Write-Log ("scrcpy capture for {0} over {1}{2} ({3})" -f $displayName, $captureDevice.ConnectionType, $(if ($launchWifiMode) { " $launchWifiMode" } else { '' }), $adb_device) -Level INFO
     $headsetModel   = Get-HeadsetModel -Device $captureDevice
     Write-Log -Message ($msg.Scrcpy.ModelDetected -f $headsetModel) -Level "INFO"
@@ -1589,7 +1599,7 @@ function start-screenCopy {
         }
         Exit-ScrcpyLaunchLock -Lock $launchLock; $launchLock = $null
         $startHoldSec = 2
-        $global:ScrcpyLaunchState[$displayName] = @{ LaunchStamp = $launchStamp.Stamp; StampParts = $launchStamp.Parts; Transport = $launchTransport; WifiMode = $launchWifiMode }
+        $global:ScrcpyLaunchState[$displayName] = @{ LaunchStamp = $launchStamp.Stamp; StampParts = $launchStamp.Parts; Transport = $launchTransport; WifiMode = $launchWifiMode; WifiEndpoint = $launchWifiEndpoint }
     }
 
     # Windowed LocalWindow mode: scrcpy itself writes the recording. Remember the file so it can be
@@ -1651,6 +1661,7 @@ function start-screenCopy {
                 StampParts     = $launchStamp.Parts
                 Transport      = $launchTransport
                 WifiMode       = $launchWifiMode
+                WifiEndpoint   = $launchWifiEndpoint
                 MediaMtxPid    = $mediaMtxPid
                 StartedAt      = (Get-Date)
             }
@@ -1759,6 +1770,12 @@ function Get-ScrcpyTransportDecision {
     re-enumerate the transport for seconds, and the published set is unreliable meanwhile.
     The cabled set is VRMonitor published snapshot, so this costs no adb.exe.
 
+    A WiFi session also follows its WiFi ADB mode (ADR-0034, S10-5) through
+    Get-AdbWifiCaptureModeDecision when -CurrentWifiMode / -CurrentEndpoint (stored at launch)
+    and -LiveWifiMode (live status) are given: a dead endpoint restarts at once (an adbd
+    restarted by "tcpip" leaves scrcpy hung), and a session on the fallback mode moves to the
+    preferred one under the same scrcpy.usb_switch_mode policy as above.
+
     .EXAMPLE
     $d = Get-ScrcpyTransportDecision -Headset $headset -CurrentTransport 'WiFi' -Recording $false
     if ($d.Restart) { Write-Log $d.Reason }
@@ -1768,7 +1785,12 @@ function Get-ScrcpyTransportDecision {
         # Transport the session was launched with, as stored by start-screenCopy ('USB' or
         # 'WiFi'). Empty (adopted session, unknown) = no decision.
         [string]$CurrentTransport = '',
-        [bool]$Recording = $false
+        [bool]$Recording = $false,
+        # WiFi mode ('Classic'/'TLS') and 'ip:port' the session was launched with, and the mode
+        # the live status reports now (S10-5). Empty = no WiFi mode decision.
+        [string]$CurrentWifiMode = '',
+        [string]$CurrentEndpoint = '',
+        [string]$LiveWifiMode = ''
     )
 
     $d = [PSCustomObject]@{ Restart = $false; Reason = ''; Current = '-'; Preferred = '-' }
@@ -1795,7 +1817,13 @@ function Get-ScrcpyTransportDecision {
         return $d
     }
 
-    # Currently on WiFi.
+    # Currently on WiFi. A dead endpoint (or, when USB is not preferred, the preferred WiFi mode
+    # being back) is decided first by the WiFi mode helper.
+    if (($CurrentWifiMode -or $CurrentEndpoint) -and (Get-Command Get-AdbWifiCaptureModeDecision -ErrorAction SilentlyContinue)) {
+        $wm = Get-AdbWifiCaptureModeDecision -Headset $Headset -CurrentWifiMode $CurrentWifiMode -CurrentEndpoint $CurrentEndpoint `
+            -LiveWifiMode $(if ($d.Preferred -eq 'USB') { '' } else { $LiveWifiMode }) -Recording $Recording
+        if ($wm.Restart) { $d.Restart = $true; $d.Reason = $wm.Reason; return $d }
+    }
     if ($d.Preferred -ne 'USB') { return $d }
     $mode = if ($global:scrcpyUsbSwitchMode) { [string]$global:scrcpyUsbSwitchMode } else { 'stable' }
     $switchMsg = (Get-MessageString -Key 'Diag.ScrcpySwitchToUsb' -Fallback 'USB cable detected for {0} - moving the capture from WiFi to USB.') -f $Headset.Name
@@ -2320,7 +2348,7 @@ function Invoke-ScrcpyCaptureJob {
             }
         }
 
-        start-screenCopy -displayName ([string]$Job.Name) -headsetIP ([string]$Job.IPAddress) -recording ([bool]$Job.Recording) -scrcpyProfile ([string]$Job.Profile)
+        start-screenCopy -displayName ([string]$Job.Name) -headsetIP ([string]$Job.IPAddress) -recording ([bool]$Job.Recording) -scrcpyProfile ([string]$Job.Profile) -headsetId $hid
 
         # Read Cancel and mark the job Done in ONE step, under the job's lock: a stop that comes
         # after this point is not handed to the job any more (Request-ScrcpyCaptureCancel checks
@@ -2679,6 +2707,8 @@ function Watch-ScrcpyProcesses {
                 $launchState = if ($pipeline) { $pipeline } else { $global:ScrcpyLaunchState[$safeName] }
                 $storedStamp = if ($launchState) { [string]$launchState.LaunchStamp } else { '' }
                 $storedTransport = ''
+                $storedWifiMode     = if ($launchState -and $launchState.WifiMode)     { [string]$launchState.WifiMode }     else { '' }
+                $storedWifiEndpoint = if ($launchState -and $launchState.WifiEndpoint) { [string]$launchState.WifiEndpoint } else { '' }
 
                 if ($headsetModel -and "$headsetModel" -ne '-') {
                     $lensIpd = Get-HeadsetIpdValue -HeadsetId ([int]$headset.ID) -Model ([string]$headsetModel)
@@ -2718,7 +2748,8 @@ function Watch-ScrcpyProcesses {
                 # re-resolves the transport anyway. See Get-ScrcpyTransportDecision for the
                 # three scrcpy.usb_switch_mode behaviours.
                 if (-not $shouldRestart) {
-                    $transportDecision = Get-ScrcpyTransportDecision -Headset $headset -CurrentTransport $storedTransport -Recording $expectedRecording
+                    $transportDecision = Get-ScrcpyTransportDecision -Headset $headset -CurrentTransport $storedTransport -Recording $expectedRecording `
+                        -CurrentWifiMode $storedWifiMode -CurrentEndpoint $storedWifiEndpoint -LiveWifiMode ([string]$headsetInfos.AdbWifiMode)
                     if ($transportDecision.Restart) {
                         Write-Log $transportDecision.Reason -Level INFO
                         $shouldRestart = $true

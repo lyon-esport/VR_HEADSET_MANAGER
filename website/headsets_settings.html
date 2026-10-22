@@ -3584,6 +3584,24 @@
           }
           html += '</div>';
 
+          // ADB auto-enable app section (S10-6)
+          html += '<div class="ndm-section"><div class="ndm-section-label">ADB auto-enable app (TLS)</div>';
+          if (_ndmData.autoEnableInstalled) {
+            html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px">' +
+                      '<div style="display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:#22c55e">' +
+                        '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>' +
+                        'App already installed' +
+                      '</div>' +
+                      '<button class="pm-btn" id="ndm-btn-reinstall-autoenable" style="font-size:11px;padding:4px 12px;color:#3b82f6;border-color:rgba(59,130,246,0.35);background:rgba(59,130,246,0.08)">Reinstall</button>' +
+                    '</div>';
+          } else {
+            html += '<button class="ndm-action-btn" id="ndm-btn-install-autoenable">' +
+                      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>' +
+                      '<span><strong>Install ADB auto-enable app</strong><br><span style="font-size:11px;opacity:0.6">Install, grant permissions, enable accessibility and start at boot</span></span>' +
+                    '</button>';
+          }
+          html += '</div>';
+
         } else {
           // No USB detected
           html += '<div class="wifi-step-row" style="color:#ef4444;align-items:flex-start;gap:8px">' + _warnSvg +
@@ -3624,6 +3642,10 @@
         if (connectWifiBtn) connectWifiBtn.addEventListener('click', function() { submitConnectWifi(); });
         var installBtn = document.getElementById('ndm-btn-install-apk');
         if (installBtn) installBtn.addEventListener('click', function() { renderNdmStep('installing', { reinstall: false }); submitInstallAdbWifiApk(); });
+        var installAeBtn = document.getElementById('ndm-btn-install-autoenable');
+        if (installAeBtn) installAeBtn.addEventListener('click', function() { renderNdmStep('installing', { kind: 'autoenable', reinstall: false }); submitInstallAdbAutoEnable(); });
+        var reinstallAeBtn = document.getElementById('ndm-btn-reinstall-autoenable');
+        if (reinstallAeBtn) reinstallAeBtn.addEventListener('click', function() { renderNdmStep('installing', { kind: 'autoenable', reinstall: true }); submitInstallAdbAutoEnable(); });
         var reinstallBtn = document.getElementById('ndm-btn-reinstall');
         if (reinstallBtn) reinstallBtn.addEventListener('click', function() { renderNdmStep('installing', { reinstall: true }); submitInstallAdbWifiApk(); });
         document.getElementById('ndm-btn-add-manual').addEventListener('click', function() { _ndmIp = ''; renderNdmStep('add-ip'); });
@@ -3756,15 +3778,30 @@
 
       // -- Install APK: busy --------------------------------------------------
       } else if (step === 'installing') {
-        _ndmSetTitle('Install ADB WiFi App');
+        var isAe = data && data.kind === 'autoenable';
+        _ndmSetTitle(isAe ? 'Install ADB auto-enable app' : 'Install ADB WiFi App');
         var isReinstall = data && data.reinstall;
+        if (isAe) {
+          body.innerHTML =
+            '<div class="wifi-step-row">' + _spinSvg + (isReinstall ? 'Reinstalling' : 'Installing') + ' ADB auto-enable app... this may take ~20 seconds.</div>' +
+            '<div class="wifi-hint">The app is installed, permissions granted, its accessibility service enabled and the app started once.</div>';
+        } else 
         body.innerHTML =
           '<div class="wifi-step-row">' + _spinSvg + (isReinstall ? 'Reinstalling' : 'Installing') + ' ADB WiFi app... this may take ~15 seconds.</div>' +
           '<div class="wifi-hint">The app will be installed, permissions granted, and WiFi ADB enabled automatically.</div>';
 
       // -- Install APK: success -----------------------------------------------
       } else if (step === 'success-install') {
-        _ndmSetTitle('Install ADB WiFi App');
+        _ndmSetTitle((data && data.kind === 'autoenable') ? 'Install ADB auto-enable app' : 'Install ADB WiFi App');
+        if (data && data.kind === 'autoenable') {
+          var stepsHtml = ((data.steps || []).map(function(s) {
+            return '<div style="font-size:11px;color:' + (s.ok ? '#22c55e' : '#ef4444') + '">' + (s.ok ? '&#10003; ' : '&#10007; ') + esc(s.name) + ' - ' + esc(s.detail || '') + '</div>';
+          }).join(''));
+          body.innerHTML =
+            '<div class="wifi-step-row" style="color:#22c55e">' + _checkSvg + (data.reinstalled ? 'Reinstalled' : 'Installed') + ' on <strong>' + esc(data.model || 'Headset') + '</strong>.</div>' +
+            '<div style="margin:6px 0">' + stepsHtml + '</div>' +
+            '<div class="wifi-hint">WiFi ADB over TLS will be re-enabled at every boot.</div>';
+        } else 
         body.innerHTML =
           '<div class="wifi-step-row" style="color:#22c55e">' + _checkSvg +
             ((data && data.reinstalled) ? 'Reinstalled' : 'Installed') + ' on <strong>' + esc((data && data.model) || 'Headset') + '</strong>.' +
@@ -3839,6 +3876,16 @@
         .then(function(j) {
           if (j.ok) { renderNdmStep('success-tcpip', j); }
           else      { renderNdmStep('error', j); }
+        })
+        .catch(function() { renderNdmStep('error', { error: 'Could not communicate with server.' }); });
+    }
+
+    function submitInstallAdbAutoEnable() {
+      fetch('/api/installadbautoenable', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          if (j.ok) { j.kind = 'autoenable'; renderNdmStep('success-install', j); }
+          else      { renderNdmStep('error', { error: j.error || 'Install failed.' }); }
         })
         .catch(function() { renderNdmStep('error', { error: 'Could not communicate with server.' }); });
     }

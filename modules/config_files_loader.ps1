@@ -261,6 +261,12 @@ function Get-Config {
     $global:ADBWirelessActivatorAPK = Join-Path -Path $(Join-Path -Path $sourcesPath -ChildPath $configContent.apk.adbWirelessActivatorFolder) -ChildPath $configContent.apk.adbWirelessActivatorApk
     $global:ADBWirelessActivatorPackageName = $configContent.apk.adbWirelessActivatorPackageName
 
+    # ADB auto-enable app (S10-6). Null guards: a config.json written before S10-6 has no such keys.
+    $autoEnableFolder = if ($configContent.apk.adbAutoEnableFolder) { [string]$configContent.apk.adbAutoEnableFolder } else { [string]$configContent.apk.adbWirelessActivatorFolder }
+    $autoEnableApk    = if ($configContent.apk.adbAutoEnableApk) { [string]$configContent.apk.adbAutoEnableApk } else { "eu.project_simple.adbautoenable-3.0.0.apk" }
+    $global:ADBAutoEnableAPK = Join-Path -Path (Join-Path -Path $sourcesPath -ChildPath $autoEnableFolder) -ChildPath $autoEnableApk
+    $global:ADBAutoEnablePackageName = if ($configContent.apk.adbAutoEnablePackageName) { [string]$configContent.apk.adbAutoEnablePackageName } else { "eu.project_simple.adbautoenable" }
+
     $global:VRMonitor_refresh_timer = $configContent.VRMonitor.refresh_timer
 
     # Background LAN discovery of headsets (VRMonitor.networkDiscovery).
@@ -339,18 +345,20 @@ function Get-Config {
     # Applied on the next config reload (slow tick), no restart.
     $global:ADB_wifi_classic_enabled = if ($null -ne $configContent.ADB.wifi_classic_enabled) { [bool]$configContent.ADB.wifi_classic_enabled } else { $true }
     $global:ADB_wifi_tls_enabled     = if ($null -ne $configContent.ADB.wifi_tls_enabled)     { [bool]$configContent.ADB.wifi_tls_enabled }     else { $true }
-    $wifiPreferred = if ($configContent.ADB.wifi_preferred_mode) { ([string]$configContent.ADB.wifi_preferred_mode).Trim().ToLowerInvariant() } else { 'classic' }
-    if ($wifiPreferred -ne 'classic' -and $wifiPreferred -ne 'tls') { $wifiPreferred = 'classic' }
+    # 'auto' (default, ADR-0037) = no preference: whatever mode answers is used, classic first when
+    # both do, and no headset is ever switched. 'classic' / 'tls' = switch to that mode (S10-5).
+    $wifiPreferred = if ($configContent.ADB.wifi_preferred_mode) { ([string]$configContent.ADB.wifi_preferred_mode).Trim().ToLowerInvariant() } else { 'auto' }
+    if ($wifiPreferred -notin @('auto', 'classic', 'tls')) { $wifiPreferred = 'auto' }
     $global:ADB_wifi_preferred_mode = $wifiPreferred
     if (-not $global:ADB_wifi_classic_enabled -and -not $global:ADB_wifi_tls_enabled) {
         # Both off would leave no way to reach a headset over WiFi: classic is forced back on.
         $global:ADB_wifi_classic_enabled = $true
         Write-Log "ADB.wifi_classic_enabled and ADB.wifi_tls_enabled are both false - classic WiFi ADB forced on" -Level WARNING
     }
-    # A preferred mode that is disabled yields to the other one.
+    # With only one mode enabled there is nothing to prefer or to switch to: 'auto'. A preferred
+    # mode that is disabled therefore yields to the other one, without any switching.
     $global:ADB_wifi_effective_preferred = $wifiPreferred
-    if ($wifiPreferred -eq 'classic' -and -not $global:ADB_wifi_classic_enabled) { $global:ADB_wifi_effective_preferred = 'tls' }
-    elseif ($wifiPreferred -eq 'tls' -and -not $global:ADB_wifi_tls_enabled)     { $global:ADB_wifi_effective_preferred = 'classic' }
+    if (-not ($global:ADB_wifi_classic_enabled -and $global:ADB_wifi_tls_enabled)) { $global:ADB_wifi_effective_preferred = 'auto' }
 
 
     $global:Monitoring_headsetTemplate = Join-Path -Path $global:ScriptPath -ChildPath ("\website\template\"+$configContent.Monitoring.HeadsetTemplate)

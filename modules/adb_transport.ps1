@@ -624,6 +624,185 @@ function Install-OculusWirelessAdbApk {
 }
 
 
+function Install-AdbAutoEnableApk {
+    <#
+    .SYNOPSIS
+    Installs and fully configures the ADB auto-enable app (eu.project_simple.adbautoenable) on a headset (S10-6).
+
+    .DESCRIPTION
+    The app re-enables Wireless debugging at every boot, so it only helps once it holds
+    WRITE_SECURE_SETTINGS and POST_NOTIFICATIONS, its accessibility service is enabled and it was
+    started once. Steps (each reported in Steps, a failed one does not hide the others):
+    install -r -d, grants, accessibility service APPENDED to the enabled list (never overwritten),
+    adb_wifi_enabled, app start and, when classic WiFi ADB is enabled, adb tcpip + adb connect.
+    The caller must hold Set-UsbBusy: tcpip re-enumerates the USB transport.
+
+    .EXAMPLE
+    $r = Install-AdbAutoEnableApk -Device (Get-AdbUsbDeviceDetails); $r.Steps | Format-Table Name, Ok, Detail
+    #>
+    param (
+        [PSCustomObject]$Device = $null,
+        [string]$adb = $global:adbPath
+    )
+
+    $apkPath = $global:ADBAutoEnableAPK
+    $pkg     = $global:ADBAutoEnablePackageName
+    $steps   = New-Object System.Collections.ArrayList
+    $result  = @{ Ok = $false; Steps = @(); Reinstalled = $false; Error = '' }
+
+    $addStep = {
+        param([string]$Name, [bool]$Ok, [string]$Detail)
+        [void]$steps.Add(@{ Name = $Name; Ok = $Ok; Detail = $Detail })
+        $lvl = if ($Ok) { 'INFO' } else { 'ERROR' }
+        Write-Log ($msg.AdbWifi.AutoEnableStep -f $Name, $Detail) -Level $lvl
+    }
+
+    if (-not (Test-Path -LiteralPath $adb)) {
+        $result.Error = ($msg.ADBNotFound -f $global:adbFolder)
+        Write-Log $result.Error -Level ERROR
+        return $result
+    }
+    if (-not $apkPath -or -not (Test-Path -LiteralPath $apkPath)) {
+        $result.Error = ($msg.AdbWifi.AutoEnableApkMissing -f $apkPath)
+        Write-Log $result.Error -Level ERROR
+        return $result
+    }
+    if ($pkg -notmatch '^[A-Za-z0-9._]+$') {
+        $result.Error = "Invalid package name: $pkg"
+        Write-Log $result.Error -Level ERROR
+        return $result
+    }
+    if (-not $Device) {
+        $Device = Get-AdbUsbDevice -adb $adb
+        if (-not $Device) {
+            $result.Error = $msg.AdbWifi.AutoEnableNoUsb
+            Write-Log $result.Error -Level WARNING
+            return $result
+        }
+    }
+    Write-Log ($msg.AdbWifi.AutoEnableInstalling -f $Device.DeviceId) -Level INFO
+
+    # a. install / reinstall
+    try {
+        $pm = Invoke-AdbCmd -Device $Device -Command "pm list packages $pkg" -ShellScript -adb $adb -SilentOnFail
+        $result.Reinstalled = ($pm -ne $false) -and [bool](@($pm) | Where-Object { $_ -match "^package:$([regex]::Escape($pkg))\s*$" })
+        $out = Invoke-AdbCmd -Device $Device -Command "install -r -d `"$apkPath`"" -TimeoutSeconds 120 -adb $adb
+        $okInstall = ($out -ne $false) -and [bool](@($out) -match 'Success')
+        & $addStep 'install' $okInstall $(if ($okInstall) { $(if ($result.Reinstalled) { 'reinstalled' } else { 'installed' }) } else { (@($out) -join ' ') })
+    } catch {
+        & $addStep 'install' $false $_.Exception.Message
+    }
+    if (-not $steps[0].Ok) {
+        $result.Steps = @($steps)
+        $result.Error = ($msg.AdbWifi.AutoEnableFailed -f $steps[0].Detail)
+        return $result
+    }
+
+    # b. permissions
+    foreach ($perm in 'WRITE_SECURE_SETTINGS', 'POST_NOTIFICATIONS') {
+        try {
+            $r = Invoke-AdbCmd -Device $Device -Command "pm grant $pkg android.permission.$perm" -ShellScript -adb $adb
+            & $addStep "grant $perm" ($r -ne $false) $(if ($r -ne $false) { 'granted' } else { 'pm grant failed' })
+        } catch { & $addStep "grant $perm" $false $_.Exception.Message }
+    }
+
+    # c. accessibility service: append, never overwrite another enabled service
+    try {
+        $component = "$pkg/$pkg.AdbPopupAccessibilityService"
+        $cur = ((Invoke-AdbCmd -Device $Device -Command 'settings get secure enabled_accessibility_services' -ShellScript -adb $adb) -join '').Trim()
+        $list = @()
+        if ($cur -and $cur -ne 'null') { $list = @($cur -split ':' | Where-Object { $_ }) }
+        $did = $true
+        $detail = 'already enabled'
+        if ($list -notcontains $component) {
+            $newValue = (($list + $component) -join ':')
+            $q = ConvertTo-DiagShellQuoted -Text $newValue
+            $r = Invoke-AdbCmd -Device $Device -Command "settings put secure enabled_accessibility_services $q" -ShellScript -adb $adb
+            $did = ($r -ne $false)
+            $detail = if ($did) { 'enabled' } else { 'settings put failed' }
+        }
+        if ($did) {
+            $r = Invoke-AdbCmd -Device $Device -Command 'settings put secure accessibility_enabled 1' -ShellScript -adb $adb
+            if ($r -eq $false) { $did = $false; $detail = 'accessibility_enabled failed' }
+        }
+        & $addStep 'accessibility' $did $detail
+    } catch { & $addStep 'accessibility' $false $_.Exception.Message }
+
+    # d. Wireless debugging on now
+    try {
+        $r = Invoke-AdbCmd -Device $Device -Command 'settings put global adb_wifi_enabled 1' -ShellScript -adb $adb
+        & $addStep 'wireless debugging' ($r -ne $false) $(if ($r -ne $false) { 'on' } else { 'settings put failed' })
+    } catch { & $addStep 'wireless debugging' $false $_.Exception.Message }
+
+    # e. start the app once (it closes itself and starts its watchdog service)
+    try {
+        $r = Invoke-AdbCmd -Device $Device -Command "am start -n `"$pkg/.MainActivity`"" -ShellScript -adb $adb
+        & $addStep 'start' ($r -ne $false) $(if ($r -ne $false) { 'started' } else { 'am start failed' })
+    } catch { & $addStep 'start' $false $_.Exception.Message }
+
+    # f. classic mode: usable at once, no waiting for a reboot. tcpip drops USB for a few seconds.
+    if ($global:ADB_wifi_classic_enabled) {
+        try {
+            $ip = ''
+            foreach ($line in @(Invoke-AdbCmd -Device $Device -Command 'ip -f inet addr show wlan0' -ShellScript -adb $adb)) {
+                if ($line -match 'inet\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/') { $ip = $Matches[1]; break }
+            }
+            $port = Get-ClassicAdbPort
+            Invoke-AdbCmd -Device $Device -Command "tcpip $port" -adb $adb | Out-Null
+            Start-Sleep -Seconds 2
+            $up = $false
+            if ($ip) { $up = Connect-HeadsetWifiAdb -IPAddress $ip -AdbPort $port -adb $adb }
+            & $addStep 'classic tcpip' ($up -or -not $ip) $(if ($up) { "${ip}:${port}" } elseif ($ip) { "${ip}:${port} (connect pending)" } else { 'no WiFi address read' })
+        } catch { & $addStep 'classic tcpip' $false $_.Exception.Message }
+    }
+
+    $result.Steps = @($steps)
+    $failed = @($steps | Where-Object { -not $_.Ok })
+    $result.Ok = ($failed.Count -eq 0)
+    if ($result.Ok) {
+        Write-Log $msg.AdbWifi.AutoEnableDone -Level SUCCESS
+        # A proper name in the apps list even offline; the icon is matched by file name (app_icons).
+        try {
+            Save-AppCatalogEntry -Entry ([PSCustomObject]@{ PackageName = $pkg; DisplayName = "ADB Auto Enable"; ThirdParty = $true }) | Out-Null
+        } catch { Write-Log "Catalogue entry for $pkg not saved: $($_.Exception.Message)" -Level DEBUG }
+    } else {
+        $result.Error = ($msg.AdbWifi.AutoEnableFailed -f (($failed | ForEach-Object { $_.Name }) -join ', '))
+        Write-Log $result.Error -Level ERROR
+    }
+    return $result
+}
+
+
+function Uninstall-AdbAutoEnableApk {
+    <#
+    .SYNOPSIS
+    Removes the ADB auto-enable app (eu.project_simple.adbautoenable) from a headset (S10-6).
+    Its accessibility entry goes with the package. Returns @{Ok;Error}. Never throws.
+
+    .EXAMPLE
+    Uninstall-AdbAutoEnableApk -Device $device
+    #>
+    param (
+        [Parameter(Mandatory = $true)][PSCustomObject]$Device,
+        [string]$adb = $global:adbPath
+    )
+    $pkg = $global:ADBAutoEnablePackageName
+    if ($pkg -notmatch '^[A-Za-z0-9._]+$') { return @{ Ok = $false; Error = "Invalid package name: $pkg" } }
+    try {
+        $out = Invoke-AdbCmd -Device $Device -Command "uninstall $pkg" -TimeoutSeconds 60 -adb $adb
+        $ok = ($out -ne $false) -and [bool](@($out) -match 'Success')
+        if ($ok) {
+            Write-Log ($msg.AdbWifi.AutoEnableUninstalled -f $Device.DeviceId) -Level INFO
+            return @{ Ok = $true; Error = '' }
+        }
+        return @{ Ok = $false; Error = (@($out) -join ' ') }
+    } catch {
+        Write-Log ("Uninstall-AdbAutoEnableApk failed: {0}" -f $_.Exception.Message) -Level ERROR
+        return @{ Ok = $false; Error = $_.Exception.Message }
+    }
+}
+
+
 function Test-AdbDevicesAuthorization {
     # Checks if a headset is connected and authorized for USB debugging
     param (

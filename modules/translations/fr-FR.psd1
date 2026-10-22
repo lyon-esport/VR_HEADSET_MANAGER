@@ -428,6 +428,7 @@
         # --- Detection automatique sur le reseau ---
         SweepStart            = "Detection de casques : analyse de {0}..."
         SweepDone             = "Detection de casques : {0} appareil(s) trouve(s) en {1}s."
+        SweepModes            = "Detection de casques : classique={0}, TLS={1} (services mDNS : {2}), balayage en {3} ms."
         SweepFailed           = "Echec de la detection de casques : {0}"
         Found                 = "Detection de casques : {0} ({1}) sur {2}"
         UnknownDevice         = "Detection de casques : appareil inconnu {0} ({1}) sur {2} - en attente de l'operateur."
@@ -965,5 +966,33 @@
         Expired          = "Minuterie expiree pour le casque {0}"
         FilesInitialized = "Fichiers minuterie initialises ({0} casques)"
         FolderCreated    = "Dossier minuterie cree : {0}"
+    }
+
+    AdbWifi = @{
+        AutoEnableMenuOption  = "	 9. Installer l application ADB auto-enable sur un casque USB"
+        AutoEnableNoUsb       = "Aucun casque USB detecte."
+        AutoEnableApkMissing  = "APK ADB auto-enable introuvable : {0}"
+        AutoEnableInstalling  = "Installation de l application ADB auto-enable sur {0} ..."
+        AutoEnableStep        = "Application ADB auto-enable - {0} : {1}"
+        AutoEnableDone        = "Application ADB auto-enable installee et configuree. Le WiFi ADB sur TLS sera reactive a chaque demarrage."
+        AutoEnableUninstalled = "Application ADB auto-enable desinstallee de {0}."
+        AutoEnableFailed      = "Application ADB auto-enable : une ou plusieurs etapes ont echoue - {0}"
+        Switched              = "{0} est passe du WiFi ADB {1} au WiFi ADB {2}."
+        PreferredUnavailable  = "Le WiFi ADB {2} ne peut pas etre active sur {0} ({3}) : il reste en {1} jusqu au prochain changement de mode prefere, redemarrage du casque ou de l application."
+        PreferenceChanged     = "Reglages des modes WiFi ADB modifies (prefere : {0}) - verification de tous les casques et captures."
+        MenuNoPreference      = "sans preference (classique d abord)"
+        SwitchDeferred        = "{0} est en WiFi ADB TLS pendant une capture : le passage en classique attend la fin de la capture (scrcpy.usb_switch_mode = {1})."
+        ScrcpyModeSwitch      = "Le WiFi ADB de {0} est maintenant {2} - la capture quitte {1}."
+        ScrcpyEndpointLost    = "Le point d'acces WiFi ADB {1} de {0} a disparu - redemarrage de la capture."
+        MenuOption            = "  A. Modes WiFi ADB  - Prefere : {0}"
+        MenuTitle             = "  === Modes WiFi ADB ==="
+        MenuClassic           = "  1. Classique (adb tcpip, port {1})  - {0}"
+        MenuTls               = "  2. ADB sur TLS (debogage sans fil)  - {0}"
+        MenuPreferred         = "  3. Mode prefere  - {0} (utilise : {1})"
+        MenuHint              = "  Le mode prefere est utilise des que le casque y repond ; l autre mode sert de secours."
+        MenuEnabled           = "active"
+        MenuDisabled          = "desactive"
+        MenuSaved             = "Modes WiFi ADB enregistres. VRMonitor les applique a son prochain cycle lent."
+        MenuSaveFailed        = "Modes WiFi ADB : config.json non mis a jour - {0}"
     }
 }
