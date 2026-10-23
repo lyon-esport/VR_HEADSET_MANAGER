@@ -134,7 +134,6 @@ function Get-InstallProcessMap {
         $cl = [string]$p.CommandLine
         $id = [int]$p.ProcessId
         if ($cl -match 'web_server\.ps1') { $map[$id] = 'webserver' }
-        elseif ($cl -match 'headsets_dashboard\.ps1') { $map[$id] = 'dashboard' }
         elseif ($cl -match 'reaper\.ps1') { $map[$id] = 'reaper' }
         elseif ($cl -match 'mdns_responder') { $map[$id] = 'mdns' }
         elseif ($cl -match 'main\.ps1' -and ($cl.IndexOf($root, [StringComparison]::OrdinalIgnoreCase) -ge 0 -or $cl -match 'VR_HEADSET_MANAGER')) {

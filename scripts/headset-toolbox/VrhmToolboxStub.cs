@@ -20,6 +20,7 @@ class VrhmToolboxLauncher
         string entryPs1 = Path.Combine(subDir, "Start-VrhmToolbox.ps1");
         string cachePath = Path.Combine(subDir, "vrhm_server_cache.json");
 
+        // The embedded files: the four scripts plus the operator's HOWTO.txt.
         // adb.exe is deliberately NOT in this list. It is downloaded from the
         // VRHM server on first use, so this binary stays small and adb never
         // drifts from the version the server itself runs.
@@ -27,7 +28,8 @@ class VrhmToolboxLauncher
             "Start-VrhmToolbox.ps1",
             "VrhmServerDiscovery.ps1",
             "VrhmHeadsetOnboard.ps1",
-            "VrhmKioskAgent.ps1"
+            "VrhmKioskAgent.ps1",
+            "HOWTO.txt"
         };
 
         // Unconditional: the folder must exist even when nothing needs
@@ -84,6 +86,20 @@ class VrhmToolboxLauncher
             catch { }
         }
 
+        // A ready-made "start the kiosk agent" shortcut for the operator to copy
+        // into the Startup folder (see HOWTO.txt). Re-created on every run so it
+        // always points at where this exe is NOW, even after the folder moved.
+        string exePath = Assembly.GetExecutingAssembly().Location;
+        try
+        {
+            CreateShortcut(Path.Combine(subDir, "VRHM Kiosk Agent.lnk"), exePath, "-kiosk", exeDir,
+                           "VR HEADSET MANAGER - start the kiosk agent");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("Could not create the kiosk shortcut: " + ex.Message);
+        }
+
         StringBuilder psArgs = new StringBuilder();
         psArgs.Append("-NoProfile -ExecutionPolicy Bypass -File \"").Append(entryPs1).Append("\"");
         psArgs.Append(" -ServerCachePath \"").Append(cachePath).Append("\"");
@@ -111,6 +127,33 @@ class VrhmToolboxLauncher
         {
             p.WaitForExit();
             return p.ExitCode;
+        }
+    }
+
+    static void CreateShortcut(string linkPath, string targetPath, string arguments,
+                               string workingDirectory, string description)
+    {
+        // WScript.Shell through late binding, so the build needs no extra
+        // assembly reference (csc compiles this file on its own).
+        Type shellType = Type.GetTypeFromProgID("WScript.Shell");
+        if (shellType == null) { throw new InvalidOperationException("WScript.Shell is not available"); }
+        object shell = Activator.CreateInstance(shellType);
+        try
+        {
+            object link = shellType.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell,
+                                                 new object[] { linkPath });
+            Type linkType = link.GetType();
+            linkType.InvokeMember("TargetPath", BindingFlags.SetProperty, null, link, new object[] { targetPath });
+            linkType.InvokeMember("Arguments", BindingFlags.SetProperty, null, link, new object[] { arguments });
+            linkType.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, link, new object[] { workingDirectory });
+            linkType.InvokeMember("IconLocation", BindingFlags.SetProperty, null, link, new object[] { targetPath + ",0" });
+            linkType.InvokeMember("Description", BindingFlags.SetProperty, null, link, new object[] { description });
+            linkType.InvokeMember("Save", BindingFlags.InvokeMethod, null, link, null);
+            System.Runtime.InteropServices.Marshal.FinalReleaseComObject(link);
+        }
+        finally
+        {
+            System.Runtime.InteropServices.Marshal.FinalReleaseComObject(shell);
         }
     }
 

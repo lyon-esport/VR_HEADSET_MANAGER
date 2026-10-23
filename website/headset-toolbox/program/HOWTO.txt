@@ -1,0 +1,82 @@
+VRHM HEADSET TOOLBOX - HOW TO START IT
+======================================
+
+This folder (VRHM-Toolbox) is created by VRHM-Headset-Toolbox.exe the first
+time it runs. Its scripts are refreshed each time a NEW exe is run, so edits
+made to them here are lost when the exe is replaced.
+
+
+1. NORMAL START
+---------------
+Double-click VRHM-Headset-Toolbox.exe. It finds the VR HEADSET MANAGER server
+on the network and shows a menu:
+  [1] Headset Toolbox  - onboard a USB headset
+  [2] Kiosk Agent      - turn this PC into a managed Chrome kiosk
+  [3] Change server    - search again or type an address
+  [0] Quit
+
+Of the files in this folder, only Start-VrhmToolbox.ps1 is a starting point.
+VrhmKioskAgent.ps1, VrhmHeadsetOnboard.ps1 and VrhmServerDiscovery.ps1 are
+parts of it: run on their own, they print a notice and start
+Start-VrhmToolbox.ps1 for you.
+
+
+2. COMMAND LINE
+---------------
+Switches (same for the exe and for Start-VrhmToolbox.ps1):
+  -kiosk            go straight to the kiosk agent
+  -toolbox          go straight to the headset toolbox
+  -autodiscover     search the network again, then show the menu
+  -vrhm_ip <addr>   use this server: ip, ip:port or http://host:port
+                    (skips the network search)
+  -vrhm_port <n>    server port, default 8080
+
+Examples, from the folder that holds the exe:
+  VRHM-Headset-Toolbox.exe -kiosk
+  VRHM-Headset-Toolbox.exe -kiosk -vrhm_ip 192.168.1.37 -vrhm_port 8080
+
+From PowerShell, without the exe:
+  powershell -NoProfile -ExecutionPolicy Bypass -File .\VRHM-Toolbox\Start-VrhmToolbox.ps1 -kiosk
+
+From the PowerShell ISE: open Start-VrhmToolbox.ps1 (or VrhmKioskAgent.ps1)
+and press F5.
+
+
+3. START THE KIOSK AUTOMATICALLY WHEN WINDOWS STARTS
+----------------------------------------------------
+The exe creates the shortcut "VRHM Kiosk Agent.lnk" in this folder each time
+it runs. It starts VRHM-Headset-Toolbox.exe -kiosk.
+
+  a) Press Win + R, type   shell:startup   and press Enter.
+  b) Copy "VRHM Kiosk Agent.lnk" into the folder that opens.
+  c) Optional: right-click the copy > Properties, and add
+     -vrhm_ip <server ip> at the end of "Target" to skip the network search.
+
+The kiosk agent needs Administrator rights (firewall rules, port forward,
+reboot / shutdown commands). With the shortcut, Windows therefore asks for
+permission (UAC) at every logon.
+
+To start it with no UAC prompt, use a scheduled task instead of the
+shortcut. In a PowerShell or command prompt opened as Administrator
+(replace the path with where the exe really is):
+
+  schtasks /Create /TN "VRHM Kiosk Agent" /SC ONLOGON /RL HIGHEST /TR "\"C:\VRHM\VRHM-Headset-Toolbox.exe\" -kiosk"
+
+To remove it:
+  schtasks /Delete /TN "VRHM Kiosk Agent" /F
+
+If the exe is moved, run it once from its new place (the shortcut follows),
+then copy the shortcut again or re-create the scheduled task.
+
+
+4. STOPPING THE KIOSK AGENT
+---------------------------
+Press Ctrl + C in the agent window, or select this kiosk on the Kiosk Screens
+page of the VR HEADSET MANAGER web interface and click "Stop kiosk session". Chrome, the port
+forward and the firewall rules are cleaned up.
+
+
+5. MORE
+-------
+adb.exe is downloaded from the server the first time option [1] is used and
+kept in this folder. vrhm_server_cache.json remembers the server last used.

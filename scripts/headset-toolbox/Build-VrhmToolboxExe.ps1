@@ -72,7 +72,8 @@ $embeddedScripts = @(
     "Start-VrhmToolbox.ps1",
     "VrhmServerDiscovery.ps1",
     "VrhmHeadsetOnboard.ps1",
-    "VrhmKioskAgent.ps1"
+    "VrhmKioskAgent.ps1",
+    "HOWTO.txt"
 )
 
 foreach ($name in $embeddedScripts) {

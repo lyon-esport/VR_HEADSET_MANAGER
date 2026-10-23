@@ -64,9 +64,14 @@ Levels: `DEBUG` < `INFO` < `SUCCESS` < `WARNING` < `ERROR` < `NONE`.
 | Key | Default | Description |
 |---|---|---|
 | `refresh_timer` | `5` | Headset polling interval in seconds |
-| `showConsole` | `false` | Open a separate live dashboard console window |
 | `networkDiscovery.enabled` | `true` | Background LAN sweep that finds headsets whose serial is not registered yet (proposed in "Discovered devices") and heals an address that changed (DHCP). Applies on the next monitor cycle, no restart |
 | `networkDiscovery.interval_sec` | `60` | Seconds between two sweeps (minimum 10) |
+
+### `Console`
+
+| Key | Default | Description |
+|---|---|---|
+| `live_refresh_sec` | `5` | How often the console main screen and the headset panel redraw their status header and headset table while nothing is typed. `0` turns it off; values under 2 are raised to 2. Applies on the next console reload (F5) or restart |
 
 ### `ComputerMonitoring`
 

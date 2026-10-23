@@ -86,8 +86,9 @@ function Start-RecordingPlayback {
         Starts a live h264 re-encode of a recording into mediamtx and returns its WHEP URL.
     .DESCRIPTION
         -Speed is limited to 1, 2 or 4. -OffsetSec is clamped to [0, duration-1] when the duration
-        is known. -FilePath bypasses the catalogue (testing). Enforces
-        $global:Recordings_playback_max_sessions after reaping idle sessions.
+        is known. -FilePath bypasses the catalogue (testing). Caps concurrent sessions at
+        $global:Recordings_playback_max_sessions after reaping idle ones: at the cap the least
+        recently pinged session is evicted so the new request succeeds.
     .EXAMPLE
         $p = Start-RecordingPlayback -RecordingId 12 -OffsetSec 30 -Speed 2 -HostName '192.168.1.10'
         if ($p.Ok) { $p.WhepUrl }
@@ -128,8 +129,14 @@ function Start-RecordingPlayback {
 
         $null = Remove-IdleRecordingPlayback
         $max = if ($global:Recordings_playback_max_sessions) { [int]$global:Recordings_playback_max_sessions } else { 2 }
-        if ($script:RecordingPlaybackSessions.Count -ge $max) {
-            return (& $fail ("Too many previews running ({0}). Close one first." -f $max))
+        # At the cap, the newest request wins: evict the least recently pinged session(s).
+        while ($script:RecordingPlaybackSessions.Count -ge $max) {
+            $oldest = @($script:RecordingPlaybackSessions.GetEnumerator() |
+                Sort-Object { $_.Value.LastPing }, { $_.Value.StartedAt } | Select-Object -First 1)
+            if (-not $oldest -or -not (Stop-RecordingPlayback -Token $oldest[0].Key)) {
+                return (& $fail ("Too many previews running ({0}). Close one first." -f $max))
+            }
+            Write-Log ("Recording playback: evicted {0} to make room" -f $oldest[0].Key) -Level INFO
         }
 
         $maxH = if ($global:Recordings_playback_max_height)  { [int]$global:Recordings_playback_max_height }  else { 720 }

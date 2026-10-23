@@ -1050,8 +1050,9 @@
         { type: 'subgroup', label: 'Headset Monitoring' },
         { path: 'VRMonitor.refresh_timer', label: 'Refresh Timer', type: 'number', min: 1, max: 120, unit: 'seconds',
           desc: 'How often the monitor polls headset status.' },
-        { path: 'VRMonitor.showConsole', label: 'Show Monitoring Console', type: 'boolean',
-          desc: 'Display the VR Headset Monitoring console window on startup. Requires restart.' },
+
+        { path: 'Console.live_refresh_sec', label: 'Console Live Refresh', type: 'number', min: 0, max: 600, unit: 'seconds',
+          desc: 'How often the main console screen redraws its status header and headset table while nothing is typed. 0 turns it off; values under 2 are raised to 2. Applies on the next console reload (F5) or restart.' },
         { path: 'VRMonitor.networkDiscovery.enabled', label: 'Background Network Discovery', type: 'boolean',
           desc: 'Periodically scan the local network for headsets. A known headset that changed IP address is '
               + 'corrected automatically; an unknown one is proposed under "Discovered devices" on the Headsets '

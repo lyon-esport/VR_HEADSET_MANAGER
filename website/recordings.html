@@ -685,7 +685,13 @@
         if (seq !== startPlayback.seq) return;
         return api('/api/recordings/play', { id: rec.id, offset: offset, speed: spd });
       }).then(function (j) {
-        if (!j || seq !== startPlayback.seq) return;
+        if (!j) return;
+        if (seq !== startPlayback.seq) {
+          // Superseded while the server was starting it: nobody will ever hold this token, so
+          // release the session now instead of leaving it to the heartbeat timeout.
+          if (j.ok && j.token) api('/api/recordings/play-stop', { token: j.token });
+          return;
+        }
         if (!j.ok) { setOverlay('Playback failed: ' + j.error); showError('Playback failed: ' + j.error); return; }
         cur.token = j.token;
         cur.offset = (j.offsetSec != null) ? j.offsetSec : offset;

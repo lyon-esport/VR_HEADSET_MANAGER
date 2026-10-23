@@ -1,7 +1,7 @@
 # VR Headsets Manager - reaper.ps1
 # Standalone hidden watchdog: when the main process dies unexpectedly (crash,
 # Ctrl+C, X button), reads PID files in data\ and kills any orphan services
-# (mediamtx, web server, dashboard) plus any scrcpy launched from this app.
+# (mediamtx, web server, mDNS responder) plus any scrcpy launched from this app.
 #
 # This script intentionally does NOT dot-source the module set. It must stay
 # self-contained so a broken module cannot prevent cleanup.
@@ -9,7 +9,7 @@
 # PID-file contract (data\*.pid). Writer / reader / deleter:
 #   webserver.pid        web_server.ps1 at start        | reaper, Stop-WebServer, Get-WebServerProcess | web server on exit, reaper
 #   mediamtx.pid         Start-MediaMtx                 | reaper, Get-MediaMtxProcess                  | Stop-MediaMtx, reaper
-#   dashboard.pid        main.ps1 / Show-MainMenu       | reaper                                       | dashboard on exit, reaper
+
 #   mdns_responder.pid   Start-MdnsResponder            | reaper                                       | Stop-MdnsResponder, reaper
 # scrcpy / ffmpeg / adb have no PID file: matched by exe path under sources\.
 # The pipe bridge is a thread of the process that started the stream (ADR-0035): it dies with
@@ -28,7 +28,7 @@ $reaperExitFlag    = Join-Path $dataFolder "reaper_exit.flag"
 $pidFiles          = @(
     (Join-Path $dataFolder "webserver.pid"),
     (Join-Path $dataFolder "mediamtx.pid"),
-    (Join-Path $dataFolder "dashboard.pid"),
+
     (Join-Path $dataFolder "mdns_responder.pid")
 )
 

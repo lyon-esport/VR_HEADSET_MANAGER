@@ -4,7 +4,10 @@
     VR HEADSET MANAGER server.
 
 .DESCRIPTION
-    Dot-sourced by Start-VrhmToolbox.ps1. Launches Chrome in kiosk mode with the
+    Dot-sourced by Start-VrhmToolbox.ps1. Run on its own, it only starts
+    Start-VrhmToolbox.ps1 (see the end of the file) - that is the entry point.
+
+    Launches Chrome in kiosk mode with the
     DevTools port open, then reports to the server every few seconds and carries
     out the commands that ride back in the reply (reboot, shutdown,
     browser-restart, agent-stop).
@@ -975,4 +978,22 @@ function Start-VrhmKioskAgent {
         Stop-VrhmKioskAgent
         Write-Host "Done." -ForegroundColor DarkGray
     }
+}
+
+# ---------------------------------------------------------------------------
+# Run directly (ISE F5, right-click Run, powershell -File) instead of being
+# dot-sourced by Start-VrhmToolbox.ps1: this file only defines functions, so
+# hand over to the real entry point. Start-VrhmToolbox.ps1 sets the marker
+# while it loads the libraries, so nothing happens here in that case.
+# ---------------------------------------------------------------------------
+if (-not $global:VrhmToolboxLoadingLibraries) {
+    $vrhmHere  = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+    $vrhmEntry = Join-Path $vrhmHere 'Start-VrhmToolbox.ps1'
+    Write-Host "This file is a part of the toolbox, not its entry point. Starting Start-VrhmToolbox.ps1 -kiosk" -ForegroundColor Yellow
+    Write-Host "(VRHM-Headset-Toolbox.exe does the same - see HOWTO.txt.)" -ForegroundColor Yellow
+    if (-not (Test-Path -LiteralPath $vrhmEntry)) {
+        Write-Host "Start-VrhmToolbox.ps1 was not found next to this file: $vrhmEntry" -ForegroundColor Red
+        return
+    }
+    & $vrhmEntry -kiosk @args
 }

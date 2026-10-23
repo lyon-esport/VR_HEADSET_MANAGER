@@ -302,232 +302,922 @@ function Show-HeadsetPickerMenu {
 }
 
 
-function Show-MainMenu {
-    do {
+# ---------------------------------------------------------------------------
+# Main screen ("cockpit"): status header, live headset table, grouped tiles.
+# Drawn with the ASCII kit of console_ui.ps1. The header and the table are the
+# "dynamic" region: Read-CockpitInput redraws it in place while nothing is typed.
+# ---------------------------------------------------------------------------
 
+function Test-CockpitFlag {
+    # $true for a live-status flag that reads as on: 1, True, OK (the status table stores
+    # booleans as 1/0, the SCRCPY column as "OK"/"-").
+    param([AllowNull()] $Value)
+    if ($null -eq $Value) { return $false }
+    if ($Value -is [bool]) { return $Value }
+    return (([string]$Value).Trim() -in @('1', 'True', 'OK', 'Yes'))
+}
+
+function Set-CockpitNotice {
+    <#
+    .SYNOPSIS
+    Sets the one-line result shown under the headset table of the main screen and of the
+    headset panel (for 60 s), instead of pausing the screen with a sleep.
+    .EXAMPLE
+    Set-CockpitNotice -Text 'Recording ON for Q3 RED.' -Kind ok
+    #>
+    param([string]$Text, [ValidateSet('ok', 'warn', 'err', 'info')] [string]$Kind = 'info')
+    $script:CockpitNotice = @{ Text = $Text; Kind = $Kind; At = Get-Date }
+}
+
+function Get-CockpitNoticeSegments {
+    # Segments of the current notice, or a blank line once it is older than 60 s.
+    $n = $script:CockpitNotice
+    if (-not $n -or ((Get-Date) - $n.At).TotalSeconds -gt 60) { return @(New-UiSegment '') }
+    $tag, $color = switch ($n.Kind) {
+        'ok'   { '[OK]', 'Green' }
+        'warn' { '[!!]', 'Yellow' }
+        'err'  { '[XX]', 'Red' }
+        default { '[..]', 'Cyan' }
+    }
+    return @((New-UiSegment ('  ' + $tag + ' ') $color), (New-UiSegment $n.Text 'White'))
+}
+
+function Get-CockpitVersion {
+    # version.txt, read once per process ('' when missing).
+    if ($null -eq $script:CockpitVersion) {
+        $script:CockpitVersion = ''
+        try {
+            $vf = Join-Path $global:ScriptPath 'version.txt'
+            if (Test-Path -LiteralPath $vf) { $script:CockpitVersion = (Get-Content -LiteralPath $vf -Raw -Encoding UTF8).Trim() }
+        } catch { }
+    }
+    return $script:CockpitVersion
+}
+
+function Get-CockpitWebUrls {
+    <#
+    .SYNOPSIS
+    Addresses of the web monitor: the mDNS name first, then the interface holding the default
+    route, then every other usable LAN interface (Get-PrivateNetworks drops link-down and
+    virtual adapters). Returns the URL strings; -Detailed returns @{ Url; Label } where Label
+    names the source ('mDNS', or the interface alias + WiFi/LAN + 'default route').
+    Cached 30 s: Get-PrivateNetworks calls Get-NetAdapter.
+    .EXAMPLE
+    Get-CockpitWebUrls -Detailed | Format-Table Url, Label
+    #>
+    param([switch]$Detailed)
+    if (-not $global:WebServer_enabled) { return @() }
+    $c = $script:CockpitUrlCache
+    if (-not $c -or ((Get-Date) - $c.At).TotalSeconds -ge 30) {
+        $list = @()
+        if ($global:MdnsResponder_enabled -and $global:MdnsResponder_hostname) {
+            $list += @{ Url = ('http://{0}.local:{1}' -f $global:MdnsResponder_hostname, $global:WebServer_port); Label = 'mDNS' }
+        }
+        try {
+            # Default-route interface first; the others keep the order Get-PrivateNetworks gives.
+            $nets = @(Get-PrivateNetworks)
+            foreach ($n in @($nets | Where-Object { $_.HasDefaultGateway }) + @($nets | Where-Object { -not $_.HasDefaultGateway })) {
+                $label = '{0} [{1}]' -f $n.InterfaceAlias, $(if ($n.IsWifi) { 'WiFi' } else { 'LAN' })
+                if ($n.HasDefaultGateway) { $label += ' - ' + $msg.Console.HelpWebDefault }
+                $list += @{ Url = ('http://{0}:{1}' -f $n.IPAddress, $global:WebServer_port); Label = $label }
+            }
+        } catch { }
+        $c = @{ At = Get-Date; List = $list }
+        $script:CockpitUrlCache = $c
+    }
+    if ($Detailed) { return @($c.List) }
+    return @($c.List | ForEach-Object { $_.Url })
+}
+
+function Get-CockpitLoadColor {
+    # Colour of a load percentage against the VQA thresholds (mitigation = amber, max = red).
+    param([AllowNull()] $Percent, [int]$Warn, [int]$High)
+    if ($null -eq $Percent) { return 'Gray' }
+    if ($Percent -ge $High) { return 'Red' }
+    if ($Percent -ge $Warn) { return 'Yellow' }
+    return 'White'
+}
+
+function Get-CockpitHeaderRows {
+    <#
+    .SYNOPSIS
+    The two rows of the main-screen banner as segment arrays: title + service status, then
+    PC load + recording drive + web addresses. Reads only published state (VRMonitor job,
+    pid files, the computer_monitoring snapshot): nothing is sampled here.
+    #>
+    param([int]$Width)
+    $inner = $Width - 4
+    $c = $msg.Console
+
+    # Row 1: title + version | service badges
+    $vrm = Get-VRMonitorStatusText
+    $vrmColor = switch ($vrm.Color) { 'Red' { 'Red' } 'Yellow' { 'Yellow' } default { 'Green' } }
+    $webColor = 'Gray'; $webText = ' ' + $c.Web
+    if ($global:WebServer_enabled) {
+        $webColor = if (Get-WebServerProcess) { 'Green' } else { 'Red' }
+        $webText = ' {0} :{1}' -f $c.Web, $global:WebServer_port
+    }
+    $mtxColor = 'Gray'
+    if ($global:mediamtxEnabled) { $mtxColor = if (Get-MediaMtxProcess) { 'Green' } else { 'Red' } }
+    $right = @(
+        (New-UiSegment '[*]' $vrmColor), (New-UiSegment (' ' + $c.Monitor + '  ')),
+        (New-UiSegment '[*]' $webColor), (New-UiSegment ($webText + '  ')),
+        (New-UiSegment '[*]' $mtxColor), (New-UiSegment (' ' + $c.MediaMtx))
+    )
+    $rightLen = ($right | ForEach-Object { $_.Text.Length } | Measure-Object -Sum).Sum
+    # On a narrow console the badges win: the version goes first, then the title.
+    $left = $c.Title
+    $ver = Get-CockpitVersion
+    if ($ver -and ($left.Length + 2 + $ver.Length + 1 + $rightLen) -le $inner) { $left += '  ' + $ver }
+    if (($left.Length + 1 + $rightLen) -gt $inner) { $left = '' }
+    $gap = [Math]::Max(1, $inner - $left.Length - $rightLen)
+    $row1 = @((New-UiSegment $left 'White'), (New-UiSegment (' ' * $gap))) + $right
+
+    # Row 2: CPU / GPU / RAM + recording drive | web addresses
+    $row2 = @()
+    $snap = $null
+    try { $snap = Get-DbKeyValue -Key 'computer_monitoring' } catch { $snap = $null }
+    if ($snap -and $snap.CPU) {
+        $cpu = if ($null -ne $snap.CPU.LoadPercent) { [int][Math]::Round([double]$snap.CPU.LoadPercent) } else { $null }
+        $ram = if ($snap.RAM -and $null -ne $snap.RAM.UsedPercent) { [int][Math]::Round([double]$snap.RAM.UsedPercent) } else { $null }
+        $row2 += New-UiSegment 'CPU ' 'Gray'
+        $row2 += New-UiSegment ('{0}%  ' -f $(if ($null -ne $cpu) { $cpu } else { '-' })) (Get-CockpitLoadColor -Percent $cpu -Warn $global:VQA_CpuMitigationThreshold -High $global:VQA_CpuMaxThreshold)
+        # One value per GPU, labelled with its index and vendor: "GPU0 (Intel) 3%  GPU1 (NVIDIA) 12%"
+        # (a single GPU drops the index). Utilization = busiest engine, as VQA judges it.
+        $gpus = @($snap.GPU | Where-Object { $_ })
+        foreach ($g in $gpus) {
+            $v = if ($null -ne $g.UtilizationPercent) { $g.UtilizationPercent } else { $g.Load3DPercent }
+            $pct = if ($null -ne $v) { [int][Math]::Round([double]$v) } else { $null }
+            $vendor = ''
+            if (Get-Command Get-GpuVendor -ErrorAction SilentlyContinue) { try { $vendor = [string](Get-GpuVendor -Gpu $g) } catch { $vendor = '' } }
+            if (-not $vendor -or $vendor -eq 'Unknown') { $vendor = (([string]$g.Model).Trim() -split '\s+')[0] }
+            $name = if ($gpus.Count -gt 1) { 'GPU{0}' -f $g.Index } else { 'GPU' }
+            if ($vendor) { $name += ' (' + $vendor + ')' }
+            $row2 += New-UiSegment ($name + ' ') 'Gray'
+            $row2 += New-UiSegment ('{0}%  ' -f $(if ($null -ne $pct) { $pct } else { '-' })) (Get-CockpitLoadColor -Percent $pct -Warn $global:VQA_GpuMitigationThreshold -High $global:VQA_GpuMaxThreshold)
+        }
+        if ($gpus.Count -eq 0) { $row2 += New-UiSegment 'GPU -  ' 'Gray' }
+        $row2 += New-UiSegment 'RAM ' 'Gray'
+        $row2 += New-UiSegment ('{0}%  ' -f $(if ($null -ne $ram) { $ram } else { '-' })) 'White'
+        $rd = $snap.RecordingDrive
+        if ($rd -and $rd.DriveLetter) {
+            $free = if ($null -ne $rd.FreeGB) { [Math]::Round([double]$rd.FreeGB) } else { '-' }
+            if ($rd.IsLow) { $row2 += New-UiSegment ($c.RecDriveLow -f $rd.DriveLetter, $free) 'Red' }
+            else { $row2 += New-UiSegment ($c.RecDrive -f $rd.DriveLetter, $free) 'White' }
+        }
+    } else {
+        $row2 += New-UiSegment $c.LoadUnknown 'Gray'
+    }
+    $leftLen = ($row2 | ForEach-Object { $_.Text.Length } | Measure-Object -Sum).Sum
+    # Web addresses, each its own clickable segment, in Get-CockpitWebUrls order (mDNS name,
+    # then the interface holding the default route, then the others), "+N" for those that do
+    # not fit; the help screen (F1) lists them all. Right of the load line when the first one
+    # fits there, else on a third banner row of their own (several GPUs fill the load line).
+    $urls = @(Get-CockpitWebUrls)
+    $rows = @(, $row1)
+    if ($urls.Count -eq 0) { return $rows + @(, $row2) }
+    $onRow2 = ($leftLen + 2 + $urls[0].Length + $(if ($urls.Count -gt 1) { (' +' + ($urls.Count - 1)).Length } else { 0 })) -le $inner
+    $room = if ($onRow2) { $inner - $leftLen - 2 } else { $inner - 2 }
+    $shown = @()
+    $width = 0
+    for ($i = 0; $i -lt $urls.Count; $i++) {
+        $more = $urls.Count - $i - 1
+        $moreText = if ($more -gt 0) { ' +' + $more } else { '' }
+        $next = $width + $(if ($shown.Count) { 2 } else { 0 }) + $urls[$i].Length
+        if ($next + $moreText.Length -gt $room) { break }
+        $shown += $urls[$i]
+        $width = $next
+    }
+    $hidden = $urls.Count - $shown.Count
+    $tail = if ($hidden -gt 0) { ' +' + $hidden } else { '' }
+    $urlSegs = @()
+    for ($i = 0; $i -lt $shown.Count; $i++) {
+        if ($i -gt 0) { $urlSegs += New-UiSegment '  ' }
+        $urlSegs += New-UiSegment $shown[$i] 'Cyan' $null $shown[$i]
+    }
+    if ($tail -and ($width + $tail.Length) -le $room) { $urlSegs += New-UiSegment $tail 'Gray' } else { $tail = '' }
+    $total = $width + $tail.Length
+    if ($onRow2) {
+        $row2 += New-UiSegment (' ' * [Math]::Max(2, $inner - $leftLen - $total))
+        $row2 += $urlSegs
+        return $rows + @(, $row2)
+    }
+    $row3 = @((New-UiSegment (' ' * [Math]::Max(0, $inner - $total)))) + $urlSegs
+    return $rows + @(, $row2) + @(, $row3)
+}
+
+function Get-CockpitHeadsetRows {
+    # Registry rows with their live status (Get-HeadsetInfosMerged), in display order. A
+    # headset whose status row does not exist yet (just added) is kept, with no status.
+    $merged = @()
+    try { $merged = @(Get-HeadsetInfosMerged) } catch { $merged = @() }
+    $known = @()
+    try { $known = @(Get-KnownHeadsets) } catch { $known = @() }
+    $byId = @{}
+    foreach ($m in $merged) { $byId[[string]$m.ID] = $m }
+    $rows = @()
+    foreach ($k in $known) {
+        if ($byId.ContainsKey([string]$k.ID)) { $rows += $byId[[string]$k.ID] } else { $rows += $k }
+    }
+    return $rows
+}
+
+function Get-CockpitLinkSegments {
+    # "* WiFi TLS" / "* USB" (green), "* ping, no ADB" (amber), "o offline" (dark gray).
+    param($Row, [int]$Width)
+    $c = $msg.Console
+    # One column of the width is kept as a gap before the next column.
+    $Width = [Math]::Max(1, $Width - 1)
+    if (Test-UnknownIp $Row.IPAddress) { return @{ Text = (Format-UiCell -Text ('- ' + $c.LinkUnknownIp) -Width $Width) + ' '; Color = 'DarkGray'; Online = $false } }
+    if (Test-CockpitFlag $Row.ADBWifi) {
+        $t = [string]$Row.AdbTransport
+        if (-not $t -or $t -eq '-') { $t = 'ADB' }
+        if ($t -eq 'WiFi' -and [string]$Row.AdbWifiMode -eq 'TLS') { $t = 'WiFi TLS' }
+        return @{ Text = (Format-UiCell -Text ('* ' + $t) -Width $Width) + ' '; Color = 'Green'; Online = $true }
+    }
+    if (Test-CockpitFlag $Row.Ping) { return @{ Text = (Format-UiCell -Text ('* ' + $c.LinkPingOnly) -Width $Width) + ' '; Color = 'Yellow'; Online = $true } }
+    return @{ Text = (Format-UiCell -Text ('o ' + $c.LinkOffline) -Width $Width) + ' '; Color = 'DarkGray'; Online = $false }
+}
+
+function Get-CockpitBatterySegment {
+    # "87%" (+ when charging), coloured against Monitoring.thresholds.headset_battery_*.
+    param($Row, [int]$Width)
+    $b = [string]$Row.Battery
+    if ($b -match '^\s*(\d{1,3})') {
+        $n = [int]$Matches[1]
+        $text = '{0}%' -f $n
+        if (Test-CockpitFlag $Row.Charging) { $text += '+' }
+        $color = 'White'
+        if ($n -le $global:Monitoring_headset_battery_criticalLevel) { $color = 'Red' }
+        elseif ($n -lt $global:Monitoring_headset_battery_warningLevel) { $color = 'Yellow' }
+        return (New-UiSegment (Format-UiCell -Text $text -Width $Width) $color)
+    }
+    return (New-UiSegment (Format-UiCell -Text '-' -Width $Width) 'DarkGray')
+}
+
+function Write-CockpitDynamic {
+    <#
+    .SYNOPSIS
+    Draws the dynamic region of the main screen - banner, headset table, notice line - and
+    returns how many lines it wrote. -Pad pads every line to the width so a redraw in place
+    fully replaces the previous content.
+    #>
+    param([int]$Width, [switch]$Pad)
+    $c = $msg.Console
+    $lines = Write-UiBanner -Rows (Get-CockpitHeaderRows -Width $Width) -Fg 'White' -Bg 'DarkBlue' -Width $Width
+
+    # Column widths; PROFILE then AUTO are dropped on a narrow console.
+    $wId = 4; $wName = 14; $wLink = 12; $wBat = 6; $wCast = 7; $wAuto = 5; $wRec = 4
+    $fixed = 2 + $wId + $wName + $wLink + $wBat + $wCast + $wRec
+    $showAuto = ($Width -ge $fixed + $wAuto + 1)
+    if ($showAuto) { $fixed += $wAuto }
+    $wProfile = $Width - $fixed - 1
+    $showProfile = ($wProfile -ge 10)
+
+    Write-UiSegments -Segments @(New-UiSegment '') -Width $Width -Pad:$Pad; $lines++
+    $hdr = '  ' + (Format-UiCell $c.ColId $wId) + (Format-UiCell $c.ColHeadset $wName) + (Format-UiCell $c.ColLink $wLink) +
+           (Format-UiCell $c.ColBattery $wBat) + (Format-UiCell $c.ColCast $wCast)
+    if ($showAuto) { $hdr += Format-UiCell $c.ColAuto $wAuto }
+    $hdr += Format-UiCell $c.ColRec $wRec
+    if ($showProfile) { $hdr += $c.ColProfile }
+    Write-UiSegments -Segments @(New-UiSegment $hdr 'Yellow') -Width $Width -Pad:$Pad; $lines++
+
+    $rows = @(Get-CockpitHeadsetRows)
+    if ($rows.Count -eq 0) {
+        Write-UiSegments -Segments @(New-UiSegment ('  ' + $c.NoHeadsets) 'DarkGray') -Width $Width -Pad:$Pad; $lines++
+    } else {
+        $starting = @()
+        try { $starting = @(Get-ScrcpyStartingIds) } catch { $starting = @() }
+        foreach ($r in $rows) {
+            $link = Get-CockpitLinkSegments -Row $r -Width $wLink
+            $nameColor = if ($link.Online) { 'White' } else { 'DarkGray' }
+            $segs = @(
+                (New-UiSegment ('  ' + (Format-UiCell ([string]$r.ID) $wId)) 'Cyan'),
+                (New-UiSegment (Format-UiCell ([string]$r.Name) ($wName - 1)) $nameColor),
+                (New-UiSegment ' '),
+                (New-UiSegment $link.Text $link.Color),
+                (Get-CockpitBatterySegment -Row $r -Width $wBat)
+            )
+            if ($starting -contains [int]$r.ID) { $segs += New-UiSegment (Format-UiCell $c.CastStarting $wCast) 'Yellow' }
+            elseif (Test-CockpitFlag $r.SCRCPY) { $segs += New-UiSegment (Format-UiCell $c.CastLive $wCast) 'Green' }
+            else { $segs += New-UiSegment (Format-UiCell $c.CastIdle $wCast) 'DarkGray' }
+            if ($showAuto) {
+                if (ConvertTo-BoolField $r.scrcpy_AutoRestart) { $segs += New-UiSegment (Format-UiCell $c.On $wAuto) 'Green' }
+                else { $segs += New-UiSegment (Format-UiCell $c.Off $wAuto) 'DarkGray' }
+            }
+            if (ConvertTo-BoolField $r.Record) { $segs += New-UiSegment (Format-UiCell ' *' $wRec) 'Red' }
+            else { $segs += New-UiSegment (Format-UiCell '' $wRec) }
+            if ($showProfile) { $segs += New-UiSegment (Format-UiCell ([string]$r.ScrcpyProfile) $wProfile -Dash) 'Gray' }
+            Write-UiSegments -Segments $segs -Width $Width -Pad:$Pad; $lines++
+        }
+    }
+    Write-UiSegments -Segments @(New-UiSegment '') -Width $Width -Pad:$Pad; $lines++
+    Write-UiSegments -Segments (Get-CockpitNoticeSegments) -Width $Width -Pad:$Pad; $lines++
+    return $lines
+}
+
+function Get-CockpitKeymap {
+    <#
+    .SYNOPSIS
+    THE shortcut table of the main screen: @(@{ Key; Aliases; Group; Label; Badge; Hidden;
+    Action }). Both the tiles / dispatcher (Show-MainMenu) and the help screen
+    (Show-ConsoleHelp) read it, so they cannot drift. Built per call because labels come from
+    $msg and some entries depend on live state (pending discovered devices, VQA enabled).
+    #>
+    $c = $msg.Console
+    $pending = 0
+    if (Get-Command Get-PendingDiscoveredHeadsets -ErrorAction SilentlyContinue) {
+        try { $pending = @(Get-PendingDiscoveredHeadsets).Count } catch { $pending = 0 }
+    }
+    $vqa = [bool]($global:VQA_Enabled -and (Get-Command Show-SubMenu-Monitoring -ErrorAction SilentlyContinue))
+    return @(
+        @{ Key = 'H'; Group = 'Headsets'; Label = $c.TileHeadsets;   Action = { Show-SubMenu-AddHeadset } },
+        @{ Key = 'D'; Group = 'Headsets'; Label = $c.TileDiscovered; Badge = $(if ($pending -gt 0) { [string]$pending } else { '' }); Hidden = ($pending -eq 0); Action = {
+            if (@(Get-PendingDiscoveredHeadsets).Count -gt 0) { Show-SubMenu-DiscoveredHeadsets }
+            else { Set-CockpitNotice -Text $msg.Console.HsDiscoveredNone -Kind info }
+        } },
+        @{ Key = 'A'; Group = 'Headsets'; Label = $c.TileApps;       Action = { Show-SubMenu-LaunchApp } },
+        @{ Key = 'S'; Group = 'Streams';  Label = $c.TileAutoCast;   Action = { Show-SubMenu-scrcpyTracking } },
+        @{ Key = 'P'; Group = 'Streams';  Label = $c.TileProfiles;   Aliases = @('M'); Action = { Show-SubMenu-ScrcpyOptions } },
+        @{ Key = 'R'; Group = 'Streams';  Label = $c.TileRecording;  Action = { Show-SubMenu-Recording } },
+        @{ Key = 'K'; Group = 'Site';     Label = $c.TileKiosks;     Action = { Show-SubMenu-KioskScreens } },
+        @{ Key = 'W'; Group = 'Site';     Label = $c.TileWeb;        Aliases = @('B'); Badge = $(if ($global:WebServer_enabled) { '' } else { $c.Off }); Action = {
+            if ($global:WebServer_enabled) {
+                Start-Process ("http://localhost:{0}/" -f $global:WebServer_port)
+                Set-CockpitNotice -Text $msg.Console.WebOpened -Kind ok
+            } else { Set-CockpitNotice -Text $msg.MenuWebServerDisabled -Kind err }
+        } },
+        @{ Key = 'I'; Group = 'Site';     Label = $c.TileInternet;   Action = {
+            if (Test-InternetConnectivity) { Set-CockpitNotice -Text $msg.InternetOK.Trim() -Kind ok }
+            else { Set-CockpitNotice -Text $msg.InternetProblem.Trim() -Kind err }
+        } },
+        @{ Key = 'V'; Group = 'System';   Label = $c.TileServices;   Action = { Show-SubMenu-Services } },
+        @{ Key = 'C'; Group = 'System';   Label = $c.TileConfig;     Action = { Show-SubMenu-Config } },
+        @{ Key = 'F'; Group = 'System';   Label = $c.TileFiles;      Action = { Show-SubMenu-FilesAndFolders } },
+        @{ Key = 'L'; Group = 'System';   Label = $c.FilesLogPick; Hidden = $true; Action = { Show-SubMenu-LogFiles } },
+        @{ Key = 'Q'; Group = 'System';   Label = $c.TileQuality;    Hidden = (-not $vqa); InHelp = $vqa; Action = {
+            if ($global:VQA_Enabled -and (Get-Command Show-SubMenu-Monitoring -ErrorAction SilentlyContinue)) { Show-SubMenu-Monitoring }
+        } }
+    )
+}
+
+function Get-CockpitTileGroups {
+    # The keymap shaped for Write-UiTiles: the visible entries of each group, in order.
+    param([array]$Keymap)
+    $c = $msg.Console
+    $defs = @(
+        @{ Id = 'Headsets'; Title = $c.GroupHeadsets; Color = 'Green' },
+        @{ Id = 'Streams';  Title = $c.GroupStreams;  Color = 'Cyan' },
+        @{ Id = 'Site';     Title = $c.GroupSite;     Color = 'Magenta' },
+        @{ Id = 'System';   Title = $c.GroupSystem;   Color = 'Gray' }
+    )
+    $groups = @()
+    foreach ($d in $defs) {
+        $items = @($Keymap | Where-Object { $_.Group -eq $d.Id -and -not $_.Hidden } | ForEach-Object {
+            @{ Key = $_.Key; Label = $_.Label; Badge = $_.Badge }
+        })
+        $groups += @{ Title = $d.Title; Color = $d.Color; Items = $items }
+    }
+    return $groups
+}
+
+function Write-CockpitScreen {
+    # Full redraw of the main screen. Records in -State where the dynamic region starts and
+    # how tall it is, for the in-place refresh of Read-CockpitInput.
+    param([hashtable]$State, [array]$Keymap)
+    Clear-Host
+    $w = Get-UiWidth
+    $State.Width = $w
+    $State.Top   = 0
+    try { $State.Top = [Console]::CursorTop } catch { }
+    $State.Lines = Write-CockpitDynamic -Width $w
+    [void](Write-UiTiles -Groups (Get-CockpitTileGroups -Keymap $Keymap) -Width $w -MaxTileWidth 22)
+    Write-Host ('  ' + $msg.Console.FooterQuick) -ForegroundColor Gray
+    Write-Host ('  ' + $msg.Console.FooterSystem) -ForegroundColor Gray -NoNewline
+    Write-Host $msg.Console.FooterShutdown -ForegroundColor Red
+    Write-Host ''
+}
+
+function Read-CockpitInput {
+    <#
+    .SYNOPSIS
+    The input line of the main screen. A small line editor on [Console]::ReadKey instead of
+    Read-Host, so F1 / F5 / '?' can be caught. While waiting it runs the VRMonitor supervision
+    about once a second (Invoke-VRMonitorSupervision, as Read-MenuLine does) and, while the
+    line is empty, redraws the dynamic region in place every Console.live_refresh_sec seconds.
+    Returns @{ Kind = 'Line' | 'Key' | 'Redraw'; Value }.
+
+    .DESCRIPTION
+    Keystrokes injected by the web server (/api/app-shutdown, /app-restart, /host-shutdown
+    write "0" / "00" / "000" + Enter into this console with WriteConsoleInput) are ordinary key
+    events here, so they keep working. Redirected input falls back to Read-Host.
+    #>
+    param([hashtable]$State)
+    $canPoll = $true
+    try { $null = [Console]::KeyAvailable } catch { $canPoll = $false }
+    if (-not $canPoll) { return @{ Kind = 'Line'; Value = [string](Read-Host '>') } }
+
+    $prompt = '  > '
+    Write-Host $prompt -NoNewline -ForegroundColor Magenta
+    $buf = New-Object System.Text.StringBuilder
+    $refreshSec = if ($null -ne $global:Console_live_refresh_sec) { [int]$global:Console_live_refresh_sec } else { 5 }
+    $nextIdle = Get-Date
+    $nextRefresh = if ($refreshSec -gt 0) { (Get-Date).AddSeconds($refreshSec) } else { [datetime]::MaxValue }
+
+    while ($true) {
+        while (-not [Console]::KeyAvailable) {
+            $now = Get-Date
+            if ($now -ge $nextIdle) {
+                $before = try { '{0},{1}' -f [Console]::CursorLeft, [Console]::CursorTop } catch { '' }
+                try { Invoke-VRMonitorSupervision } catch { }
+                $after = try { '{0},{1}' -f [Console]::CursorLeft, [Console]::CursorTop } catch { '' }
+                if ($before -ne $after) {
+                    # The supervision printed something (a log line).
+                    if ($buf.Length -eq 0) { return @{ Kind = 'Redraw'; Value = $null } }
+                    Write-Host ''
+                    Write-Host $prompt -NoNewline -ForegroundColor Magenta
+                    Write-Host $buf.ToString() -NoNewline
+                }
+                $nextIdle = $now.AddMilliseconds(1000)
+            }
+            if ($buf.Length -eq 0 -and $now -ge $nextRefresh) {
+                $ok = $false
+                if ((Get-UiWidth) -eq $State.Width) {
+                    $saveLeft = [Console]::CursorLeft; $saveTop = [Console]::CursorTop
+                    try { [Console]::CursorVisible = $false } catch { }
+                    try {
+                        [Console]::SetCursorPosition(0, $State.Top)
+                        $ok = ((Write-CockpitDynamic -Width $State.Width -Pad) -eq $State.Lines)
+                        [Console]::SetCursorPosition($saveLeft, $saveTop)
+                    } catch { $ok = $false }
+                    try { [Console]::CursorVisible = $true } catch { }
+                }
+                # A different width or a table that grew/shrank: redraw everything.
+                if (-not $ok) { return @{ Kind = 'Redraw'; Value = $null } }
+                $nextRefresh = (Get-Date).AddSeconds($refreshSec)
+            }
+            Start-Sleep -Milliseconds 100
+        }
+
+        $k = [Console]::ReadKey($true)
+        if ($k.Key -eq [ConsoleKey]::F1) { Write-Host ''; return @{ Kind = 'Key'; Value = 'F1' } }
+        if ($k.Key -eq [ConsoleKey]::F5) { Write-Host ''; return @{ Kind = 'Key'; Value = 'F5' } }
+        if ($k.Key -eq [ConsoleKey]::Enter -or [int]$k.KeyChar -eq 13) {
+            Write-Host ''
+            return @{ Kind = 'Line'; Value = $buf.ToString() }
+        }
+        if ($k.Key -eq [ConsoleKey]::Escape) {
+            $n = $buf.Length
+            if ($n -gt 0) { Write-Host (("`b" * $n) + (' ' * $n) + ("`b" * $n)) -NoNewline; [void]$buf.Clear() }
+            continue
+        }
+        if ($k.Key -eq [ConsoleKey]::Backspace) {
+            if ($buf.Length -gt 0) { [void]$buf.Remove($buf.Length - 1, 1); Write-Host "`b `b" -NoNewline }
+            continue
+        }
+        $ch = $k.KeyChar
+        if ([int]$ch -lt 32) { continue }
+        if ($ch -eq '?' -and $buf.Length -eq 0) { Write-Host ''; return @{ Kind = 'Key'; Value = 'F1' } }
+        if ($buf.Length -lt 40) {
+            [void]$buf.Append($ch)
+            Write-Host ([string]$ch) -NoNewline -ForegroundColor White
+        }
+    }
+}
+
+function Invoke-CockpitHeadsetCommand {
+    <#
+    .SYNOPSIS
+    One quick action on a headset, from the main screen ("<id>x" / "<id>s" / "<id>r" /
+    "<id>a") or the headset panel: x = kill the capture, s = start it now, r = recording
+    on/off, a = auto-cast on/off. The result goes to the notice line (Set-CockpitNotice).
+    Uses the same backend as the web buttons (Stop-HeadsetCapture, Set-HeadsetRecording,
+    Set-HeadsetAutoCast, Request-StreamRestart).
+    .EXAMPLE
+    Invoke-CockpitHeadsetCommand -Headset $row -Action 'r'
+    #>
+    param([Parameter(Mandatory = $true)] $Headset, [string]$Action)
+    $c    = $msg.Console
+    $name = [string]$Headset.Name
+    $id   = [int]$Headset.ID
+    switch ($Action.ToLowerInvariant()) {
+        'x' {
+            Write-Host ('  ' + ($c.Stopping -f $name)) -ForegroundColor DarkGray
+            Write-Log ("Stop scrcpy requested for {0} from the console" -f $name) -Level INFO
+            $r = Stop-HeadsetCapture -Headset $Headset
+            if (-not $r.Ok)         { Set-CockpitNotice -Text ($c.CastStopFailed -f $name) -Kind err }
+            elseif ($r.Restarting)  { Set-CockpitNotice -Text ($c.CastStopRestart -f $name, $id) -Kind warn }
+            elseif ($r.Stopped)     { Set-CockpitNotice -Text ($c.CastStopped -f $name) -Kind ok }
+            else                    { Set-CockpitNotice -Text ($c.CastNotRunning -f $name) -Kind info }
+        }
+        's' {
+            $ip = [string]$Headset.IPAddress
+            if ((Test-UnknownIp $ip) -or -not (Test-Connection -ComputerName $ip -Count 1 -Quiet)) {
+                Write-Log ($msg.PingKO -f $ip) -Level WARNING
+                Set-CockpitNotice -Text ($c.CastStartPingKo -f $name, $ip) -Kind err
+                break
+            }
+            # VRMonitor owns the pipelines (ADR-0032): it starts the capture on its next fast tick.
+            [void](Request-StreamRestart -HeadsetId $id -Start -Reason 'console start')
+            Write-Log ($msg.Scrcpy.StartRequested -f $name) -Level INFO
+            Set-CockpitNotice -Text ($msg.Scrcpy.StartRequested -f $name) -Kind ok
+        }
+        'r' {
+            $on = -not (ConvertTo-BoolField $Headset.Record)
+            $r = Set-HeadsetRecording -Headset $Headset -Enabled $on
+            if ($r.StorageLow) { Set-CockpitNotice -Text ($c.RecLow -f $r.DriveLetter, $r.FreeGB, $r.MinFreeGB) -Kind err }
+            elseif ($r.Ok) {
+                $text = if ($on) { $c.RecOn -f $name } else { $c.RecOff -f $name }
+                Write-Log ("Console: " + $text) -Level INFO
+                Set-CockpitNotice -Text $text -Kind ok
+            }
+            else { Set-CockpitNotice -Text ($c.ActionFailed -f $name) -Kind err }
+        }
+        'a' {
+            $on = -not (ConvertTo-BoolField $Headset.scrcpy_AutoRestart)
+            if (Set-HeadsetAutoCast -Headset $Headset -Enabled $on) {
+                $text = if ($on) { $c.AutoCastOn -f $name } else { $c.AutoCastOff -f $name, $id }
+                Write-Log ("Console: " + $text) -Level INFO
+                Set-CockpitNotice -Text $text -Kind $(if ($on) { 'ok' } else { 'info' })
+            }
+            else { Set-CockpitNotice -Text ($c.ActionFailed -f $name) -Kind err }
+        }
+        default { Set-CockpitNotice -Text ($c.UnknownSuffix -f $id, $Action) -Kind err }
+    }
+}
+
+function Get-HeadsetPanelKeymap {
+    # The single-key actions of Show-HeadsetPanel: @(@{ Key; Group; Label }). Read by the
+    # panel itself and by the help screen.
+    $c = $msg.Console
+    return @(
+        @{ Key = '1'; Group = 'Capture'; Label = $c.PanelAutoCast },
+        @{ Key = '2'; Group = 'Capture'; Label = $c.PanelStart },
+        @{ Key = '3'; Group = 'Capture'; Label = $c.PanelKill },
+        @{ Key = '4'; Group = 'Capture'; Label = $c.PanelRecord },
+        @{ Key = '5'; Group = 'Setup';   Label = $c.PanelProfileEdit },
+        @{ Key = '6'; Group = 'Setup';   Label = $c.PanelEyeMerge },
+        @{ Key = '8'; Group = 'Setup';   Label = $c.PanelRefreshRate },
+        @{ Key = '9'; Group = 'Setup';   Label = $c.PanelPushWifi },
+        @{ Key = '7'; Group = 'Device';  Label = $c.PanelLaunchApp },
+        @{ Key = 'G'; Group = 'Device';  Label = $c.PanelFrame },
+        @{ Key = 'E'; Group = 'Device';  Label = $c.PanelEdit },
+        @{ Key = 'B'; Group = 'Device';  Label = $c.PanelDiag },
+        @{ Key = 'X'; Group = 'Device';  Label = $c.PanelRemove }
+    )
+}
+
+function Write-HeadsetPanelCard {
+    <#
+    .SYNOPSIS
+    The status card at the top of the headset panel (6 lines, two columns): model, serial,
+    address, link, battery, temperatures, capture, auto-cast, recording, profile, running app.
+    Returns the number of lines written. -Pad for the redraw in place.
+    #>
+    param([int]$Id, [int]$Width, [switch]$Pad)
+    $c = $msg.Console
+    $row = @(Get-CockpitHeadsetRows | Where-Object { [int]$_.ID -eq $Id }) | Select-Object -First 1
+    if (-not $row) { Write-UiSegments -Segments @(New-UiSegment ('  ' + $c.PanelGone) 'Red') -Width $Width -Pad:$Pad; return 1 }
+    $half = [Math]::Max(30, [Math]::Floor($Width / 2))
+    $lw = 11
+    $cell = {
+        param($label, $value, $color, $w)
+        @((New-UiSegment (Format-UiCell -Text $label -Width $lw) 'DarkGray'),
+          (New-UiSegment (Format-UiCell -Text $value -Width ($w - $lw) -Dash) $(if ($color) { $color } else { 'White' })))
+    }
+    $link = Get-CockpitLinkSegments -Row $row -Width 20
+    $bat = Get-CockpitBatterySegment -Row $row -Width 8
+    $temp = [string]$row.Temp
+    if ($temp -and $temp -ne '-') { $temp = $temp + ' C' }
+    if ($row.CpuTemp -and [string]$row.CpuTemp -ne '-') { $temp = ('{0}  (CPU {1} C)' -f $temp, $row.CpuTemp) }
+    $starting = @()
+    try { $starting = @(Get-ScrcpyStartingIds) } catch { }
+    $castText = $c.CastIdle; $castColor = 'DarkGray'
+    if ($starting -contains $Id) { $castText = $c.CastStarting; $castColor = 'Yellow' }
+    elseif (Test-CockpitFlag $row.SCRCPY) { $castText = $c.CastLive; $castColor = 'Green' }
+    $auto = ConvertTo-BoolField $row.scrcpy_AutoRestart
+    $rec  = ConvertTo-BoolField $row.Record
+    $app  = [string]$row.RunningApp
+
+    $lines = @(
+        ((& $cell $c.PanelModel ([string]$row.Model) $null $half) + (& $cell $c.PanelSerial ([string]$row.SerialNumber) 'Gray' ($Width - $half))),
+        ((& $cell $c.PanelAddress ([string]$row.IPAddress) $null $half) + (& $cell $c.PanelLink $link.Text.Trim() $link.Color ($Width - $half))),
+        ((& $cell $c.PanelBattery $bat.Text.Trim() $bat.Fg $half) + (& $cell $c.PanelTemp $temp $null ($Width - $half))),
+        ((& $cell $c.PanelCast $castText $castColor $half) + (& $cell $c.PanelAuto $(if ($auto) { $c.On } else { $c.Off }) $(if ($auto) { 'Green' } else { 'DarkGray' }) ($Width - $half))),
+        ((& $cell $c.PanelRec $(if ($rec) { $c.On } else { $c.Off }) $(if ($rec) { 'Red' } else { 'DarkGray' }) $half) + (& $cell $c.PanelProfile ([string]$row.ScrcpyProfile) 'Cyan' ($Width - $half))),
+        (& $cell $c.PanelApp $app 'Gray' $Width)
+    )
+    foreach ($l in $lines) { Write-UiSegments -Segments (@(New-UiSegment '  ') + $l) -Width $Width -Pad:$Pad }
+    return $lines.Count
+}
+
+function Show-HeadsetPanel {
+    <#
+    .SYNOPSIS
+    Everything about ONE headset on one screen: a live status card and single-key actions
+    (auto-cast, start, kill, recording, profile, eye merge, refresh rate, WiFi push, launch
+    app, frame capture, edit, DIAG page, remove). Opened by typing the headset ID on the main
+    screen. Actions reuse the existing sub-menus with -Headset (no second picker) and the web
+    backend for the capture toggles.
+    .EXAMPLE
+    Show-HeadsetPanel -Headset (Get-KnownHeadsets | Where-Object ID -eq 3)
+    #>
+    param([Parameter(Mandatory = $true)] $Headset)
+    $c = $msg.Console
+    $id = [int]$Headset.ID
+    $keymap = Get-HeadsetPanelKeymap
+    $refreshSec = if ($null -ne $global:Console_live_refresh_sec) { [int]$global:Console_live_refresh_sec } else { 5 }
+
+    while ($true) {
+        $row = @(Get-KnownHeadsets | Where-Object { [int]$_.ID -eq $id }) | Select-Object -First 1
+        if (-not $row) {
+            Set-CockpitNotice -Text $c.PanelGone -Kind warn
+            return
+        }
+        Clear-Host
+        $w = Get-UiWidth
+        Write-UiTitle -Title ($c.PanelTitle -f $id, $row.Name) -Subtitle ($c.PanelSubtitle -f $row.Name) -Bg 'DarkBlue'
+        Write-Host ''
+        $cardTop = 0
+        try { $cardTop = [Console]::CursorTop } catch { }
+        $cardLines = Write-HeadsetPanelCard -Id $id -Width $w
+        Write-Host ''
+        $groups = @(
+            @{ Title = $c.PanelGroupCapture; Color = 'Green';   Items = @($keymap | Where-Object { $_.Group -eq 'Capture' }) },
+            @{ Title = $c.PanelGroupSetup;   Color = 'Cyan';    Items = @($keymap | Where-Object { $_.Group -eq 'Setup' }) },
+            @{ Title = $c.PanelGroupDevice;  Color = 'Magenta'; Items = @($keymap | Where-Object { $_.Group -eq 'Device' }) }
+        )
+        [void](Write-UiTiles -Groups $groups -Width $w -MaxTileWidth 26)
+        Write-UiSegments -Segments (Get-CockpitNoticeSegments) -Width $w
+        Write-Host ('  ' + $c.PanelFooter) -ForegroundColor DarkGray
+
+        $tick = {
+            if ((Get-UiWidth) -ne $w) { return }
+            $saveLeft = [Console]::CursorLeft; $saveTop = [Console]::CursorTop
+            try { [Console]::CursorVisible = $false } catch { }
+            try {
+                [Console]::SetCursorPosition(0, $cardTop)
+                [void](Write-HeadsetPanelCard -Id $id -Width $w -Pad)
+                [Console]::SetCursorPosition($saveLeft, $saveTop)
+            } catch { }
+            try { [Console]::CursorVisible = $true } catch { }
+        }
+        # $tick reads $w / $cardTop / $id at call time through the caller chain (Read-UiKey is
+        # called from here). No GetNewClosure: a closure only sees global commands, and the
+        # module functions live in main.ps1's script scope.
+        $key = Read-UiKey -OnIdle { Invoke-VRMonitorSupervision } -OnTick $tick -TickSec $refreshSec
+
+        switch ($key) {
+            '1' { Invoke-CockpitHeadsetCommand -Headset $row -Action 'a' }
+            '2' { Invoke-CockpitHeadsetCommand -Headset $row -Action 's' }
+            '3' { Invoke-CockpitHeadsetCommand -Headset $row -Action 'x' }
+            '4' { Invoke-CockpitHeadsetCommand -Headset $row -Action 'r' }
+            '5' { Show-SubMenu-ScrcpyOptions -HeadsetID $id }
+            '6' { Show-SubMenu-EyeMerge -Headset $row }
+            '7' { Show-SubMenu-LaunchApp -Headset $row }
+            '8' { Show-SubMenu-HeadsetRefreshRate -Headset $row }
+            '9' { Show-SubMenu-PushHeadsetWifi -Headset $row }
+            'G' { Show-SubMenu-CaptureHeadsetFrame -Headset $row }
+            'E' { Show-SubMenu-EditHeadset -Headset $row }
+            'B' {
+                if ($global:WebServer_enabled) {
+                    Start-Process ("http://localhost:{0}/headset_diag.html?id={1}" -f $global:WebServer_port, $id)
+                    Set-CockpitNotice -Text $c.WebOpened -Kind ok
+                } else { Set-CockpitNotice -Text $c.PanelWebDisabled -Kind err }
+            }
+            'X' {
+                Show-SubMenu-RemoveHeadset -Headset $row
+                if (-not @(Get-KnownHeadsets | Where-Object { [int]$_.ID -eq $id })) { return }
+            }
+            '0'   { return }
+            'ESC' { return }
+            default { }
+        }
+    }
+}
+
+function Show-ConsoleHelp {
+    <#
+    .SYNOPSIS
+    The shortcut help screen (F1 or ? on the main screen), built from Get-CockpitKeymap and
+    Get-HeadsetPanelKeymap so it always lists exactly what the screens accept.
+    .EXAMPLE
+    Show-ConsoleHelp
+    #>
+    $c = $msg.Console
+    Clear-Host
+    Write-UiTitle -Title $c.HelpTitle -Subtitle 'VRHM > Help' -Bg 'DarkBlue'
+    $row = {
+        param($key, $text, $keyColor)
+        Write-UiSegments -Segments @(
+            (New-UiSegment '    '),
+            (New-UiSegment (Format-UiCell -Text $key -Width 12) $(if ($keyColor) { $keyColor } else { 'Yellow' })),
+            (New-UiSegment $text 'White'))
+    }
+    $section = { param($title) Write-Host ''; Write-Host ('  ' + $title) -ForegroundColor Cyan }
+
+    & $section $c.HelpMain
+    foreach ($k in @(Get-CockpitKeymap | Where-Object { $_.InHelp -ne $false })) {
+        $keys = @($k.Key) + @($k.Aliases | Where-Object { $_ })
+        & $row ($keys -join ' / ') $k.Label
+    }
+    & $row 'F1 / ?' $c.HelpHelp
+    & $row 'F5' $c.HelpReload
+    & $row 'Enter' $c.HelpRefresh
+
+    & $section $c.HelpQuick
+    & $row '<id>' $c.HelpOpen
+    & $row '<id>x' $c.HelpKill
+    & $row '<id>s' $c.HelpStart
+    & $row '<id>r' $c.HelpRec
+    & $row '<id>a' $c.HelpAuto
+
+    & $section $c.HelpPanel
+    $panel = @(Get-HeadsetPanelKeymap | Sort-Object { $_.Key })
+    for ($i = 0; $i -lt $panel.Count; $i += 2) {
+        $a = $panel[$i]
+        $line = @((New-UiSegment '    '), (New-UiSegment (Format-UiCell $a.Key 4) 'Yellow'), (New-UiSegment (Format-UiCell $a.Label 28) 'White'))
+        if ($i + 1 -lt $panel.Count) {
+            $b = $panel[$i + 1]
+            $line += New-UiSegment (Format-UiCell $b.Key 4) 'Yellow'
+            $line += New-UiSegment $b.Label 'White'
+        }
+        Write-UiSegments -Segments $line
+    }
+
+    & $section $c.HelpSub
+    Write-Host ('    ' + $c.HelpSubKeys)
+    Write-Host ('    ' + $c.HelpSubBack)
+    Write-Host ('    ' + $c.HelpTextInput)
+    $refreshSec = if ($null -ne $global:Console_live_refresh_sec) { [int]$global:Console_live_refresh_sec } else { 5 }
+    if ($refreshSec -gt 0) { Write-Host ('    ' + ($c.HelpLiveRefresh -f $refreshSec)) -ForegroundColor DarkGray }
+
+    # Every address of the web monitor (the header only has room for the first ones).
+    & $section $c.HelpWeb
+    $webUrls = @(Get-CockpitWebUrls -Detailed)
+    if ($webUrls.Count -eq 0) { Write-Host ('    ' + $c.HelpWebNone) -ForegroundColor DarkGray }
+    foreach ($u in $webUrls) {
+        Write-UiSegments -Segments @(
+            (New-UiSegment '    '),
+            (New-UiSegment (Format-UiCell -Text $u.Url -Width 32) 'Cyan' $null $u.Url),
+            (New-UiSegment ('  ' + $u.Label) 'Gray'))
+    }
+    if ($webUrls.Count -gt 0 -and -not (Test-UiHyperlinkSupport)) { Write-Host ('    ' + $c.HelpWebNoLink) -ForegroundColor DarkGray }
+
+    & $section $c.HelpSystem
+    & $row '0' $c.HelpQuit
+    & $row '00' $c.HelpRestart
+    & $row '000' $c.HelpShutdown 'Red'
+    Wait-UiKey
+}
+
+function Show-MainMenu {
+    <#
+    .SYNOPSIS
+    The main console screen ("cockpit"): status header, live headset table, grouped tiles,
+    then one input line. Typed + Enter: a tile letter, a headset ID (opens Show-HeadsetPanel),
+    a quick command "<id>x|s|r|a", or 0 / 00 / 000 (quit / restart / host shutdown - also what
+    the web server injects). F1 or ? opens the help, F5 reloads modules and configuration.
+    #>
+    $c = $msg.Console
+    do {
         # Prevent the computer from sleeping while the app is running.
         # Awake mode is independent of the dashboard window visibility.
         Set-AwakeMode
 
-        # Only spawn / respawn the dashboard window when the operator wants it visible.
-        # Service supervision is owned by Start-VRMonitor, not the dashboard.
-        if ($global:Dashboard_showConsole) {
-            $VRMonitorProcess = Get-WmiObject -Class Win32_Process -Filter "ParentProcessId = $PID" | Where-Object { $_.CommandLine -match "headsets_dashboard.ps1" }
-            Write-Log ($msg.VRMonitorProcessId -f $VRMonitorProcess.ProcessId) -Level DEBUG
-
-            if (-not $VRMonitorProcess) {
-                Write-Host $msg.VRMonitorNotRunning -ForegroundColor Yellow
-                $headsets_dashboard_script = Join-Path -Path $scriptPath -ChildPath "modules\headsets_dashboard.ps1"
-                $dashProc = Start-Process powershell.exe -ArgumentList @(
-                    "-NoProfile",
-                    "-NoExit",
-                    "-File",
-                    "`"$headsets_dashboard_script`"",
-                    "-ScriptPath",
-                    "`"$scriptPath`"",
-                    "-ConfigFilePath",
-                    "`"$configFilePath`""
-                ) -WindowStyle Normal -PassThru
-                if ($dashProc) {
-                    $dashPidFile = Join-Path $global:ScriptPath "data\dashboard.pid"
-                    $dashProc.Id | Set-Content -LiteralPath $dashPidFile -Encoding ASCII -Force -ErrorAction SilentlyContinue
-                }
-            }
-        }
 
         # Start html monitor update
         Write-htmlMonitor $global:knownHeadsets
 
-
-        Clear-Host
-        Start-Sleep -Milliseconds 200
-        Write-Host $msg.MainMenuTitle -ForegroundColor Cyan
-        $vrmStatus = Get-VRMonitorStatusText
-        if ($vrmStatus.Text) { Write-Host $vrmStatus.Text -ForegroundColor $vrmStatus.Color }
-        Write-Host $msg.StreamHeadset -BackgroundColor Yellow -ForegroundColor Black
-        #Write-Host " I. Check internet connection " -BackgroundColor White -ForegroundColor Black
-        Write-Host $msg.AddModifyHeadset -BackgroundColor Green -ForegroundColor DarkMagenta
-        Write-Host $msg.Scrcpy.Tracking -BackgroundColor DarkRed -ForegroundColor White
-        Write-Host $msg.Scrcpy.Options -BackgroundColor DarkCyan -ForegroundColor Yellow
-        Write-Host $msg.RecordingManagement -BackgroundColor DarkBlue -ForegroundColor White
-        Write-Host $msg.FilesFolders -BackgroundColor DarkCyan -ForegroundColor Black
-        Write-Host $msg.ServicesManagement -BackgroundColor DarkGray -ForegroundColor White
-        Write-Host $msg.OpenBrowser -BackgroundColor DarkCyan -ForegroundColor White
-        Write-Host $msg.Kiosk.MenuOption -BackgroundColor DarkGray -ForegroundColor Cyan
-        Write-Host "C. Configuration" -BackgroundColor DarkBlue -ForegroundColor Cyan
-        Write-Host $msg.Quit
-        Write-Host $msg.RestartApp
-        Write-Host $msg.HostShutdown -ForegroundColor Red
-        Write-Host $msg.AnyOtherKey
-        Write-Host
-        Write-Host $msg.KnownHeadsets
-        #Start-Sleep -Milliseconds 200
-        #Show-HeadsetsTable -FieldsToShow @("ID","Name", "IPAddress", "Ping", "ADBReachable", "SCRCPY")
-        #Show-HeadsetsTable
-        Show-HeadsetsConfig
-        #Show-HeadsetsTableColored -FieldsToShow @("ID","Name", "IPAddress")
-        #Write-Host "Name ; Status (OK/KO) ; Battery level ; current application"
-
-        # Show web server LAN URLs if enabled. Reuses Get-PrivateNetworks (network_scanner.ps1)
-        # so this list stays consistent with Wait-ForValidNetwork / Get-ServerLanUrl - it
-        # already excludes APIPA, virtual/hypervisor adapters, and (critically here) any
-        # adapter whose link is actually down, so a disconnected NIC's leftover static IP
-        # never shows up as a reachable web monitor URL.
-        if ($global:WebServer_enabled) {
-            $lanEntries = Get-PrivateNetworks | ForEach-Object {
-                [PSCustomObject]@{ IPAddress = $_.IPAddress; Label = if ($_.IsWifi) { '[WiFi]' } else { '[LAN]' } }
+        # Draw and read until a real command arrives (Enter on an empty line, a resize, a log
+        # line or the help screen only redraw).
+        $state  = @{ Top = 0; Lines = 0; Width = 0 }
+        $keymap = @(Get-CockpitKeymap)
+        $redraw = $true
+        $line   = $null
+        $reload = $false
+        while ($true) {
+            if ($redraw) { Write-CockpitScreen -State $state -Keymap $keymap; $redraw = $false }
+            $in = Read-CockpitInput -State $state
+            if ($in.Kind -eq 'Redraw') { $redraw = $true; continue }
+            if ($in.Kind -eq 'Key') {
+                if ($in.Value -eq 'F1') { Show-ConsoleHelp; $redraw = $true; continue }
+                if ($in.Value -eq 'F5') { $reload = $true; break }
+                continue
             }
-            if ($lanEntries) {
-                Write-Host ""
-                Write-Host $msg.WebServerLinksHeader -ForegroundColor DarkCyan
-                if ($global:MdnsResponder_enabled -and $global:MdnsResponder_hostname) {
-                    Write-Host ("  http://{0}.local:{1}/ [mDNS]" -f $global:MdnsResponder_hostname, $global:WebServer_port) -ForegroundColor Cyan
-                }
-                foreach ($entry in $lanEntries) {
-                    Write-Host ($msg.WebServerLinkLine -f $entry.IPAddress, $global:WebServer_port, $entry.Label) -ForegroundColor Cyan
-                }
-            }
+            $line = ([string]$in.Value).Trim()
+            if ($line -eq '') { $keymap = @(Get-CockpitKeymap); $redraw = $true; continue }
+            break
         }
-
-        $headsets = @(Get-KnownHeadsets)
-
-        # Waits for input while supervising the VRMonitor job (restarts it if it died).
-        $choice = ([string](Read-MenuLine -Prompt $msg.EnterChoice -OnIdle { Invoke-VRMonitorSupervision })).ToUpper()
-        
-        if ($choice -in $headsets.ID){
-            $headsetName = ($headsets | Where-Object { $_.ID -eq $choice }).Name
-            $headsetIPAddress = ($headsets | Where-Object { $_.ID -eq $choice }).IPAddress
-            $headsetRecording = ($headsets | Where-Object { $_.ID -eq $choice }).Record
-            $headsetProfile = ($headsets | Where-Object { $_.ID -eq $choice }).ScrcpyProfile
-            if (-not $headsetProfile) { $headsetProfile = "portrait-R-N-45-20" }
-            #convert $headsetRecording to boolean
-            if ($headsetRecording -in @("True", "true", $true)) {
-                $headsetRecording = $true
+        if ($reload -or $line -ieq 'U') {
+            Write-Host ('  ' + $c.Reloading) -ForegroundColor Yellow
+            # Reload all modules and config file
+            $scripts_init = Join-Path -Path $global:ScriptPath -ChildPath "\modules\scripts_init.ps1"
+            if (Test-Path -LiteralPath $scripts_init) {
+                . $scripts_init
             } else {
-                $headsetRecording = $false
+                Write-Host "Error: The initialization script is missing!" -ForegroundColor Red
+                exit
             }
-
-            Write-Log -Message ($msg.TryingConnection -f $headsetName, $headsetIPAddress) -Level "INFO"
-            #Check ping headset first !
-            if (Test-Connection -ComputerName $headsetIPAddress -Count 1 -Quiet){
-                # VRMonitor owns the pipelines (ADR-0032): it starts the capture on its next fast tick.
-                [void](Request-StreamRestart -HeadsetId ([int]$choice) -Start -Reason 'console start')
-                Write-Log ($msg.Scrcpy.StartRequested -f $headsetName) -Level INFO
-            }
-            else {
-                Write-Log -Message ($msg.PingKO -f $headsetIPAddress) -Level "WARNING"
-                Start-Sleep -Seconds 5
-            }
+            # Signal main.ps1 to re-enter Show-MainMenu with the freshly loaded definition
+            $global:MenuReload = $true
+            $c = $msg.Console
+            continue
         }
-        else {
 
-            switch ($choice) {
-                'A' { Write-Host $msg.AddHeadsetTitle
-                        Show-SubMenu-AddHeadset
-                    }
-
-                'S' { Write-Host $msg.Scrcpy.TrackingTitle
-                        Show-SubMenu-scrcpyTracking
-                    }
-                'M' { Write-Host $msg.Scrcpy.OptionsTitle
-                        Show-SubMenu-ScrcpyOptions
-                    }
-                'R' { Write-Host $msg.RecordingTitle
-                        Show-SubMenu-Recording
-                    }
-                'F' { Write-Host $msg.FilesFoldersTitle
-                        Show-SubMenu-FilesAndFolders
-                    }
-                'W' { Show-SubMenu-Services }
-                'B' {
-                    if ($global:WebServer_enabled) {
-                        Start-Process ("http://localhost:{0}/" -f $global:WebServer_port)
-                    } else {
-                        Write-Host $msg.MenuWebServerDisabled -ForegroundColor Red
-                        pause
-                    }
-                }
-                'K' { Show-SubMenu-KioskScreens }
-                'C' { Show-SubMenu-Config }
-                'I' {
-                    if (Test-InternetConnectivity) {
-                        Write-Host $msg.InternetOK -ForegroundColor Green
-                    } else {
-                        Write-Host $msg.InternetProblem -ForegroundColor White -BackgroundColor Red
-                    }
-                    pause
-                }
-                '00' {
-                    Write-Host $msg.Restarting -ForegroundColor Yellow
-                    $mainScript = Join-Path $global:ScriptPath "main.ps1"
-                    Start-Process powershell.exe -ArgumentList @(
-                        "-NoProfile",
-                        "-ExecutionPolicy","Bypass",
-                        "-File","`"$mainScript`"",
-                        "-WaitForPid",$PID
-                    ) -WindowStyle Normal
-                    Invoke-AppShutdown
-                    return
-                }
-                '0' {
-                    Write-Host $msg.Goodbye -ForegroundColor Yellow
-                    Invoke-AppShutdown
-                    return
-                }
-                '000' {
-                    Write-Host $msg.HostShutdownConfirm -ForegroundColor Red
-                    if ((Read-Host $msg.HostShutdownConfirmPrompt).ToUpper() -eq 'YES') {
-                        Invoke-HostShutdown -DelaySec 30
-                        Invoke-AppShutdown
-                        return
-                    }
-                }
-                default {
-                    Write-Host $msg.Refresh -ForegroundColor Red
-                    # Reload all modules and config file
-                    $scripts_init = Join-Path -Path $global:ScriptPath -ChildPath "\modules\scripts_init.ps1"
-                    if (Test-Path -LiteralPath $scripts_init) {
-                        . $scripts_init
-                    } else {
-                        Write-Host "Error: The initialization script is missing!" -ForegroundColor Red
-                        exit
-                    }
-                    # Signal main.ps1 to re-enter Show-MainMenu with the freshly loaded definition
-                    $global:MenuReload = $true
-                    break
-                }
-            }
+        # System commands first, so "0" / "00" / "000" can never be read as a headset ID.
+        # (if/elseif, not switch: a "continue" inside a switch only leaves the switch.)
+        $choice = $line.ToUpperInvariant()
+        if ($choice -eq '00') {
+            Write-Host $msg.Restarting -ForegroundColor Yellow
+            $mainScript = Join-Path $global:ScriptPath "main.ps1"
+            Start-Process powershell.exe -ArgumentList @(
+                "-NoProfile",
+                "-ExecutionPolicy","Bypass",
+                "-File","`"$mainScript`"",
+                "-WaitForPid",$PID
+            ) -WindowStyle Normal
+            Invoke-AppShutdown
+            return
         }
-    } while ($choice -ne '0')
-} 
+        elseif ($choice -eq '0') {
+            Write-Host $msg.Goodbye -ForegroundColor Yellow
+            Invoke-AppShutdown
+            return
+        }
+        elseif ($choice -eq '000') {
+            Write-Host $msg.HostShutdownConfirm -ForegroundColor Red
+            if ((Read-Host $msg.HostShutdownConfirmPrompt).ToUpper() -eq 'YES') {
+                Invoke-HostShutdown -DelaySec 30
+                Invoke-AppShutdown
+                return
+            }
+            continue
+        }
+
+        # Headset ID, optionally followed by a quick action letter.
+        if ($choice -match '^(\d+)([A-Z]?)$') {
+            $hid = [int]$Matches[1]
+            $act = $Matches[2]
+            $headset = @(Get-KnownHeadsets | Where-Object { [int]$_.ID -eq $hid }) | Select-Object -First 1
+            if (-not $headset) { Set-CockpitNotice -Text ($c.UnknownHeadset -f $hid) -Kind err; continue }
+            if ($act) { Invoke-CockpitHeadsetCommand -Headset $headset -Action $act }
+            else { Show-HeadsetPanel -Headset $headset }
+            continue
+        }
+
+        $entry = $keymap | Where-Object { $_.Key -eq $choice -or (@($_.Aliases) -contains $choice) } | Select-Object -First 1
+        if ($entry) {
+            & $entry.Action
+            continue
+        }
+        Set-CockpitNotice -Text ($c.UnknownCommand -f $line) -Kind err
+    } while ($true)
+}
 
 
 
 
-function Show-SubMenu-AddHeadset { #CHOICE 2
-    Clear-Host
-    Start-Sleep -Milliseconds 200
-    Write-Host $msg.AddOrModifyHeadset -BackgroundColor Green -ForegroundColor DarkMagenta
-    Write-Host $msg.ScanNetworkAdd
-    Write-Host $msg.AddManually
-    Write-Host $msg.ModifyManually
-    Write-Host $msg.RemoveFromList
-    Write-Host $msg.LaunchAppMenu
-    Write-Host "`t 6. Enable Wifi ADB on a connected headset"
-    Write-Host "`t 7. Register/update headset by serial number (USB)"
-    Write-Host $msg.AdbWifi.AutoEnableMenuOption
-    # Only advertise discovered devices when there are actually some waiting.
-    $pendingDiscovered = @()
-    if (Get-Command Get-PendingDiscoveredHeadsets -ErrorAction SilentlyContinue) {
-        try { $pendingDiscovered = @(Get-PendingDiscoveredHeadsets) } catch { $pendingDiscovered = @() }
+function Show-SubMenu-AddHeadset {
+    # "H Headsets" tile of the main screen: add / edit / remove / USB onboarding. One key per
+    # option, the menu stays open until 0 or Esc.
+    $c = $msg.Console
+    while ($true) {
+        # Only advertise discovered devices when there are actually some waiting.
+        $pendingDiscovered = @()
+        if (Get-Command Get-PendingDiscoveredHeadsets -ErrorAction SilentlyContinue) {
+            try { $pendingDiscovered = @(Get-PendingDiscoveredHeadsets) } catch { $pendingDiscovered = @() }
+        }
+        $items = @(
+            @{ Key = '1'; Label = $c.HsScan },
+            @{ Key = '2'; Label = $c.HsAddManual },
+            @{ Key = '3'; Label = $c.HsEdit },
+            @{ Key = '4'; Label = $c.HsRemove },
+            @{ Key = '5'; Label = $c.HsLaunchApp },
+            @{ Separator = $true; Label = 'USB' },
+            @{ Key = '6'; Label = $c.HsWifiAdb },
+            @{ Key = '7'; Label = $c.HsSerial },
+            @{ Key = '9'; Label = $c.HsAutoEnable }
+        )
+        if ($pendingDiscovered.Count -gt 0) {
+            $items += @{ Separator = $true }
+            $items += @{ Key = '8'; Label = $c.HsDiscovered; Value = [string]$pendingDiscovered.Count; ValueColor = 'Cyan' }
+        }
+        Write-UiMenu -Title $c.HeadsetsTitle -Subtitle 'VRHM > Headsets' -Items $items -Footer $c.Back -Bg 'DarkGreen'
+        Show-HeadsetsTableColored
+        $userInput = Read-UiKey
+        if ($userInput -in @('0', 'ESC')) { return }
+        if ($userInput -notin @('1', '2', '3', '4', '5', '6', '7', '8', '9')) { continue }
+        Write-Host ''
+        Invoke-HeadsetsMenuChoice -Choice $userInput
+        if ($userInput -in @('1', '6', '7', '9')) { Wait-UiKey }
     }
-    if ($pendingDiscovered.Count -gt 0) {
-        Write-Host ("{0} ({1})" -f $msg.Discovery.MenuOption, $pendingDiscovered.Count) -ForegroundColor Cyan
-    }
-    Write-Host $msg.ReturnPreviousMenu
+}
 
-    $userInput = Read-Host $msg.YourChoice
-
+function Invoke-HeadsetsMenuChoice {
+    # The actions behind the options of Show-SubMenu-AddHeadset (same numbering as before).
+    param([string]$Choice)
+    $userInput = $Choice
     switch ($userInput) {
         '1' {
             Write-Log -Message $msg.NetworkScanLaunch -Level "INFO"
@@ -714,7 +1404,9 @@ function Show-SubMenu-DiscoveredHeadsets {
     }
 } # OK
 
-function Show-SubMenu-EditHeadset { #CHOICE 3
+function Show-SubMenu-EditHeadset {
+    # -Headset (a registry row) skips the picker: used by the headset panel (Show-HeadsetPanel).
+    param($Headset = $null)
     Clear-Host
     Start-Sleep -Milliseconds 200
     Write-Host $msg.ModifyHeadsetManually -BackgroundColor DarkCyan
@@ -726,15 +1418,20 @@ function Show-SubMenu-EditHeadset { #CHOICE 3
         return
     }
 
-    Show-HeadsetsTableColored
-
-    $idInput = Read-Host $msg.EnterIDToModify
+    if ($Headset) {
+        $idInput = [string]$Headset.ID
+        Write-Host (" {0} - {1}" -f $Headset.ID, $Headset.Name) -ForegroundColor Cyan
+    } else {
+        Show-HeadsetsTableColored
+        $idInput = Read-Host $msg.EnterIDToModify
+    }
     if ($idInput -eq '0') {
         Write-Log $msg.ReturnFromEdit -Level "INFO"
         return
     }
 
-    if (-not ($idInput -match '^\d+$') -or [int]$idInput -lt 1 -or [int]$idInput -gt $headsets.Count) {
+    # Validated against the registry IDs: IDs are permanent and need not be contiguous.
+    if (-not ($idInput -match '^\d+$') -or -not ($headsets | Where-Object { [int]$_.ID -eq [int]$idInput })) {
         Write-Log ($msg.InvalidIDModification -f $idInput) -Level "ERROR"
         Write-Host $msg.InvalidIDRetry -ForegroundColor Red
         return
@@ -904,6 +1601,8 @@ function Save-FavoriteApps {
 }
 
 function Show-SubMenu-LaunchApp {
+    # -Headset (a registry row) skips the picker: used by the headset panel (Show-HeadsetPanel).
+    param($Headset = $null)
     Clear-Host
     Start-Sleep -Milliseconds 200
     Write-Host $msg.LaunchAppTitle -BackgroundColor DarkCyan -ForegroundColor White
@@ -916,14 +1615,17 @@ function Show-SubMenu-LaunchApp {
         return
     }
 
-    Write-Host ""
-    Write-Host $msg.LaunchAppSelectHeadset -ForegroundColor Cyan
-    Show-HeadsetsConfig
-    Write-Host $msg.ReturnPreviousMenu
-    $headsetChoice = Read-Host $msg.YourChoice
-    if ($headsetChoice -eq '0') { return }
-
-    $headset = $headsets | Where-Object { $_.ID -eq $headsetChoice }
+    if ($Headset) {
+        $headset = $Headset
+    } else {
+        Write-Host ""
+        Write-Host $msg.LaunchAppSelectHeadset -ForegroundColor Cyan
+        Show-HeadsetsConfig
+        Write-Host $msg.ReturnPreviousMenu
+        $headsetChoice = Read-Host $msg.YourChoice
+        if ($headsetChoice -eq '0') { return }
+        $headset = $headsets | Where-Object { $_.ID -eq $headsetChoice }
+    }
     if (-not $headset) {
         Write-Log ($msg.InvalidID -f $headsetChoice) -Level WARNING
         Start-Sleep -Seconds 2
@@ -1065,13 +1767,25 @@ function Show-SubMenu-LaunchApp {
 }
 
 
-function Show-SubMenu-RemoveHeadset {     # Check whether headsets exist in the file
+function Show-SubMenu-RemoveHeadset {
+    # -Headset (a registry row) removes that one headset after a Y/O confirmation: used by the
+    # headset panel (Show-HeadsetPanel). Without it, the operator picks an ID or ALL.
+    param($Headset = $null)
     Clear-Host
     Start-Sleep -Milliseconds 200
     $headsets = @(get-knownHeadsets) # @() ensures the object is an array so .Count works
     if (-not $headsets) {
         Write-Log -Message $msg.NoHeadsetFound -Level "INFO"
         Write-Host "There is no headset to delete." -ForegroundColor Yellow
+        return
+    }
+
+    if ($Headset) {
+        Write-Host $msg.RemoveHeadsetTitle -BackgroundColor DarkMagenta
+        Write-Host (" {0} - {1}  ({2})" -f $Headset.ID, $Headset.Name, $Headset.IPAddress) -ForegroundColor Cyan
+        $confirm = ([string](Read-Host ($msg.Console.RemoveConfirm -f $Headset.Name))).Trim().ToUpper()
+        if ($confirm -in @('Y', 'O')) { Remove-Headset -ID ([int]$Headset.ID) }
+        else { Write-Log -Message $msg.DeletionCancelled -Level "INFO" }
         return
     }
 
@@ -1129,7 +1843,9 @@ function Show-SubMenu-PushHeadsetWifi {
 
     .EXAMPLE
     Show-SubMenu-PushHeadsetWifi
+    Show-SubMenu-PushHeadsetWifi -Headset $row   # from the headset panel, no picker
     #>
+    param($Headset = $null)
     $headsets = @(Get-KnownHeadsets)
     if ($headsets.Count -eq 0) {
         Write-Host $msg.NoHeadsetInFile -ForegroundColor Yellow
@@ -1144,12 +1860,15 @@ function Show-SubMenu-PushHeadsetWifi {
         return
     }
 
-    Show-HeadsetsTable
-    Write-Host ""
-    $headsetChoice = Read-Host $msg.Headset.WifiPickHeadset
-    if ($headsetChoice -eq '0' -or -not $headsetChoice) { return }
-
-    $headset = $headsets | Where-Object { [string]$_.ID -eq [string]$headsetChoice } | Select-Object -First 1
+    if ($Headset) {
+        $headset = $Headset
+    } else {
+        Show-HeadsetsTable
+        Write-Host ""
+        $headsetChoice = Read-Host $msg.Headset.WifiPickHeadset
+        if ($headsetChoice -eq '0' -or -not $headsetChoice) { return }
+        $headset = $headsets | Where-Object { [string]$_.ID -eq [string]$headsetChoice } | Select-Object -First 1
+    }
     if (-not $headset) {
         Write-Log $msg.UnrecognizedOption -Level ERROR
         Start-Sleep -Seconds 2
@@ -1191,7 +1910,9 @@ function Show-SubMenu-HeadsetRefreshRate {
 
     .EXAMPLE
     Show-SubMenu-HeadsetRefreshRate
+    Show-SubMenu-HeadsetRefreshRate -Headset $row   # from the headset panel, no picker
     #>
+    param($Headset = $null)
     $headsets = @(Get-KnownHeadsets)
     if ($headsets.Count -eq 0) {
         Write-Host $msg.NoHeadsetInFile -ForegroundColor Yellow
@@ -1199,12 +1920,15 @@ function Show-SubMenu-HeadsetRefreshRate {
         return
     }
 
-    Show-HeadsetsTable
-    Write-Host ""
-    $headsetChoice = Read-Host $msg.Headset.RefreshPickHeadset
-    if ($headsetChoice -eq '0' -or -not $headsetChoice) { return }
-
-    $headset = $headsets | Where-Object { [string]$_.ID -eq [string]$headsetChoice } | Select-Object -First 1
+    if ($Headset) {
+        $headset = $Headset
+    } else {
+        Show-HeadsetsTable
+        Write-Host ""
+        $headsetChoice = Read-Host $msg.Headset.RefreshPickHeadset
+        if ($headsetChoice -eq '0' -or -not $headsetChoice) { return }
+        $headset = $headsets | Where-Object { [string]$_.ID -eq [string]$headsetChoice } | Select-Object -First 1
+    }
     if (-not $headset) {
         Write-Log $msg.UnrecognizedOption -Level ERROR
         Start-Sleep -Seconds 2
@@ -1254,7 +1978,9 @@ function Show-SubMenu-CaptureHeadsetFrame {
 
     .EXAMPLE
     Show-SubMenu-CaptureHeadsetFrame
+    Show-SubMenu-CaptureHeadsetFrame -Headset $row   # from the headset panel, no picker
     #>
+    param($Headset = $null)
     $headsets = @(Get-KnownHeadsets)
     if ($headsets.Count -eq 0) {
         Write-Host $msg.NoHeadsetInFile -ForegroundColor Yellow
@@ -1262,12 +1988,15 @@ function Show-SubMenu-CaptureHeadsetFrame {
         return
     }
 
-    Show-HeadsetsTable
-    Write-Host ""
-    $headsetChoice = Read-Host $msg.Headset.FramePickHeadset
-    if ($headsetChoice -eq '0' -or -not $headsetChoice) { return }
-
-    $headset = $headsets | Where-Object { [string]$_.ID -eq [string]$headsetChoice } | Select-Object -First 1
+    if ($Headset) {
+        $headset = $Headset
+    } else {
+        Show-HeadsetsTable
+        Write-Host ""
+        $headsetChoice = Read-Host $msg.Headset.FramePickHeadset
+        if ($headsetChoice -eq '0' -or -not $headsetChoice) { return }
+        $headset = $headsets | Where-Object { [string]$_.ID -eq [string]$headsetChoice } | Select-Object -First 1
+    }
     if (-not $headset) {
         Write-Log $msg.UnrecognizedOption -Level ERROR
         Start-Sleep -Seconds 2
@@ -1286,113 +2015,56 @@ function Show-SubMenu-CaptureHeadsetFrame {
     Start-Sleep -Seconds 3
 }
 
-function Show-SubMenu-scrcpyTracking { #CHOICE 5
-    Clear-Host
-    $headsets = @(Get-KnownHeadsets)
-
-    Start-Sleep -Milliseconds 200
-    Write-Host $msg.SwitchScrcpyTracking -ForegroundColor Cyan
-    #Write-Host "Menu disabled for now!"
-    Write-Host $msg.EnterNumberToModify
-    #Write-Host "1. Enable automatic scrcpy restart"
-    #Write-Host "2. Disable automatic scrcpy restart"
-    #Write-Host "3. Launch active monitoring of running windows"
-    
-    if ($headsets.Count -eq 0) {
-        Write-Host $msg.NoHeadsetInFile -ForegroundColor Yellow
-    }
-    else {
-        write-host $msg.IDNameAutoRestart
-        Write-Host $msg.Separator
-        $headsets | ForEach-Object {
-            $autoRestartText = $_.scrcpy_AutoRestart
-            $autoRestartColor = if (ConvertTo-BoolField $autoRestartText) { "Green" } else { "Red" }
-            
-            Write-Host "$($_.ID) `t $($_.Name) `t`t " -NoNewline
-            Write-Host $autoRestartText -ForegroundColor $autoRestartColor
+function Show-HeadsetToggleList {
+    <#
+    .SYNOPSIS
+    The "S Auto-cast" and "R Recording" lists of the main screen: every headset with the
+    current state of one flag; typing an ID + Enter toggles it (IDs can have two digits, so
+    this list keeps line input), Enter alone goes back. Goes through the web backend
+    (Set-HeadsetAutoCast / Set-HeadsetRecording), so a toggle starts / restarts the capture
+    at once and the low-disk guard applies.
+    .EXAMPLE
+    Show-HeadsetToggleList -Field Record
+    #>
+    param([ValidateSet('scrcpy_AutoRestart', 'Record')] [string]$Field)
+    $c = $msg.Console
+    $title = if ($Field -eq 'Record') { $c.RecordingTitle } else { $c.AutoCastTitle }
+    while ($true) {
+        $headsets = @(Get-KnownHeadsets)
+        Write-UiMenu -Title $title -Subtitle ('VRHM > ' + $title) -Items @() -Bg 'DarkCyan'
+        if ($headsets.Count -eq 0) {
+            Write-Host ('  ' + $c.NoHeadsets) -ForegroundColor Yellow
+            Wait-UiKey
+            return
         }
-    }
-    Write-Host $msg.Return
-    Write-Host ""
-    
-    $choice = Read-Host $msg.Choice
-
-    if ($choice -in $headsets.ID){
-        if (ConvertTo-BoolField $headsets[$choice-1].scrcpy_AutoRestart) {
-            Write-Log -Message ($msg.DeactivateAutoTracking -f $choice, $headsets[$choice-1].Name) -Level "INFO"
-            $headsets[$choice-1].scrcpy_AutoRestart = $false
-        } else {
-            Write-Log -Message ($msg.ActivateAutoTracking -f $choice, $headsets[$choice-1].Name) -Level "INFO"
-            $headsets[$choice-1].scrcpy_AutoRestart = $true
+        Write-Host ('  ' + (Format-UiCell $c.ColId 5) + (Format-UiCell $c.ColHeadset 20) + $title) -ForegroundColor Yellow
+        foreach ($h in $headsets) {
+            $on = ConvertTo-BoolField $h.$Field
+            Write-UiSegments -Segments @(
+                (New-UiSegment ('  ' + (Format-UiCell ([string]$h.ID) 5)) 'Cyan'),
+                (New-UiSegment (Format-UiCell ([string]$h.Name) 20) 'White'),
+                (New-UiSegment $(if ($on) { $c.On } else { $c.Off }) $(if ($on) { 'Green' } else { 'DarkGray' })))
         }
-        # Save changes to the CSV file
-        Save-Headsets -headsets $headsets
-    }
-    else {
-        Write-Log -Message $msg.ReturnPreviousDots -Level "INFO"
-        Start-Sleep -seconds 2
-        break 
+        Write-Host ''
+        Write-UiSegments -Segments (Get-CockpitNoticeSegments)
+        Write-Host ('  ' + $c.ToggleHint) -ForegroundColor DarkGray
+        $choice = ([string](Read-Host '  >')).Trim()
+        if (-not $choice -or $choice -eq '0') { return }
+        $h = $headsets | Where-Object { [string]$_.ID -eq $choice } | Select-Object -First 1
+        if (-not $h) { Set-CockpitNotice -Text ($c.UnknownHeadset -f $choice) -Kind err; continue }
+        Invoke-CockpitHeadsetCommand -Headset $h -Action $(if ($Field -eq 'Record') { 'r' } else { 'a' })
     }
 }
 
-function Show-SubMenu-Recording { #CHOICE 6
-    Clear-Host
-    $headsets = @(Get-KnownHeadsets)
+function Show-SubMenu-scrcpyTracking {
+    # "S Auto-cast" tile: auto-restart (scrcpy_AutoRestart) on/off per headset.
+    Show-HeadsetToggleList -Field 'scrcpy_AutoRestart'
+}
 
-    Start-Sleep -Milliseconds 200
-    Write-Host $msg.SwitchRecording -ForegroundColor Cyan
-    Write-Host $msg.EnterNumberToModify
-    
-    if ($headsets.Count -eq 0) {
-        Write-Host $msg.NoHeadsetInFile -ForegroundColor Yellow
-    }
-    else {
-        write-host $msg.IDNameRecording
-        Write-Host $msg.Separator
-        $headsets | ForEach-Object {
-            $recordingText = $_.Record
-            $recordingColor = if (ConvertTo-BoolField $recordingText) { "Green" } else { "Red" }
-            
-            Write-Host "$($_.ID) `t $($_.Name) `t " -NoNewline
-            Write-Host $recordingText -ForegroundColor $recordingColor
-        }
-    }
-    Write-Host $msg.Return
-    Write-Host ""
-    
-    $choice = Read-Host $msg.Choice
-
-    if ($choice -in $headsets.ID){
-        if (ConvertTo-BoolField $headsets[$choice-1].Record) {
-            Write-Log -Message ($msg.DeactivateRecording -f $choice, $headsets[$choice-1].Name) -Level "INFO"
-            $headsets[$choice-1].Record = $false
-        } else {
-            $driveInfo = Get-RecordingDriveInfo
-            if ($driveInfo -and $driveInfo.IsLow) {
-                Write-Host ""
-                Write-Host ("[WARNING] Recording drive {0}: only {1} GB free (minimum: {2} GB). Recording cannot be enabled." -f $driveInfo.DriveLetter, $driveInfo.FreeGB, $driveInfo.MinFreeGB) -ForegroundColor Red
-                Write-Host "Options: [C] Change record folder   [L] Change minimum space limit   [Enter] Cancel" -ForegroundColor Yellow
-                $key = [Console]::ReadKey($true)
-                if ($key.Key -eq 'C') {
-                    Write-Host "Edit 'scrcpy.recordFolder' in config.json to point to a drive with more space." -ForegroundColor Cyan
-                } elseif ($key.Key -eq 'L') {
-                    Write-Host "Edit 'scrcpy.recordMinFreeSpaceGB' in config.json to lower the required free space." -ForegroundColor Cyan
-                }
-                Start-Sleep -Seconds 2
-                break
-            }
-            Write-Log -Message ($msg.ActivateRecording -f $choice, $headsets[$choice-1].Name) -Level "INFO"
-            $headsets[$choice-1].Record = $true
-        }
-        # Save changes to the CSV file
-        Save-Headsets -headsets $headsets
-    }
-    else {
-        Write-Log -Message $msg.ReturnPreviousDots -Level "INFO"
-        Start-Sleep -seconds 2
-        break 
-    }
-} # OK
+function Show-SubMenu-Recording {
+    # "R Recording" tile: recording on/off per headset (refused when the drive is low).
+    Show-HeadsetToggleList -Field 'Record'
+}
 
 
 function Show-SubMenu-ScrcpyOptions {
@@ -1830,36 +2502,33 @@ function Show-SubMenu-EyeMerge {
 
 
 function Show-SubMenu-Services {
+    $c = $msg.Console
     do {
-        Clear-Host
-        Write-Host $msg.ServicesTitle -ForegroundColor Cyan
-
-        # --- Web server status ---
         # Get-WebServerProcess (scripts_init.ps1) is the single source of truth: it
         # verifies PID + process identity + port, so this display always matches the
         # VRMonitor watchdog's verdict.
         $wsProc    = Get-WebServerProcess
-        $wsRunning = [bool]$wsProc
-        $wsStatus  = if ($wsRunning) { $msg.ServicesRunning -f $wsProc.Id } else { $msg.ServicesStopped }
-        Write-Host ($msg.ServicesWebServerStatus -f $wsStatus) -ForegroundColor $(if ($wsRunning) { 'Green' } else { 'Red' })
-
-        # --- MediaMtx status ---
+        $wsStatus  = if ($wsProc) { $msg.ServicesRunning -f $wsProc.Id } else { $msg.ServicesStopped }
         $mtxProc   = Get-MediaMtxProcess
         $mtxStatus = if ($mtxProc) { $msg.ServicesRunning -f $mtxProc.Id } else { $msg.ServicesStopped }
-        Write-Host ($msg.ServicesMediaMtxStatus -f $mtxStatus) -ForegroundColor $(if ($mtxProc) { 'Green' } else { 'Red' })
+        $items = @(
+            @{ Separator = $true; Label = ('{0}: {1}' -f $c.SvcStatusWeb, $wsStatus) },
+            @{ Key = '1'; Label = $c.SvcWebRestart },
+            @{ Key = '2'; Label = $c.SvcWebStop },
+            @{ Separator = $true },
+            @{ Separator = $true; Label = ('{0}: {1}' -f $c.SvcStatusMtx, $mtxStatus) },
+            @{ Key = '3'; Label = $c.SvcMtxRestart },
+            @{ Key = '4'; Label = $c.SvcMtxStop },
+            @{ Separator = $true },
+            @{ Key = 'V'; Label = $c.SvcRecast },
+            @{ Key = 'B'; Label = $c.SvcBenchmark }
+        )
+        Write-UiMenu -Title $c.ServicesTitle -Subtitle 'VRHM > Services' -Items $items -Footer $c.Back -Bg 'DarkGray'
 
-        Write-Host ""
-        Write-Host $msg.VideoRecast              -BackgroundColor DarkMagenta -ForegroundColor White
-        Write-Host $msg.ServicesChoiceWebServer  -BackgroundColor DarkBlue -ForegroundColor White
-        Write-Host $msg.ServicesChoiceStopWS     -BackgroundColor DarkBlue -ForegroundColor White
-        Write-Host $msg.ServicesChoiceMediaMtx   -BackgroundColor DarkMagenta -ForegroundColor White
-        Write-Host $msg.ServicesChoiceStopMtx    -BackgroundColor DarkMagenta -ForegroundColor White
-        Write-Host $msg.Benchmark.MenuChoice     -BackgroundColor DarkCyan -ForegroundColor White
-        Write-Host $msg.ServicesChoiceBack
+        $choice = Read-UiKey
+        if ($choice -eq 'ESC') { $choice = '0' }
 
-        $choice = Read-Host $msg.EnterChoice
-
-        switch ($choice.ToUpper()) {
+        switch ($choice) {
             'V' { Show-SubMenu-VideoRecast }
             'B' { Show-SubMenu-Benchmark }
             '1' {
@@ -2515,8 +3184,8 @@ function Show-SubMenu-Benchmark {
     #>
     do {
         Clear-Host
+        Write-UiTitle -Title $msg.Console.BenchmarkTitle -Subtitle 'VRHM > Services > Benchmark' -Bg 'DarkGray'
         Write-Host ""
-        Write-Host ("  " + $msg.Benchmark.Title) -ForegroundColor Cyan
         Write-Host ("  " + $msg.Benchmark.Intro)
         Write-Host ""
         Write-Host ("  " + $msg.Benchmark.MenuRun)
@@ -2526,7 +3195,8 @@ function Show-SubMenu-Benchmark {
         Write-Host ("  " + $msg.Benchmark.MenuClear)
         Write-Host ("  " + $msg.Benchmark.MenuBack)
         Write-Host ""
-        $choice = (Read-Host $msg.EnterChoice).Trim().ToUpper()
+        $choice = Read-UiKey
+        if ($choice -eq 'ESC') { $choice = '0' }
         switch ($choice) {
             '1' {
                 if (Test-StreamBenchmarkActive) {
@@ -2573,30 +3243,30 @@ function Show-SubMenu-Benchmark {
 }
 
 
+function Get-CaptureModeLabel {
+    # Readable name of a Performance.Capture_Mode value (Console.Capture* strings).
+    param([string]$Mode = $global:CaptureMode)
+    switch ($Mode) {
+        'StreamOnly'           { return $msg.Console.CaptureStreamOnly }
+        'StreamAndLocalWindow' { return $msg.Console.CaptureBoth }
+        'LocalWindow'          { return $msg.Console.CaptureLocal }
+        default                { return [string]$Mode }
+    }
+}
+
 function Show-SubMenu-Config {
+    $c = $msg.Console
     do {
-        Clear-Host
-        Write-Host ""
-        Write-Host "  === Configuration ===" -ForegroundColor Cyan
-        Write-Host ""
-        Write-Host "  W. WiFi Networks  - List, add, edit, delete, set preferred"
-        $dashboardStatus = if ($global:Dashboard_showConsole) { "Shown" } else { "Hidden" }
-        Write-Host "  D. VR Headset Monitoring Console  - Currently: $dashboardStatus"
-        $captureLabel = switch ($global:CaptureMode) {
-            'StreamOnly'           { "Stream only" }
-            'StreamAndLocalWindow' { "Stream + local scrcpy window" }
-            'LocalWindow'          { "Local scrcpy window only" }
-            default                { "$global:CaptureMode" }
-        }
-        Write-Host "  V. Video Capture Mode  - Currently: $captureLabel"
-        Write-Host ($msg.AdbWifi.MenuOption -f $(switch ([string]$global:ADB_wifi_effective_preferred) { 'tls' { 'TLS' } 'classic' { 'classic' } default { $msg.AdbWifi.MenuNoPreference } }))
-        if ($global:VQA_Enabled) {
-            Write-Host "  Q. Video Quality Automation (VQR / VQO)"
-        }
-        Write-Host ""
-        Write-Host "  0. Back"
-        Write-Host ""
-        $choice = (Read-Host $msg.EnterChoice).Trim().ToUpper()
+        $adbPref = switch ([string]$global:ADB_wifi_effective_preferred) { 'tls' { 'TLS' } 'classic' { 'classic' } default { $msg.AdbWifi.MenuNoPreference } }
+        $items = @(
+            @{ Key = 'W'; Label = $c.CfgWifi },
+            @{ Key = 'A'; Label = $c.CfgAdbWifi;   Value = $adbPref },
+            @{ Key = 'V'; Label = $c.CfgCapture;   Value = (Get-CaptureModeLabel) }
+        )
+        if ($global:VQA_Enabled) { $items += @{ Key = 'Q'; Label = $c.CfgQuality } }
+        Write-UiMenu -Title $c.ConfigTitle -Subtitle 'VRHM > Config' -Items $items -Footer $c.Back -Bg 'DarkBlue'
+        $choice = Read-UiKey
+        if ($choice -eq 'ESC') { $choice = '0' }
         switch ($choice) {
             'W' { Show-SubMenu-WifiNetworks }
             'V' { Show-SubMenu-CaptureMode }
@@ -2604,46 +3274,6 @@ function Show-SubMenu-Config {
             'Q' {
                 if ($global:VQA_Enabled -and (Get-Command Show-SubMenu-Monitoring -ErrorAction SilentlyContinue)) {
                     Show-SubMenu-Monitoring
-                }
-            }
-            'D' {
-                $cfgPath = if ($global:configFilePath) { $global:configFilePath } else { Join-Path $global:ScriptPath "config\config.json" }
-                $cfg = $null
-                $cfgLock = Enter-VqaLock -TimeoutMs 5000
-                try {
-                    $cfg = Read-ConfigJson -ConfigFilePath $cfgPath -NonInteractive
-                    if ($cfg) {
-                        if ($null -eq $cfg.VRMonitor) {
-                            $cfg | Add-Member -NotePropertyName VRMonitor -NotePropertyValue ([PSCustomObject]@{ showConsole = $false })
-                        }
-                        $newVal = -not [bool]$cfg.VRMonitor.showConsole
-                        $cfg.VRMonitor.showConsole = $newVal
-                        Write-ConfigJson -Object $cfg -Path $cfgPath -Depth 20
-                        $global:Dashboard_showConsole = $newVal
-                    }
-                } catch {
-                    Write-Log ("Dashboard toggle: config.json not updated: " + $_.Exception.Message) -Level ERROR
-                    $cfg = $null
-                } finally {
-                    if ($cfgLock) { Exit-VqaLock -Stream $cfgLock }
-                }
-                if ($cfg) {
-                    if (-not $newVal) {
-                        # Toggled OFF: kill any running dashboard now so it does
-                        # not linger. Show-MainMenu's gate prevents a respawn.
-                        try {
-                            Get-WmiObject -Class Win32_Process -Filter "ParentProcessId = $PID" |
-                                Where-Object { $_.CommandLine -match "headsets_dashboard\.ps1" } |
-                                ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-                        } catch { }
-                        $dashPidFile = Join-Path $global:ScriptPath "data\dashboard.pid"
-                        if (Test-Path -LiteralPath $dashPidFile) { Remove-Item -LiteralPath $dashPidFile -Force -ErrorAction SilentlyContinue }
-                    }
-                    $statusLabel = if ($newVal) { "Shown" } else { "Hidden" }
-                    Write-Host ""
-                    Write-Host "  VR Headset Monitoring Console set to: $statusLabel" -ForegroundColor Green
-                    Write-Host ""
-                    Read-Host $msg.PressEnterToContinue | Out-Null
                 }
             }
             '0' { return }
@@ -2659,8 +3289,7 @@ function Show-SubMenu-AdbWifiModes {
     # tick (Test-ConfigChanged), no restart.
     do {
         Clear-Host
-        Write-Host ""
-        Write-Host $msg.AdbWifi.MenuTitle -ForegroundColor Cyan
+        Write-UiTitle -Title $msg.Console.AdbWifiTitle -Subtitle 'VRHM > Config > ADB WiFi modes' -Bg 'DarkBlue'
         Write-Host ""
         $onText = { param($v) if ($v) { $msg.AdbWifi.MenuEnabled } else { $msg.AdbWifi.MenuDisabled } }
         Write-Host ($msg.AdbWifi.MenuClassic -f (& $onText $global:ADB_wifi_classic_enabled), (Get-ClassicAdbPort))
@@ -2673,10 +3302,9 @@ function Show-SubMenu-AdbWifiModes {
         Write-Host ""
         Write-Host $msg.AdbWifi.MenuHint -ForegroundColor DarkGray
         Write-Host ""
-        Write-Host "  0. Back"
-        Write-Host ""
-        $choice = (Read-Host $msg.EnterChoice).Trim().ToUpper()
-        if ($choice -eq '0') { return }
+        Write-Host ('  ' + $msg.Console.Back) -ForegroundColor DarkGray
+        $choice = Read-UiKey
+        if ($choice -in @('0', 'ESC')) { return }
         if ($choice -notin @('1', '2', '3')) { continue }
 
         $cfgPath = if ($global:ConfigFilePath) { $global:ConfigFilePath } else { Join-Path $global:ScriptPath "config\config.json" }
@@ -2719,54 +3347,41 @@ function Show-SubMenu-AdbWifiModes {
 
 
 function Show-SubMenu-CaptureMode {
+    $c = $msg.Console
     do {
-        Clear-Host
-        Write-Host ""
-        Write-Host "  === Video Capture Mode ===" -ForegroundColor Cyan
-        Write-Host ""
-        $captureCurrentLabel = switch ($global:CaptureMode) {
-            'StreamOnly'           { "Stream only" }
-            'StreamAndLocalWindow' { "Stream + local scrcpy window" }
-            'LocalWindow'          { "Local scrcpy window only" }
-            default                { "$global:CaptureMode" }
-        }
-        Write-Host "  Current: $captureCurrentLabel"
-        Write-Host ""
-        Write-Host "  1. Stream only                  - No scrcpy window. Lowest CPU. Stream available on the website."
-        Write-Host "  2. Stream + local scrcpy window - scrcpy window visible + stream via named pipe (GPU rendering)."
-        Write-Host "  3. Local scrcpy window only     - Window only. No streaming pipeline (lowest CPU when no viewer)."
-        Write-Host ""
-        Write-Host "  Switching restarts any running scrcpy session in the new mode."
-        Write-Host ""
-        Write-Host "  0. Back"
-        Write-Host ""
-        $choice = (Read-Host $msg.EnterChoice).Trim()
+        $items = @(
+            @{ Separator = $true; Label = ('{0}: {1}' -f $c.CaptureCurrent, (Get-CaptureModeLabel)) },
+            @{ Separator = $true },
+            @{ Key = '1'; Label = $c.CaptureOpt1 },
+            @{ Key = '2'; Label = $c.CaptureOpt2 },
+            @{ Key = '3'; Label = $c.CaptureOpt3 },
+            @{ Separator = $true },
+            @{ Separator = $true; Label = $c.CaptureNote }
+        )
+        Write-UiMenu -Title $c.CaptureTitle -Subtitle 'VRHM > Config > Capture mode' -Items $items -Footer $c.Back -Bg 'DarkBlue'
+        $choice = Read-UiKey
+        if ($choice -in @('0', 'ESC')) { return }
         $newMode = switch ($choice) {
             '1' { 'StreamOnly' }
             '2' { 'StreamAndLocalWindow' }
             '3' { 'LocalWindow' }
-            '0' { return }
             default { $null }
         }
         if ($newMode) {
             # Warn before switching to LocalWindow - no stream/web/restream
             if ($newMode -eq 'LocalWindow' -and $global:CaptureMode -ne 'LocalWindow') {
                 Write-Host ""
-                Write-Host "  WARNING: Only the local scrcpy windows will open." -ForegroundColor Yellow
-                Write-Host "  Video capture will NOT be available on the web interface or via restream links." -ForegroundColor Yellow
-                Write-Host ""
-                $ack = (Read-Host "  Continue? [Y/N]").Trim().ToUpper()
-                if ($ack -ne 'Y') {
-                    Write-Host "  Cancelled." -ForegroundColor DarkGray
+                Write-UiMessage -Text $c.CaptureLocalWarn -Kind warn
+                $ack = ([string](Read-Host ('  ' + $c.CaptureConfirm))).Trim().ToUpper()
+                if ($ack -notin @('Y', 'O')) {
+                    Write-Host ('  ' + $c.Cancelled) -ForegroundColor DarkGray
                     Start-Sleep -Seconds 1
                     continue
                 }
             }
             if (Set-CaptureMode -Mode $newMode) {
-                Write-Host ""
-                Write-Host "  CaptureMode set to $newMode" -ForegroundColor Green
-                Write-Host ""
-                Read-Host $msg.PressEnterToContinue | Out-Null
+                Write-UiMessage -Text ($c.CaptureSet -f (Get-CaptureModeLabel -Mode $newMode)) -Kind ok
+                Wait-UiKey
             }
         }
     } while ($true)
@@ -2963,19 +3578,28 @@ function Show-SubMenu-VideoRecast {
 }
 
 
-function Show-SubMenu-FilesAndFolders{
-    Clear-Host
-    Start-Sleep -Milliseconds 200
-    Write-Host $msg.FilesAndFoldersManagement -BackgroundColor DarkCyan -ForegroundColor White
-    Write-Host $msg.OpenRecordingsFolder
-    Write-Host $msg.OpenLogsFolder
-    Write-Host $msg.OpenAppFolder
-    Write-Host $msg.EditConfigFile
-    Write-Host $msg.EditKnownHeadsetsConfig
-    Write-Host (Get-MessageString -Key 'Logs.OpenLogFile')
+function Show-SubMenu-FilesAndFolders {
+    $c = $msg.Console
+    while ($true) {
+        $items = @(
+            @{ Key = '1'; Label = $c.FilesRec },
+            @{ Key = '2'; Label = $c.FilesLogs },
+            @{ Key = '3'; Label = $c.FilesApp },
+            @{ Key = '4'; Label = $c.FilesConfig },
+            @{ Key = '5'; Label = $c.FilesExport },
+            @{ Key = '6'; Label = $c.FilesLogPick }
+        )
+        Write-UiMenu -Title $c.FilesTitle -Subtitle 'VRHM > Files & logs' -Items $items -Footer $c.Back -Bg 'DarkGray'
+        $userInput = Read-UiKey
+        if ($userInput -in @('0', 'ESC')) { return }
+        Invoke-FilesMenuChoice -Choice $userInput
+    }
+}
 
-    Write-Host $msg.ReturnPreviousMenu
-    $userInput = $(Read-Host $msg.YourChoice).ToUpper() #ToUpper = Convert user input to uppercase for case-insensitive comparison
+function Invoke-FilesMenuChoice {
+    # The actions behind the options of Show-SubMenu-FilesAndFolders.
+    param([string]$Choice)
+    $userInput = $Choice
     switch ($userInput) {
         '1' {
             Write-Log -Message $msg.OpenRecordings -Level "INFO"
@@ -3010,20 +3634,13 @@ function Show-SubMenu-FilesAndFolders{
             catch {
                 Write-Log ("Headset export failed: " + $_.Exception.Message) -Level ERROR
             }
+            Wait-UiKey
         }
         '6' {
             Show-SubMenu-LogFiles
         }
-        '0' {
-            Write-Log -Message $msg.ReturnPreviousDots -Level "INFO"
-            Start-Sleep -seconds 2
-            break
-        }
-
-        default {
-            Write-Log -Message $msg.InvalidOptionFileMenu -Level "ERROR"
-            Write-Host $msg.InvalidOptionFiles -ForegroundColor Yellow
-        }
+        # Any other key: single-key menu, nothing to do (the menu is simply drawn again).
+        default { }
     }
 }
 
@@ -3124,10 +3741,7 @@ function Open-File {
 function Show-SubMenu-Monitoring {
     do {
         Clear-Host
-        Write-Host ""
-        Write-Host " ==========================================================" -ForegroundColor Cyan
-        Write-Host "   $($msg.MonitoringMenuTitle)" -ForegroundColor Cyan
-        Write-Host " ==========================================================" -ForegroundColor Cyan
+        Write-UiTitle -Title $msg.Console.QualityTitle -Subtitle 'VRHM > Quality' -Bg 'DarkGray'
         Write-Host ""
 
         $rec = Get-LatestVqaRecommendation
@@ -3151,9 +3765,10 @@ function Show-SubMenu-Monitoring {
         Write-Host "   [4] Apply current recommendation now"
         Write-Host "   [5] Restore originals"
         Write-Host "   [6] Show full recommendation JSON"
-        Write-Host "   [0] Back"
         Write-Host ""
-        $choice = Read-Host "   Choice"
+        Write-Host ('   ' + $msg.Console.Back) -ForegroundColor DarkGray
+        $choice = Read-UiKey
+        if ($choice -eq 'ESC') { $choice = '0' }
 
         switch ($choice) {
             '1' { Set-VqaAutoApply -Section 'profiles' -Enabled (-not $global:VQA_AutoApplyProfiles) | Out-Null; Start-Sleep -Milliseconds 500 }

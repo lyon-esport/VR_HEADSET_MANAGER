@@ -474,6 +474,16 @@ function Get-Config {
     $global:databaseBackupKeep    = if ($dbCfg -and $dbCfg.backup -and $null -ne $dbCfg.backup.keep) { [int]$dbCfg.backup.keep } else { 5 }
     $global:databaseBackupOnStartup = if ($dbCfg -and $dbCfg.backup -and $null -ne $dbCfg.backup.on_startup) { [bool]$dbCfg.backup.on_startup } else { $true }
 
+    # Console main screen (Show-MainMenu): how often the header and headset table redraw while
+    # the operator has typed nothing. 0 turns the live refresh off; otherwise floor 2 s (each
+    # redraw reads the status table and the process list).
+    $consoleCfg = $configContent.Console
+    $global:Console_live_refresh_sec = 5
+    if ($consoleCfg -and $null -ne $consoleCfg.live_refresh_sec) {
+        $consoleRefresh = [int]$consoleCfg.live_refresh_sec
+        $global:Console_live_refresh_sec = if ($consoleRefresh -le 0) { 0 } else { [Math]::Max(2, $consoleRefresh) }
+    }
+
     # Headset DIAG page (headset_diag.html). Every value has a default so a config.json written
     # before the "Diag" section existed still loads. command_presets is kept as an array of
     # @{ name; command } objects exactly as the page renders them.
@@ -537,7 +547,7 @@ function Get-Config {
     }
 
     # VR Monitor console visibility
-    $global:Dashboard_showConsole = if ($null -ne $configContent.VRMonitor.showConsole) { [bool]$configContent.VRMonitor.showConsole } else { $false }
+
 
    
     # Charge of logging configuration variables with validation and default values

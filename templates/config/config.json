@@ -21,7 +21,6 @@
                 },
     "VRMonitor":  {
                       "refresh_timer":  5,
-                      "showConsole":  false,
                       "networkDiscovery":  {
                                                "enabled":  true,
                                                "interval_sec":  60
@@ -457,6 +456,9 @@
                                     "on_startup":  true
                                 }
                  },
+    "Console":  {
+                    "live_refresh_sec":  5
+                },
     "Diag":  {
                  "auto_refresh_sec":  30,
                  "cable_test_passes":  3,

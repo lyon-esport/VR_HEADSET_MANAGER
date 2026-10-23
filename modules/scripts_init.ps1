@@ -65,7 +65,7 @@ if (Test-Path -LiteralPath $vqaPreConfigPath) {
 $moduleFiles = Get-ChildItem -LiteralPath $ModulesPath -Filter "*.ps1" -File | Sort-Object Name |
     Where-Object {
         $_.Name -notlike "*_init.ps1" -and
-        $_.Name -notlike "headsets_dashboard.ps1" -and
+
         $_.Name -notlike "reaper.ps1" -and
         $_.Name -notlike "*_test.ps1" -and
         ($vqaPreEnabled -or $_.Name -ne "video_quality_automation.ps1")
@@ -516,17 +516,6 @@ function Invoke-AppShutdown {
     try { Disconnect-ADBConnections } catch { }
     try { Stop-AdbServer }            catch { }
 
-    # Kill the dashboard (if any) before stopping services so its self-exit
-    # parent-PID check does not race against us.
-    try {
-        $dashProcs = Get-WmiObject -Class Win32_Process -Filter "ParentProcessId = $PID" |
-            Where-Object { $_.CommandLine -match "headsets_dashboard\.ps1" }
-        foreach ($dp in $dashProcs) {
-            Stop-Process -Id $dp.ProcessId -Force -ErrorAction SilentlyContinue
-        }
-        $dashPidFile = Join-Path $global:ScriptPath "data\dashboard.pid"
-        if (Test-Path -LiteralPath $dashPidFile) { Remove-Item -LiteralPath $dashPidFile -Force -ErrorAction SilentlyContinue }
-    } catch { }
 
     try { Stop-WebServer    } catch { }
     try { Stop-MdnsResponder } catch { }

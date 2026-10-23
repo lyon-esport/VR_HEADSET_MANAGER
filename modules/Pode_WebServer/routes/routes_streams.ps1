@@ -24,36 +24,21 @@ function Invoke-RouteRecording {
         $rows = Get-KnownHeadsets
         $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
         if ($headset) {
-            $newVal = if ([string]$json.value -eq 'True' -or [string]$json.value -eq 'true') { 'True' } else { 'False' }
-
-            # Guard: block enabling when recording drive space is low
-            if ($newVal -eq 'True') {
-                $rdInfo = $null
-                try {
-                    $monJson = Get-DbKeyValue -Key 'computer_monitoring'
-                    if ($monJson) { $rdInfo = $monJson.RecordingDrive }
-                } catch {}
-                if (-not $rdInfo) {
-                    try { $rdInfo = Get-RecordingDriveInfo } catch {}
-                }
-                if ($rdInfo -and $rdInfo.IsLow) {
-                    $lowBody = ('{"ok":false,"storageLow":true,"freeGB":' + $rdInfo.FreeGB + ',"minFreeGB":' + $rdInfo.MinFreeGB + ',"driveLetter":"' + $rdInfo.DriveLetter + '"}')
-                    $respBytes = [System.Text.Encoding]::UTF8.GetBytes($lowBody)
-                    $response.StatusCode      = 200
-                    $response.ContentType     = 'application/json; charset=utf-8'
-                    $response.Headers.Add('Access-Control-Allow-Origin', '*')
-                    $response.ContentLength64 = $respBytes.Length
-                    $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
-                    Close-HttpResponse -Response $response
-                    return
-                }
+            $enable = ([string]$json.value -eq 'True' -or [string]$json.value -eq 'true')
+            # Low-disk guard, registry write and capture restart: shared with the console.
+            $rec = Set-HeadsetRecording -Headset $headset -Enabled $enable -Headsets $rows
+            if ($rec.StorageLow) {
+                $lowBody = ('{"ok":false,"storageLow":true,"freeGB":' + $rec.FreeGB + ',"minFreeGB":' + $rec.MinFreeGB + ',"driveLetter":"' + $rec.DriveLetter + '"}')
+                $respBytes = [System.Text.Encoding]::UTF8.GetBytes($lowBody)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'application/json; charset=utf-8'
+                $response.Headers.Add('Access-Control-Allow-Origin', '*')
+                $response.ContentLength64 = $respBytes.Length
+                $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+                Close-HttpResponse -Response $response
+                return
             }
-
-            $recordChanged = (([string]$headset.Record -eq 'True') -ne ($newVal -eq 'True'))
-            Update-HeadsetField -headsets $rows -ID ([int]$headset.ID) -Field "Record" -NewValue $newVal
-            # Turning recording on/off restarts the capture (the recording is a second
-            # output of the same ffmpeg): mark it starting and apply it now.
-            if ($recordChanged) { [void](Request-ScrcpyCheck -HeadsetId ([int]$headset.ID) -Reason 'recording toggled') }
+            if (-not $rec.Ok) { throw "Set-HeadsetRecording failed" }
             $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
         } else {
             $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"not found"}')
@@ -260,11 +245,9 @@ function Invoke-RouteAutorestart {
         $rows = Get-KnownHeadsets
         $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
         if ($headset) {
-            $newVal = if ([string]$json.value -eq 'True' -or [string]$json.value -eq 'true') { 'True' } else { 'False' }
-            Update-HeadsetField -headsets $rows -ID ([int]$headset.ID) -Field "scrcpy_AutoRestart" -NewValue $newVal
-            # Turned ON: mark it starting right away (the monitor's registry edge starts it
-            # within ~0.5 s, but the page should not wait for that to show it).
-            if ($newVal -eq 'True') { [void](Request-ScrcpyCheck -HeadsetId ([int]$headset.ID) -Reason 'auto-restart enabled') }
+            $enable = ([string]$json.value -eq 'True' -or [string]$json.value -eq 'true')
+            # Registry write + immediate start request when ON: shared with the console.
+            if (-not (Set-HeadsetAutoCast -Headset $headset -Enabled $enable -Headsets $rows)) { throw "Set-HeadsetAutoCast failed" }
             $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":true}')
         } else {
             $respBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"not found"}')
@@ -312,34 +295,10 @@ function Invoke-RouteStopScrcpy {
             $stopFrom = try { [string]$request.RemoteEndPoint.Address } catch { '?' }
             $stopPage = try { if ($request.UrlReferrer) { [string]$request.UrlReferrer.AbsolutePath } else { '-' } } catch { '-' }
             Write-Log ("Stop scrcpy requested for {0} by {1} (page {2})" -f $headset.Name, $stopFrom, $stopPage) -Level INFO
-            $stopped   = [bool](Stop-Scrcpy -HeadsetName $headset.Name -HeadsetIP $headset.IPAddress)
-            $stopSafe  = Convert-Displayname $headset.Name
-
-            # A stop that arrives while a start is IN FLIGHT (a restart just triggered by a
-            # profile change, a toggle...) finds no process yet - and the capture would come
-            # up right after it, so the stop would silently do nothing. Wait for that start
-            # (at most 12 s: it is marked "starting"), then stop what it produced.
-            if (-not $stopped) {
-                $deadline = (Get-Date).AddSeconds(12)
-                while ((Get-Date) -lt $deadline) {
-                    $st = Get-ScrcpyCaptureState
-                    if (Get-ScrcpyProcess -displayName $stopSafe -headsetIP $headset.IPAddress -headsetSerial $headset.SerialNumber) {
-                        $stopped = [bool](Stop-Scrcpy -HeadsetName $headset.Name -HeadsetIP $headset.IPAddress)
-                        Write-Log ("Stop scrcpy: {0} was starting - stopped it once it was up" -f $headset.Name) -Level INFO
-                        break
-                    }
-                    if (@($st.Starting) -notcontains [int]$headset.ID) { break }
-                    Start-Sleep -Milliseconds 400
-                }
-            }
-
-            # Auto-restart ON means the capture comes back: do not leave that to the slow
-            # tick. Mark it "starting" and have VRMonitor restart it as soon as it can.
-            $restarting = @(Request-ScrcpyCheck -HeadsetId ([int]$headset.ID) -Reason 'capture stopped').Count -gt 0
-            # ok = nothing is running for this headset any more (a stop of an already-stopped
-            # capture is a success, not an error); stopped = something WAS running and was killed.
-            $stillUp = [bool](Get-ScrcpyProcess -displayName $stopSafe -headsetIP $headset.IPAddress -headsetSerial $headset.SerialNumber)
-            Send-JsonResponse -Response $response -Body @{ ok = (-not $stillUp); stopped = $stopped; restarting = $restarting } -StatusCode 200
+            # Waits for a start in flight, then asks VRMonitor to restart it when auto-restart
+            # is ON: shared with the console (Stop-HeadsetCapture).
+            $stop = Stop-HeadsetCapture -Headset $headset
+            Send-JsonResponse -Response $response -Body @{ ok = [bool]$stop.Ok; stopped = [bool]$stop.Stopped; restarting = [bool]$stop.Restarting } -StatusCode 200
         } else {
             Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'not found' } -StatusCode 200
         }

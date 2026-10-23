@@ -2013,6 +2013,136 @@ function Get-ScrcpyCheckRequest {
     try { return (Get-DbKeyValue -Key $script:ScrcpyCheckKey) } catch { return $null }
 }
 
+function Stop-HeadsetCapture {
+    <#
+    .SYNOPSIS
+    Kills the running capture of ONE headset. Shared by POST /api/stop-scrcpy and the console
+    (headset panel, "<id>x" command), so both behave the same.
+
+    .DESCRIPTION
+    A stop that arrives while a start is IN FLIGHT (a restart just triggered by a profile change,
+    a toggle...) finds no process yet, and the capture would come up right after it: wait for
+    that start (at most -WaitStartingSec, it is marked "starting"), then stop what it produced.
+    Auto-restart ON means the capture comes back: VRMonitor is asked to restart it at once
+    (Request-ScrcpyCheck) instead of waiting for its slow tick.
+    Returns @{ Ok; Stopped; Restarting }: Ok = nothing runs for this headset any more (stopping an
+    already-stopped capture is a success), Stopped = a running capture was killed, Restarting =
+    auto-restart is ON and the restart was requested. Never throws (Ok = $false on failure).
+
+    .EXAMPLE
+    $r = Stop-HeadsetCapture -Headset (Get-KnownHeadsets | Where-Object ID -eq 3)
+    #>
+    param(
+        [Parameter(Mandatory = $true)] $Headset,
+        [int]$WaitStartingSec = 12
+    )
+    try {
+        $safe    = Convert-Displayname $Headset.Name
+        $stopped = [bool](Stop-Scrcpy -HeadsetName $Headset.Name -HeadsetIP $Headset.IPAddress)
+        if (-not $stopped) {
+            $deadline = (Get-Date).AddSeconds($WaitStartingSec)
+            while ((Get-Date) -lt $deadline) {
+                $st = Get-ScrcpyCaptureState
+                if (Get-ScrcpyProcess -displayName $safe -headsetIP $Headset.IPAddress -headsetSerial $Headset.SerialNumber) {
+                    $stopped = [bool](Stop-Scrcpy -HeadsetName $Headset.Name -HeadsetIP $Headset.IPAddress)
+                    Write-Log ("Stop scrcpy: {0} was starting - stopped it once it was up" -f $Headset.Name) -Level INFO
+                    break
+                }
+                if (@($st.Starting) -notcontains [int]$Headset.ID) { break }
+                Start-Sleep -Milliseconds 400
+            }
+        }
+        $restarting = @(Request-ScrcpyCheck -HeadsetId ([int]$Headset.ID) -Reason 'capture stopped').Count -gt 0
+        $stillUp    = [bool](Get-ScrcpyProcess -displayName $safe -headsetIP $Headset.IPAddress -headsetSerial $Headset.SerialNumber)
+        return @{ Ok = (-not $stillUp); Stopped = $stopped; Restarting = $restarting }
+    } catch {
+        Write-Log ("Stop-HeadsetCapture failed for {0}: {1}" -f $Headset.Name, $_.Exception.Message) -Level WARNING
+        return @{ Ok = $false; Stopped = $false; Restarting = $false }
+    }
+}
+
+function Set-HeadsetAutoCast {
+    <#
+    .SYNOPSIS
+    Turns the automatic capture (scrcpy_AutoRestart) of ONE headset on or off. Shared by
+    POST /api/autorestart and the console (headset panel, "<id>a" command).
+
+    .DESCRIPTION
+    Turned ON: the headset is marked "starting" and VRMonitor is asked to start it now
+    (Request-ScrcpyCheck), so it does not wait for the slow tick. Turned OFF: only the flag
+    changes - a capture already running keeps running until it is stopped (Stop-HeadsetCapture).
+    Returns $true when the registry was written. Never throws.
+
+    .EXAMPLE
+    Set-HeadsetAutoCast -Headset $row -Enabled $true
+    #>
+    param(
+        [Parameter(Mandatory = $true)] $Headset,
+        [Parameter(Mandatory = $true)] [bool]$Enabled,
+        $Headsets = $null
+    )
+    try {
+        $rows   = if ($Headsets) { $Headsets } else { Get-KnownHeadsets }
+        $newVal = if ($Enabled) { 'True' } else { 'False' }
+        Update-HeadsetField -headsets $rows -ID ([int]$Headset.ID) -Field 'scrcpy_AutoRestart' -NewValue $newVal
+        if ($Enabled) { [void](Request-ScrcpyCheck -HeadsetId ([int]$Headset.ID) -Reason 'auto-restart enabled') }
+        return $true
+    } catch {
+        Write-Log ("Set-HeadsetAutoCast failed for {0}: {1}" -f $Headset.Name, $_.Exception.Message) -Level WARNING
+        return $false
+    }
+}
+
+function Set-HeadsetRecording {
+    <#
+    .SYNOPSIS
+    Turns recording on or off for ONE headset. Shared by POST /api/recording and the console
+    (headset panel, "<id>r" command, Recording list).
+
+    .DESCRIPTION
+    Enabling is refused when the recording drive is low on space (RecordingDrive.IsLow of the
+    computer_monitoring snapshot, else a fresh Get-RecordingDriveInfo). A real change restarts
+    the capture (the recording is a second output of the same ffmpeg), so VRMonitor is asked to
+    apply it now (Request-ScrcpyCheck).
+    Returns @{ Ok; StorageLow; FreeGB; MinFreeGB; DriveLetter; Changed }. Never throws.
+
+    .EXAMPLE
+    $r = Set-HeadsetRecording -Headset $row -Enabled $true; if ($r.StorageLow) { 'disk full' }
+    #>
+    param(
+        [Parameter(Mandatory = $true)] $Headset,
+        [Parameter(Mandatory = $true)] [bool]$Enabled,
+        $Headsets = $null
+    )
+    $result = @{ Ok = $false; StorageLow = $false; FreeGB = $null; MinFreeGB = $null; DriveLetter = $null; Changed = $false }
+    try {
+        if ($Enabled) {
+            $rdInfo = $null
+            try {
+                $mon = Get-DbKeyValue -Key 'computer_monitoring'
+                if ($mon) { $rdInfo = $mon.RecordingDrive }
+            } catch {}
+            if (-not $rdInfo) { try { $rdInfo = Get-RecordingDriveInfo } catch {} }
+            if ($rdInfo -and $rdInfo.IsLow) {
+                $result.StorageLow  = $true
+                $result.FreeGB      = $rdInfo.FreeGB
+                $result.MinFreeGB   = $rdInfo.MinFreeGB
+                $result.DriveLetter = $rdInfo.DriveLetter
+                return $result
+            }
+        }
+        $rows   = if ($Headsets) { $Headsets } else { Get-KnownHeadsets }
+        $newVal = if ($Enabled) { 'True' } else { 'False' }
+        $result.Changed = ((ConvertTo-BoolField $Headset.Record) -ne $Enabled)
+        Update-HeadsetField -headsets $rows -ID ([int]$Headset.ID) -Field 'Record' -NewValue $newVal
+        if ($result.Changed) { [void](Request-ScrcpyCheck -HeadsetId ([int]$Headset.ID) -Reason 'recording toggled') }
+        $result.Ok = $true
+    } catch {
+        Write-Log ("Set-HeadsetRecording failed for {0}: {1}" -f $Headset.Name, $_.Exception.Message) -Level WARNING
+    }
+    return $result
+}
+
 
 function Get-HeadsetPipelineFault {
     <#

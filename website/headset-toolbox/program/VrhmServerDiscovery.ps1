@@ -3,7 +3,10 @@
     VR HEADSET MANAGER server discovery - the single shared copy.
 
 .DESCRIPTION
-    Dot-sourced by Start-VrhmToolbox.ps1. Finds a VR HEADSET MANAGER server on
+    Dot-sourced by Start-VrhmToolbox.ps1. Run on its own, it only starts
+    Start-VrhmToolbox.ps1 (see the end of the file) - that is the entry point.
+
+    Finds a VR HEADSET MANAGER server on
     the LAN, confirms its identity, remembers it in vrhm_server_cache.json and
     lets the operator pick between several servers or type an address by hand.
 
@@ -633,4 +636,22 @@ function Resolve-VrhmServer {
         }
         # [S], anything else, or an empty answer -> search again
     }
+}
+
+# ---------------------------------------------------------------------------
+# Run directly (ISE F5, right-click Run, powershell -File) instead of being
+# dot-sourced by Start-VrhmToolbox.ps1: this file only defines functions, so
+# hand over to the real entry point. Start-VrhmToolbox.ps1 sets the marker
+# while it loads the libraries, so nothing happens here in that case.
+# ---------------------------------------------------------------------------
+if (-not $global:VrhmToolboxLoadingLibraries) {
+    $vrhmHere  = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+    $vrhmEntry = Join-Path $vrhmHere 'Start-VrhmToolbox.ps1'
+    Write-Host "This file is a part of the toolbox, not its entry point. Starting Start-VrhmToolbox.ps1" -ForegroundColor Yellow
+    Write-Host "(VRHM-Headset-Toolbox.exe does the same - see HOWTO.txt.)" -ForegroundColor Yellow
+    if (-not (Test-Path -LiteralPath $vrhmEntry)) {
+        Write-Host "Start-VrhmToolbox.ps1 was not found next to this file: $vrhmEntry" -ForegroundColor Red
+        return
+    }
+    & $vrhmEntry @args
 }

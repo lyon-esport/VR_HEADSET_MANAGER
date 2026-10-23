@@ -324,32 +324,13 @@ Add-StartupStage -Name 'adb server + reaper'
 Start-VRMonitor -VRMonitor_refresh_timer $global:VRMonitor_refresh_timer
 Add-StartupStage -Name 'VRMonitor start'
 
-# Dashboard is a pure DISPLAY window now. Only spawn it when actually visible.
-if ($global:Dashboard_showConsole) {
-    $headsets_dashboard_script = Join-Path -Path $scriptPath -ChildPath "modules\headsets_dashboard.ps1"
-    $dashProc = Start-Process powershell.exe -ArgumentList @(
-        "-NoProfile",
-        "-NoExit",
-        "-File",
-        "`"$headsets_dashboard_script`"",
-        "-ScriptPath",
-        "`"$scriptPath`"",
-        "-ConfigFilePath",
-        "`"$configFilePath`""
-    ) -WindowStyle Normal -PassThru
-    if ($dashProc) {
-        $dashPidFile = Join-Path $global:ScriptPath "data\dashboard.pid"
-        $dashProc.Id | Set-Content -LiteralPath $dashPidFile -Encoding ASCII -Force -ErrorAction SilentlyContinue
-    }
-}
-
 Write-Host "Waiting 5 seconds before showing the main menu... " -ForegroundColor Yellow -NoNewline
     for ($i = 4; $i -ge 1; $i--) {
         Write-Host "$i " -ForegroundColor Cyan -NoNewline
         Start-Sleep -Seconds 1
     }
 Write-Host "`n"
-Add-StartupStage -Name 'dashboard + 5s countdown'
+Add-StartupStage -Name '5s countdown'
 
 # One INFO line with every startup stage (S8-4). The fixed countdown is part of the last
 # stage, so read the real startup cost from the stages before it.

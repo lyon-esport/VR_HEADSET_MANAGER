@@ -94,9 +94,18 @@ param(
 # Everything that genuinely needs a throw passes -ErrorAction Stop explicitly.
 $script:ToolFolder = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 
-. (Join-Path $script:ToolFolder 'VrhmServerDiscovery.ps1')
-. (Join-Path $script:ToolFolder 'VrhmHeadsetOnboard.ps1')
-. (Join-Path $script:ToolFolder 'VrhmKioskAgent.ps1')
+# The three files below are libraries. Run on their own (ISE F5, right-click
+# Run) they forward to this script; the marker tells them they are being loaded
+# from here instead. It is global because the ISE runs scripts in the global
+# scope, and it is removed right away so a later direct run still forwards.
+$global:VrhmToolboxLoadingLibraries = $true
+try {
+    . (Join-Path $script:ToolFolder 'VrhmServerDiscovery.ps1')
+    . (Join-Path $script:ToolFolder 'VrhmHeadsetOnboard.ps1')
+    . (Join-Path $script:ToolFolder 'VrhmKioskAgent.ps1')
+} finally {
+    Remove-Variable -Name VrhmToolboxLoadingLibraries -Scope Global -ErrorAction SilentlyContinue
+}
 
 $defaultPort = if ($vrhm_port -gt 0) { $vrhm_port } else { 8080 }
 Set-VrhmDiscoveryContext -CachePath $ServerCachePath -DefaultPort $defaultPort
@@ -148,6 +157,7 @@ function Show-VrhmBanner {
         Write-Host ("  Reachable     {0}" -f $reach) -ForegroundColor Red
     }
     Write-Host "=========================================================" -ForegroundColor Cyan
+    Write-Host "  Kiosk autostart and command line: see VRHM-Toolbox\HOWTO.txt" -ForegroundColor DarkGray
 
     return $info.Ok
 }

@@ -245,6 +245,12 @@
     /* Launch app button - hidden when the headset is not ADB-reachable */
     .cell-action-btn.launch-app-btn.hidden { display: none; }
 
+    /* Recording toggle - red camera while recording, grey slashed camera otherwise */
+    .cell-action-btn.record-btn.on  { color: #ef4444; border-color: rgba(239,68,68,0.6); }
+    .cell-action-btn.record-btn.on .ic-on { fill: #ef4444; }
+    .cell-action-btn.record-btn.on:hover { background: rgba(239,68,68,0.35); color: #ef4444; }
+    .record-btn.on .ic-off, .record-btn.off .ic-on { display: none; }
+
     /* Cast-to-kiosk popover (single shared instance, repositioned per click) */
     .cast-panel {
       display: none; position: fixed;
@@ -991,9 +997,52 @@
 
 
 
+    // ------ Recording toggle (POST /api/recording, same backend as the settings page and console) ------
+    // A click flips the icon at once and holds it for RECORD_PENDING_MS so a poll that still
+    // carries the old registry value does not flip it back.
+    var RECORD_PENDING_MS = 6000;
+    var _recordPending = {};
+    function setRecordBtn(btn, on) {
+      btn.classList.toggle('on', on);
+      btn.classList.toggle('off', !on);
+      btn.title = on ? 'Recording - click to stop (restarts the capture)'
+                     : 'Not recording - click to record (restarts the capture)';
+    }
+    function toggleRecording(dn, btn) {
+      var want = !btn.classList.contains('on');
+      setRecordBtn(btn, want);
+      _recordPending[dn] = Date.now() + RECORD_PENDING_MS;
+      fetch('/api/recording', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: dn, value: want })
+      })
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          if (j && j.ok) {
+            if (headsetStatus[dn]) headsetStatus[dn].record = want;
+            return;
+          }
+          delete _recordPending[dn];
+          setRecordBtn(btn, !want);
+          if (j && j.storageLow) {
+            alert('Recording drive low: ' + j.freeGB + ' GB free on ' + j.driveLetter +
+                  ' (minimum ' + j.minFreeGB + ' GB). Recording not enabled.');
+          } else {
+            alert('Could not change recording: ' + ((j && j.error) || 'server error'));
+          }
+        })
+        .catch(function() {
+          delete _recordPending[dn];
+          setRecordBtn(btn, !want);
+        });
+    }
+
     document.getElementById('grid').addEventListener('click', function(e) {
       var launchBtn = e.target.closest('.launch-app-btn');
       if (launchBtn) { openLaunchModal(launchBtn.dataset.launchApp); return; }
+      var recBtn = e.target.closest('.record-btn');
+      if (recBtn) { e.stopPropagation(); toggleRecording(recBtn.dataset.recordHeadset, recBtn); return; }
       var castBtn = e.target.closest('.cast-btn');
       if (castBtn) { e.stopPropagation(); openCastPanel(castBtn); }
     });
@@ -1010,6 +1059,7 @@
               scrcpy:     item.scrcpy,
               starting:   !!item.scrcpy_starting && !item.scrcpy,
               adb:        item.adb,
+              record:     !!item.record,
               runningApp: item.running_app || ''
             };
             autoRestartState[item.display_name] = item.scrcpy_auto_restart;
@@ -1127,6 +1177,11 @@
 
         var launchBtn = cell.querySelector('.launch-app-btn');
         if (launchBtn) launchBtn.classList.toggle('hidden', !stat.adb);
+
+        var recBtn = cell.querySelector('.record-btn');
+        if (recBtn && !(_recordPending[dn] && Date.now() < _recordPending[dn])) {
+          setRecordBtn(recBtn, !!stat.record);
+        }
       });
       if (scaleNeeded) { applyAll(); }
     }
@@ -1553,6 +1608,15 @@
           '<button class="cell-action-btn launch-app-btn" data-launch-app="' + dn + '" title="Launch app" aria-label="Launch app">' +
             '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
               '<polygon points="5 3 19 12 5 21 5 3"/>' +
+            '</svg>' +
+          '</button>' +
+          '<button class="cell-action-btn record-btn off" data-record-headset="' + dn + '" title="Not recording - click to record (restarts the capture)" aria-label="Toggle recording">' +
+            '<svg class="ic-on" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+              '<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>' +
+            '</svg>' +
+            '<svg class="ic-off" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+              '<path d="M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10"/>' +
+              '<line x1="1" y1="1" x2="23" y2="23"/>' +
             '</svg>' +
           '</button>' +
           '<button class="cell-action-btn cast-btn" data-cast-headset="' + dn + '" title="Cast to kiosk screen" aria-label="Cast to kiosk screen">' +

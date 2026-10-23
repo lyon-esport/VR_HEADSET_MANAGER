@@ -410,6 +410,8 @@ function Invoke-RouteHeadsetStatus {
             scrcpy               = $(if ($capSt.Starting -contains [int]$headsetRow.ID) { $false } elseif ($capSt.Settling -contains [int]$headsetRow.ID) { $true } else { [bool]($row.SCRCPY -eq 'ok') })
             scrcpy_starting      = [bool](($capSt.Starting -contains [int]$headsetRow.ID) -or ($capSt.Announcing -contains [int]$headsetRow.ID))
             scrcpy_auto_restart  = [bool]($headsetRow.scrcpy_AutoRestart -eq 'True')
+            # Recording flag of the registry (the record button of the [video].html page).
+            record               = [bool](ConvertTo-DbBool $headsetRow.Record)
         }
         Send-JsonResponse -Response $response -Body $result
     } catch {
@@ -748,6 +750,7 @@ function Invoke-RouteHeadsetsStatus {
                     running_app_icon      = if ($info.RunningAppIcon) { $info.RunningAppIcon } else { '' }
                     model                 = if ($h.Model -and $h.Model -ne '-') { $h.Model } else { '' }
                     scrcpy_auto_restart   = [bool]($h.scrcpy_AutoRestart -eq 'True')
+                    record                = [bool](ConvertTo-DbBool $h.Record)
                 }
             }
         )

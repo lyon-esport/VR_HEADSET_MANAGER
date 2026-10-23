@@ -4,7 +4,10 @@
     VR HEADSET MANAGER server.
 
 .DESCRIPTION
-    Dot-sourced by Start-VrhmToolbox.ps1. For each headset plugged in over USB:
+    Dot-sourced by Start-VrhmToolbox.ps1. Run on its own, it only starts
+    Start-VrhmToolbox.ps1 (see the end of the file) - that is the entry point.
+
+    For each headset plugged in over USB:
       1. Read its serial number, brand and model.
       2. Switch it into WiFi ADB mode (adb tcpip <port>) and read its WiFi IP.
       3. Confirm the WiFi ADB session actually comes up (adb connect).
@@ -793,4 +796,22 @@ function Invoke-VrhmHeadsetOnboarding {
 
         Write-Host ""
     }
+}
+
+# ---------------------------------------------------------------------------
+# Run directly (ISE F5, right-click Run, powershell -File) instead of being
+# dot-sourced by Start-VrhmToolbox.ps1: this file only defines functions, so
+# hand over to the real entry point. Start-VrhmToolbox.ps1 sets the marker
+# while it loads the libraries, so nothing happens here in that case.
+# ---------------------------------------------------------------------------
+if (-not $global:VrhmToolboxLoadingLibraries) {
+    $vrhmHere  = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+    $vrhmEntry = Join-Path $vrhmHere 'Start-VrhmToolbox.ps1'
+    Write-Host "This file is a part of the toolbox, not its entry point. Starting Start-VrhmToolbox.ps1 -toolbox" -ForegroundColor Yellow
+    Write-Host "(VRHM-Headset-Toolbox.exe does the same - see HOWTO.txt.)" -ForegroundColor Yellow
+    if (-not (Test-Path -LiteralPath $vrhmEntry)) {
+        Write-Host "Start-VrhmToolbox.ps1 was not found next to this file: $vrhmEntry" -ForegroundColor Red
+        return
+    }
+    & $vrhmEntry -toolbox @args
 }

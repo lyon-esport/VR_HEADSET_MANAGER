@@ -93,6 +93,11 @@
       .action-btn:hover { background: rgba(59,130,246,0.80); color: #fff; border-color: rgba(59,130,246,0.6); }
       .action-btn.active { background: rgba(59,130,246,0.55); color: #fff; border-color: rgba(59,130,246,0.6); }
       .btn-icon { width: 14px; height: 14px; display: block; }
+      /* Recording toggle - red camera while recording, grey slashed camera otherwise */
+      #btn-record.on  { color: #ef4444; border-color: rgba(239,68,68,0.6); }
+      #btn-record.on .ic-on { fill: #ef4444; }
+      #btn-record.on:hover { background: rgba(239,68,68,0.35); color: #ef4444; }
+      #btn-record.on .ic-off, #btn-record.off .ic-on { display: none; }
       /* Touch devices: larger tap targets, always-visible buttons */
       @media (pointer: coarse) {
         #actions-left  { opacity: 1; gap: 10px; top: 14px; left: 14px; }
@@ -184,6 +189,16 @@
           <polygon points="5 3 19 12 5 21 5 3"/>
         </svg>
       </button>
+      <!-- Recording on/off -->
+      <button class="action-btn off" id="btn-record" title="Not recording - click to record (restarts the capture)" aria-label="Toggle recording" onclick="toggleRecording()">
+        <svg class="btn-icon ic-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+        </svg>
+        <svg class="btn-icon ic-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10"/>
+          <line x1="1" y1="1" x2="23" y2="23"/>
+        </svg>
+      </button>
     </div>
 
     <div id="timer-overlay"></div>
@@ -253,6 +268,41 @@
         return ['Stream unavailable - retrying...', false];
       }
 
+      // ---- Recording toggle (POST /api/recording, same backend as the settings page and console) ----
+      // The icon flips at once on click and is held for 6 s so a poll still carrying the old
+      // registry value does not flip it back. The capture restarts to apply it.
+      var recordBtn = document.getElementById('btn-record');
+      var recordPendingUntil = 0;
+      function setRecordBtn(on) {
+        recordBtn.classList.toggle('on', on);
+        recordBtn.classList.toggle('off', !on);
+        recordBtn.title = on ? 'Recording - click to stop (restarts the capture)'
+                             : 'Not recording - click to record (restarts the capture)';
+      }
+      function toggleRecording() {
+        var want = !recordBtn.classList.contains('on');
+        setRecordBtn(want);
+        recordPendingUntil = Date.now() + 6000;
+        fetch('/api/recording', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: '<%= $display_name %>', value: want })
+        })
+          .then(function(r) { return r.json(); })
+          .then(function(j) {
+            if (j && j.ok) { pollCaptureState(); return; }
+            recordPendingUntil = 0;
+            setRecordBtn(!want);
+            if (j && j.storageLow) {
+              alert('Recording drive low: ' + j.freeGB + ' GB free on ' + j.driveLetter +
+                    ' (minimum ' + j.minFreeGB + ' GB). Recording not enabled.');
+            } else {
+              alert('Could not change recording: ' + ((j && j.error) || 'server error'));
+            }
+          })
+          .catch(function() { recordPendingUntil = 0; setRecordBtn(!want); });
+      }
+
       function pollCaptureState() {
         if (capturePollTimer) { clearTimeout(capturePollTimer); capturePollTimer = null; }
         if (!CAPTURE_ID) { return; }
@@ -267,6 +317,7 @@
             capture.scrcpy      = j.scrcpy !== false;
             capture.autoRestart = !!j.scrcpy_auto_restart;
             capture.known       = true;
+            if (Date.now() >= recordPendingUntil) { setRecordBtn(!!j.record); }
             if (document.hidden && pausedForVisibility) { return; }
             if (capture.starting && hasPicture) {
               // The stream is about to be replaced: say so over the frozen last picture.

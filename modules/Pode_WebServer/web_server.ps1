@@ -2,7 +2,7 @@
 # Serves all files under the /website folder over HTTP using System.Net.HttpListener.
 # Does NOT require admin - relies on the URL ACL registered once by computer_setup.ps1:
 #   netsh http add urlacl url=http://+:<port>/ user=Everyone
-# Launched as a standalone PowerShell process (same pattern as headsets_dashboard.ps1).
+# Launched as a standalone PowerShell process (started by Start-WebServer, scripts_init.ps1).
 #
 # URL: http://<host-ip>:<port>/video_monitor.html
 

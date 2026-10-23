@@ -86,7 +86,7 @@ At startup VRHM detects invalid JSON and offers **[R]** retry (after you fix it)
 
 ### The application did not shut down cleanly
 
-A watchdog (reaper) kills the child services (web server, MediaMTX, dashboard, orphan scrcpy) if the main process dies. If something survives anyway, check Task Manager for `mediamtx`, `scrcpy`, `ffmpeg` and PowerShell processes and end them.
+A watchdog (reaper) kills the child services (web server, MediaMTX, mDNS responder, orphan scrcpy) if the main process dies. If something survives anyway, check Task Manager for `mediamtx`, `scrcpy`, `ffmpeg` and PowerShell processes and end them.
 
 ## Still stuck?
 

@@ -46,7 +46,6 @@ function Get-SandboxPaths {
         ComputerMonJson = Join-Path $TargetRoot 'data\computer_monitoring.json'
         WebServerPid    = Join-Path $TargetRoot 'data\webserver.pid'
         MediaMtxPid     = Join-Path $TargetRoot 'data\mediamtx.pid'
-        DashboardPid    = Join-Path $TargetRoot 'data\dashboard.pid'
         ShutdownFlag    = Join-Path $TargetRoot 'data\shutdown.flag'
         ReaperExitFlag  = Join-Path $TargetRoot 'data\reaper_exit.flag'
         WifiStore       = Join-Path $TargetRoot 'data\wifi_networks.dat'
@@ -385,7 +384,6 @@ function Get-VrmProcessInventory {
             if ($cmd -match 'main\.ps1')                { $role = 'main' }
             elseif ($cmd -match 'web_server\.ps1')      { $role = 'webserver' }
             elseif ($cmd -match 'reaper\.ps1')          { $role = 'reaper' }
-            elseif ($cmd -match 'headsets_dashboard\.ps1') { $role = 'dashboard' }
             if (-not $role) { continue }
 
             if ($UnderRoot -and ($cmd -notlike "*$UnderRoot*")) { continue }
@@ -450,7 +448,7 @@ function Test-SandboxPreconditions {
 
     # 2. Exclusive run
     $running = @(Get-VrmProcessInventory)
-    $blockers = @($running | Where-Object { $_.Role -in @('main', 'webserver', 'reaper', 'dashboard', 'mediamtx', 'scrcpy') })
+    $blockers = @($running | Where-Object { $_.Role -in @('main', 'webserver', 'reaper', 'mediamtx', 'scrcpy') })
     if ($blockers.Count -eq 0) {
         Write-Host '  [PASS] No other VR HEADSET MANAGER instance is running' -ForegroundColor Green
     }
@@ -584,10 +582,9 @@ function Initialize-SandboxConfig {
     }
 
     # --- Test overrides -----------------------------------------------------
-    # Keep the browser and the dashboard window out of the way, make the
-    # monitoring loop responsive, and keep recordings inside the sandbox.
+    # Keep the browser out of the way, make the monitoring loop responsive,
+    # and keep recordings inside the sandbox.
     $config.WebServer.openBrowserOnStartup = $false
-    $config.VRMonitor.showConsole          = $false
     $config.VRMonitor.refresh_timer        = 5
     $config.Logging.debugLevelToFile       = 'DEBUG'   # max verbosity - see the log block below
     $config.Logging.debugLevelToConsole    = 'ERROR'
@@ -720,7 +717,7 @@ function Start-SandboxApp {
     }
 
     # Clear stale signal files so the ready-wait cannot latch onto an old run.
-    foreach ($stale in @($paths.ShutdownFlag, $paths.ReaperExitFlag, $paths.WebServerPid, $paths.MediaMtxPid, $paths.DashboardPid)) {
+    foreach ($stale in @($paths.ShutdownFlag, $paths.ReaperExitFlag, $paths.WebServerPid, $paths.MediaMtxPid)) {
         if (Test-Path -LiteralPath $stale) { Remove-Item -LiteralPath $stale -Force -ErrorAction SilentlyContinue }
     }
 
@@ -845,7 +842,7 @@ function Invoke-InTargetModules {
 
         The child sets $global:IsWebServerProcess = $true before dot-sourcing
         scripts_init.ps1. That is the app's own established "load the module set
-        but do not boot" flag - the same one web_server.ps1, headsets_dashboard.ps1
+        but do not boot" flag - the same one web_server.ps1
         and headsets_monitoring.ps1 use - and it suppresses
         Confirm-AppPortsAvailable, Initialize-ComputerSetup, Start-WebServer and
         the browser launcher.
@@ -1080,7 +1077,7 @@ function Remove-SandboxArtifacts {
         try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch { }
     }
 
-    foreach ($f in @($paths.WebServerPid, $paths.MediaMtxPid, $paths.DashboardPid, $paths.ShutdownFlag, $paths.ReaperExitFlag)) {
+    foreach ($f in @($paths.WebServerPid, $paths.MediaMtxPid, $paths.ShutdownFlag, $paths.ReaperExitFlag)) {
         if (Test-Path -LiteralPath $f) {
             Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue
         }

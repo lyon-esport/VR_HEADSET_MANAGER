@@ -393,9 +393,6 @@ New-NetFirewallRule -DisplayName '_[VR_HEADSET_MANAGER]ADB_Allowed [IN]'  -Direc
 }
 
 
-function Get-FwReadyFlagPath {
-    return Join-Path $global:ScriptPath "data\fw_ready.flag"
-}
 
 # ---------------------------------------------------------------------------
 # Persistent firewall state (app_kv key 'fw_state')
@@ -1123,19 +1120,11 @@ function Initialize-ComputerSetup {
     Called once at startup from scripts_init.ps1.
     #>
 
-    # Guard: scripts_init.ps1 is dot-sourced on every module reload AND by
-    # headsets_dashboard.ps1 in its refresh loop. Only run setup tasks once
-    # per PowerShell process to avoid duplicate firewall prompts and UAC windows.
+    # Guard: scripts_init.ps1 is dot-sourced on every module reload. Only run setup
+    # tasks once per PowerShell process to avoid duplicate firewall prompts and UAC windows.
     if ($global:ComputerSetupDone) { return }
     $global:ComputerSetupDone = $true
 
-    # Remove stale flag from a previous run so headsets_dashboard.ps1 waits for
-    # this run's setup to complete before starting MediaMTX.
-    $flagPath = Get-FwReadyFlagPath
-    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
-    if (Test-Path -LiteralPath $flagPath) {
-        Remove-Item -LiteralPath $flagPath -Force -ErrorAction SilentlyContinue
-    }
 
     # Load the persisted state from the previous successful run so per-rule
     # drift detection (port changed, program path changed) can also clean up
@@ -1246,12 +1235,6 @@ function Initialize-ComputerSetup {
                             else { [datetime]::UtcNow.ToString('o') }
     Set-FwState -State $fwState
 
-    # Write the ready flag so headsets_dashboard.ps1 knows firewall setup is done.
-    # Content is the port fingerprint - dashboard deletes the file after reading it.
-    $rtspPort   = if ($global:mediamtxRtspPort)   { $global:mediamtxRtspPort   } else { 8554 }
-    $hlsPort    = if ($global:mediamtxHlsPort)    { $global:mediamtxHlsPort    } else { 8888 }
-    $webrtcPort = if ($global:mediamtxWebrtcPort) { $global:mediamtxWebrtcPort } else { 8889 }
-    [System.IO.File]::WriteAllText($flagPath, "rtsp=$rtspPort;hls=$hlsPort;webrtc=$webrtcPort", $utf8NoBom)
 
     # Keep the PC awake for the duration of the session
     Set-AwakeMode
