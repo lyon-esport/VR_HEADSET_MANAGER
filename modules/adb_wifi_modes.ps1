@@ -196,6 +196,78 @@ function Find-AdbTlsEndpointBySerial {
 }
 
 
+function Repair-AdbTlsEndpointAddress {
+    <#
+    .SYNOPSIS
+    Corrects the IP of mDNS TLS endpoints with the registry address of the same serial when that
+    address answers on the advertised port. Returns the endpoints (corrected copies).
+
+    .DESCRIPTION
+    "adb mdns services" is right about the serial (service name) and the port (SRV record), but
+    the IP comes from the A record of the device's HOST name, which several Android devices can
+    share: measured 2026-10-23, Q3 BLUE (192.168.1.243, TLS port 42547) was listed as
+    192.168.1.239:42547 - the address of another headset - and every reader of
+    adb_tls_endpoints then judged the live capture "gone" and resolved a dead endpoint.
+    For each endpoint whose serial is a known headset with a different, usable registry address,
+    ONE TCP probe of <registry ip>:<port>: open -> the registry address is published; closed ->
+    the mDNS address is kept (a real DHCP change). The verdict is memoised per
+    serial|mdns ip|port|registry ip, so a steady state costs no probe. The registry is read
+    through Get-KnownHeadsets, cached on the 'headsets' change counter; without it (unit tests,
+    a process that does not load headsets_manager.ps1) the endpoints pass unchanged. Never throws.
+
+    .EXAMPLE
+    Repair-AdbTlsEndpointAddress -Endpoints @(Get-AdbTlsServices)
+    #>
+    param($Endpoints, [int]$TimeoutMs = 300)
+
+    $list = @($Endpoints | Where-Object { $_ })
+    try {
+        if ($list.Count -eq 0 -or -not (Get-Command Get-KnownHeadsets -ErrorAction SilentlyContinue) -or
+            -not (Get-Command Test-Port -ErrorAction SilentlyContinue)) { return $list }
+
+        # serial -> registry IP, re-read only when the registry changed
+        $ver = $null
+        if (Get-Command Get-DbTableVersion -ErrorAction SilentlyContinue) { try { $ver = Get-DbTableVersion -Name 'headsets' } catch { $ver = $null } }
+        if ($null -eq $script:AdbTlsRegistryMap -or $null -eq $ver -or $ver -ne $script:AdbTlsRegistryVer) {
+            $map = @{}
+            foreach ($h in @(Get-KnownHeadsets)) {
+                $k = Get-AdbWifiHeadsetKey -Headset $h
+                if ($k.Serial -and $k.Ip) { $map[$k.Serial] = $k.Ip }
+            }
+            $script:AdbTlsRegistryMap = $map
+            $script:AdbTlsRegistryVer = $ver
+        }
+        if ($null -eq $script:AdbTlsAddressMemo) { $script:AdbTlsAddressMemo = @{} }
+
+        $out = @()
+        foreach ($e in $list) {
+            $serial = [string]$e.Serial; $ip = [string]$e.Ip; $port = [int]$e.Port
+            $regIp = $script:AdbTlsRegistryMap[$serial]
+            if (-not $regIp -or $regIp -eq $ip) { $out += $e; continue }
+            $memoKey = '{0}|{1}|{2}|{3}' -f $serial, $ip, $port, $regIp
+            if (-not $script:AdbTlsAddressMemo.ContainsKey($memoKey)) {
+                $useReg = [bool](Test-Port -hostname $regIp -port $port -timeout $TimeoutMs).open
+                $script:AdbTlsAddressMemo[$memoKey] = $useReg
+                if ($script:AdbTlsAddressMemo.Count -gt 200) { $script:AdbTlsAddressMemo.Clear() }
+                if ($useReg -and (Get-Command Write-Log -ErrorAction SilentlyContinue)) {
+                    Write-Log ("ADB TLS: mDNS lists serial {0} at {1}:{2}, but it answers at its registry address {3}:{2} - using the registry address" -f $serial, $ip, $port, $regIp) -Level DEBUG
+                }
+            }
+            if ($script:AdbTlsAddressMemo[$memoKey]) {
+                $c = [PSCustomObject]@{ Serial = $serial; Ip = $regIp; Port = $port }
+                if ($e.PSObject.Properties['Name']) { $c | Add-Member -NotePropertyName Name -NotePropertyValue $e.Name }
+                $out += $c
+            } else {
+                $out += $e
+            }
+        }
+        return @($out)
+    } catch {
+        return $list
+    }
+}
+
+
 function Publish-AdbTlsEndpoints {
     <#
     .SYNOPSIS
@@ -228,7 +300,8 @@ function Publish-AdbTlsEndpoints {
         $previous = if ($null -ne $script:AdbTlsLastSet) { @($script:AdbTlsLastSet) } else { @(Get-PublishedAdbTlsEndpoints -MaxAgeSec 0 -IncludeStale) }
 
         $merged = [ordered]@{}
-        foreach ($e in @($Endpoints)) {
+        # mDNS can give a serial the IP of ANOTHER device (shared host name): fix it first.
+        foreach ($e in @(Repair-AdbTlsEndpointAddress -Endpoints $Endpoints)) {
             if ($null -eq $e -or -not $e.Serial -or -not $e.Ip -or -not $e.Port) { continue }
             $merged[[string]$e.Serial] = [PSCustomObject]@{ Serial = [string]$e.Serial; Ip = [string]$e.Ip; Port = [int]$e.Port; Seen = $nowText }
         }
@@ -684,6 +757,10 @@ function Get-AdbWifiModeSwitchDecision {
         $preferred = Get-AdbWifiPreferredMode
         if (-not $preferred) { $d.Reason = 'no preferred mode'; return $d }
         $d.Preferred = $preferred
+        # A brand without Wireless debugging (Pico, ADR-0038) stays on classic: nothing to switch.
+        if ($Headset.PSObject.Properties['Brand'] -and -not (Test-HeadsetAdbTlsSupported -Brand ([string]$Headset.Brand))) {
+            $d.Reason = 'ADB over TLS not supported on this brand'; return $d
+        }
         $k = Get-AdbWifiHeadsetKey -Headset $Headset
         if (-not $k.Serial) { $d.Reason = 'no serial'; return $d }
         $cur = if ($Info -and $Info.AdbWifiMode) { [string]$Info.AdbWifiMode } else { '-' }

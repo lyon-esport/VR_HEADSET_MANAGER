@@ -910,6 +910,7 @@
 
     AdbWifi = @{
         AutoEnableNoUsb       = "No USB headset detected."
+        TlsUnsupportedBrand   = "ADB over TLS (Wireless debugging) is not supported on {0} headsets: the firmware cannot show the confirmation dialog. Use classic WiFi ADB (adb tcpip) instead."
         AutoEnableApkMissing  = "ADB auto-enable APK not found: {0}"
         AutoEnableInstalling  = "Installing the ADB auto-enable app on {0} ..."
         AutoEnableStep        = "ADB auto-enable app - {0}: {1}"

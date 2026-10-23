@@ -624,6 +624,25 @@ function Install-OculusWirelessAdbApk {
 }
 
 
+function Test-HeadsetAdbTlsSupported {
+    <#
+    .SYNOPSIS
+    $false for a brand whose firmware cannot run Wireless debugging (ADB over TLS), else $true.
+
+    .DESCRIPTION
+    PICO (measured on a PICO 4 Ultra, Android 14, 2026-10-23): adbd has the pairing libraries, but
+    AdbDebuggingManager cannot start com.android.systemui/.wifi.WifiDebuggingActivity (the "allow
+    wireless debugging on this network" dialog, absent from Pico's SystemUI), so
+    `settings put global adb_wifi_enabled 1` is reset to 0 within a second. See ADR-0038.
+    A blank or unknown brand counts as supported (nothing is known against it). Pure, no I/O.
+
+    .EXAMPLE
+    Test-HeadsetAdbTlsSupported -Brand 'Pico'   # False
+    #>
+    param([string]$Brand = '')
+    return ($Brand -notmatch '(?i)pico')
+}
+
 function Install-AdbAutoEnableApk {
     <#
     .SYNOPSIS
@@ -676,6 +695,17 @@ function Install-AdbAutoEnableApk {
         $Device = Get-AdbUsbDevice -adb $adb
         if (-not $Device) {
             $result.Error = $msg.AdbWifi.AutoEnableNoUsb
+            Write-Log $result.Error -Level WARNING
+            return $result
+        }
+    }
+    # The app only re-enables Wireless debugging, which a Pico cannot run (ADR-0038): refuse
+    # before installing anything.
+    if (Get-Command Get-HeadsetBrandModel -ErrorAction SilentlyContinue) {
+        $bm = $null
+        try { $bm = Get-HeadsetBrandModel -Device $Device -adb $adb } catch { }
+        if ($bm -and -not (Test-HeadsetAdbTlsSupported -Brand ([string]$bm.Brand))) {
+            $result.Error = ($msg.AdbWifi.TlsUnsupportedBrand -f $bm.Brand)
             Write-Log $result.Error -Level WARNING
             return $result
         }

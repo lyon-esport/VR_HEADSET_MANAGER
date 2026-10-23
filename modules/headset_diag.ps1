@@ -1373,6 +1373,15 @@ function Enable-HeadsetAdbTls {
     Enable-HeadsetAdbTls -Device $d
     #>
     param([Parameter(Mandatory=$true)] $Device)
+    # Refused for a brand that cannot run Wireless debugging (Pico, ADR-0038): the setting would
+    # be reset to 0 at once by the platform.
+    if ((Get-Command Get-HeadsetBrandModel -ErrorAction SilentlyContinue) -and (Get-Command Test-HeadsetAdbTlsSupported -ErrorAction SilentlyContinue)) {
+        $bm = $null
+        try { $bm = Get-HeadsetBrandModel -Device $Device } catch { }
+        if ($bm -and -not (Test-HeadsetAdbTlsSupported -Brand ([string]$bm.Brand))) {
+            return @{ Ok = $false; Output = ''; Error = ($msg.AdbWifi.TlsUnsupportedBrand -f $bm.Brand) }
+        }
+    }
     return Invoke-HeadsetDiagAction -Device $Device -Script 'settings put global adb_wifi_enabled 1'
 }
 

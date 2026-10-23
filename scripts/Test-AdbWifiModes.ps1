@@ -552,6 +552,28 @@ Set-Modes $true $true 'auto'; $script:openPorts = @('192.168.1.242:5555')
 Assert-Case 'memo: no preference -> keep' (-not (Test-AdbWifiPreferredModeBack -Device $tlsDev -Headset $q2Row))
 Set-Modes $true $true 'classic'
 
+# mDNS address repair (2026-10-23): adb listed Q3 BLUE (registry .243, TLS 42547) with the IP of
+# another device (.239). The registry address wins when it answers on the advertised port.
+function Get-KnownHeadsets { @([PSCustomObject]@{ ID = 2; Name = 'Q3 BLUE'; IPAddress = '192.168.1.243'; SerialNumber = '2G0YC5ZG1W00ZJ' }) }
+$script:AdbTlsRegistryMap = $null; $script:AdbTlsAddressMemo = $null
+$wrong = @([PSCustomObject]@{ Serial = '2G0YC5ZG1W00ZJ'; Ip = '192.168.1.239'; Port = 42547 })
+$script:openPorts = @('192.168.1.243:42547')
+$fx = @(Repair-AdbTlsEndpointAddress -Endpoints $wrong)
+Assert-Case 'mdns repair: wrong IP replaced by the registry IP that answers' ($fx.Count -eq 1 -and $fx[0].Ip -eq '192.168.1.243' -and $fx[0].Port -eq 42547) ("got {0}:{1}" -f $fx[0].Ip, $fx[0].Port)
+$script:openPorts = @()
+$fx2 = @(Repair-AdbTlsEndpointAddress -Endpoints $wrong)
+Assert-Case 'mdns repair: verdict memoised (no re-probe)' ($fx2[0].Ip -eq '192.168.1.243')
+$script:AdbTlsAddressMemo = $null
+$moved = @([PSCustomObject]@{ Serial = '2G0YC5ZG1W00ZJ'; Ip = '192.168.1.250'; Port = 40001 })
+$fx3 = @(Repair-AdbTlsEndpointAddress -Endpoints $moved)
+Assert-Case 'mdns repair: registry closed -> mDNS IP kept (DHCP change)' ($fx3[0].Ip -eq '192.168.1.250')
+$same = @([PSCustomObject]@{ Serial = '2G0YC5ZG1W00ZJ'; Ip = '192.168.1.243'; Port = 40002 })
+Assert-Case 'mdns repair: matching IP passes unchanged' ((@(Repair-AdbTlsEndpointAddress -Endpoints $same))[0].Ip -eq '192.168.1.243')
+$unknown = @([PSCustomObject]@{ Serial = 'UNKNOWN123'; Ip = '192.168.1.239'; Port = 40003 })
+Assert-Case 'mdns repair: unknown serial passes unchanged' ((@(Repair-AdbTlsEndpointAddress -Endpoints $unknown))[0].Ip -eq '192.168.1.239')
+Remove-Item Function:\Get-KnownHeadsets
+$script:AdbTlsRegistryMap = $null; $script:AdbTlsAddressMemo = $null
+
 Write-Host ''
 Write-Host ("{0} case(s), {1} failed" -f $script:count, $script:fails)
 if ($script:fails -gt 0) { exit 1 } else { exit 0 }

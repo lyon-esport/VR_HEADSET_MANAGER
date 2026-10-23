@@ -910,6 +910,7 @@
 
     AdbWifi = @{
         AutoEnableNoUsb       = "Aucun casque USB detecte."
+        TlsUnsupportedBrand   = "L'ADB over TLS (Debogage sans fil) n'est pas pris en charge sur les casques {0} : le firmware ne peut pas afficher la boite de confirmation. Utilisez l'ADB WiFi classique (adb tcpip)."
         AutoEnableApkMissing  = "APK ADB auto-enable introuvable : {0}"
         AutoEnableInstalling  = "Installation de l application ADB auto-enable sur {0} ..."
         AutoEnableStep        = "Application ADB auto-enable - {0} : {1}"
