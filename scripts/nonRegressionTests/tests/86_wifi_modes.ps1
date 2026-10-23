@@ -58,7 +58,11 @@ Invoke-RegressionTest -Name 'App is running' -Test {
 Invoke-RegressionTest -Name 'The headset-free unit suite (Test-AdbWifiModes.ps1) passes' -Test {
     $script = Join-Path $devRoot 'scripts\Test-AdbWifiModes.ps1'
     if (-not (Test-Path -LiteralPath $script)) { Skip-Test 'scripts\Test-AdbWifiModes.ps1 not found in the dev tree' }
-    $psExe = (Get-Process -Id $PID).Path
+    # The console host from $PSHOME, never the current process: run from the ISE, $PID is
+    # powershell_ise.exe, which rejects -ExecutionPolicy (TEST30: exit -1, no output, an
+    # error dialog on screen).
+    $psExe = Join-Path $PSHOME 'powershell.exe'
+    if (-not (Test-Path -LiteralPath $psExe)) { $psExe = Join-Path $PSHOME 'pwsh.exe' }
     # Output and errors go to files, with a timeout: TEST30 saw exit -1 with NO output at all,
     # which a 2>&1 pipe cannot explain. Exit 0/1 is the suite's own verdict; any other code is
     # the process failing (load error, crash, kill), retried once with its stderr as evidence.
