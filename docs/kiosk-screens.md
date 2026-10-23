@@ -1,108 +1,102 @@
 # Kiosk Screens
 
-[← Back to documentation home](README.md)
+[← Back to documentation home](../README.md#documentation)
 
-**Kiosk Screens** lets you remote-control any PC that's displaying a browser on-screen (a lobby TV, a showroom monitor, a second display at a booth) directly from VR HEADSET MANAGER: push a URL to it, cast a headset's live video feed to it, or stop its kiosk session - all without touching that PC. It reuses the same restreaming pipeline as the [Video Monitor](web-interface.md#video-monitor-home-page): any kiosk screen can be pushed the live WHEP feed of a headset, so it works as a lightweight "cast to a wall-mounted display" feature.
+**Kiosk Screens** lets you remote-control any PC that displays a browser full screen — a lobby TV, a showroom monitor, a second display at a booth — from VR HEADSET MANAGER: push a URL to it, cast one headset's live video or a custom wall of several headsets, stop its kiosk session, or reboot / shut the PC down. It reuses the [Video Monitor](web-interface.md#video-monitor-home-page) streams, so it works as a lightweight "cast to a wall display" feature.
 
-Under the hood it talks to Google Chrome / Chromium's **remote debugging protocol (CDP)** — it does not install anything on the kiosk PC. You only need a small helper script running there to launch the browser with debugging enabled.
+![Kiosk Screens: picking two headsets for a wall and a kiosk screen](pics/gif_kiosk_cast.gif)
 
 ## How it works
 
-1. A **kiosk launcher script** runs on the target PC (Windows or Linux) and opens Chrome/Chromium in kiosk mode with CDP remote debugging enabled on a port (default `9222`).
-2. VRHM discovers or is told the kiosk's IP address and registers it in `data\known_kiosks.csv`.
-3. From the **Kiosk Screens** page (or the console `[K]` menu), you push any URL to one or more registered kiosks — VRHM sends a `Page.navigate` command over CDP, and Chrome switches page instantly, live, no interaction needed on the kiosk itself.
-4. VRHM also polls each kiosk (ping + CDP) to show whether it's online and what URL is actually on screen right now — which can differ from the last URL you pushed if the kiosk PC or its browser restarted since.
+1. A **kiosk agent** runs on the display PC (Windows or Linux). It opens Chrome/Chromium full screen with its remote debugging protocol (CDP) enabled on a port (default `9222`).
+2. The agent finds the VRHM server on the network by itself and reports to it every few seconds (PC name, OS, Ethernet or WiFi, link speed, browser version). A kiosk that reports for the first time is **added automatically**.
+3. From the **Kiosk Screens** page (or the console **K** tile) you push a URL or a headset feed: VRHM sends `Page.navigate` over CDP and the screen switches instantly, with nobody touching the kiosk PC.
+4. Operator commands (reboot, shutdown, restart the browser, stop the agent) travel back inside the agent's heartbeat reply — the agent never opens a listening port of its own.
 
 ## 1. Set up the kiosk PC
 
-Quick start for a Windows kiosk:
+### Windows — VRHM Headset Toolbox (recommended)
 
-1. Open **Kiosk Screens -> Add kiosk device -> Setup Scripts**.
-2. Download `Start-Kiosk-Agent.exe` and run it on the kiosk PC - a single file, no unzip step. It finds the VRHM server on the network automatically.
-3. Back in VRHM, use **Add kiosk device -> Scan network** or add the kiosk IP manually, then push a headset or URL.
+1. On the **Kiosk Screens** page, click **Download kiosk launcher**, then **Download VRHM Headset Toolbox (.exe)**.
+2. Copy `VRHM-Headset-Toolbox.exe` to the kiosk PC and run it. It finds the VRHM server (or asks you to pick one / type `ip:port`).
+3. Choose **`[2]` Kiosk Agent**. It restarts elevated (one UAC prompt), installs Chrome silently when missing, opens the firewall for the DevTools port and ping, starts Chrome in kiosk mode and starts reporting.
 
-Advanced is recommended for normal use. It reports the kiosk device information, restarts Chrome if it crashes, and receives reboot/shutdown/session-stop commands. Basic is the fallback when you only need URL casting.
+![Download kiosk launcher panel](pics/web_kiosk_launcher.png)
 
-Download the launcher for the kiosk's OS from the **Kiosk Screens** page (**Download kiosk launcher** button) or grab it directly from `website\kiosk-launcher\` in the VRHM install:
+**Start it at every logon:** each run of the exe writes `VRHM-Toolbox\VRHM Kiosk Agent.lnk` next to it (it starts the exe with `-kiosk`). Copy it into the Startup folder (`Win+R` → `shell:startup`). Add `-vrhm_ip <ip> -vrhm_port <port>` to the shortcut target to skip the server search. To avoid the UAC prompt at each logon, use a scheduled task instead (elevated prompt):
 
-| Script | Platform |
-|---|---|
-| `Start-Kiosk-Agent.exe` | Windows advanced launcher, standalone single-file build of `Start-KioskAgent.ps1` below - the easiest way to set up a Windows kiosk |
-| `Start-KioskAgent.ps1` | Windows advanced launcher with reporting and power/session control |
-| `Start-KioskAgent-Linux.sh` | Debian / Raspberry Pi OS advanced launcher with reporting and power/session control |
-| `Start-KioskChrome.ps1` | Windows (any PC with Google Chrome installed) |
-| `Start-KioskChrome-Linux.sh` | Debian / Raspberry Pi OS (Raspbian) with Chromium |
-
-Copy the file matching the kiosk's OS onto that PC and run it there — it's fully standalone and does not need any other VRHM file.
-
-```powershell
-# Windows - double-click also works, it self-elevates and shows a UAC prompt
-.\Start-KioskChrome.ps1
-.\Start-KioskChrome.ps1 -Url "https://example.com" -Port 9222
 ```
+schtasks /Create /TN "VRHM Kiosk Agent" /SC ONLOGON /RL HIGHEST /TR "\"C:\VRHM\VRHM-Headset-Toolbox.exe\" -kiosk"
+```
+
+The same exe also onboards headsets from that PC — see [Connecting headsets → Headset Toolbox](connecting-headsets.md#the-headset-toolbox-onboarding-from-another-pc). Full operator guide: [`README-Toolbox.md`](../website/headset-toolbox/README-Toolbox.md).
+
+### Linux (Debian / Raspberry Pi OS)
+
+Download **Linux agent (.sh)** from the same panel and run it in the kiosk's graphical session — same protocol, only `curl` needed:
 
 ```bash
-# Linux - run as your normal desktop user inside the kiosk's own graphical session
-chmod +x Start-KioskChrome-Linux.sh
-./Start-KioskChrome-Linux.sh
-./Start-KioskChrome-Linux.sh "https://example.com" 9222
+chmod +x Start-KioskAgent-Linux.sh
+./Start-KioskAgent-Linux.sh --server-url http://<vrhm-ip>:8080
 ```
 
-The script opens the firewall for the debug port, launches the browser in kiosk mode, and verifies the debug port is actually reachable from the LAN — automatically setting up an OS-level port relay if Chrome refuses to bind anything but loopback (a deliberate Chrome security restriction; see the full explanation and troubleshooting steps in [`website/kiosk-launcher/README-KioskChrome.md`](../website/kiosk-launcher/README-KioskChrome.md)).
+### Basic launchers (fallback)
 
-Security note: Chrome DevTools Protocol can control the kiosk browser. Only expose the debug port on a trusted lab/showroom LAN, never on public Wi-Fi or an internet-routed network. The launcher opens the local firewall for the selected debug port because VRHM needs to reach Chrome from the server.
+`Start-KioskChrome.ps1` (Windows) and `Start-KioskChrome-Linux.sh` only open Chrome in kiosk mode with CDP enabled: URL casting works, but there is no reporting and no remote reboot/shutdown. Use them only when the toolbox cannot run on that PC.
 
-For an always-on kiosk, set the script to run on boot (autostart entry on Windows/Task Scheduler, or a `~/.config/autostart/*.desktop` file on Raspberry Pi OS) — see the README above for a ready-to-use example and the passwordless-`sudo` setup needed for unattended boots on Linux.
+> [!WARNING]
+> The Chrome DevTools Protocol gives full control of the kiosk browser. Only use it on a trusted lab/showroom LAN, never on public WiFi or an internet-routed network.
 
 ## 2. Register the kiosk in VRHM
 
-Open **Config → Kiosk Screens** (or press **`[K]`** from the console main menu), then either:
+A kiosk running the agent adds itself. Otherwise, use **Add kiosk device**:
 
-- **Add kiosk device → Add manually** — enter the kiosk's IP, an optional friendly name (defaults to the IP), and its debug port (default `9222`)
-- **Add kiosk device → Scan network** — pick a local network interface, scan its subnet for open CDP ports, and add the ones found
+- **Add manually** — the kiosk's IP, an optional name (defaults to the IP) and its debug port (default `9222`)
+- **Scan network** — pick a local network interface, scan its subnet for open CDP ports and add the ones found
 
 ![Add kiosk device dialog](pics/web_kiosk_add.png)
 
-Each registered kiosk is stored in `data\known_kiosks.csv` (`ID, Name, IPAddress, Port, PushedURL, LastPushedAt`).
+A kiosk you remove is not re-added by its agent's next heartbeat; adding it manually again works.
 
-## 3. Push a URL
+## 3. Push a URL or a headset feed
 
 ![Kiosk Screens page](pics/web_kiosk_screens.png)
 
-On the **Kiosk Screens** page: tick one or more screens in the table, then either paste a URL into the box and click **Push to selected screens**, or use the **Select headset to cast...** dropdown above it to push a headset's own video feed (or the whole fleet) instead — see [Casting a headset's video feed to a kiosk](#casting-a-headsets-video-feed-to-a-kiosk) below. VRHM sends `Page.navigate` to each selected kiosk's active Chrome tab immediately — no reload delay, no interaction needed on the kiosk PC.
+The table lists every kiosk: status dot, name, IP and port (editable with the pencil), latency, device (PC name, Ethernet/WiFi and link speed, `stale` when its agent stopped reporting) and what is on screen now (*Available to cast*, the pushed URL, or *UNAVAILABLE*). The **×** button removes a kiosk.
 
-- If the URL points at `localhost` / `127.0.0.1`, VRHM detects that it would resolve to the kiosk PC itself (not the VRHM server) and offers to replace it with the server's real LAN IP before pushing — confirm the suggestion to proceed.
-- **Stop kiosk session** closes Chrome on the selected kiosk(s). For an advanced kiosk, VRHM sends an agent command that closes Chrome and stops the agent so the watchdog does not reopen the browser. For a basic kiosk, VRHM closes Chrome via CDP `Browser.close`; you'll need to relaunch it manually on that PC.
-- For streaming a clean feed of the pushed page into Twitch or similar, the page links to [pwn.sh/tools/getstream.html](https://pwn.sh/tools/getstream.html) to strip page chrome from the capture.
-- Selecting a headset (or the wall option) from the dropdown greys out the manual URL box, and vice versa — typing in the URL box resets the dropdown. The **Subtitles (YouTube links only)** row only appears once the pasted URL is recognized as a YouTube link (watch/playlist/shorts/`youtu.be`).
+Tick one or more screens in the table, then in the **Push new link to kiosk screens** panel:
 
-The table shows, per kiosk: current reachability (ping + CDP open), latency, and the pushed URL / last-pushed timestamp. Name, IP address, and port are editable inline (pencil icon); the **×** button removes a kiosk from the registry.
+- **Cast headsets** — tick the headsets to show and order them with the arrows or by drag-and-drop. One headset = its own video page; several = a **custom wall** with only those headsets, in that order (offline ones are hidden). **All headsets in a wall** follows the headset list automatically. **Display monitor + timer overlay** (on by default) keeps the battery/controller/timer HUD; untick it for a clean video. The generated link is shown with a **Copy link** button.
+- **Or paste any URL** in the box (a YouTube link also shows a subtitles option).
+- **Push to selected screens** sends it; **Waiting screen** shows a neutral "Ready to stream" page; **Stop kiosk session** closes the browser (and stops the agent so its watchdog does not reopen it).
+- **Power control kiosk PC** — **Reboot PC** / **Shutdown kiosk host** (agent kiosks only). The kiosk always shows a one-minute warning on screen first.
 
-Kiosk actions are also logged server-side in `logs\<COMPUTERNAME>\kiosk_<date>.log`: add/edit/remove, scans, URL pushes, localhost replacements, power commands, session stops, and meaningful advanced-agent state changes. The log is intended for kiosk troubleshooting and avoids full raw agent payloads.
+![Two headsets ticked for a wall, with the generated link](pics/web_cast_to_kiosk.png)
 
-## Casting a headset's video feed to a kiosk
+If a URL points at `localhost` / `127.0.0.1`, VRHM notices it would resolve to the kiosk PC itself and offers to replace it with the server's LAN address before pushing.
 
-There are two equivalent ways to push a headset's live video feed to a kiosk screen:
+The **cast** button on a Video Monitor tile, and on a headset's `[video].html` page, opens a *Cast to kiosk screen* popover pre-filled with that headset's feed.
 
-- **From Kiosk Screens** — pick the headset by name from the **Select headset to cast...** dropdown in the push panel (see [Push a URL](#3-push-a-url) above). This is the quickest path when you're already managing kiosks and want to send a specific headset's feed without leaving the page.
-- **From the Video Monitor** — any headset tile on the [Video Monitor](web-interface.md#video-monitor-home-page) page (and the standalone `[video].html` player) has a **cast** button that opens a **Cast to kiosk screen** popover, pre-filled with that headset's own live video URL:
+### Wall URLs
 
-![Cast to kiosk screen popover](pics/web_cast_to_kiosk.png)
+The pushed wall is the Video Monitor page with its top bar hidden, so it can also be bookmarked or opened by hand:
 
-1. Tick one or more kiosk screens (or, on Kiosk Screens, select the headset from the dropdown and the screens in the table)
-2. Optionally untick **display monitor + timer overlay** (checked by default) to push a clean video feed without the battery/controller/timer HUD — this appends `?nooverlay=1` to the pushed URL, which the video player page reads to skip auto-showing those overlays (they remain toggleable by hand once pushed, via the same on-screen buttons)
-3. Click **Push to kiosk screens** (or **Push to selected screens** on Kiosk Screens)
-
-This is the fastest way to put a specific headset's feed on a lobby TV or showroom display: the kiosk shows exactly what the operator sees in that tile, live.
-
-### Casting the whole fleet as a wall
-
-Instead of picking one headset, the Kiosk Screens dropdown also offers **All headsets in a wall**, which pushes the [Video Monitor](web-interface.md#video-monitor-home-page) page itself in [wall view](web-interface.md#video-monitor-home-page) (`http://<pc-ip>:8080/?hidetopbar=1`) — a full-window grid of every headset's live feed, with the top bar hidden. The same **display monitor + timer overlay** checkbox applies here too: unticking it appends `&nooverlay=1`, which suppresses every tile's status/timer HUD from the start instead of just hiding the top bar.
+| URL | Shows |
+|---|---|
+| `http://<pc-ip>:8080/?hidetopbar=1` | Every live headset |
+| `http://<pc-ip>:8080/?hidetopbar=1&filterid=10,9` | Only headsets 10 and 9, in that order |
+| `...&nooverlay=1` | The same, without the status/timer overlays |
 
 ## Console equivalent
 
-The same operations are available from the console main menu under **`[K]` Kiosk Screens**, without opening a browser: list kiosks with live status, `[A]` add manually, `[S]` scan network, then select a row by number for **`[P]` push URL**, **`[E]` edit**, **`[I]` advanced-device info**, **`[R]` reboot**, **`[H]` shutdown**, or **`[D]` delete**. Pushing a URL from the console goes through the same localhost-detection prompt as the web UI.
+The console **K** tile does the same without a browser: list kiosks with live status, `[A]` add manually, `[S]` scan network, then select a row by number for `[P]` push a URL (or `W` for a headset wall), `[E]` edit, `[I]` device info, `[R]` reboot, `[H]` shutdown, or `[D]` delete. See [Console](console.md).
 
-## Troubleshooting
+## Logs and troubleshooting
 
-If a kiosk shows as unreachable or push fails, see the dedicated troubleshooting section in [`website/kiosk-launcher/README-KioskChrome.md`](../website/kiosk-launcher/README-KioskChrome.md) — it covers verifying the browser process and its bound address, confirming the port-relay is running, and testing reachability from the VRHM server. The general [Troubleshooting](troubleshooting.md) page covers the rest of the app.
+Kiosk actions are logged in `logs\<COMPUTERNAME>\kiosk_<date>.log`: add/edit/remove, scans, pushes, power commands, and agent state changes.
+
+- **The kiosk shows "UNAVAILABLE" or "Chrome debug closed".** Recent Chrome builds only bind DevTools to `127.0.0.1`; the agent then sets up a `netsh portproxy` forward, which needs the **IP Helper** service (`iphlpsvc`). Check with `Get-Service iphlpsvc` and `Get-NetTCPConnection -LocalPort 9222` on the kiosk.
+- **"No VR HEADSET MANAGER server was found"** on the kiosk: the scan only covers the kiosk's own networks — type the server address (`ip:port`) in the toolbox.
+- **Chrome shows "Restore pages?"**: delete `%LOCALAPPDATA%\VRHM_KioskChrome` on the kiosk.
+
+More in [`README-Toolbox.md`](../website/headset-toolbox/README-Toolbox.md#troubleshooting) and the general [Troubleshooting](troubleshooting.md) page.

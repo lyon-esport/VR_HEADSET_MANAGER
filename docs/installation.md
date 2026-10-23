@@ -1,6 +1,6 @@
 # Installation
 
-[← Back to documentation home](README.md)
+[← Back to documentation home](../README.md#documentation)
 
 ## Prerequisites
 
@@ -31,8 +31,8 @@ The more headsets you capture — and the more viewers watch the restreams — t
 ### Headsets
 
 - The headset must be in **Developer Mode** ([official Meta tutorial](https://developers.meta.com/horizon/documentation/native/android/mobile-device-setup/))
-- **ADB over WiFi** must be enabled — VRHM enables it automatically when you add a headset over USB, or you can use the bundled headset app: see [Enable ADB over WiFi](docs_HowToEnableADBWifi.md)
-- The headset must be connected to WiFi and reachable from the PC
+- **ADB over WiFi** must be reachable — VRHM enables it automatically when you plug a headset in over USB, and can install a small app that keeps it on after reboots: see [Connecting headsets](connecting-headsets.md)
+- The headset must be connected to WiFi and reachable from the PC (a headset cabled to the VRHM PC also works over USB)
 
 > [!IMPORTANT]
 > Without these prerequisites the headset is not reachable over the network, and screen capture will not work.
@@ -56,7 +56,7 @@ The more headsets you capture — and the more viewers watch the restreams — t
       - Windows Firewall rules so MediaMTX can restream on the network
       - Windows Firewall rule for the web server, plus the HTTP URL reservation (so the web server runs without admin)
 
-   ![Setup Wizard steps](pics/newInstall_setp2.png)
+   ![Setup Wizard steps](pics/newInstall_step2.png)
 
    You may also be asked whether you want to **exclude the application folder from Windows Defender**. This is optional but recommended: real-time scanning of the video pipeline can cause high CPU usage.
 
@@ -64,17 +64,18 @@ The more headsets you capture — and the more viewers watch the restreams — t
 
    ![Setup complete summary](pics/newInstall_step3.png)
 
-4. **Open the web interface.** The web server starts automatically; its URL is printed in the console — by default:
+4. **Open the web interface.** The web server starts automatically; its address is shown in the status banner at the top of the [console](console.md) (press `F1` for the full list of addresses, or `W` to open it in your browser) — by default:
 
    ```
    http://<your-pc-ip>:8080
    ```
 
-   ![Console main menu showing the web monitor URLs](pics/console_Started.png)
-
    You can open it from the VRHM PC itself or from any device on the same LAN (some management features, like installing APK files, are only available when browsing from the VRHM PC itself).
 
 5. Continue with [Getting started](getting-started.md) to add your first headset.
+
+> [!NOTE]
+> If a program VRHM needs (scrcpy/adb, MediaMTX, FFmpeg) is missing at startup, the console offers to **download the latest version** or to **point to an existing folder** instead of stopping. Each of them can also be updated, or rolled back to an older installed version, from **Config → App Configuration → Advanced**; the change applies at the next application restart.
 
 ## Updating
 
@@ -82,7 +83,9 @@ The more headsets you capture — and the more viewers watch the restreams — t
 2. Unzip the new release into a **new folder**.
 3. Copy your personal data from the old folder if you want to keep it:
    - `config\config.json` — your configuration
-   - `data\` — headset registry, app caches, WiFi credentials
+   - `data\` — the local database `vrhm.db` (headset registry, kiosks, live status, app catalogue, timers, metric history, recordings catalogue) and the encrypted WiFi store `wifi_networks.dat`
+
+   Quit the old version before copying `data\`, so the database is complete on disk.
 4. Start the new version.
 
 ## Uninstalling

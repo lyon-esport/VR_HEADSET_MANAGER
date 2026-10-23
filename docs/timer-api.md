@@ -1,14 +1,15 @@
-# VR HEADSET MANAGER
+# Timer API
 
-## Timer system — how it works and how to use it externally
+[← Back to documentation home](../README.md#documentation)
+
+How the per-headset session timers work, and how to drive them from another tool.
 
 ---
 
 ### Overview
 
 Each headset has an independent countdown or count-up timer. The timer state is managed
-by the PowerShell web server (`modules/Pode_WebServer/web_server.ps1`) and persisted in two
-places:
+by the VRHM web server and exposed in two files:
 
 | File | Purpose |
 |---|---|
@@ -16,8 +17,11 @@ places:
 | `website/timer/<DisplayName>[timer].run` | Run-token used to kill orphaned background jobs |
 
 `<DisplayName>` is the headset's display name with spaces replaced by underscores
-(e.g. `Headset Name` → `<headset-name>`), consistent with `<headset-name>[video].html` and `<headset-name>[monitoring].html`. Timer configuration (duration, mode) is stored per-headset
-in `data/timer.csv`.
+(e.g. `Headset Name` → `Headset_Name`), consistent with `Headset_Name[video].html` and `Headset_Name[monitoring].html`.
+Timer configuration (duration, mode) is stored per headset in the local database (`data\vrhm.db`).
+
+For an OBS Browser source on another PC, use the self-refreshing `website/<DisplayName>[timer].html`
+overlay (see [Streaming → OBS](streaming.md)).
 
 ---
 
@@ -44,7 +48,7 @@ Every request must identify the target headset using **one** of:
 
 | Parameter | Format | Example |
 |---|---|---|
-| `id` | Numeric headset ID (from `known_headsets.csv`) | `id=1` |
+| `id` | Numeric headset ID (the `#` column of the Monitoring page) | `id=1` |
 | `name` | Headset display name (spaces allowed or replaced by `_`) | `name=<headset-name>` or `name=<Headset Name>` |
 
 ---
@@ -159,7 +163,7 @@ Response:
 
 ##### `config` — Save timer configuration
 
-Sets the duration and mode. The new values are stored in `data/timer.csv` and used the next
+Sets the duration and mode. The new values are stored in the database and used the next
 time `start` is called. Does **not** affect a currently running timer.
 
 ```

@@ -1,6 +1,6 @@
 # Applications manager
 
-[← Back to documentation home](README.md)
+[← Back to documentation home](../README.md#documentation)
 
 VR HEADSET MANAGER lets the operator drive every application on every headset **without the player ever leaving the experience**: launch games remotely, sideload new ones, uninstall, and apply pending updates.
 

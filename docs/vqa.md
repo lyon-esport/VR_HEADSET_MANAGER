@@ -1,6 +1,6 @@
 # Video Quality Automation (VQA)
 
-[← Back to documentation home](README.md)
+[← Back to documentation home](../README.md#documentation)
 
 Capturing several headsets is heavy. When the computer starts to choke, streams stutter for everyone. **Video Quality Automation** watches the machine and reacts *before* that happens: it computes quality reductions (resolution, framerate, bitrate) that would bring the load back to a safe level, and either **recommends** them to you or **applies them automatically**.
 

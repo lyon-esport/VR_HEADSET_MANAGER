@@ -13,58 +13,73 @@
 
 ---
 
-**VR HEADSET MANAGER** (VRHM) is a Windows automation tool that manages, monitors, and captures the screens of **Meta Quest** and **PICO** VR headsets over WiFi, using **ADB** and [**scrcpy**](https://github.com/Genymobile/scrcpy).
+**VR HEADSET MANAGER** (VRHM) is a Windows tool that manages, monitors and captures the screens of **Meta Quest** and **PICO** VR headsets over WiFi or USB, using **ADB** and [**scrcpy**](https://github.com/Genymobile/scrcpy).
 
-It is built for **VR labs, showrooms, gaming exhibitions, training centers, and any multi-headset deployment** where an operator needs a global, real-time view of every active VR experience — typically to feed live video walls or **OBS**.
+It is built for **VR labs, showrooms, gaming events, training centres and any multi-headset setup** where an operator needs a live view of every headset — on a video wall, on lobby screens, or in **OBS**.
 
-![Video Monitor page showing the live wall of headsets](docs/pics/hero_video_monitor.png)
-*The Video Monitor web page: one tile per headset with live video, battery, controllers, and session timer.*
+![Video Monitor page showing two live headsets](docs/pics/hero_video_monitor.jpg)
+*The Video Monitor page: one tile per headset with live video, battery, controllers, temperature and session timer.*
+
+![Quick tour: Video Monitor, Monitoring, Headset Settings, Recordings](docs/pics/gif_tour.gif)
+*A quick tour of the web interface: Video Monitor, Monitoring (with battery history on hover), Headset Settings and Recordings.*
 
 ## Features
 
-- **Live screen capture** of every headset (scrcpy), restreamed over the network as **WHEP (WebRTC), RTSP, and HLS** through [MediaMTX](https://github.com/bluenviron/mediamtx)
-- **Web interface** to watch all streams with very low latency, manage headsets, and change every setting — from any device on your LAN
-- **Auto-restart**: streams come back automatically when a headset reappears on the network
-- **Health monitoring**: headset and controller battery, charge status, temperature — with per-headset HTML overlays ready to drop into OBS
-- **Session timers** per headset (limit play sessions), controllable from the web page or any external tool via a [REST API](docs/docs_timer_api.md) (Stream Deck, OBS, curl...)
-- **Applications manager**: install (sideload), uninstall, and launch apps on any headset remotely — the player never has to touch a menu
-- **Recording** of any capture session to disk, with a **Recordings page**: timeline per headset, in-browser preview, download of the original file, "do not delete" lock and bulk clean-up of old recordings
-- **Automatic WiFi-ADB activation** when a known headset is plugged in over USB
-- **Video Quality Automation**: monitors your PC's CPU/GPU load and recommends (or applies) resolution/framerate/bitrate reductions to keep the machine responsive
+- **Live screen capture** of every headset, restreamed on the LAN as **WHEP (WebRTC), RTSP and HLS** through [MediaMTX](https://github.com/bluenviron/mediamtx), ready for browsers, VLC and OBS
+- **Web interface** reachable from any device on the LAN, plus a full **console** on the server PC
+- **Automatic capture**: streams start by themselves when a headset wakes up, and switch between USB and WiFi when you plug or unplug the cable
+- **Easy onboarding**: plug a headset in once, VRHM enables WiFi ADB and registers it; headsets on the network are discovered automatically; a portable **toolbox** does the same from any other PC
+- **Health monitoring**: headset and controller battery, charge power, CPU/GPU/skin temperatures, running app — with a history graph for each value and HTML overlays for OBS
+- **DIAG page** per headset: firmware, health, WiFi, USB cable test, recovery actions and an ADB shell
+- **Session timers** per headset, also driven by a [REST API](docs/timer-api.md) (Stream Deck, OBS, curl...)
+- **Applications manager**: install, uninstall, update and launch apps remotely
+- **Recording** of any capture, with a **Recordings page**: timeline, in-browser preview, download, lock and clean-up
+- **Kiosk screens**: push a headset feed, a custom wall or any web page to lobby TVs and monitors
+- **Eye merge**: both eyes of a Quest 3 stitched into one wider, level picture
+- **Benchmark** and **Video Quality Automation** to size the capture settings to your PC
 
 ## Quick start
 
 1. Download the [latest release](https://github.com/lyon-esport/VR_HEADSET_MANAGER/releases) and unzip it (keep `VR_HEADSET_MANAGER` in the folder name).
-2. Run **`START_VR_HEADSET_MANAGER.exe`**. On first start it configures the Windows Firewall (asks for admin) and creates the config files.
-3. Open the web interface — the URL is printed in the console, by default **`http://<your-pc-ip>:8080`**.
-4. Put your headset in **Developer Mode**, plug it in over USB, and add it via **Headset Settings → Manage New Devices**.
-5. Start the stream from the **Video Monitor** page — done.
+2. Run **`START_VR_HEADSET_MANAGER.exe`**. The first-run wizard sets the ports, downloads FFmpeg and configures the Windows Firewall (one admin prompt).
+3. Open the web interface — the address is shown at the top of the console, by default **`http://<your-pc-ip>:8080`**.
+4. Put your headset in **Developer Mode**, plug it in over USB and open **Headset Settings → Add New Headset**.
+5. The capture starts on its own (auto-restart is on by default) — the headset appears on the **Video Monitor** page.
 
 Full details: [Installation](docs/installation.md) → [Getting started](docs/getting-started.md).
 
 ## Documentation
 
+**Using VRHM**
+
 | Page | What you will find |
 |---|---|
-| [Installation](docs/installation.md) | Prerequisites, first run, firewall/Defender setup, updating |
-| [Getting started](docs/getting-started.md) | Add your first headset and start streaming (web interface) |
-| [Web interface tour](docs/web-interface.md) | Every page of the web UI explained |
-| [Streaming & OBS](docs/streaming.md) | Capture pipeline, stream URLs, re-encoding, benchmark, OBS integration, recording |
+| [Installation](docs/installation.md) | Prerequisites, first-run wizard, updating, uninstalling |
+| [Getting started](docs/getting-started.md) | From a fresh install to your first live stream |
+| [Connecting headsets](docs/connecting-headsets.md) | USB onboarding, WiFi ADB (classic and TLS), USB-first transport, network discovery, the Headset Toolbox |
+| [Web interface tour](docs/web-interface.md) | Every page of the web UI: Video Monitor, Monitoring, Headset Settings, DIAG, configuration |
+| [Console](docs/console.md) | The console main screen, its shortcuts and the headset panel |
+| [Streaming & OBS](docs/streaming.md) | Capture pipeline, profiles, eye merge, benchmark, stream URLs, OBS |
+| [Recordings](docs/recordings.md) | Recording sessions, the Recordings page, preview, clean-up |
 | [Applications manager](docs/apps-manager.md) | Launch, sideload, uninstall and update apps on headsets |
-| [Kiosk screens](docs/kiosk-screens.md) | Remote-control browser displays (lobby TVs, showroom monitors): push URLs, cast a headset's live feed |
+| [Kiosk screens](docs/kiosk-screens.md) | Drive lobby TVs and monitors: push URLs, cast headset feeds and walls |
+| [Video Quality Automation](docs/vqa.md) | Automatic performance mitigation |
+| [Troubleshooting](docs/troubleshooting.md) | Common problems and fixes |
+
+**Reference**
+
+| Page | What you will find |
+|---|---|
 | [Configuration reference](docs/configuration.md) | Every `config.json` setting, ports, WiFi credentials |
-| [Video Quality Automation](docs/vqa.md) | Automatic performance mitigation explained |
-| [Timer API](docs/docs_timer_api.md) | REST API for per-headset session timers |
-| [Enable ADB over WiFi](docs/docs_HowToEnableADBWifi.md) | How to enable wireless ADB on a Meta Quest |
-| [VRHM ADB WiFi app](docs/android-adb-wifi.md) | Headset app that turns ADB over Wi-Fi back on after reboots, without a computer |
-| [Troubleshooting](docs/troubleshooting.md) | Common problems and how to fix them |
+| [Timer API](docs/timer-api.md) | REST API for per-headset session timers |
+| [VRHM ADB WiFi app](docs/android-adb-wifi.md) | Headset app that turns ADB over WiFi back on after reboots |
 
 ## Supported headsets
 
 | Model | Status |
 |---|---|
-| Meta Quest 3 | Fully supported (including per-eye crop profiles) |
-| Meta Quest 2 | Fully supported (cropping profiles are defined for 63mm IPD) |
+| Meta Quest 3 | Fully supported (per-eye crop profiles, eye merge) |
+| Meta Quest 2 | Fully supported (crop profiles per lens position) |
 | PICO 4 Ultra | Supported |
 | Other Android-based headsets | Should work over WiFi ADB — profiles may need tuning |
 
@@ -74,8 +89,8 @@ Full details: [Installation](docs/installation.md) → [Getting started](docs/ge
 ## Requirements at a glance
 
 - Windows 10/11 PC on the same network as the headsets (Ethernet recommended for the PC)
-- Headsets in **Developer Mode** with **ADB over WiFi** reachable
-- Hardware: minimum 4 CPU cores, 16 GB RAM, 2 GB GPU VRAM for ~4 headsets
+- Headsets in **Developer Mode**
+- Hardware: minimum 4 CPU cores, 16 GB RAM, 2 GB GPU VRAM for ~4 headsets — the built-in [benchmark](docs/streaming.md#benchmark-what-each-option-costs-this-pc) tells you what your PC can take
 
 See [Installation](docs/installation.md) for the full list.
 
@@ -88,7 +103,11 @@ Licensed under the **PolyForm Noncommercial License 1.0.0** — free for persona
 VR HEADSET MANAGER stands on the shoulders of:
 
 - [scrcpy](https://github.com/Genymobile/scrcpy) — screen mirroring
-- [oculus-wireless-adb](https://github.com/thedroidgeek/oculus-wireless-adb) — enable ADB over WiFi from inside the headset
 - [MediaMTX](https://github.com/bluenviron/mediamtx) — real-time media server for restreaming
+- [FFmpeg](https://ffmpeg.org/) — video re-encoding, eye merge and recording
+- [SQLite](https://www.sqlite.org/) — local database
+- [uPlot](https://github.com/leeoniya/uPlot) — history graphs
+- [oculus-wireless-adb](https://github.com/thedroidgeek/oculus-wireless-adb) and ADB Auto Enable (`eu.project_simple.adbautoenable`) — keeping ADB over WiFi on after a reboot
 - [MetaMetadata](https://github.com/threethan/MetaMetadata) — the database linking package names to app names and icons
-- [Pode](https://github.com/Badgerati/Pode) & [EPS](https://github.com/straightdave/eps) — PowerShell web server and templating
+
+<sub>Developer notes (design plans) live in [docs/dev/](docs/dev/).</sub>

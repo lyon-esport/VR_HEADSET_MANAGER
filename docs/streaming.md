@@ -1,6 +1,6 @@
 # Streaming, restreaming & OBS
 
-[← Back to documentation home](README.md)
+[← Back to documentation home](../README.md#documentation)
 
 ## How the pipeline works
 
@@ -112,6 +112,9 @@ More about re-encoding:
 
 The **Benchmark** page (top bar → configuration menu → **Benchmark**) measures what each capture option costs this PC on **one** headset. The console has the same feature under **Services → B**.
 
+![Benchmark page: tests selection and results](pics/web_benchmark.png)
+*Typical (quick) preset selected for a Quest 3, with the results of an earlier run below.*
+
 ### Tests selection
 
 Pick a headset that is on, with ADB (USB or WiFi), then switch option buttons on (green) or off (grey):
@@ -193,6 +196,7 @@ The page also shows:
 Running streams then restart with the new settings.
 
 The benchmark itself never changes your configuration. Only **Apply** does.
+
 ## Stream URLs
 
 Every headset stream is published under a path derived from its name (e.g. `Q3 BLUE` → `q3_blue`), on three protocols:
@@ -256,26 +260,12 @@ You can resize the digits from OBS with a one-line Custom CSS, e.g. `#timer-val 
 
 ![OBS Browser source properties for the timer](pics/obs_timer.png)
 
-The timer is controlled from the web interface or from any external tool (Stream Deck, curl...) via the [Timer API](docs_timer_api.md).
+The timer is controlled from the web interface or from any external tool (Stream Deck, curl...) via the [Timer API](timer-api.md).
 
 ## Recording
 
-Enable **Recording** on a headset's card in **Headset Settings** to save its capture sessions to disk.
-
-- Files go to the configured record folder (default `C:\DATA\MEDIA\VR_Records`, see [configuration](configuration.md#headset-capture-profiles-scrcpy))
-- The recording is a lossless copy of the capture (no re-encoding)
-- A **minimum free space guard** (default 5 GB) automatically disables recording on all headsets when the drive runs low; the web UI shows a storage warning banner
-- **A new file for each capture session.** Unplugging a cable or restarting a capture starts a new timestamped `.mkv`; the previous one is finalised when its session ends. Recordings are Matroska (`.mkv`) on purpose, because the format stays readable even if a capture is cut abruptly.
-- **No empty files.** A capture attempt that never produced video (for example a relaunch while the cable is half unplugged) would leave a 0-byte file; the app deletes those automatically when the session ends, and logs a warning for any file under 64 KB, which it keeps.
-- **If a recording was cut abruptly** (ffmpeg had to be force-stopped after 15 s, which the log reports with the file name), the file still plays in VLC and decodes in ffmpeg, but its duration and seek index are missing. Repair it with `ffmpeg -i broken.mkv -c copy fixed.mkv`.
-- **Files are organised** as `<record folder>\<yyyy-MM-dd>\<headset>\<headset>_<yyyyMMdd_HHmmss>.mkv`.
-
-### Recordings page
-
-Every session is also listed in the app's database with its start and end time, size, codec, picture size and the capture settings it was made with (profile, fps, bitrate, capture mode, eye merge). The **Recordings** page (**Config → Recordings**) uses it to show a timeline per headset, watch a recording in the browser (live low-resolution re-encode, the file is never modified), download the original file, protect a recording from deletion and delete old ones. See [Web interface → Recordings](web-interface.md#recordings).
-
-The database follows the record folder: at every start, and every `Recordings.rescan_interval_min` minutes (default 10), the app imports files that appeared in the folder, drops the entries of files deleted outside the app, and closes sessions that a crash or power cut left open (shown as **interrupted**). If the record folder cannot be reached (drive unplugged), nothing is removed - a warning is written to the log instead.
+Any capture can be recorded to disk as a lossless copy (never re-encoded), one `.mkv` per session, and browsed on the **Recordings** page. See [Recordings](recordings.md).
 
 ---
 
-Related: [Web interface tour](web-interface.md) · [Configuration reference](configuration.md) · [Video Quality Automation](vqa.md)
+Related: [Recordings](recordings.md) · [Web interface tour](web-interface.md) · [Configuration reference](configuration.md) · [Video Quality Automation](vqa.md)

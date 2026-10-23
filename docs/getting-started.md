@@ -1,88 +1,93 @@
 # Getting started
 
-[← Back to documentation home](README.md)
+[← Back to documentation home](../README.md#documentation)
 
-This guide takes you from a freshly installed VR HEADSET MANAGER to a live headset stream, **using only the web interface**. (Everything shown here can also be done from the PowerShell console menu, but the web interface is the recommended way to work.)
+This guide takes you from a freshly installed VR HEADSET MANAGER to a live headset stream, using the web interface. Everything shown here can also be done from the [console](console.md).
 
 ## 1. Open the web interface
 
-Start the application with `START_VR_HEADSET_MANAGER.exe` if it is not already running. The console prints the web address — by default:
+Start the application with `START_VR_HEADSET_MANAGER.exe` if it is not already running (by default it also opens the web interface in your browser). The address is shown in the status banner of the console — by default:
 
 ```
 http://<your-pc-ip>:8080
 ```
 
-Open it in a browser. The top navigation bar gives you access to every page:
+Open it in any browser on the LAN. The top bar gives you access to every page:
 
 - **Video Monitor** (home) — live wall of all headset streams
-- **Monitoring** — status table (battery, temperature, connectivity)
-- **Headset Settings** — per-headset cards: stream, record, timer, power
-- **Config** menu — application configuration, apps manager, help & diagnostics
+- **Monitoring** — status table (battery, temperatures, connectivity, running app) and PC statistics
+- **Headset Settings** — one card per headset: capture, recording, timer, DIAG, power. Its drop-down menu holds **Add New Headset** and the actions for all headsets
+- **Config** menu — every other page: Kiosk Screens, Recordings, Headsets Apps, Known Apps, Help & Diagnostics, Benchmark, App Configuration and the dark mode
 
 ## 2. Add your first headset
 
 > [!IMPORTANT]
-> The headset must already be in **Developer Mode**. If it is not, follow the [official Meta tutorial](https://developers.meta.com/horizon/documentation/native/android/mobile-device-setup/) first.
+> The headset must already be in **Developer Mode**. On a Meta Quest, follow the [official Meta tutorial](https://developers.meta.com/horizon/documentation/native/android/mobile-device-setup/); on a PICO, enable the developer options from *Settings → General → About* (tap the software version several times) and turn on USB debugging.
 
 ### Option A — USB (recommended)
 
-1. Connect the headset to the PC with a USB cable.
-2. Put the headset on and **accept the "Allow USB debugging" prompt** shown inside it.
-3. In the web interface, go to **Headset Settings** and click the **Manage New Devices** button (the small headset icon at the top). (On a fresh install the page also shows a big **"Click here to add your first headset"** button.)
-4. Your headset appears in the dialog. Click **Add this headset to the list**: VRHM reads the model and serial number, **enables ADB over WiFi automatically** (Enable WiFi ADB), and registers the headset with a friendly name.
+1. Connect the headset to the VRHM PC with a USB cable.
+2. Put the headset on and **accept the "Allow USB debugging" prompt** (tick *Always allow from this computer*).
+3. Open **Headset Settings → Add New Headset** (on a fresh install the page also shows a big **"Click here to add your first headset"** button).
+4. The **Manage New Devices** dialog detects the headset and shows its model, WiFi network, IP address and serial number. Click **Add this headset to the list**: VRHM reads the model and serial number, **enables ADB over WiFi**, and registers the headset under a friendly name.
+
+![Opening Add New Headset from the Headset Settings menu](pics/gif_add_headset.gif)
+
+The same dialog checks everything the headset needs and offers a button for each missing piece:
 
 ![Manage New Devices dialog with a USB headset detected](pics/web_add_newheadset.png)
-*The Manage New Devices dialog with a USB-detected Quest 3, ready to be added in one click — WiFi ADB can be manually enabled from the same dialog.*
 
-> [!TIP]
-> Once a headset is added, while you connect the headset on a USB port of the server, it will automatically enable WiFi ADB after few seconds. You can then disconnect the headset from the USB port
+- **WiFi connection** — moves the headset onto the WiFi network configured on the server (the password never leaves the server)
+- **WiFi ADB** — enables ADB over WiFi now
+- **ADB WiFi app** / **ADB auto-enable app (TLS)** — small headset apps that turn wireless ADB back on after every reboot, so you do not need the cable again. See [Connecting headsets](connecting-headsets.md#keeping-wifi-adb-on-after-a-reboot).
 
 Once added, the headset gets its own card in **Headset Settings**:
 
 ![Freshly added headset card](pics/new_headset-added.png)
 
+> [!TIP]
+> A headset VRHM already knows is handled by itself whenever you plug it in: WiFi ADB is re-enabled and its IP address corrected after a few seconds. While the cable is in, VRHM even uses USB for the capture and switches back to WiFi when you unplug it. See [Connecting headsets](connecting-headsets.md).
+
 ### Option B — manually by IP address
 
-If the headset already has ADB over WiFi enabled (see [how to enable it](docs_HowToEnableADBWifi.md)), you can skip the cable:
+If the headset already has ADB over WiFi enabled, you can skip the cable: in **Manage New Devices** click **Add manually new headset with IP address**, enter the IP and then a name.
 
-1. Find the headset's IP address (headset **Settings → WiFi → your network → Advanced**).
-2. In **Manage New Devices**, click **Add manually new headset with IP address** and fill in the IP and a friendly name.
+![Add a headset by IP address](pics/web_add_headset.png)
 
 > [!NOTE]
-> The first time VRHM connects over ADB, the headset asks you (inside VR) to authorize the computer. Tick "Always allow from this computer" and accept.
+> The first time VRHM connects over ADB, the headset asks you (inside VR) to authorize the computer. Tick *Always allow from this computer* and accept.
 
-## 3. Start your first stream
+### Option C — let VRHM find it
 
-1. Go to the **Video Monitor** page (the home page). Each registered headset has a tile.
-2. Click the **stream button** on your headset's tile (or enable **Auto-restart scrcpy** — see below). After a few seconds the live video appears.
+Headsets with WiFi ADB enabled that are on the same network are **discovered automatically** (every 60 s by default). When one is found, a blinking **Discovered devices** button appears on **Headset Settings**: add it with a name, or *Forget* it. See [Connecting headsets → Network discovery](connecting-headsets.md#network-discovery).
 
-A scrcpy window also opens on the VRHM computer itself — this is the local capture window that feeds the stream.
+## 3. Watch the stream
 
-![scrcpy capture window over the Video Monitor page](pics/scrcpy_window.png)
-*The live tile on the Video Monitor page, with the local scrcpy mirror window (titled with the headset name) that feeds the stream.*
+**Auto-restart scrcpy** is **ON** by default on every new headset: as soon as the headset is reachable, VRHM starts its capture by itself. Go to the **Video Monitor** page (the home page) — after a few seconds the live video appears on the headset's tile. While a capture starts, the tile shows *Capture starting...*.
 
-## 4. Make the stream automatic (enabled by default)
+![Video Monitor with two live headsets](pics/hero_video_monitor.jpg)
 
-You usually do not want to click a button every time a headset wakes up. Enable auto-restart:
+If auto-restart is off, click the **stream button** on the tile, or switch **Auto-restart scrcpy** to **ON** on the headset's card:
 
-1. Go to **Headset Settings**.
-2. On your headset's card, switch **Auto-restart scrcpy** to **ON**.
+![Headset card with the Auto-restart scrcpy toggle](pics/web_headset_settings_focus_scrcpyAutoRestart.png)
 
-![Headset Settings cards with the Auto-restart scrcpy toggle highlighted](pics/web_headset_settings_focus_scrcpyAutoRestart.png)
-*The Auto-restart scrcpy toggle (highlighted) on each headset card.*
+From then on the capture comes back automatically whenever the headset wakes up, reconnects or reboots — as long as ADB over WiFi is still enabled (see [Connecting headsets](connecting-headsets.md#keeping-wifi-adb-on-after-a-reboot) to keep it on across reboots).
 
-From now on, whenever the headset is reachable on the network, VRHM (re)starts the capture automatically — including after the headset went to sleep or rebooted (ADB over WiFi needs to be re-enabled after a headset reboot so use *Oculus Wireless ADB application* or replug the headset to USB port for few seconds and it will re-enable automatically WiFi ADB).
+> [!NOTE]
+> By default VRHM only streams (`StreamOnly` capture mode). Switch to `StreamAndLocalWindow` in **App Configuration → Streaming** if you also want a scrcpy mirror window on the VRHM PC. See [Streaming → Capture modes](streaming.md#capture-modes).
 
-## 5. Check headset health
+## 4. Check headset health
 
-Open the **Monitoring** page to see everything at a glance: ping/ADB/scrcpy status, charge state and power draw, battery levels (headset and both controllers), temperature, model, and the app currently running in the headset.
+Open the **Monitoring** page to see everything at a glance: ping/ADB/scrcpy status (with the link in use: USB, WiFi or WiFi TLS), charge state and power draw, battery levels (headset and both controllers), temperatures, model, and the app currently running in the headset. Hover a battery or temperature cell for a one-hour sparkline, click it for the full history.
 
 ![Monitoring page](pics/web_monitoring.png)
-*The Monitoring table plus live computer statistics (CPU, RAM, GPU, recording drive, process workload).*
 
 ## Where to go next
 
-- Put the streams into **OBS**, share them on the LAN, record sessions → [Streaming & OBS](streaming.md)
-- Launch or install games remotely on the headsets → [Applications manager](apps-manager.md)
-- Limit session time per player → [Timer API](docs_timer_api.md) (timers are also on each Video Monitor tile and Headset Settings card)
+- Put the streams into **OBS** or on the LAN → [Streaming & OBS](streaming.md)
+- Record sessions → [Recordings](recordings.md)
+- Show headsets on lobby TVs → [Kiosk screens](kiosk-screens.md)
+- Launch or install games remotely → [Applications manager](apps-manager.md)
+- Limit session time per player → [Timer API](timer-api.md) (timers are also on each Video Monitor tile and Headset Settings card)
+- Diagnose a headset → [Web interface → Headset DIAG](web-interface.md#headset-diag)
 - Tune everything → [Configuration reference](configuration.md)

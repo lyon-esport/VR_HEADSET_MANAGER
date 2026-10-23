@@ -1,6 +1,6 @@
 # Troubleshooting & FAQ
 
-[← Back to documentation home](README.md)
+[← Back to documentation home](../README.md#documentation)
 
 ## Where are the logs?
 
@@ -8,7 +8,7 @@
 logs\<COMPUTERNAME>\log_<date>.txt
 ```
 
-Increase verbosity in **Config → App Configuration → General** (`Logging.debugLevelToFile`, set to `DEBUG` while investigating). Logs older than 30 days are cleaned automatically.
+Increase verbosity in **Config → App Configuration → General** (`Logging.debugLevelToFile`, set to `DEBUG` while investigating). Logs older than 30 days are cleaned automatically. You can read any log from **Config → Help & Diagnostics → Live Logs** or the console **F** tile.
 
 ## Headset problems
 
@@ -16,12 +16,22 @@ Increase verbosity in **Config → App Configuration → General** (`Logging.deb
 
 - Is the headset **awake**? A sleeping Quest drops off WiFi. (When it is captured, VRHM keeps it awake with `stay_awake`.)
 - Is it on the **same network/VLAN** as the PC? Guest WiFi networks often isolate clients.
-- Did its **IP address change**? Check headset Settings → WiFi and update the IP on its card in **Headset Settings**, or re-add via USB (VRHM recognizes the serial and heals the IP automatically).
+- Did its **IP address change**? VRHM usually corrects it by itself (network discovery, USB, TLS announcements — see [IP address changes](connecting-headsets.md#ip-address-changes)). Otherwise plug it in over USB for a few seconds, or edit the IP on its card in **Headset Settings**.
 
 ### PING OK but ADB KO
 
-- ADB over WiFi is not (or no longer) enabled — it turns off at every reboot on some firmwares. Plug the headset in over USB once (auto re-enable), or use the in-headset app: [Enable ADB over WiFi](docs_HowToEnableADBWifi.md).
+- ADB over WiFi is not (or no longer) enabled — classic WiFi ADB turns off at every headset reboot. Plug the headset in over USB for a few seconds (auto re-enable), and install the **ADB auto-enable app** so it comes back by itself: [Keeping WiFi ADB on after a reboot](connecting-headsets.md#keeping-wifi-adb-on-after-a-reboot).
+- With TLS (Wireless debugging), the headset must be on the **same network segment** as the PC: its announcements (mDNS) do not cross VLANs. On another VLAN, use classic WiFi ADB.
 - The ADB **authorization prompt** inside the headset was never accepted: put the headset on and accept "Allow USB debugging", ticking *Always allow*.
+
+### The headset uses WiFi although it is cabled
+
+- `ADB.prefer_usb` must be `true` (default). A capture already running over WiFi only moves to USB after the cable has been in for 10 s and when it is not recording (`scrcpy.usb_switch_mode`, see [USB first](connecting-headsets.md#usb-first-capturing-over-the-cable)).
+- Accept the USB debugging prompt inside the headset: an unauthorized cable cannot be used.
+
+### A headset appears in "Discovered devices" but I do not want it
+
+Open **Discovered devices** and click **Forget**: it is never proposed again, even after an IP change. Adding it manually later cancels that.
 
 ### The headset is not detected over USB
 
@@ -50,6 +60,10 @@ Increase verbosity in **Config → App Configuration → General** (`Logging.deb
 - Check the **Monitoring** page's computer statistics: if CPU/GPU are saturated, let [Video Quality Automation](vqa.md) recommend reductions
 - Many simultaneous viewers? Keep [re-encoding](streaming.md#ffmpeg-re-encoding-and-streaming-options) enabled (the default) to cap per-viewer bandwidth
 
+### The Headset Toolbox does not find the server
+
+Its scan only covers the networks of the PC it runs on. Choose the manual entry and type `ip`, `ip:port` (another port) or a URL. Allow `adb.exe` through the Windows Firewall if asked — it is only needed for WiFi ADB from that PC. See [`README-Toolbox.md`](../website/headset-toolbox/README-Toolbox.md#troubleshooting).
+
 ## Web interface problems
 
 ### The web page does not load from another device
@@ -70,7 +84,11 @@ VRHM detects it and offers to: use the next free port (saved to the config autom
 
 ### Recording refuses to enable / stopped by itself
 
-The recording drive is under the free-space floor (`recordMinFreeSpaceGB`, default 5 GB). Free some space or point `recordFolder` to another drive — see [Configuration](configuration.md#headset-capture-profiles-scrcpy).
+The recording drive is under the free-space floor (`recordMinFreeSpaceGB`, default 5 GB). Free some space (**Recordings → Delete old recordings...**) or point `recordFolder` to another drive — see [Recordings](recordings.md) and [Configuration](configuration.md#headset-capture-profiles-scrcpy).
+
+### A recording shows as "interrupted"
+
+The session was cut abruptly (application or PC stopped). VRHM repairs the file in the background and marks it done; nothing to do. If it stays interrupted, the file is probably still in use or the drive is full — see the log.
 
 ### The recording preview does not start, or shows a black picture
 

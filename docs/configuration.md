@@ -1,6 +1,6 @@
 # Configuration reference
 
-[← Back to documentation home](README.md)
+[← Back to documentation home](../README.md#documentation)
 
 ## Where the configuration lives
 
@@ -37,7 +37,7 @@ Two ways to edit:
 
 ### `Paths`
 
-File names of the headset registry (`known_headsets.csv`) and app catalog (`known_apps.csv`) inside `data\`. Normally never changed.
+Legacy file names (`known_headsets.csv`, `known_apps.csv`) from before the database. The data itself now lives in the database (`database` section); these names are kept for the import/export tools. Normally never changed.
 
 ### `apk`
 
@@ -46,7 +46,7 @@ Location and package name of the bundled [oculus-wireless-adb](https://github.co
 | Key | Default | Description |
 |---|---|---|
 | `adbAutoEnableFolder` | `ADB Wireless activator` | Folder under `sources\` holding the ADB auto-enable app APK. Falls back to `adbWirelessActivatorFolder` when absent |
-| `adbAutoEnableApk` | `eu.project_simple.adbautoenable-3.0.0.apk` | APK file name installed by "Install ADB auto-enable app" (web Manage New Devices, console Add menu option 9). It restores Wireless debugging at every headset boot |
+| `adbAutoEnableApk` | `eu.project_simple.adbautoenable-3.0.0.apk` | APK file name installed by "Install ADB auto-enable app" (web Manage New Devices, console **H** then **9**). It restores Wireless debugging at every headset boot |
 | `adbAutoEnablePackageName` | `eu.project_simple.adbautoenable` | Android package name, used to detect whether the app is already installed on the headset |
 
 ### `Logging`
@@ -195,6 +195,17 @@ Browser-side behavior of the video wall: pause hidden streams after `pauseWhenHi
 
 `enabled` (default `true`), `port` (default `8080`), and `openBrowserOnStartup` (default `true`) - automatically opens the default web browser to the dashboard when the app starts.
 
+`sse` drives the live push channel the pages use to refresh as soon as something changes (instead of waiting for their polling timer):
+
+| Key | Default | Description |
+|---|---|---|
+| `sse.enabled` | `true` | `false` makes every page fall back to plain polling — safe and reversible |
+| `sse.poll_ms` | `250` | How often the server checks for changes (minimum 100) |
+| `sse.max_clients` | `32` | Maximum open pages at once; more get polling only |
+| `sse.heartbeat_sec` | `15` | Keep-alive interval |
+
+Changing `sse` needs an application restart.
+
 ### `Network`
 
 `waitForValidNetwork` (default `true`) - pauses startup if no network interface has a valid (non-APIPA) IP yet, re-checking every `checkIntervalSeconds` (default 5) until DHCP assigns one. Press any key during the wait to skip it and continue startup anyway.
@@ -206,6 +217,17 @@ Optional mDNS responder so the web UI is reachable at `http://vrhm.local` instea
 ### `Battery`
 
 `headset_charging_power_W` (default 13) — expected charger wattage, used to flag slow charging.
+
+### `database`
+
+The local SQLite database `data\vrhm.db` (headset registry, kiosks, live status, app catalogue, timers, metric history, recordings catalogue).
+
+| Key | Default | Description |
+|---|---|---|
+| `metric_history_hours` | `24` | How long the [metric history](web-interface.md#metric-history) keeps its samples. Above 24, the graph page offers an *All records* window |
+| `maintenance_interval_min` | `60` | How often old history is pruned |
+| `backup.on_startup` / `backup.keep` | `true` / `5` | A copy of the database at every start, keeping the 5 most recent |
+| `busy_timeout_ms`, `retry_max`, `integrity_check` | `5000`, `6`, `quick` | Internal tuning — leave as is |
 
 ### `Performance`
 
@@ -222,4 +244,4 @@ WiFi networks that VRHM can push to headsets (**Config → App Configuration →
 
 ## Headset registry
 
-The headset list itself lives in `data\known_headsets.csv` (name, IP, serial, model, profile, per-headset switches). Manage it from the web UI ([Headset Settings](web-interface.md#headset-settings)) rather than editing the file by hand.
+The headset list (name, IP, serial, model, profile, per-headset switches) lives in the database `data\vrhm.db`, like the kiosks, timers, app catalogue and recordings catalogue. Manage it from the web UI ([Headset Settings](web-interface.md#headset-settings)) or the [console](console.md). Back up or move an installation by copying `config\config.json` and the whole `data\` folder while the application is closed.
