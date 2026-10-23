@@ -59,8 +59,28 @@ Invoke-RegressionTest -Name 'The headset-free unit suite (Test-AdbWifiModes.ps1)
     $script = Join-Path $devRoot 'scripts\Test-AdbWifiModes.ps1'
     if (-not (Test-Path -LiteralPath $script)) { Skip-Test 'scripts\Test-AdbWifiModes.ps1 not found in the dev tree' }
     $psExe = (Get-Process -Id $PID).Path
-    $out = & $psExe -NoProfile -ExecutionPolicy Bypass -File $script 2>&1 | ForEach-Object { [string]$_ }
-    $code = $LASTEXITCODE
+    # Output and errors go to files, with a timeout: TEST30 saw exit -1 with NO output at all,
+    # which a 2>&1 pipe cannot explain. Exit 0/1 is the suite's own verdict; any other code is
+    # the process failing (load error, crash, kill), retried once with its stderr as evidence.
+    $code = $null; $out = @(); $err = ''
+    for ($attempt = 1; $attempt -le 2; $attempt++) {
+        $outFile = Join-Path $env:TEMP ('vrhm_nrt86_{0}_out.txt' -f [guid]::NewGuid().ToString('N'))
+        $errFile = [IO.Path]::ChangeExtension($outFile, '.err.txt')
+        try {
+            $p = Start-Process -FilePath $psExe -PassThru -NoNewWindow `
+                -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f $script)) `
+                -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+            $null = $p.Handle   # PS 5.1: without the handle cached now, ExitCode reads back empty
+            if (-not $p.WaitForExit(120000)) { try { $p.Kill() } catch { }; $code = 'timeout' }
+            else { $code = $p.ExitCode }
+            if (Test-Path -LiteralPath $outFile) { $out = @(Get-Content -LiteralPath $outFile -Encoding UTF8) }
+            if (Test-Path -LiteralPath $errFile) { $err = [string](Get-Content -LiteralPath $errFile -Raw -Encoding UTF8) }
+        } finally {
+            Remove-Item -LiteralPath $outFile, $errFile -Force -ErrorAction SilentlyContinue
+        }
+        if ($code -eq 0 -or $code -eq 1) { break }
+        Add-TestEvidence ("attempt {0}: exit {1}, {2} output line(s), stderr: {3}" -f $attempt, $code, $out.Count, ($err -replace '\s+', ' ').Trim())
+    }
     $summary = @($out | Where-Object { $_ -match 'case\(s\)' }) | Select-Object -Last 1
     Add-TestEvidence ("summary: {0}" -f $summary)
     $failed = @($out | Where-Object { $_ -match '^\[FAIL\]' })
