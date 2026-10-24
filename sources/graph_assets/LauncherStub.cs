@@ -18,8 +18,15 @@ class Launcher
             return 1;
         }
 
+        // Forward the command line (e.g. -AutoApprove from a shortcut) to main.ps1.
+        string forwarded = "";
+        foreach (string a in args)
+        {
+            forwarded += " \"" + a.Replace("\"", "\\\"") + "\"";
+        }
+
         ProcessStartInfo psi = new ProcessStartInfo("powershell.exe",
-            "-NoProfile -ExecutionPolicy Bypass -File \"" + mainPs1 + "\"");
+            "-NoProfile -ExecutionPolicy Bypass -File \"" + mainPs1 + "\"" + forwarded);
         psi.UseShellExecute = false;
         psi.WorkingDirectory = exeDir;
 

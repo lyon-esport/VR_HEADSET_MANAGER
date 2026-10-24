@@ -132,12 +132,22 @@ function Show-SetupBox {
     # Non-regression harness (-AutoApproveSetup) exports this env var so a first boot needs no
     # keypress. An env var, not a global: this block can run in a fresh elevated process.
     # Destructive boxes (kill a process) pass -NoAutoApprove and always ask.
-    if (-not $NoAutoApprove -and $env:VRHM_AUTO_APPROVE_SETUP -eq "1") {
-        Write-Host "  Auto-approved (non-interactive run)." -ForegroundColor Green
+    # The same applies to the [A] key (approve this box and every later one of this elevated
+    # console) and to the -AutoApprove launch option of main.ps1, which sets the env var.
+    if (-not $NoAutoApprove -and ($env:VRHM_AUTO_APPROVE_SETUP -eq "1" -or $global:VrhmSetupApproveAll)) {
+        Write-Host "  Auto-approved." -ForegroundColor Green
         return $true
     }
-    Write-Host "  [Y or Enter] $ActionLabel    [any key] Skip" -ForegroundColor Yellow
+    if ($NoAutoApprove) {
+        Write-Host "  [Y or Enter] $ActionLabel    [any key] Skip" -ForegroundColor Yellow
+    } else {
+        Write-Host "  [Y or Enter] $ActionLabel    [A] Approve all    [any key] Skip" -ForegroundColor Yellow
+    }
     $k = [Console]::ReadKey($true)
+    if (-not $NoAutoApprove -and ($k.KeyChar -eq "a" -or $k.KeyChar -eq "A")) {
+        $global:VrhmSetupApproveAll = $true
+        return $true
+    }
     return ($k.KeyChar -eq "y" -or $k.KeyChar -eq "Y" -or $k.Key -eq [ConsoleKey]::Enter)
 }
 '@

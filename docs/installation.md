@@ -45,6 +45,8 @@ The more headsets you capture — and the more viewers watch the restreams — t
 
    ![First-time Setup Wizard](pics/newInstall_startWizard.png)
 
+   > **Setup prompts (firewall, URL reservation, Defender):** press `Y`/Enter to approve one box, `A` to approve it and all the following ones, any other key to skip. To approve everything without a keypress, start the program with the `-AutoApprove` option, e.g. a shortcut whose target is `START_VR_HEADSET_MANAGER.exe -AutoApprove`. Boxes that would kill a process always ask.
+
 3. **Follow the Setup Wizard.** It walks you through 5 quick steps (every choice can be changed later in `config\config.json` or from the web interface):
 
    1. **Recording folder** — where scrcpy saves screen recordings

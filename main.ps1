@@ -15,8 +15,15 @@ param (
     # check. Used by the console menu's "00. Restart application" option so the
     # relaunched process does not trip the "already running" prompt against the
     # instance that spawned it.
-    [int]$WaitForPid = 0
+    [int]$WaitForPid = 0,
+
+    # Approves every first-time setup box (firewall rules, URL ACL, Defender exclusion) without a
+    # keypress, like the non-regression harness. Exported as an env var so the elevated setup
+    # console and a restarted instance inherit it. Boxes that kill a process still ask.
+    [switch]$AutoApprove
 )
+
+if ($AutoApprove) { $env:VRHM_AUTO_APPROVE_SETUP = '1' }
 
 
 
@@ -26,6 +33,7 @@ param (
 #Welcome message
 Write-Host "Welcome to VR HEADSET MANAGER!" -ForegroundColor Green
 Write-Host "Starting the initialization process..." -ForegroundColor Green
+if ($AutoApprove) { Write-Host "Option -AutoApprove: setup prompts (firewall, URL ACL, Defender) are approved automatically." -ForegroundColor Yellow }
 
 # If relaunched by the "Restart application" menu option, wait for the previous
 # instance to fully exit before running the duplicate-instance check below.
