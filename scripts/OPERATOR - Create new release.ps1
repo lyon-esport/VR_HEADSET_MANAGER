@@ -1,8 +1,9 @@
 cd "L:\Drive partagés\04 Equipe Technique\20 VR\VR_HEADSET_MANAGER\DEV_VERSION\VR_HEADSET_MANAGER"
 
+$version = "2026-10.RC2"
 
-.\scripts\Create-ZipRelease.ps1 -Version 2026-10.TEST25 -Unzip
-.\scripts\Invoke-NonRegressionTests.ps1 -VRHMFolder ..\VR_HEADSET_MANAGER.v2026-10.TEST25 -Depth Full -AutoApproveSetup
+.\scripts\Create-ZipRelease.ps1 -Version $version -Unzip
+.\scripts\Invoke-NonRegressionTests.ps1 -VRHMFolder $("..\VR_HEADSET_MANAGER.v"+$version) -Depth Full -AutoApproveSetup
 
 
 cd "L:\Drive partagés\04 Equipe Technique\20 VR\VR_HEADSET_MANAGER\DEV_VERSION\VR_HEADSET_MANAGER"
@@ -52,3 +53,7 @@ $z.Dispose()
 
 
 .\scripts\Invoke-NonRegressionTests.ps1 -VRHMFolder ..\VR_HEADSET_MANAGER.v2026-10.TEST30 -AutoApproveSetup -Sections 86 -Unattended
+
+
+.\scripts\Create-ZipRelease.ps1 -Version 2026-10.TEST32 -Unzip
+.\scripts\Invoke-NonRegressionTests.ps1 -VRHMFolder ..\VR_HEADSET_MANAGER.v2026-10.TEST32 -AutoApproveSetup

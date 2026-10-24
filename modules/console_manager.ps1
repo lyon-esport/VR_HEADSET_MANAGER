@@ -168,7 +168,7 @@ function Resolve-PortConflict {
         switch ($picked) {
             2 {
                 while ($true) {
-                    $new = Read-ValidPort -Label "$Service port" -Default $CurrentPort
+                    $new = Read-ValidPort -Label "$Service port" -Default $CurrentPort -Min $(if ($Service -eq 'WebServer') { 1 } else { 1024 })
                     if ($new -eq $CurrentPort) {
                         Write-Host "  Same port - re-checking..." -ForegroundColor DarkGray
                     }
@@ -191,7 +191,7 @@ function Resolve-PortConflict {
                 # Kill failed or port still busy -> fall back to manual entry
                 Write-Host ("  Falling back to manual port entry.") -ForegroundColor Yellow
                 while ($true) {
-                    $new = Read-ValidPort -Label "$Service port" -Default $CurrentPort
+                    $new = Read-ValidPort -Label "$Service port" -Default $CurrentPort -Min $(if ($Service -eq 'WebServer') { 1 } else { 1024 })
                     if (Test-LocalPortFree -Port $new -Protocol $Protocol) {
                         return @{ Resolved = $true; NewPort = $new; KilledPid = $null; Action = 'Manual' }
                     }

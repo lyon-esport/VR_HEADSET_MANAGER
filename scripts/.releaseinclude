@@ -53,6 +53,7 @@
 
 # --- Sources: explicitly included subfolders ---
 /sources/ADB Wireless activator/
+!/sources/ADB Wireless activator/VRsideloader 1.1.4.exe
 # ffmpeg is NEVER part of a release (about 100 MB). Do not add a /sources/ffmpeg line here:
 # a fresh install gets it from the first-run wizard (Invoke-FfmpegDownload, option 1) or from
 # Configuration > Advanced, and Create-ZipRelease.ps1 refuses to pack sources\ffmpeg* anyway.

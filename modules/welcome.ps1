@@ -236,7 +236,8 @@ function Invoke-WelcomeSetup {
     # ------------------------------------------------------------------
     Show-WizardStep -Step 2 -Total $totalSteps -Title "Web Server Port"
     Write-Host "  The built-in web server shows headset status in your browser." -ForegroundColor White
-    $wsPort = Read-ValidPort -Label "Web server port" -Default 8080
+    Write-Host "  Default 8080. Use 80 to browse without a port number (http://<pc-name>/)." -ForegroundColor DarkGray
+    $wsPort = Read-ValidPort -Label "Web server port" -Default 8080 -Min 1
     $wsPool = $global:AppPortPools.WebServer
     $wsRes  = Resolve-PortConflict -Service 'WebServer' -CurrentPort $wsPort -Pool $wsPool.Pool -Protocol $wsPool.Protocol -AllowIncrement:$wsPool.AllowIncrement
     $wsPort = [int]$wsRes.NewPort

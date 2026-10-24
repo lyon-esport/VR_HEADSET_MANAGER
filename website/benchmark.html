@@ -129,6 +129,11 @@
     .rec-inputs label .inl { display: flex; gap: 8px; align-items: center; }
     .rec-inputs label .inl input[type=range] { flex: 1; }
     .rec-inputs label .inl input[type=number] { width: 64px; flex: none; }
+    .rec-calc { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+    .rec-calc button { padding: 7px 16px; border-radius: 6px; border: 1px solid rgba(59,130,246,0.6); background: rgba(59,130,246,0.18); color: #3b82f6; font-size: 13px; font-weight: 600; cursor: pointer; }
+    .rec-calc button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .rec-calc button.busy::before { content: ''; display: inline-block; width: 11px; height: 11px; margin-right: 8px; vertical-align: -1px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: rec-spin 0.8s linear infinite; }
+    @keyframes rec-spin { to { transform: rotate(360deg); } }
     .rec-inputs .txt { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--text); font-size: 12px; }
     .ebar { margin: 7px 0; font-size: 12px; }
     .ebar .t { display: flex; justify-content: space-between; margin-bottom: 2px; }
@@ -230,7 +235,8 @@
     <details class="comp-section disabled" id="sec-rec">
       <summary id="rec-sum"><span id="rec-title">Please run first a benchmark</span> <span class="mode-badge" id="rec-mode" hidden></span> <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg></summary>
       <div class="comp-body">
-        <div class="comp-card"><div class="comp-card-title">Scenario</div><div class="rec-inputs" id="rec-inputs"></div></div>
+        <div class="comp-card"><div class="comp-card-title">Scenario</div><div class="rec-inputs" id="rec-inputs"></div>
+          <div class="rec-calc"><button type="button" id="rec-calc" class="go" disabled>Calculate estimate</button><span class="note" id="rec-calc-note"></span></div></div>
         <div class="comp-card"><div class="comp-card-title">Estimate</div><div id="rec-est"></div></div>
         <div class="comp-card"><div class="comp-card-title">Proposals</div><div class="props" id="rec-props"></div></div>
         <details class="comp-card" id="rec-model" hidden><summary style="cursor:pointer;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted)">Model details</summary><div id="rec-model-body" style="margin-top:8px;overflow-x:auto"></div></details>
@@ -873,7 +879,10 @@
     if (!S.opts) return;
     var body = { model: S.opts.Model, headsets: parseInt(($('r-n') || {}).value, 10) || 1, maxCpu: parseInt(($('r-cpu') || {}).value, 10) || S.opts.Thresholds.CpuMax, maxGpu: parseInt(($('r-gpu') || {}).value, 10) || S.opts.Thresholds.GpuMax };
     if (!first && S.recBuilt) body.settings = readRecSettings();
+    var seq = S.recSeq = (S.recSeq || 0) + 1;
+    setRecBusy(true);
     jpost('/api/benchmark/recommend', body).then(function (j) {
+      if (seq !== S.recSeq) return;
       var rec = j && j.recommendation;
       if (!j || !j.ok || !rec || !rec.Ok) { S.rec = null; S.recBuilt = false; setRecAvailable(false); return; }
       S.rec = rec; setRecAvailable(true);
@@ -885,9 +894,17 @@
       renderEstimate(rec);
       renderModelDetails(rec);
       renderParList();
-    }).catch(function () {});
+    }).catch(function () {}).then(function () { if (seq === S.recSeq) setRecBusy(false); });
   }
-  var recChanged = debounce(function () { loadRecommend(false); }, 250);
+  function setRecBusy(busy) {
+    var b = $('rec-calc'); if (!b) return;
+    b.disabled = busy; b.classList.toggle('busy', busy);
+    b.textContent = busy ? 'Calculating...' : 'Calculate estimate';
+    if ($('rec-calc-note')) $('rec-calc-note').textContent = busy ? '' : '';
+  }
+  // No automatic recalculation: a change only flags the estimate as outdated, the button recalculates.
+  function recChanged() { var n = $('rec-calc-note'); if (n && !$('rec-calc').disabled) n.textContent = 'Settings changed - click to update the estimate.'; }
+  $('rec-calc').addEventListener('click', function () { if (!this.disabled) loadRecommend(false); });
 
   function selHtml(id, lab, opts, cur) {
     return '<label>' + esc(lab) + '<select id="' + id + '">' + opts.map(function (o) {
@@ -905,7 +922,7 @@
     var model = mode === 'model';
     var keepN = $('r-n') ? $('r-n').value : '1';
     var keepCpu = $('r-cpu') ? $('r-cpu').value : (t.CpuMax || 80), keepGpu = $('r-gpu') ? $('r-gpu').value : (t.GpuMax || 80);
-    var h = '<label>Headsets in parallel<div class="inl"><input type="range" id="r-nr" min="1" max="64" value="' + esc(keepN) + '"><input type="number" id="r-n" min="1" max="64" value="' + esc(keepN) + '"></div></label>';
+    var h = '<label>Headsets in parallel<div class="inl"><input type="range" id="r-nr" min="1" max="30" value="' + esc(keepN) + '"><input type="number" id="r-n" min="1" max="64" value="' + esc(keepN) + '"></div></label>';
     h += selHtml('r-eye', 'Eye', arr(c.Eyes).map(function (e) { return [e, e === 'M' ? 'Merged' : 'Single eye']; }), s.Eye);
     h += selHtml('r-view', 'View', arr(c.Views).map(function (v) { return [v, v]; }), s.View);
     h += selHtml('r-enc', 'Encoding', arr(c.Encodings).map(function (v) { return [v, gpuLabel(v)]; }), s.Encoding);
@@ -940,7 +957,7 @@
     var mx = $('r-max');
     if (mx && S.recMode === 'model' && document.activeElement !== mx) {
       var o = maxOpts(rec.Choices || {}, s, 'model');
-      mx.innerHTML = o.map(function (x) { return '<option value="' + esc(x[0]) + '">' + esc(x[1]) + '</option>'; }).join('');
+      mx.innerHTML = o.map(function (x) { return '<option value="' + esc(x[0]) + '"' + (String(x[0]) === String(s.MaxSize) ? ' selected' : '') + '>' + esc(x[1]) + '</option>'; }).join('');
     }
     REC_KEYS.forEach(function (k) { var el = $(k[1]); if (el && document.activeElement !== el && s[k[0]] != null) el.value = s[k[0]]; });
   }

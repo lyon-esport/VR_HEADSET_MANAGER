@@ -77,3 +77,4 @@ auto.key
 /sources/scrcpy/*
 !/sources/scrcpy/scrcpy-win64-v5.0.1/
 # END vrhm-managed scrcpy
+START_VR_HEADSET_MANAGER AutoApprove.lnk

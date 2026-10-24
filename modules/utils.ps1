@@ -340,20 +340,21 @@ function Test-InternetConnectivity {
 }
 
 
-# Prompt for a port number on the console, validate it is within 1024-65535,
+# Prompt for a port number on the console, validate it is within -Min..65535
+# (default Min 1024; the web server prompts pass 1 so port 80 can be chosen),
 # loop until valid. Empty input returns -Default.
 # Moved from welcome.ps1 so it can be reused from any module without circular deps.
 function Read-ValidPort {
-    param([string]$Label, [int]$Default)
+    param([string]$Label, [int]$Default, [int]$Min = 1024)
     while ($true) {
         Write-Host "  $Label [default: $Default]: " -ForegroundColor White -NoNewline
         $raw = Read-Host
         if ([string]::IsNullOrWhiteSpace($raw)) { return $Default }
         $val = 0
-        if ([int]::TryParse($raw, [ref]$val) -and $val -ge 1024 -and $val -le 65535) {
+        if ([int]::TryParse($raw, [ref]$val) -and $val -ge $Min -and $val -le 65535) {
             return $val
         }
-        Write-Host "  Invalid. Enter a number between 1024 and 65535." -ForegroundColor Red
+        Write-Host "  Invalid. Enter a number between $Min and 65535." -ForegroundColor Red
     }
 }
 
