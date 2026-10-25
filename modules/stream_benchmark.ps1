@@ -47,7 +47,21 @@ $script:BenchTiming = @{
     StopMaxSec         = 30
     RestoreSec         = 10    # normal streams coming back at the end
     AckTimeoutSec      = 60    # wait for VRMonitor to acknowledge the pause
+    # ffmpeg hot swap (ADR-0039): a test that keeps the running capture only replaces ffmpeg
+    # (Restart-HeadsetFfmpegPush, measured 0.2-0.4 s + up to one ~2 s cluster).
+    SwapOverheadSec    = 3
+    SwapWarmupSec      = 4
+    ExtraStartSec      = 6     # each extra capture of the same headset (multi-capture tests)
 }
+
+# Low / Mid / High reference scenarios (ADR-0039): the anchors of the typical presets and the three
+# proposals of the recommendation. View falls back to the headset's current one when the model has
+# no view of that name.
+$script:BenchScenarios = @(
+    [ordered]@{ Name = 'Low';  Eye = 'R'; View = 'square'; MaxSize = 720;  Fps = 15; Mbps = 5;  ReencodeFps = 15; ReencodeMbps = 3 }
+    [ordered]@{ Name = 'Mid';  Eye = 'R'; View = 'max';    MaxSize = 1440; Fps = 45; Mbps = 10; ReencodeFps = 30; ReencodeMbps = 6 }
+    [ordered]@{ Name = 'High'; Eye = 'R'; View = 'max';    MaxSize = 0;    Fps = 60; Mbps = 20; ReencodeFps = 60; ReencodeMbps = 12 }
+)
 
 $script:BenchKvFlag   = 'benchmark_active'
 $script:BenchKvAck    = 'benchmark_ack'
@@ -65,9 +79,21 @@ $script:BenchMaxTests       = 200
 # rounded GPU percentages and load deltas. Always write 0.0 / 100.0 when the value is a double.
 # Processes of the capture chain, by name (the pipe bridge is a thread of this process, ADR-0035).
 $script:BenchProcNames      = @('adb', 'scrcpy', 'ffmpeg', 'mediamtx')
+# Parallel captures of one headset (multi-capture tests, ADR-0039): the offered levels, and the cap on
+# the total capture bitrate of one test (operator choice: the WiFi must not carry more than 80 Mb/s,
+# i.e. at most 20 Mb/s per capture with 4). A combination above the cap is not planned.
+$script:BenchStreamLevels   = @(1, 2, 4)
+$script:BenchMaxNetworkMbps = 80
+# Matrix of the typical presets: max capture sizes (ratio ~1.6, Fibonacci-like; the ones under the
+# view's native size are kept, native always added) and the fixed capture bitrate of the matrix.
+$script:BenchMatrixSizes    = @(480, 784, 1264, 2048, 3312)
+$script:BenchMatrixMbps     = 8
 # Concurrent NVENC sessions a GeForce driver allows (8 on current drivers; professional cards
 # are not limited). Caps the headset count of an NVIDIA-encoded recommendation.
 $script:BenchNvencSessionCap = 8
+# Measured NVENC session limit of this PC (Measure-StreamBenchmarkNvencSessions); used when a stored
+# result has no SessionCap of its own.
+$script:BenchKvNvencCap      = 'benchmark_nvenc_cap'
 # Last parallel check (Invoke-StreamBenchmarkParallel).
 $script:BenchKvParallel     = 'benchmark_parallel_last'
 
@@ -168,6 +194,10 @@ function Get-StreamBenchmarkTestEstimate {
     )
     $t = $script:BenchTiming
     if ($Test.Encoding -eq 'none') { return [int]($t.SettleSec + $MeasureSec) }
+    # A plan test carries its own warm-up (shorter after an ffmpeg swap) and its overhead already
+    # includes the stop + settle when it is the last test of its capture group.
+    $warm = Get-StreamBenchmarkSelectionValue $Test 'WarmupSec'
+    if ($null -ne $warm -and "$warm" -ne '') { return [int]([int]$Test.OverheadSec + [int]$warm + $MeasureSec) }
     return [int]([int]$Test.OverheadSec + $t.WarmupSec + $MeasureSec + $t.SettleSec)
 }
 
@@ -226,6 +256,40 @@ function Set-StreamBenchmarkModelTemplate {
 }
 
 
+function Get-StreamBenchmarkLiveConfig {
+    <#
+    .SYNOPSIS
+    The encoding settings config.json holds NOW: @{GpuAcceleration;GpuIndex;Codec;Framerate;Bitrate;
+    Reencode}. Read from the file, not from this process's globals: the web server re-reads config
+    only after its own config writes, so a change made elsewhere (console, VRMonitor, another
+    session) left it showing GPU 0 as "configured" while config.json said GPU 1. Falls back to the
+    globals when the file cannot be read. Never throws.
+    .EXAMPLE
+    (Get-StreamBenchmarkLiveConfig).GpuIndex
+    #>
+    param()
+    $out = @{ GpuAcceleration = [bool]$global:GPU_Acceleration; GpuIndex = [int]$global:GPU_Index; Codec = [string]$global:mediamtxCodec
+              Framerate = [int]$global:mediamtxFramerate; Bitrate = [string]$global:mediamtxBitrate; Reencode = [bool]$global:mediamtxReencode }
+    try {
+        $path = if ($global:ConfigFilePath) { $global:ConfigFilePath } else { Join-Path $global:ScriptPath 'config\config.json' }
+        $cfg = Read-ConfigJson -ConfigFilePath $path -NonInteractive
+        if ($cfg) {
+            if ($cfg.Performance) {
+                if ($null -ne $cfg.Performance.GPU_Acceleration) { $out.GpuAcceleration = [bool]$cfg.Performance.GPU_Acceleration }
+                if ($null -ne $cfg.Performance.GPU_Index) { $out.GpuIndex = [int]$cfg.Performance.GPU_Index }
+            }
+            if ($cfg.mediamtx) {
+                if ($cfg.mediamtx.codec) { $out.Codec = [string]$cfg.mediamtx.codec }
+                if ($null -ne $cfg.mediamtx.stream_framerate) { $out.Framerate = [int]$cfg.mediamtx.stream_framerate }
+                if ($cfg.mediamtx.stream_bitrate) { $out.Bitrate = [string]$cfg.mediamtx.stream_bitrate }
+                if ($null -ne $cfg.mediamtx.reencode_in_ffmpeg) { $out.Reencode = [bool]$cfg.mediamtx.reencode_in_ffmpeg }
+            }
+        }
+    } catch { }
+    return $out
+}
+
+
 function Get-StreamBenchmarkGpuList {
     <#
     .SYNOPSIS
@@ -240,7 +304,7 @@ function Get-StreamBenchmarkGpuList {
         if ($snap -and $snap.GPU) { $gpus = @($snap.GPU) }
     } catch { }
     if ($gpus.Count -eq 0) { try { $gpus = @(Get-GpuInfo) } catch { $gpus = @() } }
-    $best = [int]$global:GPU_Index
+    $best = [int](Get-StreamBenchmarkLiveConfig).GpuIndex
     if (-not ($gpus | Where-Object { [int]$_.Index -eq $best })) { $best = if ($gpus.Count -gt 0) { [int]$gpus[0].Index } else { -1 } }
     return @($gpus | ForEach-Object { @{ Index = [int]$_.Index; Model = [string]$_.Model; Best = ([int]$_.Index -eq $best) } })
 }
@@ -258,6 +322,9 @@ function Get-StreamBenchmarkOptions {
     #>
     param([Parameter(Mandatory = $true)]$Headset)
 
+    # What config.json holds now (not this process's possibly stale globals), templates included.
+    if (Get-Command Update-EyeMergeParameters -ErrorAction SilentlyContinue) { try { Update-EyeMergeParameters } catch { } }
+    $live = Get-StreamBenchmarkLiveConfig
     $model = [string]$Headset.Model
     $tpl = Get-StreamBenchmarkModelTemplate -Model $model
     $views = @()
@@ -273,11 +340,26 @@ function Get-StreamBenchmarkOptions {
 
     $gpus = @(Get-StreamBenchmarkGpuList)
     $bestGpu = $gpus | Where-Object { $_.Best } | Select-Object -First 1
-    $reenc = ConvertTo-StreamBenchmarkMbps $global:mediamtxBitrate
+    $reenc = ConvertTo-StreamBenchmarkMbps $live.Bitrate
     if (-not $reenc) { $reenc = 4 }
     $maxSize = if ($tpl -and $null -ne $tpl.max_size) { [int]$tpl.max_size } else { 0 }
 
     $defaultEnc = if ($bestGpu) { 'gpu:' + $bestGpu.Index } else { 'cpu' }
+    # What the application runs today (red border on the page, ADR-0039), from config.json.
+    $curEnc = if ($live.GpuAcceleration -and $bestGpu) { 'gpu:' + $bestGpu.Index } else { 'cpu' }
+    $curCodec = if ([string]$live.Codec -eq 'h265') { 'h265' } else { 'h264' }
+    $curReFps = [int]$live.Framerate; if ($curReFps -le 0) { $curReFps = 30 }
+    $cur = [ordered]@{
+        Encoding = $curEnc; Codec = $curCodec
+        CaptureCodec = if ($tpl -and $tpl.video_codec) { [string]$tpl.video_codec } else { 'h264' }
+        View = $current
+        Eye = if ($parsed -and $parsed.Eye -eq 'M') { 'M' } else { 'R' }
+        Fps = if ($parsed) { [int]$parsed.Fps } else { 0 }
+        Mbps = if ($parsed) { [int]$parsed.BitrateMbps } else { 0 }
+        MaxSize = $maxSize
+        ReencodeFps = $curReFps; ReencodeMbps = $reenc
+        Reencode = [bool]$live.Reencode
+    }
     return @{
         Model           = $model
         Views           = @($views | ForEach-Object { @{ Name = $_; Current = ($_ -eq $current) } })
@@ -296,17 +378,47 @@ function Get-StreamBenchmarkOptions {
             CpuMitigation = if ($null -ne $global:VQA_CpuMitigationThreshold) { [int]$global:VQA_CpuMitigationThreshold } else { 60 }
             GpuMitigation = if ($null -ne $global:VQA_GpuMitigationThreshold) { [int]$global:VQA_GpuMitigationThreshold } else { 60 }
         }
+        # Spread roughly geometrically (Fibonacci-like steps) so a fit has leverage.
         Choices         = @{
-            Bitrates     = @(5, 10, 20, 40)
-            Fps          = @(15, 30, 45, 60)
-            ReencodeMbps = @(2, 4, 6, 8, 12)
-            MaxSizes     = @(0, 2560, 1920, 1440, 1080, 720)
+            Bitrates     = @(3, 5, 8, 13, 20, 34)
+            Fps          = @(15, 30, 45, 60, 72, 90)
+            ReencodeMbps = @(2, 4, 6, 8, 10, 12)
+            ReencodeFps  = @(15, 30, 45, 60)
+            MaxSizes     = @(720, 1080, 1440, 1920, 2560, 0)
+            Streams      = @($script:BenchStreamLevels)
         }
+        NetworkCapMbps  = $script:BenchMaxNetworkMbps
+        Current         = $cur
+        Scenarios       = @(Get-StreamBenchmarkScenarios -Model $model -CurrentView $current)
+        # Default view 'square' (operator choice, ADR-0039): the right view depends on the captured
+        # application, so the headset's current one is not a better default.
         Defaults        = @{
-            Encodings = @($defaultEnc); Codecs = @('h264'); Bitrates = @(10); Fps = @(45)
-            Eyes = @('R'); View = $current; ReencodeMbps = $reenc; MaxSize = $maxSize
+            Encodings = @($curEnc); Codecs = @($curCodec)
+            Bitrates = @($(if ($cur.Mbps -gt 0) { $cur.Mbps } else { 10 })); Fps = @($(if ($cur.Fps -gt 0) { $cur.Fps } else { 45 }))
+            Eyes = @('R'); View = $(if ($views -contains 'square') { 'square' } else { $current }); ReencodeMbps = $reenc; ReencodeFps = $curReFps; MaxSize = $maxSize
+            Streams = 1
         }
     }
+}
+
+
+function Get-StreamBenchmarkScenarios {
+    <#
+    .SYNOPSIS
+    The Low / Mid / High reference scenarios (ADR-0039) resolved for one model: each view falls back
+    to -CurrentView when the model has no view of that name. Returns @(@{Name;Eye;View;MaxSize;Fps;
+    Mbps;ReencodeFps;ReencodeMbps}). Used by the typical presets and the recommendation proposals.
+    .EXAMPLE
+    Get-StreamBenchmarkScenarios -Model 'Quest 3' -CurrentView 'square'
+    #>
+    param([string]$Model, [string]$CurrentView = '')
+    $tpl = Get-StreamBenchmarkModelTemplate -Model $Model
+    $views = @(); if ($tpl -and $tpl.views) { $views = @($tpl.views.PSObject.Properties | ForEach-Object { $_.Name }) }
+    return @($script:BenchScenarios | ForEach-Object {
+        $s = [ordered]@{}; foreach ($k in $_.Keys) { $s[$k] = $_[$k] }
+        if ($views.Count -gt 0 -and $views -notcontains $s.View) { $s.View = if ($CurrentView) { $CurrentView } else { $views[0] } }
+        $s
+    })
 }
 
 
@@ -330,7 +442,12 @@ function New-StreamBenchmarkTest {
         [string]$Encoding, [int]$GpuIndex = -1, [string]$GpuName = '', [string]$Codec = '',
         [string]$Eye = '', [string]$View = '', [int]$Fps = 0, [int]$Mbps = 0,
         [int]$ReencodeMbps = 0, [int]$MaxSize = 0,
-        # Typical presets: what this test varies (ref / size / fps / mbps / reenc / merged / baseline).
+        # Re-encode output frame rate (ffmpeg -r); 0 = the capture FPS (the v3 behaviour).
+        [int]$ReencodeFps = 0,
+        # Captures of the same headset streamed at once (multi-capture tests, ADR-0039).
+        [int]$Streams = 1,
+        # What this test varies: ref / size / fps / mbps / reenc / refps / merged / multi /
+        # low / mid / high / baseline.
         [string]$Role = '',
         # Baselines only: -End gives the closing baseline 'baseline_end' (drift correction).
         [switch]$End
@@ -341,26 +458,35 @@ function New-StreamBenchmarkTest {
             Id = $(if ($End) { 'baseline_end' } else { 'baseline' })
             Label = $(if ($End) { 'Baseline at the end - no stream (idle PC)' } else { 'Baseline - no stream (idle PC)' })
             Eye = ''; View = ''; Fps = 0; Mbps = 0
-            Encoding = 'none'; GpuIndex = -1; GpuName = ''; Codec = ''; ReencodeMbps = 0; MaxSize = 0
-            Available = $true; Reason = ''; OverheadSec = 0; Role = 'baseline'
+            Encoding = 'none'; GpuIndex = -1; GpuName = ''; Codec = ''; ReencodeMbps = 0; ReencodeFps = 0; MaxSize = 0; Streams = 0
+            CaptureKey = ''; Group = $(if ($End) { 'Baseline (end)' } else { 'Baseline' })
+            Available = $true; Reason = ''; OverheadSec = 0; WarmupSec = 0; Role = 'baseline'
         }
     }
     # A merged view always sends the full frame: max capture size does not apply to it.
     if ($Eye -eq 'M') { $MaxSize = -1 }
+    if ($ReencodeFps -le 0) { $ReencodeFps = $Fps }
+    if ($Streams -lt 1) { $Streams = 1 }
     $encTag = if ($Encoding -eq 'gpu') { 'gpu' + $GpuIndex } else { 'cpu' }
-    $id = ('{0}-{1}-{2}-{3}-{4}-{5}-r{6}-s{7}' -f $Eye, $View, $Fps, $Mbps, $encTag, $Codec, $ReencodeMbps, $MaxSize).ToLower()
-    $encLabel = if ($Encoding -eq 'gpu') { 'GPU {0} {1}' -f $GpuIndex, $Codec } else { 'CPU ' + $Codec }
+    $id = ('{0}-{1}-{2}-{3}-{4}-{5}-r{6}-s{7}-f{8}-x{9}' -f $Eye, $View, $Fps, $Mbps, $encTag, $Codec, $ReencodeMbps, $MaxSize, $ReencodeFps, $Streams).ToLower()
+    $encLabel = if ($Encoding -eq 'gpu') { 'GPU {0}' -f $GpuIndex } else { 'CPU' }
+    if ($GpuName) { $encLabel += ' (' + $GpuName + ')' }
     $eyeLabel = if ($Eye -eq 'M') { 'merged' } else { 'single eye' }
-    $sizeLabel = if ($MaxSize -lt 0) { 'full frame' } elseif ($MaxSize -eq 0) { 'native size' } else { 'max {0} px' -f $MaxSize }
-    $overhead = $t.StartOverheadSec + $t.StopOverheadSec
+    $sizeLabel = if ($MaxSize -lt 0) { 'full frame' } elseif ($MaxSize -eq 0) { 'native' } else { '{0} px' -f $MaxSize }
+    # The capture (scrcpy) part: tests sharing it run back to back and only swap ffmpeg.
+    $capKey = ('{0}|{1}|{2}|{3}|{4}|{5}|{6}' -f $Eye, $View, $MaxSize, $Fps, $Mbps, $Codec, $Streams).ToLower()
+    $group = ('Capture: {0} {1}, {2}, {3} fps, {4} Mb/s, {5}{6}' -f $eyeLabel, $View, $sizeLabel, $Fps, $Mbps, $Codec.ToUpper(), $(if ($Streams -gt 1) { (' x {0} captures' -f $Streams) } else { '' }))
+    # Full start by default; New-StreamBenchmarkPlan rewrites it once the order is known.
+    $overhead = $t.StartOverheadSec + $t.StopOverheadSec + $t.SettleSec + ($Streams - 1) * $t.ExtraStartSec
     if ($Eye -eq 'M') { $overhead += $t.MergeExtraSec }
     return [ordered]@{
         Id = $id
-        Label = ('{0} {1}, {2} fps, {3} Mb/s, {4}, re-encode {5} Mb/s, {6}' -f $eyeLabel, $View, $Fps, $Mbps, $encLabel, $ReencodeMbps, $sizeLabel)
+        Label = ('{0} - re-encode {1} fps, {2} Mb/s{3}' -f $encLabel, $ReencodeFps, $ReencodeMbps, $(if ($Eye -eq 'M') { ' (merged: CPU encode)' } else { '' }))
         Eye = $Eye; View = $View; Fps = $Fps; Mbps = $Mbps
         Encoding = $Encoding; GpuIndex = $GpuIndex; GpuName = $GpuName; Codec = $Codec
-        ReencodeMbps = $ReencodeMbps; MaxSize = $MaxSize
-        Available = $true; Reason = ''; OverheadSec = $overhead; Role = $Role
+        ReencodeMbps = $ReencodeMbps; ReencodeFps = $ReencodeFps; MaxSize = $MaxSize; Streams = $Streams
+        CaptureKey = $capKey; Group = $group
+        Available = $true; Reason = ''; OverheadSec = $overhead; WarmupSec = $t.WarmupSec; Role = $Role
     }
 }
 
@@ -376,12 +502,17 @@ function Get-StreamBenchmarkFramePixels {
     Get-StreamBenchmarkFramePixels -Model 'Quest 3' -View 'square' -MaxSize 1080
     #>
     param([Parameter(Mandatory = $true)][string]$Model, [string]$View, [string]$Eye = 'R', [int]$MaxSize = 0)
-    $res = @{ W = 0; H = 0; Pixels = 0; NativeW = 0; NativeH = 0; Approx = $false }
+    # InPixels = what ffmpeg DECODES (a merged stream decodes the full frame), Pixels = what it encodes.
+    $res = @{ W = 0; H = 0; Pixels = 0; InPixels = 0; NativeW = 0; NativeH = 0; Approx = $false }
     $mp = $null
     try { $mp = Get-EyeMergeProfile -Model $Model -IncludeDisabled } catch { }
     if ($Eye -eq 'M' -and $mp) {
         $crop = $null; try { $crop = Get-EyeMergeViewCrop -Model $Model -View $View -MergeProfile $mp } catch { }
-        if ($crop) { $res.W = [int]$crop.W; $res.H = [int]$crop.H; $res.NativeW = $res.W; $res.NativeH = $res.H; $res.Pixels = $res.W * $res.H; return $res }
+        if ($crop) {
+            $res.W = [int]$crop.W; $res.H = [int]$crop.H; $res.NativeW = $res.W; $res.NativeH = $res.H; $res.Pixels = $res.W * $res.H
+            $res.InPixels = if ($mp.frame_width) { [int]$mp.frame_width * [int]$mp.frame_height } else { $res.Pixels }
+            return $res
+        }
     }
     $w = 0; $h = 0
     $tpl = Get-StreamBenchmarkModelTemplate -Model $Model
@@ -398,7 +529,7 @@ function Get-StreamBenchmarkFramePixels {
         $k = $MaxSize / $long
         $w = [int]([Math]::Floor($w * $k / 8) * 8); $h = [int]([Math]::Floor($h * $k / 8) * 8)
     }
-    $res.W = $w; $res.H = $h; $res.Pixels = $w * $h
+    $res.W = $w; $res.H = $h; $res.Pixels = $w * $h; $res.InPixels = $res.Pixels
     return $res
 }
 
@@ -406,21 +537,30 @@ function Get-StreamBenchmarkFramePixels {
 function New-StreamBenchmarkPlan {
     <#
     .SYNOPSIS
-    Expands a test selection into the run list: the baseline, then EVERY combination of
-    the selected values (full grid). Returns @{Ok;Error;Tests;Count;EstimateSec;FixedSec}.
+    Expands a test selection into the run list, ordered so that every test sharing one capture
+    (scrcpy) runs back to back and only swaps ffmpeg (ADR-0039). Returns
+    @{Ok;Error;Tests;Count;Groups;Captures;EstimateSec;FixedSec;Selection}.
     .DESCRIPTION
-    -Selection (hashtable or parsed JSON), every list optional - an empty or invalid list
-    falls back to the default (the reference test):
-      Encodings    'cpu' and/or 'gpu:<index>' (unknown GPU indexes are dropped)
-      Codecs       'h264' / 'h265'
-      Bitrates     capture Mb/s, 1..100        Fps  5..120
-      Eyes         'R' (single eye) / 'M' (merged; dropped when the model has no calibration)
-      View         one view of the model (else the headset's current one)
-      ReencodeMbps one value 1..100 (else config)   MaxSize  one value 0..8192 (0 = native; else config)
-    Pure computation (no ADB) so the page can call it on every click. Refuses more than
+    -Selection (hashtable or parsed JSON), every list optional - an empty or invalid list falls
+    back to the default (the current configuration):
+      General   Encodings 'cpu' / 'gpu:<index>'   Codecs 'h264' / 'h265' (capture AND re-encode)
+      Capture   MaxSize (list, 0 = native)  Bitrates (1..100)  Fps (5..120)  View (one)
+                Eyes 'R' / 'M' (merged: dropped without a calibration; always CPU encoded)
+      Re-encode ReencodeFps (list, 5..120; values above the capture FPS are dropped for it)
+                ReencodeMbps (list, 1..100)
+      Preset    '' (full grid of the selection) | 'typical' | 'typical-quick'
+    Typical (quick): baseline; the Low / Mid / High scenarios x every encoder (the configured codec);
+    on Mid with the default encoder re-encode FPS / bitrate variants, 2 and 4 captures of the same
+    headset; a merged Mid test when calibrated; a closing baseline.
+    Typical: both codecs; Low / Mid / High x every encoder; from Mid, one change at a time with
+    spread values (capture FPS 15/90, capture Mb/s 5/13/34, size 720/native, re-encode FPS 15/45,
+    re-encode Mb/s 3/12) on every encoder; multi-capture x2/x4; merged; baselines.
+    Pure computation (no ADB) so the page calls it on every click. Refuses more than
     $script:BenchMaxTests tests.
     .EXAMPLE
-    New-StreamBenchmarkPlan -Headset $h -Selection @{ Encodings = 'gpu:0','cpu'; Fps = 30,60 }
+    New-StreamBenchmarkPlan -Headset $h -Selection @{ Encodings = 'gpu:0','cpu'; Fps = 30,60; ReencodeFps = 15,30 }
+    .EXAMPLE
+    New-StreamBenchmarkPlan -Headset $h -Selection @{ Preset = 'typical-quick' }
     #>
     param(
         [Parameter(Mandatory = $true)]$Headset,
@@ -430,6 +570,7 @@ function New-StreamBenchmarkPlan {
     )
     $opt = Get-StreamBenchmarkOptions -Headset $Headset
     $def = $opt.Defaults
+    $t = $script:BenchTiming
     $inv = [System.Globalization.CultureInfo]::InvariantCulture
     $intList = {
         param($raw, [int]$min, [int]$max, $fallback)
@@ -440,96 +581,152 @@ function New-StreamBenchmarkPlan {
         if ($vals.Count -eq 0) { return @($fallback) }
         return @($vals | Select-Object -First 8)
     }
+    $sel = { param($n) Get-StreamBenchmarkSelectionValue $Selection $n }
 
     $gpuByIdx = @{}; foreach ($g in $opt.Gpus) { $gpuByIdx[[int]$g.Index] = $g }
-    $encs = @(@(Get-StreamBenchmarkSelectionValue $Selection 'Encodings') | ForEach-Object { ([string]$_).Trim().ToLower() } | Where-Object {
+    $encs = @(@(& $sel 'Encodings') | ForEach-Object { ([string]$_).Trim().ToLower() } | Where-Object {
         $_ -eq 'cpu' -or ($_ -match '^gpu:(\d+)$' -and $gpuByIdx.ContainsKey([int]$Matches[1]))
     } | Select-Object -Unique)
     if ($encs.Count -eq 0) { $encs = @($def.Encodings) }
-    $codecs = @(@(Get-StreamBenchmarkSelectionValue $Selection 'Codecs') | ForEach-Object { ([string]$_).Trim().ToLower() } | Where-Object { $_ -in @('h264', 'h265') } | Select-Object -Unique)
+    $codecs = @(@(& $sel 'Codecs') | ForEach-Object { ([string]$_).Trim().ToLower() } | Where-Object { $_ -in @('h264', 'h265') } | Select-Object -Unique)
     if ($codecs.Count -eq 0) { $codecs = @($def.Codecs) }
-    $bitrates = @(& $intList (Get-StreamBenchmarkSelectionValue $Selection 'Bitrates') 1 100 $def.Bitrates)
-    $fpsList  = @(& $intList (Get-StreamBenchmarkSelectionValue $Selection 'Fps') 5 120 $def.Fps)
-    $eyes = @(@(Get-StreamBenchmarkSelectionValue $Selection 'Eyes') | ForEach-Object { ([string]$_).Trim().ToUpper() } | Where-Object { $_ -in @('R', 'M') } | Select-Object -Unique)
+    $bitrates = @(& $intList (& $sel 'Bitrates') 1 100 $def.Bitrates)
+    $fpsList  = @(& $intList (& $sel 'Fps') 5 120 $def.Fps)
+    $eyes = @(@(& $sel 'Eyes') | ForEach-Object { ([string]$_).Trim().ToUpper() } | Where-Object { $_ -in @('R', 'M') } | Select-Object -Unique)
     if (-not $opt.MergeSupported) { $eyes = @($eyes | Where-Object { $_ -ne 'M' }) }
     if ($eyes.Count -eq 0) { $eyes = @($def.Eyes) }
-    $view = [string](Get-StreamBenchmarkSelectionValue $Selection 'View')
+    $view = [string](& $sel 'View')
     if (-not $view -or -not ($opt.Views | Where-Object { $_.Name -eq $view })) { $view = $opt.CurrentView }
-    $reenc = @(& $intList (Get-StreamBenchmarkSelectionValue $Selection 'ReencodeMbps') 1 100 $def.ReencodeMbps)[0]
-    $size  = @(& $intList (Get-StreamBenchmarkSelectionValue $Selection 'MaxSize') 0 8192 $def.MaxSize)[0]
+    $reencs  = @(& $intList (& $sel 'ReencodeMbps') 1 100 $def.ReencodeMbps)
+    $refpsL  = @(& $intList (& $sel 'ReencodeFps') 5 120 $def.ReencodeFps)
+    $sizes   = @(& $intList (& $sel 'MaxSize') 0 8192 $def.MaxSize)
+    # Parallel captures (max): the grid runs every capture combination at each offered level up to it.
+    $maxStreams = [int](@(& $intList (& $sel 'Streams') 1 ($script:BenchStreamLevels | Measure-Object -Maximum).Maximum 1)[-1])
+    $streamLevels = @($script:BenchStreamLevels | Where-Object { $_ -le $maxStreams })
 
     $tests = [System.Collections.Generic.List[object]]::new()
-    $tests.Add((New-StreamBenchmarkTest -Encoding 'none'))
     $seen = @{}
-    $preset = ([string](Get-StreamBenchmarkSelectionValue $Selection 'Preset')).Trim().ToLower()
+    $add = {
+        param($enc, $codec, $eye, $v, $sz, $f, $b, $rf, $re, $streams, $role)
+        $isGpu = $enc -like 'gpu:*'
+        # A merged stream is always encoded on the CPU (Start-FfmpegStreamPush): no GPU variant.
+        if ($eye -eq 'M' -and $isGpu) { return }
+        if ($rf -gt $f) { return }   # more output frames than captured ones: duplicates only
+        if ([int]$streams * [int]$b -gt $script:BenchMaxNetworkMbps) { return }   # WiFi cap of one test
+        $gIdx = if ($isGpu) { [int]($enc.Split(':')[1]) } else { -1 }
+        $test = New-StreamBenchmarkTest -Encoding $(if ($isGpu) { 'gpu' } else { 'cpu' }) -GpuIndex $gIdx `
+            -GpuName $(if ($isGpu) { [string]$gpuByIdx[$gIdx].Model } else { '' }) -Codec $codec -Eye $eye -View $v `
+            -Fps $f -Mbps $b -ReencodeFps $rf -ReencodeMbps $re -MaxSize $sz -Streams $streams -Role $role
+        if ($seen.ContainsKey($test.Id)) { return }
+        $seen[$test.Id] = $true
+        if (-not $opt.MediamtxEnabled) { $test.Available = $false; $test.Reason = 'mediamtx is disabled: streaming tests need it.' }
+        $tests.Add($test)
+    }
+
+    $preset = ([string](& $sel 'Preset')).Trim().ToLower()
+    $allEncs = @('cpu') + @($opt.Gpus | ForEach-Object { 'gpu:' + $_.Index })
+    $bestEnc = @($def.Encodings)[0]; if (-not $bestEnc) { $bestEnc = 'cpu' }
+    $sc = @{}; foreach ($s in @($opt.Scenarios)) { $sc[$s.Name] = $s }
+    $scen = {
+        param($s, $enc, $codec, [hashtable]$over, $role)
+        $p = @{ Eye = $s.Eye; View = $s.View; MaxSize = $s.MaxSize; Fps = $s.Fps; Mbps = $s.Mbps; ReencodeFps = $s.ReencodeFps; ReencodeMbps = $s.ReencodeMbps; Streams = 1 }
+        if ($over) { foreach ($k in $over.Keys) { $p[$k] = $over[$k] } }
+        if ($p.ReencodeFps -gt $p.Fps) { $p.ReencodeFps = $p.Fps }
+        & $add $enc $codec $p.Eye $p.View $p.MaxSize $p.Fps $p.Mbps $p.ReencodeFps $p.ReencodeMbps $p.Streams $role
+    }
+
     if ($preset -in @('typical', 'typical-quick')) {
-        # ---- Typical tests: ONE change at a time from a reference, for every encoder x codec, so
-        # Get-StreamBenchmarkModel can fit cost = a + b x (pixels x fps) per family and predict
-        # every combination. Reference: single eye, 45 fps, 10 Mb/s, native size.
-        $addT = {
-            param($enc, $codec, $eye, $f, $b, $re, $sz, $role)
-            $isGpu = $enc -like 'gpu:*'
-            $gIdx = if ($isGpu) { [int]($enc.Split(':')[1]) } else { -1 }
-            $test = New-StreamBenchmarkTest -Encoding $(if ($isGpu) { 'gpu' } else { 'cpu' }) -GpuIndex $gIdx `
-                -GpuName $(if ($isGpu) { [string]$gpuByIdx[$gIdx].Model } else { '' }) -Codec $codec -Eye $eye -View $view `
-                -Fps $f -Mbps $b -ReencodeMbps $re -MaxSize $sz -Role $role
-            if ($seen.ContainsKey($test.Id)) { return }
-            $seen[$test.Id] = $true
-            if (-not $opt.MediamtxEnabled) { $test.Available = $false; $test.Reason = 'mediamtx is disabled: streaming tests need it.' }
-            $tests.Add($test)
-        }
-        $bestEnc = @($def.Encodings)[0]
-        $famEncs = if ($preset -eq 'typical') { @('cpu') + @($opt.Gpus | ForEach-Object { 'gpu:' + $_.Index }) } else { @('cpu', $bestEnc) | Select-Object -Unique }
-        $px = Get-StreamBenchmarkFramePixels -Model $opt.Model -View $view -Eye 'R'
+        # ---- Matrix (ADR-0039, from the measured runs): the PC cost is driven by the picture size
+        # and the number of streams; the capture bitrate barely matters. So the core is a matrix
+        # of sizes (480 .. native, ratio ~1.6) x parallel captures (1 / 2 / 4) on a fixed base
+        # (Mid view, capture 45 fps 8 Mb/s, re-encode 30 fps 6 Mb/s), plus one change at a time
+        # for the other inputs. Inside one capture the encoders are ffmpeg swaps.
+        $quick = ($preset -eq 'typical-quick')
+        $pCodecs = if ($quick) { @(@($def.Codecs)[0]) } else { @('h264', 'h265') }
+        $mid = $sc['Mid']
+        $base = @{ Mbps = $script:BenchMatrixMbps }
+        $px = Get-StreamBenchmarkFramePixels -Model $opt.Model -View $mid.View -Eye 'R'
         $native = [Math]::Max($px.NativeW, $px.NativeH)
-        # Mid size: geometric middle of 720 and native, on scrcpy's multiple of 8.
-        $mid = [int]([Math]::Round([Math]::Sqrt(720 * $native) / 8) * 8)
-        foreach ($enc in $famEncs) {
-            foreach ($codec in 'h264', 'h265') {
-                & $addT $enc $codec 'R' 45 10 $reenc 0 'ref'
-                if ($mid -lt $native - 64) { & $addT $enc $codec 'R' 45 10 $reenc $mid 'size' }
-                if (720 -lt $native - 64)  { & $addT $enc $codec 'R' 45 10 $reenc 720 'size' }
-                & $addT $enc $codec 'R' 30 10 $reenc 0 'fps'
-                & $addT $enc $codec 'R' 60 10 $reenc 0 'fps'
+        $mSizes = @(@($script:BenchMatrixSizes | Where-Object { $_ -lt $native - 64 }) + @(0))
+        foreach ($codec in $pCodecs) {
+            # Matrix: the configured encoder at every size x stream count; the other encoders at one
+            # stream per size (quick) or at every point (typical).
+            foreach ($z in $mSizes) {
+                foreach ($n in $script:BenchStreamLevels) {
+                    $mEncs = if ($n -eq 1 -or -not $quick) { $allEncs } else { @($bestEnc) }
+                    foreach ($enc in $mEncs) { & $scen $mid $enc $codec ($base + @{ MaxSize = $z; Streams = $n }) 'matrix' }
+                }
+            }
+            # One change at a time from the native single stream (configured encoder; every encoder in typical).
+            $vEncs = if ($quick) { @($bestEnc) } else { $allEncs }
+            foreach ($enc in $vEncs) {
+                foreach ($f in 15, 90) { & $scen $mid $enc $codec ($base + @{ MaxSize = 0; Fps = $f; ReencodeFps = [Math]::Min(30, $f) }) 'fps' }
+                foreach ($rf in 15, 45) { & $scen $mid $enc $codec ($base + @{ MaxSize = 0; ReencodeFps = $rf }) 'refps' }
+                foreach ($re in 3, 12) { & $scen $mid $enc $codec ($base + @{ MaxSize = 0; ReencodeMbps = $re }) 'reenc' }
+            }
+            # Capture bitrate at the network cap: 4 streams x 3 / 20 Mb/s (80 Mb/s), the 8 Mb/s point is in the matrix.
+            foreach ($b in 3, 20) { & $scen $mid $bestEnc $codec @{ MaxSize = 0; Streams = 4; Mbps = $b } 'mbps' }
+            if (-not $quick) {
+                # Scenario anchors, so the Low / High proposals sit on measured points.
+                foreach ($name in 'Low', 'High') { foreach ($enc in $allEncs) { & $scen $sc[$name] $enc $codec $null $name.ToLower() } }
             }
         }
-        # Shared effects, measured once on the reference family (best encoder, H264).
-        & $addT $bestEnc 'h264' 'R' 45 5 $reenc 0 'mbps'
-        & $addT $bestEnc 'h264' 'R' 45 20 $reenc 0 'mbps'
-        $reLo = [Math]::Max(1, [int][Math]::Round($reenc / 2)); $reHi = [Math]::Min(100.0, $reenc * 2)
-        if ($reLo -ne $reenc) { & $addT $bestEnc 'h264' 'R' 45 10 $reLo 0 'reenc' }
-        if ($reHi -ne $reenc) { & $addT $bestEnc 'h264' 'R' 45 10 $reHi 0 'reenc' }
-        # Merged view measured at its default frame rate (Get-EyeMergeFpsAdvice: 30 fps).
-        if ($opt.MergeSupported) { foreach ($enc in $famEncs) { & $addT $enc 'h264' 'M' 30 10 $reenc 0 'merged' } }
-        $tests.Add((New-StreamBenchmarkTest -Encoding 'none' -End))
-        $eyes = @()   # the grid below is skipped
-    }
-    foreach ($eye in $eyes) {
-        foreach ($enc in $encs) {
-            $isGpu = $enc -like 'gpu:*'
-            $gIdx = if ($isGpu) { [int]($enc.Split(':')[1]) } else { -1 }
-            $gName = if ($isGpu) { [string]$gpuByIdx[$gIdx].Model } else { '' }
+        $c0 = @($pCodecs)[0]
+        # Merged view at its default frame rate (Get-EyeMergeFpsAdvice: 30 fps), CPU encode, 1 and 2 streams.
+        if ($opt.MergeSupported) { foreach ($n in 1, 2) { & $scen $mid 'cpu' $c0 @{ Eye = 'M'; Fps = 30; ReencodeFps = 30; Streams = $n } 'merged' } }
+    } else {
+        foreach ($eye in $eyes) {
+            $eSizes = if ($eye -eq 'M') { @(-1) } else { $sizes }
             foreach ($codec in $codecs) {
-                foreach ($f in $fpsList) {
-                    foreach ($b in $bitrates) {
-                        $test = New-StreamBenchmarkTest -Encoding $(if ($isGpu) { 'gpu' } else { 'cpu' }) -GpuIndex $gIdx -GpuName $gName `
-                            -Codec $codec -Eye $eye -View $view -Fps $f -Mbps $b -ReencodeMbps $reenc -MaxSize $size
-                        if ($seen.ContainsKey($test.Id)) { continue }
-                        $seen[$test.Id] = $true
-                        if (-not $opt.MediamtxEnabled) { $test.Available = $false; $test.Reason = 'mediamtx is disabled: streaming tests need it.' }
-                        $tests.Add($test)
+                foreach ($sz in $eSizes) {
+                    foreach ($f in $fpsList) {
+                        foreach ($b in $bitrates) {
+                            foreach ($n in $streamLevels) {
+                                # Inside one capture: every encoder x re-encode FPS x re-encode bitrate (swaps).
+                                $eEncs = if ($eye -eq 'M') { @('cpu') } else { $encs }
+                                foreach ($enc in $eEncs) {
+                                    $rfs = @($refpsL | Where-Object { $_ -le $f }); if ($rfs.Count -eq 0) { $rfs = @($f) }
+                                    foreach ($rf in $rfs) { foreach ($re in $reencs) { & $add $enc $codec $eye $view $sz $f $b $rf $re $n $(if ($n -gt 1) { 'multi' } else { '' }) } }
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
     }
 
-    # A longer grid also gets a closing baseline, so a drift of the idle load during the run can
-    # be corrected (Get-StreamBenchmarkBaseline averages both).
-    if (-not $seen.ContainsKey('baseline_end') -and $tests.Count -ge 6 -and -not ($tests | Where-Object { $_.Id -eq 'baseline_end' })) {
-        $tests.Add((New-StreamBenchmarkTest -Encoding 'none' -End))
+    # Order: baseline, then the capture groups in order of first appearance (tests of one group
+    # stay together), then the closing baseline. Overhead: a full start for the first test of a
+    # group, an ffmpeg swap for the others; stop + settle are charged to the last one.
+    $groups = [System.Collections.Specialized.OrderedDictionary]::new()
+    foreach ($x in $tests) { if (-not $groups.Contains($x.CaptureKey)) { $groups[$x.CaptureKey] = [System.Collections.Generic.List[object]]::new() }; $groups[$x.CaptureKey].Add($x) }
+    $ordered = [System.Collections.Generic.List[object]]::new()
+    $ordered.Add((New-StreamBenchmarkTest -Encoding 'none'))
+    $groupInfo = [System.Collections.Generic.List[object]]::new()
+    foreach ($k in $groups.Keys) {
+        $list = $groups[$k]
+        for ($i = 0; $i -lt $list.Count; $i++) {
+            $x = $list[$i]
+            $extra = ([int]$x.Streams - 1) * $t.ExtraStartSec
+            if ($i -eq 0) {
+                $x.OverheadSec = $t.StartOverheadSec + $extra + $(if ($x.Eye -eq 'M') { $t.MergeExtraSec } else { 0 })
+                $x.WarmupSec = $t.WarmupSec
+            } else {
+                $x.OverheadSec = $t.SwapOverheadSec * [int]$x.Streams
+                $x.WarmupSec = $t.SwapWarmupSec
+            }
+            if ($i -eq $list.Count - 1) { $x.OverheadSec += $t.StopOverheadSec * [int]$x.Streams + $t.SettleSec }
+            $ordered.Add($x)
+        }
+        $gEst = 0; foreach ($x in $list) { $gEst += (Get-StreamBenchmarkTestEstimate -Test $x -MeasureSec $MeasureSec) }
+        $groupInfo.Add(@{ Key = $k; Label = [string]$list[0].Group; Count = $list.Count; EstimateSec = [int]$gEst })
     }
-    $arr = $tests.ToArray()
+    # A run of several tests also gets a closing baseline, so a drift of the idle load during the
+    # run can be corrected (Get-StreamBenchmarkBaseline averages both).
+    if ($ordered.Count -ge 4) { $ordered.Add((New-StreamBenchmarkTest -Encoding 'none' -End)) }
+
+    $arr = $ordered.ToArray()
     if ($RunningStreams -lt 0) { $RunningStreams = @(Get-Process -Name 'scrcpy' -ErrorAction SilentlyContinue).Count }
     $fixed = Get-StreamBenchmarkFixedEstimate -Tests $arr -RunningStreams $RunningStreams
     $sum = 0; foreach ($x in $arr) { $sum += (Get-StreamBenchmarkTestEstimate -Test $x -MeasureSec $MeasureSec) }
@@ -540,9 +737,12 @@ function New-StreamBenchmarkPlan {
         Error       = $err
         Tests       = $arr
         Count       = $arr.Count
+        Groups      = $groupInfo.ToArray()
+        Captures    = $groupInfo.Count
         FixedSec    = $fixed
         EstimateSec = [int]($sum + $fixed)
-        Selection   = @{ Encodings = $encs; Codecs = $codecs; Bitrates = $bitrates; Fps = $fpsList; Eyes = $eyes; View = $view; ReencodeMbps = $reenc; MaxSize = $size }
+        Selection   = @{ Preset = $preset; Encodings = $encs; Codecs = $codecs; Bitrates = $bitrates; Fps = $fpsList; Eyes = $eyes; View = $view
+                         ReencodeMbps = $reencs; ReencodeFps = $refpsL; MaxSize = $sizes; Streams = $maxStreams }
     }
 }
 
@@ -843,9 +1043,12 @@ function Invoke-StreamBenchmark {
     .DESCRIPTION
     Raises the pause flag, waits for VRMonitor to stop every stream, pre-warms one encoder per
     GPU/CPU + codec pair, then for each test: applies the in-memory overrides (re-encode,
-    codec, GPU on/off + index, re-encode framerate = capture FPS, re-encode bitrate, max
-    capture size), starts the stream (recording off), warms up, samples for -MeasureSec, reads
-    the ffmpeg -progress file and stops the stream. Every global is restored in finally and
+    codec for capture AND re-encode, GPU on/off + index, re-encode FPS, re-encode bitrate, max
+    capture size), then either swaps only ffmpeg when the test keeps the running capture
+    (Restart-HeadsetFfmpegPush, ADR-0039) or starts the capture(s) (recording off; extra
+    captures '<name>_bN' for a multi-capture test), warms up, samples for -MeasureSec, reads
+    the ffmpeg -progress file(s), and stops the capture once the next test needs another one.
+    Every global is restored in finally and
     the flag is cleared, after which the watchdog restarts the normal streams.
     -Tests may be hashtables or PSCustomObjects (the web job passes them as JSON).
     -OnProgress (scriptblock, gets the state) is for the console.
@@ -970,21 +1173,88 @@ function Invoke-StreamBenchmark {
         $encKeyOf = { param($x) if ($x.Encoding -eq 'gpu') { 'gpu|{0}|{1}' -f $x.GpuIndex, $x.Codec } else { 'cpu||{0}' -f $x.Codec } }
         $encCache = @{}
         $encKeys = @($tests | Where-Object { $_.Encoding -in @('gpu', 'cpu') } | ForEach-Object { & $encKeyOf $_ } | Select-Object -Unique)
+        $gpuProbeFailed = @()
         if ($encKeys.Count -gt 0) {
             & $publish 'checking which hardware encoders work (not measured)' (@($encKeys | Where-Object { $_ -like 'gpu|*' }).Count * $t.EncoderProbeSec)
             foreach ($k in $encKeys) {
+                # Each probe can take tens of seconds: keep the pause flag alive, or VRMonitor sees it
+                # expire and restarts the normal streams in the middle of the run.
+                Set-StreamBenchmarkActive -RunId $runId -Seconds ($t.EncoderProbeSec * 4 + 60)
                 $parts = $k -split '\|'
                 $global:mediamtxCodec = $parts[2]
                 $global:GPU_Acceleration = ($parts[0] -eq 'gpu')
                 if ($parts[0] -eq 'gpu') { $global:GPU_Index = [int]$parts[1] }
                 $global:GpuEncoder = $null
                 $encCache[$k] = Get-GpuEncoder
+                # A GPU whose encoder check fails falls back to the CPU encoder, and every test of that
+                # GPU is then skipped. Seen once for BOTH GPUs at the start of a 146-test run (each
+                # check ~70 s, fine minutes before and after): retry once after a pause before giving up.
+                if ($parts[0] -eq 'gpu' -and $encCache[$k] -and $encCache[$k].Vendor -eq 'CPU') {
+                    Write-Log ("Benchmark: the {0} encoder of GPU {1} failed its check - retrying in 10 s" -f $parts[2], $parts[1]) -Level WARNING
+                    Set-StreamBenchmarkActive -RunId $runId -Seconds ($t.EncoderProbeSec * 4 + 60)
+                    Start-Sleep -Seconds 10
+                    $global:GpuEncoder = $null
+                    $encCache[$k] = Get-GpuEncoder
+                    if ($encCache[$k].Vendor -eq 'CPU') {
+                        $gpuProbeFailed += ('GPU {0} {1}' -f $parts[1], $parts[2].ToUpper())
+                        Write-Log ("Benchmark: no working {0} encoder on GPU {1} at the start of this run - its tests are skipped (check the GPU driver, then run again)" -f $parts[2], $parts[1]) -Level WARNING
+                    }
+                }
                 Write-Log ("Benchmark: encoder for {0} is {1}" -f $k, $encCache[$k].Name) -Level INFO
             }
         }
+        $state.warnings = @($gpuProbeFailed | ForEach-Object { 'No working encoder on ' + $_ + ' at the start of this run: its tests were skipped. Check the GPU driver and run again.' })
+        # NVENC concurrent sessions: measured, not assumed (it caps the headsets of a recommendation).
+        $nvencCap = $null
+        if (@($encCache.Values | Where-Object { $_ -and [string]$_.Name -like '*_nvenc' }).Count -gt 0) {
+            Set-StreamBenchmarkActive -RunId $runId -Seconds 120
+            & $publish 'measuring how many NVENC sessions the driver allows (not measured)' 10
+            $nvencCap = Measure-StreamBenchmarkNvencSessions
+        }
         # The load sampler pays its slow first counter read here, not inside a measure.
+        Set-StreamBenchmarkActive -RunId $runId -Seconds ($t.SamplerWarmSec * 4 + 60)
         & $publish 'preparing the load sampler' $t.SamplerWarmSec
         $sampler = New-StreamBenchmarkSampler
+
+        # The capture(s) currently running: tests sharing a CaptureKey keep them and swap ffmpeg
+        # (ADR-0039). Extra captures of a multi-capture test run as '<name>_b2'..'_b4'.
+        $cap = @{ Key = ''; Names = @() }
+        $progressOf = {
+            param([string]$n)
+            $sn = Convert-Displayname $n
+            if ($sn -eq $safeName) { return $ffProgress }
+            return (Get-JobFilePath -Name ('vrm_benchmark_ffprogress_{0}.txt' -f $sn))
+        }
+        $stopCaptures = {
+            foreach ($n in @($cap.Names)) { try { Stop-Scrcpy -HeadsetName $n | Out-Null } catch { } }
+            $cap.Key = ''; $cap.Names = @()
+        }
+        # One capture with the test's max size AND codec: a clone of the model template is in place
+        # only while start-screenCopy builds the arguments. The eye merge refresh runs first so it
+        # cannot reload the parameters from config.json in the middle of the launch.
+        $startCapture = {
+            param([string]$n, [string]$pf, $tst, [string]$prof)
+            if (Get-Command Update-EyeMergeParameters -ErrorAction SilentlyContinue) { try { Update-EyeMergeParameters } catch { } }
+            $origTpl = Get-StreamBenchmarkModelTemplate -Model $model
+            if ($origTpl) {
+                $clone = $origTpl | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+                if ([int]$tst.MaxSize -ge 0) {
+                    if ($clone.PSObject.Properties['max_size']) { $clone.max_size = [int]$tst.MaxSize }
+                    else { $clone | Add-Member -NotePropertyName 'max_size' -NotePropertyValue ([int]$tst.MaxSize) }
+                }
+                if ($tst.Codec) {
+                    if ($clone.PSObject.Properties['video_codec']) { $clone.video_codec = [string]$tst.Codec }
+                    else { $clone | Add-Member -NotePropertyName 'video_codec' -NotePropertyValue ([string]$tst.Codec) }
+                }
+                Set-StreamBenchmarkModelTemplate -Model $model -Template $clone
+            }
+            try {
+                start-screenCopy -headsetIP ([string]$Headset.IPAddress) -displayName $n -recording $false `
+                    -scrcpyProfile $prof -ffmpegProgressFile $pf -headsetId ([int]$Headset.ID)
+            } finally {
+                if ($origTpl) { Set-StreamBenchmarkModelTemplate -Model $model -Template $origTpl }
+            }
+        }
 
         for ($i = 0; $i -lt $tests.Count; $i++) {
             if (& $cancelled) { $status = 'cancelled'; break }
@@ -994,11 +1264,15 @@ function Invoke-StreamBenchmark {
             $testStart = Get-Date
             Set-StreamBenchmarkActive -RunId $runId -Seconds ($estTests[$i] * 3 + 60)
 
+            $reFps = [int]$test.ReencodeFps; if ($reFps -le 0) { $reFps = [int]$test.Fps }
+            $nStreams = [Math]::Max(1, [int]$test.Streams)
+            $capKey = [string]$test.CaptureKey
             $res = [ordered]@{
                 Id = [string]$test.Id; Label = [string]$test.Label; Eye = [string]$test.Eye; View = [string]$test.View
                 Fps = [int]$test.Fps; Mbps = [int]$test.Mbps; Encoding = [string]$test.Encoding
                 GpuIndex = [int]$test.GpuIndex; GpuName = [string]$test.GpuName; Codec = [string]$test.Codec
-                ReencodeMbps = [int]$test.ReencodeMbps; MaxSize = [int]$test.MaxSize; Role = [string]$test.Role
+                ReencodeMbps = [int]$test.ReencodeMbps; ReencodeFps = $reFps; MaxSize = [int]$test.MaxSize; Role = [string]$test.Role
+                Streams = $nStreams; CaptureKey = $capKey; Group = [string]$test.Group; Swapped = $false
                 Encoder = ''; Status = 'ok'; Message = ''; ElapsedSec = 0; Load = $null
                 Timestamp = (Get-Date).ToString('s'); MeasureSec = $MeasureSec
                 Stream = [ordered]@{ TargetFps = [int]$test.Fps; Fps = $null; Frames = $null; Drop = $null; Dup = $null; Speed = $null }
@@ -1011,78 +1285,106 @@ function Invoke-StreamBenchmark {
             }
 
             if ($test.Encoding -eq 'none') {
+                if ($cap.Names.Count -gt 0) { & $stopCaptures }
                 & $publish 'settling' $t.SettleSec
                 Start-Sleep -Seconds $t.SettleSec
             } else {
                 # ---- In-memory overrides of this test ----
+                # One codec for both sides (ADR-0039): scrcpy captures with it (template clone below)
+                # and ffmpeg re-encodes with it. Re-encode FPS is its own setting now.
                 $encKey = & $encKeyOf $test
                 $isGpu = ($test.Encoding -eq 'gpu')
                 $global:mediamtxReencode  = $true
                 $global:mediamtxCodec     = [string]$test.Codec
                 $global:GPU_Acceleration  = $isGpu
                 if ($isGpu) { $global:GPU_Index = [int]$test.GpuIndex }
-                $global:mediamtxFramerate = [int]$test.Fps
+                $global:mediamtxFramerate = $reFps
                 $global:mediamtxBitrate   = ('{0}M' -f [int]$test.ReencodeMbps)
                 $global:GpuEncoder        = $encCache[$encKey]
                 if ($isGpu -and $encCache[$encKey] -and $encCache[$encKey].Vendor -eq 'CPU') {
-                    $res.Status = 'skipped'; $res.Message = ('No working {0} encoder on GPU {1}.' -f $test.Codec, $test.GpuIndex)
+                    $res.Status = 'skipped'; $res.Message = ('No working {0} encoder on GPU {1} at the start of this run (its check failed twice - see the log).' -f $test.Codec, $test.GpuIndex)
                     $results.Add($res); continue
                 }
-                $res.Encoder = [string]$encCache[$encKey].Name
+                $res.Encoder = if ($test.Eye -eq 'M') { $(if ($test.Codec -eq 'h265') { 'libx265' } else { 'libx264' }) } else { [string]$encCache[$encKey].Name }
                 $scrcpyProfile = ConvertTo-ScrcpyProfile -View ([string]$test.View) -Eye ([string]$test.Eye) -AudioDup $false -Fps ([int]$test.Fps) -BitrateMbps ([int]$test.Mbps)
+                $names = @([string]$Headset.Name) + @(if ($nStreams -gt 1) { 2..$nStreams | ForEach-Object { '{0}_b{1}' -f $Headset.Name, $_ } })
 
+                $up = $false; $stopRun = $false; $attempt = 0
+                # ---- Same capture as the previous test: only ffmpeg changes (hot swap) ----
+                if ($capKey -and $cap.Key -eq $capKey -and $cap.Names.Count -eq $names.Count) {
+                    & $publish 'switching ffmpeg (capture kept)' ([int]$test.OverheadSec) ((Get-Date) - $testStart).TotalSeconds
+                    $swapOk = $true
+                    foreach ($n in $cap.Names) {
+                        $pf = & $progressOf $n
+                        if (Test-Path -LiteralPath $pf) { Remove-Item -LiteralPath $pf -Force -ErrorAction SilentlyContinue }
+                        if (-not (Restart-HeadsetFfmpegPush -SafeName (Convert-Displayname $n) -ProgressFile $pf)) { $swapOk = $false; break }
+                    }
+                    if ($swapOk) {
+                        $res.Swapped = $true
+                        $pipe = $global:HeadsetPipelines[$safeName]
+                        Set-StreamBenchmarkBridgePids -Sampler $sampler
+                        $warm = [int]$t.SwapWarmupSec
+                        & $publish 'warm-up' $warm ((Get-Date) - $testStart).TotalSeconds
+                        $warmEnd = (Get-Date).AddSeconds($warm)
+                        while ((Get-Date) -lt $warmEnd -and -not (& $cancelled) -and -not $pipe.FfmpegProcess.HasExited) { Start-Sleep -Milliseconds 250 }
+                        if (& $cancelled) { $stopRun = $true }
+                        $up = [bool]($pipe -and -not $pipe.FfmpegProcess.HasExited)
+                        # A slow-opening encoder (QSV) may not have written its first progress yet:
+                        # measuring then gave a test with no stream figures. Wait a little for it.
+                        $pw = (Get-Date).AddSeconds(6)
+                        while ($up -and -not $stopRun -and (Get-Date) -lt $pw -and $null -eq (Read-FfmpegProgressFile -Path $ffProgress).Frame -and -not $pipe.FfmpegProcess.HasExited) { Start-Sleep -Milliseconds 250 }
+                    }
+                    if (-not $up -and -not $stopRun) {
+                        Write-Log ("Benchmark: {0} - ffmpeg swap failed, restarting the capture." -f $test.Label) -Level WARNING
+                        & $stopCaptures
+                        Start-Sleep -Seconds $t.SettleSec
+                    }
+                }
+
+                # ---- New capture: stop the previous one, start this one (+ extra captures) ----
                 # Start + warm-up, retried ONCE: back-to-back restarts sometimes hand ffmpeg a pipe
                 # whose first bytes are not a Matroska header ("EBML header parsing failed") and it
                 # exits at once - a pipeline start race, not a load limit of the tested settings.
-                $attempt = 0; $up = $false; $stopRun = $false
-                while ($true) {
-                    $attempt++
-                    & $publish 'starting stream' ([int]$test.OverheadSec) ((Get-Date) - $testStart).TotalSeconds
-                    if (Test-Path -LiteralPath $ffProgress) { Remove-Item -LiteralPath $ffProgress -Force -ErrorAction SilentlyContinue }
-
-                    # Max capture size: a clone of the model template with max_size replaced, in place
-                    # only while start-screenCopy builds the arguments. The eye merge refresh runs first
-                    # so it cannot reload the parameters from config.json in the middle of the launch.
-                    $origTpl = $null
-                    if ([int]$test.MaxSize -ge 0) {
-                        if (Get-Command Update-EyeMergeParameters -ErrorAction SilentlyContinue) { try { Update-EyeMergeParameters } catch { } }
-                        $origTpl = Get-StreamBenchmarkModelTemplate -Model $model
-                        if ($origTpl) {
-                            $clone = $origTpl | ConvertTo-Json -Depth 20 | ConvertFrom-Json
-                            if ($clone.PSObject.Properties['max_size']) { $clone.max_size = [int]$test.MaxSize }
-                            else { $clone | Add-Member -NotePropertyName 'max_size' -NotePropertyValue ([int]$test.MaxSize) }
-                            Set-StreamBenchmarkModelTemplate -Model $model -Template $clone
+                if (-not $up -and -not $stopRun) {
+                    if ($cap.Names.Count -gt 0) { & $stopCaptures; Start-Sleep -Seconds $t.SettleSec }
+                    while ($true) {
+                        $attempt++
+                        & $publish 'starting stream' ([int]$test.OverheadSec) ((Get-Date) - $testStart).TotalSeconds
+                        $okAll = $true
+                        foreach ($n in $names) {
+                            $pf = & $progressOf $n
+                            if (Test-Path -LiteralPath $pf) { Remove-Item -LiteralPath $pf -Force -ErrorAction SilentlyContinue }
+                            & $startCapture $n $pf $test $scrcpyProfile
+                            $pp = $global:HeadsetPipelines[(Convert-Displayname $n)]
+                            if (-not ($pp -and $pp.FfmpegProcess -and -not $pp.FfmpegProcess.HasExited)) { $okAll = $false; break }
                         }
+                        $cap.Key = $capKey; $cap.Names = @($names)
+                        $pipe = $global:HeadsetPipelines[$safeName]
+                        $up = $okAll
+                        if ($up) {
+                            Set-StreamBenchmarkBridgePids -Sampler $sampler
+                            $warm = if ($null -ne $test.WarmupSec -and "$($test.WarmupSec)" -ne '') { [int]$test.WarmupSec } else { [int]$t.WarmupSec }
+                            if ($warm -lt $t.WarmupSec) { $warm = [int]$t.WarmupSec }
+                            & $publish 'warm-up' $warm ((Get-Date) - $testStart).TotalSeconds
+                            $warmEnd = (Get-Date).AddSeconds($warm)
+                            while ((Get-Date) -lt $warmEnd -and -not (& $cancelled) -and -not $pipe.FfmpegProcess.HasExited) { Start-Sleep -Milliseconds 500 }
+                            if (& $cancelled) { $stopRun = $true; break }
+                            $up = -not $pipe.FfmpegProcess.HasExited
+                        }
+                        if ($up) { break }
+                        & $stopCaptures
+                        if ($attempt -ge 2) { break }
+                        Write-Log ("Benchmark: {0} - the stream did not come up, retrying once." -f $test.Label) -Level WARNING
+                        Start-Sleep -Seconds $t.SettleSec
                     }
-                    try {
-                        start-screenCopy -headsetIP ([string]$Headset.IPAddress) -displayName ([string]$Headset.Name) -recording $false `
-                            -scrcpyProfile $scrcpyProfile -ffmpegProgressFile $ffProgress -headsetId ([int]$Headset.ID)
-                    } finally {
-                        if ($origTpl) { Set-StreamBenchmarkModelTemplate -Model $model -Template $origTpl }
-                    }
-
-                    $pipe = $global:HeadsetPipelines[$safeName]
-                    $up = [bool]($pipe -and $pipe.FfmpegProcess -and -not $pipe.FfmpegProcess.HasExited)
-                    if ($up) {
-                        Set-StreamBenchmarkBridgePids -Sampler $sampler
-                        & $publish 'warm-up' $t.WarmupSec ((Get-Date) - $testStart).TotalSeconds
-                        $warmEnd = (Get-Date).AddSeconds($t.WarmupSec)
-                        while ((Get-Date) -lt $warmEnd -and -not (& $cancelled) -and -not $pipe.FfmpegProcess.HasExited) { Start-Sleep -Milliseconds 500 }
-                        if (& $cancelled) { $stopRun = $true; break }
-                        $up = -not $pipe.FfmpegProcess.HasExited
-                    }
-                    if ($up) { break }
-                    try { Stop-Scrcpy -HeadsetName ([string]$Headset.Name) | Out-Null } catch { }
-                    if ($attempt -ge 2) { break }
-                    Write-Log ("Benchmark: {0} - the stream did not come up, retrying once." -f $test.Label) -Level WARNING
-                    Start-Sleep -Seconds $t.SettleSec
                 }
                 if ($stopRun) {
-                    try { Stop-Scrcpy -HeadsetName ([string]$Headset.Name) | Out-Null } catch { }
+                    & $stopCaptures
                     $status = 'cancelled'; break
                 }
                 if (-not $up) {
-                    $res.Status = 'failed'; $res.Message = 'The stream did not start, twice (see the scrcpy / ffmpeg logs).'
+                    $res.Status = 'failed'
+                    $res.Message = if ($nStreams -gt 1) { ('The {0} captures did not all start, twice (see the scrcpy / ffmpeg logs).' -f $nStreams) } else { 'The stream did not start, twice (see the scrcpy / ffmpeg logs).' }
                     $res.ElapsedSec = [int]((Get-Date) - $testStart).TotalSeconds
                     $doneEst += $estTests[$i]; $doneActual += $res.ElapsedSec
                     $results.Add($res); continue
@@ -1092,7 +1394,7 @@ function Invoke-StreamBenchmark {
                     $res.Status = 'fallback'; $res.Message = 'Merged view not used - a single eye was streamed (see the eye merge warning in the log).'
                 }
                 # The size override is keyed on the registry model; check scrcpy really got it.
-                if ([int]$test.MaxSize -ge 0 -and $pipe.ScrcpyProcess) {
+                if (-not $res.Swapped -and [int]$test.MaxSize -ge 0 -and $pipe.ScrcpyProcess) {
                     $cl = ''
                     try { $cl = [string](Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f $pipe.ScrcpyProcess.Id) -ErrorAction Stop).CommandLine } catch { }
                     if ($cl) {
@@ -1124,6 +1426,8 @@ function Invoke-StreamBenchmark {
                 }
             }
             if ($test.Encoding -ne 'none') { & $readProg }
+            $extraP0 = @{}
+            if ($test.Encoding -ne 'none' -and [int]$test.Streams -gt 1) { foreach ($n in $cap.Names) { $extraP0[$n] = Read-FfmpegProgressFile -Path (& $progressOf $n) } }
             while ((Get-Date) -lt $measureEnd) {
                 # About one sample per second; a sample costs ~0.3 s, so the window is respected.
                 $next = (Get-Date).AddSeconds(1)
@@ -1143,6 +1447,8 @@ function Invoke-StreamBenchmark {
             $res.Load = Get-StreamBenchmarkAggregate -Samples $samples.ToArray() -CpuWindowAvg (Get-StreamBenchmarkCpuPercent -From $c0 -To $c1)
 
             if ($test.Encoding -ne 'none') {
+                # No reading at the measure start (encoder still opening): start from the first one taken.
+                if ($null -eq $p0.Frame -and $fpsPts.Count -gt 0) { $p0 = @{ Frame = $outPts[0].V; Drop = $null; Dup = $null } }
                 if ($null -ne $p1.Frame -and $null -ne $p0.Frame -and $span -gt 0) {
                     $res.Stream.Frames = [int]($p1.Frame - $p0.Frame)
                     # Slope over every reading; the plain delta / wall time only as a fallback.
@@ -1156,9 +1462,36 @@ function Invoke-StreamBenchmark {
                 $res.Stream.Speed = $p1.Speed
                 if ($res.Status -eq 'ok' -and $null -eq $res.Stream.Fps -and -not $res.Message) { $res.Message = 'No ffmpeg progress data - stream figures unavailable.' }
 
-                & $publish 'settling' ($t.StopOverheadSec + $t.SettleSec) ((Get-Date) - $testStart).TotalSeconds
-                try { Stop-Scrcpy -HeadsetName ([string]$Headset.Name) | Out-Null } catch { }
-                Start-Sleep -Seconds $t.SettleSec
+                # Multi-capture: frames delivered by EVERY capture of the headset. One under 90% of
+                # the target while the PC is not loaded means the headset (encoder / WiFi) limited it.
+                if ($nStreams -gt 1 -and $span -gt 0) {
+                    $per = @(foreach ($n in $cap.Names) {
+                        $pf = & $progressOf $n
+                        $q0 = $extraP0[$n]; $q1 = Read-FfmpegProgressFile -Path $pf
+                        if ($q0 -and $null -ne $q0.Frame -and $null -ne $q1.Frame) {
+                            $dd = [double]$(if ($null -ne $q1.Dup) { $q1.Dup } else { 0 }) - [double]$(if ($null -ne $q0.Dup) { $q0.Dup } else { 0 })
+                            $dr = [double]$(if ($null -ne $q1.Drop) { $q1.Drop } else { 0 }) - [double]$(if ($null -ne $q0.Drop) { $q0.Drop } else { 0 })
+                            [Math]::Round((($q1.Frame - $q0.Frame) - $dd + $dr) / $span, 1)
+                        } else { $null }
+                    })
+                    $res.Stream.PerStreamFps = $per
+                    $low = @($per | Where-Object { $null -ne $_ -and [double]$_ -lt 0.9 * [double]$test.Fps })
+                    $res.HeadsetLimited = ($low.Count -gt 0)
+                }
+
+                # Keep the capture when the next test uses the same one: it only swaps ffmpeg.
+                $nextSame = $false
+                for ($j = $i + 1; $j -lt $tests.Count; $j++) {
+                    $nx = $tests[$j]
+                    if (-not $nx.Available) { continue }
+                    $nextSame = ($nx.Encoding -ne 'none' -and $capKey -and [string]$nx.CaptureKey -eq $capKey)
+                    break
+                }
+                if (-not $nextSame -or $res.Status -eq 'failed') {
+                    & $publish 'settling' ($t.StopOverheadSec + $t.SettleSec) ((Get-Date) - $testStart).TotalSeconds
+                    & $stopCaptures
+                    Start-Sleep -Seconds $t.SettleSec
+                }
             }
 
             $res.ElapsedSec = [int]((Get-Date) - $testStart).TotalSeconds
@@ -1171,16 +1504,34 @@ function Invoke-StreamBenchmark {
         $status = 'error'; $err = $_.Exception.Message
         Write-Log ("Benchmark {0} failed: {1}" -f $runId, $err) -Level ERROR
     } finally {
+        if ($cap -and $stopCaptures) { try { & $stopCaptures } catch { } }
         try { Stop-Scrcpy -HeadsetName ([string]$Headset.Name) | Out-Null } catch { }
         foreach ($k in $saved.Keys) { Set-Variable -Name $k -Scope Global -Value $saved[$k] }
         Clear-StreamBenchmarkActive
         if (Test-Path -LiteralPath $cancelPath) { Remove-Item -LiteralPath $cancelPath -Force -ErrorAction SilentlyContinue }
         if (Test-Path -LiteralPath $ffProgress) { Remove-Item -LiteralPath $ffProgress -Force -ErrorAction SilentlyContinue }
+        foreach ($k in 2..4) {
+            $pf = Get-JobFilePath -Name ('vrm_benchmark_ffprogress_{0}_b{1}.txt' -f $safeName, $k)
+            if (Test-Path -LiteralPath $pf) { Remove-Item -LiteralPath $pf -Force -ErrorAction SilentlyContinue }
+        }
     }
 
     $gpuList = @()
     $first = $results | Where-Object { $_.Load -and $_.Load.Gpus } | Select-Object -First 1
     if ($first) { $gpuList = @($first.Load.Gpus | ForEach-Object { @{ Index = $_.Index; Model = $_.Model } }) }
+    # Measured NVENC session limit on the NVIDIA entries (Get-StreamBenchmarkSessionCap reads it).
+    $capVar = Get-Variable -Name nvencCap -ValueOnly -ErrorAction SilentlyContinue
+    if ($null -ne $capVar -and [int]$capVar -ne 0) { foreach ($g in $gpuList) { if ([string]$g.Model -match 'NVIDIA') { $g.SessionCap = [int]$capVar } } }
+    # Each row keeps the idle load of ITS run: results accumulate over runs, and the idle GPU load
+    # was seen moving from 0.4 % to 6.5 % between two runs, which skewed every older row measured
+    # against the latest baseline.
+    $runBase = $null
+    try { $runBase = Get-StreamBenchmarkBaseline -Rows $results.ToArray() } catch { }
+    if ($runBase -and $runBase.Load) {
+        $rb = @{ CpuAvg = $runBase.Load.CpuAvg; StreamCpuAvg = $runBase.Load.StreamCpuAvg; RamUsedGB = $runBase.Load.RamUsedGB
+                 Gpus = @(@($runBase.Load.Gpus) | Where-Object { $_ } | ForEach-Object { @{ Index = [int]$_.Index; UtilAvg = $_.UtilAvg } }) }
+        foreach ($x in $results) { if ($x.Encoding -ne 'none') { $x.RunBase = $rb } }
+    }
     $run = [ordered]@{
         Ok         = ($status -eq 'done')
         Status     = $status
@@ -1240,8 +1591,9 @@ function Invoke-StreamBenchmarkParallel {
     $mb = if ((& $get 'Mbps') -as [int]) { [int](& $get 'Mbps') } else { 10 }
     $re = if ((& $get 'ReencodeMbps') -as [int]) { [int](& $get 'ReencodeMbps') } else { [int]$opt0.ReencodeMbps }
     $size = if ($null -ne (& $get 'MaxSize') -and "$(& $get 'MaxSize')" -ne '') { [int](& $get 'MaxSize') } else { 0 }
+    $refps = if ((& $get 'ReencodeFps') -as [int]) { [Math]::Min([int](& $get 'ReencodeFps'), $fps) } else { $fps }
     $isGpu = $enc -like 'gpu:*'; $gIdx = if ($isGpu) { [int]$enc.Split(':')[1] } else { -1 }
-    $set = @{ Eye = $eye; Encoding = $enc; Codec = $codec; Fps = $fps; Mbps = $mb; ReencodeMbps = $re; MaxSize = $size }
+    $set = @{ Eye = $eye; Encoding = $enc; Codec = $codec; Fps = $fps; Mbps = $mb; ReencodeFps = $refps; ReencodeMbps = $re; MaxSize = $size }
 
     $startedAt = Get-Date
     $total = $Headsets.Count
@@ -1298,7 +1650,7 @@ function Invoke-StreamBenchmarkParallel {
         & $publish 'pre-warming encoder' $t.EncoderProbeSec
         $global:mediamtxReencode = $true; $global:mediamtxCodec = $codec; $global:GPU_Acceleration = $isGpu
         if ($isGpu) { $global:GPU_Index = $gIdx }
-        $global:mediamtxFramerate = $fps; $global:mediamtxBitrate = ('{0}M' -f $re)
+        $global:mediamtxFramerate = $refps; $global:mediamtxBitrate = ('{0}M' -f $re)
         $global:GpuEncoder = $null
         $encoder = Get-GpuEncoder
         if ($isGpu -and $encoder.Vendor -eq 'CPU') { throw ('No working {0} encoder on GPU {1}.' -f $codec, $gIdx) }
@@ -1335,15 +1687,17 @@ function Invoke-StreamBenchmarkParallel {
             $view = if ($parsed) { $parsed.View } else { Get-ScrcpyDefaultView -Model $model }
             $prog = Get-JobFilePath -Name ('vrm_benchmark_par_{0}.txt' -f $h.ID)
             if (Test-Path -LiteralPath $prog) { Remove-Item -LiteralPath $prog -Force -ErrorAction SilentlyContinue }
-            if ($eye -ne 'M') {
-                if (Get-Command Update-EyeMergeParameters -ErrorAction SilentlyContinue) { try { Update-EyeMergeParameters } catch { } }
-                $tpl = Get-StreamBenchmarkModelTemplate -Model $model
-                if ($tpl) {
-                    if (-not $origTpls.ContainsKey($model)) { $origTpls[$model] = $tpl }
-                    $clone = $origTpls[$model] | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+            # Max size (single eye) and the capture codec (= the re-encode codec, ADR-0039).
+            if (Get-Command Update-EyeMergeParameters -ErrorAction SilentlyContinue) { try { Update-EyeMergeParameters } catch { } }
+            $tpl = Get-StreamBenchmarkModelTemplate -Model $model
+            if ($tpl) {
+                if (-not $origTpls.ContainsKey($model)) { $origTpls[$model] = $tpl }
+                $clone = $origTpls[$model] | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+                if ($eye -ne 'M') {
                     if ($clone.PSObject.Properties['max_size']) { $clone.max_size = $size } else { $clone | Add-Member -NotePropertyName 'max_size' -NotePropertyValue $size }
-                    Set-StreamBenchmarkModelTemplate -Model $model -Template $clone
                 }
+                if ($clone.PSObject.Properties['video_codec']) { $clone.video_codec = $codec } else { $clone | Add-Member -NotePropertyName 'video_codec' -NotePropertyValue $codec }
+                Set-StreamBenchmarkModelTemplate -Model $model -Template $clone
             }
             try {
                 start-screenCopy -headsetIP ([string]$h.IPAddress) -displayName ([string]$h.Name) -recording $false `
@@ -1515,7 +1869,7 @@ function ConvertTo-StreamBenchmarkCsv {
     $fmt = { param($v) if ($null -eq $v) { '' } else { [string]::Format($inv, '{0}', $v) } }
     $q = { param($s) '"' + ([string]$s -replace '"', '""') + '"' }
     $lines = [System.Collections.Generic.List[string]]::new()
-    $lines.Add('Host,Model,Headset,Timestamp,MeasureSec,Test,Eye,View,Fps,CaptureMbps,Encoding,EncGpuIndex,Codec,ReencodeMbps,MaxSize,Encoder,Status,Message,CpuAvg,CpuPeak,RamUsedGB,RamPeakGB,GpuIndex,GpuModel,GpuUtilAvg,GpuUtilPeak,Gpu3DAvg,GpuVideoAvg,GpuEncodeAvg,GpuVramGB,ScrcpyCpu,ScrcpyMB,FfmpegCpu,FfmpegMB,MediamtxCpu,MediamtxMB,StreamFps,TargetFps,Frames,Drop,Dup,Speed,ElapsedSec,Role,StreamCpuAvg,StreamCpuPeak,AdbCpu,BridgeCpu,OutFps')
+    $lines.Add('Host,Model,Headset,Timestamp,MeasureSec,Test,Eye,View,Fps,CaptureMbps,Encoding,EncGpuIndex,Codec,ReencodeMbps,MaxSize,Encoder,Status,Message,CpuAvg,CpuPeak,RamUsedGB,RamPeakGB,GpuIndex,GpuModel,GpuUtilAvg,GpuUtilPeak,Gpu3DAvg,GpuVideoAvg,GpuEncodeAvg,GpuVramGB,ScrcpyCpu,ScrcpyMB,FfmpegCpu,FfmpegMB,MediamtxCpu,MediamtxMB,StreamFps,TargetFps,Frames,Drop,Dup,Speed,ElapsedSec,Role,StreamCpuAvg,StreamCpuPeak,AdbCpu,BridgeCpu,OutFps,ReencodeFps,Streams,Swapped,HeadsetLimited')
     foreach ($r in @($Result.Results)) {
         $l = $r.Load
         $gpus = if ($l -and $l.Gpus -and @($l.Gpus).Count -gt 0) { @($l.Gpus) } else { @($null) }
@@ -1530,7 +1884,9 @@ function ConvertTo-StreamBenchmarkCsv {
                 (& $fmt $g.Index), (& $q $g.Model), (& $fmt $g.UtilAvg), (& $fmt $g.UtilPeak), (& $fmt $g.D3Avg), (& $fmt $g.VideoAvg), (& $fmt $g.EncodeAvg), (& $fmt $g.VramGB),
                 (& $fmt $l.Procs.scrcpy.CpuAvg), (& $fmt $l.Procs.scrcpy.MemMB), (& $fmt $l.Procs.ffmpeg.CpuAvg), (& $fmt $l.Procs.ffmpeg.MemMB), (& $fmt $l.Procs.mediamtx.CpuAvg), (& $fmt $l.Procs.mediamtx.MemMB),
                 (& $fmt $r.Stream.Fps), (& $fmt $r.Stream.TargetFps), (& $fmt $r.Stream.Frames), (& $fmt $r.Stream.Drop), (& $fmt $r.Stream.Dup), (& $fmt $r.Stream.Speed), (& $fmt $r.ElapsedSec),
-                (& $q $r.Role), (& $fmt $l.StreamCpuAvg), (& $fmt $l.StreamCpuPeak), (& $fmt $l.Procs.adb.CpuAvg), (& $fmt $l.Procs.bridge.CpuAvg), (& $fmt $r.Stream.OutFps)
+                (& $q $r.Role), (& $fmt $l.StreamCpuAvg), (& $fmt $l.StreamCpuPeak), (& $fmt $l.Procs.adb.CpuAvg), (& $fmt $l.Procs.bridge.CpuAvg), (& $fmt $r.Stream.OutFps),
+                (& $fmt $(if ($r.ReencodeFps) { $r.ReencodeFps } elseif ($r.Encoding -ne 'none') { $r.Fps } else { $null })),
+                (& $fmt $(if ($r.Streams) { $r.Streams } elseif ($r.Encoding -ne 'none') { 1 } else { $null })), (& $fmt $r.Swapped), (& $fmt $r.HeadsetLimited)
             )
             $lines.Add(($cells -join ','))
         }
@@ -1579,6 +1935,8 @@ function Get-StreamBenchmarkLoadVector {
     param($Row, $Base)
     $l = $Row.Load
     if (-not $l) { return $null }
+    # The idle load of the row's own run when stored (accumulated results, ADR-0039).
+    if ($Row.RunBase) { $Base = @{ Id = 'runbase'; Load = $Row.RunBase } }
     $bCpu = if ($Base -and $Base.Load) { [double]$Base.Load.CpuAvg } else { 0 }
     $bRam = if ($Base -and $Base.Load -and $null -ne $Base.Load.RamUsedGB) { [double]$Base.Load.RamUsedGB } else { 0 }
     $gpu = @{}
@@ -1664,8 +2022,10 @@ function Get-StreamBenchmarkLoadEstimate {
     $limitN = {
         param([double]$b, [double]$d, [double]$lim)
         if ($b -ge $lim) { return 0 }
-        if ($d -le 0) { return 99 }
-        return [int][Math]::Floor(($lim - $b) / ($d * $k))
+        # A cost of (practically) zero - a fit coefficient of 1e-21 was seen - is no limit; and the
+        # division is capped before the [int] cast, which overflowed and broke the recommendation.
+        if ($d -le 0.001) { return 99 }
+        return [int][Math]::Min(99.0, [Math]::Floor(($lim - $b) / ($d * $k)))
     }
     $maxN = [Math]::Min($maxN, (& $limitN $bCpu $Vec.Cpu $MaxCpu))
     $gpuOut = foreach ($g in @($Gpus)) {
@@ -1715,130 +2075,256 @@ function Get-StreamBenchmarkLinearFit {
 }
 
 
+function Get-StreamBenchmarkMultiFit {
+    <#
+    .SYNOPSIS
+    Least squares y = X . coef over several columns (internal, ADR-0039), with a small ridge on the
+    -Penalize columns (scaled to unit RMS first, so the penalty does not depend on units) and
+    non-negative -NonNegative columns: a negative slope is dropped (set to 0) and the fit redone, one
+    column at a time. A column that is zero everywhere is left out. Returns @{Coef;Rmse;N;Resid}.
+    .EXAMPLE
+    Get-StreamBenchmarkMultiFit -X @(,[double[]](1, 2.5)) -Y @(3.1) -Penalize $false,$true -NonNegative $false,$true
+    #>
+    param([object[]]$X, [double[]]$Y, [bool[]]$Penalize, [bool[]]$NonNegative, [double]$Ridge = 0.005)
+    $n = $Y.Count; $p = $Penalize.Count
+    $coef = [double[]]::new($p)
+    $out = @{ Coef = $coef; Rmse = 0.0; N = $n; Resid = [double[]]::new($n) }
+    if ($n -eq 0) { return $out }
+    $active = [bool[]]::new($p)
+    for ($c = 0; $c -lt $p; $c++) { for ($r = 0; $r -lt $n; $r++) { if ([double]$X[$r][$c] -ne 0) { $active[$c] = $true; break } } }
+    for ($iter = 0; $iter -le $p; $iter++) {
+        $idx = @(0..($p - 1) | Where-Object { $active[$_] })
+        $k = $idx.Count
+        for ($c = 0; $c -lt $p; $c++) { $coef[$c] = 0.0 }
+        if ($k -eq 0) { break }
+        $scale = [double[]]::new($k)
+        for ($a = 0; $a -lt $k; $a++) {
+            $s = 0.0; for ($r = 0; $r -lt $n; $r++) { $v = [double]$X[$r][$idx[$a]]; $s += $v * $v }
+            $scale[$a] = if ($Penalize[$idx[$a]] -and $s -gt 0) { [Math]::Sqrt($s / $n) } else { 1.0 }
+        }
+        $m = [double[,]]::new($k, $k + 1)
+        for ($r = 0; $r -lt $n; $r++) {
+            $row = [double[]]::new($k)
+            for ($a = 0; $a -lt $k; $a++) { $row[$a] = [double]$X[$r][$idx[$a]] / $scale[$a] }
+            for ($a = 0; $a -lt $k; $a++) {
+                $m[$a, $k] += $row[$a] * $Y[$r]
+                for ($b = 0; $b -lt $k; $b++) { $m[$a, $b] += $row[$a] * $row[$b] }
+            }
+        }
+        for ($a = 0; $a -lt $k; $a++) { $m[$a, $a] += 1e-9 + $(if ($Penalize[$idx[$a]]) { $Ridge * $n } else { 0.0 }) }
+        # Gauss-Jordan with partial pivoting.
+        for ($col = 0; $col -lt $k; $col++) {
+            $piv = $col
+            for ($r = $col + 1; $r -lt $k; $r++) { $vr = $m[$r, $col]; $vp = $m[$piv, $col]; if ([Math]::Abs($vr) -gt [Math]::Abs($vp)) { $piv = $r } }
+            if ($piv -ne $col) { for ($c = 0; $c -le $k; $c++) { $tmp = $m[$col, $c]; $m[$col, $c] = $m[$piv, $c]; $m[$piv, $c] = $tmp } }
+            $d = $m[$col, $col]; if ([Math]::Abs($d) -lt 1e-12) { continue }
+            for ($c = $col; $c -le $k; $c++) { $m[$col, $c] /= $d }
+            for ($r = 0; $r -lt $k; $r++) {
+                if ($r -eq $col) { continue }
+                $f = $m[$r, $col]; if ($f -eq 0) { continue }
+                for ($c = $col; $c -le $k; $c++) { $m[$r, $c] -= $f * $m[$col, $c] }
+            }
+        }
+        for ($a = 0; $a -lt $k; $a++) { $coef[$idx[$a]] = $m[$a, $k] / $scale[$a] }
+        $worst = -1; $worstV = 0.0
+        foreach ($c in $idx) { if ($NonNegative[$c] -and $coef[$c] -lt $worstV) { $worst = $c; $worstV = $coef[$c] } }
+        if ($worst -lt 0) { break }
+        $active[$worst] = $false
+    }
+    $se = 0.0
+    for ($r = 0; $r -lt $n; $r++) {
+        $yh = 0.0; for ($c = 0; $c -lt $p; $c++) { $yh += $coef[$c] * [double]$X[$r][$c] }
+        $out.Resid[$r] = $Y[$r] - $yh; $se += $out.Resid[$r] * $out.Resid[$r]
+    }
+    $out.Coef = $coef; $out.Rmse = [Math]::Sqrt($se / $n)
+    return $out
+}
+
+
+function Get-StreamBenchmarkFeatures {
+    <#
+    .SYNOPSIS
+    The load-model inputs of one stream (internal, ADR-0039): @{Xcap;Xdec;Xenc;Rb;M;W;H;Pixels;InPixels}.
+    Xcap = capture Mb/s (adb / scrcpy), Xdec = decoded pixels x capture fps (ffmpeg decode, on the
+    CPU), Xenc = encoded pixels x re-encode fps (the encoder of the family), Rb = re-encode Mb/s,
+    M = 1 for a merged view. Pixel rates in Mpx/s. $null when the frame size is unknown.
+    #>
+    param([string]$Model, [string]$View, [string]$Eye, [int]$MaxSize, [double]$Fps, [double]$Mbps, [double]$ReencodeFps, [double]$ReencodeMbps)
+    $px = Get-StreamBenchmarkFramePixels -Model $Model -View $View -Eye $Eye -MaxSize $(if ($Eye -eq 'M') { 0 } else { $MaxSize })
+    if ($px.Pixels -le 0) { return $null }
+    if ($ReencodeFps -le 0) { $ReencodeFps = $Fps }
+    $inPx = if ($px.InPixels -gt 0) { $px.InPixels } else { $px.Pixels }
+    return @{
+        Xcap = $Mbps; Xdec = $inPx * $Fps / 1e6; Xenc = $px.Pixels * $ReencodeFps / 1e6; Rb = $ReencodeMbps
+        M = $(if ($Eye -eq 'M') { 1.0 } else { 0.0 }); W = $px.W; H = $px.H; Pixels = $px.Pixels; InPixels = $inPx
+    }
+}
+
+
 function Get-StreamBenchmarkModel {
     <#
     .SYNOPSIS
-    Fits the load model of a stored result, so every parameter combination can be predicted
-    (Get-StreamBenchmarkModelPrediction). Returns @{Ok;Error;Model;Families;RefMbps;RefReencode;
-    MbpsSlope;ReencodeSlope;Base;Gpus}.
+    Fits the load model (v4, ADR-0039) of a stored result, so every parameter combination can be
+    predicted (Get-StreamBenchmarkModelPrediction). Returns @{Ok;Error;Model;Families;Coef;Ranges;
+    Linearity;RefMbps;RefReencode;Base;Gpus}.
     .DESCRIPTION
-    Per encoder x codec family and per resource (stream CPU, every GPU, RAM):
-        cost = A + B x (pixels per frame x fps, in Mpx/s)
-               + MbpsSlope x (capture Mb/s - ref) + ReencodeSlope x (re-encode Mb/s - ref)
-               [+ MergedExtra for a merged view]
-    Pixels come from Get-StreamBenchmarkFramePixels, so a view or max size that was never run is
-    still predictable. The capture and re-encode bitrate slopes are shared by every family (the
-    typical preset measures them once). Each fit keeps its RMSE, which the recommendation shows
-    as a +/- band, and its measured pixel-rate range, outside which a prediction is flagged.
-    Validated on a Quest 3 + RTX 5070: one change at a time predicted combined points within
-    about 1 GPU point.
+    Per resource (stream CPU, every GPU, RAM), ONE fit over every single-stream test:
+        cost = a[family] + d[family] x Xenc + b x Xcap + c x Xdec + e x Rb + m x Merged
+    family = encoder x codec. The capture terms (b: capture bitrate, c: decoded pixel rate) are
+    shared by every family - scrcpy, adb and the software decode do not depend on the encoder - and
+    the encode term d is per family. Slopes are kept non-negative and lightly ridge-regularised, so
+    a preset that moved two inputs together still gives a stable fit. Each family keeps the RMSE of
+    its own points (the +/- band) and its measured Xenc range; Ranges holds the shared inputs'
+    ranges, outside which a prediction is flagged. Multi-capture tests (2 / 4 captures of one
+    headset) are not fitted: they give Linearity = measured cost / (N x predicted single cost).
+    Old results without ReencodeFps are read with ReencodeFps = capture FPS (the v3 behaviour).
     .EXAMPLE
     $m = Get-StreamBenchmarkModel -Result (Get-StreamBenchmarkResult -Model 'Quest 3')
     #>
     param($Result)
-    $out = @{ Ok = $false; Error = ''; Model = ''; Families = @(); RefMbps = 10; RefReencode = 4
-              MbpsSlope = $null; ReencodeSlope = $null; Base = $null; Gpus = @() }
+    $out = @{ Ok = $false; Error = ''; Model = ''; Families = @(); Coef = @{}; Ranges = @{}; Linearity = $null
+              RefMbps = 10; RefReencode = 4; Base = $null; Gpus = @(); MultiFitted = $true }
     if (-not $Result -or -not $Result.Results) { $out.Error = 'Please run first a benchmark.'; return $out }
     $model = [string]$Result.Model; $out.Model = $model
     $rows = @($Result.Results)
     $base = Get-StreamBenchmarkBaseline -Rows $rows
-    $meas = @($rows | Where-Object { $_.Encoding -in @('cpu', 'gpu') -and $_.Status -in @('ok', 'fallback') -and $_.Load })
+    $meas = @($rows | Where-Object { $_.Encoding -in @('cpu', 'gpu') -and $_.Status -eq 'ok' -and $_.Load })
     if (-not $base -or $meas.Count -eq 0) { $out.Error = 'The stored benchmark has no baseline or no successful test.'; return $out }
     $out.Base = $base
     $gpus = @($Result.Gpus); if ($gpus.Count -eq 0) { $gpus = @($base.Load.Gpus | ForEach-Object { @{ Index = $_.Index; Model = $_.Model } }) }
     $out.Gpus = $gpus
     $gIdx = @($gpus | ForEach-Object { [int]$_.Index })
-
     $mode = { param($vals) @($vals | Group-Object | Sort-Object Count -Descending | Select-Object -First 1)[0].Name }
-    $refMb = [int](& $mode ($meas | ForEach-Object { [int]$_.Mbps }))
-    $refRe = [int](& $mode ($meas | ForEach-Object { [int]$_.ReencodeMbps }))
-    $out.RefMbps = $refMb; $out.RefReencode = $refRe
+    $out.RefMbps = [int](& $mode ($meas | ForEach-Object { [int]$_.Mbps }))
+    $out.RefReencode = [int](& $mode ($meas | ForEach-Object { [int]$_.ReencodeMbps }))
 
-    # One point per measured row: pixel rate + cost vector.
-    $pts = foreach ($r in $meas) {
-        $px = Get-StreamBenchmarkFramePixels -Model $model -View ([string]$r.View) -Eye ([string]$r.Eye) -MaxSize ([int]$r.MaxSize)
-        $vec = Get-StreamBenchmarkLoadVector -Row $r -Base $base
-        if (-not $vec -or $px.Pixels -le 0) { continue }
-        # Fit on the frames actually DELIVERED: a headset that sent 35 of 45 fps made the encoder do
-        # 35 fps of work, and fitting that cost against 45 biased the whole family low. Predictions
-        # then use the requested fps (a headset that keeps up).
-        $fpsEff = [double]$r.Fps
-        if ($r.Stream -and $null -ne $r.Stream.Fps -and [double]$r.Stream.Fps -gt 0) { $fpsEff = [Math]::Min([double]$r.Stream.Fps, [double]$r.Fps * 1.1) }
-        @{ Row = $r; X = $px.Pixels * $fpsEff / 1e6; Vec = $vec
-           Fam = ('{0}|{1}' -f $(if ($r.Encoding -eq 'gpu') { 'gpu:' + [int]$r.GpuIndex } else { 'cpu' }), [string]$r.Codec) }
-    }
-    $pts = @($pts)
+    $famOf = { param($r) '{0}|{1}' -f $(if ($r.Encoding -eq 'gpu') { 'gpu:' + [int]$r.GpuIndex } else { 'cpu' }), [string]$r.Codec }
     $val = { param($v, $res) if ($res -eq 'cpu') { $v.Cpu } elseif ($res -eq 'ram') { $v.Ram } else { $gi = [int]$res.Substring(3); if ($v.Gpu.ContainsKey($gi)) { $v.Gpu[$gi] } else { 0.0 } } }
     $resList = @('cpu', 'ram') + @($gIdx | ForEach-Object { 'gpu' + $_ })
 
-    # Shared slopes for capture / re-encode bitrate: from the family holding the most variation,
-    # comparing points that differ ONLY in that bitrate.
-    $slopeOf = {
-        param([string]$field, [int]$refVal)
-        $best = $null; $bestN = 1
-        foreach ($g in @($pts | Group-Object { '{0}|{1}|{2}|{3}|{4}|{5}' -f $_.Fam, $_.Row.Eye, $_.Row.View, $_.Row.Fps, $_.Row.MaxSize, $(if ($field -eq 'Mbps') { $_.Row.ReencodeMbps } else { $_.Row.Mbps }) })) {
-            $n = @($g.Group | ForEach-Object { [int]$_.Row.$field } | Select-Object -Unique).Count
-            if ($n -gt $bestN) { $bestN = $n; $best = @($g.Group) }
+    $pts = [System.Collections.Generic.List[object]]::new()
+    $multi = [System.Collections.Generic.List[object]]::new()
+    foreach ($r in $meas) {
+        $vec = Get-StreamBenchmarkLoadVector -Row $r -Base $base
+        if (-not $vec) { continue }
+        # Fit on the frames actually DELIVERED: a headset that sent 35 of 45 fps made the decoder do
+        # 35 fps of work. Predictions then use the requested fps (a headset that keeps up).
+        $fpsEff = [double]$r.Fps
+        if ($r.Stream -and $null -ne $r.Stream.Fps -and [double]$r.Stream.Fps -gt 0) { $fpsEff = [Math]::Min([double]$r.Stream.Fps, [double]$r.Fps * 1.1) }
+        # Several captures: the frames each one really delivered (one slow capture is not the PC's work).
+        $nStr = [Math]::Max(1, [int]$r.Streams)
+        if ($nStr -gt 1 -and $r.Stream -and $r.Stream.PerStreamFps) {
+            $ps = @($r.Stream.PerStreamFps | Where-Object { $null -ne $_ -and [double]$_ -gt 0 } | ForEach-Object { [double]$_ })
+            if ($ps.Count) { $fpsEff = [Math]::Min(($ps | Measure-Object -Average).Average, [double]$r.Fps * 1.1) }
         }
-        $s = @{}
-        foreach ($res in $resList) {
-            if ($best) { $f = Get-StreamBenchmarkLinearFit -X @($best | ForEach-Object { [double]$_.Row.$field }) -Y @($best | ForEach-Object { [double](& $val $_.Vec $res) }); $s[$res] = $f.B }
-            else { $s[$res] = 0.0 }
-        }
-        return $s
+        $refps = if ($r.ReencodeFps) { [double]$r.ReencodeFps } else { [double]$r.Fps }
+        $f = Get-StreamBenchmarkFeatures -Model $model -View ([string]$r.View) -Eye ([string]$r.Eye) -MaxSize ([int]$r.MaxSize) -Fps $fpsEff -Mbps ([double]$r.Mbps) -ReencodeFps $refps -ReencodeMbps ([double]$r.ReencodeMbps)
+        if (-not $f) { continue }
+        $p = @{ Row = $r; F = $f; Vec = $vec; Fam = (& $famOf $r); N = $nStr }
+        # Every test is fitted, the multi-capture ones as N x one stream (ADR-0039 matrix): the
+        # cost of N headsets is then measured, not extrapolated. They also give the Linearity report.
+        $pts.Add($p)
+        if ($nStr -gt 1) { $multi.Add($p) }
     }
-    $mbS = & $slopeOf 'Mbps' $refMb
-    $reS = & $slopeOf 'ReencodeMbps' $refRe
-    $out.MbpsSlope = $mbS; $out.ReencodeSlope = $reS
+    if (@($pts | Where-Object { $_.N -eq 1 }).Count -eq 0) { $out.Error = 'No single-stream test to build the model from.'; return $out }
+    $famKeys = @($pts | ForEach-Object { $_.Fam } | Select-Object -Unique)
+    $nf = $famKeys.Count
+    # Columns: [a per family][d per family][b Xcap][c Xdec][e Rb][m Merged]
+    $p = 2 * $nf + 4
+    $pen = [bool[]]::new($p); $nonNeg = [bool[]]::new($p)
+    for ($c = $nf; $c -lt $p; $c++) { $pen[$c] = $true; $nonNeg[$c] = $true }
+    $X = @(foreach ($pt in $pts) {
+        $row = [double[]]::new($p); $fi = [array]::IndexOf($famKeys, $pt.Fam); $k = [double]$pt.N
+        $row[$fi] = $k; $row[$nf + $fi] = $k * $pt.F.Xenc
+        $row[2 * $nf] = $k * $pt.F.Xcap; $row[2 * $nf + 1] = $k * $pt.F.Xdec; $row[2 * $nf + 2] = $k * $pt.F.Rb; $row[2 * $nf + 3] = $k * $pt.F.M
+        , $row
+    })
+    $fits = @{}
+    foreach ($res in $resList) {
+        $y = [double[]]@($pts | ForEach-Object { [double](& $val $_.Vec $res) })
+        $fits[$res] = Get-StreamBenchmarkMultiFit -X $X -Y $y -Penalize $pen -NonNegative $nonNeg
+    }
+    $coefOf = { param($res, $fam) $fi = [array]::IndexOf($famKeys, $fam); $cf = $fits[$res].Coef
+        @{ A = $cf[$fi]; D = $cf[$nf + $fi]; B = $cf[2 * $nf]; C = $cf[2 * $nf + 1]; E = $cf[2 * $nf + 2]; M = $cf[2 * $nf + 3] } }
+    $out.Coef = @{}
+    foreach ($res in $resList) { $out.Coef[$res] = @{}; foreach ($fk in $famKeys) { $out.Coef[$res][$fk] = & $coefOf $res $fk } }
+    $rng = { param($vals) @{ Min = ($vals | Measure-Object -Minimum).Minimum; Max = ($vals | Measure-Object -Maximum).Maximum } }
+    $out.Ranges = @{
+        Xcap = (& $rng @($pts | ForEach-Object { $_.F.Xcap })); Xdec = (& $rng @($pts | ForEach-Object { $_.F.Xdec }))
+        Rb = (& $rng @($pts | ForEach-Object { $_.F.Rb }))
+    }
 
-    # Per family: fit single-eye points (bitrate effects removed), then the merged residual.
-    $fams = foreach ($g in @($pts | Group-Object { $_.Fam })) {
-        $single = @($g.Group | Where-Object { $_.Row.Eye -ne 'M' })
-        $merged = @($g.Group | Where-Object { $_.Row.Eye -eq 'M' })
-        $adj = { param($p, $res) (& $val $p.Vec $res) - $mbS[$res] * ([double]$p.Row.Mbps - $refMb) - $reS[$res] * ([double]$p.Row.ReencodeMbps - $refRe) }
+    # FPS risk: the smallest encode rate where the PC could not keep up - the encoder fell behind
+    # real time (ffmpeg speed < 0.95) or a CPU / GPU was at 85% or more. A headset that delivers
+    # fewer frames on its own (not worn, static scene) is NOT a PC limit.
+    $pcBound = {
+        param($pt)
+        $l = $pt.Row.Load; $sp = if ($pt.Row.Stream) { $pt.Row.Stream.Speed } else { $null }
+        ($null -ne $sp -and [double]$sp -lt 0.95) -or ($l -and [double]$l.CpuAvg -ge 85) -or
+            ($l -and @($l.Gpus | Where-Object { $_ -and [double]$_.UtilAvg -ge 85 }).Count -gt 0)
+    }
+    # Error bands are per stream: the residual of an N-stream test is divided by N.
+    $allRmse = @{}
+    foreach ($res in $resList) {
+        $rr = @(for ($k = 0; $k -lt $pts.Count; $k++) { $fits[$res].Resid[$k] / [double]$pts[$k].N })
+        $allRmse[$res] = [Math]::Sqrt((($rr | ForEach-Object { $_ * $_ }) | Measure-Object -Sum).Sum / [Math]::Max(1, $rr.Count))
+    }
+    $fams = foreach ($fk in $famKeys) {
+        $ix = @(for ($k = 0; $k -lt $pts.Count; $k++) { if ($pts[$k].Fam -eq $fk) { $k } })
+        $g = @($ix | ForEach-Object { $pts[$_] })
+        $single = @($g | Where-Object { $_.F.M -eq 0 })
         $fit = @{}
         foreach ($res in $resList) {
-            if ($single.Count -gt 0) { $fit[$res] = Get-StreamBenchmarkLinearFit -X @($single | ForEach-Object { $_.X }) -Y @($single | ForEach-Object { & $adj $_ $res }) }
+            $rs = @($ix | ForEach-Object { $fits[$res].Resid[$_] / [double]$pts[$_].N })
+            $rm = if ($rs.Count -ge 3) { [Math]::Sqrt((($rs | ForEach-Object { $_ * $_ }) | Measure-Object -Sum).Sum / $rs.Count) } else { $allRmse[$res] }
+            $fit[$res] = @{ Rmse = [Math]::Max($rm, $allRmse[$res] * 0.5) }
         }
-        $mx = $null
-        if ($merged.Count -gt 0 -and $single.Count -gt 0) {
-            $mx = @{}
-            foreach ($res in $resList) {
-                $resid = @($merged | ForEach-Object { (& $adj $_ $res) - ($fit[$res].A + $fit[$res].B * $_.X) })
-                $mx[$res] = ($resid | Measure-Object -Average).Average
-            }
-        }
-        # FPS risk: the smallest pixel rate where the PC could not keep up. A shortfall counts only
-        # when the PC was the limit - the encoder fell behind real time (ffmpeg speed < 0.95) or a
-        # CPU / GPU was at 85% or more. A headset that delivers fewer frames on its own (not worn,
-        # proximity sensor, static scene) dropped every NVENC h264 point to 35/45 fps at 5% GPU in
-        # a real run - counting that would have flagged every NVENC setting as a risk.
-        $pcBound = {
-            param($p)
-            $l = $p.Row.Load; $sp = if ($p.Row.Stream) { $p.Row.Stream.Speed } else { $null }
-            ($null -ne $sp -and [double]$sp -lt 0.95) -or ($l -and [double]$l.CpuAvg -ge 85) -or
-                ($l -and @($l.Gpus | Where-Object { $_ -and [double]$_.UtilAvg -ge 85 }).Count -gt 0)
-        }
-        $short = @($g.Group | Where-Object { $null -ne $_.Vec.FpsRatio -and $_.Vec.FpsRatio -lt 0.9 })
-        $bad = @($short | Where-Object { & $pcBound $_ } | ForEach-Object { $_.X })
-        $headsetShort = @($short | Where-Object { -not (& $pcBound $_) }).Count
-        $first = $g.Group[0].Row
+        $short = @($g | Where-Object { $null -ne $_.Vec.FpsRatio -and $_.Vec.FpsRatio -lt 0.9 })
+        $bad = @($short | Where-Object { & $pcBound $_ } | ForEach-Object { $_.F.Xenc })
+        $xs = @($g | ForEach-Object { $_.F.Xenc })
+        $first = $g[0].Row
         @{
-            Key = $g.Name; Encoding = [string]$first.Encoding; GpuIndex = [int]$first.GpuIndex; Codec = [string]$first.Codec
-            Encoder = [string](@($g.Group | ForEach-Object { $_.Row.Encoder } | Where-Object { $_ }) | Select-Object -First 1)
-            Points = $g.Count; SinglePoints = $single.Count; MergedPoints = $merged.Count
-            XMin = if ($single.Count) { ($single | ForEach-Object { $_.X } | Measure-Object -Minimum).Minimum } else { $null }
-            XMax = if ($single.Count) { ($single | ForEach-Object { $_.X } | Measure-Object -Maximum).Maximum } else { $null }
-            DistinctX = @($single | ForEach-Object { [Math]::Round($_.X, 2) } | Select-Object -Unique).Count
-            Fit = $fit; MergedExtra = $mx
+            Key = $fk; Encoding = [string]$first.Encoding; GpuIndex = [int]$first.GpuIndex; Codec = [string]$first.Codec
+            Encoder = [string](@($g | ForEach-Object { $_.Row.Encoder } | Where-Object { $_ }) | Select-Object -First 1)
+            Points = $g.Count; SinglePoints = $single.Count; MergedPoints = ($g.Count - $single.Count)
+            XMin = ($xs | Measure-Object -Minimum).Minimum; XMax = ($xs | Measure-Object -Maximum).Maximum
+            DistinctX = @($xs | ForEach-Object { [Math]::Round($_, 2) } | Select-Object -Unique).Count
+            Fit = $fit
+            MergedExtra = $(if (($g.Count - $single.Count) -gt 0 -or @($pts | Where-Object { $_.F.M -gt 0 }).Count -gt 0) { @{ Shared = $true } } else { $null })
             FpsLimitX = if ($bad.Count) { ($bad | Measure-Object -Minimum).Minimum } else { $null }
-            # Tests short of frames while the PC was NOT the limit: a headset-side shortfall.
-            HeadsetFpsShortfalls = $headsetShort
+            HeadsetFpsShortfalls = @($short | Where-Object { -not (& $pcBound $_) }).Count
         }
     }
-    $out.Families = @($fams | Where-Object { $_.SinglePoints -gt 0 })
-    if ($out.Families.Count -eq 0) { $out.Error = 'No single-eye test to build the model from.'; return $out }
+    $out.Families = @($fams)
     $out.Ok = $true
+
+    # Linearity from the multi-capture tests: measured cost of N captures / (N x one predicted).
+    if ($multi.Count -gt 0) {
+        $lin = [System.Collections.Generic.List[object]]::new()
+        foreach ($mp in $multi) {
+            if ($mp.Row.HeadsetLimited) { continue }
+            $n = [int]$mp.Row.Streams
+            $one = Get-StreamBenchmarkModelPrediction -ModelFit $out -Settings @{
+                Eye = $mp.Row.Eye; View = $mp.Row.View; Encoding = ($mp.Fam.Split('|')[0]); Codec = $mp.Row.Codec
+                Fps = $mp.Row.Fps; Mbps = $mp.Row.Mbps; ReencodeFps = $(if ($mp.Row.ReencodeFps) { $mp.Row.ReencodeFps } else { $mp.Row.Fps }); ReencodeMbps = $mp.Row.ReencodeMbps; MaxSize = $mp.Row.MaxSize } -NoLinearity
+            if (-not $one.Ok) { continue }
+            $cpuR = if ($one.Vec.Cpu * $n -gt 0.5) { $mp.Vec.Cpu / ($one.Vec.Cpu * $n) } else { $null }
+            $gpuR = @{}
+            foreach ($gi in $gIdx) { $pv = [double]$one.Vec.Gpu[$gi]; if ($pv * $n -gt 0.5) { $gpuR[$gi] = [double]$mp.Vec.Gpu[$gi] / ($pv * $n) } }
+            $lin.Add(@{ Streams = $n; Cpu = $cpuR; Gpu = $gpuR })
+        }
+        if ($lin.Count -gt 0) {
+            $cpuVals = @($lin | Where-Object { $null -ne $_.Cpu } | ForEach-Object { $_.Cpu })
+            $gl = @{}
+            # String keys: this goes out as JSON, and ConvertTo-Json refuses a dictionary with int keys.
+            foreach ($gi in $gIdx) { $vs = @($lin | ForEach-Object { if ($_.Gpu.ContainsKey($gi)) { $_.Gpu[$gi] } }); if ($vs.Count) { $gl[[string]$gi] = ($vs | Measure-Object -Average).Average } }
+            $out.Linearity = @{
+                Cpu = if ($cpuVals.Count) { ($cpuVals | Measure-Object -Average).Average } else { $null }
+                Gpu = $gl; Points = $lin.Count
+                Rows = @($lin | ForEach-Object { @{ Streams = $_.Streams; Cpu = $(if ($null -ne $_.Cpu) { [Math]::Round($_.Cpu, 2) } else { $null }) } })
+            }
+        }
+    }
     return $out
 }
 
@@ -1846,46 +2332,57 @@ function Get-StreamBenchmarkModel {
 function Get-StreamBenchmarkModelPrediction {
     <#
     .SYNOPSIS
-    Predicted cost of ONE stream for any settings, from Get-StreamBenchmarkModel:
+    Predicted cost of ONE stream for any settings, from Get-StreamBenchmarkModel (v4, ADR-0039):
     @{Ok;Error;Vec;Err;X;Pixels;W;H;InRange;FpsRisk;Family}. Vec / Err have the LoadVector shape
-    (Cpu, Gpu = @{index}, Ram) - Err holds each fit's RMSE. -Settings keys: Eye, View, Encoding
-    ('cpu' | 'gpu:<i>'), Codec, Fps, Mbps, ReencodeMbps, MaxSize.
+    (Cpu, Gpu = @{index}, Ram) - Err holds the family's RMSE. -Settings keys: Eye, View, Encoding
+    ('cpu' | 'gpu:<i>'), Codec, Fps, Mbps, ReencodeFps (default = Fps), ReencodeMbps, MaxSize.
+    A merged view is always encoded on the CPU, whatever Encoding says. -Headsets > 1 scales the
+    single-stream cost by the measured multi-capture Linearity (clamped 0.8 .. 1.6) unless
+    -NoLinearity.
     .EXAMPLE
-    Get-StreamBenchmarkModelPrediction -ModelFit $m -Settings @{ Eye='R'; View='square'; Encoding='gpu:1'; Codec='h264'; Fps=60; Mbps=10; ReencodeMbps=4; MaxSize=1080 }
+    Get-StreamBenchmarkModelPrediction -ModelFit $m -Settings @{ Eye='R'; View='square'; Encoding='gpu:1'; Codec='h264'; Fps=60; Mbps=10; ReencodeFps=30; ReencodeMbps=4; MaxSize=1080 }
     #>
-    param([Parameter(Mandatory = $true)]$ModelFit, [Parameter(Mandatory = $true)]$Settings)
+    param([Parameter(Mandatory = $true)]$ModelFit, [Parameter(Mandatory = $true)]$Settings, [int]$Headsets = 1, [switch]$NoLinearity)
     $get = { param($n) Get-StreamBenchmarkSelectionValue $Settings $n }
     $eye = ([string](& $get 'Eye')).ToUpper(); if ($eye -ne 'M') { $eye = 'R' }
     $enc = ([string](& $get 'Encoding')).ToLower(); $codec = ([string](& $get 'Codec')).ToLower()
+    if ($eye -eq 'M') { $enc = 'cpu' }
     $fps = [double](& $get 'Fps'); $mb = [double](& $get 'Mbps'); $re = [double](& $get 'ReencodeMbps')
+    $refps = [double](& $get 'ReencodeFps'); if ($refps -le 0) { $refps = $fps }
     $size = [int](& $get 'MaxSize'); $view = [string](& $get 'View')
     $res = @{ Ok = $false; Error = ''; Vec = $null; Err = $null; X = 0; Pixels = 0; W = 0; H = 0; InRange = $true; FpsRisk = $false; Family = $null }
-    $fam = $ModelFit.Families | Where-Object { $_.Key -eq ('{0}|{1}' -f $enc, $codec) } | Select-Object -First 1
+    $fk = '{0}|{1}' -f $enc, $codec
+    $fam = $ModelFit.Families | Where-Object { $_.Key -eq $fk } | Select-Object -First 1
     if (-not $fam) { $res.Error = ('{0} {1} was not measured.' -f $enc, $codec); return $res }
-    if ($eye -eq 'M' -and -not $fam.MergedExtra) {
-        # A merged view on this encoder family was not measured; another codec of the same encoder will do.
-        $alt = $ModelFit.Families | Where-Object { $_.Key -like ($enc + '|*') -and $_.MergedExtra } | Select-Object -First 1
-        if (-not $alt) { $res.Error = ('Merged view with {0} was not measured.' -f $enc); return $res }
-        $mExtra = $alt.MergedExtra
-    } else { $mExtra = $fam.MergedExtra }
-    $px = Get-StreamBenchmarkFramePixels -Model $ModelFit.Model -View $view -Eye $eye -MaxSize $(if ($eye -eq 'M') { 0 } else { $size })
-    if ($px.Pixels -le 0) { $res.Error = 'Unknown frame size for this view.'; return $res }
-    $x = $px.Pixels * $fps / 1e6
+    if ($eye -eq 'M' -and -not $fam.MergedExtra) { $res.Error = 'A merged view was not measured.'; return $res }
+    $f = Get-StreamBenchmarkFeatures -Model $ModelFit.Model -View $view -Eye $eye -MaxSize $size -Fps $fps -Mbps $mb -ReencodeFps $refps -ReencodeMbps $re
+    if (-not $f) { $res.Error = 'Unknown frame size for this view.'; return $res }
+    $lin = $null
+    # A model fitted on the multi-capture tests already holds their cost: no second correction.
+    if ($Headsets -gt 1 -and -not $NoLinearity -and $ModelFit.Linearity -and -not $ModelFit.MultiFitted) { $lin = $ModelFit.Linearity }
+    $clampLin = { param($v) if ($null -eq $v) { 1.0 } else { [Math]::Max(0.8, [Math]::Min(1.6, [double]$v)) } }
     $one = {
         param($r)
-        $f = $fam.Fit[$r]; if (-not $f) { return 0.0 }
-        $v = $f.A + $f.B * $x + $ModelFit.MbpsSlope[$r] * ($mb - $ModelFit.RefMbps) + $ModelFit.ReencodeSlope[$r] * ($re - $ModelFit.RefReencode)
-        if ($eye -eq 'M' -and $mExtra) { $v += $mExtra[$r] }
+        $c = $ModelFit.Coef[$r][$fk]; if (-not $c) { return 0.0 }
+        $v = $c.A + $c.D * $f.Xenc + $c.B * $f.Xcap + $c.C * $f.Xdec + $c.E * $f.Rb + $c.M * $f.M
         return [Math]::Max(0.0, $v)
     }
     $gpu = @{}; $gerr = @{}
-    foreach ($g in $ModelFit.Gpus) { $k = 'gpu' + [int]$g.Index; $gpu[[int]$g.Index] = & $one $k; $gerr[[int]$g.Index] = if ($fam.Fit[$k]) { $fam.Fit[$k].Rmse } else { 0.0 } }
-    $res.Vec = @{ Cpu = (& $one 'cpu'); Gpu = $gpu; Ram = (& $one 'ram'); FpsRatio = $null }
+    foreach ($g in $ModelFit.Gpus) {
+        $k = 'gpu' + [int]$g.Index
+        $k2 = if ($lin -and $lin.Gpu -and $lin.Gpu.ContainsKey([string][int]$g.Index)) { & $clampLin $lin.Gpu[[string][int]$g.Index] } else { 1.0 }
+        $gpu[[int]$g.Index] = (& $one $k) * $k2
+        $gerr[[int]$g.Index] = if ($fam.Fit[$k]) { $fam.Fit[$k].Rmse } else { 0.0 }
+    }
+    $kc = if ($lin) { & $clampLin $lin.Cpu } else { 1.0 }
+    $res.Vec = @{ Cpu = (& $one 'cpu') * $kc; Gpu = $gpu; Ram = (& $one 'ram'); FpsRatio = $null }
     $res.Err = @{ Cpu = $fam.Fit['cpu'].Rmse; Gpu = $gerr; Ram = $fam.Fit['ram'].Rmse }
-    $res.X = [Math]::Round($x, 2); $res.Pixels = $px.Pixels; $res.W = $px.W; $res.H = $px.H
-    # Outside the measured pixel-rate range by more than 25%: flagged, still computed.
-    if ($null -ne $fam.XMax -and ($x -gt $fam.XMax * 1.25 -or $x -lt $fam.XMin * 0.75)) { $res.InRange = $false }
-    if ($null -ne $fam.FpsLimitX -and $x -ge $fam.FpsLimitX * 0.95) { $res.FpsRisk = $true }
+    $res.X = [Math]::Round($f.Xenc, 2); $res.Pixels = $f.Pixels; $res.W = $f.W; $res.H = $f.H
+    # Outside the measured range by more than 25% (encode rate of the family, or a shared input).
+    $out = { param($v, $lo, $hi) ($null -ne $hi -and ($v -gt [double]$hi * 1.25 -or $v -lt [double]$lo * 0.75)) }
+    if ((& $out $f.Xenc $fam.XMin $fam.XMax) -or (& $out $f.Xdec $ModelFit.Ranges.Xdec.Min $ModelFit.Ranges.Xdec.Max) -or
+        (& $out $f.Xcap $ModelFit.Ranges.Xcap.Min $ModelFit.Ranges.Xcap.Max)) { $res.InRange = $false }
+    if ($null -ne $fam.FpsLimitX -and $f.Xenc -ge $fam.FpsLimitX * 0.95) { $res.FpsRisk = $true }
     $res.Family = $fam.Key
     $res.Ok = $true
     return $res
@@ -1902,22 +2399,87 @@ function Get-StreamBenchmarkSessionCap {
     param([string]$Encoding, [object[]]$Gpus)
     if ($Encoding -notmatch '^gpu:(\d+)$') { return 0 }
     $g = @($Gpus) | Where-Object { [int]$_.Index -eq [int]$Matches[1] } | Select-Object -First 1
-    if ($g -and [string]$g.Model -match 'NVIDIA' -and [string]$g.Model -notmatch 'Quadro|RTX A\d|RTX \d000 Ada|Tesla|Data Center') { return $script:BenchNvencSessionCap }
+    if (-not $g -or [string]$g.Model -notmatch 'NVIDIA') { return 0 }
+    # The limit MEASURED on this PC wins (Measure-StreamBenchmarkNvencSessions): the driver's limit
+    # changes over versions (measured 12 on a GeForce RTX 5070 Laptop, driver 617.42, while the
+    # documented figure was 8). -1 = at least the probe maximum, i.e. not a practical limit.
+    $measured = $null
+    if ($g.PSObject.Properties['SessionCap'] -or ($g -is [System.Collections.IDictionary] -and $g.Contains('SessionCap'))) { $measured = $g.SessionCap }
+    if ($null -eq $measured) { try { $kv = Get-DbKeyValue -Key $script:BenchKvNvencCap; if ($kv) { $measured = $kv.Cap } } catch { } }
+    if ($null -ne $measured -and [int]$measured -ne 0) { return $(if ([int]$measured -lt 0) { 0 } else { [int]$measured }) }
+    if ([string]$g.Model -notmatch 'Quadro|RTX A\d|RTX \d000 Ada|Tesla|Data Center') { return $script:BenchNvencSessionCap }
     return 0
+}
+
+
+function Measure-StreamBenchmarkNvencSessions {
+    <#
+    .SYNOPSIS
+    How many NVENC encode sessions the NVIDIA driver accepts at once on this PC: starts -Max short
+    encodes of a synthetic picture together (no headset) and counts those that opened. Returns the
+    count, -1 when all -Max opened (no practical limit), 0 when it could not run. Stores the result
+    in app_kv benchmark_nvenc_cap. About 5 s. Called once per benchmark run that uses NVENC.
+    .EXAMPLE
+    Measure-StreamBenchmarkNvencSessions -Max 24
+    #>
+    # -re (real-time input) on purpose: without it a small encode finishes before the last one has
+    # started, the sessions never all overlap and the count is inflated (20-22 at 640x480 against
+    # the real 12 on an RTX 5070 Laptop, driver 617.42). With -re the count is the same at every
+    # size: a fixed driver quota on GeForce cards, not a load limit.
+    param([int]$Max = 24, [int]$Seconds = 5, [string]$Encoder = 'h264_nvenc', [string]$Size = '640x480')
+    $ff = $global:ffmpegFilePath
+    if (-not $ff -or -not (Test-Path -LiteralPath $ff)) { return 0 }
+    $procs = @()
+    $reads = @()
+    try {
+        for ($i = 0; $i -lt $Max; $i++) {
+            $psi = [System.Diagnostics.ProcessStartInfo]::new()
+            $psi.FileName = $ff
+            # -nostdin + a closed stdin: in a background job ffmpeg's stdin is an open pipe nobody
+            # writes to, and ffmpeg (which polls stdin for key commands) hung there - 24 encodes of
+            # 5 s were still alive minutes later and the run sat in this step.
+            $psi.Arguments = ('-hide_banner -nostdin -loglevel error -re -f lavfi -i testsrc2=size={2}:rate=30 -t {0} -c:v {1} -b:v 2M -f null -' -f $Seconds, $Encoder, $Size)
+            $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true; $psi.RedirectStandardError = $true; $psi.RedirectStandardInput = $true
+            $pr = [System.Diagnostics.Process]::Start($psi)
+            try { $pr.StandardInput.Close() } catch { }
+            $procs += $pr
+            $reads += $pr.StandardError.ReadToEndAsync()
+        }
+        # One overall deadline; whatever has not ended by then is killed in finally (never a hang).
+        $deadline = (Get-Date).AddSeconds($Seconds + 15)
+        $ok = 0
+        for ($i = 0; $i -lt $procs.Count; $i++) {
+            $p = $procs[$i]
+            $leftMs = [Math]::Max(0, [int]($deadline - (Get-Date)).TotalMilliseconds)
+            [void]$p.WaitForExit($leftMs)
+            $err = ''
+            if ($p.HasExited -and $reads[$i].Wait(1000)) { $err = [string]$reads[$i].Result }
+            if ($p.HasExited -and $p.ExitCode -eq 0 -and $err -notmatch 'OpenEncodeSessionEx failed') { $ok++ }
+        }
+        $cap = if ($ok -ge $Max) { -1 } else { $ok }
+        if ($ok -gt 0) { try { Set-DbKeyValue -Key $script:BenchKvNvencCap -Value @{ Cap = $cap; Encoder = $Encoder; At = (Get-Date).ToUniversalTime().ToString('o') } } catch { } }
+        Write-Log ("Benchmark: NVENC accepts {0} concurrent encode session(s) on this PC ({1} tried)" -f $(if ($cap -lt 0) { ('{0}+' -f $Max) } else { $cap }), $Max) -Level INFO
+        return $cap
+    } catch {
+        Write-Log ("Benchmark: NVENC session probe failed: {0}" -f $_.Exception.Message) -Level WARNING
+        return 0
+    } finally {
+        foreach ($p in $procs) { try { if (-not $p.HasExited) { $p.Kill() } } catch { } }
+    }
 }
 
 
 function Get-StreamBenchmarkRecommendation {
     <#
     .SYNOPSIS
-    Load estimate for -Headsets parallel streams and up to three proposals. Uses the fitted model
-    (Get-StreamBenchmarkModel) when the result supports it - any parameter combination, with a
-    +/- band - and falls back to Get-StreamBenchmarkRecommendationMeasured (measured tests and
-    interpolation only) otherwise. Same parameters and return shape as the measured mode, plus
-    Mode ('model' | 'measured'), Model (fit summary) and, in Estimate / Proposals, CpuBand,
-    Gpus[].Band, InRange, FpsRisk, SessionCap, W, H.
+    Load estimate for -Headsets parallel streams of the -Settings scenario, plus three proposals:
+    the Low / Mid / High reference scenarios (ADR-0039) on the scenario's encoder and codec. Uses
+    the fitted model (Get-StreamBenchmarkModel) when the result supports it - any combination, with
+    a +/- band - and falls back to Get-StreamBenchmarkRecommendationMeasured otherwise. Returns
+    @{Ok;Error;Mode;Headsets;Margin;Limits;Choices;Settings;Estimate;Proposals;Note;Model}.
+    Settings keys: Eye, View, Encoding, Codec, Fps, Mbps, ReencodeFps, ReencodeMbps, MaxSize.
     .EXAMPLE
-    Get-StreamBenchmarkRecommendation -Result (Get-StreamBenchmarkResult -Model 'Quest 3') -Headsets 6 -Settings @{ Fps = 60; MaxSize = 1080 }
+    Get-StreamBenchmarkRecommendation -Result (Get-StreamBenchmarkResult -Model 'Quest 3') -Headsets 6 -Settings @{ Fps = 60; ReencodeFps = 30; MaxSize = 1080 }
     #>
     param(
         $Result,
@@ -1928,7 +2490,7 @@ function Get-StreamBenchmarkRecommendation {
         [double]$Margin = 0.10
     )
     $fit = $null
-    try { $fit = Get-StreamBenchmarkModel -Result $Result } catch { $fit = $null }
+    try { $fit = Get-StreamBenchmarkModel -Result $Result } catch { $fit = $null; Write-Log ("Benchmark model: {0}" -f $_.Exception.Message) -Level WARNING }
     $usable = $fit -and $fit.Ok -and @($fit.Families | Where-Object { $_.DistinctX -ge 2 }).Count -gt 0
     if (-not $usable) {
         $r = Get-StreamBenchmarkRecommendationMeasured -Result $Result -Headsets $Headsets -Settings $Settings -MaxCpu $MaxCpu -MaxGpu $MaxGpu -Margin $Margin
@@ -1939,7 +2501,7 @@ function Get-StreamBenchmarkRecommendation {
     if ($MaxGpu -le 0) { $MaxGpu = if ($null -ne $global:VQA_GpuMaxThreshold) { [double]$global:VQA_GpuMaxThreshold } else { 80 } }
     $out = @{ Ok = $true; Error = ''; Mode = 'model'; Headsets = $Headsets; Margin = $Margin; Limits = @{ Cpu = $MaxCpu; Gpu = $MaxGpu }
               Choices = $null; Settings = $null; Estimate = $null; Proposals = @()
-              Note = 'Model fitted on the measured tests (one change at a time), linear in pixels x fps, scaled to N headsets with a safety margin. The +/- band is the fit error.'
+              Note = 'Model fitted on the measured tests: capture terms (bitrate, decoded pixels x fps) shared by every encoder, encode term (encoded pixels x re-encode fps) per encoder, scaled to N headsets with a safety margin. The +/- band is the fit error.'
               Model = $null }
     $base = $fit.Base; $gpus = $fit.Gpus; $modelName = $fit.Model
     $k = 1.0 + $Margin
@@ -1952,57 +2514,79 @@ function Get-StreamBenchmarkRecommendation {
     $tpl = Get-StreamBenchmarkModelTemplate -Model $modelName
     $views = @(); if ($tpl -and $tpl.views) { $views = @($tpl.views.PSObject.Properties | ForEach-Object { $_.Name }) }
     $encs = @($fit.Families | ForEach-Object { if ($_.Encoding -eq 'gpu') { 'gpu:' + $_.GpuIndex } else { 'cpu' } } | Select-Object -Unique)
-    $hasMerged = [bool]($fit.Families | Where-Object { $_.MergedExtra })
+    $hasMerged = [bool]($fit.Families | Where-Object { $_.MergedExtra -and $_.Encoding -eq 'cpu' })
     $out.Choices = @{
         Eyes = @(@('R') + $(if ($hasMerged) { @('M') } else { @() }))
         Views = $views; Encodings = $encs
         Codecs = @($fit.Families | ForEach-Object { $_.Codec } | Select-Object -Unique)
-        Fps = @(15, 30, 45, 60, 72); Mbps = @(5, 10, 20, 40)
-        ReencodeMbps = @(@(2, 4, 6, 8, 12) + @($fit.RefReencode) | Select-Object -Unique | Sort-Object)
-        MaxSizes = @(0, 2560, 1920, 1440, 1080, 720)
+        Fps = @(15, 30, 45, 60, 72, 90); Mbps = @(3, 5, 8, 13, 20, 34)
+        ReencodeFps = @(15, 30, 45, 60)
+        ReencodeMbps = @(@(2, 4, 6, 8, 10, 12) + @($fit.RefReencode) | Select-Object -Unique | Sort-Object)
+        MaxSizes = @(720, 1080, 1440, 1920, 2560, 0)
     }
     $out.Model = @{
         RefMbps = $fit.RefMbps; RefReencode = $fit.RefReencode
+        Linearity = $fit.Linearity
         Families = @($fit.Families | ForEach-Object {
             $fm = $_
-            @{ Key = $fm.Key; Encoder = $fm.Encoder; Points = $fm.SinglePoints; Merged = [bool]$fm.MergedExtra
+            @{ Key = $fm.Key; Encoder = $fm.Encoder; Points = $fm.Points; Merged = [bool]($fm.MergedPoints -gt 0)
                XMin = $fm.XMin; XMax = $fm.XMax; CpuRmse = [Math]::Round($fm.Fit['cpu'].Rmse, 2)
                GpuRmse = @($gpus | ForEach-Object { @{ Index = [int]$_.Index; Rmse = [Math]::Round($fm.Fit[('gpu' + [int]$_.Index)].Rmse, 2) } }) } })
     }
 
-    # ---- Settings (defaults: single eye, current view, 45 fps, 10 Mb/s, best GPU, h264) ----
+    # ---- Settings (defaults: the current configuration) ----
     $get = { param($n) Get-StreamBenchmarkSelectionValue $Settings $n }
-    $bestGpu = $gpus | Where-Object { [int]$_.Index -eq [int]$global:GPU_Index } | Select-Object -First 1
-    $defEnc = if ($bestGpu -and $encs -contains ('gpu:' + [int]$bestGpu.Index)) { 'gpu:' + [int]$bestGpu.Index } else { $encs[0] }
+    $live = Get-StreamBenchmarkLiveConfig
+    $bestGpu = $gpus | Where-Object { [int]$_.Index -eq [int]$live.GpuIndex } | Select-Object -First 1
+    $cfgEnc = if ($live.GpuAcceleration -and $bestGpu) { 'gpu:' + [int]$bestGpu.Index } else { 'cpu' }
+    $defEnc = if ($encs -contains $cfgEnc) { $cfgEnc } else { $encs[0] }
+    $cfgCodec = if ([string]$live.Codec -eq 'h265') { 'h265' } else { 'h264' }
+    $cfgReFps = [int]$live.Framerate; if ($cfgReFps -le 0) { $cfgReFps = 30 }
+    $cfgReMb = ConvertTo-StreamBenchmarkMbps $live.Bitrate; if (-not $cfgReMb) { $cfgReMb = [int]$fit.RefReencode }
     $lastView = @($Result.Results | Where-Object { $_.View } | ForEach-Object { [string]$_.View } | Group-Object | Sort-Object Count -Descending | Select-Object -First 1)[0].Name
-    $s = @{
+    $num = { param($n, $d) $v = & $get $n; if ($null -ne $v -and "$v" -ne '' -and ($v -as [int]) -ne $null) { [int]$v } else { $d } }
+    $s = [ordered]@{
         Eye = $(if ([string](& $get 'Eye') -eq 'M' -and $hasMerged) { 'M' } else { 'R' })
-        View = $(if ($views -contains [string](& $get 'View')) { [string](& $get 'View') } elseif ($lastView) { $lastView } else { $views[0] })
+        View = $(if ($views -contains [string](& $get 'View')) { [string](& $get 'View') } elseif ($views -contains 'square') { 'square' } elseif ($lastView) { $lastView } else { $views[0] })
         Encoding = $(if ($encs -contains [string](& $get 'Encoding')) { [string](& $get 'Encoding') } else { $defEnc })
-        Codec = $(if ((& $get 'Codec') -in @('h264', 'h265')) { [string](& $get 'Codec') } else { 'h264' })
-        Fps = $(if ((& $get 'Fps') -as [int]) { [int](& $get 'Fps') } else { 45 })
-        Mbps = $(if ((& $get 'Mbps') -as [int]) { [int](& $get 'Mbps') } else { 10 })
-        ReencodeMbps = $(if ((& $get 'ReencodeMbps') -as [int]) { [int](& $get 'ReencodeMbps') } else { [int]$fit.RefReencode })
-        MaxSize = $(if ($null -ne (& $get 'MaxSize') -and "$(& $get 'MaxSize')" -ne '') { [int](& $get 'MaxSize') } else { 0 })
+        Codec = $(if ((& $get 'Codec') -in @('h264', 'h265')) { [string](& $get 'Codec') } else { $cfgCodec })
+        Fps = (& $num 'Fps' 45)
+        Mbps = (& $num 'Mbps' 10)
+        ReencodeFps = (& $num 'ReencodeFps' $cfgReFps)
+        ReencodeMbps = (& $num 'ReencodeMbps' $cfgReMb)
+        MaxSize = (& $num 'MaxSize' 0)
     }
     if (-not ($fit.Families | Where-Object { $_.Key -eq ('{0}|{1}' -f $s.Encoding, $s.Codec) })) {
         $s.Codec = [string](@($fit.Families | Where-Object { $_.Key -like ($s.Encoding + '|*') })[0].Codec)
     }
     if ($s.Eye -eq 'M') { $s.MaxSize = -1 } elseif ($s.MaxSize -lt 0) { $s.MaxSize = 0 }
+    if ($s.ReencodeFps -gt $s.Fps) { $s.ReencodeFps = $s.Fps }
     $out.Settings = $s
 
     # ---- One settings set -> estimate for N headsets ----
     $estimate = {
         param($set, [int]$n)
-        $p = Get-StreamBenchmarkModelPrediction -ModelFit $fit -Settings $set
+        $p = Get-StreamBenchmarkModelPrediction -ModelFit $fit -Settings $set -Headsets $n
         if (-not $p.Ok) { return @{ NotMeasured = $true; Message = $p.Error } }
         $e = Get-StreamBenchmarkLoadEstimate -Vec $p.Vec -Base $base -Gpus $gpus -Headsets $n -MaxCpu $MaxCpu -MaxGpu $MaxGpu -Margin $Margin
-        $e.CpuBand = [Math]::Round($n * $p.Err.Cpu * $k, 1)
-        foreach ($g in $e.Gpus) { $g.Band = [Math]::Round($n * $p.Err.Gpu[[int]$g.Index] * $k, 1) }
-        $cap = Get-StreamBenchmarkSessionCap -Encoding $set.Encoding -Gpus $gpus
+        # +/- band: the fit error is mostly measurement noise (idle drift of 1-2 points), which does
+        # not add up linearly over N streams: scaled by sqrt(N), not N (N gave +/-27 points on a GPU
+        # at 18 headsets). A resource the setting barely uses (under 0.25 point per stream, e.g. the
+        # other GPU) gets no band: its fit error is that GPU's own noise, not this stream's.
+        $sq = [Math]::Sqrt([double]$n)
+        $e.CpuBand = [Math]::Round($sq * $p.Err.Cpu * $k, 1)
+        foreach ($g in $e.Gpus) {
+            $gi = [int]$g.Index
+            $g.Band = if ([double]$p.Vec.Gpu[$gi] -lt 0.25) { 0.0 } else { [Math]::Round($sq * $p.Err.Gpu[$gi] * $k, 1) }
+        }
+        $encUsed = if ($set.Eye -eq 'M') { 'cpu' } else { $set.Encoding }
+        $cap = Get-StreamBenchmarkSessionCap -Encoding $encUsed -Gpus $gpus
         $e.SessionCap = $cap
+        # Which limit decides the headset count: the load (CPU / GPU thresholds) or the encoder sessions.
+        $e.MaxHeadsetsLoad = $e.MaxHeadsets
+        $e.LimitedBy = 'load'
         if ($cap -gt 0) {
-            $e.MaxHeadsets = [Math]::Min($e.MaxHeadsets, $cap)
+            if ($cap -lt $e.MaxHeadsets) { $e.MaxHeadsets = $cap; $e.LimitedBy = 'sessions' }
             if ($n -gt $cap) { $e.Fits = $false }
         }
         $e.FpsRisk = $p.FpsRisk; $e.InRange = $p.InRange
@@ -2015,57 +2599,21 @@ function Get-StreamBenchmarkRecommendation {
     }
     $out.Estimate = & $estimate $s $Headsets
 
-    # ---- Proposals: search the space, best quality that fits ----
-    $cands = [System.Collections.Generic.List[object]]::new()
-    $candSeen = @{}
-    $eyesC = @('R') + $(if ($hasMerged) { @('M') } else { @() })
-    foreach ($fam in $fit.Families) {
-        $enc = if ($fam.Encoding -eq 'gpu') { 'gpu:' + $fam.GpuIndex } else { 'cpu' }
-        foreach ($eye in $eyesC) {
-            $sizes = if ($eye -eq 'M') { @(-1) } else { @(0, 1920, 1440, 1080, 720) }
-            foreach ($sz in $sizes) {
-                # A merged view is only proposed at its default 30 fps (higher costs CPU per frame).
-                foreach ($f in $(if ($eye -eq 'M') { @(30) } else { @(30, 45, 60, 72) })) {
-                    foreach ($b in 10, 20) {
-                        $set = @{ Eye = $eye; View = $s.View; Encoding = $enc; Codec = $fam.Codec; Fps = $f; Mbps = $b; ReencodeMbps = $s.ReencodeMbps; MaxSize = $sz }
-                        $e = & $estimate $set $Headsets
-                        if ($e.NotMeasured) { continue }
-                        # A max size above the native frame gives the native frame: one candidate only.
-                        $ck = '{0}|{1}|{2}|{3}x{4}|{5}|{6}' -f $enc, $fam.Codec, $eye, $e.W, $e.H, $f, $b
-                        if ($candSeen.ContainsKey($ck)) { continue }
-                        $candSeen[$ck] = $true
-                        $cands.Add([PSCustomObject]@{
-                            Settings = $set; Estimate = $e; Fits = [bool]$e.Fits
-                            RankEye = [int]($eye -eq 'M'); RankFps = $f; RankPx = [int]$e.W * [int]$e.H; RankMbps = $b
-                            RankGpu = [int]($enc -like 'gpu:*'); Cpu = [double]$e.Cpu; MaxN = [int]$e.MaxHeadsets
-                            InRange = [bool]$e.InRange; Encoder = $fam.Encoder
-                        })
-                    }
-                }
-            }
-        }
-    }
-    $all = @($cands)
-    # Prefer predictions inside the measured range; fall back to all when none fits there.
-    $fitting = @($all | Where-Object { $_.Fits -and $_.InRange })
-    if ($fitting.Count -eq 0) { $fitting = @($all | Where-Object { $_.Fits }) }
-    $order = @(
-        @{ Expression = 'RankEye'; Descending = $true }, @{ Expression = 'RankFps'; Descending = $true },
-        @{ Expression = 'RankPx'; Descending = $true }, @{ Expression = 'RankMbps'; Descending = $true },
-        @{ Expression = 'RankGpu'; Descending = $true }, @{ Expression = 'Cpu'; Descending = $false })
-    if ($fitting.Count -gt 0) {
-        $top = @($fitting | Sort-Object -Property $order | Select-Object -First 3)
-    } else {
-        $top = @($all | Sort-Object -Property @{ Expression = 'MaxN'; Descending = $true }, @{ Expression = 'Cpu'; Descending = $false } | Select-Object -First 3)
-        $out.Note += (' No configuration fits {0} headset(s) under these limits - the closest ones are shown.' -f $Headsets)
-    }
-    $out.Proposals = @($top | ForEach-Object {
-        $st = $_.Settings
-        $encLbl = if ($st.Encoding -eq 'cpu') { 'CPU' } else { 'GPU ' + $st.Encoding.Split(':')[1] }
-        $sizeLbl = if ($st.Eye -eq 'M') { 'merged' } else { '{0}x{1}' -f $_.Estimate.W, $_.Estimate.H }
-        @{ Settings = $st; Encoder = $_.Encoder; Estimate = $_.Estimate; Fits = $_.Fits
-           Label = ('{0}, {1} fps, {2} Mb/s, {3} {4}, re-encode {5} Mb/s' -f $sizeLbl, $st.Fps, $st.Mbps, $encLbl, $st.Codec, $st.ReencodeMbps) }
+    # ---- Proposals: the Low / Mid / High scenarios on the scenario's encoder and codec ----
+    $out.Proposals = @(foreach ($sc in @(Get-StreamBenchmarkScenarios -Model $modelName -CurrentView $s.View)) {
+        $set = [ordered]@{ Eye = $sc.Eye; View = $sc.View; Encoding = $s.Encoding; Codec = $s.Codec; Fps = $sc.Fps; Mbps = $sc.Mbps
+                           ReencodeFps = $sc.ReencodeFps; ReencodeMbps = $sc.ReencodeMbps; MaxSize = $sc.MaxSize }
+        $e = & $estimate $set $Headsets
+        if ($e.NotMeasured) { continue }
+        $encLbl = if ($set.Encoding -eq 'cpu') { 'CPU' } else { 'GPU ' + $set.Encoding.Split(':')[1] }
+        $sizeLbl = if ([int]$set.MaxSize -eq 0) { 'native' } else { [string]$set.MaxSize }
+        @{ Name = $sc.Name; Settings = $set; Estimate = $e; Fits = [bool]$e.Fits
+           Encoder = [string](@($fit.Families | Where-Object { $_.Key -eq ('{0}|{1}' -f $set.Encoding, $set.Codec) })[0].Encoder)
+           Label = ('{0} - {1} {2}, {3} fps, {4} Mb/s - re-encode {5} fps, {6} Mb/s, {7} {8}' -f $sc.Name, $set.View, $sizeLbl, $set.Fps, $set.Mbps, $set.ReencodeFps, $set.ReencodeMbps, $encLbl, ([string]$set.Codec).ToUpper()) }
     })
+    if (-not ($out.Proposals | Where-Object { $_.Fits })) {
+        $out.Note += (' None of the Low / Mid / High scenarios fits {0} headset(s) under these limits.' -f $Headsets)
+    }
     return $out
 }
 
@@ -2255,7 +2803,11 @@ function Set-StreamBenchmarkRecommendation {
     $enc = ([string](& $get 'Encoding')).ToLower()
     $codec = ([string](& $get 'Codec')).ToLower(); if ($codec -notin @('h264', 'h265')) { $codec = 'h264' }
     $fps = [int](& $get 'Fps'); $mbps = [int](& $get 'Mbps'); $reenc = [int](& $get 'ReencodeMbps'); $size = [int](& $get 'MaxSize')
-    if ($fps -lt 5 -or $fps -gt 120 -or $mbps -lt 1 -or $mbps -gt 100 -or $reenc -lt 1 -or $reenc -gt 100) { $res.Error = 'Invalid settings.'; return $res }
+    # Re-encode output FPS is its own setting (ADR-0039); an older caller without it keeps the v3
+    # meaning (= capture FPS). Never above the capture FPS (duplicate frames only).
+    $refps = [int](& $get 'ReencodeFps'); if ($refps -le 0) { $refps = $fps }
+    if ($refps -gt $fps) { $refps = $fps }
+    if ($fps -lt 5 -or $fps -gt 120 -or $mbps -lt 1 -or $mbps -gt 100 -or $reenc -lt 1 -or $reenc -gt 100 -or $refps -lt 5) { $res.Error = 'Invalid settings.'; return $res }
     $isGpu = $enc -match '^gpu:(\d+)$'
     $gpuIdx = if ($isGpu) { [int]$Matches[1] } else { -1 }
 
@@ -2276,13 +2828,17 @@ function Set-StreamBenchmarkRecommendation {
             if (Set-StreamBenchmarkConfigValue -Object $obj -Name $name -Value $value) { $changes.Add(('{0}: {1} -> {2}' -f $label, $old, $value)) }
         }
         & $track $cfg.mediamtx 'reencode_in_ffmpeg' $true 'mediamtx.reencode_in_ffmpeg'
-        & $track $cfg.mediamtx 'stream_framerate' $fps 'mediamtx.stream_framerate'
+        & $track $cfg.mediamtx 'stream_framerate' $refps 'mediamtx.stream_framerate'
         & $track $cfg.mediamtx 'stream_bitrate' ('{0}M' -f $reenc) 'mediamtx.stream_bitrate'
         & $track $cfg.mediamtx 'codec' $codec 'mediamtx.codec'
         & $track $cfg.Performance 'GPU_Acceleration' ([bool]$isGpu) 'Performance.GPU_Acceleration'
         if ($isGpu) { & $track $cfg.Performance 'GPU_Index' $gpuIdx 'Performance.GPU_Index' }
-        if ($eye -eq 'R' -and $size -ge 0 -and $cfg.scrcpy -and $cfg.scrcpy.parameters -and $cfg.scrcpy.parameters.PSObject.Properties[$Model]) {
-            & $track $cfg.scrcpy.parameters.$Model 'max_size' $size ("scrcpy.parameters.{0}.max_size" -f $Model)
+        if ($cfg.scrcpy -and $cfg.scrcpy.parameters -and $cfg.scrcpy.parameters.PSObject.Properties[$Model]) {
+            if ($eye -eq 'R' -and $size -ge 0) {
+                & $track $cfg.scrcpy.parameters.$Model 'max_size' $size ("scrcpy.parameters.{0}.max_size" -f $Model)
+            }
+            # One codec for the capture and the re-encode (ADR-0039).
+            & $track $cfg.scrcpy.parameters.$Model 'video_codec' $codec ("scrcpy.parameters.{0}.video_codec" -f $Model)
         }
         $cfgChanged = $changes.Count -gt 0
         if ($cfgChanged -and -not $Preview) {
@@ -2300,7 +2856,10 @@ function Set-StreamBenchmarkRecommendation {
         $old = ConvertFrom-ScrcpyProfile -Profile ([string]$row.ScrcpyProfile)
         $v = if ($view) { $view } elseif ($old) { $old.View } else { Get-ScrcpyDefaultView -Model $row.Model }
         $audio = if ($old) { [bool]$old.AudioDup } else { $false }
-        $new = ConvertTo-ScrcpyProfile -View $v -Eye $eye -AudioDup $audio -Fps $fps -BitrateMbps $mbps
+        # A single-eye result is valid for either eye (an L crop is the same size as R): keep the
+        # headset's own eye instead of switching a left-eye headset to the right one.
+        $e = if ($eye -eq 'R' -and $old -and $old.Eye -eq 'L') { 'L' } else { $eye }
+        $new = ConvertTo-ScrcpyProfile -View $v -Eye $e -AudioDup $audio -Fps $fps -BitrateMbps $mbps
         if ([string]$row.ScrcpyProfile -ne $new) {
             $changes.Add(('{0} profile: {1} -> {2}' -f $row.Name, $row.ScrcpyProfile, $new))
             if (-not $Preview) { Update-HeadsetField -ID ([int]$row.ID) -Field 'ScrcpyProfile' -NewValue $new }

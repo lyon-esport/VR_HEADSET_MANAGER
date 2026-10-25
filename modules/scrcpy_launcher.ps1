@@ -678,11 +678,24 @@ public sealed class VrhmPipeBridge
     private static double endedCpuSeconds = 0.0;
 
     private readonly NamedPipeServerStream srvIn;
-    private readonly NamedPipeServerStream srvOut;
+    private NamedPipeServerStream srvOut;
     private readonly ManualResetEvent stopEvent = new ManualResetEvent(false);
     private readonly int readSize;
     private readonly int inTimeoutMs;
     private readonly int outTimeoutMs;
+    private readonly int pipeBufferBytes;
+    // ffmpeg hot swap (benchmark, ADR-0039): the Matroska header (EBML + Segment + Tracks, i.e.
+    // every byte before the first Cluster) is kept so a NEW ffmpeg can join the running capture:
+    // it gets the header, then the stream from the next cluster start. A cut anywhere else is
+    // undecodable (measured). Off until BeginReattach: production keeps ending on a lost reader.
+    private byte[] header = null;
+    private MemoryStream headerProbe = new MemoryStream();
+    private volatile bool reattachRequested = false;
+    private volatile bool holdOnReaderLoss = false;
+    private volatile bool outListening = false;
+    private int listenGeneration = 0;
+    private int reattachCount = 0;
+    private long bytesDiscarded = 0;
     private readonly Thread thread;
     private IntPtr threadHandle = IntPtr.Zero;
     private long bytesCopied = 0;
@@ -706,6 +719,7 @@ public sealed class VrhmPipeBridge
         this.readSize = Math.Max(4096, readBytes);
         this.inTimeoutMs = inTimeoutMs;
         this.outTimeoutMs = outTimeoutMs;
+        this.pipeBufferBytes = pipeBufferBytes;
         srvIn = new NamedPipeServerStream(pipeIn, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous, pipeBufferBytes, pipeBufferBytes);
         try
         {
@@ -727,6 +741,78 @@ public sealed class VrhmPipeBridge
     public string Error { get { return error; } }
     public long BytesCopied { get { return Interlocked.Read(ref bytesCopied); } }
     public int NativeThreadId { get { return nativeThreadId; } }
+    // Hot swap state: CanReattach once the header is known; OutListening while a new output
+    // server waits for the next ffmpeg; ListenGeneration counts those servers (a caller waits for
+    // it to move before starting ffmpeg - a client opening a busy pipe fails at once);
+    // ReattachCount counts swaps completed (header + first cluster written to the new reader).
+    public bool CanReattach { get { return header != null; } }
+    public bool OutListening { get { return outListening; } }
+    public int ListenGeneration { get { return Thread.VolatileRead(ref listenGeneration); } }
+    public int ReattachCount { get { return Thread.VolatileRead(ref reattachCount); } }
+    public long BytesDiscarded { get { return Interlocked.Read(ref bytesDiscarded); } }
+    public int HeaderBytes { get { byte[] h = header; return h == null ? 0 : h.Length; } }
+
+    // Keeps the relay alive when the reader (ffmpeg) goes away, without asking for a swap: the
+    // next ffmpeg that opens the output pipe gets the header and the stream from the next cluster.
+    // Armed only while a just-started NVENC ffmpeg is checked (encoder fallback), then disarmed.
+    public void SetHoldOnReaderLoss(bool on) { holdOnReaderLoss = on; }
+
+    // Asks the relay to accept a new reader: the current one may be killed right after. From then
+    // on a lost reader no longer ends the bridge. False when the header is not known yet.
+    public bool BeginReattach()
+    {
+        if (header == null || stopRequested) { return false; }
+        holdOnReaderLoss = true;
+        reattachRequested = true;
+        return true;
+    }
+
+    // Offset of the first VALID cluster start in b[0..len): the Cluster ID 1F 43 B6 75, an EBML
+    // size and the Timestamp element E7 as first child, optionally after a CRC-32 element (an ID
+    // alone can occur inside a frame).
+    // -1 when none; keepFrom = where a match could still start once more bytes arrive.
+    private static int FindCluster(byte[] b, int len, out int keepFrom)
+    {
+        keepFrom = Math.Max(0, len - 3);
+        for (int i = 0; i + 3 < len; i++)
+        {
+            if (b[i] != 0x1F || b[i + 1] != 0x43 || b[i + 2] != 0xB6 || b[i + 3] != 0x75) { continue; }
+            if (i + 4 >= len) { keepFrom = i; return -1; }
+            int s = b[i + 4];
+            if (s == 0) { continue; }
+            int l = 1;
+            while ((s & 0x80) == 0) { s <<= 1; l++; }
+            int q = i + 4 + l;
+            if (q >= len) { keepFrom = i; return -1; }
+            if (b[q] == 0xE7) { return i; }
+            // libavformat (scrcpy's muxer) puts a CRC-32 element (BF 84 + 4 bytes) first.
+            if (b[q] == 0xBF)
+            {
+                if (q + 6 >= len) { keepFrom = i; return -1; }
+                if (b[q + 1] == 0x84 && b[q + 6] == 0xE7) { return i; }
+            }
+        }
+        return -1;
+    }
+
+    // Collects the stream start until the first cluster: that prefix is the header.
+    private void TrackHeader(byte[] buf, int n)
+    {
+        MemoryStream probe = headerProbe;
+        if (probe == null || header != null) { return; }
+        probe.Write(buf, 0, n);
+        byte[] all = probe.ToArray();
+        int keep;
+        int idx = FindCluster(all, all.Length, out keep);
+        if (idx > 0)
+        {
+            byte[] h = new byte[idx];
+            Buffer.BlockCopy(all, 0, h, 0, idx);
+            header = h;
+            headerProbe = null;
+        }
+        else if (all.Length > 4 * 1024 * 1024) { headerProbe = null; }
+    }
 
     // CPU time used by this bridge's thread so far (kernel + user), in seconds.
     public double CpuSeconds { get { lock (RegistryLock) { return ReadCpuLocked(); } } }
@@ -797,14 +883,85 @@ public sealed class VrhmPipeBridge
     }
 
     // One write: false when stopped or when the reader (ffmpeg) is gone.
-    private bool WriteOrStop(byte[] buf, int count)
+    private bool WriteOrStop(byte[] buf, int count) { return WriteOrStop(buf, 0, count); }
+    private bool WriteOrStop(byte[] buf, int offset, int count)
     {
+        if (count <= 0) { return true; }
         IAsyncResult ar;
-        try { ar = srvOut.BeginWrite(buf, 0, count, null, null); } catch (IOException) { return false; }
+        try { ar = srvOut.BeginWrite(buf, offset, count, null, null); } catch (IOException) { return false; } catch (ObjectDisposedException) { return false; }
         if (!WaitOrStop(ar.AsyncWaitHandle, -1)) { return false; }
-        try { srvOut.EndWrite(ar); } catch (IOException) { return false; }
+        try { srvOut.EndWrite(ar); } catch (IOException) { return false; } catch (ObjectDisposedException) { return false; }
         Interlocked.Add(ref bytesCopied, count);
         return true;
+    }
+
+    // Hot swap: replaces the output server, keeps DRAINING scrcpy (a blocked writer would stall the
+    // capture) until the next ffmpeg connects, writes the header, then relays from the next valid
+    // cluster start. False when stopped, at end of input, or when no reader came in time.
+    private bool Reconnect(byte[] buf)
+    {
+        reattachRequested = false;
+        try { srvOut.Dispose(); } catch { }
+        srvOut = new NamedPipeServerStream(PipeOut, PipeDirection.Out, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous, pipeBufferBytes, pipeBufferBytes);
+        IAsyncResult arOut = srvOut.BeginWaitForConnection(null, null);
+        outListening = true;
+        Interlocked.Increment(ref listenGeneration);
+        DateTime deadline = DateTime.UtcNow.AddMilliseconds(outTimeoutMs);
+        IAsyncResult arRead = null;
+        try
+        {
+            while (true)
+            {
+                if (arRead == null) { arRead = srvIn.BeginRead(buf, 0, buf.Length, null, null); }
+                int left = (int)(deadline - DateTime.UtcNow).TotalMilliseconds;
+                if (left <= 0) { error = "ffmpeg did not reopen the output pipe in time"; return false; }
+                int r = WaitHandle.WaitAny(new WaitHandle[] { arOut.AsyncWaitHandle, arRead.AsyncWaitHandle, stopEvent }, left);
+                if (r == 2) { return false; }
+                if (r == WaitHandle.WaitTimeout) { continue; }
+                if (r == 1)
+                {
+                    int n;
+                    try { n = srvIn.EndRead(arRead); } catch (IOException) { n = 0; }
+                    arRead = null;
+                    if (n == 0) { return false; }
+                    Interlocked.Add(ref bytesDiscarded, n);
+                    continue;
+                }
+                srvOut.EndWaitForConnection(arOut);
+                break;
+            }
+        }
+        finally { outListening = false; }
+
+        if (!WriteOrStop(header, header.Length)) { return false; }
+        byte[] carry = new byte[0];
+        while (true)
+        {
+            int n;
+            if (arRead != null)
+            {
+                if (!WaitOrStop(arRead.AsyncWaitHandle, -1)) { return false; }
+                try { n = srvIn.EndRead(arRead); } catch (IOException) { n = 0; }
+                arRead = null;
+            }
+            else { n = ReadOrStop(buf); }
+            if (n <= 0) { return false; }
+            byte[] all = new byte[carry.Length + n];
+            Buffer.BlockCopy(carry, 0, all, 0, carry.Length);
+            Buffer.BlockCopy(buf, 0, all, carry.Length, n);
+            int keep;
+            int idx = FindCluster(all, all.Length, out keep);
+            if (idx >= 0)
+            {
+                Interlocked.Add(ref bytesDiscarded, idx);
+                if (!WriteOrStop(all, idx, all.Length - idx)) { return false; }
+                Interlocked.Increment(ref reattachCount);
+                return true;
+            }
+            Interlocked.Add(ref bytesDiscarded, keep);
+            carry = new byte[all.Length - keep];
+            Buffer.BlockCopy(all, keep, carry, 0, carry.Length);
+        }
     }
 
     private void Run()
@@ -835,6 +992,7 @@ public sealed class VrhmPipeBridge
             // input ("EBML header parsing failed"). Said here so the health fault names the cause.
             if (first == 0) { error = "scrcpy closed the input pipe before sending any data"; return; }
             hasData = true;
+            TrackHeader(buf, first);
             if (!WaitOrStop(arOut.AsyncWaitHandle, outTimeoutMs))
             {
                 endState = stopRequested ? "Stopped" : "Failed";
@@ -842,13 +1000,27 @@ public sealed class VrhmPipeBridge
                 return;
             }
             srvOut.EndWaitForConnection(arOut);
-            if (!WriteOrStop(buf, first)) { endState = stopRequested ? "Stopped" : "Completed"; return; }
+            bool ok = WriteOrStop(buf, first);
             while (true)
             {
+                if (!ok)
+                {
+                    // Reader gone: the end of the bridge, unless a hot swap was asked for.
+                    if (stopRequested) { endState = "Stopped"; break; }
+                    if (!holdOnReaderLoss || header == null) { break; }
+                    if (!Reconnect(buf)) { if (stopRequested) { endState = "Stopped"; } else if (error != "") { endState = "Failed"; } break; }
+                }
                 int n = ReadOrStop(buf);
                 if (n < 0) { endState = "Stopped"; break; }
                 if (n == 0) { break; }
-                if (!WriteOrStop(buf, n)) { if (stopRequested) { endState = "Stopped"; } break; }
+                if (header == null) { TrackHeader(buf, n); }
+                if (reattachRequested)
+                {
+                    if (!Reconnect(buf)) { if (stopRequested) { endState = "Stopped"; } else if (error != "") { endState = "Failed"; } break; }
+                    ok = true;
+                    continue;
+                }
+                ok = WriteOrStop(buf, n);
             }
         }
         catch (Exception ex)
@@ -1028,6 +1200,68 @@ function Get-HeadsetPipeBridgeCpuSeconds {
     try { return [double][VrhmPipeBridge]::TotalCpuSeconds() } catch { return 0.0 }
 }
 
+# ffmpeg hot swap (ADR-0039): replaces the ffmpeg of a RUNNING pipe pipeline of THIS process
+# without touching scrcpy. The bridge keeps draining scrcpy, opens a new output pipe, and the new
+# ffmpeg receives the Matroska header then the stream from the next cluster (~2 s at most). The new
+# ffmpeg is started with the CURRENT globals (re-encode codec / fps / bitrate, GPU choice), so the
+# caller sets those first. Refused ($false, nothing changed) for a recording pipeline, an unknown
+# header, or a bridge compiled from an older source; after a failure part way the caller must
+# restart the whole capture. Used by the stream benchmark only. Never throws.
+# Example: Restart-HeadsetFfmpegPush -SafeName 'Q3_BLUE' -ProgressFile $p
+function Restart-HeadsetFfmpegPush {
+    param(
+        [Parameter(Mandatory)][string]$SafeName,
+        [string]$ProgressFile = '',
+        [int]$TimeoutMs = 8000
+    )
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        $entry = $global:HeadsetPipelines[$SafeName]
+        if (-not $entry -or -not $entry.Bridge -or $entry.RecordFile) { return $false }
+        $b = $entry.Bridge
+        if (-not $b.PSObject.Methods['BeginReattach'] -or -not $b.IsAlive -or -not $b.CanReattach) { return $false }
+        $gen0 = [int]$b.ListenGeneration
+        $rc0 = [int]$b.ReattachCount
+        if (-not $b.BeginReattach()) { return $false }
+
+        # No recording here, so nothing to finalise: a kill is immediate.
+        $ff = $entry.FfmpegProcess
+        if ($ff) {
+            try { if (-not $ff.HasExited) { $ff.Kill(); [void]$ff.WaitForExit(3000) } } catch { }
+            try { $ff.CancelErrorRead() } catch { }
+        }
+        if ($entry.FfmpegErrorWriter) { try { $entry.FfmpegErrorWriter.Dispose() } catch { } }
+
+        # Wait for the new output server: a client opening a pipe still held by the old one fails at once.
+        while ([int]$b.ListenGeneration -le $gen0) {
+            if (-not $b.IsAlive -or $sw.ElapsedMilliseconds -ge $TimeoutMs) {
+                Write-Log ("Restart-HeadsetFfmpegPush: bridge of {0} did not reopen its output (alive={1}, {2})" -f $SafeName, $b.IsAlive, $b.Error) -Level WARNING
+                return $false
+            }
+            Start-Sleep -Milliseconds 20
+        }
+        $push = Start-FfmpegStreamPush -SafeName $SafeName -RtspUrl $entry.RtspUrl -SourceCodec ([string]$entry.SourceCodec) -EyeMerge $entry.EyeMergeMaps -ProgressFile $ProgressFile
+        $entry.FfmpegProcess     = $push.Process
+        $entry.FfmpegErrorWriter = $push.ErrorWriter
+        $entry.FfmpegErrorSubId  = $push.ErrorSubscriptionId
+        $entry.StartedAt         = Get-Date
+
+        # Done once the header and the first cluster reached the new ffmpeg.
+        while ([int]$b.ReattachCount -le $rc0) {
+            if (-not $b.IsAlive -or $push.Process.HasExited -or $sw.ElapsedMilliseconds -ge ($TimeoutMs + 4000)) {
+                Write-Log ("Restart-HeadsetFfmpegPush: {0} not resumed (bridge alive={1}, ffmpeg exited={2}, {3})" -f $SafeName, $b.IsAlive, $push.Process.HasExited, $b.Error) -Level WARNING
+                return $false
+            }
+            Start-Sleep -Milliseconds 20
+        }
+        Write-Log ("Restart-HeadsetFfmpegPush: ffmpeg of {0} swapped in {1} ms (header {2} bytes, {3} KB skipped so far)" -f $SafeName, $sw.ElapsedMilliseconds, $b.HeaderBytes, [int]($b.BytesDiscarded / 1KB)) -Level DEBUG
+        return $true
+    } catch {
+        Write-Log ("Restart-HeadsetFfmpegPush: {0}: {1}" -f $SafeName, $_.Exception.Message) -Level WARNING
+        return $false
+    }
+}
+
 # Quotes/escapes a single argument for ProcessStartInfo.Arguments (a single
 # command-line string), following the same rules the Win32 CRT / CommandLineToArgvW
 # parser expects: wrap in quotes if it contains whitespace or a quote, double any
@@ -1057,7 +1291,10 @@ function Start-FfmpegStreamPush {
         [hashtable]$EyeMerge = $null,
         # Stream benchmark (stream_benchmark.ps1): ffmpeg writes frame/drop/dup/speed here once
         # per second (-progress). Empty for a normal stream.
-        [string]$ProgressFile = ''
+        [string]$ProgressFile = '',
+        # Encoder to use instead of Get-GpuEncoder (@{Name;Vendor;ExtraArgs;Codec}): the CPU fallback
+        # of start-screenCopy when the GPU refused the encode session (NVENC quota full).
+        [hashtable]$EncoderOverride = $null
     )
     $names = Get-HeadsetPipeNames -SafeName $SafeName
     # One file PER SESSION (timestamped), never overwritten: a stream that keeps dying and
@@ -1124,6 +1361,8 @@ function Start-FfmpegStreamPush {
             $cpuCodec = if ($global:mediamtxCodec -eq 'h265') { 'h265' } else { 'h264' }
             $enc = @{ Name = $(if ($cpuCodec -eq 'h265') { 'libx265' } else { 'libx264' }); Vendor = 'CPU'; ExtraArgs = @(); Codec = $cpuCodec }
             Write-Log ("Start-FfmpegStreamPush: merged stream of {0} encoded on the CPU ({1})" -f $SafeName, $enc.Name) -Level INFO
+        } elseif ($EncoderOverride) {
+            $enc = $EncoderOverride
         } else {
             $enc = Get-GpuEncoder
         }
@@ -1226,7 +1465,55 @@ function Start-FfmpegStreamPush {
         Process              = $proc
         ErrorWriter          = $errWriter
         ErrorSubscriptionId  = $null
+        # Which encoder this ffmpeg runs ('copy' = passthrough) and where its stderr goes: the
+        # NVENC session fallback of start-screenCopy reads both.
+        EncoderName          = $(if ($forceReencode -and $enc) { [string]$enc.Name } else { 'copy' })
+        ErrorLogPath         = $logErr
     }
+}
+
+
+# Number of NVENC encode sessions open right now on this PC (all NVIDIA GPUs, every process), from
+# nvidia-smi; -1 when it cannot be read (no NVIDIA driver / tool). About 150 ms. Never throws.
+# Example: Get-NvencSessionCount
+function Get-NvencSessionCount {
+    try {
+        if (-not $script:NvidiaSmiPath) {
+            $c = Get-Command 'nvidia-smi.exe' -ErrorAction SilentlyContinue
+            $script:NvidiaSmiPath = if ($c) { $c.Source } else { '-' }
+        }
+        if ($script:NvidiaSmiPath -eq '-') { return -1 }
+        $r = Invoke-Adb -adb $script:NvidiaSmiPath -Arguments @('--query-gpu=encoder.stats.sessionCount', '--format=csv,noheader,nounits') -TimeoutSeconds 5
+        if (-not $r.Ok) { return -1 }
+        $sum = 0; $any = $false
+        foreach ($line in @($r.StdOut -split "`r?`n")) { $n = 0; if ([int]::TryParse($line.Trim(), [ref]$n)) { $sum += $n; $any = $true } }
+        if ($any) { return $sum } else { return -1 }
+    } catch { return -1 }
+}
+
+# The NVENC session limit measured by the benchmark (app_kv benchmark_nvenc_cap, written by
+# Measure-StreamBenchmarkNvencSessions), or 0 when unknown / not limited. Never throws.
+function Get-NvencSessionLimit {
+    try {
+        if (-not (Get-Command Get-DbKeyValue -ErrorAction SilentlyContinue)) { return 0 }
+        $kv = Get-DbKeyValue -Key 'benchmark_nvenc_cap'
+        if ($kv -and [int]$kv.Cap -gt 0) { return [int]$kv.Cap }
+    } catch { }
+    return 0
+}
+
+# NVENC session fallback: $true when an ffmpeg that just exited was refused an encode session by the
+# GPU driver (GeForce NVENC quota full: "OpenEncodeSessionEx failed: incompatible client key") or
+# could not open its hardware encoder at all. Reads the session's stderr log. Never throws.
+# Example: Test-FfmpegEncoderSessionRefused -ErrorLogPath $push.ErrorLogPath
+function Test-FfmpegEncoderSessionRefused {
+    param([string]$ErrorLogPath)
+    if (-not $ErrorLogPath -or -not (Test-Path -LiteralPath $ErrorLogPath)) { return $false }
+    try {
+        $fs = [System.IO.File]::Open($ErrorLogPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        try { $text = (New-Object System.IO.StreamReader($fs, [System.Text.Encoding]::UTF8)).ReadToEnd() } finally { $fs.Close() }
+        return ($text -match 'OpenEncodeSessionEx failed|incompatible client key|No capable devices found|out of memory \(10\)')
+    } catch { return $false }
 }
 
 # Sets the global capture mode, persists it to config.json, and asks VRMonitor to restart
@@ -1643,8 +1930,60 @@ function start-screenCopy {
             if (Get-Command Get-MediaMtxProcess -ErrorAction SilentlyContinue) {
                 try { $mtxProc = Get-MediaMtxProcess; if ($mtxProc) { $mediaMtxPid = [int]$mtxProc.Id } } catch { }
             }
-            $ffmpegPush = Start-FfmpegStreamPush -SafeName $displayName -RtspUrl $rtspUrl -RecordFile $ffmpegRecord -SourceCodec $sourceCodec -EyeMerge $eyeMergeMaps -ProgressFile $ffmpegProgressFile
+            # NVENC session fallback: a GeForce driver accepts a fixed number of encode sessions at
+            # once (12 measured on an RTX 5070 Laptop). The next ffmpeg is refused within a second
+            # and the capture would restart in a loop with no stream. Hold the relay open while the
+            # new ffmpeg is checked; if the GPU refused it, encode this stream on the CPU instead,
+            # without restarting scrcpy. Not during a benchmark: a refused test must stay a failure.
+            $canHold = ($bridge -and $bridge.PSObject.Methods['SetHoldOnReaderLoss'] -and -not $ffmpegProgressFile)
+            $cpuName = if ([string]$global:mediamtxCodec -eq 'h265') { 'libx265' } else { 'libx264' }
+            $cpuEnc = @{ Name = $cpuName; Vendor = 'CPU'; ExtraArgs = @(); Codec = $(if ($cpuName -eq 'libx265') { 'h265' } else { 'h264' }) }
+            $encoderFallback = ''
+            $gpuEnc = if ($global:mediamtxReencode -and -not $eyeMergeMaps) { Get-GpuEncoder } else { $null }
+            $isNvenc = ($gpuEnc -and [string]$gpuEnc.Name -like '*_nvenc')
+            $nvBefore = -1
+            $override = $null
+            if ($isNvenc -and -not $ffmpegProgressFile) {
+                # Preflight: every NVENC session of the driver already in use -> straight to the CPU.
+                $nvBefore = Get-NvencSessionCount
+                $nvLimit = Get-NvencSessionLimit
+                if ($nvBefore -ge 0 -and $nvLimit -gt 0 -and $nvBefore -ge $nvLimit) {
+                    Write-Log ($msg.Scrcpy.EncoderFallback -f $displayName, $gpuEnc.Name, $cpuName) -Level WARNING
+                    $override = $cpuEnc; $encoderFallback = $cpuName
+                }
+            }
+            if ($canHold -and -not $override) { $bridge.SetHoldOnReaderLoss($true) }
+            $ffmpegPush = Start-FfmpegStreamPush -SafeName $displayName -RtspUrl $rtspUrl -RecordFile $ffmpegRecord -SourceCodec $sourceCodec -EyeMerge $eyeMergeMaps -ProgressFile $ffmpegProgressFile -EncoderOverride $override
+            if ($canHold -and -not $override) {
+                try {
+                    if ([string]$ffmpegPush.EncoderName -like '*_nvenc' -or [string]$ffmpegPush.EncoderName -like '*_qsv' -or [string]$ffmpegPush.EncoderName -like '*_amf') {
+                        $gen0 = [int]$bridge.ListenGeneration
+                        $chk = [System.Diagnostics.Stopwatch]::StartNew()
+                        # ffmpeg opens the encoder once the first keyframe is decoded (~2 s on a live
+                        # capture, measured). Wait for: ffmpeg exits (refused?) or, for NVENC, one
+                        # more driver session (the encoder opened: success). At most 5 s.
+                        while ($chk.ElapsedMilliseconds -lt 5000 -and -not $ffmpegPush.Process.HasExited) {
+                            Start-Sleep -Milliseconds 150
+                            if ($nvBefore -ge 0 -and $chk.ElapsedMilliseconds -gt 600) { $nvNow = Get-NvencSessionCount; if ($nvNow -gt $nvBefore) { break } }
+                        }
+                        if ($ffmpegPush.Process.HasExited) {
+                            Start-Sleep -Milliseconds 200   # let the stderr sink write the last lines
+                            if (Test-FfmpegEncoderSessionRefused -ErrorLogPath $ffmpegPush.ErrorLogPath) {
+                                Write-Log ($msg.Scrcpy.EncoderFallback -f $displayName, $ffmpegPush.EncoderName, $cpuName) -Level WARNING
+                                try { $ffmpegPush.ErrorWriter.Dispose() } catch { }
+                                # The relay drops the dead reader and opens a new output pipe; wait for it.
+                                $w = [System.Diagnostics.Stopwatch]::StartNew()
+                                while ([int]$bridge.ListenGeneration -le $gen0 -and $bridge.IsAlive -and $w.ElapsedMilliseconds -lt 5000) { Start-Sleep -Milliseconds 20 }
+                                $ffmpegPush = Start-FfmpegStreamPush -SafeName $displayName -RtspUrl $rtspUrl -RecordFile $ffmpegRecord -SourceCodec $sourceCodec -EyeMerge $eyeMergeMaps -EncoderOverride $cpuEnc
+                                $encoderFallback = $cpuName
+                            }
+                        }
+                    }
+                } finally { $bridge.SetHoldOnReaderLoss($false) }
+            }
             $global:HeadsetPipelines[$displayName] = @{
+                # Set when this stream is encoded on the CPU because the GPU refused the session.
+                EncoderFallback     = $encoderFallback
                 Bridge              = $bridge
                 ScrcpyProcess       = $scrcpyProc
                 FfmpegProcess       = $ffmpegPush.Process
@@ -1653,6 +1992,9 @@ function start-screenCopy {
                 PipeInName     = (Get-HeadsetPipeNames -SafeName $displayName).In
                 PipeOutName    = (Get-HeadsetPipeNames -SafeName $displayName).Out
                 RtspUrl        = $rtspUrl
+                # What Restart-HeadsetFfmpegPush needs to start another ffmpeg on this capture.
+                SourceCodec    = $sourceCodec
+                EyeMergeMaps   = $eyeMergeMaps
                 CaptureMode    = $captureMode
                 Recording      = [bool]$recording
                 RecordFile     = $ffmpegRecord

@@ -8,16 +8,42 @@
   <link rel="stylesheet" href="assets/topbar.css">
   <script src="assets/vrhm_common.js"></script>
   <script src="assets/topbar.js"></script>
+  <script src="assets/offline_guard.js"></script>
   <style>
     :root {
       --bg: #111; --muted: #444; --text: #ccc; --th-bg: #1a1a1a; --tr-hover: #1c1c1e; --border: #222;
       --ping-ok: #22c55e; --ping-ko: #ef4444; --scrcpy-ok: #3b82f6; --scrcpy-ko: #a06030;
       --card-bg: #161616; --sub: #777; --warn: #f97316; --input-bd: #333;
     }
+    /* Light mode: darker greys for labels and notes, white panels on a light grey page, stronger
+       borders (the previous #999 labels on #e8e8e8 cards were hard to read). */
     [data-theme="light"] {
-      --bg: #f0f0f0; --muted: #999; --text: #222; --th-bg: #e8e8e8; --tr-hover: #ececec; --border: #d8d8d8;
-      --card-bg: #e8e8e8; --sub: #666; --input-bd: #c8c8c8;
+      --bg: #eef0f3; --muted: #4b5563; --text: #111827; --th-bg: #e2e6ec; --tr-hover: #e8edf3; --border: #c5ccd6;
+      --card-bg: #ffffff; --sub: #374151; --input-bd: #9aa4b2; --panel-bg: #ffffff; --inset-bg: #f6f8fa;
     }
+    :root { --panel-bg: transparent; --inset-bg: var(--card-bg); }
+    [data-theme="light"] .comp-refresh-btn { border-color: #9aa4b2; color: #374151; }
+    [data-theme="light"] .bench-opt { color: #374151; }
+    [data-theme="light"] .bench-opt.on { color: #15803d; background: rgba(34,197,94,0.14); }
+    [data-theme="light"] .note, [data-theme="light"] .cfg-legend { color: #4b5563; }
+    [data-theme="light"] select, [data-theme="light"] input[type=number] { background: #ffffff; color: #111827; }
+    [data-theme="light"] table.grid tbody tr.data td { background: #ffffff; }
+    [data-theme="light"] .bench-modal-text { color: #374151; }
+
+    /* Tabs: one view at a time instead of three stacked foldable sections. */
+    .bench-tabs { display: flex; gap: 4px; border-bottom: 2px solid var(--border); margin-bottom: 0; flex-wrap: wrap; }
+    .bench-tab { padding: 9px 18px; border: 1px solid var(--border); border-bottom: none; border-radius: 6px 6px 0 0; background: var(--th-bg);
+      color: var(--muted); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; cursor: pointer; position: relative; top: 2px; }
+    .bench-tab:hover:not(:disabled) { color: var(--text); }
+    .bench-tab.on { background: var(--panel-bg); color: var(--text); border-color: var(--border); border-bottom: 2px solid var(--bg); }
+    [data-theme="light"] .bench-tab.on { background: #ffffff; border-bottom-color: #ffffff; }
+    .bench-tab:disabled { opacity: 0.45; cursor: not-allowed; }
+    .bench-tab .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #22c55e; margin-left: 6px; vertical-align: 1px; }
+    .bench-tab .dot[hidden] { display: none; }
+    .comp-section.tabbed { margin-top: 0; border-top: none; border-radius: 0 0 6px 6px; background: var(--panel-bg); }
+    .comp-section.tabbed > summary { display: none; }
+    .comp-section.tabbed:not(.active) { display: none; }
+    .sel-card { background: var(--inset-bg) !important; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { background: var(--bg); min-height: 100vh; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color: var(--text); overflow-x: hidden; }
     .page { padding: 24px; }
@@ -59,6 +85,25 @@
     .bench-opt:disabled { opacity: 0.35; cursor: not-allowed; }
     .bench-opt.flash { background: rgba(239,68,68,0.25); border-color: #ef4444; }
     .bench-opt.add { border-style: dashed; }
+    /* The value the application config uses today (ADR-0039): red, selected or not. */
+    /* Only the border is red; the text keeps its normal style (green when selected). */
+    .bench-opt.cfg { border-color: #ef4444; }
+    .bench-opt.on.cfg { border-color: #ef4444; }
+    .cfg-legend { font-size: 11px; color: var(--sub); }
+    .cfg-legend b { color: #ef4444; }
+    .sel-card { border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; background: var(--card-bg); }
+    .sel-card .comp-card-title { margin-bottom: 0; }
+    .sel-card .comp-card-title .note { text-transform: none; letter-spacing: 0; font-weight: 400; margin-left: 8px; }
+    .tests-list .grp { font-weight: 700; margin-top: 6px; color: var(--text); }
+    .tests-list .grp:first-child { margin-top: 0; }
+    .tests-list .tst { padding-left: 16px; color: var(--sub); }
+    .tests-list .tst .sw { color: #3b82f6; font-size: 10.5px; margin-left: 6px; }
+    .rec-sub { grid-column: 1 / -1; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted);
+      border-bottom: 1px solid var(--border); padding-bottom: 3px; margin-top: 4px; }
+    .cfg-hint { color: #ef4444; font-weight: 600; text-transform: none; letter-spacing: 0; }
+    /* The apply button sits next to "Calculate estimation" but stays red: it writes the config. */
+    .rec-calc { flex-wrap: wrap; }
+    .rec-calc button.apply { border-color: rgba(239,68,68,0.6); background: rgba(239,68,68,0.12); color: #ef4444; }
     .comp-refresh-btn.on { color: #22c55e; border-color: rgba(34,197,94,0.6); background: rgba(34,197,94,0.16); }
     .row.locked { opacity: 0.4; pointer-events: none; }
     .mode-badge { padding: 1px 8px; border-radius: 9px; font-size: 10px; font-weight: 800; text-transform: none; letter-spacing: 0; }
@@ -180,8 +225,16 @@
 
   <div class="page">
 
+    <!-- Run messages sit above the tabs so they stay visible whichever tab is shown. -->
+    <div class="msg" id="run-msg" style="margin-bottom:10px"></div>
+    <div class="bench-tabs" id="bench-tabs">
+      <button type="button" class="bench-tab" data-tab="sec-sel">Tests selection</button>
+      <button type="button" class="bench-tab" data-tab="sec-res">Results<span class="dot" id="tab-res-dot" hidden></span></button>
+      <button type="button" class="bench-tab" data-tab="sec-rec" disabled title="Run a benchmark first">Recommendations</button>
+    </div>
+
     <!-- A) Tests selection -->
-    <details class="comp-section" id="sec-sel" open>
+    <details class="comp-section tabbed" id="sec-sel" open>
       <summary>Tests selection <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg></summary>
       <div class="comp-body">
         <fieldset id="sel-fs">
@@ -189,18 +242,33 @@
           <div class="row quick"><span class="lbl">Quick selection</span>
             <button type="button" class="comp-refresh-btn" id="q-default" title="Baseline + one reference test (configured settings, best GPU, H264)">Reset to default</button>
             <button type="button" class="comp-refresh-btn" id="q-full" title="Every encoder, both codecs, every listed bitrate and FPS, single eye and merged - a very long run">Full tests</button>
-            <button type="button" class="comp-refresh-btn" id="q-typical" title="One change at a time from a reference (single eye, 45 fps, 10 Mb/s, native size) for every encoder x codec, plus bitrate / re-encode / merged tests and a closing baseline - enough for the model to predict any combination">Typical tests</button>
-            <button type="button" class="comp-refresh-btn" id="q-typicalq" title="Same as Typical tests, but only the CPU and the best GPU: one change at a time from a reference (single eye, 45 fps, 10 Mb/s, native size), plus bitrate / re-encode / merged tests and a closing baseline - enough for the model to predict any combination">Typical (quick)</button>
+            <button type="button" class="comp-refresh-btn" id="q-typical" title="Matrix of sizes (480 to native) x 1 / 2 / 4 parallel captures on EVERY encoder and both codecs, plus one change at a time (capture FPS, re-encode FPS and bitrate, capture bitrate), Low / High anchors and merged - the most precise, about an hour">Typical tests</button>
+            <button type="button" class="comp-refresh-btn" id="q-typicalq" title="Matrix of sizes (480 to native) x 1 / 2 / 4 parallel captures on the configured encoder, every other encoder at one capture per size, plus one change at a time and 4 captures at 3 / 20 Mb/s - the cost of N headsets is measured, not extrapolated">Typical (quick)</button>
           </div>
-          <div class="row"><span class="lbl">Encoding</span><span class="row" id="g-enc"></span><span class="note pn" hidden>Set by the preset</span></div>
-          <div class="row"><span class="lbl">Codec</span><span class="row" id="g-codec"></span><span class="note pn" hidden>Set by the preset</span></div>
-          <div class="row"><span class="lbl">Capture bitrate</span><span class="row" id="g-mbps"></span><span class="note pn" hidden>Set by the preset</span></div>
-          <div class="row"><span class="lbl">FPS</span><span class="row" id="g-fps"></span><span class="note pn" hidden>Set by the preset</span></div>
-          <div class="row"><span class="lbl">View + eye</span><select id="s-view"></select><span class="row" id="g-eye"></span><span class="note pn" hidden>Eye set by the preset</span></div>
-          <div class="row"><span class="lbl">Re-encode bitrate</span><select id="s-reenc"></select></div>
-          <div class="row"><span class="lbl">Max capture size</span><select id="s-max"></select><span class="note">Not used by merged tests (full frame)</span><span class="note pn" hidden>Set by the preset</span></div>
-          <div class="row"><span class="lbl">Measure window</span>
-            <select id="s-measure"><option value="10">10 s</option><option value="20" selected>20 s</option><option value="40">40 s</option></select></div>
+          <div class="cfg-legend"><b>Red border</b> = the value the application configuration uses today. Green = selected for the benchmark.<span class="note pn" hidden> - the preset decides every value below except the measure window.</span></div>
+          <div class="sel-card">
+            <div class="comp-card-title">General - applies to every test</div>
+            <div class="row"><span class="lbl">Encoding</span><span class="row" id="g-enc"></span></div>
+            <div class="row"><span class="lbl">Codec</span><span class="row" id="g-codec"></span><span class="note">Same codec for the headset capture and the re-encode</span></div>
+            <div class="row"><span class="lbl">Measure window</span>
+              <select id="s-measure"><option value="10">10 s</option><option value="20" selected>20 s</option><option value="40">40 s</option></select></div>
+          </div>
+          <div class="sel-card">
+            <div class="comp-card-title">Headset capture - scrcpy<span class="note">Changing one of these restarts the capture</span></div>
+            <div class="row"><span class="lbl">Max capture size</span><span class="row" id="g-max"></span><span class="note">Not used by merged tests (full frame)</span></div>
+            <div class="row"><span class="lbl">Capture bitrate</span><span class="row" id="g-mbps"></span></div>
+            <div class="row"><span class="lbl">Capture FPS</span><span class="row" id="g-fps"></span></div>
+            <div class="row"><span class="lbl">View</span><select id="s-view"></select></div>
+            <div class="row"><span class="lbl">Eye</span><span class="row" id="g-eye"></span><span class="note">Merged: the re-encode always runs on the CPU (full frame, both eyes)</span></div>
+            <div class="row"><span class="lbl">Parallel captures</span>
+              <select id="s-streams"><option value="1">1 (one stream)</option><option value="2">up to 2</option><option value="4">up to 4</option></select>
+              <span class="note" id="s-streams-note">Captures the same headset several times at once to simulate several headsets on this PC. Total capture bitrate capped at 80 Mb/s per test.</span></div>
+          </div>
+          <div class="sel-card">
+            <div class="comp-card-title">Re-encoding and streaming - ffmpeg<span class="note">Only ffmpeg is swapped between these tests: the capture keeps running</span></div>
+            <div class="row"><span class="lbl">Re-encode bitrate</span><span class="row" id="g-reenc"></span></div>
+            <div class="row"><span class="lbl">Re-encode FPS</span><span class="row" id="g-refps"></span><span class="note">Values above the capture FPS are skipped (duplicate frames only)</span></div>
+          </div>
         </fieldset>
         <div>
           <div class="summary-line" id="plan-sum">Loading...</div>
@@ -211,12 +279,11 @@
           <div class="progress-bar"><div id="prog-bar"></div></div>
           <div class="progress-text"><span id="prog-text"></span><button class="comp-refresh-btn danger" id="btn-cancel">Cancel</button></div>
         </div>
-        <div class="msg" id="run-msg"></div>
       </div>
     </details>
 
     <!-- B) Results -->
-    <details class="comp-section" id="sec-res">
+    <details class="comp-section tabbed" id="sec-res" open>
       <summary>Results <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg></summary>
       <div class="comp-body">
         <div id="res-empty" class="note">No stored result for this model.</div>
@@ -226,19 +293,30 @@
             <a class="comp-refresh-btn" id="res-csv" href="#">Download CSV</a>
             <button class="comp-refresh-btn danger" id="res-clear">Clear results</button>
           </div>
+          <div class="comp-card" id="mx-card" style="margin-bottom:10px;display:none">
+            <div class="comp-card-title">Per-capture cost - size x parallel captures (matrix tests)</div>
+            <div class="row" style="margin-bottom:6px"><span class="lbl" style="width:auto">Encoder</span><select id="mx-fam"></select>
+              <span class="note">Each cell: cost of ONE capture above idle (total / captures) - stream CPU % and every GPU %. "!" = a capture delivered under 90% of its FPS (headset limit).</span></div>
+            <div style="overflow-x:auto"><table class="small" id="mx-tbl"></table></div>
+          </div>
           <div class="grid-wrap"><table class="grid" id="grid"></table></div>
         </div>
       </div>
     </details>
 
     <!-- C) Recommendations -->
-    <details class="comp-section disabled" id="sec-rec">
+    <details class="comp-section tabbed disabled" id="sec-rec" open>
       <summary id="rec-sum"><span id="rec-title">Please run first a benchmark</span> <span class="mode-badge" id="rec-mode" hidden></span> <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg></summary>
       <div class="comp-body">
         <div class="comp-card"><div class="comp-card-title">Scenario</div><div class="rec-inputs" id="rec-inputs"></div>
-          <div class="rec-calc"><button type="button" id="rec-calc" class="go" disabled>Calculate estimate</button><span class="note" id="rec-calc-note"></span></div></div>
-        <div class="comp-card"><div class="comp-card-title">Estimate</div><div id="rec-est"></div></div>
-        <div class="comp-card"><div class="comp-card-title">Proposals</div><div class="props" id="rec-props"></div></div>
+          <div class="rec-calc"><button type="button" id="rec-calc" class="go" disabled>Calculate estimation</button>
+            <button type="button" id="rec-apply" class="apply" disabled>Apply selected parameters to global configuration</button>
+            <span class="note" id="rec-calc-note"></span></div>
+          <div class="note" style="margin-top:6px">"Apply" writes the scenario above into the application configuration (preview first, then confirm). "config: ..." under each label = what the configuration uses today.</div></div>
+        <div class="comp-card"><div class="comp-card-title">Workload Estimation</div><div id="rec-est"></div></div>
+        <div class="comp-card"><div class="comp-card-title">Proposals - Low / Mid / High</div>
+          <div class="note" style="margin-bottom:8px">"Use in scenario" copies a proposal into the scenario above and recalculates; nothing is written until you apply the scenario.</div>
+          <div class="props" id="rec-props"></div></div>
         <details class="comp-card" id="rec-model" hidden><summary style="cursor:pointer;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted)">Model details</summary><div id="rec-model-body" style="margin-top:8px;overflow-x:auto"></div></details>
         <div class="comp-card" id="par-card">
           <div class="comp-card-title">Parallel check</div>
@@ -280,8 +358,8 @@
 
   var S = {
     headsets: [], hid: null, opts: null, headset: null,
-    eyeSel: [], enc: [], codec: [], mbps: [], fps: [], view: '', reenc: 0, max: 0, measure: 20,
-    cust: { mbps: [], fps: [], reenc: [] },
+    eyeSel: [], enc: [], codec: [], mbps: [], fps: [], view: '', reenc: [], refps: [], max: [], streams: 1, measure: 20,
+    cust: { mbps: [], fps: [], reenc: [], refps: [] },
     preset: '', plan: null, busy: false, prog: null, progRecv: 0, lastStatus: 'idle',
     result: null, rec: null, recSettings: null, recBuilt: false, resOpened: false
   };
@@ -341,10 +419,19 @@
       S.opts = j.options; S.headset = j.headset;
       var d = S.opts.Defaults || {};
       S.enc = arr(d.Encodings).slice(); S.codec = arr(d.Codecs).slice(); S.mbps = arr(d.Bitrates).slice(); S.fps = arr(d.Fps).slice();
-      S.eyeSel = arr(d.Eyes).slice(); S.view = d.View || S.opts.CurrentView || ''; S.reenc = d.ReencodeMbps; S.max = d.MaxSize;
+      S.eyeSel = arr(d.Eyes).slice(); S.view = d.View || S.opts.CurrentView || '';
+      S.reenc = arr(d.ReencodeMbps).slice(); S.refps = arr(d.ReencodeFps).slice(); S.max = arr(d.MaxSize).slice();
+      S.streams = d.Streams || 1;
+      if (S.opts.NetworkCapMbps) $('s-streams-note').textContent = 'Captures the same headset several times at once to simulate several headsets on this PC. Total capture bitrate capped at ' + S.opts.NetworkCapMbps + ' Mb/s per test (combinations above are skipped).';
       if (!S.opts.MergeSupported) S.eyeSel = S.eyeSel.filter(function (e) { return e !== 'M'; });
       if (!S.eyeSel.length) S.eyeSel = ['R'];
-      S.cust = { mbps: [], fps: [], reenc: [] }; S.preset = '';
+      // A configured value outside the offered list still gets its own button (marked red).
+      var cu = S.opts.Current || {}, ch = S.opts.Choices || {};
+      S.cust = { mbps: [], fps: [], reenc: [], refps: [] };
+      [['mbps', 'Bitrates', cu.Mbps], ['fps', 'Fps', cu.Fps], ['reenc', 'ReencodeMbps', cu.ReencodeMbps], ['refps', 'ReencodeFps', cu.ReencodeFps]].forEach(function (x) {
+        if (x[2] && arr(ch[x[1]]).indexOf(x[2]) < 0) S.cust[x[0]].push(x[2]);
+      });
+      S.preset = '';
       renderSel(); schedulePlan(); loadResult();
     }).catch(function () { $('plan-sum').textContent = 'Cannot reach the server.'; });
   }
@@ -355,8 +442,9 @@
     items.forEach(function (it) {
       var b = document.createElement('button'); b.type = 'button';
       var on = selected.map(String).indexOf(String(it.v)) >= 0;
-      b.className = 'bench-opt' + (on ? ' on' : ''); b.textContent = it.label;
+      b.className = 'bench-opt' + (on ? ' on' : '') + (it.cfg ? ' cfg' : ''); b.textContent = it.label;
       if (it.title) b.title = it.title; if (it.disabled) b.disabled = true;
+      if (it.cfg) b.title = (b.title ? b.title + ' - ' : '') + 'current configuration';
       if (it.custom) {
         var x = document.createElement('span'); x.className = 'x'; x.textContent = '×'; x.title = 'Remove';
         x.addEventListener('click', function (e) { e.stopPropagation(); custom.onRemove(it.v); });
@@ -395,79 +483,89 @@
     out.sort(function (a, b) { return a.v - b.v; });
     return out;
   }
+  // State key -> Options.Choices key / Options.Defaults key.
+  var CHOICE_OF = { mbps: 'Bitrates', fps: 'Fps', reenc: 'ReencodeMbps', refps: 'ReencodeFps' };
   function customCfg(key, min, max) {
     return {
       min: min, max: max,
       onAdd: function (v) {
-        if (S.cust[key].indexOf(v) < 0 && arr(S.opts.Choices[key === 'mbps' ? 'Bitrates' : 'Fps']).indexOf(v) < 0) S.cust[key].push(v);
+        if (S.cust[key].indexOf(v) < 0 && arr(S.opts.Choices[CHOICE_OF[key]]).indexOf(v) < 0) S.cust[key].push(v);
         if (S[key].map(Number).indexOf(v) < 0) S[key].push(v);
         renderSel(); schedulePlan();
       },
       onRemove: function (v) {
         S.cust[key] = S.cust[key].filter(function (c) { return c !== v; });
         S[key] = S[key].filter(function (c) { return Number(c) !== v; });
-        if (!S[key].length) S[key] = arr(S.opts.Defaults[key === 'mbps' ? 'Bitrates' : 'Fps']).slice();
+        if (!S[key].length) S[key] = arr(S.opts.Defaults[CHOICE_OF[key]]).slice();
         renderSel(); schedulePlan();
       }
     };
   }
+  function cur() { return (S.opts && S.opts.Current) || {}; }
+  function sizeLabel(v) { return v === 0 ? 'Native' : (v === -1 ? 'Full frame' : v + ' px'); }
   function renderSel() {
     var o = S.opts; if (!o) return;
-    var enc = [{ v: 'cpu', label: 'CPU (software)' }];
-    arr(o.Gpus).forEach(function (g) { enc.push({ v: 'gpu:' + g.Index, label: 'GPU ' + g.Index + ' - ' + g.Model + (g.Best ? ' (best)' : '') }); });
+    var c = cur();
+    var enc = [{ v: 'cpu', label: 'CPU (software)', cfg: c.Encoding === 'cpu' }];
+    arr(o.Gpus).forEach(function (g) { enc.push({ v: 'gpu:' + g.Index, label: 'GPU ' + g.Index + ' - ' + g.Model, cfg: c.Encoding === 'gpu:' + g.Index }); });
     renderToggles('g-enc', enc, S.enc, function () {});
-    renderToggles('g-codec', [{ v: 'h264', label: 'H264' }, { v: 'h265', label: 'H265' }], S.codec, function () {});
-    var mb = numList(o.Choices.Bitrates, S.cust.mbps); mb.forEach(function (i) { i.label = i.v + ' Mb/s'; });
-    renderToggles('g-mbps', mb, S.mbps, function () {}, customCfg('mbps', 1, 100));
-    var fp = numList(o.Choices.Fps, S.cust.fps); fp.forEach(function (i) { i.label = i.v + ' fps'; });
-    renderToggles('g-fps', fp, S.fps, function () {}, customCfg('fps', 5, 120));
+    renderToggles('g-codec', [{ v: 'h264', label: 'H264', cfg: c.Codec === 'h264' }, { v: 'h265', label: 'H265', cfg: c.Codec === 'h265' }], S.codec, function () {});
+    var mx = arr(o.Choices.MaxSizes).slice();
+    if (c.MaxSize != null && mx.indexOf(c.MaxSize) < 0) mx.push(c.MaxSize);
+    renderToggles('g-max', mx.map(function (v) { return { v: v, label: sizeLabel(v), cfg: v === c.MaxSize }; }), S.max, function () {});
+    function nums(key, unit, cfgVal) {
+      var l = numList(o.Choices[CHOICE_OF[key]], S.cust[key]);
+      l.forEach(function (i) { i.label = i.v + unit; i.cfg = i.v === cfgVal; });
+      return l;
+    }
+    renderToggles('g-mbps', nums('mbps', ' Mb/s', c.Mbps), S.mbps, function () {}, customCfg('mbps', 1, 100));
+    renderToggles('g-fps', nums('fps', ' fps', c.Fps), S.fps, function () {}, customCfg('fps', 5, 120));
     renderToggles('g-eye', [
-      { v: 'R', label: 'Single eye' },
-      { v: 'M', label: 'Merged', disabled: !o.MergeSupported, title: o.MergeSupported ? '' : (o.MergeReason || 'Merged view not supported') }
+      { v: 'R', label: 'Single eye', cfg: c.Eye !== 'M' },
+      { v: 'M', label: 'Merged (CPU only)', cfg: c.Eye === 'M', disabled: !o.MergeSupported, title: o.MergeSupported ? '' : (o.MergeReason || 'Merged view not supported') }
     ], S.eyeSel, function () {});
+    // No config marking on the view: the right one depends on the application being captured.
     $('s-view').innerHTML = arr(o.Views).map(function (v) {
-      return '<option value="' + esc(v.Name) + '"' + (v.Name === S.view ? ' selected' : '') + '>' + esc(v.Name + (v.Current ? ' (current)' : '')) + '</option>';
+      return '<option value="' + esc(v.Name) + '"' + (v.Name === S.view ? ' selected' : '') + '>' + esc(v.Name) + '</option>';
     }).join('');
-    // re-encode bitrate
-    var re = ['<option value="' + o.ReencodeMbps + '">Config (' + o.ReencodeMbps + ' Mb/s)</option>'];
-    arr(o.Choices.ReencodeMbps).concat(S.cust.reenc).forEach(function (v) { if (v !== o.ReencodeMbps) re.push('<option value="' + v + '">' + v + ' Mb/s</option>'); });
-    re.push('<option value="__custom">Custom...</option>');
-    $('s-reenc').innerHTML = re.join(''); $('s-reenc').value = String(S.reenc);
-    // max size
-    var mx = ['<option value="' + o.MaxSize + '">Config (' + (o.MaxSize ? o.MaxSize : 'native') + ')</option>'];
-    arr(o.Choices.MaxSizes).forEach(function (v) { if (v !== o.MaxSize) mx.push('<option value="' + v + '">' + (v ? v : 'Native') + '</option>'); });
-    $('s-max').innerHTML = mx.join(''); $('s-max').value = String(S.max);
+    $('s-streams').value = String(S.streams || 1);
+    renderToggles('g-reenc', nums('reenc', ' Mb/s', c.ReencodeMbps), S.reenc, function () {}, customCfg('reenc', 1, 100));
+    renderToggles('g-refps', nums('refps', ' fps', c.ReencodeFps), S.refps, function () {}, customCfg('refps', 5, 120));
     applyLock();
   }
-  // With a preset active, the preset decides encodings, codecs, bitrates, fps, eyes and max size.
-  // Only View and Re-encode bitrate stay editable (they define the reference).
+  // With a preset active, the preset decides every value (scenarios Low / Mid / High and the
+  // one-change-at-a-time variants); only the measure window stays editable.
   function applyLock() {
     var on = !!S.preset;
-    ['g-enc', 'g-codec', 'g-mbps', 'g-fps', 'g-eye'].forEach(function (id) { $(id).classList.toggle('locked', on); });
-    $('s-max').disabled = on;
+    ['g-enc', 'g-codec', 'g-max', 'g-mbps', 'g-fps', 'g-eye', 'g-reenc', 'g-refps'].forEach(function (id) { $(id).classList.toggle('locked', on); });
+    $('s-view').disabled = on; $('s-streams').disabled = on;
     Array.prototype.forEach.call(document.querySelectorAll('#sel-fs .pn'), function (n) { n.hidden = !on; });
     $('q-typical').classList.toggle('on', S.preset === 'typical');
     $('q-typicalq').classList.toggle('on', S.preset === 'typical-quick');
   }
-  // Quick selection presets. 'default' = the options' Defaults (baseline + reference test);
-  // 'full' = every encoder, both codecs, every listed + custom bitrate and FPS, both eyes.
-  // View, re-encode bitrate, max size and measure window are left as they are.
+  // Quick selection presets. 'default' = the current configuration (baseline + one test);
+  // 'full' = every encoder, both codecs, capture FPS 15-60, every max size, both eyes, with the
+  // configured capture bitrate and re-encode settings (a long run).
   function applyPreset(kind) {
     var o = S.opts; if (!o || S.busy) return;
     var d = o.Defaults || {};
     S.preset = '';
     if (kind === 'typical' || kind === 'typical-quick') {
-      S.preset = kind; S.measure = 20; $('s-measure').value = '20';
+      S.preset = kind; S.measure = kind === 'typical' ? 10 : 20; $('s-measure').value = String(S.measure);
     } else if (kind === 'full') {
       S.enc = ['cpu'].concat(arr(o.Gpus).map(function (g) { return 'gpu:' + g.Index; }));
       S.codec = ['h264', 'h265'];
-      S.mbps = arr(o.Choices.Bitrates).concat(S.cust.mbps);
-      S.fps = arr(o.Choices.Fps).concat(S.cust.fps);
+      S.mbps = arr(d.Bitrates).slice();
+      S.fps = arr(o.Choices.Fps).filter(function (v) { return v <= 60; });
+      S.max = arr(o.Choices.MaxSizes).slice();
       S.eyeSel = o.MergeSupported ? ['R', 'M'] : ['R'];
+      S.reenc = arr(d.ReencodeMbps).slice(); S.refps = arr(d.ReencodeFps).slice();
     } else {
       S.enc = arr(d.Encodings).slice(); S.codec = arr(d.Codecs).slice();
       S.mbps = arr(d.Bitrates).slice(); S.fps = arr(d.Fps).slice();
-      S.eyeSel = arr(d.Eyes).slice(); S.view = d.View || S.view; S.reenc = d.ReencodeMbps; S.max = d.MaxSize;
+      S.eyeSel = arr(d.Eyes).slice(); S.view = d.View || S.view;
+      S.reenc = arr(d.ReencodeMbps).slice(); S.refps = arr(d.ReencodeFps).slice(); S.max = arr(d.MaxSize).slice();
+      S.streams = d.Streams || 1;
     }
     renderSel(); schedulePlan();
   }
@@ -475,21 +573,14 @@
   $('q-full').addEventListener('click', function () { applyPreset('full'); });
   $('q-typical').addEventListener('click', function () { applyPreset('typical'); });
   $('q-typicalq').addEventListener('click', function () { applyPreset('typical-quick'); });
-  $('s-view').addEventListener('change', function () { S.view = this.value; schedulePlan(); });
-  $('s-max').addEventListener('change', function () { S.max = parseInt(this.value, 10); schedulePlan(); });
+  $('s-view').addEventListener('change', function () { S.view = this.value; renderSel(); schedulePlan(); });
   $('s-measure').addEventListener('change', function () { S.measure = parseInt(this.value, 10); schedulePlan(); });
-  $('s-reenc').addEventListener('change', function () {
-    if (this.value === '__custom') {
-      var v = parseInt(prompt('Re-encode bitrate (Mb/s, 1-100):', ''), 10);
-      if (!isNaN(v) && v >= 1 && v <= 100) { if (v !== S.opts.ReencodeMbps && arr(S.opts.Choices.ReencodeMbps).indexOf(v) < 0 && S.cust.reenc.indexOf(v) < 0) S.cust.reenc.push(v); S.reenc = v; }
-      renderSel(); schedulePlan(); return;
-    }
-    S.reenc = parseInt(this.value, 10); schedulePlan();
-  });
+  $('s-streams').addEventListener('change', function () { S.streams = parseInt(this.value, 10) || 1; schedulePlan(); });
 
   /* ---------- plan ---------- */
   function selection() {
-    return { Preset: S.preset || '', Encodings: S.enc, Codecs: S.codec, Bitrates: S.mbps.map(Number), Fps: S.fps.map(Number), Eyes: S.eyeSel, View: S.view, ReencodeMbps: S.reenc, MaxSize: S.max };
+    return { Preset: S.preset || '', Encodings: S.enc, Codecs: S.codec, Bitrates: S.mbps.map(Number), Fps: S.fps.map(Number), Eyes: S.eyeSel, View: S.view,
+             ReencodeMbps: S.reenc.map(Number), ReencodeFps: S.refps.map(Number), MaxSize: S.max.map(Number), Streams: S.streams || 1 };
   }
   var schedulePlan = debounce(refreshPlan, 250);
   function refreshPlan() {
@@ -499,13 +590,25 @@
       if (!p || !p.ok) {
         el.className = 'summary-line err'; el.textContent = (p && p.error) || 'Plan failed'; $('plan-list').innerHTML = ''; updateRunBtn(); return;
       }
-      el.textContent = S.preset
-        ? p.count + ' tests (' + (S.preset === 'typical' ? 'typical' : 'typical quick') + ': one change at a time) - estimated ' + fmtDur(p.estimateSec)
-        : p.count + ' tests (baseline + grid) - estimated ' + fmtDur(p.estimateSec);
-      if (p.count > 40) { el.className = 'summary-line warn'; el.textContent += ' - long run - consider fewer options'; }
-      $('plan-list').innerHTML = arr(p.tests).map(function (t) {
-        return '<div' + (t.Available === false ? ' style="opacity:.5"' : '') + '>' + esc(t.Label) + (t.Available === false ? ' (' + esc(t.Reason || 'unavailable') + ')' : '') + '</div>';
-      }).join('');
+      var kind = S.preset === 'typical' ? 'typical: Low / Mid / High + one change at a time' : (S.preset === 'typical-quick' ? 'typical quick: Low / Mid / High per encoder' : 'baseline + grid');
+      el.textContent = p.count + ' tests in ' + (p.captures || 0) + ' capture(s) (' + kind + ') - estimated ' + fmtDur(p.estimateSec);
+      if (p.estimateSec > 3600) { el.className = 'summary-line warn'; el.textContent += ' - long run - consider fewer options'; }
+      // Grouped by capture: inside a group only ffmpeg changes (hot swap, a few seconds).
+      var gEst = {}; arr(p.groups).forEach(function (g) { gEst[g.Key] = g; });
+      var h = '', lastKey = null, inGroup = 0;
+      arr(p.tests).forEach(function (t) {
+        var dim = t.Available === false ? ' style="opacity:.5"' : '';
+        var why = t.Available === false ? ' (' + esc(t.Reason || 'unavailable') + ')' : '';
+        if (!t.CaptureKey) { lastKey = null; h += '<div class="grp"' + dim + '>' + esc(t.Label) + why + '</div>'; return; }
+        if (t.CaptureKey !== lastKey) {
+          lastKey = t.CaptureKey; inGroup = 0;
+          var g = gEst[t.CaptureKey] || {};
+          h += '<div class="grp">' + esc(t.Group || t.CaptureKey) + ' <span class="note">- ' + (g.Count || 1) + ' test(s), ' + esc(fmtDur(g.EstimateSec || 0)) + '</span></div>';
+        }
+        inGroup++;
+        h += '<div class="tst"' + dim + '>' + esc(t.Label) + (t.Role ? ' <span class="note">[' + esc(t.Role) + ']</span>' : '') + (inGroup > 1 ? '<span class="sw">ffmpeg swap</span>' : '') + why + '</div>';
+      });
+      $('plan-list').innerHTML = h;
       updateRunBtn();
     }).catch(function () { $('plan-sum').className = 'summary-line err'; $('plan-sum').textContent = 'Plan request failed.'; });
   }
@@ -525,7 +628,7 @@
       { label: 'Run', cls: 'go', fn: function (m) {
         m.close(); showMsg('', '');
         jpost('/api/benchmark/start', { id: parseInt(S.hid, 10), selection: selection(), measureSec: S.measure }).then(function (j) {
-          if (j && j.ok) { S.busy = true; applyBusy(); pollProgress(); }
+          if (j && j.ok) { S.busy = true; applyBusy(); showTab('sec-sel', true); pollProgress(); }
           else showMsg('err', (j && j.error) || 'Could not start the benchmark.');
         }).catch(function () { showMsg('err', 'Start request failed.'); });
       } }
@@ -557,9 +660,13 @@
       S.prog = p; S.progRecv = Date.now();
       var st = p && p.status ? p.status : 'idle';
       var active = st === 'queued' || st === 'running';
+      // One "not running" answer during a run is not enough to end it (a read that hit the moment
+      // the run rewrote its progress file): wait for a second one before re-enabling RUN.
+      if (!active && S.busy && st !== 'done' && st !== 'cancelled' && st !== 'error' && !S.idleOnce) { S.idleOnce = true; return; }
+      S.idleOnce = false;
       if (active) {
         S.activeKind = p.kind || '';
-        if (!S.busy) { S.busy = true; if (p.headset && p.headset.id != null && String(p.headset.id) !== String(S.hid)) { S.hid = p.headset.id; hsSig = ''; renderHeadsetSelect(); loadOptions(); } applyBusy(); }
+        if (!S.busy) { S.busy = true; if (S.activeKind !== 'parallel') showTab('sec-sel', true); if (p.headset && p.headset.id != null && String(p.headset.id) !== String(S.hid)) { S.hid = p.headset.id; hsSig = ''; renderHeadsetSelect(); loadOptions(); } applyBusy(); }
         renderProgress();
       } else {
         var was = S.busy; S.busy = false; applyBusy();
@@ -580,35 +687,39 @@
       else if (st === 'error') showMsg('err', 'Parallel check failed: ' + ((p && p.error) || 'unknown error'));
       loadParallel().then(function () {
         if (!S.parResult) return;
-        var sec = $('sec-rec');
-        if (!sec.classList.contains('disabled')) { sec.open = true; setTimeout(function () { $('par-card').scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 150); }
+        if (!$('sec-rec').classList.contains('disabled')) { showTab('sec-rec', true); setTimeout(function () { $('par-card').scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 150); }
       });
       return;
     }
-    if (st === 'done') showMsg('info', 'Benchmark finished - results updated below.');
-    else if (st === 'cancelled') showMsg('info', 'Benchmark cancelled - results so far are shown below.');
+    if (st === 'done' && arr(p && p.warnings).length) showMsg('err', 'Benchmark finished with warnings: ' + arr(p.warnings).join(' '));
+    else if (st === 'done') showMsg('info', 'Benchmark finished - see the recommendations (results in the Results tab).');
+    else if (st === 'cancelled') showMsg('info', 'Benchmark cancelled - results so far are in the Results tab.');
     else if (st === 'error') showMsg('err', 'Benchmark failed: ' + ((p && p.error) || 'unknown error'));
-    // Refresh the results (and the recommendations built on them), then bring them into view.
-    loadResult().then(function () {
-      if (!S.result) return;
-      var sec = $('sec-res');
-      sec.open = true; S.resOpened = true;
-      setTimeout(function () { sec.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 150);
-    });
+    // Refresh the results and the recommendations built on them; loadRecommend then opens the
+    // Recommendations tab (or Results when no recommendation can be made).
+    S.afterRun = true;
+    $('tab-res-dot').hidden = false;
+    loadResult().then(function () { if (!S.result) { S.afterRun = false; showTab('sec-sel', true); } });
   }
   function renderProgress() {
     var p = S.prog; if (!S.busy || !p) return;
     var drift = (Date.now() - S.progRecv) / 1000;
     var tot = p.total || 0, idx = p.index || 0;
     $('prog-bar').style.width = (tot ? Math.min(100, (Math.max(0, idx - 1) / tot) * 100) : 0) + '%';
+    // Times are counted on the SERVER clock (serverNow, sent with every answer): the progress file
+    // is not rewritten every second, so its own updatedAt can be several seconds old. age = how old
+    // the file was when the answer was sent; drift = time since the answer arrived.
+    var now = p.serverNow != null ? p.serverNow : p.updatedAt;
+    var age = (p.updatedAt && now) ? Math.max(0, (now - p.updatedAt) / 1000) : 0;
     var left = '';
-    if (p.phaseEndsAt != null && p.updatedAt != null) left = ' (' + Math.max(0, Math.round((p.phaseEndsAt - p.updatedAt) / 1000 - drift)) + 's left)';
-    var eta = Math.max(0, (p.etaSec || 0) - drift);
+    if (p.phaseEndsAt != null && now != null) left = ' (' + Math.max(0, Math.round((p.phaseEndsAt - now) / 1000 - drift)) + 's left)';
+    var eta = Math.max(0, (p.etaSec || 0) - age - drift);
+    var elapsed = (p.elapsedSec || 0) + age + drift;
     var txt = p.status === 'queued' ? 'Starting...' : (p.kind === 'parallel' ?
-      'Parallel check - ' + (p.phase || '') + ' (' + idx + ' / ' + tot + ' headsets)' + left + ' - about ' + fmtDur(eta) + ' remaining (elapsed ' + fmtDur((p.elapsedSec || 0) + drift) + ')' :
+      'Parallel check - ' + (p.phase || '') + ' (' + idx + ' / ' + tot + ' headsets)' + left + ' - about ' + fmtDur(eta) + ' remaining (elapsed ' + fmtDur(elapsed) + ')' :
       // Before the first test (stopping streams, encoder check, sampler) there is no test to name yet.
       (idx > 0 ? 'Test ' + idx + ' / ' + tot + ' - ' + (p.current || '') + ' - ' : 'Preparing ' + tot + ' tests - ') +
-      (p.phase || '') + left + ' - about ' + fmtDur(eta) + ' remaining (elapsed ' + fmtDur((p.elapsedSec || 0) + drift) + ')');
+      (p.phase || '') + left + ' - about ' + fmtDur(eta) + ' remaining (elapsed ' + fmtDur(elapsed) + ')');
     $('prog-text').textContent = txt;
   }
   setInterval(renderProgress, 1000);
@@ -631,7 +742,9 @@
     { id: 'fps', title: 'FPS', fl: 1, txt: function (r) { return r.Fps == null ? '-' : r.Fps; }, val: function (r) { return r.Fps; }, ft: function (r) { return r.Fps == null ? '-' : String(r.Fps); } },
     { id: 'mbps', title: 'Capture Mb/s', fl: 1, txt: function (r) { return r.Mbps == null ? '-' : r.Mbps; }, val: function (r) { return r.Mbps; }, ft: function (r) { return r.Mbps == null ? '-' : String(r.Mbps); } },
     { id: 'reenc', title: 'Re-encode Mb/s', fl: 1, txt: function (r) { return r.Encoding === 'none' ? '-' : (r.ReencodeMbps == null ? '-' : r.ReencodeMbps); }, val: function (r) { return r.ReencodeMbps; }, ft: function (r) { return r.Encoding === 'none' ? '-' : (r.ReencodeMbps == null ? '-' : String(r.ReencodeMbps)); } },
+    { id: 'refps', title: 'Re-encode FPS', fl: 1, txt: function (r) { return reFpsTxt(r); }, val: function (r) { return r.ReencodeFps || r.Fps; }, ft: function (r) { return reFpsTxt(r); } },
     { id: 'max', title: 'Max size', fl: 1, txt: function (r) { return maxTxt(r); }, val: function (r) { return r.MaxSize; }, ft: function (r) { return maxTxt(r); } },
+    { id: 'nstr', title: 'Captures', fl: 1, txt: function (r) { return streamsTxt(r); }, val: function (r) { return r.Streams || 1; }, ft: function (r) { return streamsTxt(r); } },
     { id: 'role', title: 'Role', fl: 1, txt: function (r) { return esc(r.Role || '-'); }, val: function (r) { return r.Role || ''; }, ft: function (r) { return r.Role || '-'; } }
   ];
   function isBaseRow(r) { return r.Id === 'baseline' || r.Id === 'baseline_end'; }
@@ -648,6 +761,9 @@
     return { Id: 'baseline_avg', Load: { CpuAvg: av(l1.CpuAvg, l2.CpuAvg), StreamCpuAvg: av(l1.StreamCpuAvg, l2.StreamCpuAvg), RamUsedGB: av(l1.RamUsedGB, l2.RamUsedGB), Gpus: gp } };
   }
   function maxTxt(r) { if (r.Encoding === 'none') return '-'; return r.MaxSize === -1 ? 'full frame' : (r.MaxSize === 0 ? 'native' : (r.MaxSize == null ? '-' : String(r.MaxSize))); }
+  // Results stored before ADR-0039 have no ReencodeFps: they re-encoded at the capture FPS.
+  function reFpsTxt(r) { if (r.Encoding === 'none') return '-'; var v = r.ReencodeFps || r.Fps; return v == null ? '-' : String(v); }
+  function streamsTxt(r) { if (r.Encoding === 'none') return '-'; return String(r.Streams || 1) + (r.HeadsetLimited ? ' (headset limit)' : ''); }
   function pcls(v, warn, hi) { if (v == null) return ''; return v >= hi ? 'c-red' : (v >= warn ? 'c-orange' : 'c-blue'); }
   function cpuLim() { var t = (S.opts && S.opts.Thresholds) || {}; return [t.CpuMitigation || 60, t.CpuMax || 85]; }
   function gpuLim() { var t = (S.opts && S.opts.Thresholds) || {}; return [t.GpuMitigation || 60, t.GpuMax || 85]; }
@@ -731,10 +847,11 @@
     var res = S.result, tbl = $('grid');
     $('res-empty').style.display = res ? 'none' : ''; $('res-main').style.display = res ? '' : 'none';
     if (res && !S.resOpened) { S.resOpened = true; $('sec-res').open = true; }
-    if (!res) { tbl.innerHTML = ''; return; }
+    if (!res) { tbl.innerHTML = ''; $('mx-card').style.display = 'none'; return; }
     var rows = arr(res.Results), b0 = rows.filter(function (r) { return r.Id === 'baseline'; })[0] || null;
     var b1 = rows.filter(function (r) { return r.Id === 'baseline_end'; })[0] || null;
     var base = avgBase(b0, b1);
+    S.resBase = base; renderMatrix(res, base);
     var pinned = [b0, b1].filter(Boolean);
     var rest = rows.filter(function (r) { return !isBaseRow(r); });
     var h = res.Headset || {};
@@ -802,6 +919,41 @@
       top += trs[k].offsetHeight;
     }
   }
+  // Per-capture cost matrix from the 'matrix' rows (ADR-0039): sizes x 1 / 2 / 4 captures for one
+  // encoder family. Costs are above the idle load of the row's own run (RunBase) when stored.
+  function renderMatrix(res, base) {
+    var rows = arr(res && res.Results).filter(function (r) { return r.Role === 'matrix' && r.Status === 'ok' && r.Load; });
+    $('mx-card').style.display = rows.length ? '' : 'none';
+    if (!rows.length) return;
+    function famOf(r) { return (r.Encoding === 'gpu' ? 'gpu:' + r.GpuIndex : 'cpu') + '|' + (r.Codec || ''); }
+    var fams = []; rows.forEach(function (r) { var f = famOf(r); if (fams.indexOf(f) < 0) fams.push(f); });
+    var sel = $('mx-fam'), cur = sel.value && fams.indexOf(sel.value) >= 0 ? sel.value : fams[0];
+    sel.innerHTML = fams.map(function (f) { var p = f.split('|'); return '<option value="' + esc(f) + '"' + (f === cur ? ' selected' : '') + '>' + esc(gpuLabel(p[0]) + ' - ' + String(p[1]).toUpperCase()) + '</option>'; }).join('');
+    var mine = rows.filter(function (r) { return famOf(r) === cur; });
+    var sizes = []; mine.forEach(function (r) { if (sizes.indexOf(r.MaxSize) < 0) sizes.push(r.MaxSize); });
+    sizes.sort(function (a, b) { return (a === 0 ? 1e9 : a) - (b === 0 ? 1e9 : b); });
+    var levels = [1, 2, 4], gpus = arr(res.Gpus);
+    function baseOf(r) { return r.RunBase || (base && base.Load) || null; }
+    function cell(r) {
+      if (!r) return '<td class="note">-</td>';
+      var n = r.Streams || 1, b = baseOf(r) || {}, l = r.Load;
+      var cpu = (l.StreamCpuAvg != null && b.StreamCpuAvg != null) ? (l.StreamCpuAvg - b.StreamCpuAvg) / n : null;
+      var parts = ['CPU ' + num(cpu, 2)];
+      gpus.forEach(function (g) {
+        var x = arr(l.Gpus).filter(function (y) { return y.Index === g.Index; })[0], bg = arr(b.Gpus).filter(function (y) { return y.Index === g.Index; })[0];
+        if (x && bg) parts.push('GPU' + g.Index + ' ' + num((x.UtilAvg - bg.UtilAvg) / n, 2));
+      });
+      return '<td>' + esc(parts.join('  ')) + (r.HeadsetLimited ? ' <span class="c-orange" title="A capture delivered under 90% of its FPS">!</span>' : '') + '</td>';
+    }
+    var h = '<thead><tr><th>Max size</th>' + levels.map(function (n) { return '<th>' + n + ' capture' + (n > 1 ? 's' : '') + '</th>'; }).join('') + '</tr></thead><tbody>';
+    sizes.forEach(function (z) {
+      h += '<tr><td>' + esc(sizeLabel(z)) + '</td>' + levels.map(function (n) {
+        return cell(mine.filter(function (r) { return r.MaxSize === z && (r.Streams || 1) === n; })[0]);
+      }).join('') + '</tr>';
+    });
+    $('mx-tbl').innerHTML = h + '</tbody>';
+  }
+  $('mx-fam').addEventListener('change', function () { renderMatrix(S.result, S.resBase); });
   $('grid').addEventListener('click', function (e) {
     var t = e.target;
     var g = t.closest && t.closest('.gtoggle');
@@ -828,7 +980,9 @@
     if (nx && nx.className === 'detail') { nx.parentNode.removeChild(nx); return; }
     var r = shown[parseInt(tr.getAttribute('data-ri'), 10)]; if (!r) return;
     var l = r.Load, s = r.Stream, h = '<div class="detail-grid">';
-    h += '<div><h4>Test</h4>' + kv('Label', r.Label) + kv('Id', r.Id) + kv('Role', r.Role) + kv('Status', r.Status) + kv('Message', r.Message) + kv('Encoder', r.Encoder) + kv('Timestamp', r.Timestamp) + kv('Measure (s)', r.MeasureSec) + kv('Elapsed (s)', r.ElapsedSec) + '</div>';
+    h += '<div><h4>Test</h4>' + kv('Capture', r.Group) + kv('Label', r.Label) + kv('Id', r.Id) + kv('Role', r.Role) + kv('Status', r.Status) + kv('Message', r.Message) + kv('Encoder', r.Encoder) +
+      kv('Re-encode FPS', reFpsTxt(r)) + kv('Captures of the headset', r.Streams || 1) + kv('ffmpeg swapped (capture kept)', r.Swapped ? 'yes' : 'no') +
+      kv('Timestamp', r.Timestamp) + kv('Measure (s)', r.MeasureSec) + kv('Elapsed (s)', r.ElapsedSec) + '</div>';
     if (l) {
       h += '<div><h4>Load</h4>' + kv('Samples', l.Samples) + kv('Stream CPU avg %', num(l.StreamCpuAvg)) + kv('Stream CPU peak %', num(l.StreamCpuPeak)) + kv('Whole-PC CPU avg %', num(l.CpuAvg)) + kv('Whole-PC CPU peak %', num(l.CpuPeak)) + kv('RAM used GB', num(l.RamUsedGB, 2)) + kv('RAM peak GB', num(l.RamPeakGB, 2)) + kv('RAM used %', num(l.RamUsedPct)) + '</div>';
       arr(l.Gpus).forEach(function (g) {
@@ -838,7 +992,8 @@
         var p = l.Procs[n] || {}; h += '<div><h4>' + esc(n) + '</h4>' + kv('CPU avg %', num(p.CpuAvg)) + kv('Mem MB', num(p.MemMB, 0)) + '</div>';
       });
     }
-    if (s) h += '<div><h4>Stream</h4>' + kv('Target fps', s.TargetFps) + kv('Delivered fps', num(s.Fps)) + kv('Output fps', num(s.OutFps)) + kv('Frames', s.Frames) + kv('Drop', s.Drop) + kv('Dup', s.Dup) + kv('Speed', s.Speed == null ? '-' : num(s.Speed, 2) + 'x') + '</div>';
+    if (s) h += '<div><h4>Stream</h4>' + kv('Target fps', s.TargetFps) + kv('Delivered fps', num(s.Fps)) + kv('Output fps', num(s.OutFps)) + kv('Frames', s.Frames) + kv('Drop', s.Drop) + kv('Dup', s.Dup) + kv('Speed', s.Speed == null ? '-' : num(s.Speed, 2) + 'x') +
+      (s.PerStreamFps ? kv('Delivered fps per capture', arr(s.PerStreamFps).map(function (v) { return num(v); }).join(' / ')) + kv('Headset limited', r.HeadsetLimited ? 'yes' : 'no') : '') + '</div>';
     h += '</div>';
     var d = document.createElement('tr'); d.className = 'detail';
     d.innerHTML = '<td colspan="' + $('grid')._ncols + '">' + h + '</td>';
@@ -846,17 +1001,78 @@
   }
   $('res-clear').addEventListener('click', function () {
     if (!S.result || !confirm('Clear all stored benchmark results for ' + S.result.Model + '?')) return;
-    jpost('/api/benchmark/clear', { model: S.result.Model }).then(function () { S.resOpened = false; $('sec-res').open = false; loadResult(); }).catch(function () {});
+    jpost('/api/benchmark/clear', { model: S.result.Model }).then(function () { S.resOpened = false; loadResult(); }).catch(function () {});
   });
 
   /* ---------- recommendations ---------- */
-  var REC_KEYS = [['Eye', 'r-eye'], ['View', 'r-view'], ['Encoding', 'r-enc'], ['Codec', 'r-codec'], ['Fps', 'r-fps'], ['Mbps', 'r-mbps'], ['ReencodeMbps', 'r-reenc'], ['MaxSize', 'r-max']];
+  var REC_KEYS = [['Eye', 'r-eye'], ['View', 'r-view'], ['Encoding', 'r-enc'], ['Codec', 'r-codec'], ['Fps', 'r-fps'], ['Mbps', 'r-mbps'], ['ReencodeFps', 'r-refps'], ['ReencodeMbps', 'r-reenc'], ['MaxSize', 'r-max']];
+  var REC_NUM = { Fps: 1, Mbps: 1, ReencodeFps: 1, ReencodeMbps: 1, MaxSize: 1 };
+  // The configured value of each scenario control (red when the control shows it).
+  function recCfg(key) {
+    var c = cur();
+    switch (key) {
+      case 'Eye': return c.Eye || 'R';
+      case 'MaxSize': return c.Eye === 'M' ? -1 : c.MaxSize;
+      default: return c[key];
+    }
+  }
+  // Short text of a configured value for the label hint: "config: GPU 1", "config: Single eye".
+  function cfgText(key, v) {
+    switch (key) {
+      case 'Encoding': return v === 'cpu' ? 'CPU' : String(v).replace(/^gpu:/, 'GPU ');
+      case 'Codec': return String(v).toUpperCase();
+      case 'Eye': return v === 'M' ? 'Merged' : 'Single eye';
+      case 'MaxSize': return sizeLabel(Number(v));
+      case 'Mbps': case 'ReencodeMbps': return v + ' Mb/s';
+      case 'Fps': case 'ReencodeFps': return v + ' fps';
+      default: return String(v);
+    }
+  }
+  // Only the label shows the configured value; the controls keep their normal colours. The view
+  // gets no hint: the right one depends on the application being captured.
+  function markRecCfg() {
+    REC_KEYS.forEach(function (k) {
+      var el = $(k[1]); if (!el || k[0] === 'View') return;
+      var cv = recCfg(k[0]), lab = el.closest('label');
+      var hint = lab && lab.querySelector('.cfg-hint');
+      if (hint) hint.textContent = (cv == null || cv === '') ? '' : '(config: ' + cfgText(k[0], cv) + ')';
+    });
+  }
   function setRecAvailable(ok) {
     var sec = $('sec-rec');
     sec.classList.toggle('disabled', !ok);
     $('rec-title').textContent = ok ? 'Recommendations' : 'Please run first a benchmark';
-    if (!ok) { sec.open = false; $('rec-mode').hidden = true; }
+    if (!ok) { $('rec-mode').hidden = true; }
+    var tb = document.querySelector('.bench-tab[data-tab="sec-rec"]');
+    tb.disabled = !ok; tb.title = ok ? '' : 'Run a benchmark first';
+    if (!ok && S.tab === 'sec-rec') showTab(S.result ? 'sec-res' : 'sec-sel', true);
+    // First load with stored results: open on the recommendations, unless the operator already
+    // picked a tab (remembered) or a run is in progress.
+    if (ok && !S.busy && !S.autoTabDone && (!S.tabChosen || S.wantTab === 'sec-rec')) { S.autoTabDone = true; showTab('sec-rec', true); }
   }
+
+  /* ---------- tabs ---------- */
+  // One view at a time: Tests selection / Results / Recommendations. The sections stay <details>
+  // (kept open); the tab bar only shows one of them. auto = chosen by the page, not remembered.
+  function showTab(id, auto) {
+    var btn = document.querySelector('.bench-tab[data-tab="' + id + '"]');
+    if (!btn || btn.disabled) id = 'sec-sel';
+    S.tab = id;
+    ['sec-sel', 'sec-res', 'sec-rec'].forEach(function (s) {
+      var el = $(s); el.classList.toggle('active', s === id); el.open = true;
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('.bench-tab'), function (b) { b.classList.toggle('on', b.getAttribute('data-tab') === id); });
+    if (id === 'sec-res') $('tab-res-dot').hidden = true;
+    if (!auto) { S.tabChosen = true; lsSet('bench_tab', id); }
+  }
+  $('bench-tabs').addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('.bench-tab'); if (!b || b.disabled) return;
+    showTab(b.getAttribute('data-tab'));
+  });
+  // The remembered tab; Recommendations is enabled only once the results loaded (setRecAvailable).
+  S.wantTab = lsGet('bench_tab', '');
+  if (S.wantTab) S.tabChosen = true;
+  showTab(S.wantTab || 'sec-sel', true);
   $('rec-sum').addEventListener('click', function (e) { if ($('sec-rec').classList.contains('disabled')) e.preventDefault(); });
   $('sec-rec').addEventListener('toggle', function () { if (this.classList.contains('disabled') && this.open) this.open = false; });
 
@@ -871,7 +1087,7 @@
     REC_KEYS.forEach(function (k) {
       var el = $(k[1]); if (!el) return;
       var v = el.value;
-      s[k[0]] = (k[0] === 'Fps' || k[0] === 'Mbps' || k[0] === 'ReencodeMbps' || k[0] === 'MaxSize') ? Number(v) : v;
+      s[k[0]] = REC_NUM[k[0]] ? Number(v) : v;
     });
     return s;
   }
@@ -884,8 +1100,16 @@
     jpost('/api/benchmark/recommend', body).then(function (j) {
       if (seq !== S.recSeq) return;
       var rec = j && j.recommendation;
-      if (!j || !j.ok || !rec || !rec.Ok) { S.rec = null; S.recBuilt = false; setRecAvailable(false); return; }
-      S.rec = rec; setRecAvailable(true);
+      if (!j || !j.ok || !rec || !rec.Ok) {
+        S.rec = null; S.recBuilt = false; setRecAvailable(false); $('rec-apply').disabled = true;
+        // A stored result that the recommendation cannot use is not "no benchmark": say why.
+        var why = (j && j.error) || (rec && rec.Error) || '';
+        if (S.result && why) $('rec-title').textContent = 'Recommendations unavailable: ' + why;
+        if (S.afterRun) { S.afterRun = false; showTab(S.result ? 'sec-res' : 'sec-sel', true); }
+        return;
+      }
+      if (S.afterRun) { S.afterRun = false; S.autoTabDone = true; setTimeout(function () { showTab('sec-rec', true); }, 0); }
+      S.rec = rec; setRecAvailable(true); $('rec-apply').disabled = false;
       var mode = rec.Mode === 'model' ? 'model' : 'measured';
       var mb = $('rec-mode'); mb.hidden = false; mb.className = 'mode-badge ' + mode; mb.textContent = mode === 'model' ? 'Model' : 'Measured only';
       mb.title = mode === 'model' ? 'Fitted model: any settings value can be predicted' : 'Only measured values (with interpolation)';
@@ -899,16 +1123,20 @@
   function setRecBusy(busy) {
     var b = $('rec-calc'); if (!b) return;
     b.disabled = busy; b.classList.toggle('busy', busy);
-    b.textContent = busy ? 'Calculating...' : 'Calculate estimate';
+    b.textContent = busy ? 'Calculating...' : 'Calculate estimation';
     if ($('rec-calc-note')) $('rec-calc-note').textContent = busy ? '' : '';
   }
   // No automatic recalculation: a change only flags the estimate as outdated, the button recalculates.
-  function recChanged() { var n = $('rec-calc-note'); if (n && !$('rec-calc').disabled) n.textContent = 'Settings changed - click to update the estimate.'; }
+  function recChanged() { markRecCfg(); var n = $('rec-calc-note'); if (n && !$('rec-calc').disabled) n.textContent = 'Settings changed - click Calculate estimation to update.'; }
   $('rec-calc').addEventListener('click', function () { if (!this.disabled) loadRecommend(false); });
 
   function selHtml(id, lab, opts, cur) {
-    return '<label>' + esc(lab) + '<select id="' + id + '">' + opts.map(function (o) {
+    return '<label>' + esc(lab) + ' <span class="cfg-hint"></span><select id="' + id + '">' + opts.map(function (o) {
       return '<option value="' + esc(o[0]) + '"' + (String(o[0]) === String(cur) ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join('') + '</select></label>';
+  }
+  function numHtml(id, lab, v, min, max, dl) {
+    return '<label>' + esc(lab) + ' <span class="cfg-hint"></span><input type="number" id="' + id + '" min="' + min + '" max="' + max + '" step="1"' +
+      (dl ? ' list="' + dl[0] + '"' : '') + ' value="' + esc(v) + '">' + (dl ? dlHtml(dl[0], dl[1]) : '') + '</label>';
   }
   function maxOpts(c, s, mode) {
     // -1 (merged full frame) only makes sense for a merged eye.
@@ -922,23 +1150,32 @@
     var model = mode === 'model';
     var keepN = $('r-n') ? $('r-n').value : '1';
     var keepCpu = $('r-cpu') ? $('r-cpu').value : (t.CpuMax || 80), keepGpu = $('r-gpu') ? $('r-gpu').value : (t.GpuMax || 80);
-    var h = '<label>Headsets in parallel<div class="inl"><input type="range" id="r-nr" min="1" max="30" value="' + esc(keepN) + '"><input type="number" id="r-n" min="1" max="64" value="' + esc(keepN) + '"></div></label>';
-    h += selHtml('r-eye', 'Eye', arr(c.Eyes).map(function (e) { return [e, e === 'M' ? 'Merged' : 'Single eye']; }), s.Eye);
-    h += selHtml('r-view', 'View', arr(c.Views).map(function (v) { return [v, v]; }), s.View);
+    var refps = s.ReencodeFps != null ? s.ReencodeFps : s.Fps;   // measured mode on an old result: = capture FPS
+    var h = '<div class="rec-sub">General</div>';
+    h += '<label>Headsets in parallel<div class="inl"><input type="range" id="r-nr" min="1" max="30" value="' + esc(keepN) + '"><input type="number" id="r-n" min="1" max="64" value="' + esc(keepN) + '"></div></label>';
     h += selHtml('r-enc', 'Encoding', arr(c.Encodings).map(function (v) { return [v, gpuLabel(v)]; }), s.Encoding);
-    h += selHtml('r-codec', 'Codec', arr(c.Codecs).map(function (v) { return [v, String(v).toUpperCase()]; }), s.Codec);
-    if (model) {
-      h += '<label>FPS<input type="number" id="r-fps" min="1" max="240" list="dl-fps" value="' + esc(s.Fps) + '">' + dlHtml('dl-fps', c.Fps) + '</label>';
-      h += '<label>Capture Mb/s<input type="number" id="r-mbps" min="1" max="200" step="1" list="dl-mbps" value="' + esc(s.Mbps) + '">' + dlHtml('dl-mbps', c.Mbps) + '</label>';
-      h += '<label>Re-encode Mb/s<input type="number" id="r-reenc" min="1" max="200" step="1" list="dl-reenc" value="' + esc(s.ReencodeMbps) + '">' + dlHtml('dl-reenc', c.ReencodeMbps) + '</label>';
-    } else {
-      h += '<label>FPS <span id="r-fps-i" class="txt"></span><input type="number" id="r-fps" min="1" max="240" value="' + esc(s.Fps) + '"></label>';
-      h += '<label>Capture Mb/s <span id="r-mbps-i" class="txt"></span><input type="number" id="r-mbps" min="1" max="200" step="1" value="' + esc(s.Mbps) + '"></label>';
-      h += selHtml('r-reenc', 'Re-encode Mb/s', arr(c.ReencodeMbps).map(function (v) { return [v, v + ' Mb/s']; }), s.ReencodeMbps);
-    }
-    h += selHtml('r-max', 'Max size', maxOpts(c, s, mode), s.MaxSize);
+    h += selHtml('r-codec', 'Codec (capture + re-encode)', arr(c.Codecs).map(function (v) { return [v, String(v).toUpperCase()]; }), s.Codec);
     h += '<label>Max CPU % <div class="inl"><input type="range" id="r-cpu" min="10" max="100" value="' + esc(keepCpu) + '"><span class="txt" id="r-cpu-l"></span></div></label>';
     h += '<label>Max GPU % <div class="inl"><input type="range" id="r-gpu" min="10" max="100" value="' + esc(keepGpu) + '"><span class="txt" id="r-gpu-l"></span></div></label>';
+    h += '<div class="rec-sub">Headset capture - scrcpy</div>';
+    h += selHtml('r-max', 'Max size', maxOpts(c, s, mode), s.MaxSize);
+    if (model) {
+      h += numHtml('r-mbps', 'Capture Mb/s', s.Mbps, 1, 200, ['dl-mbps', c.Mbps]);
+      h += numHtml('r-fps', 'Capture FPS', s.Fps, 1, 240, ['dl-fps', c.Fps]);
+    } else {
+      h += '<label>Capture Mb/s <span id="r-mbps-i" class="txt"></span> <span class="cfg-hint"></span><input type="number" id="r-mbps" min="1" max="200" step="1" value="' + esc(s.Mbps) + '"></label>';
+      h += '<label>Capture FPS <span id="r-fps-i" class="txt"></span> <span class="cfg-hint"></span><input type="number" id="r-fps" min="1" max="240" value="' + esc(s.Fps) + '"></label>';
+    }
+    h += selHtml('r-view', 'View', arr(c.Views).map(function (v) { return [v, v]; }), s.View);
+    h += selHtml('r-eye', 'Eye', arr(c.Eyes).map(function (e) { return [e, e === 'M' ? 'Merged (CPU encode)' : 'Single eye']; }), s.Eye);
+    h += '<div class="rec-sub">Re-encoding and streaming - ffmpeg</div>';
+    if (model) {
+      h += numHtml('r-reenc', 'Re-encode Mb/s', s.ReencodeMbps, 1, 200, ['dl-reenc', c.ReencodeMbps]);
+      h += numHtml('r-refps', 'Re-encode FPS', refps, 1, 240, ['dl-refps', c.ReencodeFps || [15, 30, 45, 60]]);
+    } else {
+      h += selHtml('r-reenc', 'Re-encode Mb/s', arr(c.ReencodeMbps).map(function (v) { return [v, v + ' Mb/s']; }), s.ReencodeMbps);
+      h += numHtml('r-refps', 'Re-encode FPS', refps, 1, 240, null);
+    }
     $('rec-inputs').innerHTML = h; S.recBuilt = true; S.recMode = mode;
     function limLbl() {
       $('r-cpu-l').textContent = $('r-cpu').value + '%' + (Number($('r-cpu').value) === t.CpuMax ? ' default (VQA max)' : '');
@@ -950,6 +1187,7 @@
     $('r-cpu').addEventListener('input', function () { limLbl(); recChanged(); });
     $('r-gpu').addEventListener('input', function () { limLbl(); recChanged(); });
     REC_KEYS.forEach(function (k) { $(k[1]).addEventListener('input', recChanged); $(k[1]).addEventListener('change', recChanged); });
+    markRecCfg();
   }
   function syncRecControls(rec) {
     var s = rec.Settings || {};
@@ -960,6 +1198,22 @@
       mx.innerHTML = o.map(function (x) { return '<option value="' + esc(x[0]) + '"' + (String(x[0]) === String(s.MaxSize) ? ' selected' : '') + '>' + esc(x[1]) + '</option>'; }).join('');
     }
     REC_KEYS.forEach(function (k) { var el = $(k[1]); if (el && document.activeElement !== el && s[k[0]] != null) el.value = s[k[0]]; });
+    markRecCfg();
+  }
+  // Fills the scenario from a proposal (or any settings set) and recalculates. Writes nothing.
+  function useInScenario(set) {
+    if (!set) return;
+    var eye = $('r-eye');
+    if (eye && set.Eye != null) { eye.value = set.Eye; }
+    // The max-size list depends on the eye (-1 = merged full frame).
+    var mx = $('r-max');
+    if (mx && S.rec) {
+      var o = maxOpts(S.rec.Choices || {}, set, S.recMode);
+      mx.innerHTML = o.map(function (x) { return '<option value="' + esc(x[0]) + '">' + esc(x[1]) + '</option>'; }).join('');
+    }
+    REC_KEYS.forEach(function (k) { var el = $(k[1]); if (el && set[k[0]] != null) el.value = set[k[0]]; });
+    markRecCfg();
+    loadRecommend(false);
   }
   function bar(label, pct, lim, band) {
     var over = pct != null && pct > lim, w = Math.max(0, Math.min(100, pct || 0));
@@ -970,6 +1224,13 @@
       (hasBand ? '<div class="band" style="left:' + lo + '%;width:' + Math.max(0, hi - lo) + '%"></div>' : '') +
       '<div class="mark" style="left:' + Math.min(100, lim) + '%" title="Limit ' + lim + '%"></div></div></div>';
   }
+  // Why the headset count stops there: the encoder sessions, or the CPU / GPU limits.
+  function maxWhy(e) {
+    if (!e || e.MaxHeadsets == null) return '';
+    if (e.LimitedBy === 'sessions') return ' (NVENC session limit; the load alone would allow ' + (e.MaxHeadsetsLoad >= 99 ? '99+' : e.MaxHeadsetsLoad) + ')';
+    if (e.LimitedBy === 'load') return ' (CPU / GPU limits)';
+    return '';
+  }
   function sizeLine(e) {
     if (e.W == null || e.H == null) return '';
     return 'Picture ' + num(e.W, 0) + ' x ' + num(e.H, 0) + (e.PixelRate != null ? ', ' + num(e.PixelRate) + ' Mpx/s' : '');
@@ -979,6 +1240,11 @@
     if (rec.Mode !== 'model' || !rec.Model) { d.hidden = true; return; }
     var m = rec.Model, fam = arr(m.Families);
     var h = '<div class="note" style="margin-bottom:6px">Reference: ' + esc(num(m.RefMbps, 0)) + ' Mb/s capture, ' + esc(num(m.RefReencode, 0)) + ' Mb/s re-encode</div>';
+    var lin = m.Linearity;
+    if (lin && lin.Cpu != null) {
+      h += '<div class="note" style="margin-bottom:6px">Several captures of one headset: each costs x' + esc(num(lin.Cpu, 2)) + ' CPU of a single one (' +
+        arr(lin.Rows).map(function (r) { return r.Streams + ' captures: x' + num(r.Cpu, 2); }).join(', ') + ') - these tests are part of the fit, so estimates for N headsets already include it.</div>';
+    }
     h += '<table class="small"><thead><tr><th>Key</th><th>Encoder</th><th>Points</th><th>Merged</th><th>Measured range (Mpx/s)</th><th>CPU fit error</th><th>GPU fit errors</th></tr></thead><tbody>';
     h += fam.map(function (f) {
       var gr = arr(f.GpuRmse).map(function (g) { return 'GPU ' + g.Index + ': ' + num(g.Rmse, 2); }).join(', ');
@@ -998,31 +1264,44 @@
       arr(e.Gpus).forEach(function (g) { h += bar('GPU ' + g.Index + ' - ' + g.Model, g.Pct, lim.Gpu || 100, g.Band); });
       var sl = sizeLine(e); if (sl) h += '<div class="note" style="margin-top:4px">' + esc(sl) + '</div>';
       h += '<div class="est-facts"><span>RAM: <strong>' + num(e.RamGB) + ' GB</strong></span>' +
-        '<span>Max headsets at these settings: <strong>' + esc(e.MaxHeadsets == null ? '-' : e.MaxHeadsets) + '</strong></span>' +
+        '<span>Max headsets at these settings: <strong>' + esc(e.MaxHeadsets == null ? '-' : e.MaxHeadsets) + '</strong>' + esc(maxWhy(e)) + '</span>' +
         '<span>WiFi capture: <strong>' + num(e.CaptureMbpsTotal) + ' Mb/s</strong> total</span>' +
         '<span>Re-encode output: <strong>' + num(e.ReencodeMbpsPerViewer) + ' Mb/s</strong> per viewer</span></div>';
       if (e.FpsOk === false) h += '<div class="c-orange" style="margin-top:6px;font-size:12px">Warning: the measured frame rate stayed under the target (ratio ' + num(e.FpsRatio, 2) + ').</div>';
       if (e.InRange === false) h += '<div class="rec-warn">Outside the measured range - extrapolated, run a benchmark that covers it</div>';
       if (e.FpsRisk) h += '<div class="rec-warn">Frame rate fell under 90% of target at this load in the tests</div>';
-      if (e.SessionCap > 0) h += '<div class="note" style="margin-top:6px">NVENC session limit: ' + esc(e.SessionCap) + ' streams</div>';
+      if (e.SessionCap > 0) h += '<div class="note" style="margin-top:6px">NVENC session limit (measured on this PC when available): ' + esc(e.SessionCap) + ' streams</div>';
+      if (e.LimitedBy === 'sessions' && rec.Headsets > e.SessionCap) h += '<div class="rec-warn">' + esc(rec.Headsets) + ' headsets exceed the ' + esc(e.SessionCap) + ' NVENC sessions this GPU accepts - encode part of them on another GPU or the CPU.</div>';
     }
     if (rec.Note) h += '<div class="note" style="margin-top:6px">' + esc(rec.Note) + '</div>';
     $('rec-est').innerHTML = h;
     var props = arr(rec.Proposals);
     $('rec-props').innerHTML = props.length ? props.map(function (p, i) {
-      var pe = p.Estimate || {};
-      return '<div class="prop"><div class="ttl">' + esc(p.Label) + '</div>' +
+      var pe = p.Estimate || {}, st = p.Settings || {};
+      var lines = p.Name ? '<div class="note">Capture: ' + esc(st.View) + ', ' + esc(sizeLabel(Number(st.MaxSize))) + ', ' + esc(st.Fps) + ' fps, ' + esc(st.Mbps) + ' Mb/s</div>' +
+        '<div class="note">Re-encode: ' + esc(st.ReencodeFps) + ' fps, ' + esc(st.ReencodeMbps) + ' Mb/s, ' + esc(gpuLabel(st.Encoding)) + ', ' + esc(String(st.Codec || '').toUpperCase()) + '</div>' : '';
+      return '<div class="prop"><div class="ttl">' + esc(p.Name || p.Label) + '</div>' + lines +
         (sizeLine(pe) ? '<div class="note">' + esc(sizeLine(pe)) + '</div>' : '') +
         '<div>CPU: ' + num(pe.Cpu) + ' %' + (pe.CpuBand != null ? ' +/- ' + num(pe.CpuBand) : '') + '</div>' +
         arr(pe.Gpus).map(function (g) { return '<div>GPU ' + esc(g.Index) + ': ' + num(g.Pct) + ' %' + (g.Band != null ? ' +/- ' + num(g.Band) : '') + '</div>'; }).join('') +
-        '<div>Max headsets: ' + esc(pe.MaxHeadsets == null ? '-' : pe.MaxHeadsets) + '</div>' +
+        '<div>Max headsets: ' + esc(pe.MaxHeadsets == null ? '-' : pe.MaxHeadsets) + esc(maxWhy(pe)) + '</div>' +
         '<div><span class="pill ' + (p.Fits ? 'pill-green' : 'pill-red') + '">' + (p.Fits ? 'Fits' : 'Does not fit') + '</span></div>' +
-        '<button type="button" class="comp-refresh-btn go" data-p="' + i + '">Apply</button></div>';
+        '<button type="button" class="comp-refresh-btn go" data-p="' + i + '">Use in scenario</button></div>';
     }).join('') : '<div class="note">No proposal for these limits.</div>';
   }
+  // A proposal only fills the scenario; "Apply selected parameters" is the one config write.
   $('rec-props').addEventListener('click', function (e) {
     var b = e.target.closest && e.target.closest('button[data-p]'); if (!b) return;
-    var p = arr(S.rec && S.rec.Proposals)[parseInt(b.getAttribute('data-p'), 10)]; if (p) openApply(p);
+    var p = arr(S.rec && S.rec.Proposals)[parseInt(b.getAttribute('data-p'), 10)];
+    if (p) { useInScenario(p.Settings); $('rec-inputs').scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+  });
+  $('rec-apply').addEventListener('click', function () {
+    if (this.disabled || !S.recBuilt) return;
+    var s = readRecSettings();
+    if (s.Eye === 'M') s.MaxSize = -1;
+    if (s.ReencodeFps > s.Fps) s.ReencodeFps = s.Fps;
+    var lbl = 'capture ' + s.View + ', ' + sizeLabel(Number(s.MaxSize)) + ', ' + s.Fps + ' fps, ' + s.Mbps + ' Mb/s - re-encode ' + s.ReencodeFps + ' fps, ' + s.ReencodeMbps + ' Mb/s, ' + gpuLabel(s.Encoding) + ' ' + String(s.Codec).toUpperCase();
+    openApply({ Label: lbl, Settings: s });
   });
 
   function openApply(p) {
@@ -1047,12 +1326,21 @@
             post(false).then(function (r) {
               if (!r || !r.ok) { out('<span class="c-red">' + esc((r && r.error) || 'Apply failed') + '</span>'); return; }
               out('<span class="c-green">Applied - streams restart now.</span>'); m2.setActions([{ label: 'Close', fn: function (m3) { m3.close(); } }]);
+              refreshCurrent();
             }).catch(function () { out('<span class="c-red">Request failed.</span>'); });
           } }]);
         }).catch(function () { out('<span class="c-red">Request failed.</span>'); });
       } };
     }
-    openModal('Apply recommendation', wrap, [cancel, previewAct()]);
+    openModal('Apply to the global configuration', wrap, [cancel, previewAct()]);
+  }
+  // After an apply: re-read what the configuration uses now, so the red marks follow.
+  function refreshCurrent() {
+    if (S.hid == null) return;
+    jget('/api/benchmark/options?id=' + encodeURIComponent(S.hid)).then(function (j) {
+      if (!j || !j.ok || !S.opts) return;
+      S.opts.Current = j.options.Current; renderSel(); markRecCfg();
+    }).catch(function () {});
   }
 
   /* ---------- parallel check ---------- */

@@ -2570,13 +2570,16 @@ function Read-BenchmarkIndexList {
         [string]$Title,
         [string[]]$Labels,
         [int[]]$DefaultIndex = @(0),
-        [switch]$Single
+        [switch]$Single,
+        # Index of the value the application config uses today: printed red (ADR-0039).
+        [int]$CurrentIndex = -1
     )
     Write-Host ""
     Write-Host ("  " + $Title) -ForegroundColor Cyan
     for ($i = 0; $i -lt $Labels.Count; $i++) {
         $mark = if ($DefaultIndex -contains $i) { '*' } else { ' ' }
-        Write-Host ("   {0} [{1}] {2}" -f $mark, ($i + 1), $Labels[$i])
+        if ($i -eq $CurrentIndex) { Write-Host ("   {0} [{1}] {2} {3}" -f $mark, ($i + 1), $Labels[$i], $msg.Benchmark.ConfigTag) -ForegroundColor Red }
+        else { Write-Host ("   {0} [{1}] {2}" -f $mark, ($i + 1), $Labels[$i]) }
     }
     $hint = if ($Single) { $msg.Benchmark.HintSingle } else { $msg.Benchmark.HintMulti }
     $raw = (Read-Host $hint).Trim()
@@ -2606,11 +2609,14 @@ function Read-BenchmarkNumberList {
         [int[]]$Default = @(),
         [switch]$Single,
         [int]$Min = 0,
-        [int]$Max = 100000
+        [int]$Max = 100000,
+        # The value the application config uses today: printed red (ADR-0039). Empty = not shown.
+        [string]$Current = ''
     )
     Write-Host ""
     Write-Host ("  " + $Title) -ForegroundColor Cyan
     Write-Host ("   " + ($msg.Benchmark.ValuesLine -f (@($Choices) -join ', '), (@($Default) -join ', ')))
+    if ($Current -ne '') { Write-Host ("   " + ($msg.Benchmark.CurrentLine -f $Current)) -ForegroundColor Red }
     $hint = if ($Single) { $msg.Benchmark.HintValueSingle } else { $msg.Benchmark.HintValueMulti }
     $raw = (Read-Host $hint).Trim()
     if (-not $raw) { return @($Default) }
@@ -2682,24 +2688,16 @@ function Start-BenchmarkRunFlow {
     Write-Host ("   " + $msg.Benchmark.SetCustom)
     $preset = switch ((Read-Host $msg.Benchmark.SetChoice).Trim()) { '1' { 'typical' } '3' { '' } default { 'typical-quick' } }
 
-    # View: one choice, default = the headset's current view.
-    $viewNames = @($opt.Views | ForEach-Object { [string]$_.Name })
-    $view = [string]$def.View
-    if ($viewNames.Count -gt 0) {
-        $viewDef = @(0..($viewNames.Count - 1) | Where-Object { $viewNames[$_] -eq [string]$def.View })
-        if ($viewDef.Count -eq 0) { $viewDef = @(0) }
-        $viewIdx = @(Read-BenchmarkIndexList -Title $msg.Benchmark.PromptView -Labels $viewNames -DefaultIndex $viewDef -Single)
-        $view = $viewNames[$viewIdx[0]]
-    }
-    $reenc = @(Read-BenchmarkNumberList -Title $msg.Benchmark.PromptReencode -Choices @($ch.ReencodeMbps) -Default @([int]$def.ReencodeMbps) -Single -Min 1 -Max 100)
-
-    $selection = @{ View = $view; ReencodeMbps = [int]$reenc[0] }
-    $measure = 20
+    $cur = $opt.Current
+    $selection = @{}
     if ($preset) {
+        # A preset decides every value (Low / Mid / High scenarios + variants, ADR-0039).
         $selection.Preset = $preset
     }
     else {
-    # Encodings: CPU + every GPU.
+    # ---- General: encodings, codec (capture AND re-encode) ----
+    Write-Host ""
+    Write-Host ("  == " + $msg.Benchmark.SecGeneral) -ForegroundColor White
     $encVals   = @('cpu')
     $encLabels = @($msg.Benchmark.EncCpu)
     foreach ($g in @($opt.Gpus)) {
@@ -2708,37 +2706,58 @@ function Start-BenchmarkRunFlow {
     }
     $encDef = @(0..($encVals.Count - 1) | Where-Object { @($def.Encodings) -contains $encVals[$_] })
     if ($encDef.Count -eq 0) { $encDef = @(0) }
-    $encIdx = @(Read-BenchmarkIndexList -Title $msg.Benchmark.PromptEncodings -Labels $encLabels -DefaultIndex $encDef)
+    $encIdx = @(Read-BenchmarkIndexList -Title $msg.Benchmark.PromptEncodings -Labels $encLabels -DefaultIndex $encDef -CurrentIndex ([Array]::IndexOf($encVals, [string]$cur.Encoding)))
 
     $codVals = @('h264', 'h265')
     $codDef  = @(0..1 | Where-Object { @($def.Codecs) -contains $codVals[$_] })
     if ($codDef.Count -eq 0) { $codDef = @(0) }
-    $codIdx = @(Read-BenchmarkIndexList -Title $msg.Benchmark.PromptCodecs -Labels @('H264', 'H265') -DefaultIndex $codDef)
+    $codIdx = @(Read-BenchmarkIndexList -Title $msg.Benchmark.PromptCodecs -Labels @('H264', 'H265') -DefaultIndex $codDef -CurrentIndex ([Array]::IndexOf($codVals, [string]$cur.Codec)))
 
-    $bitrates = @(Read-BenchmarkNumberList -Title $msg.Benchmark.PromptBitrates -Choices @($ch.Bitrates) -Default @($def.Bitrates) -Min 1 -Max 100)
-    $fpsList  = @(Read-BenchmarkNumberList -Title $msg.Benchmark.PromptFps -Choices @($ch.Fps) -Default @($def.Fps) -Min 5 -Max 120)
-
-    # Eyes: merged only when the model is calibrated.
+    # ---- Headset capture (scrcpy) ----
+    Write-Host ""
+    Write-Host ("  == " + $msg.Benchmark.SecCapture) -ForegroundColor White
+    $maxSizes = @(Read-BenchmarkNumberList -Title $msg.Benchmark.PromptMaxSize -Choices @($ch.MaxSizes) -Default @([int]$def.MaxSize) -Min 0 -Max 16384 -Current ([string]$cur.MaxSize))
+    $bitrates = @(Read-BenchmarkNumberList -Title $msg.Benchmark.PromptBitrates -Choices @($ch.Bitrates) -Default @($def.Bitrates) -Min 1 -Max 100 -Current ([string]$cur.Mbps))
+    $fpsList  = @(Read-BenchmarkNumberList -Title $msg.Benchmark.PromptFps -Choices @($ch.Fps) -Default @($def.Fps) -Min 5 -Max 120 -Current ([string]$cur.Fps))
+    $viewNames = @($opt.Views | ForEach-Object { [string]$_.Name })
+    $view = [string]$def.View
+    if ($viewNames.Count -gt 0) {
+        $viewDef = @(0..($viewNames.Count - 1) | Where-Object { $viewNames[$_] -eq [string]$def.View })
+        if ($viewDef.Count -eq 0) { $viewDef = @(0) }
+        $viewIdx = @(Read-BenchmarkIndexList -Title $msg.Benchmark.PromptView -Labels $viewNames -DefaultIndex $viewDef -Single -CurrentIndex ([Array]::IndexOf($viewNames, [string]$cur.View)))
+        $view = $viewNames[$viewIdx[0]]
+    }
+    # Eyes: merged only when the model is calibrated (always CPU-encoded).
     $eyeVals   = @('R')
     $eyeLabels = @($msg.Benchmark.EyeSingle)
     if ($opt.MergeSupported) { $eyeVals += 'M'; $eyeLabels += $msg.Benchmark.EyeMerged }
     $eyeDef = @(0..($eyeVals.Count - 1) | Where-Object { @($def.Eyes) -contains $eyeVals[$_] })
     if ($eyeDef.Count -eq 0) { $eyeDef = @(0) }
-    $eyeIdx = @(Read-BenchmarkIndexList -Title $msg.Benchmark.PromptEyes -Labels $eyeLabels -DefaultIndex $eyeDef)
+    $eyeIdx = @(Read-BenchmarkIndexList -Title $msg.Benchmark.PromptEyes -Labels $eyeLabels -DefaultIndex $eyeDef -CurrentIndex ([Array]::IndexOf($eyeVals, [string]$cur.Eye)))
+    # Parallel captures of the same headset (simulates N headsets), capped in total capture bitrate.
+    $lvls = @($ch.Streams | ForEach-Object { [int]$_ })
+    $strIdx = @(Read-BenchmarkIndexList -Title ($msg.Benchmark.PromptStreams -f $opt.NetworkCapMbps) -Labels @($lvls | ForEach-Object { [string]$_ }) -DefaultIndex @(0) -Single)
 
-    $maxSize = @(Read-BenchmarkNumberList -Title $msg.Benchmark.PromptMaxSize -Choices @($ch.MaxSizes) -Default @([int]$def.MaxSize) -Single -Min 0 -Max 16384)
+    # ---- Re-encoding and streaming (ffmpeg): swapped without restarting the capture ----
+    Write-Host ""
+    Write-Host ("  == " + $msg.Benchmark.SecReencode) -ForegroundColor White
+    $reencs = @(Read-BenchmarkNumberList -Title $msg.Benchmark.PromptReencode -Choices @($ch.ReencodeMbps) -Default @([int]$def.ReencodeMbps) -Min 1 -Max 100 -Current ([string]$cur.ReencodeMbps))
+    $refps  = @(Read-BenchmarkNumberList -Title $msg.Benchmark.PromptReencodeFps -Choices @($ch.ReencodeFps) -Default @([int]$def.ReencodeFps) -Min 5 -Max 120 -Current ([string]$cur.ReencodeFps))
 
+    $selection.Encodings    = @($encIdx | ForEach-Object { $encVals[$_] })
+    $selection.Codecs       = @($codIdx | ForEach-Object { $codVals[$_] })
+    $selection.MaxSize      = $maxSizes
+    $selection.Bitrates     = $bitrates
+    $selection.Fps          = $fpsList
+    $selection.View         = $view
+    $selection.Eyes         = @($eyeIdx | ForEach-Object { $eyeVals[$_] })
+    $selection.ReencodeMbps = $reencs
+    $selection.ReencodeFps  = $refps
+    $selection.Streams      = [int]$lvls[$strIdx[0]]
+    }
     Write-Host ""
     Write-Host $msg.Benchmark.MeasureChoice
     $measure = switch ((Read-Host $msg.EnterChoice).Trim()) { '1' { 10 } '3' { 40 } default { 20 } }
-
-    $selection.Encodings = @($encIdx | ForEach-Object { $encVals[$_] })
-    $selection.Codecs    = @($codIdx | ForEach-Object { $codVals[$_] })
-    $selection.Bitrates  = $bitrates
-    $selection.Fps       = $fpsList
-    $selection.Eyes      = @($eyeIdx | ForEach-Object { $eyeVals[$_] })
-    $selection.MaxSize   = [int]$maxSize[0]
-    }
     $running = @(Get-Process -Name 'scrcpy' -ErrorAction SilentlyContinue).Count
 
     $plan = New-StreamBenchmarkPlan -Headset $Headset -Selection $selection -MeasureSec $measure -RunningStreams $running
@@ -2750,6 +2769,9 @@ function Start-BenchmarkRunFlow {
 
     Write-Host ""
     Write-Host ($msg.Benchmark.Estimate -f $plan.Count, $Headset.Name, (Get-FormattedUptime -Seconds $plan.EstimateSec)) -ForegroundColor Cyan
+    # One line per capture group: inside a group only ffmpeg is swapped (ADR-0039).
+    Write-Host ($msg.Benchmark.EstimateCaptures -f $plan.Captures) -ForegroundColor DarkGray
+    foreach ($g in @($plan.Groups)) { Write-Host ("   - {0}  ({1}, {2})" -f $g.Label, $g.Count, (Get-FormattedUptime -Seconds $g.EstimateSec)) -ForegroundColor DarkGray }
     Write-Host ($msg.Benchmark.StopWarning -f $running) -ForegroundColor Yellow
     $answer = (Read-Host $msg.Benchmark.Confirm).Trim().ToUpper()
     if ($answer -notin @('Y', 'O')) { return }
@@ -2783,8 +2805,11 @@ function Start-BenchmarkRunFlow {
     $gpuIdx = @(@($result.Gpus) | ForEach-Object { [int]$_.Index })
     $rows = foreach ($r in @($result.Results)) {
         $l = $r.Load
+        $capTxt = if ($r.Encoding -eq 'none') { '' } else { '{0} {1} {2}fps {3}M{4}' -f $r.View, $(if ([int]$r.MaxSize -eq 0) { 'native' } elseif ([int]$r.MaxSize -lt 0) { 'full' } else { $r.MaxSize }), $r.Fps, $r.Mbps, $(if ([int]$r.Streams -gt 1) { ' x' + $r.Streams } else { '' }) }
         $row = [ordered]@{
+            Capture = $capTxt
             Test   = $r.Label
+            Swap   = if ($r.Swapped) { 'yes' } else { '' }
             Status = $r.Status
             'CPU%' = if ($l) { $l.CpuAvg } else { $null }
             'StreamCPU%' = if ($l) { $l.StreamCpuAvg } else { $null }
@@ -2859,17 +2884,29 @@ function Show-BenchmarkRecommendation {
         $i = [Array]::IndexOf($vals, [string]$current)
         if ($i -lt 0) { 0 } else { $i }
     }
-    $eyeV = @($c.Eyes)
-    $eyeL = @($eyeV | ForEach-Object { if ($_ -eq 'M') { $msg.Benchmark.EyeMerged } else { $msg.Benchmark.EyeSingle } })
-    $eyeI = @(Read-BenchmarkIndexList -Title $msg.Benchmark.PromptEyes -Labels $eyeL -DefaultIndex @(& $idxOf $eyeV $s.Eye) -Single)
-    $viewV = @($c.Views)
-    $viewI = @(Read-BenchmarkIndexList -Title $msg.Benchmark.PromptView -Labels @($viewV | ForEach-Object { [string]$_ }) -DefaultIndex @(& $idxOf $viewV $s.View) -Single)
+    # Index of the configured value in a list, -1 when absent (printed red, ADR-0039).
+    $cfgIdx = { param($values, $current) [Array]::IndexOf(@($values | ForEach-Object { [string]$_ }), [string]$current) }
+    $cfgCodec = if ([string]$global:mediamtxCodec -eq 'h265') { 'h265' } else { 'h264' }
+    $cfgEnc = if ($global:GPU_Acceleration) { 'gpu:' + [int]$global:GPU_Index } else { 'cpu' }
+    $cfgReMb = ConvertTo-StreamBenchmarkMbps $global:mediamtxBitrate
+    $cfgReFps = [int]$global:mediamtxFramerate
+    $tplNow = Get-StreamBenchmarkModelTemplate -Model $model
+    $cfgSize = if ($tplNow -and $null -ne $tplNow.max_size) { [int]$tplNow.max_size } else { 0 }
+
+    # ---- General ----
+    Write-Host ""
+    Write-Host ("  == " + $msg.Benchmark.SecGeneral) -ForegroundColor White
     $encV = @($c.Encodings)
     $encL = @($encV | ForEach-Object { if ($_ -eq 'cpu') { $msg.Benchmark.EncCpu } else { 'GPU ' + ([string]$_ -replace '^gpu:', '') } })
-    $encI = @(Read-BenchmarkIndexList -Title $msg.Benchmark.PromptEncodings -Labels $encL -DefaultIndex @(& $idxOf $encV $s.Encoding) -Single)
+    $encI = @(Read-BenchmarkIndexList -Title $msg.Benchmark.PromptEncodings -Labels $encL -DefaultIndex @(& $idxOf $encV $s.Encoding) -Single -CurrentIndex (& $cfgIdx $encV $cfgEnc))
     $codV = @($c.Codecs)
-    $codI = @(Read-BenchmarkIndexList -Title $msg.Benchmark.PromptCodecs -Labels @($codV | ForEach-Object { ([string]$_).ToUpper() }) -DefaultIndex @(& $idxOf $codV $s.Codec) -Single)
+    $codI = @(Read-BenchmarkIndexList -Title $msg.Benchmark.PromptCodecs -Labels @($codV | ForEach-Object { ([string]$_).ToUpper() }) -DefaultIndex @(& $idxOf $codV $s.Codec) -Single -CurrentIndex (& $cfgIdx $codV $cfgCodec))
 
+    # ---- Headset capture (scrcpy) ----
+    Write-Host ""
+    Write-Host ("  == " + $msg.Benchmark.SecCapture) -ForegroundColor White
+    $szV = @($c.MaxSizes | ForEach-Object { [int]$_ })
+    $szI = @(Read-BenchmarkIndexList -Title $msg.Benchmark.PromptMaxSize -Labels @($szV | ForEach-Object { if ($_ -eq 0) { $msg.Benchmark.NativeSize } else { [string]$_ } }) -DefaultIndex @(& $idxOf $szV $s.MaxSize) -Single -CurrentIndex (& $cfgIdx $szV $cfgSize))
     $fpsC = @($c.Fps | ForEach-Object { [int]$_ })
     $mbpC = @($c.Mbps | ForEach-Object { [int]$_ })
     $fpsMin = if ($fpsC.Count) { ($fpsC | Measure-Object -Minimum).Minimum } else { 5 }
@@ -2878,20 +2915,28 @@ function Show-BenchmarkRecommendation {
     $mbpMax = if ($mbpC.Count) { ($mbpC | Measure-Object -Maximum).Maximum } else { 100 }
     # Model mode predicts any value: FPS and Mb/s are free numbers, the choices are only suggestions.
     if ($isModel) { $fpsMin = 5; $fpsMax = 120; $mbpMin = 1; $mbpMax = 100 }
-    $fps = @(Read-BenchmarkNumberList -Title $msg.Benchmark.PromptFps -Choices $fpsC -Default @([int]$s.Fps) -Single -Min $fpsMin -Max $fpsMax)
     $mbp = @(Read-BenchmarkNumberList -Title $msg.Benchmark.PromptBitrates -Choices $mbpC -Default @([int]$s.Mbps) -Single -Min $mbpMin -Max $mbpMax)
+    $fps = @(Read-BenchmarkNumberList -Title $msg.Benchmark.PromptFps -Choices $fpsC -Default @([int]$s.Fps) -Single -Min $fpsMin -Max $fpsMax)
+    $viewV = @($c.Views)
+    $viewI = @(Read-BenchmarkIndexList -Title $msg.Benchmark.PromptView -Labels @($viewV | ForEach-Object { [string]$_ }) -DefaultIndex @(& $idxOf $viewV $s.View) -Single)
+    $eyeV = @($c.Eyes)
+    $eyeL = @($eyeV | ForEach-Object { if ($_ -eq 'M') { $msg.Benchmark.EyeMerged } else { $msg.Benchmark.EyeSingle } })
+    $eyeI = @(Read-BenchmarkIndexList -Title $msg.Benchmark.PromptEyes -Labels $eyeL -DefaultIndex @(& $idxOf $eyeV $s.Eye) -Single)
 
+    # ---- Re-encoding and streaming (ffmpeg) ----
+    Write-Host ""
+    Write-Host ("  == " + $msg.Benchmark.SecReencode) -ForegroundColor White
     $reV = @($c.ReencodeMbps | ForEach-Object { [int]$_ })
     if ($isModel) {
-        $reN = @(Read-BenchmarkNumberList -Title $msg.Benchmark.PromptReencode -Choices $reV -Default @([int]$s.ReencodeMbps) -Single -Min 1 -Max 100)
+        $reN = @(Read-BenchmarkNumberList -Title $msg.Benchmark.PromptReencode -Choices $reV -Default @([int]$s.ReencodeMbps) -Single -Min 1 -Max 100 -Current ([string]$cfgReMb))
         $reValue = [int]$reN[0]
     }
     else {
-        $reI = @(Read-BenchmarkIndexList -Title $msg.Benchmark.PromptReencode -Labels @($reV | ForEach-Object { [string]$_ }) -DefaultIndex @(& $idxOf $reV $s.ReencodeMbps) -Single)
+        $reI = @(Read-BenchmarkIndexList -Title $msg.Benchmark.PromptReencode -Labels @($reV | ForEach-Object { [string]$_ }) -DefaultIndex @(& $idxOf $reV $s.ReencodeMbps) -Single -CurrentIndex (& $cfgIdx $reV $cfgReMb))
         $reValue = [int]$reV[$reI[0]]
     }
-    $szV = @($c.MaxSizes | ForEach-Object { [int]$_ })
-    $szI = @(Read-BenchmarkIndexList -Title $msg.Benchmark.PromptMaxSize -Labels @($szV | ForEach-Object { if ($_ -eq 0) { $msg.Benchmark.NativeSize } else { [string]$_ } }) -DefaultIndex @(& $idxOf $szV $s.MaxSize) -Single)
+    $refpsDef = if ($s.ReencodeFps) { [int]$s.ReencodeFps } else { [int]$s.Fps }
+    $refpsN = @(Read-BenchmarkNumberList -Title $msg.Benchmark.PromptReencodeFps -Choices @(15, 30, 45, 60) -Default @($refpsDef) -Single -Min 5 -Max 120 -Current ([string]$cfgReFps))
 
     $maxCpu = [double]$first.Limits.Cpu
     $maxGpu = [double]$first.Limits.Gpu
@@ -2909,101 +2954,103 @@ function Show-BenchmarkRecommendation {
         Codec        = [string]$codV[$codI[0]]
         Fps          = [int]$fps[0]
         Mbps         = [int]$mbp[0]
+        ReencodeFps  = [Math]::Min([int]$refpsN[0], [int]$fps[0])
         ReencodeMbps = $reValue
         MaxSize      = [int]$szV[$szI[0]]
     }
-    $rec = Get-StreamBenchmarkRecommendation -Result $result -Headsets $n -Settings $settings -MaxCpu $maxCpu -MaxGpu $maxGpu
-    if (-not $rec.Ok) {
-        Write-Host ([string]$rec.Error) -ForegroundColor Yellow
-        Read-Host $msg.PressEnterToContinue | Out-Null
-        return
-    }
 
-    # Estimate of the chosen settings.
-    Write-Host ""
-    Write-Host ($msg.Benchmark.EstHeader -f $n, $model) -ForegroundColor Cyan
-    $e = $rec.Estimate
-    if ($e.NotMeasured) {
-        Write-Host ([string]$e.Message) -ForegroundColor Yellow
-    }
-    else {
-        $verdict = { param($fits) if ($fits) { @($msg.Benchmark.Ok, 'Green') } else { @($msg.Benchmark.Over, 'Red') } }
-        $v = & $verdict $e.CpuFits
-        if ($null -ne $e.CpuBand) {
-            Write-Host ($msg.Benchmark.EstResourceBand -f 'CPU', ('{0:N1}' -f [double]$e.Cpu), ('{0:N1}' -f [double]$e.CpuBand), $rec.Limits.Cpu, $v[0]) -ForegroundColor $v[1]
+    # Scenario loop: estimate, Low / Mid / High proposals; a proposal only becomes the scenario,
+    # [A] is the one config write (ADR-0039).
+    while ($true) {
+        $rec = Get-StreamBenchmarkRecommendation -Result $result -Headsets $n -Settings $settings -MaxCpu $maxCpu -MaxGpu $maxGpu
+        if (-not $rec.Ok) {
+            Write-Host ([string]$rec.Error) -ForegroundColor Yellow
+            Read-Host $msg.PressEnterToContinue | Out-Null
+            return
+        }
+        $settings = $rec.Settings
+        $st = $settings
+        Write-Host ""
+        Write-Host ($msg.Benchmark.EstHeader -f $n, $model) -ForegroundColor Cyan
+        Write-Host ("   " + ($msg.Benchmark.ScenarioLine -f $st.View, $(if ([int]$st.MaxSize -eq 0) { $msg.Benchmark.NativeSize } elseif ([int]$st.MaxSize -lt 0) { 'full frame' } else { $st.MaxSize }), $st.Fps, $st.Mbps, $st.ReencodeFps, $st.ReencodeMbps, $st.Encoding, ([string]$st.Codec).ToUpper())) -ForegroundColor White
+        $e = $rec.Estimate
+        if ($e.NotMeasured) {
+            Write-Host ([string]$e.Message) -ForegroundColor Yellow
         }
         else {
-            Write-Host ($msg.Benchmark.EstResource -f 'CPU', ('{0:N1}' -f [double]$e.Cpu), $rec.Limits.Cpu, $v[0]) -ForegroundColor $v[1]
-        }
-        foreach ($g in @($e.Gpus)) {
-            $v = & $verdict $g.Fits
-            $gname = 'GPU {0} ({1})' -f $g.Index, $g.Model
-            if ($null -ne $g.Band) {
-                Write-Host ($msg.Benchmark.EstResourceBand -f $gname, ('{0:N1}' -f [double]$g.Pct), ('{0:N1}' -f [double]$g.Band), $rec.Limits.Gpu, $v[0]) -ForegroundColor $v[1]
+            $verdict = { param($fits) if ($fits) { @($msg.Benchmark.Ok, 'Green') } else { @($msg.Benchmark.Over, 'Red') } }
+            $v = & $verdict $e.CpuFits
+            if ($null -ne $e.CpuBand) {
+                Write-Host ($msg.Benchmark.EstResourceBand -f 'CPU', ('{0:N1}' -f [double]$e.Cpu), ('{0:N1}' -f [double]$e.CpuBand), $rec.Limits.Cpu, $v[0]) -ForegroundColor $v[1]
             }
             else {
-                Write-Host ($msg.Benchmark.EstResource -f $gname, ('{0:N1}' -f [double]$g.Pct), $rec.Limits.Gpu, $v[0]) -ForegroundColor $v[1]
+                Write-Host ($msg.Benchmark.EstResource -f 'CPU', ('{0:N1}' -f [double]$e.Cpu), $rec.Limits.Cpu, $v[0]) -ForegroundColor $v[1]
             }
+            foreach ($g in @($e.Gpus)) {
+                $v = & $verdict $g.Fits
+                $gname = 'GPU {0} ({1})' -f $g.Index, $g.Model
+                if ($null -ne $g.Band) {
+                    Write-Host ($msg.Benchmark.EstResourceBand -f $gname, ('{0:N1}' -f [double]$g.Pct), ('{0:N1}' -f [double]$g.Band), $rec.Limits.Gpu, $v[0]) -ForegroundColor $v[1]
+                }
+                else {
+                    Write-Host ($msg.Benchmark.EstResource -f $gname, ('{0:N1}' -f [double]$g.Pct), $rec.Limits.Gpu, $v[0]) -ForegroundColor $v[1]
+                }
+            }
+            if ($e.W -and $e.H) { Write-Host ($msg.Benchmark.EstPicture -f $e.W, $e.H) }
+            if ($e.InRange -eq $false) { Write-Host $msg.Benchmark.WarnRange -ForegroundColor Yellow }
+            if ($e.FpsRisk) { Write-Host $msg.Benchmark.WarnFps -ForegroundColor Yellow }
+            if ($e.SessionCap -and [int]$e.SessionCap -gt 0) { Write-Host ($msg.Benchmark.WarnCap -f $e.SessionCap) -ForegroundColor Yellow }
+            Write-Host ($msg.Benchmark.EstRam -f ('{0:N1}' -f [double]$e.RamGB))
+            Write-Host ($msg.Benchmark.EstMax -f $e.MaxHeadsets)
+            Write-Host ($msg.Benchmark.EstWifi -f ('{0:N0}' -f [double]$e.CaptureMbpsTotal), ('{0:N0}' -f [double]$e.ReencodeMbpsPerViewer))
+            $how = if ($e.Measured) { $msg.Benchmark.EstMeasured } elseif ($e.Interpolated) { $msg.Benchmark.EstInterpolated } else { '' }
+            if ($how) { Write-Host $how -ForegroundColor DarkGray }
         }
-        if ($e.W -and $e.H) { Write-Host ($msg.Benchmark.EstPicture -f $e.W, $e.H) }
-        if ($e.PSObject.Properties['InRange'] -and $e.InRange -eq $false) { Write-Host $msg.Benchmark.WarnRange -ForegroundColor Yellow }
-        if ($e.FpsRisk) { Write-Host $msg.Benchmark.WarnFps -ForegroundColor Yellow }
-        if ($e.SessionCap -and [int]$e.SessionCap -gt 0) { Write-Host ($msg.Benchmark.WarnCap -f $e.SessionCap) -ForegroundColor Yellow }
-        Write-Host ($msg.Benchmark.EstRam -f ('{0:N1}' -f [double]$e.RamGB))
-        Write-Host ($msg.Benchmark.EstMax -f $e.MaxHeadsets)
-        Write-Host ($msg.Benchmark.EstWifi -f ('{0:N0}' -f [double]$e.CaptureMbpsTotal), ('{0:N0}' -f [double]$e.ReencodeMbpsPerViewer))
-        $how = if ($e.Measured) { $msg.Benchmark.EstMeasured } elseif ($e.Interpolated) { $msg.Benchmark.EstInterpolated } else { '' }
-        if ($how) { Write-Host $how -ForegroundColor DarkGray }
-    }
-    if ($rec.Note) { Write-Host ([string]$rec.Note) -ForegroundColor DarkGray }
+        if ($rec.Note) { Write-Host ([string]$rec.Note) -ForegroundColor DarkGray }
 
-    # Proposals.
-    $props = @($rec.Proposals)
-    if ($props.Count -eq 0) {
-        Write-Host $msg.Benchmark.NoProposal -ForegroundColor Yellow
-        Read-Host $msg.PressEnterToContinue | Out-Null
+        $props = @($rec.Proposals)
+        Write-Host ""
+        Write-Host $msg.Benchmark.ProposalsHeader -ForegroundColor Cyan
+        if ($props.Count -eq 0) { Write-Host $msg.Benchmark.NoProposal -ForegroundColor Yellow }
+        for ($i = 0; $i -lt $props.Count; $i++) {
+            $p = $props[$i]
+            $pe = $p.Estimate
+            Write-Host ("  [{0}] {1}" -f ($i + 1), $p.Label) -ForegroundColor White
+            if ($null -ne $pe.CpuBand) {
+                $gtxt = (@($pe.Gpus) | ForEach-Object { 'GPU{0} {1:N0}% +/- {2:N0}%' -f $_.Index, [double]$_.Pct, [double]$_.Band }) -join '  '
+                Write-Host ($msg.Benchmark.ProposalLineBand -f $p.Encoder, ('{0:N0}' -f [double]$pe.Cpu), ('{0:N0}' -f [double]$pe.CpuBand), $gtxt, ('{0:N1}' -f [double]$pe.RamGB), $pe.MaxHeadsets)
+            }
+            else {
+                $gtxt = (@($pe.Gpus) | ForEach-Object { 'GPU{0} {1:N0}%' -f $_.Index, [double]$_.Pct }) -join '  '
+                Write-Host ($msg.Benchmark.ProposalLine -f $p.Encoder, ('{0:N0}' -f [double]$pe.Cpu), $gtxt, ('{0:N1}' -f [double]$pe.RamGB), $pe.MaxHeadsets)
+            }
+            if ($pe.InRange -eq $false) { Write-Host ("      " + $msg.Benchmark.WarnRange.Trim()) -ForegroundColor Yellow }
+            if ($pe.FpsRisk) { Write-Host ("      " + $msg.Benchmark.WarnFps.Trim()) -ForegroundColor Yellow }
+        }
+        $pick = (Read-Host ($msg.Benchmark.ScenarioPick -f $props.Count)).Trim().ToUpper()
+        $pi = 0
+        if ([int]::TryParse($pick, [ref]$pi) -and $pi -ge 1 -and $pi -le $props.Count) { $settings = $props[$pi - 1].Settings; continue }
+        if ($pick -eq 'A') { break }
         return
     }
-    Write-Host ""
-    Write-Host $msg.Benchmark.ProposalsHeader -ForegroundColor Cyan
-    for ($i = 0; $i -lt $props.Count; $i++) {
-        $p = $props[$i]
-        $pe = $p.Estimate
-        $gtxt = (@($pe.Gpus) | ForEach-Object { 'GPU{0} {1:N0}%' -f $_.Index, [double]$_.Pct }) -join '  '
-        Write-Host ("  [{0}] {1}" -f ($i + 1), $p.Label) -ForegroundColor White
-        if ($null -ne $pe.CpuBand) {
-            $gtxt = (@($pe.Gpus) | ForEach-Object { 'GPU{0} {1:N0}% +/- {2:N0}%' -f $_.Index, [double]$_.Pct, [double]$_.Band }) -join '  '
-            Write-Host ($msg.Benchmark.ProposalLineBand -f $p.Encoder, ('{0:N0}' -f [double]$pe.Cpu), ('{0:N0}' -f [double]$pe.CpuBand), $gtxt, ('{0:N1}' -f [double]$pe.RamGB), $pe.MaxHeadsets)
-        }
-        else {
-            Write-Host ($msg.Benchmark.ProposalLine -f $p.Encoder, ('{0:N0}' -f [double]$pe.Cpu), $gtxt, ('{0:N1}' -f [double]$pe.RamGB), $pe.MaxHeadsets)
-        }
-        if ($pe.PSObject.Properties['InRange'] -and $pe.InRange -eq $false) { Write-Host ("      " + $msg.Benchmark.WarnRange.Trim()) -ForegroundColor Yellow }
-        if ($pe.FpsRisk) { Write-Host ("      " + $msg.Benchmark.WarnFps.Trim()) -ForegroundColor Yellow }
-    }
 
-    $pick = (Read-Host ($msg.Benchmark.ProposalPick -f $props.Count)).Trim()
-    $pi = 0
-    if (-not ([int]::TryParse($pick, [ref]$pi) -and $pi -ge 1 -and $pi -le $props.Count)) { return }
-    $chosen = $props[$pi - 1]
-
+    # ---- Apply the scenario to the global configuration (preview, then confirm) ----
     $ofModel = @(Get-KnownHeadsets | Where-Object { [string]$_.Model -eq $model })
-    if ($ofModel.Count -eq 0) {
-        Write-Host ($msg.Benchmark.NoHeadsetOfModel -f $model) -ForegroundColor Yellow
-        Read-Host $msg.PressEnterToContinue | Out-Null
-        return
+    $ids = @()
+    if ($ofModel.Count -gt 0) {
+        Write-Host ""
+        foreach ($h in $ofModel) { Write-Host ("   {0,3}  {1}" -f $h.ID, $h.Name) }
+        $rawIds = (Read-Host $msg.Benchmark.WhichHeadsets).Trim()
+        $ids = @($ofModel | ForEach-Object { [int]$_.ID })
+        if ($rawIds) {
+            $want = @()
+            foreach ($t in ($rawIds -split '[,; ]+')) { $x = 0; if ([int]::TryParse($t, [ref]$x) -and ($ids -contains $x) -and ($want -notcontains $x)) { $want += $x } }
+            if ($want.Count -gt 0) { $ids = $want }
+        }
     }
-    Write-Host ""
-    foreach ($h in $ofModel) { Write-Host ("   {0,3}  {1}" -f $h.ID, $h.Name) }
-    $rawIds = (Read-Host $msg.Benchmark.WhichHeadsets).Trim()
-    $ids = @($ofModel | ForEach-Object { [int]$_.ID })
-    if ($rawIds) {
-        $want = @()
-        foreach ($t in ($rawIds -split '[,; ]+')) { $x = 0; if ([int]::TryParse($t, [ref]$x) -and ($ids -contains $x) -and ($want -notcontains $x)) { $want += $x } }
-        if ($want.Count -gt 0) { $ids = $want }
-    }
+    else { Write-Host ($msg.Benchmark.NoHeadsetOfModel -f $model) -ForegroundColor Yellow }
 
-    $prev = Set-StreamBenchmarkRecommendation -Model $model -Settings $chosen.Settings -HeadsetIds $ids -Preview
+    $prev = Set-StreamBenchmarkRecommendation -Model $model -Settings $settings -HeadsetIds $ids -Preview
     if (-not $prev.Ok) {
         Write-Host ($msg.Benchmark.ApplyFailed -f $prev.Error) -ForegroundColor Red
         Read-Host $msg.PressEnterToContinue | Out-Null
@@ -3011,9 +3058,10 @@ function Show-BenchmarkRecommendation {
     }
     Write-Host $msg.Benchmark.Changes -ForegroundColor Cyan
     foreach ($line in @($prev.Changes)) { Write-Host ("   - " + $line) }
+    if (@($prev.Changes).Count -eq 0) { Write-Host ("   " + $msg.Benchmark.NoChange) }
     $ok = (Read-Host $msg.Benchmark.ApplyConfirm).Trim().ToUpper()
     if ($ok -notin @('Y', 'O')) { return }
-    $done = Set-StreamBenchmarkRecommendation -Model $model -Settings $chosen.Settings -HeadsetIds $ids
+    $done = Set-StreamBenchmarkRecommendation -Model $model -Settings $settings -HeadsetIds $ids
     if ($done.Ok) { Write-Host $msg.Benchmark.Applied -ForegroundColor Green }
     else { Write-Host ($msg.Benchmark.ApplyFailed -f $done.Error) -ForegroundColor Red }
     Read-Host $msg.PressEnterToContinue | Out-Null

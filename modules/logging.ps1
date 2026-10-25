@@ -31,13 +31,21 @@ function Write-Log {
 
     if ($toConsole) {
         $consoleEntry = "[$Level] $Message"
-        switch ($Level) {
-            "DEBUG"   { Write-Host $consoleEntry -ForegroundColor DarkGray }
-            "INFO"    { Write-Host $consoleEntry -ForegroundColor Green }
-            "SUCCESS" { Write-Host $consoleEntry -BackgroundColor Magenta -ForegroundColor White }
-            "WARNING" { Write-Host $consoleEntry -ForegroundColor Yellow }
-            "ERROR"   { Write-Host $consoleEntry -BackgroundColor Red -ForegroundColor White }
-            default   { Write-Host $consoleEntry }
+        # A coloured Write-Host reads the host's colours. In a Start-Job of a process with no usable
+        # console (the web server after an /api/app-restart: "invalid handle") that throws "remote
+        # host method get_BackgroundColor is not implemented", which killed the benchmark job on its
+        # first ERROR line and lost the line itself. The console write must never stop the log.
+        try {
+            switch ($Level) {
+                "DEBUG"   { Write-Host $consoleEntry -ForegroundColor DarkGray }
+                "INFO"    { Write-Host $consoleEntry -ForegroundColor Green }
+                "SUCCESS" { Write-Host $consoleEntry -BackgroundColor Magenta -ForegroundColor White }
+                "WARNING" { Write-Host $consoleEntry -ForegroundColor Yellow }
+                "ERROR"   { Write-Host $consoleEntry -BackgroundColor Red -ForegroundColor White }
+                default   { Write-Host $consoleEntry }
+            }
+        } catch {
+            try { Write-Host $consoleEntry } catch { }
         }
     }
 

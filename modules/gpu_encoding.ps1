@@ -91,7 +91,9 @@ function Test-FfmpegEncoder {
     )
     if (-not (Test-Path -LiteralPath $global:ffmpegFilePath)) { return @{ Ok = $false; Reason = 'open-failed' } }
 
-    $openArgs = @('-hide_banner','-loglevel','error','-f','lavfi','-i','color=c=black:s=320x240:r=10:d=0.1')
+    # -nostdin on every probe call: run from a background job (benchmark, web server), ffmpeg's stdin
+    # is an open pipe and ffmpeg can sit waiting on it (seen: a probe hung for minutes).
+    $openArgs = @('-hide_banner','-nostdin','-loglevel','error','-f','lavfi','-i','color=c=black:s=320x240:r=10:d=0.1')
     $openArgs += $ExtraArgs
     $openArgs += @('-c:v',$Encoder,'-frames:v','1','-f','null','-')
     try {
@@ -107,7 +109,7 @@ function Test-FfmpegEncoder {
     $probeSrc = 'testsrc2=size=320x240:rate={0}:duration=3' -f $probeGop
     $tmpFile  = Join-Path $env:TEMP ("vrhm_encprobe_{0}.mkv" -f ([guid]::NewGuid().ToString('N')))
     try {
-        $encArgs = @('-hide_banner','-loglevel','error','-f','lavfi','-i',$probeSrc)
+        $encArgs = @('-hide_banner','-nostdin','-loglevel','error','-f','lavfi','-i',$probeSrc)
         $encArgs += $ExtraArgs
         $encArgs += (Get-StreamEncoderArgs -EncoderName $Encoder -Bitrate '2M' -Gop ([string]$probeGop))
         $encArgs += @('-y',$tmpFile)
@@ -116,7 +118,7 @@ function Test-FfmpegEncoder {
 
         # One decode pass yields both checks: blackframe reports black frames, showinfo
         # reports the picture type of every frame.
-        $checkArgs = @('-hide_banner','-loglevel','info','-i',$tmpFile,'-vf','blackframe=98:32,showinfo','-f','null','-')
+        $checkArgs = @('-hide_banner','-nostdin','-loglevel','info','-i',$tmpFile,'-vf','blackframe=98:32,showinfo','-f','null','-')
         $checkOut = & $global:ffmpegFilePath @checkArgs 2>&1
         $blackFrames = 0
         $keyFrames   = 0
@@ -157,7 +159,12 @@ function Get-GpuVendor {
 # is present - it's both unnecessary and rejected by some driver builds.
 function Get-GpuEncoderCandidates {
     param([int]$GpuIndex = 0, [string]$Codec = 'h264')
-    $gpus = @(); try { $gpus = @(Get-GpuInfo) } catch { $gpus = @() }
+    # Only the GPU list and models are needed (vendor + index): Get-GpuLayout reads them without any
+    # performance counter. Get-GpuInfo also reads every GPU Engine counter, which took 64 s on a
+    # two-GPU laptop and made each encoder check of a benchmark run last a minute and a half.
+    $gpus = @()
+    try { $lay = Get-GpuLayout; if ($lay -and $lay.Gpus) { $gpus = @($lay.Gpus) } } catch { $gpus = @() }
+    if ($gpus.Count -eq 0) { try { $gpus = @(Get-GpuInfo) } catch { $gpus = @() } }
     $selected = $null
     if ($gpus.Count -gt 0) {
         if ($GpuIndex -ge 0 -and $GpuIndex -lt $gpus.Count) { $selected = $gpus[$GpuIndex] }

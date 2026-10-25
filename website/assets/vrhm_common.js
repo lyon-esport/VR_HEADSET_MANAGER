@@ -49,6 +49,16 @@
     return String(name == null ? '' : name).replace(/ /g, '_');
   }
 
+  // Tells offline_guard.js (when the page includes it) that a request failed, so it checks
+  // the server at once. Throttled: a page with several pollers must not trigger a ping storm.
+  var lastErrEvt = 0;
+  function notifyFetchError() {
+    var now = Date.now();
+    if (now - lastErrEvt < 1000) return;
+    lastErrEvt = now;
+    try { window.dispatchEvent(new Event('vrhm:fetch-error')); } catch (e) {}
+  }
+
   function fetchJson(url, opts) {
     opts = opts || {};
     var timeoutMs = opts.timeoutMs == null ? 10000 : opts.timeoutMs;
@@ -119,7 +129,7 @@
       if (timer) { clearTimeout(timer); timer = null; }
       var p;
       try { p = Promise.resolve(fn()); } catch (e) { p = Promise.reject(e); }
-      current = p.then(function () { errors = 0; }, function () { errors++; })
+      current = p.then(function () { errors = 0; }, function () { errors++; notifyFetchError(); })
         .then(function () {
           current = null;
           if (again) { again = false; run(); } else { schedule(); }

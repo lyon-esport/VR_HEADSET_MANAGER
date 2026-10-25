@@ -474,6 +474,10 @@ $benchmarkJobBlock = {
     param([string]$ScriptPath, [string]$ConfigFilePath, [int]$HeadsetId, [string]$TestsJson, [int]$MeasureSec)
     # Same file as Get-StreamBenchmarkProgressPath (utils.ps1 is not loaded yet at this point).
     $progFile = [System.IO.Path]::Combine($ScriptPath, 'data\jobs\vrm_benchmark.json')
+    # A job's host calls go to this web server's host; with no usable console a coloured
+    # Write-Host throws "get_BackgroundColor is not implemented" and ended the run. Nobody reads
+    # this job's console output, so a failing console write is simply dropped.
+    function global:Write-Host { try { Microsoft.PowerShell.Utility\Write-Host @args } catch { } }
     try {
         $global:ScriptPath         = $ScriptPath
         $global:ConfigFilePath     = $ConfigFilePath
@@ -497,6 +501,8 @@ $benchmarkParallelJobBlock = {
     param([string]$ScriptPath, [string]$ConfigFilePath, [string]$IdsCsv, [string]$SettingsJson, [int]$MeasureSec)
     # Same file as Get-StreamBenchmarkProgressPath (utils.ps1 is not loaded yet at this point).
     $progFile = [System.IO.Path]::Combine($ScriptPath, 'data\jobs\vrm_benchmark.json')
+    # Same guard as $benchmarkJobBlock: a console write must not end the run.
+    function global:Write-Host { try { Microsoft.PowerShell.Utility\Write-Host @args } catch { } }
     try {
         $global:ScriptPath         = $ScriptPath
         $global:ConfigFilePath     = $ConfigFilePath

@@ -65,6 +65,8 @@ function Invoke-RouteBenchmarkPlan {
             count       = $benchPlan.Count
             estimateSec = $benchPlan.EstimateSec
             fixedSec    = $benchPlan.FixedSec
+            captures    = $benchPlan.Captures
+            groups      = @($benchPlan.Groups)
             selection   = $benchPlan.Selection
             tests       = @($benchPlan.Tests)
         }
@@ -213,15 +215,34 @@ function Invoke-RouteBenchmarkProgress {
 
     try {
         $raw = '{"status":"idle"}'
-        if (Test-Path -LiteralPath $script:benchmarkProgFile) {
-            $raw = try { [System.IO.File]::ReadAllText($script:benchmarkProgFile, [System.Text.Encoding]::UTF8) } catch { '{"status":"idle"}' }
-            $jobAlive = ($script:benchmarkJob -and $script:benchmarkJob.State -in @('Running', 'NotStarted'))
+        $jobAlive = ($script:benchmarkJob -and $script:benchmarkJob.State -in @('Running', 'NotStarted'))
+        # The run rewrites this file once a second (temp file + replace): a read can hit that moment.
+        # Retry briefly, and while our job runs answer the last good reading rather than "idle" -
+        # one "idle" made the page end the run, re-enable RUN and reload, then go busy again.
+        $read = $null
+        for ($try = 0; $try -lt 3 -and $null -eq $read; $try++) {
+            if (Test-Path -LiteralPath $script:benchmarkProgFile) {
+                try { $read = [System.IO.File]::ReadAllText($script:benchmarkProgFile, [System.Text.Encoding]::UTF8) } catch { $read = $null }
+                if ($read -and -not $read.Trim()) { $read = $null }
+            }
+            if ($null -eq $read) { Start-Sleep -Milliseconds 40 }
+        }
+        if ($null -ne $read) { $script:benchmarkProgLast = $read }
+        elseif ($jobAlive -and $script:benchmarkProgLast) { $read = $script:benchmarkProgLast }
+        if ($null -ne $read) {
+            $raw = $read
             if (-not $jobAlive -and -not (Test-StreamBenchmarkActive)) {
                 # No run of ours and no pause flag: a running/queued file is a leftover.
                 $parsed = try { $raw | ConvertFrom-Json } catch { $null }
                 if (-not $parsed -or $parsed.status -in @('running', 'queued')) { $raw = '{"status":"idle"}' }
             }
         }
+        # The server's clock at answer time: the file is rewritten only on phase changes and samples,
+        # so the page must count "time left" from phaseEndsAt against THIS, not against the file's
+        # updatedAt - that reset the countdown at every poll (10, 9, 10, 9 s left).
+        $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        $t = $raw.TrimStart()
+        if ($t.StartsWith('{') -and $t.Length -gt 2) { $raw = '{"serverNow":' + $nowMs + ',' + $t.Substring(1) }
         Send-JsonResponse -Response $response -Raw $raw
     } catch {
         Send-JsonResponse -Response $response -StatusCode 500 -Body @{ status = 'error' }

@@ -7,6 +7,7 @@
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
   <link rel="stylesheet" href="assets/topbar.css">
   <script src="assets/topbar.js"></script>
+  <script src="assets/offline_guard.js" data-no-reload></script>
   <style>
     :root { --bg:#111; --text:#ccc; --card-bg:#161616; --card-border:#252525; --accent:#3b82f6; --muted:#555; }
     * { box-sizing:border-box; margin:0; padding:0; }
@@ -2123,7 +2124,7 @@
             // Sync _cfg so accordion auto-save picks up latest scrcpy.parameters
             if (_cfg) _cfg.scrcpy = _proCfg.scrcpy;
             if (closeOnSuccess) document.getElementById('pro-modal').style.display = 'none';
-            showToast('Profiles saved. Restart the app to apply changes.', 3500);
+            showToast('Profiles saved. Running captures are restarted automatically if their settings changed.', 4000);
           } else {
             showToast('Save failed: ' + (j.error || 'error'), 3500);
           }
