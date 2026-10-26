@@ -71,8 +71,6 @@ $script:BenchKvResultPrefix = 'benchmark_result_'
 $script:BenchKvLastModel    = 'benchmark_last_model'
 # Stream restart requests executed by VRMonitor (Request-StreamRestart, ADR-0027).
 $script:BenchKvRestart      = 'streams_restart_request'
-# Hard cap on one run (a full grid grows fast: 2 x 2 x 4 x 4 x 2 = 128).
-$script:BenchMaxTests       = 200
 # PS 5.1 TRAP, fixed everywhere in this file: [Math]::Max(0, 3.4) returns 3 - PowerShell picks
 # the INT overload when the first argument is an int literal and truncates the double. It turned
 # every sub-second process CPU delta into 0 (adb / bridge / NVENC ffmpeg always read 0 %) and
@@ -555,8 +553,7 @@ function New-StreamBenchmarkPlan {
     Typical: both codecs; Low / Mid / High x every encoder; from Mid, one change at a time with
     spread values (capture FPS 15/90, capture Mb/s 5/13/34, size 720/native, re-encode FPS 15/45,
     re-encode Mb/s 3/12) on every encoder; multi-capture x2/x4; merged; baselines.
-    Pure computation (no ADB) so the page calls it on every click. Refuses more than
-    $script:BenchMaxTests tests.
+    Pure computation (no ADB) so the page calls it on every click. No limit on the test count.
     .EXAMPLE
     New-StreamBenchmarkPlan -Headset $h -Selection @{ Encodings = 'gpu:0','cpu'; Fps = 30,60; ReencodeFps = 15,30 }
     .EXAMPLE
@@ -731,7 +728,6 @@ function New-StreamBenchmarkPlan {
     $fixed = Get-StreamBenchmarkFixedEstimate -Tests $arr -RunningStreams $RunningStreams
     $sum = 0; foreach ($x in $arr) { $sum += (Get-StreamBenchmarkTestEstimate -Test $x -MeasureSec $MeasureSec) }
     $err = ''
-    if ($arr.Count -gt $script:BenchMaxTests) { $err = ('{0} tests selected - the limit is {1}. Untick some options.' -f $arr.Count, $script:BenchMaxTests) }
     return @{
         Ok          = ($err -eq '')
         Error       = $err
@@ -1075,10 +1071,9 @@ function Invoke-StreamBenchmark {
     # Unroll one level: a caller that wrapped a parsed JSON array passes ONE element holding the
     # whole list (PS 5.1 ConvertFrom-Json trap).
     $Tests = @($Tests | ForEach-Object { $_ })
-    # The start baseline first, then the plan order (a closing 'baseline_end' stays last);
-    # never more than the limit.
+    # The start baseline first, then the plan order (a closing 'baseline_end' stays last).
     $tests = @(@($Tests | Where-Object { $_.Id -eq 'baseline' } | Select-Object -First 1) + @($Tests | Where-Object { $_.Id -ne 'baseline' }))
-    $tests = @($tests | Where-Object { $null -ne $_ } | Select-Object -First $script:BenchMaxTests)
+    $tests = @($tests | Where-Object { $null -ne $_ })
 
     $startedAt = Get-Date
     $runningStreams = @(Get-Process -Name 'scrcpy' -ErrorAction SilentlyContinue).Count

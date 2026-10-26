@@ -422,6 +422,8 @@ New-NetFirewallRule -DisplayName '_[VR_HEADSET_MANAGER]ADB_Allowed [IN]'  -Direc
 # called this.
 
 function Get-FwState {
+    # The first-run wizard calls Initialize-ComputerSetup before the database module is loaded.
+    if (-not (Get-Command Get-DbKeyValue -ErrorAction SilentlyContinue)) { return $null }
     try {
         return (Get-DbKeyValue -Key 'fw_state')
     } catch {
@@ -432,6 +434,7 @@ function Get-FwState {
 
 function Set-FwState {
     param([Parameter(Mandatory=$true)] $State)
+    if (-not (Get-Command Set-DbKeyValue -ErrorAction SilentlyContinue)) { return }
     try {
         Set-DbKeyValue -Key 'fw_state' -Value $State -Depth 4
     } catch {

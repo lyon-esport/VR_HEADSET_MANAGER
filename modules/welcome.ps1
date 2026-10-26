@@ -351,6 +351,10 @@ function Invoke-WelcomeSetup {
 
         Write-WizardAction "Requesting administrator rights and opening the batch authorization console..."
         Initialize-ComputerSetup
+        # The database is not open yet here, so fw_state could not be stored. Re-arm the
+        # once-per-process guard so scripts_init.ps1 runs the setup again after the database
+        # opens: the rules just created are only verified (no new UAC) and fw_state is stored.
+        $global:ComputerSetupDone = $false
         Write-Host "  System authorizations completed." -ForegroundColor Green
     } catch {
         Write-Host "  System authorizations step failed: $($_.Exception.Message)" -ForegroundColor Red
