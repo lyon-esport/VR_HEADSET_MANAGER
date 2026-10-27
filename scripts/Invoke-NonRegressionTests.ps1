@@ -83,6 +83,20 @@
     elevated, device not found) it asks the operator as before. With -PhysicalUsb only ONE real
     unplug/replug cycle is requested per run; the other cycles stay software.
 
+.PARAMETER TestModeSwitch
+    Enables section 88 (ADB WiFi mode switch, Meta headsets only). It moves the test headset to the
+    OTHER WiFi ADB mode (TLS to classic or classic to TLS) and back through the app's own switch
+    engine (ADB.wifi_preferred_mode), so it tests the real feature. At most 2 switches are made
+    (-MaxModeSwitches, default 2): out and back, the second one being the rollback. Every
+    switch restarts the headset's ADB daemon (running captures drop for ~10-20 s, the TLS port
+    changes). A final rollback is always attempted; if it fails the original mode is printed, and
+    the state file written next to the report tells what to restore. Also enabled by the
+    environment variable VRHM_TEST_MODE_SWITCH=1. Without it section 88 SKIPs.
+
+.PARAMETER MaxModeSwitches
+    Upper bound of WiFi mode switches section 88 may perform (default 2, hard minimum 2 because a
+    test must come back). One extra rollback switch is always allowed on top, never more.
+
 .PARAMETER ShutdownHeadsetsAtEnd
     When the run is over (also after a failure or Ctrl+C), power off every Quest / Pico headset
     adb can reach - USB and WiFi, each headset once - with the release's own adb.exe, BEFORE the
@@ -147,6 +161,8 @@ param(
     [switch]$Unattended,
     [switch]$NoHeadset,
     [switch]$PhysicalUsb,
+    [switch]$TestModeSwitch,
+    [ValidateRange(2, 6)][int]$MaxModeSwitches = 2,
     [switch]$ShutdownHeadsetsAtEnd,
     [switch]$AutoApproveSetup,
     [switch]$RestoreOnly,
@@ -189,6 +205,8 @@ $sectionRegistry = @(
     [PSCustomObject]@{ Id = 80; Title = 'Apps manager';          File = '80_apps.ps1';             Light = 0; Standard = 4;  Full = 8;  Operator = $true  }
     [PSCustomObject]@{ Id = 85; Title = 'DIAG and USB transport'; File = '85_diag_transport.ps1';   Light = 0; Standard = 6;  Full = 12; Operator = $true  }
     [PSCustomObject]@{ Id = 86; Title = 'ADB WiFi modes';        File = '86_wifi_modes.ps1';       Light = 1; Standard = 3;  Full = 5;  Operator = $false }
+    [PSCustomObject]@{ Id = 87; Title = 'Session settings';      File = '87_session_settings.ps1'; Light = 0; Standard = 3;  Full = 9;  Operator = $false }
+    [PSCustomObject]@{ Id = 88; Title = 'ADB WiFi mode switch';  File = '88_wifi_mode_switch.ps1'; Light = 0; Standard = 5;  Full = 5;  Operator = $false }
     [PSCustomObject]@{ Id = 90; Title = 'Shutdown and reaper';  File = '90_shutdown.ps1';         Light = 1; Standard = 2;  Full = 3;  Operator = $false }
 )
 
@@ -495,6 +513,9 @@ $global:TestRun.HeadsetName = $HeadsetName
 $global:TestRun.Unattended = [bool]$Unattended
 $global:TestRun.NoHeadset  = [bool]$NoHeadset
 $global:TestRun.PhysicalUsb = [bool]$PhysicalUsb
+# Section 88: opt-in WiFi mode switch test (flag or VRHM_TEST_MODE_SWITCH=1), with a hard cap.
+$global:TestRun.TestModeSwitch  = ([bool]$TestModeSwitch -or ($env:VRHM_TEST_MODE_SWITCH -eq '1'))
+$global:TestRun.MaxModeSwitches = [int]$MaxModeSwitches
 $global:TestRun.DevRoot = $devRoot
 
 Write-Host ''

@@ -129,7 +129,7 @@ Write-Host ("  Preflight: USB headset A visible = {0} ({1}); stale USB devices r
 
 # Headset B that does not answer is treated as absent: its tests skip instead of failing, and the
 # action tests fall back to headset A.
-if ($nrtB -and -not (Test-NrtHeadsetReachable -IPAddress ([string]$nrtB.IPAddress) -AdbPort (Get-NrtSandboxPorts -TargetRoot $target).Adb)) {
+if ($nrtB -and -not (Test-NrtHeadsetReachable -IPAddress ([string]$nrtB.IPAddress) -AdbPort (Get-NrtSandboxPorts -TargetRoot $target).Adb -Serial ([string]$nrtB.SerialNumber))) {
     Write-Host ("  Preflight: headset B '{0}' ({1}) does not answer - treated as absent." -f $nrtB.Name, $nrtB.IPAddress) -ForegroundColor DarkGray
     $nrtB = $null
     $nrtT = $nrtA
@@ -564,7 +564,7 @@ Invoke-RegressionTest -Name 'ADB over TLS: record what the headset offers (evide
     $rb = Invoke-VrmApi -Path '/api/reboot' -Method POST -Body @{ name = $rebootName } -TimeoutSec 60
     Add-TestEvidence ("reboot requested for {0}: HTTP {1} ok={2}" -f $rebootName, $rb.StatusCode, $rb.Json.ok)
     if (-not ($rb.Ok -and $rb.Json.ok)) { Skip-Test 'the reboot request was refused (headset not reachable over ADB)' }
-    $wait = Wait-NrtHeadsetRebooted -IPAddress ([string]$nrtT.IPAddress) -AdbPort $nrt85Ports.Adb -TimeoutSec 240
+    $wait = Wait-NrtHeadsetRebooted -IPAddress ([string]$nrtT.IPAddress) -AdbPort $nrt85Ports.Adb -TimeoutSec 240 -Serial ([string]$nrtT.SerialNumber)
     Add-TestEvidence ("went down={0}  back={1}  after {2} s" -f $wait.Down, $wait.Back, $wait.ElapsedSec)
     if (-not $wait.Back) {
         Add-TestEvidence 'the headset did not answer on WiFi ADB within 240 s (wireless ADB does not survive the reboot, or the headset is still booting)'

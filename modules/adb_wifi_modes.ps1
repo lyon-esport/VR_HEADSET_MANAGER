@@ -1054,6 +1054,12 @@ function Update-AdbWifiModeState {
                     $memo.DeferLogged = $true
                     Write-Log ((Get-MessageString -Key 'AdbWifi.SwitchDeferred' -Fallback '{0} is on TLS WiFi ADB while capturing: the switch to classic waits until the capture stops (scrcpy.usb_switch_mode = {1}).') -f $h.Name, $switchMode) -Level DEBUG
                 }
+                elseif (-not $dec.Deferred -and $dec.Reason -and $dec.Reason -ne 'already on the preferred mode' -and $memo['LastNoSwitchReason'] -ne $dec.Reason) {
+                    # One DEBUG line per change of reason: a preferred mode that is set but not applied
+                    # used to be completely silent, which made "why did it not switch" unanswerable.
+                    $memo['LastNoSwitchReason'] = $dec.Reason
+                    Write-Log ("ADB WiFi mode: no switch for {0} ({1}; live mode {2}, preferred {3})" -f $h.Name, $dec.Reason, $dec.Current, $dec.Preferred) -Level DEBUG
+                }
                 continue
             }
 

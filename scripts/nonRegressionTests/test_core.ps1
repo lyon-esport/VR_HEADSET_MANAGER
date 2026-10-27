@@ -96,6 +96,9 @@ function Initialize-TestRun {
         AutoApproveSetup = $false
         DevRoot          = ''
         PhysicalUsb      = $false
+        # Section 88 (WiFi mode switch): opt-in flag and the hard cap on switches.
+        TestModeSwitch   = $false
+        MaxModeSwitches  = 2
         DisabledUsb      = (New-Object System.Collections.Generic.List[string])
     }
     return $global:TestRun

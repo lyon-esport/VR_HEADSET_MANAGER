@@ -82,8 +82,16 @@ function Test-NrtHeadsetReachable {
     param(
         [Parameter(Mandatory = $true)][string]$IPAddress,
         [int]$AdbPort = 5555,
-        [int]$TimeoutMs = 1500
+        [int]$TimeoutMs = 1500,
+        # When a serial is given the headset is identified, not just the address: classic OR TLS
+        # is accepted and the answering device must report this serial (Find-NrtHeadsetEndpoint).
+        # Without a serial this is the old ping + classic-port probe (identity is NOT verified).
+        [string]$Serial = ''
     )
+
+    if ($Serial) {
+        return [bool](Find-NrtHeadsetEndpoint -IPAddress $IPAddress -Serial $Serial -AdbPort $AdbPort -TimeoutMs $TimeoutMs).Ok
+    }
 
     $ping = $false
     try { $ping = Test-Connection -ComputerName $IPAddress -Count 1 -Quiet -ErrorAction SilentlyContinue } catch { }
@@ -96,6 +104,181 @@ function Test-NrtHeadsetReachable {
     }
     catch { return $false }
     finally { if ($client) { try { $client.Close() } catch { } } }
+}
+
+# ---------------------------------------------------------------------------
+# Mode-aware, serial-verified reachability (classic 5555 OR ADB over TLS)
+#
+# The app picks whichever WiFi ADB mode answers, so the tests do not care about the mode. The
+# harness used to probe the classic port only, which skipped every hardware test for a headset
+# that is reachable over TLS. Several headsets share the lab network and the mDNS address of a TLS
+# service is unreliable (it is derived from a host name devices share), so identity is the SERIAL:
+# a headset counts as reachable only when an endpoint answers adb and reports ro.serialno equal to
+# the registry serial.
+# ---------------------------------------------------------------------------
+
+function Get-NrtAdbPath {
+    <#
+    .SYNOPSIS
+        The release's own adb.exe (sandbox config, else the shipped template), or '' when not found.
+    .EXAMPLE
+        $adb = Get-NrtAdbPath
+    #>
+    param([string]$TargetRoot = '')
+    if ($script:NrtAdbPathMemo -and (Test-Path -LiteralPath $script:NrtAdbPathMemo)) { return $script:NrtAdbPathMemo }
+    if (-not $TargetRoot -and $global:TestRun) { $TargetRoot = [string]$global:TestRun.TargetRoot }
+    if (-not $TargetRoot) { return '' }
+    try {
+        $paths   = Get-SandboxPaths -TargetRoot $TargetRoot
+        $cfgPath = if (Test-Path -LiteralPath $paths.ConfigFile) { $paths.ConfigFile } else { $paths.TemplateConfig }
+        $cfg     = Get-Content -LiteralPath $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $adb     = Join-Path (Join-Path $paths.SourcesFolder ([string]$cfg.ADB.folder)) 'adb.exe'
+        if (Test-Path -LiteralPath $adb) { $script:NrtAdbPathMemo = $adb; return $adb }
+    } catch { }
+    return ''
+}
+
+function Invoke-NrtAdb {
+    <#
+    .SYNOPSIS
+        Runs the release's adb.exe with a hard time limit. Returns @{Ok;ExitCode;Out}. Never throws
+        (the harness runs with ErrorActionPreference Stop, so adb's stderr must not leak).
+    .EXAMPLE
+        $r = Invoke-NrtAdb -Arguments @('-s', '10.0.0.5:5555', 'shell', 'getprop', 'ro.serialno')
+    #>
+    param([Parameter(Mandatory = $true)][string[]]$Arguments, [int]$TimeoutMs = 8000)
+    $adb = Get-NrtAdbPath
+    if (-not $adb) { return @{ Ok = $false; ExitCode = -1; Out = '' } }
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $adb
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError  = $true
+    $psi.CreateNoWindow = $true
+    $psi.Arguments = (@($Arguments | ForEach-Object { if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ } })) -join ' '
+    $p = New-Object System.Diagnostics.Process
+    $p.StartInfo = $psi
+    try {
+        [void]$p.Start()
+        $outTask = $p.StandardOutput.ReadToEndAsync()
+        $errTask = $p.StandardError.ReadToEndAsync()
+        if (-not $p.WaitForExit($TimeoutMs)) { try { $p.Kill() } catch { }; return @{ Ok = $false; ExitCode = -2; Out = '' } }
+        $null = $errTask.Result
+        return @{ Ok = ($p.ExitCode -eq 0); ExitCode = $p.ExitCode; Out = [string]$outTask.Result }
+    }
+    catch { return @{ Ok = $false; ExitCode = -1; Out = '' } }
+    finally { try { $p.Dispose() } catch { } }
+}
+
+function ConvertFrom-NrtMdnsServices {
+    <#
+    .SYNOPSIS
+        Parses `adb mdns services` into @(@{Serial;Ip;Port}) for the _adb-tls-connect lines. The
+        instance name is adb-<serial>-<random>, so the serial comes from the name, not from the
+        (unreliable) address. Pure; @() on empty input.
+    .EXAMPLE
+        ConvertFrom-NrtMdnsServices -Text "adb-2G0YC5ZG1W00ZJ-XUIVEi`t_adb-tls-connect._tcp`t192.168.1.243:45539"
+    #>
+    param([string]$Text)
+    $out = New-Object System.Collections.Generic.List[object]
+    foreach ($line in @(([string]$Text) -split "`r?`n")) {
+        if ($line -match '^\s*adb-(?<s>.+)-(?<r>[^-\s]+)\s+_adb-tls-connect\._tcp\.?\s+(?<ip>\d{1,3}(?:\.\d{1,3}){3}):(?<p>\d+)') {
+            $serial = $Matches['s']; $ip = $Matches['ip']; $port = [int]$Matches['p']
+            if (-not ($out | Where-Object { $_.Serial -eq $serial -and $_.Ip -eq $ip -and $_.Port -eq $port })) {
+                $out.Add([PSCustomObject]@{ Serial = $serial; Ip = $ip; Port = $port })
+            }
+        }
+    }
+    return $out.ToArray()
+}
+
+function Get-NrtTlsServices {
+    <#
+    .SYNOPSIS
+        The headsets advertising ADB over TLS right now (one `adb mdns services`, memoised 2 s).
+    .EXAMPLE
+        @(Get-NrtTlsServices) | Where-Object Serial -eq '2G0YC5ZG1W00ZJ'
+    #>
+    if ($script:NrtTlsMemo -and ((Get-Date) - $script:NrtTlsMemoAt).TotalSeconds -lt 2) { return $script:NrtTlsMemo }
+    $r = Invoke-NrtAdb -Arguments @('mdns', 'services') -TimeoutMs 8000
+    $svc = @(ConvertFrom-NrtMdnsServices -Text $r.Out)
+    $script:NrtTlsMemo = $svc
+    $script:NrtTlsMemoAt = Get-Date
+    return $svc
+}
+
+function Test-NrtAdbSerial {
+    <#
+    .SYNOPSIS
+        $true when adb connected to -Target ("ip:port") reports ro.serialno equal to -Serial.
+    .EXAMPLE
+        Test-NrtAdbSerial -Target '10.0.0.5:5555' -Serial '2G0YC5ZG1W00ZJ'
+    #>
+    param([Parameter(Mandatory = $true)][string]$Target, [Parameter(Mandatory = $true)][string]$Serial)
+    [void](Invoke-NrtAdb -Arguments @('connect', $Target) -TimeoutMs 8000)
+    $r = Invoke-NrtAdb -Arguments @('-s', $Target, 'shell', 'getprop', 'ro.serialno') -TimeoutMs 8000
+    if (-not $r.Ok) { return $false }
+    return (([string]$r.Out).Trim() -ieq $Serial.Trim())
+}
+
+function Find-NrtHeadsetEndpoint {
+    <#
+    .SYNOPSIS
+        Finds how a headset can be reached over WiFi ADB, verified by serial. Returns
+        @{Ok;Mode (Classic|TLS);Target (ip:port);Serial;Verified;Reason}.
+
+    .DESCRIPTION
+        1. classic: the registry address on the classic port, accepted only when ADB there reports
+           this serial (a different headset on that address is "serial mismatch", never reachable);
+        2. TLS: every _adb-tls-connect service whose instance name carries this serial, tried on the
+           registry address and on the address mDNS reports, accepted only on a serial match.
+        An empty -Serial cannot be verified: only the classic port is probed and the result says so.
+
+    .EXAMPLE
+        $e = Find-NrtHeadsetEndpoint -IPAddress '10.0.0.5' -Serial '2G0YC5ZG1W00ZJ'
+        if ($e.Ok) { "{0} at {1}" -f $e.Mode, $e.Target }
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$IPAddress,
+        [string]$Serial = '',
+        [int]$AdbPort = 5555,
+        [int]$TimeoutMs = 1500
+    )
+    $res = { param($ok, $mode, $target, $verified, $reason) [PSCustomObject]@{ Ok = $ok; Mode = $mode; Target = $target; Serial = $Serial; Verified = $verified; Reason = $reason } }
+
+    $classicOpen = $false
+    $client = $null
+    try {
+        $client = New-Object System.Net.Sockets.TcpClient
+        $classicOpen = [bool]$client.ConnectAsync($IPAddress, $AdbPort).Wait($TimeoutMs)
+    } catch { $classicOpen = $false } finally { if ($client) { try { $client.Close() } catch { } } }
+
+    if (-not $Serial) {
+        if ($classicOpen) { return (& $res $true 'Classic' ("{0}:{1}" -f $IPAddress, $AdbPort) $false 'serial unknown, identity not verified') }
+        return (& $res $false '' '' $false 'classic port closed and no serial to look for a TLS service')
+    }
+
+    $mismatch = $false
+    if ($classicOpen) {
+        $t = "{0}:{1}" -f $IPAddress, $AdbPort
+        if (Test-NrtAdbSerial -Target $t -Serial $Serial) { return (& $res $true 'Classic' $t $true 'serial verified') }
+        $mismatch = $true
+    }
+    foreach ($s in @(Get-NrtTlsServices | Where-Object { $_.Serial -ieq $Serial })) {
+        foreach ($ip in @($IPAddress, $s.Ip | Select-Object -Unique)) {
+            $t = "{0}:{1}" -f $ip, $s.Port
+            if (Test-NrtAdbSerial -Target $t -Serial $Serial) { return (& $res $true 'TLS' $t $true 'serial verified') }
+        }
+    }
+    # 3. USB: the serial itself is the adb id of a cabled headset (no ':' and not an mDNS 'adb-' id).
+    $dev = Invoke-NrtAdb -Arguments @('devices') -TimeoutMs 6000
+    foreach ($line in @(([string]$dev.Out) -split "`r?`n")) {
+        if ($line -match '^(?<id>[^\s:]+)\s+device\b' -and $Matches['id'] -ieq $Serial.Trim() -and $Matches['id'] -notlike 'adb-*') {
+            return (& $res $true 'USB' $Serial.Trim() $true 'serial verified (cabled)')
+        }
+    }
+    if ($mismatch) { return (& $res $false '' '' $false 'another device answers on the classic port (serial mismatch)') }
+    return (& $res $false '' '' $false 'no classic answer, no TLS service and no USB link for this serial')
 }
 
 function Wait-NrtCandidatesReachable {
@@ -121,7 +304,7 @@ function Wait-NrtCandidatesReachable {
 
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ($true) {
-        $reachable = @($Candidates | Where-Object { Test-NrtHeadsetReachable -IPAddress $_.IPAddress -AdbPort $AdbPort })
+        $reachable = @($Candidates | Where-Object { Test-NrtHeadsetReachable -IPAddress $_.IPAddress -AdbPort $AdbPort -Serial ([string]$_.SerialNumber) })
         if ($reachable.Count -gt 0) { return $reachable }
         if ((Get-Date) -ge $deadline) { return @() }
         Start-Sleep -Seconds 2
@@ -286,7 +469,10 @@ function Resolve-NrtTestHeadset {
         $pool = $candidates
     }
 
-    $reachable = @($pool | Where-Object { Test-NrtHeadsetReachable -IPAddress $_.IPAddress -AdbPort $AdbPort })
+    # Mode-aware and serial-verified: classic OR TLS, and the answering device must carry the
+    # registry serial (several headsets share the network). A row with no serial falls back to
+    # the old classic-port probe.
+    $reachable = @($pool | Where-Object { Test-NrtHeadsetReachable -IPAddress $_.IPAddress -AdbPort $AdbPort -Serial ([string]$_.SerialNumber) })
 
     # Silent pre-check: a headset can already be sitting on USB (or was just
     # plugged in a moment ago) with its WiFi ADB not (yet) enabled. Bridging it
@@ -296,7 +482,7 @@ function Resolve-NrtTestHeadset {
         $bridged = Invoke-NrtEnableUsbWifiAdb
         if ($bridged) {
             Write-Host ("  USB bridge: {0} is now on WiFi ADB at {1}:{2}" -f $bridged.Model, $bridged.Ip, $bridged.Port) -ForegroundColor DarkGray
-            $reachable = @($pool | Where-Object { Test-NrtHeadsetReachable -IPAddress $_.IPAddress -AdbPort $AdbPort })
+            $reachable = @($pool | Where-Object { Test-NrtHeadsetReachable -IPAddress $_.IPAddress -AdbPort $AdbPort -Serial ([string]$_.SerialNumber) })
         }
     }
 
@@ -325,16 +511,35 @@ function Resolve-NrtTestHeadset {
     }
 
     if ($reachable.Count -eq 0) { return $null }
-    if ($reachable.Count -eq 1) { return $reachable[0] }
+    if ($reachable.Count -eq 1) { return (Add-NrtReachNote -Headset $reachable[0] -AdbPort $AdbPort) }
 
     $interactive = $true
     if ($global:TestRun -and $global:TestRun.Unattended) { $interactive = $false }
     if ($global:TestRun -and $global:TestRun.Mode -eq 'Auto') { $interactive = $false }
 
-    if (-not $interactive) { return $reachable[0] }
+    if (-not $interactive) { return (Add-NrtReachNote -Headset $reachable[0] -AdbPort $AdbPort) }
 
     $picked = Select-TestHeadset -Candidates @($reachable | ForEach-Object { $_.Name })
-    return ($reachable | Where-Object { $_.Name -eq $picked } | Select-Object -First 1)
+    return (Add-NrtReachNote -Headset ($reachable | Where-Object { $_.Name -eq $picked } | Select-Object -First 1) -AdbPort $AdbPort)
+}
+
+function Add-NrtReachNote {
+    <#
+    .SYNOPSIS
+        Stamps the chosen headset row with how it was reached (ReachMode Classic|TLS, ReachTarget
+        ip:port, ReachVerified) and prints one line, so a report shows which headset and which WiFi
+        ADB mode a hardware section ran on. Returns the row.
+    .EXAMPLE
+        $row = Add-NrtReachNote -Headset $row
+    #>
+    param($Headset, [int]$AdbPort = 5555)
+    if (-not $Headset) { return $Headset }
+    $e = Find-NrtHeadsetEndpoint -IPAddress ([string]$Headset.IPAddress) -Serial ([string]$Headset.SerialNumber) -AdbPort $AdbPort
+    Add-Member -InputObject $Headset -NotePropertyName ReachMode     -NotePropertyValue ([string]$e.Mode)     -Force
+    Add-Member -InputObject $Headset -NotePropertyName ReachTarget   -NotePropertyValue ([string]$e.Target)   -Force
+    Add-Member -InputObject $Headset -NotePropertyName ReachVerified -NotePropertyValue ([bool]$e.Verified)   -Force
+    Write-Host ("  Test headset: {0} (serial {1}) reached over {2} at {3}{4}" -f $Headset.Name, $Headset.SerialNumber, $(if ($e.Mode) { $e.Mode } else { '?' }), $e.Target, $(if ($e.Verified) { ', identity verified' } else { ', identity NOT verified' })) -ForegroundColor DarkGray
+    return $Headset
 }
 
 function ConvertTo-NrtSafeName {
@@ -1151,7 +1356,11 @@ function Wait-NrtHeadsetRebooted {
         [Parameter(Mandatory = $true)][string]$IPAddress,
         [int]$AdbPort = 5555,
         [int]$TimeoutSec = 240,
-        [int]$DownTimeoutSec = 60
+        [int]$DownTimeoutSec = 60,
+        # The headset's serial: "down" and "back" are then judged on THIS headset answering adb in
+        # either WiFi mode on whatever port it has (the TLS port changes at every boot), so another
+        # headset on the network going up or down cannot satisfy the wait.
+        [string]$Serial = ''
     )
 
     $start    = Get-Date
@@ -1160,13 +1369,13 @@ function Wait-NrtHeadsetRebooted {
 
     $downDeadline = $start.AddSeconds($DownTimeoutSec)
     while ((Get-Date) -lt $downDeadline) {
-        if (-not (Test-NrtHeadsetReachable -IPAddress $IPAddress -AdbPort $AdbPort -TimeoutMs 1000)) { $down = $true; break }
+        if (-not (Test-NrtHeadsetReachable -IPAddress $IPAddress -AdbPort $AdbPort -TimeoutMs 1000 -Serial $Serial)) { $down = $true; break }
         Start-Sleep -Seconds 2
     }
 
     $back = $false
     while ((Get-Date) -lt $deadline) {
-        if (Test-NrtHeadsetReachable -IPAddress $IPAddress -AdbPort $AdbPort -TimeoutMs 1500) { $back = $true; break }
+        if (Test-NrtHeadsetReachable -IPAddress $IPAddress -AdbPort $AdbPort -TimeoutMs 1500 -Serial $Serial) { $back = $true; break }
         Start-Sleep -Seconds 3
     }
     return @{ Back = $back; Down = $down; ElapsedSec = [int]((Get-Date) - $start).TotalSeconds }

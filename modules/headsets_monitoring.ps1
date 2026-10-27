@@ -919,7 +919,12 @@ function Start-VRMonitor {
                                             $sessionBlocked = [bool]$sharedState['_benchmark_active']
                                             if (-not $sessionBlocked -and (Get-Command Test-UsbBusy -ErrorAction SilentlyContinue)) { $sessionBlocked = [bool](Test-UsbBusy) }
                                             Update-HeadsetSessionSettings -Headset $liveHeadset -Device $device -Brand ([string]$workingInfo.Brand) -Blocked $sessionBlocked -State $sessionState | Out-Null
-                                        } catch { }
+                                        } catch {
+                                            if ($sessionState['LastError'] -ne $_.Exception.Message) {
+                                                $sessionState['LastError'] = $_.Exception.Message
+                                                Write-Log ("Session settings on {0}: step failed: {1}" -f $liveHeadset.Name, $_.Exception.Message) -Level DEBUG
+                                            }
+                                        }
                                     }
                                 }
 

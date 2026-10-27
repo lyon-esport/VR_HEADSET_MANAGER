@@ -1385,5 +1385,8 @@ function Update-HeadsetSessionSettings {
         $State['NextTry'] = [datetime]::Now.AddSeconds([Math]::Min(300, 30 * [int]$State['Failures']))
         Write-Log ("Session settings re-apply incomplete on {0}: failed {1}. Retrying later." -f $Headset.Name, ($failed -join ', ')) -Level WARNING
         return $false
-    } catch { return $false }
+    } catch {
+        if ($State['LastReason'] -ne ('error ' + $_.Exception.Message)) { $State['LastReason'] = 'error ' + $_.Exception.Message; Write-Log ("Session settings on {0}: step error: {1}" -f $Headset.Name, $_.Exception.Message) -Level DEBUG }
+        return $false
+    }
 }

@@ -50,6 +50,7 @@ Invoke-RegressionTest -Name 'A real headset is available for streaming tests' -T
     Assert-NrtHeadsetAvailable
     Add-TestEvidence ("headset: {0}  model {1}" -f $nrtHeadset.Name, $nrtHeadset.Model)
     Add-TestEvidence ("profile: {0}" -f $nrtHeadset.ScrcpyProfile)
+    Add-TestEvidence ("reached over {0} at {1} (serial {2}, identity verified: {3})" -f $nrtHeadset.ReachMode, $nrtHeadset.ReachTarget, $nrtHeadset.SerialNumber, $nrtHeadset.ReachVerified)
     Add-TestEvidence ("adb port {0}, mediamtx api port {1}" -f $ports.Adb, $ports.MediaMtxApi)
 }
 
