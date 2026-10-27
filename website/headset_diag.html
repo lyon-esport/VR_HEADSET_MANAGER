@@ -439,6 +439,20 @@
       rows.push(kv('Time zone', val(d.TimeZone) + (d.AutoTime === false ? ' ' + badge('auto time off', 'warn') : '')));
       rows.push(kv('Camera errors', d.CameraErrors > 0 ? badge(d.CameraErrors + ' recent', 'bad') : badge('none', 'good')));
       var html = '<div class="dg-tiles">' + tiles + '</div>' + kvBlock(rows);
+      var inp = d.Input;
+      if (inp) {
+        var onOff = function (v) { return v == null ? none() : badge(v ? 'on' : 'off', v ? 'good' : 'warn'); };
+        var irows = [];
+        irows.push(kv('Hand tracking', onOff(inp.HandsEnabled)));
+        irows.push(kv('Hands allowed by user', onOff(inp.HandsOptIn)));
+        irows.push(kv('Auto switch hands / controllers', onOff(inp.AutoTransitions)));
+        irows.push(kv('Hands + controllers together', onOff(inp.Multimodal)));
+        irows.push(kv('Double tap controllers to get hands', onOff(inp.DoubleTapTransition)));
+        irows.push(kv('Sensitivity', val(inp.Sensitivity)));
+        if (inp.HandsDisabledByApp) { irows.push(kv('Hands disabled by the running app', badge('yes', 'warn'))); }
+        html += '<h3 class="dg-h">Input mode</h3>' + kvBlock(irows) +
+          '<div class="dg-muted" style="margin-top:6px">Read-only: Meta does not allow changing these settings over ADB. The headset-side double tap that toggles passthrough cannot be read either.</div>';
+      }
       var ctl = arr(d.Controllers);
       if (ctl.length) {
         html += '<h3 class="dg-h">Controllers</h3><table class="dg-t"><tr><th>Type</th><th>Model</th><th>HW</th><th>FW</th><th>Batt</th><th>Status</th></tr>' +

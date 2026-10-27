@@ -928,6 +928,10 @@ function Remove-Headset {
         # deleting a page while its row still existed let them write it back
         # (NR section 40, TEST20).
         Save-Headsets -headsets $headsets
+        # The remembered session-only settings are an app_kv row (no foreign key, so no cascade).
+        if (Get-Command Remove-HeadsetSessionSettings -ErrorAction SilentlyContinue) {
+            try { Remove-HeadsetSessionSettings -HeadsetId ([int]$headsetToRemove.ID) } catch { }
+        }
         $timerTxt = Get-TimerFilePath    -headsetId ([int]$headsetToRemove.ID)
         $timerRun = Get-TimerRunFilePath -headsetId ([int]$headsetToRemove.ID)
         foreach ($f in @($timerTxt, $timerRun)) {

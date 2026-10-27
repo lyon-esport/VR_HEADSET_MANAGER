@@ -445,9 +445,22 @@ function Invoke-RouteHeadsetSettings {
         $brightness       = Get-HeadsetBrightness       -Device $device -adb $adbPath -Brand $brand
         $blockUpdates     = Get-HeadsetUpdateBlockStatus -Device $device -adb $adbPath -Brand $brand
         $refreshRate      = if ($brand -eq 'Pico') { $null } else { Get-HeadsetRefreshRate -Device $device -adb $adbPath }
+        # Session-only settings (ADR-0040): live state where the headset can tell, the remembered
+        # wish otherwise (the proximity override cannot be read back).
+        $sessionSaved     = Get-HeadsetSessionSettings -HeadsetId ([int]$headset.ID) -NoMemo
+        $doubleTapOff     = Get-HeadsetDoubleTapDisabled -Device $device -adb $adbPath -Brand $brand
+        $wideMotion       = Get-HeadsetWideMotionMode    -Device $device -adb $adbPath -Brand $brand
+        $guardianPaused   = Get-HeadsetGuardianPause     -Device $device -adb $adbPath -Brand $brand
+        $sharpening       = Get-HeadsetSharpening        -Device $device -adb $adbPath -Brand $brand
 
         Send-JsonResponse -Response $response -Body @{
             ok               = $true
+            doubleTapDisabled = $doubleTapOff
+            wideMotion       = $wideMotion
+            guardianPaused   = $guardianPaused
+            sharpening       = $sharpening
+            proxKeepAwake   = [bool]$sessionSaved.desired.proxKeepAwake
+            sessionReapply   = [bool]$sessionSaved.reapply
             screenTimeout    = $screenTimeout
             sleepTimeout     = $sleepTimeout
             soundLevel       = $soundLevel
@@ -613,8 +626,33 @@ function Invoke-RouteHeadsetSettingsApply {
             Set-HeadsetGuardian -Device $device -adb $adbPath -Brand $brand | Out-Null
         }
 
+        $hid = [int]$headset.ID
         if ($null -ne $s.guardianPause) {
-            Set-HeadsetGuardianPause -Device $device -Pause ([bool]$s.guardianPause) -adb $adbPath -Brand $brand | Out-Null
+            $okGp = Set-HeadsetGuardianPause -Device $device -Pause ([bool]$s.guardianPause) -adb $adbPath -Brand $brand
+            if ($okGp) { [void](Set-HeadsetSessionSettings -HeadsetId $hid -Desired @{ guardianPause = [bool]$s.guardianPause }) }
+        }
+
+        # Session-only settings (ADR-0040): each change is also remembered, so "re-apply after a
+        # reboot" can put it back. Meta only.
+        if ($null -ne $s.doubleTapDisabled) {
+            if ($brand -eq 'Pico') { throw "The side double tap is only controllable on Meta Quest headsets" }
+            if (-not (Set-HeadsetDoubleTapDisabled -Device $device -Disabled ([bool]$s.doubleTapDisabled) -adb $adbPath -Brand $brand)) { throw "Could not change the side double tap" }
+            [void](Set-HeadsetSessionSettings -HeadsetId $hid -Desired @{ doubleTapOff = [bool]$s.doubleTapDisabled })
+        }
+        if ($null -ne $s.wideMotion) {
+            if ($brand -eq 'Pico') { throw "Wide-motion hand tracking is only supported on Meta Quest headsets" }
+            if (-not (Set-HeadsetWideMotionMode -Device $device -Enabled ([bool]$s.wideMotion) -adb $adbPath -Brand $brand)) { throw "Could not change the hand tracking mode" }
+            [void](Set-HeadsetSessionSettings -HeadsetId $hid -Desired @{ wideMotion = [bool]$s.wideMotion })
+        }
+        if ($null -ne $s.sharpening) {
+            $sharpMode = ([string]$s.sharpening).ToLowerInvariant()
+            if ($sharpMode -notin @('none', 'fcas', 'mqsr')) { throw "Invalid sharpening mode" }
+            if ($brand -eq 'Pico') { throw "Image sharpening is only supported on Meta Quest headsets" }
+            if (-not (Set-HeadsetSharpening -Device $device -Mode $sharpMode -adb $adbPath -Brand $brand)) { throw "Could not change the image sharpening" }
+            [void](Set-HeadsetSessionSettings -HeadsetId $hid -Desired @{ sharpening = $sharpMode })
+        }
+        if ($null -ne $s.sessionReapply) {
+            if (-not (Set-HeadsetSessionSettings -HeadsetId $hid -Reapply ([bool]$s.sessionReapply))) { throw "Could not save the re-apply switch" }
         }
 
         if ($null -ne $s.soundLevel) {
@@ -626,7 +664,11 @@ function Invoke-RouteHeadsetSettingsApply {
         }
 
         if ($null -ne $s.proxOverride) {
-            Set-HeadsetProximitySensorOverride -Device $device -adb $adbPath | Out-Null
+            # true = keep awake (prox_close, as before); false = hand the sensor back (automation_disable).
+            $keep = [bool]$s.proxOverride
+            if ($keep) { $okPx = Set-HeadsetProximitySensorOverride -Device $device -adb $adbPath }
+            else       { $okPx = Set-HeadsetProximitySensorOverride -Device $device -adb $adbPath -Clear }
+            if ($okPx) { [void](Set-HeadsetSessionSettings -HeadsetId $hid -Desired @{ proxKeepAwake = $keep }) }
         }
 
         if ($null -ne $s.displaySizeReset) {
@@ -745,7 +787,19 @@ function Invoke-RouteHeadsetsStatus {
                     adb_transport         = if ($info.AdbTransport -and $info.AdbTransport -ne '-') { $info.AdbTransport } else { '' }
                     # WiFi ADB mode (ADR-0034, migration 009): Classic / TLS, '' when WiFi ADB is not up.
                     adb_wifi_mode         = if ($info.AdbWifiMode -and $info.AdbWifiMode -ne '-') { $info.AdbWifiMode } else { '' }
-                    ipd                = (Get-HeadsetIpdValue -Headset $h)
+                    # TCP port of the WiFi ADB session: classic = configured port, TLS = published
+                    # mDNS endpoint of the serial (changes at every adbd restart). 0 = unknown / USB.
+                    adb_port              = $(
+                        $wm = if ($info.AdbWifiMode) { [string]$info.AdbWifiMode } else { '' }
+                        if ($info.AdbTransport -eq 'USB') { 0 }
+                        elseif ($wm -eq 'Classic') { [int](Get-ClassicAdbPort) }
+                        elseif ($wm -eq 'TLS' -and $h.SerialNumber -and $h.SerialNumber -ne '-') {
+                            $ep = try { Find-AdbTlsEndpointBySerial -Serial $h.SerialNumber } catch { $null }
+                            if ($ep -and $ep.Port) { [int]$ep.Port } else { 0 }
+                        }
+                        else { 0 }
+                    )
+                    ipd              = (Get-HeadsetIpdValue -Headset $h)
                     running_app           = if ($info.RunningApp)     { $info.RunningApp }     else { '' }
                     running_app_icon      = if ($info.RunningAppIcon) { $info.RunningAppIcon } else { '' }
                     model                 = if ($h.Model -and $h.Model -ne '-') { $h.Model } else { '' }

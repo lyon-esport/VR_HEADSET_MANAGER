@@ -58,9 +58,15 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
+      flex-wrap: wrap;
+      row-gap: 6px;
       padding: 12px 14px 10px;
       border-bottom: 1px solid var(--card-border);
     }
+    .card-header .card-dots { order: 3; flex-basis: 100%; gap: 12px; }
+    .card-header .card-remove-btn { order: 2; }
+    .adb-ico { display: inline-flex; align-items: center; }
+    .adb-ico svg { display: block; }
     .card-name-display {
       display: flex;
       align-items: center;
@@ -102,13 +108,6 @@
     .dot-red    { background: var(--ping-ko); }
     .dot-blue   { background: var(--scrcpy-ok); }
     .dot-grey   { background: #333; }
-    .headset-card.dots-compact .status-dot-label { display: none; }
-    .headset-card.dots-compact .status-dot { gap: 0; }
-    .headset-card.dots-compact .card-dots {
-      flex-direction: column;
-      align-items: center;
-      gap: 3px;
-    }
 
     /* Card body */
     .card-body {
@@ -337,6 +336,7 @@
       color: inherit; font-size: .85rem; font-family: inherit;
     }
     .adv-note { font-size: .72rem; opacity: .5; margin-left: 4px; font-weight: 400; }
+    .adv-field label[title] { cursor: help; }
     .adv-field select:disabled { opacity: .55; cursor: default; }
     .adv-info-val { font-size: .85rem; opacity: .8; text-align: right; flex-shrink: 0; }
     /* Segmented 2-button */
@@ -1039,6 +1039,12 @@
       <div class="advsettings-modal-body" id="adv-body">
         <div class="adv-loading" id="adv-loading">Loading current settings...</div>
         <div id="adv-fields" style="display:none; flex-direction:column; gap:13px;">
+          <div class="adv-field" id="adv-reapply-row">
+            <label title="The settings marked 'session only' below are lost when the headset restarts. When on, VRHM puts the ones you set back by itself after each restart (the headset must be reachable over ADB).">Re-apply session settings after reboot</label>
+            <button class="toggle-btn" id="adv-reapply-toggle" style="font-size:.8rem;">
+              <span id="adv-reapply-label">--</span>
+            </button>
+          </div>
           <div class="adv-field">
             <label for="adv-sound-level">Sound Level</label>
             <div class="adv-slider-wrap">
@@ -1073,17 +1079,37 @@
 
 
           <div class="adv-field">
-            <label>Proximity Sensor <span class="adv-note">(session only)</span></label>
-            <button class="hs-adv-btn" id="adv-prox-disable" style="font-size:.8rem;">
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
-              </svg>
-              Keep awake (this session)
+            <label title="Off bypasses the sensor: the headset behaves as if it was worn and stays awake. Lost when the headset restarts (see the re-apply switch at the top).">Proximity Sensor <span class="adv-note">(session only)</span></label>
+            <button class="toggle-btn" id="adv-prox-disable" style="font-size:.8rem;">
+              <span id="adv-prox-label">--</span>
             </button>
           </div>
 
+          <div class="adv-field" id="adv-doubletap-row">
+            <label title="The tap on the side of the headset that toggles passthrough. Disabling it is lost when the headset restarts (see the re-apply switch at the top).">Side double tap <span class="adv-note">(session only)</span></label>
+            <button class="toggle-btn" id="adv-doubletap-toggle" style="font-size:.8rem;">
+              <span id="adv-doubletap-label">--</span>
+            </button>
+          </div>
+
+          <div class="adv-field" id="adv-widemotion-row">
+            <label title="Tracks hands beyond the cameras' field of view using body tracking. Lost when the headset restarts (see the re-apply switch at the top).">Hand wide-motion mode <span class="adv-note">(session only)</span></label>
+            <button class="toggle-btn" id="adv-widemotion-toggle" style="font-size:.8rem;">
+              <span id="adv-widemotion-label">--</span>
+            </button>
+          </div>
+
+          <div class="adv-field" id="adv-sharpening-row">
+            <label for="adv-sharpening" title="Image sharpening applied to every app (the QGO 'Image Sharpening Algorithm' setting): FidelityFX CAS gives a subtle effect, Meta Quest Super Resolution a stronger one but may add color artifacts and GPU load. Lost when the headset restarts (see the re-apply switch at the top).">Image sharpening <span class="adv-note">(session only)</span></label>
+            <select id="adv-sharpening" style="font-size:.8rem;">
+              <option value="none">Off</option>
+              <option value="fcas">FidelityFX CAS</option>
+              <option value="mqsr">Meta Quest Super Resolution</option>
+            </select>
+          </div>
+
           <div class="adv-field">
-            <label for="adv-refresh-rate">Refresh Rate <span class="adv-note">(session only - above 120 Hz is Quest 3 only)</span></label>
+            <label for="adv-refresh-rate" title="Rates above 120 Hz are Quest 3 only. Lost when the headset restarts.">Refresh Rate <span class="adv-note">(session only)</span></label>
             <div style="display:flex;gap:6px;flex-wrap:nowrap;align-items:center;">
               <select id="adv-refresh-rate" style="font-size:.8rem;">
                 <option value="72">72 Hz</option>
@@ -1309,17 +1335,7 @@
     }
 
     function updateCardCompactness(card) {
-      if (!card) return;
-      requestAnimationFrame(function() {
-        var nameEl = card.querySelector('.card-name');
-        if (!nameEl) return;
-        card.classList.remove('dots-compact');
-        // Force a synchronous reflow before re-measuring after the class removal.
-        void nameEl.offsetWidth;
-        if (nameEl.scrollWidth > nameEl.clientWidth + 1) {
-          card.classList.add('dots-compact');
-        }
-      });
+      // No-op: the status dots now sit on their own row under the name, so nothing competes with it.
     }
 
     var _compactResizeTimer = null;
@@ -1388,10 +1404,13 @@
                 '<span class="dot dot-grey"></span><span class="status-dot-label">PING</span>' +
               '</span>' +
               '<span class="status-dot" data-dot-adb="' + dn + '" title="ADB">' +
-                '<span class="dot dot-grey"></span><span class="status-dot-label">ADB</span>' +
+                '<span class="dot dot-grey"></span><span class="adb-ico"></span><span class="status-dot-label">ADB</span>' +
               '</span>' +
               '<span class="status-dot" data-dot-scrcpy="' + dn + '" title="SCRCPY">' +
                 '<span class="dot dot-grey"></span><span class="status-dot-label">SCRCPY</span>' +
+              '</span>' +
+              '<span class="status-dot" data-dot-rec="' + dn + '" title="REC - recording off">' +
+                '<span class="dot dot-grey"></span><span class="status-dot-label">REC</span>' +
               '</span>' +
             '</div>' +
             '<button class="card-remove-btn" data-remove-headset="' + dn + '" data-remove-name="' + esc(cfg.Name) + '" title="Remove headset">' +
@@ -1871,6 +1890,7 @@
           var newVal = !recBtn.classList.contains('on');
           recBtn.classList.toggle('on', newVal);
           recBtn.textContent = newVal ? 'ON' : 'OFF';
+          updateRecDot(dn);
           fetch('/api/recording', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2151,9 +2171,41 @@
         .finally(function() { sel.disabled = false; sel.removeAttribute('data-sig'); updateIpdRows(); });
     });
 
+    // ADB link kind -> icon / label / tooltip (USB cable, WiFi classic, WiFi TLS = wireless debugging).
+    var _adbSvgOpen = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">';
+    var _adbWifiArcs = '<path d="M5 12.5a10 10 0 0 1 14 0"/><path d="M8.5 16a5 5 0 0 1 7 0"/><circle cx="12" cy="19.5" r="0.8" fill="currentColor"/>';
+    var ADB_ICONS = {
+      usb:  _adbSvgOpen + '<circle cx="10" cy="19" r="2"/><path d="M10 17V5"/><path d="M10 5l-2 2.5h4z" fill="currentColor"/><path d="M10 12l5-3v-2"/><rect x="13.5" y="4" width="3" height="3"/><path d="M10 14l-4-2.5V9"/><circle cx="6" cy="8" r="1.2"/></svg>',
+      wifi: _adbSvgOpen + _adbWifiArcs + '</svg>',
+      tls:  _adbSvgOpen + '<path d="M3 9.5a13 13 0 0 1 14-2.5"/><path d="M6 13a8 8 0 0 1 6-2"/><circle cx="8.5" cy="17" r="0.8" fill="currentColor"/><rect x="14" y="13" width="8" height="7" rx="1.5"/><path d="M16 13v-2a2 2 0 0 1 4 0v2"/></svg>',
+      none: _adbSvgOpen + _adbWifiArcs + '<line x1="3" y1="3" x2="21" y2="21"/></svg>'
+    };
+    function adbModeInfo(s) {
+      if (!s || !s.adb) { return { kind: 'none', icon: ADB_ICONS.none, label: 'ADB', title: 'ADB not connected' }; }
+      if (s.transport === 'USB') { return { kind: 'usb', icon: ADB_ICONS.usb, label: 'ADB USB', title: 'ADB over USB cable' }; }
+      var portTxt = s.adbPort ? ' - port ' + s.adbPort : '';
+      if (s.wifiMode === 'TLS') { return { kind: 'tls', icon: ADB_ICONS.tls, label: 'ADB WiFi TLS', title: 'ADB over WiFi - TLS (wireless debugging)' + portTxt }; }
+      if (s.wifiMode === 'Classic') { return { kind: 'wifi', icon: ADB_ICONS.wifi, label: 'ADB WiFi', title: 'ADB over WiFi - classic (tcpip)' + portTxt }; }
+      return { kind: 'wifi', icon: ADB_ICONS.wifi, label: 'ADB WiFi', title: 'ADB over WiFi' };
+    }
+
+    // REC dot: red while the headset is really recording (recording switch ON and a capture running),
+    // grey otherwise. The switch state is read from the Recording toggle button of the card.
+    function updateRecDot(dn) {
+      var dot = document.querySelector('[data-dot-rec="' + dn + '"] .dot');
+      if (!dot) return;
+      var btn = document.querySelector('[data-rec-headset="' + dn + '"]');
+      var s = headsetStatus[dn] || {};
+      var armed = !!(btn && btn.classList.contains('on'));
+      var rec = armed && !!s.scrcpy;
+      dot.className = 'dot ' + (rec ? 'dot-red' : 'dot-grey');
+      dot.parentNode.title = rec ? 'REC - recording' : (armed ? 'REC - on, waiting for the capture' : 'REC - recording off');
+    }
+
     function updateStatusDots() {
       Object.keys(headsetStatus).forEach(function(dn) {
         var s = headsetStatus[dn];
+        updateRecDot(dn);
 
         var pingDot = document.querySelector('[data-dot-ping="' + dn + '"] .dot');
         if (pingDot) { pingDot.className = 'dot ' + (s.ping ? 'dot-green' : 'dot-red'); }
@@ -2165,11 +2217,14 @@
         // this PC, WiFi otherwise) - shown next to the dot so a cabled headset visibly is.
         var adbLabel = document.querySelector('[data-dot-adb="' + dn + '"] .status-dot-label');
         if (adbLabel) {
-          var tr = s.adb && s.transport ? s.transport : '';
-          // WiFi ADB mode (ADR-0034): 'WiFi (TLS)' / 'WiFi (Classic)'.
-          if (tr === 'WiFi' && s.wifiMode) { tr += ' (' + s.wifiMode + ')'; }
-          adbLabel.textContent = tr ? 'ADB ' + tr : 'ADB';
-          adbLabel.parentNode.title = tr ? 'ADB over ' + tr : 'ADB';
+          var info = adbModeInfo(s);
+          adbLabel.textContent = info.label;
+          adbLabel.parentNode.title = info.title;
+          var adbIco = adbLabel.parentNode.querySelector('.adb-ico');
+          if (adbIco && adbIco.getAttribute('data-kind') !== info.kind) {
+            adbIco.setAttribute('data-kind', info.kind);
+            adbIco.innerHTML = info.icon;
+          }
         }
 
         // Capture starting (server flag, or the short hint after the operator's own action): amber
@@ -2253,6 +2308,7 @@
               var on = (row.Record || '').toLowerCase() === 'true';
               recBtn.classList.toggle('on', on);
               recBtn.textContent = on ? 'ON' : 'OFF';
+              updateRecDot(dn);
             }
             // Model from config CSV is authoritative when populated
             if (row.Model) {
@@ -2347,6 +2403,7 @@
               adb:            !!item.adb,
               transport:      item.adb_transport || '',
               wifiMode:       item.adb_wifi_mode || '',
+              adbPort:        item.adb_port || 0,
               scrcpy:         scrcpy,
               starting:       !scrcpy && (srvStarting || !!hint),
               model:          item.model || '',
@@ -2832,6 +2889,18 @@
             }
             updBtn.disabled = false;
           }
+          // Session-only settings (ADR-0040): live state where the headset can tell.
+          setAdvToggleState('adv-reapply-toggle', 'adv-reapply-label', j.sessionReapply === true, 'On', 'Off');
+          setAdvToggleState('adv-doubletap-toggle', 'adv-doubletap-label', j.doubleTapDisabled, 'Disabled', 'Enabled', true);
+          setAdvToggleState('adv-widemotion-toggle', 'adv-widemotion-label', j.wideMotion, 'On', 'Off');
+          var sharpSel = document.getElementById('adv-sharpening');
+          if (sharpSel) {
+            // 'custom' (another value set by hand) has no option: leave the list on its first entry.
+            sharpSel.value = (j.sharpening === 'fcas' || j.sharpening === 'mqsr') ? j.sharpening : 'none';
+            sharpSel.disabled = false;
+          }
+          setAdvToggleState('adv-guardian-pause', 'adv-guardian-pause-label', j.guardianPaused, 'Enable (session)', 'Disable (session)');
+          setAdvToggleState('adv-prox-disable', 'adv-prox-label', j.proxKeepAwake === true, 'Off', 'On', true);
           document.getElementById('adv-loading').style.display = 'none';
           document.getElementById('adv-fields').style.display = 'flex';
           applyAdvBrandVisibility(_advBrand);
@@ -2861,8 +2930,50 @@
         .catch(function() {});
     }
 
+    // Shared toggle idiom of the session-only settings: dataset.state is 'true' / 'false' / ''
+    // (unknown), the .on class marks the active state, the label text names it.
+    // `invert` highlights the button when the state is false (the proximity sensor: the posted
+    // state is "bypassed", the button reads On when the sensor works).
+    function setAdvToggleState(btnId, labelId, state, onText, offText, invert) {
+      var btn = document.getElementById(btnId);
+      var lbl = document.getElementById(labelId);
+      if (!btn) return;
+      btn.dataset.state = state === true ? 'true' : (state === false ? 'false' : '');
+      btn.classList.toggle('on', (state === true || state === false) ? ((state === true) !== !!invert) : false);
+      if (lbl) lbl.textContent = state === true ? onText : (state === false ? offText : '--');
+      btn.disabled = false;
+    }
+    // Clicking sends the opposite state as settings[key]; the button shows the new state only
+    // when the server confirms, and an error is shown instead of being swallowed.
+    function bindAdvToggle(btnId, labelId, key, onText, offText, invert) {
+      var btn = document.getElementById(btnId);
+      if (!btn) return;
+      btn.addEventListener('click', function() {
+        var dn = _advDn;
+        if (!dn) return;
+        var cur = btn.dataset.state === 'true';
+        var next = !cur;
+        var s = {}; s[key] = next;
+        btn.disabled = true;
+        fetch('/api/headset-settings/apply', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: dn, settings: s })
+        }).then(function(r) { return r.json(); })
+          .then(function(j) {
+            if (j.ok) { setAdvToggleState(btnId, labelId, next, onText, offText, invert); }
+            else { btn.disabled = false; alert(j.error || 'The headset did not accept the change.'); }
+          })
+          .catch(function() { btn.disabled = false; alert('Could not reach the server.'); });
+      });
+    }
+
     function applyAdvBrandVisibility(brand) {
       var isPico = brand === 'Pico';
+      ['adv-reapply-toggle', 'adv-doubletap-toggle', 'adv-widemotion-toggle', 'adv-sharpening'].forEach(function(id) {
+        var row = document.getElementById(id).closest('.adv-field');
+        if (row) row.style.display = isPico ? 'none' : '';
+      });
       document.getElementById('adv-guardian-pause').style.display = isPico ? 'none' : '';
       var proxRow = document.getElementById('adv-prox-disable').closest('.adv-field');
       if (proxRow) proxRow.style.display = isPico ? 'none' : '';
@@ -2880,7 +2991,7 @@
       document.getElementById('adv-headset').textContent = dn.replace(/_/g, ' ');
       document.getElementById('advsettings-modal').style.display = 'flex';
       var proxBtn = document.getElementById('adv-prox-disable');
-      proxBtn.classList.remove('toggle-btn', 'on');
+      proxBtn.classList.remove('on');
       proxBtn.disabled = false;
       var updBtn = document.getElementById('adv-updates-toggle');
       if (updBtn) { updBtn.dataset.blocked = ''; updBtn.classList.remove('on'); updBtn.disabled = true; }
@@ -2929,42 +3040,31 @@
     }
     advBtnAction('adv-guardian-init', { guardianMode: 'Init' });
 
+    // Session-only settings (ADR-0040). The Guardian pause now reads its real state from the
+    // headset and the proximity override can be handed back; the three new ones share the helper.
+    bindAdvToggle('adv-guardian-pause', 'adv-guardian-pause-label', 'guardianPause', 'Enable (session)', 'Disable (session)');
+    bindAdvToggle('adv-prox-disable', 'adv-prox-label', 'proxOverride', 'Off', 'On', true);
+    bindAdvToggle('adv-doubletap-toggle', 'adv-doubletap-label', 'doubleTapDisabled', 'Disabled', 'Enabled', true);
+    bindAdvToggle('adv-widemotion-toggle', 'adv-widemotion-label', 'wideMotion', 'On', 'Off');
+    bindAdvToggle('adv-reapply-toggle', 'adv-reapply-label', 'sessionReapply', 'On', 'Off');
     (function() {
-      var paused = false;
-      document.getElementById('adv-guardian-pause').addEventListener('click', function() {
-        var btn = this;
+      var sel = document.getElementById('adv-sharpening');
+      if (!sel) return;
+      sel.addEventListener('change', function() {
         var dn = _advDn;
         if (!dn) return;
-        btn.disabled = true;
-        paused = !paused;
+        var mode = sel.value;
+        sel.disabled = true;
         fetch('/api/headset-settings/apply', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: dn, settings: { guardianPause: paused } })
-        }).catch(function() { paused = !paused; }).finally(function() {
-          document.getElementById('adv-guardian-pause-label').textContent = paused ? 'Enable (session)' : 'Disable (session)';
-          btn.classList.toggle('on', paused);
-          btn.disabled = false;
-        });
+          body: JSON.stringify({ name: dn, settings: { sharpening: mode } })
+        }).then(function(r) { return r.json(); })
+          .then(function(j) { if (!j.ok) { alert(j.error || 'The headset did not accept the change.'); refreshAdvSettings(); } })
+          .catch(function() { alert('Could not reach the server.'); refreshAdvSettings(); })
+          .finally(function() { sel.disabled = false; });
       });
     })();
-
-    document.getElementById('adv-prox-disable').addEventListener('click', function() {
-      var btn = this;
-      btn.disabled = true;
-      var dn = _advDn;
-      if (!dn) { btn.disabled = false; return; }
-      fetch('/api/headset-settings/apply', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: dn, settings: { proxOverride: true } })
-      }).then(function(r) { return r.json(); })
-        .then(function(j) {
-          if (j.ok) { btn.classList.add('toggle-btn', 'on'); }
-          else { btn.disabled = false; }
-        })
-        .catch(function() { btn.disabled = false; });
-    });
 
     document.getElementById('adv-refresh-rate-apply').addEventListener('click', function() {
       var btn = this;

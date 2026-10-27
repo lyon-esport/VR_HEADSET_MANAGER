@@ -1,6 +1,6 @@
 cd "L:\Drive partagés\04 Equipe Technique\20 VR\VR_HEADSET_MANAGER\DEV_VERSION\VR_HEADSET_MANAGER"
 
-$version = "2026-10.RC2"
+$version = "2026-10.RC3"
 
 .\scripts\Create-ZipRelease.ps1 -Version $version -Unzip
 .\scripts\Invoke-NonRegressionTests.ps1 -VRHMFolder $("..\VR_HEADSET_MANAGER.v"+$version) -Depth Full -AutoApproveSetup

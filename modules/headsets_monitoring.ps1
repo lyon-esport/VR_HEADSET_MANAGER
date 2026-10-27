@@ -809,6 +809,9 @@ function Start-VRMonitor {
             # on an OTA, so a 10 minute cadence is plenty and keeps it off the hot cycle.
             $nextFirmwareAt   = [datetime]::MinValue
             $nextIpdAt        = [datetime]::MinValue
+            # Session-only settings re-applied after a headset restart (ADR-0040).
+            $nextSessionAt    = [datetime]::MinValue
+            $sessionState     = @{}
             # The serial this runspace learned from the headset itself. $headset was captured
             # at startup, so a row added from an IP alone has no serial in it - without this
             # the USB-first transport could not tell the headset is cabled.
@@ -902,6 +905,21 @@ function Start-VRMonitor {
                                     $nextIpdAt = [datetime]::Now.AddSeconds(10)
                                     if (Get-Command Update-HeadsetIpd -ErrorAction SilentlyContinue) {
                                         try { Update-HeadsetIpd -Headset $liveHeadset -Device $device -Model ([string]$workingInfo.Model) | Out-Null } catch { }
+                                    }
+                                }
+
+                                # --- Session-only settings (double tap, wide-motion hand tracking, Guardian
+                                # pause, proximity) re-applied once per headset boot when the
+                                # operator switched "re-apply after reboot" on (ADR-0040). One memoised
+                                # database read when off; skipped while a benchmark runs or USB is busy ---
+                                if ([datetime]::Now -ge $nextSessionAt) {
+                                    $nextSessionAt = [datetime]::Now.AddSeconds(10)
+                                    if (Get-Command Update-HeadsetSessionSettings -ErrorAction SilentlyContinue) {
+                                        try {
+                                            $sessionBlocked = [bool]$sharedState['_benchmark_active']
+                                            if (-not $sessionBlocked -and (Get-Command Test-UsbBusy -ErrorAction SilentlyContinue)) { $sessionBlocked = [bool](Test-UsbBusy) }
+                                            Update-HeadsetSessionSettings -Headset $liveHeadset -Device $device -Brand ([string]$workingInfo.Brand) -Blocked $sessionBlocked -State $sessionState | Out-Null
+                                        } catch { }
                                     }
                                 }
 

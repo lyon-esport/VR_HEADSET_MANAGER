@@ -418,6 +418,55 @@ function Get-DiagKeyValue {
 }
 
 
+function ConvertFrom-HandTrackingState {
+    <#
+    .SYNOPSIS
+    Parses the hand / controller input state of a headset from the lines
+    `dumpsys DumpsysProxy | grep` returns (READ-ONLY: Meta keeps the matching settings in a
+    signature-protected PrefStore, so nothing here can be changed over ADB).
+
+    .DESCRIPTION
+    Pure, tolerant: a field the firmware does not print is $null, never an exception.
+      "Hands opt in: 1  Enabled: 1  Autotransitions: 0  MM(enabled): 0  MM(turned on): 0  Double-tap: 0"
+      "Sensitivity Setting: Favor Controller"
+      {"input_shared_state_hand_tracking_enabled":1,"input_shared_state_hands_disabled_from_app":0,...}
+    Returns @{HandsOptIn;HandsEnabled;AutoTransitions;Multimodal;MultimodalActive;
+    DoubleTapTransition;Sensitivity;HandTrackingActive;HandsDisabledByApp} or $null when no
+    line was recognised at all. "Double-tap" is the controllers-to-hands double tap, NOT the
+    headset-side tap that toggles passthrough (that preference is not readable).
+
+    .EXAMPLE
+    ConvertFrom-HandTrackingState -Lines (Invoke-HeadsetDiagShell ...)[16]
+    #>
+    param([string[]]$Lines)
+
+    $text = (@($Lines) -join "`n")
+    if (-not $text.Trim()) { return $null }
+
+    $flag = {
+        param([string]$Pattern)
+        if ($text -match $Pattern) { return ($Matches[1] -eq '1') }
+        return $null
+    }
+    $r = [PSCustomObject]@{
+        HandsOptIn         = (& $flag '(?i)Hands opt in:\s*(\d)')
+        HandsEnabled       = (& $flag '(?i)\bEnabled:\s*(\d)')
+        AutoTransitions    = (& $flag '(?i)Autotransitions:\s*(\d)')
+        Multimodal         = (& $flag '(?i)MM\(enabled\):\s*(\d)')
+        MultimodalActive   = (& $flag '(?i)MM\(turned on\):\s*(\d)')
+        DoubleTapTransition = (& $flag '(?i)Double-tap:\s*(\d)')
+        Sensitivity        = $null
+        HandTrackingActive = (& $flag '"input_shared_state_hand_tracking_enabled"\s*:\s*(\d)')
+        HandsDisabledByApp = (& $flag '"input_shared_state_hands_disabled_from_app"\s*:\s*(\d)')
+    }
+    if ($text -match '(?i)Sensitivity Setting:\s*([^\r\n]+)') { $r.Sensitivity = $Matches[1].Trim() }
+
+    $any = $false
+    foreach ($p in $r.PSObject.Properties) { if ($null -ne $p.Value) { $any = $true; break } }
+    if (-not $any) { return $null }
+    return $r
+}
+
 function Get-HeadsetDiagHealth {
     <#
     .SYNOPSIS
@@ -455,7 +504,7 @@ function Get-HeadsetDiagHealth {
         Ok = $false; Temps = $null; Fan = $null; CpuLevel = $null; GpuLevel = $null
         Battery = $null; Controllers = @(); TopProcesses = @(); Memory = $null
         BootStage = $null; ClockDriftSec = $null; TimeZone = $null; AutoTime = $null
-        CameraErrors = 0; HardwareRaw = @(); Error = $null
+        CameraErrors = 0; HardwareRaw = @(); Input = $null; Error = $null
     }
 
     try {
@@ -476,7 +525,8 @@ function Get-HeadsetDiagHealth {
             'date +%s',
             'getprop persist.sys.timezone',
             'settings get global auto_time',
-            'logcat -d -t 5000 -s CAM_ERR 2>/dev/null'
+            'logcat -d -t 5000 -s CAM_ERR 2>/dev/null',
+            "dumpsys DumpsysProxy 2>/dev/null | grep -E 'Hands opt in|Sensitivity Setting|input_shared_state_hand'"
         )
         $pcAfter = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
         if (-not $seg) { $r.Error = 'No answer from the headset.'; return $r }
@@ -587,6 +637,7 @@ function Get-HeadsetDiagHealth {
         $tz = Get-DiagFirstLine $seg[13]; if ($tz) { $r.TimeZone = $tz }
         $at = Get-DiagFirstLine $seg[14]; if ($at) { $r.AutoTime = ($at -eq '1') }
         $r.CameraErrors = @($seg[15] | Where-Object { $_ -match 'Timedout waiting for frame ctx' }).Count
+        $r.Input = ConvertFrom-HandTrackingState -Lines $seg[16]
 
         $r.Ok = $true
     } catch {

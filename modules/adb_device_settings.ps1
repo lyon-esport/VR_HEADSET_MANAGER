@@ -693,14 +693,19 @@ function Set-HeadsetSoundLevel {
 
 
 function Set-HeadsetProximitySensorOverride {
+    # Keeps the headset awake as if worn (prox_close). -Clear sends automation_disable, the
+    # broadcast the QGO app uses to hand the proximity sensor back (to be confirmed on a
+    # headset). Session only. The state is not readable.
     param (
         [Parameter(Mandatory=$true)][PSCustomObject]$Device,
-        [string]$adb = $global:adbPath
+        [string]$adb = $global:adbPath,
+        [switch]$Clear
     )
     if (-not $Device) { Write-Log ($msg.ErrorOccurred -f 'No device') -Level ERROR; return $false }
+    $action = if ($Clear) { 'automation_disable' } else { 'prox_close' }
     try {
-        Write-Log "Overriding proximity sensor (prox_close) on $($Device.DeviceId)" -Level INFO
-        Invoke-AdbCmd -Device $Device -Command "shell am broadcast -a com.oculus.vrpowermanager.prox_close" -adb $adb | Out-Null
+        Write-Log "Proximity sensor override ($action) on $($Device.DeviceId)" -Level INFO
+        Invoke-AdbCmd -Device $Device -Command "shell am broadcast -a com.oculus.vrpowermanager.$action" -adb $adb | Out-Null
         Write-Log ($msg.HeadsetSettingApplied -f $Device.DeviceId) -Level SUCCESS
         return $true
     }
@@ -767,6 +772,195 @@ function Set-HeadsetRefreshRate {
         return $true
     }
     catch { Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR; return $false }
+}
+
+
+function ConvertFrom-SensorUidState {
+    <#
+    .SYNOPSIS
+    Parses the output of `cmd sensorservice get-uid-state <package>`: 'idle' -> $true (the
+    package's sensors are switched off), 'active' -> $false, anything else -> $null.
+    Pure, no adb. Used by Get-HeadsetDoubleTapDisabled.
+    .EXAMPLE
+    ConvertFrom-SensorUidState -Text 'idle'
+    #>
+    param ([string]$Text)
+    $t = ([string]$Text).Trim().ToLowerInvariant()
+    if ($t -eq 'idle') { return $true }
+    if ($t -eq 'active') { return $false }
+    return $null
+}
+
+
+function Get-HeadsetDoubleTapDisabled {
+    <#
+    .SYNOPSIS
+    Is the headset-side double tap (the tap on the side of the headset that toggles
+    passthrough) switched off? $true = disabled, $false = working, $null = unreadable.
+    Reads the sensor state override of the Horizon shell (cmd sensorservice get-uid-state).
+    Meta only; a Pico has no such sensor and returns $null.
+    .EXAMPLE
+    Get-HeadsetDoubleTapDisabled -Device $device
+    #>
+    param (
+        [Parameter(Mandatory=$true)][PSCustomObject]$Device,
+        [string]$adb = $global:adbPath,
+        [string]$Brand = ""
+    )
+    if (-not $Device -or $Brand -eq 'Pico') { return $null }
+    try {
+        # get-uid-state answers through its exit code too (idle = 5), which Invoke-AdbCmd would
+        # take for a failure and return nothing: end the script with `true` so only the text counts.
+        $out = Invoke-AdbCmd -Device $Device -Command "cmd sensorservice get-uid-state com.oculus.vrshell; true" -ShellScript -adb $adb -SilentOnFail
+        if ($out -is [bool]) { return $null }
+        return (ConvertFrom-SensorUidState -Text (@($out) -join ''))
+    }
+    catch { Write-Log ($msg.ErrorOccurred -f $_) -Level WARNING; return $null }
+}
+
+
+function Set-HeadsetDoubleTapDisabled {
+    <#
+    .SYNOPSIS
+    Disables (or re-enables) the headset-side double tap that toggles passthrough, by putting
+    the Horizon shell's sensor access to idle (cmd sensorservice set-uid-state ... idle) or
+    clearing that override (reset-uid-state). Meta v81 removed the Settings option; this is
+    the same mechanism the QGO app uses. Session only: the override is lost when the headset
+    restarts. Verified by reading the state back. Returns $true/$false.
+    .EXAMPLE
+    Set-HeadsetDoubleTapDisabled -Device $device -Disabled $true
+    #>
+    param (
+        [Parameter(Mandatory=$true)][PSCustomObject]$Device,
+        [bool]$Disabled = $true,
+        [string]$adb = $global:adbPath,
+        [string]$Brand = ""
+    )
+    if (-not $Device) { Write-Log ($msg.ErrorOccurred -f 'No device') -Level ERROR; return $false }
+    if ($Brand -eq 'Pico') {
+        Write-Log "Double tap control not supported on Pico ($($Device.DeviceId)) - no such sensor." -Level WARNING
+        return $false
+    }
+    # `; true`: the result is verified by the read-back below, not by the exit code.
+    $cmd = if ($Disabled) { 'cmd sensorservice set-uid-state com.oculus.vrshell idle; true' } else { 'cmd sensorservice reset-uid-state com.oculus.vrshell; true' }
+    try {
+        Write-Log "Side double tap $(if ($Disabled) { 'disabled' } else { 'enabled' }) on $($Device.DeviceId)" -Level INFO
+        Invoke-AdbCmd -Device $Device -Command $cmd -ShellScript -adb $adb | Out-Null
+        $now = Get-HeadsetDoubleTapDisabled -Device $Device -adb $adb -Brand $Brand
+        if ($now -ne $Disabled) {
+            Write-Log "Side double tap read-back differs on $($Device.DeviceId) (wanted disabled=$Disabled, read '$now')." -Level WARNING
+            return $false
+        }
+        Write-Log ($msg.HeadsetSettingApplied -f $Device.DeviceId) -Level SUCCESS
+        return $true
+    }
+    catch { Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR; return $false }
+}
+
+
+function ConvertFrom-WideMotionProps {
+    <#
+    .SYNOPSIS
+    Parses the line `F=<forceEnablePerformanceFeatures> A=<allowhandoverride> T=<handoverridetype>`
+    printed by Get-HeadsetWideMotionMode into $true when the hand tracking wide-motion mode
+    (body tracking assisted hand tracking, as set by QGO) is on, $false when off, $null when the
+    line is not understood. Pure, no adb.
+    .EXAMPLE
+    ConvertFrom-WideMotionProps -Text 'F=BODY_TRACKING A=1 T=3'
+    #>
+    param ([string]$Text)
+    if (-not ([string]$Text -match 'F=(\S*)\s+A=(\S*)\s+T=(\S*)')) { return $null }
+    $force = $Matches[1]; $allow = $Matches[2]; $type = $Matches[3]
+    return [bool]($force -match 'BODY_TRACKING' -and $allow -eq '1' -and $type -eq '3')
+}
+
+
+function Get-HeadsetWideMotionMode {
+    <#
+    .SYNOPSIS
+    Is the hand tracking wide-motion mode on ($true), off ($false) or unreadable ($null)?
+    Reads the three debug props QGO sets. Meta only.
+    .EXAMPLE
+    Get-HeadsetWideMotionMode -Device $device
+    #>
+    param (
+        [Parameter(Mandatory=$true)][PSCustomObject]$Device,
+        [string]$adb = $global:adbPath,
+        [string]$Brand = ""
+    )
+    if (-not $Device -or $Brand -eq 'Pico') { return $null }
+    try {
+        $script = 'echo "F=$(getprop debug.oculus.forceEnablePerformanceFeatures) A=$(getprop debug.bodyapi.allowhandoverride) T=$(getprop debug.bodyapi.handoverridetype)"'
+        $out = Invoke-AdbCmd -Device $Device -Command $script -ShellScript -adb $adb -SilentOnFail
+        if ($out -is [bool]) { return $null }
+        return (ConvertFrom-WideMotionProps -Text (@($out) -join ' '))
+    }
+    catch { Write-Log ($msg.ErrorOccurred -f $_) -Level WARNING; return $null }
+}
+
+
+function Set-HeadsetWideMotionMode {
+    <#
+    .SYNOPSIS
+    Turns the hand tracking wide-motion mode on or off (the QGO option). On sets
+    debug.oculus.forceEnablePerformanceFeatures=BODY_TRACKING, debug.bodyapi.allowhandoverride=1
+    and debug.bodyapi.handoverridetype=3; off clears the three props. Session only: a restart
+    clears them. Verified by reading back. Meta only. Returns $true/$false.
+    .EXAMPLE
+    Set-HeadsetWideMotionMode -Device $device -Enabled $true
+    #>
+    param (
+        [Parameter(Mandatory=$true)][PSCustomObject]$Device,
+        [bool]$Enabled = $true,
+        [string]$adb = $global:adbPath,
+        [string]$Brand = ""
+    )
+    if (-not $Device) { Write-Log ($msg.ErrorOccurred -f 'No device') -Level ERROR; return $false }
+    if ($Brand -eq 'Pico') {
+        Write-Log "Wide-motion hand tracking not supported on Pico ($($Device.DeviceId))." -Level WARNING
+        return $false
+    }
+    $script = if ($Enabled) {
+        "setprop debug.oculus.forceEnablePerformanceFeatures BODY_TRACKING && setprop debug.bodyapi.allowhandoverride 1 && setprop debug.bodyapi.handoverridetype 3"
+    } else {
+        "setprop debug.oculus.forceEnablePerformanceFeatures '' && setprop debug.bodyapi.allowhandoverride '' && setprop debug.bodyapi.handoverridetype ''"
+    }
+    try {
+        Write-Log "Hand tracking wide-motion mode $(if ($Enabled) { 'on' } else { 'off' }) on $($Device.DeviceId)" -Level INFO
+        Invoke-AdbCmd -Device $Device -Command $script -ShellScript -adb $adb | Out-Null
+        $now = Get-HeadsetWideMotionMode -Device $Device -adb $adb -Brand $Brand
+        if ($now -ne $Enabled) {
+            Write-Log "Wide-motion mode read-back differs on $($Device.DeviceId) (wanted $Enabled, read '$now')." -Level WARNING
+            return $false
+        }
+        Write-Log ($msg.HeadsetSettingApplied -f $Device.DeviceId) -Level SUCCESS
+        return $true
+    }
+    catch { Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR; return $false }
+}
+
+
+function Get-HeadsetGuardianPause {
+    <#
+    .SYNOPSIS
+    Is the Guardian boundary paused (debug.oculus.guardian_pause = 1)? $true / $false, or $null
+    when unreadable or on a Pico. Counterpart of Set-HeadsetGuardianPause.
+    .EXAMPLE
+    Get-HeadsetGuardianPause -Device $device
+    #>
+    param (
+        [Parameter(Mandatory=$true)][PSCustomObject]$Device,
+        [string]$adb = $global:adbPath,
+        [string]$Brand = ""
+    )
+    if (-not $Device -or $Brand -eq 'Pico') { return $null }
+    try {
+        $out = Invoke-AdbCmd -Device $Device -Command 'echo "G=$(getprop debug.oculus.guardian_pause)"' -ShellScript -adb $adb -SilentOnFail
+        if ($out -is [bool]) { return $null }
+        if ((@($out) -join ' ') -notmatch 'G=(\S*)') { return $null }
+        return ($Matches[1] -eq '1')
+    }
+    catch { Write-Log ($msg.ErrorOccurred -f $_) -Level WARNING; return $null }
 }
 
 
@@ -860,4 +1054,336 @@ function Set-HeadsetUpdateBlocked {
         Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
         return $false
     }
+}
+
+
+# ---------------------------------------------------------------------------------------------
+# Session-only headset settings and their re-apply after a reboot (ADR-0040).
+# A few headset settings are overrides that live in the running system and are lost when the
+# headset restarts: the side double tap (sensor override), the hand tracking wide-motion mode,
+# the Guardian pause and the proximity sensor override. The operator's wish is kept per headset
+# in the app_kv row headset_session_settings_<id> (one row per headset, so poll runspaces never
+# race on a shared document, same precedent as headset_ipd_<id>):
+#   { reapply: bool, desired: { doubleTapOff, wideMotion, guardianPause, proxKeepAwake },
+#     bootId: "<kernel boot id the settings were last applied on>", appliedAt: "<iso utc>" }
+# With reapply on, the headset's poll runspace applies the desired settings once per boot.
+# ---------------------------------------------------------------------------------------------
+
+# The four remembered on/off settings, in the order they are applied. The image sharpening mode
+# is remembered too, as a string (none | fcas | mqsr), see ConvertTo-SharpeningMode.
+function Get-SessionSettingKeys { return @('doubleTapOff', 'wideMotion', 'guardianPause', 'proxKeepAwake') }
+
+# Normalises an image sharpening mode: 'fcas' (AMD FidelityFX CAS), 'mqsr' (Meta Quest Super
+# Resolution) or 'none' for anything else. Pure.
+# Example: ConvertTo-SharpeningMode 'FCAS'
+function ConvertTo-SharpeningMode {
+    param($Value)
+    $v = ([string]$Value).Trim().ToLowerInvariant()
+    if ($v -eq 'fcas' -or $v -eq 'mqsr') { return $v }
+    return 'none'
+}
+
+# The image sharpening mode shown by the headset's debug props (QGO's "Image Sharpening
+# Algorithm"): layerFilter 4 = FidelityFX CAS, 3 = Meta Quest Super Resolution, empty = off;
+# any other value reads 'custom'. Pure, no adb.
+# Example: ConvertFrom-SharpeningProps -LayerFilter '4'
+function ConvertFrom-SharpeningProps {
+    param([string]$LayerFilter = '')
+    $v = $LayerFilter.Trim()
+    if ($v -eq '') { return 'none' }
+    if ($v -eq '4') { return 'fcas' }
+    if ($v -eq '3') { return 'mqsr' }
+    return 'custom'
+}
+
+# The headset's current image sharpening mode ('none', 'fcas', 'mqsr', 'custom'), or $null when
+# unreadable or on a Pico. A global setting: QGO also offers it per app, VRHM only the global one.
+# Example: Get-HeadsetSharpening -Device $device -Brand 'Meta'
+function Get-HeadsetSharpening {
+    param([Parameter(Mandatory)][PSCustomObject]$Device, [string]$adb = $global:adbPath, [string]$Brand = '')
+    if (-not $Device -or $Brand -eq 'Pico') { return $null }
+    try {
+        $out = Invoke-AdbCmd -Device $Device -Command 'echo "L=$(getprop debug.oculus.layerFilter)"' -ShellScript -adb $adb -SilentOnFail
+        if ($out -is [bool]) { return $null }
+        if (-not ((@($out) -join ' ') -match 'L=(\S*)')) { return $null }
+        $lf = $Matches[1]
+        return (ConvertFrom-SharpeningProps -LayerFilter $lf)
+    } catch { return $null }
+}
+
+# Sets the image sharpening mode with the two debug props QGO uses (decoded from QGO 14.5.0):
+#   none -> layerFilter '' and pfr.autofilter ''
+#   fcas -> layerFilter 4,  pfr.autofilter 4 on Horizon OS 207 or newer, 1 on older firmware
+#   mqsr -> layerFilter 3,  pfr.autofilter 4
+# Session only (debug props are lost at reboot). Verified by reading back. Meta only.
+# Returns $true/$false. Example: Set-HeadsetSharpening -Device $device -Mode 'mqsr' -Brand 'Meta'
+function Set-HeadsetSharpening {
+    param(
+        [Parameter(Mandatory)][PSCustomObject]$Device,
+        [Parameter(Mandatory)][string]$Mode,
+        [string]$adb = $global:adbPath,
+        [string]$Brand = ''
+    )
+    if (-not $Device) { return $false }
+    if ($Brand -eq 'Pico') { Write-Log "Image sharpening not supported on Pico ($($Device.DeviceId))." -Level WARNING; return $false }
+    $m = ConvertTo-SharpeningMode $Mode
+    $layer = ''; $auto = ''
+    if ($m -ne 'none') {
+        $vros = 0
+        try {
+            $vv = Invoke-AdbCmd -Device $Device -Command 'getprop ro.vros.build.version' -ShellScript -adb $adb -SilentOnFail
+            if ($vv -isnot [bool]) { [void][int]::TryParse(((@($vv) -join '').Trim()), [ref]$vros) }
+        } catch { }
+        if ($m -eq 'mqsr') { $layer = '3'; $auto = '4' }
+        else               { $layer = '4'; $auto = $(if ($vros -ge 207 -or $vros -eq 0) { '4' } else { '1' }) }
+    }
+    $q = { param($v) if ($v -eq '') { "''" } else { $v } }
+    $script = 'setprop debug.oculus.layerFilter {0} && setprop debug.oculus.pfr.autofilter {1}' -f (& $q $layer), (& $q $auto)
+    try {
+        Write-Log "Image sharpening $m on $($Device.DeviceId)" -Level INFO
+        Invoke-AdbCmd -Device $Device -Command $script -ShellScript -adb $adb | Out-Null
+        $now = Get-HeadsetSharpening -Device $Device -adb $adb -Brand $Brand
+        if ($now -ne $m) {
+            Write-Log "Image sharpening read-back differs on $($Device.DeviceId) (wanted $m, read '$now')." -Level WARNING
+            return $false
+        }
+        Write-Log ($msg.HeadsetSettingApplied -f $Device.DeviceId) -Level SUCCESS
+        return $true
+    } catch { Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR; return $false }
+}
+
+# The stored session settings of one headset, always a full object (every flag false when nothing
+# is stored). Memoised 2 s per process so a burst of calls costs one database read. Never throws.
+# Example: (Get-HeadsetSessionSettings -HeadsetId 3).desired.doubleTapOff
+function Get-HeadsetSessionSettings {
+    param([Parameter(Mandatory)][int]$HeadsetId, [switch]$NoMemo)
+    $blank = [PSCustomObject]@{
+        reapply   = $false
+        desired   = [PSCustomObject]@{ doubleTapOff = $false; wideMotion = $false; guardianPause = $false; proxKeepAwake = $false; sharpening = 'none' }
+        bootId    = ''
+        appliedAt = ''
+    }
+    if ($HeadsetId -le 0) { return $blank }
+    if (-not $script:HeadsetSessionMemo) { $script:HeadsetSessionMemo = @{} }
+    $m = $script:HeadsetSessionMemo[$HeadsetId]
+    if (-not $NoMemo -and $m -and ([datetime]::UtcNow - $m.At).TotalSeconds -lt 2) { return $m.Val }
+    $val = $blank
+    try {
+        $raw = Get-DbKeyValue -Key ("headset_session_settings_{0}" -f $HeadsetId)
+        if ($raw) {
+            $val = [PSCustomObject]@{
+                reapply   = [bool]$raw.reapply
+                desired   = [PSCustomObject]@{
+                    doubleTapOff  = [bool]$raw.desired.doubleTapOff
+                    wideMotion    = [bool]$raw.desired.wideMotion
+                    guardianPause = [bool]$raw.desired.guardianPause
+                    proxKeepAwake = [bool]$raw.desired.proxKeepAwake
+                    sharpening    = (ConvertTo-SharpeningMode $raw.desired.sharpening)
+                }
+                bootId    = [string]$raw.bootId
+                appliedAt = [string]$raw.appliedAt
+            }
+        }
+    } catch { $val = $blank }
+    $script:HeadsetSessionMemo[$HeadsetId] = @{ At = [datetime]::UtcNow; Val = $val }
+    return $val
+}
+
+# Stores a change in the session settings of one headset, keeping what is not named.
+# -Reapply sets the "re-apply after reboot" switch; -Desired is a hashtable of the four flags
+# (only the keys given are changed); -BootId stamps the boot the settings were applied on.
+# Returns $true when written. Never throws.
+# Example: Set-HeadsetSessionSettings -HeadsetId 3 -Desired @{ doubleTapOff = $true }
+function Set-HeadsetSessionSettings {
+    param(
+        [Parameter(Mandatory)][int]$HeadsetId,
+        [object]$Reapply = $null,
+        [hashtable]$Desired = $null,
+        [string]$BootId = $null
+    )
+    if ($HeadsetId -le 0) { return $false }
+    try {
+        $cur = Get-HeadsetSessionSettings -HeadsetId $HeadsetId -NoMemo
+        $d = [ordered]@{
+            doubleTapOff  = [bool]$cur.desired.doubleTapOff
+            wideMotion    = [bool]$cur.desired.wideMotion
+            guardianPause = [bool]$cur.desired.guardianPause
+            proxKeepAwake = [bool]$cur.desired.proxKeepAwake
+            sharpening    = (ConvertTo-SharpeningMode $cur.desired.sharpening)
+        }
+        if ($Desired) {
+            foreach ($k in (Get-SessionSettingKeys)) { if ($Desired.ContainsKey($k)) { $d[$k] = [bool]$Desired[$k] } }
+            if ($Desired.ContainsKey('sharpening')) { $d['sharpening'] = ConvertTo-SharpeningMode $Desired['sharpening'] }
+        }
+        $doc = [ordered]@{
+            reapply   = $(if ($null -ne $Reapply) { [bool]$Reapply } else { [bool]$cur.reapply })
+            desired   = $d
+            bootId    = $(if ($PSBoundParameters.ContainsKey('BootId')) { $BootId } else { [string]$cur.bootId })
+            appliedAt = $(if ($PSBoundParameters.ContainsKey('BootId')) { [datetime]::UtcNow.ToString('o') } else { [string]$cur.appliedAt })
+        }
+        Set-DbKeyValue -Key ("headset_session_settings_{0}" -f $HeadsetId) -Value ([PSCustomObject]$doc)
+        if ($script:HeadsetSessionMemo) { $script:HeadsetSessionMemo.Remove($HeadsetId) }
+        return $true
+    } catch { return $false }
+}
+
+# Forgets the stored session settings of a removed headset. Never throws.
+# Example: Remove-HeadsetSessionSettings -HeadsetId 3
+function Remove-HeadsetSessionSettings {
+    param([Parameter(Mandatory)][int]$HeadsetId)
+    try { Remove-DbKeyValue -Key ("headset_session_settings_{0}" -f $HeadsetId) } catch { }
+    if ($script:HeadsetSessionMemo) { $script:HeadsetSessionMemo.Remove($HeadsetId) }
+}
+
+# The kernel boot id of the headset (changes at every boot) and whether the system finished booting,
+# in ONE adb call. Returns @{BootId;Completed} or $null when unreadable. A headset that has just
+# rebooted answers adb before sys.boot_completed is 1, so callers wait for Completed.
+# Example: $b = Get-HeadsetBootState -Device $device
+function Get-HeadsetBootState {
+    param([Parameter(Mandatory)][PSCustomObject]$Device, [string]$adb = $global:adbPath)
+    try {
+        $out = Invoke-AdbCmd -Device $Device -Command 'echo "B=$(cat /proc/sys/kernel/random/boot_id) C=$(getprop sys.boot_completed)"' -ShellScript -adb $adb -SilentOnFail
+        if ($out -is [bool]) { return $null }
+        $text = (@($out) -join ' ')
+        if (-not ($text -match 'B=(\S+)\s+C=(\S*)')) { return $null }
+        $bootId = $Matches[1]; $completed = ($Matches[2] -eq '1')
+        return @{ BootId = $bootId; Completed = $completed }
+    } catch { return $null }
+}
+
+# Pure decision: should the stored session settings be applied now? Returns @{Apply;Reason}.
+#   -Settings  Get-HeadsetSessionSettings result
+#   -BootId / -Completed   the headset's current boot (Get-HeadsetBootState)
+#   -AppliedBootId  the boot the settings were last applied on (stored, or this runspace's memo)
+#   -Blocked   a benchmark runs or USB is busy        -NextTry  earliest time to retry a failed apply
+# Example: Get-SessionSettingsApplyDecision -Settings $s -BootId 'abc' -Completed $true -AppliedBootId ''
+function Get-SessionSettingsApplyDecision {
+    param(
+        [Parameter(Mandatory)]$Settings,
+        [string]$BootId = '',
+        [bool]$Completed = $false,
+        [string]$AppliedBootId = '',
+        [bool]$Blocked = $false,
+        [datetime]$NextTry = [datetime]::MinValue,
+        [datetime]$Now = [datetime]::Now
+    )
+    if (-not $Settings.reapply)                       { return @{ Apply = $false; Reason = 'switch off' } }
+    $any = $false
+    foreach ($k in (Get-SessionSettingKeys)) { if ($Settings.desired.$k) { $any = $true } }
+    if ((ConvertTo-SharpeningMode $Settings.desired.sharpening) -ne 'none') { $any = $true }
+    if (-not $any)                                    { return @{ Apply = $false; Reason = 'nothing to apply' } }
+    if (-not $BootId)                                 { return @{ Apply = $false; Reason = 'boot id unknown' } }
+    if (-not $Completed)                              { return @{ Apply = $false; Reason = 'still booting' } }
+    if ($BootId -eq $AppliedBootId)                   { return @{ Apply = $false; Reason = 'already applied on this boot' } }
+    if ($Blocked)                                     { return @{ Apply = $false; Reason = 'blocked (benchmark or USB busy)' } }
+    if ($Now -lt $NextTry)                            { return @{ Apply = $false; Reason = 'backoff' } }
+    return @{ Apply = $true; Reason = 'new boot' }
+}
+
+# Applies the desired session settings to a headset now. Only the settings wanted ON are applied,
+# and the readable ones only when they are not already in that state. Meta only (a Pico returns an
+# empty result). Returns a hashtable key -> $true/$false for each setting it tried.
+# Example: Invoke-HeadsetSessionSettingsApply -Device $device -Brand 'Meta' -Settings $s
+function Invoke-HeadsetSessionSettingsApply {
+    param(
+        [Parameter(Mandatory)][PSCustomObject]$Device,
+        [Parameter(Mandatory)]$Settings,
+        [string]$Brand = '',
+        [string]$adb = $global:adbPath,
+        [switch]$DriftOnly
+    )
+    # -DriftOnly: the drift check. Only the settings that no longer match are set again (and
+    # reported); a setting already in the wanted state is left alone and not listed, and the
+    # proximity override, which cannot be read back, is not re-sent.
+    $res = @{}
+    if ($Brand -eq 'Pico') { return $res }
+    if ($Settings.desired.doubleTapOff) {
+        $ok = ((Get-HeadsetDoubleTapDisabled -Device $Device -adb $adb -Brand $Brand) -eq $true)
+        if (-not $ok) { $res['doubleTapOff'] = [bool](Set-HeadsetDoubleTapDisabled -Device $Device -Disabled $true -adb $adb -Brand $Brand) }
+        elseif (-not $DriftOnly) { $res['doubleTapOff'] = $true }
+    }
+    if ($Settings.desired.wideMotion) {
+        $ok = ((Get-HeadsetWideMotionMode -Device $Device -adb $adb -Brand $Brand) -eq $true)
+        if (-not $ok) { $res['wideMotion'] = [bool](Set-HeadsetWideMotionMode -Device $Device -Enabled $true -adb $adb -Brand $Brand) }
+        elseif (-not $DriftOnly) { $res['wideMotion'] = $true }
+    }
+    if ($Settings.desired.guardianPause) {
+        $ok = ((Get-HeadsetGuardianPause -Device $Device -adb $adb -Brand $Brand) -eq $true)
+        if (-not $ok) { $res['guardianPause'] = [bool](Set-HeadsetGuardianPause -Device $Device -Pause $true -adb $adb -Brand $Brand) }
+        elseif (-not $DriftOnly) { $res['guardianPause'] = $true }
+    }
+    $sharp = ConvertTo-SharpeningMode $Settings.desired.sharpening
+    if ($sharp -ne 'none') {
+        $ok = ((Get-HeadsetSharpening -Device $Device -adb $adb -Brand $Brand) -eq $sharp)
+        if (-not $ok) { $res['sharpening'] = [bool](Set-HeadsetSharpening -Device $Device -Mode $sharp -adb $adb -Brand $Brand) }
+        elseif (-not $DriftOnly) { $res['sharpening'] = $true }
+    }
+    if ($Settings.desired.proxKeepAwake -and -not $DriftOnly) {
+        # Not readable, so it is always sent (and never in the drift check).
+        $res['proxKeepAwake'] = [bool](Set-HeadsetProximitySensorOverride -Device $Device -adb $adb)
+    }
+    return $res
+}
+
+# One step of the poll runspace: when the re-apply switch is on and the headset booted since the
+# settings were last applied, apply them. Cheap when the switch is off (one memoised database read,
+# no adb call). -State is a hashtable the runspace keeps between calls (AppliedBootId, NextTry,
+# Failures). Never throws. Returns $true when settings were applied.
+# Example: Update-HeadsetSessionSettings -Headset $row -Device $device -Brand 'Meta' -Blocked $false -State $st
+function Update-HeadsetSessionSettings {
+    param(
+        [Parameter(Mandatory)]$Headset,
+        [Parameter(Mandatory)][PSCustomObject]$Device,
+        [string]$Brand = '',
+        [bool]$Blocked = $false,
+        [Parameter(Mandatory)][hashtable]$State
+    )
+    try {
+        $id = 0
+        if (-not [int]::TryParse([string]$Headset.ID, [ref]$id) -or $id -le 0) { return $false }
+        if ($Brand -eq 'Pico') { return $false }
+        $settings = Get-HeadsetSessionSettings -HeadsetId $id
+        if (-not $settings.reapply) { return $false }
+        if (-not $State.ContainsKey('NextTry')) { $State['NextTry'] = [datetime]::MinValue }
+        $boot = Get-HeadsetBootState -Device $Device
+        if (-not $boot) {
+            if ($State['LastReason'] -ne 'boot state unreadable') { $State['LastReason'] = 'boot state unreadable'; Write-Log ("Session settings on {0}: not applied (boot state unreadable)." -f $Headset.Name) -Level DEBUG }
+            return $false
+        }
+        $applied = $(if ($State['AppliedBootId']) { [string]$State['AppliedBootId'] } else { [string]$settings.bootId })
+        $dec = Get-SessionSettingsApplyDecision -Settings $settings -BootId $boot.BootId -Completed $boot.Completed -AppliedBootId $applied -Blocked $Blocked -NextTry $State['NextTry']
+        if (-not $dec.Apply) {
+            # One DEBUG line per change of reason, so a skipped re-apply is explained in the log.
+            $why = '{0} (boot {1})' -f $dec.Reason, $boot.BootId
+            if ($State['LastReason'] -ne $why) { $State['LastReason'] = $why; Write-Log ("Session settings on {0}: not applied ({1})." -f $Headset.Name, $why) -Level DEBUG }
+            # Drift check, once a minute, on a boot that was already handled: another tool can
+            # overwrite a setting after VRHM applied it (QGO writes its own stored values a
+            # little after a restart). The settings that no longer match are set again.
+            if ($dec.Reason -like 'already applied*' -and -not $Blocked) {
+                if (-not $State.ContainsKey('NextDrift')) { $State['NextDrift'] = [datetime]::Now.AddSeconds(60) }
+                if ([datetime]::Now -ge $State['NextDrift']) {
+                    $State['NextDrift'] = [datetime]::Now.AddSeconds(60)
+                    $fix = Invoke-HeadsetSessionSettingsApply -Device $Device -Settings $settings -Brand $Brand -DriftOnly
+                    if ($fix.Count -gt 0) {
+                        Write-Log ("Session settings on {0} had changed since the restart, set again: {1}." -f $Headset.Name, (@($fix.Keys) -join ', ')) -Level INFO
+                        return $true
+                    }
+                }
+            }
+            return $false
+        }
+        $r = Invoke-HeadsetSessionSettingsApply -Device $Device -Settings $settings -Brand $Brand
+        $failed = @($r.Keys | Where-Object { -not $r[$_] })
+        if ($failed.Count -eq 0) {
+            $State['AppliedBootId'] = $boot.BootId
+            $State['Failures'] = 0
+            [void](Set-HeadsetSessionSettings -HeadsetId $id -BootId $boot.BootId)
+            Write-Log ("Session settings re-applied on {0} after a restart ({1})." -f $Headset.Name, (@($r.Keys) -join ', ')) -Level INFO
+            return $true
+        }
+        $State['Failures'] = 1 + [int]$State['Failures']
+        $State['NextTry'] = [datetime]::Now.AddSeconds([Math]::Min(300, 30 * [int]$State['Failures']))
+        Write-Log ("Session settings re-apply incomplete on {0}: failed {1}. Retrying later." -f $Headset.Name, ($failed -join ', ')) -Level WARNING
+        return $false
+    } catch { return $false }
 }

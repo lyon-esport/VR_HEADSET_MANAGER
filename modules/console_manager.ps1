@@ -859,6 +859,7 @@ function Get-HeadsetPanelKeymap {
         @{ Key = '6'; Group = 'Setup';   Label = $c.PanelEyeMerge },
         @{ Key = '8'; Group = 'Setup';   Label = $c.PanelRefreshRate },
         @{ Key = '9'; Group = 'Setup';   Label = $c.PanelPushWifi },
+        @{ Key = 'S'; Group = 'Setup';   Label = $c.PanelSession },
         @{ Key = '7'; Group = 'Device';  Label = $c.PanelLaunchApp },
         @{ Key = 'G'; Group = 'Device';  Label = $c.PanelFrame },
         @{ Key = 'E'; Group = 'Device';  Label = $c.PanelEdit },
@@ -977,6 +978,7 @@ function Show-HeadsetPanel {
             '7' { Show-SubMenu-LaunchApp -Headset $row }
             '8' { Show-SubMenu-HeadsetRefreshRate -Headset $row }
             '9' { Show-SubMenu-PushHeadsetWifi -Headset $row }
+            'S' { Show-SubMenu-HeadsetSessionSettings -Headset $row }
             'G' { Show-SubMenu-CaptureHeadsetFrame -Headset $row }
             'E' { Show-SubMenu-EditHeadset -Headset $row }
             'B' {
@@ -1964,6 +1966,150 @@ function Show-SubMenu-HeadsetRefreshRate {
     }
     Start-Sleep -Seconds 3
 }
+
+function Show-SubMenu-HeadsetSessionSettings {
+    <#
+    .SYNOPSIS
+    Console counterpart of the session-only rows of the web Configure modal (ADR-0040, ADR-0012):
+    the "re-apply after reboot" switch, the side double tap (passthrough), the hand tracking
+    wide-motion mode, the Guardian pause and the proximity override of a Meta Quest. Every
+    change is remembered, so the re-apply after a headset restart can put it back.
+
+    .EXAMPLE
+    Show-SubMenu-HeadsetSessionSettings
+    Show-SubMenu-HeadsetSessionSettings -Headset $row   # from the headset panel, no picker
+    #>
+    param($Headset = $null)
+    $c = $msg.Console
+    $headsets = @(Get-KnownHeadsets)
+    if ($headsets.Count -eq 0) {
+        Write-Host $msg.NoHeadsetInFile -ForegroundColor Yellow
+        Start-Sleep -Seconds 2
+        return
+    }
+    if ($Headset) {
+        $headset = $Headset
+    } else {
+        Show-HeadsetsTable
+        Write-Host ""
+        $headsetChoice = Read-Host $msg.Headset.RefreshPickHeadset
+        if ($headsetChoice -eq '0' -or -not $headsetChoice) { return }
+        $headset = $headsets | Where-Object { [string]$_.ID -eq [string]$headsetChoice } | Select-Object -First 1
+    }
+    if (-not $headset) {
+        Write-Log $msg.UnrecognizedOption -Level ERROR
+        Start-Sleep -Seconds 2
+        return
+    }
+    $brand = [string]$headset.Brand
+    if ($brand -eq 'Pico') {
+        Write-UiMessage -Text $c.SessionPico -Kind warn
+        Start-Sleep -Seconds 2
+        return
+    }
+    $device = Get-BestAdbDevice -Headset $headset
+    if (-not $device) {
+        Write-UiMessage -Text ($c.SessionNoAdb -f $headset.Name) -Kind err
+        Start-Sleep -Seconds 3
+        return
+    }
+    $id = [int]$headset.ID
+
+    $onOff = {
+        param($v)
+        if ($null -eq $v) { return @{ Text = $c.SessionUnknown; Color = 'DarkGray' } }
+        if ($v) { return @{ Text = $c.On; Color = 'Green' } }
+        return @{ Text = $c.Off; Color = 'DarkGray' }
+    }
+
+    do {
+        $saved = Get-HeadsetSessionSettings -HeadsetId $id -NoMemo
+        $dt = Get-HeadsetDoubleTapDisabled -Device $device -Brand $brand
+        $wm = Get-HeadsetWideMotionMode    -Device $device -Brand $brand
+        $gp = Get-HeadsetGuardianPause     -Device $device -Brand $brand
+        $px = [bool]$saved.desired.proxKeepAwake
+        $re = & $onOff ([bool]$saved.reapply)
+        $dtv = if ($null -eq $dt) { @{ Text = $c.SessionUnknown; Color = 'DarkGray' } } elseif ($dt) { @{ Text = $c.SessionDisabled; Color = 'Yellow' } } else { @{ Text = $c.SessionEnabled; Color = 'Green' } }
+        $wmv = & $onOff $wm
+        $gpv = & $onOff $gp
+        $pxv = & $onOff (-not $px)   # On = the sensor works, Off = bypassed (headset stays awake)
+        $sh = Get-HeadsetSharpening -Device $device -Brand $brand
+        $shv = switch ($sh) {
+            'none' { @{ Text = $c.SessionSharpOff;  Color = 'DarkGray' } }
+            'fcas' { @{ Text = $c.SessionSharpFcas; Color = 'Green' } }
+            'mqsr' { @{ Text = $c.SessionSharpMqsr; Color = 'Green' } }
+            'custom' { @{ Text = $c.SessionSharpOther; Color = 'Yellow' } }
+            default { @{ Text = $c.SessionUnknown; Color = 'DarkGray' } }
+        }
+        $items = @(
+            @{ Separator = $true; Label = $c.SessionNote },
+            @{ Separator = $true },
+            @{ Key = '1'; Label = $c.SessionReapply;    Value = $re.Text;  ValueColor = $re.Color },
+            @{ Separator = $true },
+            @{ Key = '2'; Label = $c.SessionDoubleTap;  Value = $dtv.Text; ValueColor = $dtv.Color },
+            @{ Key = '3'; Label = $c.SessionWideMotion; Value = $wmv.Text; ValueColor = $wmv.Color },
+            @{ Key = '4'; Label = $c.SessionGuardian;   Value = $gpv.Text; ValueColor = $gpv.Color },
+            @{ Key = '5'; Label = $c.SessionProx;       Value = $pxv.Text; ValueColor = $pxv.Color },
+            @{ Key = '6'; Label = $c.SessionSharpening; Value = $shv.Text; ValueColor = $shv.Color }
+        )
+        Write-UiMenu -Title $c.SessionTitle -Subtitle ($c.SessionSubtitle -f $headset.Name) -Items $items -Footer $c.Back -Bg 'DarkBlue'
+        $choice = Read-UiKey
+        if ($choice -in @('0', 'ESC')) { return }
+
+        $label = $null; $ok = $null; $after = $null
+        switch ($choice) {
+            '1' {
+                $label = $c.SessionReapply
+                $new = -not [bool]$saved.reapply
+                $ok = Set-HeadsetSessionSettings -HeadsetId $id -Reapply $new
+                $after = $(if ($new) { $c.On } else { $c.Off })
+            }
+            '2' {
+                $label = $c.SessionDoubleTap
+                $new = -not ($dt -eq $true)
+                $ok = Set-HeadsetDoubleTapDisabled -Device $device -Disabled $new -Brand $brand
+                if ($ok) { [void](Set-HeadsetSessionSettings -HeadsetId $id -Desired @{ doubleTapOff = $new }) }
+                $after = $(if ($new) { $c.SessionDisabled } else { $c.SessionEnabled })
+            }
+            '3' {
+                $label = $c.SessionWideMotion
+                $new = -not ($wm -eq $true)
+                $ok = Set-HeadsetWideMotionMode -Device $device -Enabled $new -Brand $brand
+                if ($ok) { [void](Set-HeadsetSessionSettings -HeadsetId $id -Desired @{ wideMotion = $new }) }
+                $after = $(if ($new) { $c.On } else { $c.Off })
+            }
+            '4' {
+                $label = $c.SessionGuardian
+                $new = -not ($gp -eq $true)
+                $ok = Set-HeadsetGuardianPause -Device $device -Pause $new -Brand $brand
+                if ($ok) { [void](Set-HeadsetSessionSettings -HeadsetId $id -Desired @{ guardianPause = $new }) }
+                $after = $(if ($new) { $c.On } else { $c.Off })
+            }
+            '5' {
+                $label = $c.SessionProx
+                $new = -not $px
+                $ok = $(if ($new) { Set-HeadsetProximitySensorOverride -Device $device } else { Set-HeadsetProximitySensorOverride -Device $device -Clear })
+                if ($ok) { [void](Set-HeadsetSessionSettings -HeadsetId $id -Desired @{ proxKeepAwake = $new }) }
+                $after = $(if ($new) { $c.On } else { $c.Off })
+            }
+            '6' {
+                $label = $c.SessionSharpening
+                # none -> FidelityFX CAS -> Meta Quest Super Resolution -> none
+                $newMode = switch ($sh) { 'none' { 'fcas' } 'fcas' { 'mqsr' } default { 'none' } }
+                $ok = Set-HeadsetSharpening -Device $device -Mode $newMode -Brand $brand
+                if ($ok) { [void](Set-HeadsetSessionSettings -HeadsetId $id -Desired @{ sharpening = $newMode }) }
+                $after = switch ($newMode) { 'fcas' { $c.SessionSharpFcas } 'mqsr' { $c.SessionSharpMqsr } default { $c.SessionSharpOff } }
+            }
+            default { }
+        }
+        if ($label) {
+            if ($ok) { Write-UiMessage -Text ($c.SessionDone -f $label, $after) -Kind ok }
+            else     { Write-UiMessage -Text $c.SessionFailed -Kind err }
+            Wait-UiKey
+        }
+    } while ($true)
+}
+
 
 function Show-SubMenu-CaptureHeadsetFrame {
     <#
