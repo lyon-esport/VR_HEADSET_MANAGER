@@ -410,6 +410,9 @@ function Invoke-RouteHeadsetStatus {
             scrcpy               = $(if ($capSt.Starting -contains [int]$headsetRow.ID) { $false } elseif ($capSt.Settling -contains [int]$headsetRow.ID) { $true } else { [bool]($row.SCRCPY -eq 'ok') })
             scrcpy_starting      = [bool](($capSt.Starting -contains [int]$headsetRow.ID) -or ($capSt.Announcing -contains [int]$headsetRow.ID))
             scrcpy_auto_restart  = [bool]($headsetRow.scrcpy_AutoRestart -eq 'True')
+            # The running capture shows pure black while the headset is awake (compositor stuck
+            # after a boot, Update-HeadsetCaptureBlackState): the pages warn and offer a reset.
+            capture_black        = [bool](@(Get-CaptureBlackIds) -contains [int]$headsetRow.ID)
             # Recording flag of the registry (the record button of the [video].html page).
             record               = [bool](ConvertTo-DbBool $headsetRow.Record)
         }
@@ -760,6 +763,7 @@ function Invoke-RouteHeadsetsStatus {
         $startingSet  = @($capState.Starting)
         $settlingSet  = @($capState.Settling)
         $announceSet  = @($capState.Announcing)
+        $blackSet     = @(Get-CaptureBlackIds)
 
         # Build response: one entry per known headset (in CSV order) joined with live infos
         $items = @(Get-KnownHeadsetsCached |
@@ -774,7 +778,8 @@ function Invoke-RouteHeadsetsStatus {
                     ping                  = [bool]($info.Ping    -eq 'True')
                     scrcpy                = $(if ($startingSet -contains [int]$h.ID) { $false } elseif ($settlingSet -contains [int]$h.ID) { $true } else { [bool]($info.SCRCPY -eq 'ok') })
                     scrcpy_starting       = [bool](($startingSet -contains [int]$h.ID) -or ($announceSet -contains [int]$h.ID))
-                    adb                   = [bool]($info.ADBWifi -eq 'True')
+                    capture_black         = [bool]($blackSet -contains [int]$h.ID)
+                    adb                 = [bool]($info.ADBWifi -eq 'True')
                     charging              = [bool]($info.Charging -eq 'True')
                     charging_wattage      = if ($info.ChargingWattage -and $info.ChargingWattage -ne '-') { $info.ChargingWattage } else { '' }
                     power_state           = if ($info.PowerState -and $info.PowerState -ne '-') { $info.PowerState } else { '' }

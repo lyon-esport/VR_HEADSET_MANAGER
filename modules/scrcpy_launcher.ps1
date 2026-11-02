@@ -640,6 +640,21 @@ function Complete-DirectRecording {
     [void](Complete-RecordingFile -Path $path)
 }
 
+# Path of the ONE log file of a headset for a kind ('scrcpy' or 'ffmpeg') and a day:
+# <logFolder>\<Headset>_<kind>_<yyyy-MM-dd>.log. Sessions append to it (each opens with a header
+# line); the extra captures of a benchmark (<Name>_b2 .. _b4) share the base headset's file.
+# Replaces the three files per session (<Name>_<stamp>_StandardOutput / StandardError /
+# ffmpegPush_stderr), which filled the folder with hundreds of files.
+# Example: Get-HeadsetLogPath -SafeName 'Q3_RED_b2' -Kind ffmpeg  ->  ...\Q3_RED_ffmpeg_2026-10-28.log
+function Get-HeadsetLogPath {
+    param(
+        [Parameter(Mandatory=$true)][string]$SafeName,
+        [Parameter(Mandatory=$true)][ValidateSet('scrcpy','ffmpeg')][string]$Kind
+    )
+    $base = $SafeName -replace '_b\d+$', ''
+    return (Join-Path $global:logFolder ("{0}_{1}_{2}.log" -f $base, $Kind, (Get-Date -Format 'yyyy-MM-dd')))
+}
+
 function Get-HeadsetPipeNames {
     param([Parameter(Mandatory)][string]$SafeName)
     return @{
@@ -1050,14 +1065,34 @@ public sealed class VrhmPipeBridge
 // it, and only while that runspace processes events: a capture started by a worker runspace
 // that then went idle would stop draining ffmpeg's stderr, and ffmpeg blocks once that pipe is
 // full. Attach right after Process.Start (it starts the async read); Dispose after CancelErrorRead.
-// Same encoding as the writer it replaced (Encoding.UTF8, with a BOM).
+// Since the one-log-file-per-headset-per-day change it APPENDS to a shared file (AttachAppend):
+// several sessions, and several processes, write to the same file with FileShare.ReadWrite, each
+// session opening with a header line. StartOffset is the file length when this session began, so
+// a reader (Test-FfmpegEncoderSessionRefused) looks only at its own session. UTF-8, no BOM.
 public sealed class VrhmStderrSink : IDisposable
 {
     private readonly StreamWriter writer;
     private readonly object gate = new object();
     private bool closed = false;
+    public long StartOffset = 0;
 
     private VrhmStderrSink(StreamWriter w) { writer = w; }
+
+    public static VrhmStderrSink AttachAppend(System.Diagnostics.Process process, string path, string header, bool includeStdout)
+    {
+        FileStream fs = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+        long start = fs.Length;
+        StreamWriter w = new StreamWriter(fs, new System.Text.UTF8Encoding(false));
+        w.AutoFlush = true;
+        VrhmStderrSink sink = new VrhmStderrSink(w);
+        sink.StartOffset = start;
+        try { if (!string.IsNullOrEmpty(header)) { w.WriteLine(header); } } catch { }
+        process.ErrorDataReceived += sink.OnData;
+        if (includeStdout) { process.OutputDataReceived += sink.OnData; }
+        process.BeginErrorReadLine();
+        if (includeStdout) { process.BeginOutputReadLine(); }
+        return sink;
+    }
 
     public static VrhmStderrSink Attach(System.Diagnostics.Process process, string path)
     {
@@ -1101,7 +1136,7 @@ $script:PipeBridgeOutTimeoutSec   = 30        # ffmpeg must open pipe-out within
 function Initialize-PipeBridgeType {
     # Both classes come from the one source: a process that compiled an older source without
     # VrhmStderrSink keeps that type until it restarts (Add-Type cannot reload).
-    if (('VrhmPipeBridge' -as [type]) -and ('VrhmStderrSink' -as [type])) { return $true }
+    if (('VrhmPipeBridge' -as [type]) -and ('VrhmStderrSink' -as [type]) -and ([VrhmStderrSink].GetMethod('AttachAppend'))) { return $true }
     if ('VrhmPipeBridge' -as [type]) {
         Write-Log 'Pipe bridge: this process holds an older build of the relay helper (no VrhmStderrSink) - restart it.' -Level ERROR
         return $false
@@ -1297,12 +1332,10 @@ function Start-FfmpegStreamPush {
         [hashtable]$EncoderOverride = $null
     )
     $names = Get-HeadsetPipeNames -SafeName $SafeName
-    # One file PER SESSION (timestamped), never overwritten: a stream that keeps dying and
-    # restarting used to leave only the LAST session's stderr, so the failing ones could not
-    # be analysed - and a still-running previous ffmpeg held the shared file open, failing
-    # the next start with "file in use". Get-LogSources' ffmpeg pattern still matches, and
-    # Remove-OldLogFiles purges them on the usual retention.
-    $logErr = Join-Path $global:logFolder ("{0}_{1}_ffmpegPush_stderr.txt" -f $SafeName, (Get-Date -Format 'yyyyMMdd_HHmmss_fff'))
+    # ONE file per headset per day (Get-HeadsetLogPath), appended: each session opens with a
+    # header line, so a stream that keeps restarting still keeps every session's stderr. The sink
+    # opens it with FileShare.ReadWrite, so a previous ffmpeg still holding it does not matter.
+    $logErr = Get-HeadsetLogPath -SafeName $SafeName -Kind ffmpeg
     $argList = [System.Collections.Generic.List[string]]::new()
     # Verbosity from config ffmpeg.log_level (default 'warning'). At 'info' and above ffmpeg
     # also logs its encoder setup and stream mapping, which is what a failing push needs.
@@ -1459,7 +1492,7 @@ function Start-FfmpegStreamPush {
         try { $proc.Kill() } catch { }
         throw 'the stderr helper (VrhmStderrSink) is not available'
     }
-    $errWriter = [VrhmStderrSink]::Attach($proc, $logErr)
+    $errWriter = [VrhmStderrSink]::AttachAppend($proc, $logErr, ("=== ffmpeg session {0} | {1} | pid {2} ===" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'), $SafeName, $proc.Id), $false)
 
     return @{
         Process              = $proc
@@ -1469,6 +1502,7 @@ function Start-FfmpegStreamPush {
         # NVENC session fallback of start-screenCopy reads both.
         EncoderName          = $(if ($forceReencode -and $enc) { [string]$enc.Name } else { 'copy' })
         ErrorLogPath         = $logErr
+        ErrorLogOffset       = [long]$errWriter.StartOffset
     }
 }
 
@@ -1507,11 +1541,16 @@ function Get-NvencSessionLimit {
 # could not open its hardware encoder at all. Reads the session's stderr log. Never throws.
 # Example: Test-FfmpegEncoderSessionRefused -ErrorLogPath $push.ErrorLogPath
 function Test-FfmpegEncoderSessionRefused {
-    param([string]$ErrorLogPath)
+    # -FromOffset: the log is shared by every session of the day, so only the bytes written by this
+    # session (from the offset the sink recorded when it opened the file) are examined.
+    param([string]$ErrorLogPath, [long]$FromOffset = 0)
     if (-not $ErrorLogPath -or -not (Test-Path -LiteralPath $ErrorLogPath)) { return $false }
     try {
         $fs = [System.IO.File]::Open($ErrorLogPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
-        try { $text = (New-Object System.IO.StreamReader($fs, [System.Text.Encoding]::UTF8)).ReadToEnd() } finally { $fs.Close() }
+        try {
+            if ($FromOffset -gt 0 -and $FromOffset -le $fs.Length) { [void]$fs.Seek($FromOffset, [System.IO.SeekOrigin]::Begin) }
+            $text = (New-Object System.IO.StreamReader($fs, [System.Text.Encoding]::UTF8)).ReadToEnd()
+        } finally { $fs.Close() }
         return ($text -match 'OpenEncodeSessionEx failed|incompatible client key|No capable devices found|out of memory \(10\)')
     } catch { return $false }
 }
@@ -1718,6 +1757,8 @@ function start-screenCopy {
         return
     }
     $adb_device = $captureDevice.DeviceId
+    # A sleeping headset (not worn, display off) streams black frames: log its state and wake it once.
+    if (Get-Command Invoke-HeadsetCaptureWake -ErrorAction SilentlyContinue) { Invoke-HeadsetCaptureWake -Device $captureDevice -Name $displayName | Out-Null }
     # WiFi mode and endpoint of the capture (ADR-0034): 'Classic' / 'TLS' and 'ip:port', '' over USB.
     # Stored with the launch state (not in the stamp): Get-ScrcpyTransportDecision restarts a WiFi
     # session whose endpoint died or whose mode is no longer the one that answers (S10-5).
@@ -1860,15 +1901,26 @@ function start-screenCopy {
         }
     }
 
-    # Per-session scrcpy logs (same reason as the ffmpeg one in Start-FfmpegStreamPush): a
-    # restart must not overwrite the output of the session that just failed.
-    $sessionStamp = Get-Date -Format 'yyyyMMdd_HHmmss_fff'
+    # ONE scrcpy log per headset per day (Get-HeadsetLogPath), appended with a header per session:
+    # stdout and stderr of scrcpy go to it through VrhmStderrSink, so a restart never overwrites the
+    # output of the session that just failed and the folder does not fill with files.
+    $scrcpyLogPath = Get-HeadsetLogPath -SafeName $displayName -Kind scrcpy
     # Held until this scrcpy's server has connected (first data, or a window): see Enter-ScrcpyLaunchLock.
     $launchLock = Enter-ScrcpyLaunchLock -Name $displayName
     try {
-        $scrcpyProc = Start-Process $scrcpy -ArgumentList $arguments -PassThru -NoNewWindow `
-			-RedirectStandardOutput (Join-Path -Path $global:logFolder -ChildPath ("{0}_{1}_StandardOutput.txt" -f $displayName, $sessionStamp)) `
-			-RedirectStandardError  (Join-Path -Path $global:logFolder -ChildPath ("{0}_{1}_StandardError.txt" -f $displayName, $sessionStamp))
+        if (-not (Initialize-PipeBridgeType)) { throw 'the log helper (VrhmStderrSink) is not available' }
+        $scrcpyPsi = [System.Diagnostics.ProcessStartInfo]::new()
+        $scrcpyPsi.FileName               = $scrcpy
+        $scrcpyPsi.Arguments              = [string]$arguments
+        $scrcpyPsi.WorkingDirectory       = (Split-Path -Parent $scrcpy)
+        $scrcpyPsi.UseShellExecute        = $false
+        $scrcpyPsi.CreateNoWindow         = $true
+        $scrcpyPsi.RedirectStandardOutput = $true
+        $scrcpyPsi.RedirectStandardError  = $true
+        $scrcpyProc = [System.Diagnostics.Process]::new()
+        $scrcpyProc.StartInfo = $scrcpyPsi
+        $null = $scrcpyProc.Start()
+        $null = [VrhmStderrSink]::AttachAppend($scrcpyProc, $scrcpyLogPath, ("=== scrcpy session {0} | {1} | pid {2} ===" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'), $displayName, $scrcpyProc.Id), $true)
 	} catch {
         Write-Log -Message ($msg.Scrcpy.LaunchError -f $_.Exception.Message) -Level "ERROR"
         Exit-ScrcpyLaunchLock -Lock $launchLock
@@ -1968,7 +2020,7 @@ function start-screenCopy {
                         }
                         if ($ffmpegPush.Process.HasExited) {
                             Start-Sleep -Milliseconds 200   # let the stderr sink write the last lines
-                            if (Test-FfmpegEncoderSessionRefused -ErrorLogPath $ffmpegPush.ErrorLogPath) {
+                            if (Test-FfmpegEncoderSessionRefused -ErrorLogPath $ffmpegPush.ErrorLogPath -FromOffset $ffmpegPush.ErrorLogOffset) {
                                 Write-Log ($msg.Scrcpy.EncoderFallback -f $displayName, $ffmpegPush.EncoderName, $cpuName) -Level WARNING
                                 try { $ffmpegPush.ErrorWriter.Dispose() } catch { }
                                 # The relay drops the dead reader and opens a new output pipe; wait for it.

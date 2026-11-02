@@ -504,7 +504,7 @@ function Get-HeadsetDiagHealth {
         Ok = $false; Temps = $null; Fan = $null; CpuLevel = $null; GpuLevel = $null
         Battery = $null; Controllers = @(); TopProcesses = @(); Memory = $null
         BootStage = $null; ClockDriftSec = $null; TimeZone = $null; AutoTime = $null
-        CameraErrors = 0; HardwareRaw = @(); Input = $null; Error = $null
+        CameraErrors = 0; HardwareRaw = @(); Input = $null; Display = $null; Error = $null
     }
 
     try {
@@ -526,7 +526,8 @@ function Get-HeadsetDiagHealth {
             'getprop persist.sys.timezone',
             'settings get global auto_time',
             'logcat -d -t 5000 -s CAM_ERR 2>/dev/null',
-            "dumpsys DumpsysProxy 2>/dev/null | grep -E 'Hands opt in|Sensitivity Setting|input_shared_state_hand'"
+            "dumpsys DumpsysProxy 2>/dev/null | grep -E 'Hands opt in|Sensitivity Setting|input_shared_state_hand'",
+            "dumpsys power 2>/dev/null | grep -E 'mWakefulness=|Display Power: state='"
         )
         $pcAfter = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
         if (-not $seg) { $r.Error = 'No answer from the headset.'; return $r }
@@ -638,6 +639,7 @@ function Get-HeadsetDiagHealth {
         $at = Get-DiagFirstLine $seg[14]; if ($at) { $r.AutoTime = ($at -eq '1') }
         $r.CameraErrors = @($seg[15] | Where-Object { $_ -match 'Timedout waiting for frame ctx' }).Count
         $r.Input = ConvertFrom-HandTrackingState -Lines $seg[16]
+        $r.Display = ConvertFrom-PowerDisplayState -Lines $seg[17]
 
         $r.Ok = $true
     } catch {
@@ -1272,6 +1274,264 @@ function Send-HeadsetText {
     return Invoke-HeadsetDiagAction -Device $Device -Script ("input text '" + $clean.Replace(' ', '%s') + "'")
 }
 
+function ConvertFrom-PowerDisplayState {
+    <#
+    .SYNOPSIS
+    Pure parser of the `dumpsys power` line `mWakefulness=<Awake|Asleep|Dozing>` and of the
+    display state: `mScreenState=<ON|OFF|DOZE>` (`dumpsys display`) or the older
+    `Display Power: state=<ON|OFF|DOZE>` (on current Horizon OS the latter prints an object
+    reference instead of a state, so it never matched). Returns @{Wakefulness;DisplayOn;Asleep}
+    or $null when no line is present. Asleep is $true when the headset is not Awake or its
+    display is not ON - the state in which scrcpy captures black frames.
+
+    .EXAMPLE
+    ConvertFrom-PowerDisplayState -Lines @('  mWakefulness=Asleep','Display Power: state=OFF')
+    #>
+    param($Lines)
+    $wake = $null; $disp = $null
+    foreach ($l in @($Lines)) {
+        if ($l -match 'mWakefulness=(\w+)') { $wake = $Matches[1] }
+        elseif ($l -match 'mScreenState=(\w+)') { $disp = $Matches[1] }
+        elseif ($l -match 'Display Power: state=(\w+)') { if ($null -eq $disp) { $disp = $Matches[1] } }
+    }
+    if ($null -eq $wake -and $null -eq $disp) { return $null }
+    $displayOn = if ($null -ne $disp) { $disp -ieq 'ON' } else { $null }
+    $asleep = (($null -ne $wake) -and ($wake -ine 'Awake')) -or ($displayOn -eq $false)
+    return [PSCustomObject]@{ Wakefulness = $wake; DisplayOn = $displayOn; Asleep = [bool]$asleep }
+}
+
+function Get-HeadsetDisplayState {
+    <#
+    .SYNOPSIS
+    Is the headset awake with its display on? One adb call; returns the object of
+    ConvertFrom-PowerDisplayState, or $null when unreadable.
+
+    .EXAMPLE
+    Get-HeadsetDisplayState -Device $device
+    #>
+    param([Parameter(Mandatory=$true)] $Device)
+    $seg = Invoke-HeadsetDiagShell -Device $Device -TimeoutSeconds 10 -Commands @(
+        "dumpsys power 2>/dev/null | grep -E 'mWakefulness=|Display Power: state='",
+        "dumpsys display 2>/dev/null | grep -m1 'mScreenState='"
+    )
+    if (-not $seg) { return $null }
+    return ConvertFrom-PowerDisplayState -Lines (@($seg[0]) + @($seg[1]))
+}
+
+function Invoke-HeadsetCaptureWake {
+    <#
+    .SYNOPSIS
+    Called when a capture starts: logs the display state at INFO and, when the headset is
+    asleep (scrcpy would record black frames), sends the wake key event once and re-reads the
+    state. Never throws; returns the final state object or $null.
+
+    .EXAMPLE
+    Invoke-HeadsetCaptureWake -Device $captureDevice -Name 'Q3 RED'
+    #>
+    param([Parameter(Mandatory=$true)] $Device, [string]$Name = '')
+    try {
+        $st = Get-HeadsetDisplayState -Device $Device
+        if (-not $st) { Write-Log ("Capture start for {0}: display state unreadable" -f $Name) -Level DEBUG; return $null }
+        Write-Log ("Capture start for {0}: wakefulness={1} display_on={2}" -f $Name, $st.Wakefulness, $st.DisplayOn) -Level INFO
+        if ($st.Asleep) {
+            Write-Log ("{0} is asleep (the capture would be black): sending the wake key" -f $Name) -Level WARNING
+            Invoke-HeadsetRecovery -Device $Device -Action 'Wake' | Out-Null
+            Start-Sleep -Milliseconds 800
+            $st2 = Get-HeadsetDisplayState -Device $Device
+            if ($st2) {
+                $lvl = if ($st2.Asleep) { 'WARNING' } else { 'INFO' }
+                Write-Log ("{0} after wake: wakefulness={1} display_on={2}" -f $Name, $st2.Wakefulness, $st2.DisplayOn) -Level $lvl
+                return $st2
+            }
+        }
+        return $st
+    } catch {
+        Write-Log ("Invoke-HeadsetCaptureWake: " + $_.Exception.Message) -Level DEBUG
+        return $null
+    }
+}
+
+# ---------------------------------------------------------------------------------------------
+# Black capture detection. After a headset boot the compositor can get stuck showing black to
+# everything that mirrors the display (scrcpy AND `screencap`) while the wearer sees a normal
+# Home; only restarting the shell brings the picture back. The poll runspace checks a running
+# capture and publishes the verdict in the app_kv row `capture_black` { "<headsetId>": <expiry
+# unix seconds> } (same shape as scrcpy_starting, TTL so a dead monitor cannot leave a stale
+# warning). The web pages warn and offer a button; NOTHING is restarted automatically.
+# ---------------------------------------------------------------------------------------------
+$script:CaptureBlackKey        = 'capture_black'
+$script:CaptureBlackTtlSec     = 90
+$script:CaptureBlackMemo       = $null
+$script:CaptureBlackMaxBytes   = 4096     # non-black bytes of a raw frame under which it is "black"
+$script:CaptureBlackSettleSec  = 15       # a capture younger than this is still settling
+$script:CaptureBlackEverySec   = 20
+
+function Test-HeadsetDisplayBlack {
+    <#
+    .SYNOPSIS
+    Is what the headset shows to screen mirroring pure black? One adb call: a raw `screencap`
+    is filtered on the headset (black pixels are 00 00 00 FF) and only the count of other bytes
+    comes back (~0.25 s, a few bytes on the wire). $true when only the 12-16 byte header
+    remains, $false for any real picture, $null when the call failed or nothing was captured.
+
+    .EXAMPLE
+    Test-HeadsetDisplayBlack -Device $device
+    #>
+    param([Parameter(Mandatory=$true)] $Device)
+    $seg = Invoke-HeadsetDiagShell -Device $Device -TimeoutSeconds 15 -Commands @(
+        "screencap 2>/dev/null | tr -d '\000\377' | wc -c"
+    )
+    if (-not $seg) { return $null }
+    $n = 0L
+    if (-not [int64]::TryParse((Get-DiagFirstLine $seg[0]), [ref]$n)) { return $null }
+    if ($n -le 0) { return $null }
+    return ($n -lt $script:CaptureBlackMaxBytes)
+}
+
+function Get-CaptureBlackIds {
+    <#
+    .SYNOPSIS
+    Headset ids whose running capture is currently judged black (app_kv `capture_black`,
+    unexpired entries). Memoised 0.7 s per process (the status endpoints are polled by every
+    page). Wrap in @(). Never throws.
+
+    .EXAMPLE
+    if (@(Get-CaptureBlackIds) -contains [int]$headset.ID) { 'black' }
+    #>
+    try {
+        $m = $script:CaptureBlackMemo
+        if ($m -and (([DateTime]::UtcNow - $m.At).TotalMilliseconds -lt 700)) { return @($m.Ids) }
+        $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+        $ids = [System.Collections.Generic.List[int]]::new()
+        $cur = Get-DbKeyValue -Key $script:CaptureBlackKey
+        if ($cur) {
+            foreach ($p in $cur.PSObject.Properties) {
+                $v = 0L
+                if ([int64]::TryParse([string]$p.Value, [ref]$v) -and $v -gt $now) { $ids.Add([int]$p.Name) }
+            }
+        }
+        $script:CaptureBlackMemo = @{ At = [DateTime]::UtcNow; Ids = $ids.ToArray() }
+        return @($ids.ToArray())
+    } catch { return @() }
+}
+
+function Set-CaptureBlackState {
+    <#
+    .SYNOPSIS
+    Marks a headset's capture as black (refreshing the TTL), or clears the mark (-Clear). One
+    transaction, expired entries are dropped. Never throws.
+
+    .EXAMPLE
+    Set-CaptureBlackState -HeadsetId 3
+    Set-CaptureBlackState -HeadsetId 3 -Clear
+    #>
+    param([Parameter(Mandatory=$true)][int]$HeadsetId, [switch]$Clear)
+    try {
+        $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+        Invoke-DbTransaction -Script {
+            $cur = Get-DbKeyValue -Key $script:CaptureBlackKey
+            $map = [ordered]@{}
+            if ($cur) {
+                foreach ($p in $cur.PSObject.Properties) {
+                    $v = 0L
+                    if ([int64]::TryParse([string]$p.Value, [ref]$v) -and $v -gt $now) { $map[[string]$p.Name] = $v }
+                }
+            }
+            if ($Clear) { $map.Remove([string]$HeadsetId) } else { $map[[string]$HeadsetId] = ($now + $script:CaptureBlackTtlSec) }
+            Set-DbKeyValue -Key $script:CaptureBlackKey -Value $map
+        } | Out-Null
+        $script:CaptureBlackMemo = $null
+    } catch {
+        Write-Log ("Set-CaptureBlackState failed: {0}" -f $_.Exception.Message) -Level DEBUG
+    }
+}
+
+function Update-HeadsetCaptureBlackState {
+    <#
+    .SYNOPSIS
+    One step of the poll runspace: while a capture runs, checks every 20 s whether the headset
+    feeds black to screen mirroring (Test-HeadsetDisplayBlack) and publishes the verdict
+    (Set-CaptureBlackState). Two black reads in a row, after the capture settled for 15 s, raise
+    the flag (ONE WARNING); a picture again clears it. A sleeping headset (display off) is not
+    flagged: that is another case (Invoke-HeadsetCaptureWake). Does NOT restart anything - the
+    operator decides (button "Reset headset interface"). Cheap when not due (no adb call).
+    -State is a hashtable kept by the caller. Returns $true while flagged; never throws.
+
+    .EXAMPLE
+    Update-HeadsetCaptureBlackState -Headset $row -Device $device -CaptureRunning $true -Blocked $false -State $st
+    #>
+    param(
+        [Parameter(Mandatory=$true)] $Headset,
+        [Parameter(Mandatory=$true)] $Device,
+        [bool]$CaptureRunning = $false,
+        [bool]$Blocked = $false,
+        [Parameter(Mandatory=$true)] [hashtable]$State
+    )
+    try {
+        $id  = [int]$Headset.ID
+        $now = [datetime]::Now
+        if (-not $CaptureRunning -or $Blocked) {
+            if ($State['Flagged']) { Set-CaptureBlackState -HeadsetId $id -Clear; $State['Flagged'] = $false }
+            $State['Since'] = $null; $State['Misses'] = 0; $State['NextAt'] = $null
+            return $false
+        }
+        if (-not $State['Since']) { $State['Since'] = $now }
+        if ($now -lt ([datetime]$State['Since']).AddSeconds($script:CaptureBlackSettleSec)) { return [bool]$State['Flagged'] }
+        if ($State['NextAt'] -and $now -lt [datetime]$State['NextAt']) { return [bool]$State['Flagged'] }
+        $State['NextAt'] = $now.AddSeconds($script:CaptureBlackEverySec)
+
+        $black = Test-HeadsetDisplayBlack -Device $Device
+        if ($null -eq $black) { return [bool]$State['Flagged'] }
+        if ($black) {
+            $disp = Get-HeadsetDisplayState -Device $Device
+            if ($disp -and $disp.Asleep) { $State['Misses'] = 0; return [bool]$State['Flagged'] }
+            # A protected app (browser, DRM video...) is black to mirroring BY DESIGN and the picture
+            # returns when it is left: only the shell (Home) in the foreground counts as a stuck screen.
+            $fg = ''
+            try { $fg = [string](Get-HeadsetForegroundApp -Device $Device) } catch { $fg = '' }
+            if ($fg -notmatch '^com\.oculus\.(vrshell|shellenv|systemux)') { $State['Misses'] = 0; return [bool]$State['Flagged'] }
+            $State['Misses'] = [int]$State['Misses'] + 1
+            if ($State['Misses'] -ge 2) {
+                if (-not $State['Flagged']) {
+                    Write-Log ("Capture of {0} is black while the headset is awake: the headset interface should be restarted (DIAG 'Reset headset interface')" -f $Headset.Name) -Level WARNING
+                }
+                $State['Flagged'] = $true
+                Set-CaptureBlackState -HeadsetId $id
+            }
+        } else {
+            $State['Misses'] = 0
+            if ($State['Flagged']) {
+                Set-CaptureBlackState -HeadsetId $id -Clear
+                $State['Flagged'] = $false
+                Write-Log ("Capture of {0} shows a picture again" -f $Headset.Name) -Level INFO
+            }
+        }
+        return [bool]$State['Flagged']
+    } catch {
+        Write-Log ("Update-HeadsetCaptureBlackState: " + $_.Exception.Message) -Level DEBUG
+        return $false
+    }
+}
+
+function Invoke-HeadsetUiReset {
+    <#
+    .SYNOPSIS
+    "Reset headset interface": restarts the Meta shell (RestartShell: force-stop
+    com.oculus.vrshell then start HomeActivity). This is what brings back a capture stuck on
+    black after a boot, without a reboot. Session only, nothing persistent changes; the player
+    drops to a loading screen for a few seconds. Clears the black-capture warning of
+    -HeadsetId. Same action for the web buttons and the console. Returns @{ Ok; Output; Error }.
+
+    .EXAMPLE
+    Invoke-HeadsetUiReset -Device $device -Name 'Q3 BLUE' -HeadsetId 1
+    #>
+    param([Parameter(Mandatory=$true)] $Device, [string]$Name = '', [int]$HeadsetId = 0)
+    Write-Log ("Resetting the headset interface of {0}" -f $Name) -Level INFO
+    $r = Invoke-HeadsetRecovery -Device $Device -Action 'RestartShell'
+    if ($HeadsetId -gt 0) { Set-CaptureBlackState -HeadsetId $HeadsetId -Clear }
+    return $r
+}
+
 function Invoke-HeadsetRecovery {
     <#
     .SYNOPSIS
@@ -1590,7 +1850,8 @@ function Invoke-HeadsetDiagActionByName {
     Actions: bluetooth_on, bluetooth_off, bluetooth_settings, sync_clock (arg setTimeZone),
     reset_dns, updater_disable, updater_enable, updater_open_settings, app_enable / app_disable (arg package),
     player_message (args title, text), send_text (arg text), recover_wake, recover_home,
-    recover_restart_shell, recover_restart_systemux, cable_test (arg passes), tls_enable,
+    recover_restart_shell, recover_reset_ui (restarts the shell and clears the black-capture
+    warning), recover_restart_systemux, cable_test (arg passes), tls_enable,
     tls_connect (arg port), command (arg command - the custom shell command panel).
 
     cable_test is the one action that resolves its own transport: it must be USB, and says so
@@ -1610,7 +1871,7 @@ function Invoke-HeadsetDiagActionByName {
     $arg = { param($n) if ($null -eq $Arguments) { return $null }; if ($Arguments -is [System.Collections.IDictionary]) { return $Arguments[$n] }; $p = $Arguments.PSObject.Properties[$n]; if ($p) { return $p.Value } else { return $null } }
     $known = @('bluetooth_on','bluetooth_off','bluetooth_settings','sync_clock','reset_dns','updater_disable','updater_enable','updater_open_settings',
                'app_enable','app_disable','player_message','send_text','recover_wake','recover_home','recover_restart_shell',
-               'recover_restart_systemux','cable_test','wifi_speed_test','tls_enable','tls_disable','tls_connect','command','wifi_scan','wifi_switch','autoenable_install','autoenable_uninstall')
+               'recover_reset_ui','recover_reboot','recover_restart_systemux','cable_test','wifi_speed_test','tls_enable','tls_disable','tls_connect','command','wifi_scan','wifi_switch','autoenable_install','autoenable_uninstall')
     if ($known -notcontains $Action) { $res.message = ('Unknown action: ' + $Action); return $res }
 
     Write-Log ("DIAG action '{0}' on headset '{1}'" -f $Action, $Headset.Name) -Level INFO
@@ -1651,8 +1912,14 @@ function Invoke-HeadsetDiagActionByName {
             'recover_wake'             { Invoke-HeadsetRecovery -Device $device -Action 'Wake' }
             'recover_home'             { Invoke-HeadsetRecovery -Device $device -Action 'Home' }
             'recover_restart_shell'    { Invoke-HeadsetRecovery -Device $device -Action 'RestartShell' }
+            'recover_reset_ui'         { Invoke-HeadsetUiReset -Device $device -Name ([string]$Headset.Name) -HeadsetId ([int]$Headset.ID) }
             'recover_restart_systemux' { Invoke-HeadsetRecovery -Device $device -Action 'RestartSystemUX' }
-            'autoenable_install'       {
+            'recover_reboot'           {
+                $ok = Invoke-HeadsetReboot -Device $device
+                if ($ok) { Set-CaptureBlackState -HeadsetId ([int]$Headset.ID) -Clear }
+                [PSCustomObject]@{ Ok = [bool]$ok; Output = ''; Error = $(if ($ok) { $null } else { 'Reboot failed' }) }
+            }
+            'autoenable_install'      {
                 # adb tcpip (last step, classic mode) re-enumerates USB: hold the claim like the other USB-mutating routes.
                 try { Set-UsbBusy -Seconds 180; Install-AdbAutoEnableApk -Device $device } finally { Set-UsbBusy -Seconds 10 }
             }

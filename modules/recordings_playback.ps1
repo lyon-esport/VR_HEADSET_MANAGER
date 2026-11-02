@@ -171,14 +171,31 @@ function Start-RecordingPlayback {
         $argList.AddRange([string[]]@('-pix_fmt', 'yuv420p', '-f', 'rtsp', '-rtsp_transport', 'tcp', $rtspUrl))
 
         $logDir = if ($global:logFolder) { $global:logFolder } else { [System.IO.Path]::GetTempPath() }
-        $logFile = Join-Path $logDir ("playback_{0}_{1}_ffmpeg_stderr.txt" -f $token, (Get-Date -Format 'yyyyMMdd_HHmmss'))
+        # ONE playback log per day, appended (a header line per preview session), instead of one file
+        # per preview: playback_ffmpeg_<yyyy-MM-dd>.log.
+        $logFile = Join-Path $logDir ("playback_ffmpeg_{0}.log" -f (Get-Date -Format 'yyyy-MM-dd'))
 
         if (-not (Set-PlaybackMediaPath -StreamPath $streamPath -Add)) {
             return (& $fail 'The streaming server refused the preview path (mediamtx API unreachable?).')
         }
 
-        $proc = Start-Process -FilePath $global:ffmpegFilePath -ArgumentList ($argList -join ' ') `
-            -PassThru -WindowStyle Hidden -RedirectStandardError $logFile
+        $proc = $null
+        try {
+            if (-not (Initialize-PipeBridgeType)) { throw 'the log helper (VrhmStderrSink) is not available' }
+            $psi = [System.Diagnostics.ProcessStartInfo]::new()
+            $psi.FileName            = $global:ffmpegFilePath
+            $psi.Arguments           = ($argList -join ' ')
+            $psi.UseShellExecute     = $false
+            $psi.CreateNoWindow      = $true
+            $psi.RedirectStandardError = $true
+            $proc = [System.Diagnostics.Process]::new()
+            $proc.StartInfo = $psi
+            $null = $proc.Start()
+            $null = [VrhmStderrSink]::AttachAppend($proc, $logFile, ("=== playback session {0} | token {1} | recording {2} | pid {3} ===" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'), $token, $recId, $proc.Id), $false)
+        } catch {
+            Write-Log ("Recording playback: could not start ffmpeg: " + $_.Exception.Message) -Level WARNING
+            $proc = $null
+        }
         if (-not $proc) {
             $null = Set-PlaybackMediaPath -StreamPath $streamPath -Remove
             return (& $fail 'Could not start ffmpeg.')

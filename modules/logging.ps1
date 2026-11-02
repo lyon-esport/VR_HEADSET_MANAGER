@@ -136,10 +136,14 @@ $script:LogFamilies = @(
     @{ Order = 10; Type = 'main';      TypeLabel = 'Main program';  Encoding = 'utf8'; Pattern = '^log_(\d{4}-\d{2}-\d{2})\.txt$' }
     @{ Order = 20; Type = 'mediamtx';  TypeLabel = 'mediamtx';      Encoding = 'utf8'; Pattern = '^mediamtx(?:_(\d{4}-\d{2}-\d{2}))?\.log$' }
     @{ Order = 30; Type = 'webserver'; TypeLabel = 'Web server';    Encoding = 'utf8'; Pattern = '^webserver_(\d{4}-\d{2}-\d{2})_(out|err)\.log$' }
-    # scrcpy / ffmpeg logs are one file per capture session: <Headset>_<yyyyMMdd_HHmmss_fff>_...
-    # (older builds wrote one overwritten file per headset, without the stamp - still matched).
-    @{ Order = 40; Type = 'scrcpy';    TypeLabel = 'scrcpy';        Encoding = 'ansi'; Pattern = '^(.+?)_(StandardOutput|StandardError)\.txt$' }
-    @{ Order = 50; Type = 'ffmpeg';    TypeLabel = 'ffmpeg push';   Encoding = 'ansi'; Pattern = '^(.+?)_ffmpegPush_stderr\.txt$' }
+    # scrcpy / ffmpeg logs are one file per headset per day: <Headset>_scrcpy_<yyyy-MM-dd>.log and
+    # <Headset>_ffmpeg_<yyyy-MM-dd>.log (UTF-8, one header line per session). The older per-session
+    # files (<Headset>_<yyyyMMdd_HHmmss_fff>_StandardOutput/StandardError/ffmpegPush_stderr.txt,
+    # ANSI) are still matched until the retention purge removes them.
+    @{ Order = 40; Type = 'scrcpy';    TypeLabel = 'scrcpy';        Encoding = 'utf8'; Pattern = '^(.+?)_scrcpy_(\d{4}-\d{2}-\d{2})\.log$' }
+    @{ Order = 41; Type = 'scrcpy';    TypeLabel = 'scrcpy';        Encoding = 'ansi'; Pattern = '^(.+?)_(StandardOutput|StandardError)\.txt$' }
+    @{ Order = 50; Type = 'ffmpeg';    TypeLabel = 'ffmpeg push';   Encoding = 'utf8'; Pattern = '^(.+?)_ffmpeg_(\d{4}-\d{2}-\d{2})\.log$' }
+    @{ Order = 51; Type = 'ffmpeg';    TypeLabel = 'ffmpeg push';   Encoding = 'ansi'; Pattern = '^(.+?)_ffmpegPush_stderr\.txt$' }
     @{ Order = 60; Type = 'kiosk';     TypeLabel = 'Kiosk screens'; Encoding = 'utf8'; Pattern = '^kiosk_(\d{4}-\d{2}-\d{2})\.log$' }
 )
 
@@ -252,11 +256,23 @@ function Get-LogSources {
                 'scrcpy' {
                     # The prefix is Convert-Displayname's output (spaces -> underscores),
                     # so turn it back into the headset name the operator knows.
-                    $kind  = if ($matches[2] -eq 'StandardError') { 'errors' } else { 'output' }
-                    $label = "$($matches[1] -replace '_', ' ') - $kind"
+                    # Capture the groups first: the -match below would overwrite $matches.
+                    $g1 = [string]$matches[1]; $g2 = [string]$matches[2]
+                    if ($g2 -match '^\d{4}-\d{2}-\d{2}$') {
+                        # <Headset>_scrcpy_<date>.log: one file per headset per day
+                        $label = "$g2 - $($g1 -replace '_', ' ')"
+                    } else {
+                        $kind  = if ($g2 -eq 'StandardError') { 'errors' } else { 'output' }
+                        $label = "$($g1 -replace '_', ' ') - $kind"
+                    }
                 }
                 'ffmpeg' {
-                    $label = ($matches[1] -replace '_', ' ')
+                    $g1 = [string]$matches[1]; $g2 = if ($matches.Count -gt 2) { [string]$matches[2] } else { '' }
+                    if ($g2 -match '^\d{4}-\d{2}-\d{2}$') {
+                        $label = "$g2 - $($g1 -replace '_', ' ')"
+                    } else {
+                        $label = ($g1 -replace '_', ' ')
+                    }
                 }
                 'mediamtx' {
                     # The undated file predates the date split - keep it selectable.

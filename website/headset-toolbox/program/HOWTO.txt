@@ -29,7 +29,7 @@ Switches (same for the exe and for Start-VrhmToolbox.ps1):
   -autodiscover     search the network again, then show the menu
   -vrhm_ip <addr>   use this server: ip, ip:port or http://host:port
                     (skips the network search)
-  -vrhm_port <n>    server port, default 8080
+  -vrhm_port <n>    server port, default 8080 (the network search also tries 8080 and 80)
 
 Examples, from the folder that holds the exe:
   VRHM-Headset-Toolbox.exe -kiosk

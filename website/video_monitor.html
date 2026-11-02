@@ -395,6 +395,41 @@
     @keyframes vm-spin { to { transform: rotate(360deg); } }
     .cell.starting .starting-overlay { display: flex; }
 
+    /* Black capture warning: the headset is awake but feeds black to the capture. Warn only; the
+       button runs the same action as DIAG "Reset headset interface" (operator decision). */
+    .black-overlay {
+      position: absolute;
+      left: 50%; bottom: 8px;
+      transform: translateX(-50%);
+      z-index: 31;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      max-width: 92%;
+      padding: 8px 12px;
+      border-radius: 10px;
+      background: rgba(0,0,0,0.82);
+      border: 1px solid rgba(239,68,68,0.65);
+      color: #fca5a5;
+      font-size: 12px;
+      font-weight: 600;
+      text-align: center;
+    }
+    .black-overlay button {
+      cursor: pointer;
+      padding: 4px 12px;
+      border-radius: 14px;
+      border: 1px solid rgba(239,68,68,0.7);
+      background: rgba(239,68,68,0.25);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .black-overlay button:hover { background: rgba(239,68,68,0.5); }
+    .black-overlay button:disabled { opacity: 0.6; cursor: wait; }
+    .cell.capture-black:not(.no-stream) .black-overlay { display: flex; }
+
     /* Local-only capture mode banner */
     .local-mode-banner {
       display: flex;
@@ -596,6 +631,25 @@
   </div>
 
   <!-- Launch app modal -->
+
+  <!-- Headset settings overlay (embeds headsets_settings.html?embed=1) -->
+  <div id="settings-overlay" hidden>
+    <div class="settings-overlay-box">
+      <button type="button" id="settings-overlay-close" title="Close (Esc)" aria-label="Close">&times;</button>
+      <iframe id="settings-overlay-frame" src="about:blank"></iframe>
+    </div>
+  </div>
+  <style>
+    #settings-overlay { position: fixed; inset: 0; z-index: 10000; background: rgba(0,0,0,0.6);
+      display: flex; align-items: center; justify-content: center; }
+    #settings-overlay[hidden] { display: none; }
+    .settings-overlay-box { position: absolute; inset: 0; }
+    #settings-overlay-frame { width: 100%; height: 100%; border: 0; display: block; background: transparent; }
+    #settings-overlay-close { position: absolute; top: 12px; right: 16px; z-index: 1; width: 34px; height: 34px;
+      border: 1px solid rgba(255,255,255,0.35); border-radius: 50%; background: rgba(20,20,20,0.85); color: #fff;
+      font-size: 22px; line-height: 1; cursor: pointer; }
+    #settings-overlay-close:hover { background: #000; }
+  </style>
 
   <script>
     // ------ Configuration ------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -1039,14 +1093,68 @@
         });
     }
 
+    // Headset settings shown over the wall (the page stays loaded, so streams keep playing)
+    function openSettingsOverlay(dn) {
+      var ov = document.getElementById('settings-overlay');
+      document.getElementById('settings-overlay-frame').src =
+        'headsets_settings.html?embed=1&headset=' + encodeURIComponent(dn);
+      ov.hidden = false;
+    }
+    function closeSettingsOverlay() {
+      var ov = document.getElementById('settings-overlay');
+      if (ov.hidden) return;
+      ov.hidden = true;
+      document.getElementById('settings-overlay-frame').src = 'about:blank';
+    }
+    document.getElementById('settings-overlay-close').addEventListener('click', closeSettingsOverlay);
+    document.getElementById('settings-overlay').addEventListener('click', function(e) {
+      if (e.target === this) closeSettingsOverlay();
+    });
+    document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeSettingsOverlay(); });
+    window.addEventListener('message', function(e) {
+      if (e.data === 'vrhm-close-settings') closeSettingsOverlay();
+    });
+
     document.getElementById('grid').addEventListener('click', function(e) {
+      var resetBtn = e.target.closest('[data-reset-ui]');
+      if (resetBtn) { e.stopPropagation(); resetHeadsetInterface(resetBtn, 'recover_reset_ui'); return; }
+      var rebootBtn = e.target.closest('[data-reboot-ui]');
+      if (rebootBtn) {
+        e.stopPropagation();
+        if (confirm('Reboot this headset? It restarts completely (about a minute) and the capture resumes once it is back.')) {
+          resetHeadsetInterface(rebootBtn, 'recover_reboot');
+        }
+        return;
+      }
       var launchBtn = e.target.closest('.launch-app-btn');
       if (launchBtn) { openLaunchModal(launchBtn.dataset.launchApp); return; }
+      var setBtn = e.target.closest('[data-settings-headset]');
+      if (setBtn && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) {
+        e.preventDefault();
+        openSettingsOverlay(setBtn.dataset.settingsHeadset);
+        return;
+      }
       var recBtn = e.target.closest('.record-btn');
       if (recBtn) { e.stopPropagation(); toggleRecording(recBtn.dataset.recordHeadset, recBtn); return; }
       var castBtn = e.target.closest('.cast-btn');
       if (castBtn) { e.stopPropagation(); openCastPanel(castBtn); }
     });
+
+    // "Reset headset interface" (black capture warning): same action as the DIAG page, restarts the
+    // Meta shell of the headset. The warning clears by itself once the picture is back.
+    function resetHeadsetInterface(btn, action) {
+      var label = btn.textContent;
+      btn.disabled = true; btn.textContent = (action === 'recover_reboot') ? 'Rebooting...' : 'Resetting...';
+      fetch('/api/headset-diag/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: parseInt(btn.dataset.resetUi || btn.dataset.rebootUi, 10), action: action })
+      })
+        .then(function(r) { return r.json().catch(function() { return {}; }); })
+        .then(function(j) { if (!j.ok) alert('Reset failed: ' + (j.message || 'unknown error')); })
+        .catch(function(err) { alert('Reset failed: ' + err); })
+        .then(function() { setTimeout(function() { btn.disabled = false; btn.textContent = label; }, 8000); });
+    }
 
     // ------ Headsets status polling (single API call replaces two CSV reads) -------------------------------------------------------------------------------
     function pollHeadsetsStatus() {
@@ -1059,6 +1167,7 @@
               ping:       item.ping,
               scrcpy:     item.scrcpy,
               starting:   !!item.scrcpy_starting && !item.scrcpy,
+              black:      !!item.capture_black,
               adb:        item.adb,
               record:     !!item.record,
               runningApp: item.running_app || ''
@@ -1152,6 +1261,7 @@
         // Capture starting (server flag): spinner on the tile, whether it is still the compact
         // tile or already the expanded cell waiting for its first picture.
         cell.classList.toggle('starting',  !!stat.starting && !streaming);
+        cell.classList.toggle('capture-black', !!stat.black && streaming);
         if (wasStream !== streaming) scaleNeeded = true;
         cell.classList.toggle('no-stream', !streaming);
         if (!streaming) cell.style.width = ''; // clear layout width for compact offline tile
@@ -1598,7 +1708,7 @@
               '<line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>' +
             '</svg>' +
           '</a>' +
-          '<a class="cell-action-btn" href="headsets_settings.html?headset=' + dn + '" title="Headset settings" aria-label="Headset settings">' +
+          '<a class="cell-action-btn" data-settings-headset="' + dn + '" href="headsets_settings.html?headset=' + dn + '" title="Headset settings" aria-label="Headset settings">' +
             '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
               '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/>' +
               '<line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/>' +
@@ -1635,7 +1745,10 @@
           '</svg>' +
         '</button>' +
         '<div class="offline-overlay">OFFLINE</div>' +
-        '<div class="starting-overlay"><span class="spin"></span>Capture starting...</div>';
+        '<div class="starting-overlay"><span class="spin"></span>Capture starting...</div>' +
+        '<div class="black-overlay"><span>Screen capture is not working properly, please restart the headset interface.</span>' +
+          '<button type="button" data-reset-ui="' + id + '">Reset headset interface</button>' +
+          '<button type="button" data-reboot-ui="' + id + '">Reboot headset</button></div>';
       return cell;
     }
 

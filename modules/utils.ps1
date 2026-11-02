@@ -246,6 +246,58 @@ function Get-JobFilePath {
 }
 
 
+# Appends one line to data\restart_trace.log (plain file, no log-level gating, one line per step
+# of an application restart: web route, console 00 handler, relaunch, new instance, shutdown).
+# It exists because a restart kills the process that would log it and the file log only keeps
+# SUCCESS and above, so a failed relaunch left no trace at all. Never throws.
+# Example: Write-RestartTrace -Step 'console 00: relaunch spawned'
+function Write-RestartTrace {
+    param([Parameter(Mandatory = $true)][string]$Step)
+    try {
+        $root = if ($global:ScriptPath) { $global:ScriptPath } else { $PSScriptRoot }
+        $dir  = Join-Path $root 'data'
+        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        $line = "{0} [PID {1}] {2}{3}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'), $PID, $Step, [Environment]::NewLine
+        [System.IO.File]::AppendAllText((Join-Path $dir 'restart_trace.log'), $line, [System.Text.UTF8Encoding]::new($false))
+    } catch { }
+}
+
+# Operator command for the main console process, written by the web server (restart / shutdown)
+# and consumed by the console's input loop: data\app_command.flag holds one word. This replaced
+# typing "00" / "0" into the console with WriteConsoleInput, which depends on the console host
+# (Windows Terminal, RDP, hidden consoles) and left no trace when it failed. A request older than
+# 30 s is ignored and removed. Never throws.
+# Example: Set-AppCommandRequest -Command restart
+function Set-AppCommandRequest {
+    param([Parameter(Mandatory = $true)][ValidateSet('restart','shutdown')][string]$Command)
+    try {
+        $dir = Join-Path $global:ScriptPath 'data'
+        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        [System.IO.File]::WriteAllText((Join-Path $dir 'app_command.flag'), $Command, [System.Text.UTF8Encoding]::new($false))
+        return $true
+    } catch { return $false }
+}
+
+# $true while a request written by Set-AppCommandRequest has not been consumed yet.
+function Test-AppCommandPending {
+    try { return (Test-Path -LiteralPath (Join-Path $global:ScriptPath 'data\app_command.flag')) } catch { return $false }
+}
+
+# Reads the pending command ('restart' / 'shutdown') and removes the file, or returns $null.
+# Called about once a second by the console input loop. Example: $c = Get-AppCommandRequest
+function Get-AppCommandRequest {
+    try {
+        $path = Join-Path $global:ScriptPath 'data\app_command.flag'
+        if (-not (Test-Path -LiteralPath $path)) { return $null }
+        $age = ((Get-Date) - (Get-Item -LiteralPath $path).LastWriteTime).TotalSeconds
+        $text = ([System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8)).Trim().ToLowerInvariant()
+        Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        if ($age -gt 30) { return $null }
+        if ($text -eq 'restart' -or $text -eq 'shutdown') { return $text }
+        return $null
+    } catch { return $null }
+}
+
 # Write text to a file as UTF-8 WITHOUT BOM.
 # .ps1 files in this project must not have a BOM (CLAUDE.md rule 1).
 # Many web/HTML/YAML outputs also need this.

@@ -39,11 +39,17 @@ if ($AutoApprove) { Write-Host "Option -AutoApprove: setup prompts (firewall, UR
 # instance to fully exit before running the duplicate-instance check below.
 if ($WaitForPid -gt 0) {
     Write-Host "Waiting for the previous instance (PID $WaitForPid) to close..." -ForegroundColor Yellow
-    $waitDeadline = (Get-Date).AddSeconds(15)
+    $waitDeadline = (Get-Date).AddSeconds(60)
     while ((Get-Date) -lt $waitDeadline) {
         if (-not (Get-Process -Id $WaitForPid -ErrorAction SilentlyContinue)) { break }
         Start-Sleep -Milliseconds 250
     }
+    $waitStillAlive = [bool](Get-Process -Id $WaitForPid -ErrorAction SilentlyContinue)
+    try {
+        $traceDir = Join-Path $PSScriptRoot 'data'
+        if (-not (Test-Path -LiteralPath $traceDir)) { New-Item -ItemType Directory -Path $traceDir -Force | Out-Null }
+        [IO.File]::AppendAllText((Join-Path $traceDir 'restart_trace.log'), ('{0} [PID {1}] main.ps1 relaunched: previous PID {2} still alive after wait = {3}{4}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'), $PID, $WaitForPid, $waitStillAlive, [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+    } catch { }
 }
 
 # Check if another instance of this script is already running
@@ -54,6 +60,10 @@ $otherInstances = Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'
         $_.ProcessId -ne $currentPID -and
         $_.CommandLine -match [regex]::Escape($thisScriptName)
     }
+
+# A relaunch asked by the Restart option already waited for the old instance: when that one is gone,
+# whatever else matches main.ps1 is not a duplicate worth a prompt that nobody can answer.
+if ($otherInstances -and $WaitForPid -gt 0 -and -not $waitStillAlive) { $otherInstances = $null }
 
 if ($otherInstances) {
     Write-Host ""

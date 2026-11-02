@@ -1076,6 +1076,13 @@ function Register-WindowsDefenderExclusion {
             Write-Log $msg.DefenderExclusionSkipped -Level DEBUG
             return @{ AlreadyApplied = $true }
         }
+        # The setup wizard runs this BEFORE the database is open, so its answer cannot be stored in
+        # fw_state: it leaves data\defender_asked.flag instead. Asked once ever, whatever the answer
+        # (also when the elevated Add-MpPreference was refused, e.g. by tamper protection).
+        if (Test-Path -LiteralPath (Join-Path $global:ScriptPath 'data\defender_asked.flag')) {
+            Write-Log $msg.DefenderExclusionSkipped -Level DEBUG
+            return @{ AlreadyApplied = $true }
+        }
         $mpStatus = Get-MpComputerStatus -ErrorAction SilentlyContinue
         if (-not ($mpStatus -and $mpStatus.AntivirusEnabled -and $mpStatus.RealTimeProtectionEnabled)) {
             Write-Log $msg.DefenderExclusionSkipped -Level DEBUG
@@ -1231,6 +1238,15 @@ function Initialize-ComputerSetup {
     # exclusion has been applied (prior state recorded it, or this run presented/confirmed
     # the task). Never carry the prior raw string forward - it may be mojibake from the
     # old UTF-8 encoding bug, and the operator should not be re-prompted to heal it.
+    if ($defenderTask -is [hashtable] -and $defenderTask.Script) {
+        # The operator has now been shown the Defender box: never ask again (see the flag check in
+        # Register-WindowsDefenderExclusion).
+        try {
+            $askedDir = Join-Path $global:ScriptPath 'data'
+            if (-not (Test-Path -LiteralPath $askedDir)) { New-Item -ItemType Directory -Path $askedDir -Force | Out-Null }
+            [System.IO.File]::WriteAllText((Join-Path $askedDir 'defender_asked.flag'), [datetime]::UtcNow.ToString('o'), [System.Text.UTF8Encoding]::new($false))
+        } catch { }
+    }
     $defenderApplied = ($priorState -and $priorState.DefenderExclusionPath) -or
                        ($defenderTask -is [hashtable] -and ($defenderTask.Script -or $defenderTask.AlreadyApplied))
     $defenderExclusionPath = if ($defenderApplied) { $global:ScriptPath } else { $null }

@@ -34,6 +34,8 @@
 
 $script:VrhmCachePath   = ""
 $script:VrhmDefaultPort = 8080
+# Ports the LAN scan also tries after the requested one (server on 8080 or on 80).
+$script:VrhmExtraScanPorts = @(8080, 80)
 
 function Set-VrhmDiscoveryContext {
     <#
@@ -353,19 +355,22 @@ function Find-VrhmServersOnLan {
     $allIps = @($allIps | Select-Object -Unique)
     if ($allIps.Count -eq 0) { return @() }
 
-    Write-Host "Scanning $($allIps.Count) address(es) on port $Port for a VR HEADSET MANAGER server..." -ForegroundColor Cyan
-    $openHosts = @(Test-PortForCidrLocal -IpRange $allIps -Port $Port -Timeout $TimeoutMs -MaxThreads $MaxThreads)
-    if ($openHosts.Count -eq 0) { return @() }
+    # The requested port first, then the other usual ones (8080 and 80).
+    $ports = @(@($Port) + $script:VrhmExtraScanPorts | Select-Object -Unique)
 
+    Write-Host "Scanning $($allIps.Count) address(es) on port(s) $($ports -join ', ') for a VR HEADSET MANAGER server..." -ForegroundColor Cyan
     $found = @()
-    foreach ($candidate in $openHosts) {
-        $info = Get-VrhmServerInfo -IPAddress $candidate.IPAddress -Port $Port
-        if ($info.Ok) {
-            $found += @{
-                IPAddress = $candidate.IPAddress
-                Port      = $Port
-                Version   = $info.Version
-                LatencyMs = $info.LatencyMs
+    foreach ($scanPort in $ports) {
+        $openHosts = @(Test-PortForCidrLocal -IpRange $allIps -Port $scanPort -Timeout $TimeoutMs -MaxThreads $MaxThreads)
+        foreach ($candidate in $openHosts) {
+            $info = Get-VrhmServerInfo -IPAddress $candidate.IPAddress -Port $scanPort
+            if ($info.Ok) {
+                $found += @{
+                    IPAddress = $candidate.IPAddress
+                    Port      = $scanPort
+                    Version   = $info.Version
+                    LatencyMs = $info.LatencyMs
+                }
             }
         }
     }

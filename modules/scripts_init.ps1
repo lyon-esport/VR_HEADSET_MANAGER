@@ -538,6 +538,7 @@ function Invoke-AppShutdown {
     }
 
     Remove-Variable moduleSnapshots -Scope Global -ErrorAction SilentlyContinue
+    if (Get-Command Write-RestartTrace -ErrorAction SilentlyContinue) { Write-RestartTrace -Step 'Invoke-AppShutdown: finished, exiting' }
     exit 0
 }
 

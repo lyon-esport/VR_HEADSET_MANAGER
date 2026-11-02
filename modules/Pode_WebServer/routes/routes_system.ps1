@@ -7,6 +7,28 @@
 # The lane of a route is decided in web_routes.ps1 ($script:SlowRoutes / $script:PriorityRoutes),
 # not here: moving a handler between files never changes its lane.
 
+# Delivers 'restart' / 'shutdown' to the main console process. First choice: the request file
+# data\app_command.flag, picked up by the console input loop within about a second (no dependency
+# on the console host). When nothing consumed it within 4 s (the console is inside a sub-menu), the
+# request is withdrawn and the old way is used: the text typed into the console with
+# WriteConsoleInput. Returns $true when one of the two was delivered. Never throws.
+# Example: Send-AppCommandToMain -Command 'restart' -MainPid 1234 -InjectText '00'
+function Send-AppCommandToMain {
+    param([string]$Command, [uint32]$MainPid, [string]$InjectText)
+    try {
+        if (Set-AppCommandRequest -Command $Command) {
+            $deadline = (Get-Date).AddSeconds(4)
+            while ((Get-Date) -lt $deadline) {
+                if (-not (Test-AppCommandPending)) { Write-RestartTrace -Step "web: '$Command' consumed by the console loop"; return $true }
+                Start-Sleep -Milliseconds 100
+            }
+            Get-AppCommandRequest | Out-Null
+        }
+        Write-RestartTrace -Step "web: '$Command' not consumed in 4 s, injecting '$InjectText' into the console"
+        return [bool][VrmConsoleInput]::InjectKeys($MainPid, $InjectText, $true)
+    } catch { return $false }
+}
+
 # API: POST /api/app-shutdown
 # Injects '0' + Enter into the main process console input so Show-MainMenu triggers Invoke-AppShutdown.
 function Invoke-RouteAppShutdown {
@@ -19,7 +41,7 @@ function Invoke-RouteAppShutdown {
         if ($mainProcs.Count -eq 0) { throw 'Main process not found' }
         if ($mainProcs.Count -gt 1) { Write-Log "app-shutdown: multiple main.ps1 processes found ($($mainProcs.Count)), using first" -Level WARNING }
         $mainPid = [uint32]$mainProcs[0].ProcessId
-        [void][VrmConsoleInput]::InjectKeys($mainPid, '0', $true)
+        if (-not (Send-AppCommandToMain -Command 'shutdown' -MainPid $mainPid -InjectText '0')) { throw "Could not reach main.ps1 (PID $mainPid)" }
         Send-JsonResponse -Response $response -Raw '{"ok":true}'
     } catch {
         try { Send-JsonResponse -Response $response -Raw '{"ok":false,"error":"server error"}' -StatusCode 500 } catch {}
@@ -40,8 +62,10 @@ function Invoke-RouteAppRestart {
         if ($mainProcs.Count -eq 0) { throw 'Main process not found' }
         if ($mainProcs.Count -gt 1) { Write-Log "app-restart: multiple main.ps1 processes found ($($mainProcs.Count)), using first" -Level WARNING }
         $mainPid = [uint32]$mainProcs[0].ProcessId
-        $injected = [VrmConsoleInput]::InjectKeys($mainPid, '00', $true)
-        if (-not $injected) { throw "Could not attach to the console of main.ps1 (PID $mainPid)" }
+        Write-RestartTrace -Step "web app-restart: asking main.ps1 (PID $mainPid) to restart"
+        $sent = Send-AppCommandToMain -Command 'restart' -MainPid $mainPid -InjectText '00'
+        Write-RestartTrace -Step "web app-restart: request delivered = $sent"
+        if (-not $sent) { throw "Could not reach main.ps1 (PID $mainPid)" }
         Write-Log "app-restart: '00' injected into main.ps1 console (PID $mainPid)" -Level INFO
         Send-JsonResponse -Response $response -Raw '{"ok":true}'
     } catch {

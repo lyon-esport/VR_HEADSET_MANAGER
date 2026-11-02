@@ -812,6 +812,7 @@ function Start-VRMonitor {
             # Session-only settings re-applied after a headset restart (ADR-0040).
             $nextSessionAt    = [datetime]::MinValue
             $sessionState     = @{}
+            $blackState       = @{}
             # The serial this runspace learned from the headset itself. $headset was captured
             # at startup, so a row added from an IP alone has no serial in it - without this
             # the USB-first transport could not tell the headset is cabled.
@@ -926,6 +927,21 @@ function Start-VRMonitor {
                                             }
                                         }
                                     }
+                                }
+
+                                # --- Black capture warning: while a capture runs, a screen that mirrors as
+                                # pure black (compositor stuck after a boot) is published for the web pages,
+                                # which offer "Reset headset interface". Nothing is restarted here. The
+                                # state decides when a check is due (no adb call otherwise) ---
+                                if (Get-Command Update-HeadsetCaptureBlackState -ErrorAction SilentlyContinue) {
+                                    try {
+                                        $scrcpyPids = $sharedState['_scrcpy_pids']
+                                        $capPid = 0
+                                        if ($scrcpyPids) { [void][int]::TryParse([string]$scrcpyPids[[string]$liveHeadset.ID], [ref]$capPid) }
+                                        $blackBlocked = [bool]$sharedState['_benchmark_active']
+                                        if (-not $blackBlocked -and (Get-Command Test-UsbBusy -ErrorAction SilentlyContinue)) { $blackBlocked = [bool](Test-UsbBusy) }
+                                        Update-HeadsetCaptureBlackState -Headset $liveHeadset -Device $device -CaptureRunning ($capPid -gt 0) -Blocked $blackBlocked -State $blackState | Out-Null
+                                    } catch { }
                                 }
 
                                 # Battery history + time estimate (local var persists across cycles)

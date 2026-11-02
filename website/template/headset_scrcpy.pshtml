@@ -37,6 +37,39 @@
         pointer-events: none;
         display: none;
       }
+      #black-warn {
+        position: absolute;
+        left: 50%; bottom: 14px;
+        transform: translateX(-50%);
+        z-index: 40;
+        display: none;
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
+        max-width: 92%;
+        padding: 10px 16px;
+        border-radius: 12px;
+        background: rgba(0, 0, 0, 0.82);
+        border: 1px solid rgba(239, 68, 68, 0.65);
+        color: #fca5a5;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        font-size: 15px;
+        font-weight: 600;
+        text-align: center;
+      }
+      #black-warn.show { display: flex; }
+      #black-warn button {
+        cursor: pointer;
+        padding: 6px 16px;
+        border-radius: 16px;
+        border: 1px solid rgba(239, 68, 68, 0.7);
+        background: rgba(239, 68, 68, 0.25);
+        color: #fff;
+        font-size: 14px;
+        font-weight: 700;
+      }
+      #black-warn button:hover { background: rgba(239, 68, 68, 0.5); }
+      #black-warn button:disabled { opacity: 0.6; cursor: wait; }
       /* Capture starting / restarting: amber text with a spinner, so it reads as "coming" and not
          as an error. */
       #status.starting { color: #f59e0b; }
@@ -160,6 +193,14 @@
   <body>
     <video id="stream" autoplay muted playsinline></video>
     <div id="status"></div>
+    <!-- Black capture warning (capture_black of /api/headset-status). Warn only: the button runs
+         the same action as DIAG "Reset headset interface". Not shown when embedded in the
+         video_monitor grid, whose cell carries its own copy. -->
+    <div id="black-warn">
+      <span>Screen capture is not working properly, please restart the headset interface.</span>
+      <button id="btn-reset-ui" type="button">Reset headset interface</button>
+      <button id="btn-reboot" type="button">Reboot headset</button>
+    </div>
 
     <div id="actions-left">
       <!-- Monitoring overlay -->
@@ -303,6 +344,29 @@
           .catch(function() { recordPendingUntil = 0; setRecordBtn(!want); });
       }
 
+      // "Reset headset interface": same backend action as the DIAG page (restarts the Meta shell).
+      function runRecovery(btn, action, busyText) {
+        var label = btn.textContent;
+        btn.disabled = true; btn.textContent = busyText;
+        fetch('/api/headset-diag/action', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: parseInt(CAPTURE_ID, 10), action: action })
+        })
+          .then(function(r) { return r.json().catch(function() { return {}; }); })
+          .then(function(j) { if (!j.ok) { alert('Action failed: ' + (j.message || 'unknown error')); } })
+          .catch(function(err) { alert('Action failed: ' + err); })
+          .then(function() { setTimeout(function() { btn.disabled = false; btn.textContent = label; }, 8000); });
+      }
+      document.getElementById('btn-reset-ui').addEventListener('click', function() {
+        runRecovery(this, 'recover_reset_ui', 'Resetting...');
+      });
+      document.getElementById('btn-reboot').addEventListener('click', function() {
+        if (confirm('Reboot this headset? It restarts completely (about a minute) and the capture resumes once it is back.')) {
+          runRecovery(this, 'recover_reboot', 'Rebooting...');
+        }
+      });
+
       function pollCaptureState() {
         if (capturePollTimer) { clearTimeout(capturePollTimer); capturePollTimer = null; }
         if (!CAPTURE_ID) { return; }
@@ -318,6 +382,8 @@
             capture.autoRestart = !!j.scrcpy_auto_restart;
             capture.known       = true;
             if (Date.now() >= recordPendingUntil) { setRecordBtn(!!j.record); }
+            document.getElementById('black-warn').classList.toggle('show',
+              !!j.capture_black && j.scrcpy !== false && window.self === window.top);
             if (document.hidden && pausedForVisibility) { return; }
             if (capture.starting && hasPicture) {
               // The stream is about to be replaced: say so over the frozen last picture.

@@ -35,6 +35,13 @@
 
     /* -- Page content -- */
     .page { padding: 24px; }
+    /* Embedded in an overlay (video_monitor.html): no top bar, tighter page */
+    body.embed .topbar { display: none; }
+    /* Transparent page: only the card floats over the wall's dimmed backdrop */
+    html:has(body.embed), body.embed { background: transparent !important; }
+    body.embed .page { padding: 16px; min-height: 100vh; display: flex; }
+    body.embed .cards-grid { display: block; width: 380px; max-width: 94vw; margin: auto; }
+    body.embed .headset-card { box-shadow: 0 12px 48px rgba(0,0,0,0.65); }
 
     /* -- Cards grid -- */
     .cards-grid {
@@ -322,6 +329,7 @@
     .advsettings-modal-box {
       background: var(--card-bg); border-radius: 12px; padding: 28px 32px;
       min-width: 340px; max-width: 540px; width: 100%;
+      max-height: calc(100vh - 32px); overflow-y: auto;
       box-shadow: 0 8px 40px rgba(0,0,0,0.45);
     }
     .advsettings-modal-title { font-size: 1.05rem; font-weight: 700; margin-bottom: 20px; }
@@ -1526,6 +1534,7 @@
             '</span>' +
             '<span style="display:inline-flex;gap:6px">' +
               '<a class="hs-adv-btn" data-diag="' + dn + '" href="headset_diag.html?id=' + encodeURIComponent(cfg.ID) + '" title="Diagnostics for this headset" style="text-decoration:none;display:inline-block">DIAG</a>' +
+              '<button class="hs-adv-btn" data-reset-ui="' + dn + '" data-reset-ui-id="' + esc(String(cfg.ID)) + '" title="Restart the Meta interface (shell) of this headset, e.g. when the capture is black. The player drops to a loading screen for a few seconds.">Reset UI</button>' +
               '<button class="hs-adv-btn" data-adv-settings="' + dn + '" data-adv-brand="' + esc(cfg.Brand || '') + '">Configure</button>' +
             '</span>' +
           '</div>' +
@@ -1658,6 +1667,24 @@
         var editProfileBtn = e.target.closest('[data-edit-profile]');
         if (editProfileBtn) {
           openProfileModal(editProfileBtn.dataset.editProfile);
+          return;
+        }
+        // Reset headset interface (same action as DIAG > Recovery > Reset headset interface)
+        var resetUiBtn = e.target.closest('[data-reset-ui]');
+        if (resetUiBtn) {
+          if (resetUiBtn.disabled) return;
+          if (!confirm('Restart the Meta interface of ' + resetUiBtn.dataset.resetUi.replace(/_/g, ' ') + '? The player will drop to a loading screen for a few seconds.')) return;
+          var ruLabel = resetUiBtn.textContent;
+          resetUiBtn.disabled = true; resetUiBtn.textContent = 'Resetting...';
+          fetch('/api/headset-diag/action', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: parseInt(resetUiBtn.dataset.resetUiId, 10), action: 'recover_reset_ui' })
+          })
+            .then(function(r) { return r.json().catch(function() { return {}; }); })
+            .then(function(j) { if (!j.ok) alert('Reset failed: ' + (j.message || 'unknown error')); })
+            .catch(function(err) { alert('Reset failed: ' + err); })
+            .then(function() { setTimeout(function() { resetUiBtn.disabled = false; resetUiBtn.textContent = ruLabel; }, 8000); });
           return;
         }
         // Advanced settings button
@@ -2272,6 +2299,7 @@
           document.querySelector('[data-launch-app="' + dn + '"]'),
           document.querySelector('[data-adv-settings="' + dn + '"]'),
           document.querySelector('[data-diag="' + dn + '"]'),
+          document.querySelector('[data-reset-ui="' + dn + '"]'),
           document.querySelector('[data-power="reboot"][data-power-headset="' + dn + '"]'),
           document.querySelector('[data-power="shutdown"][data-power-headset="' + dn + '"]')
         ].forEach(function(b) { if (b) b.classList.toggle('btn-adb-disabled', !adbOk); });
@@ -3232,6 +3260,18 @@
 
     // -- Boot -----------------------------------------------------------------
     var _headsetFilter = (new URLSearchParams(location.search)).get('headset') || '';
+    if ((new URLSearchParams(location.search)).get('embed') === '1') {
+      document.body.classList.add('embed');
+      // Ask the wall to close the overlay: click on the empty area around the card, or Esc
+      document.addEventListener('click', function(e) {
+        if (e.target === document.documentElement || e.target === document.body || e.target.classList.contains('page')) {
+          parent.postMessage('vrhm-close-settings', '*');
+        }
+      });
+      document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') parent.postMessage('vrhm-close-settings', '*');
+      });
+    }
 
     // Check recording drive space on page load and show banner if low
     fetch('/api/recording-drive')

@@ -738,6 +738,13 @@ function Read-CockpitInput {
                     Write-Host $prompt -NoNewline -ForegroundColor Magenta
                     Write-Host $buf.ToString() -NoNewline
                 }
+                # A restart / shutdown asked by the web server (data\app_command.flag).
+                $appCmd = Get-AppCommandRequest
+                if ($appCmd) {
+                    Write-RestartTrace -Step ("console: web command '{0}' picked up by the input loop" -f $appCmd)
+                    Write-Host ''
+                    return @{ Kind = 'Line'; Value = $(if ($appCmd -eq 'restart') { '00' } else { '0' }) }
+                }
                 $nextIdle = $now.AddMilliseconds(1000)
             }
             if ($buf.Length -eq 0 -and $now -ge $nextRefresh) {
@@ -864,6 +871,8 @@ function Get-HeadsetPanelKeymap {
         @{ Key = 'G'; Group = 'Device';  Label = $c.PanelFrame },
         @{ Key = 'E'; Group = 'Device';  Label = $c.PanelEdit },
         @{ Key = 'B'; Group = 'Device';  Label = $c.PanelDiag },
+        @{ Key = 'U'; Group = 'Device';  Label = $c.PanelUiReset },
+        @{ Key = 'R'; Group = 'Device';  Label = $c.PanelReboot },
         @{ Key = 'X'; Group = 'Device';  Label = $c.PanelRemove }
     )
 }
@@ -986,6 +995,26 @@ function Show-HeadsetPanel {
                     Start-Process ("http://localhost:{0}/headset_diag.html?id={1}" -f $global:WebServer_port, $id)
                     Set-CockpitNotice -Text $c.WebOpened -Kind ok
                 } else { Set-CockpitNotice -Text $c.PanelWebDisabled -Kind err }
+            }
+            'U' {
+                # Same action as the web "Reset headset interface" buttons (Invoke-HeadsetUiReset).
+                $ans = (Read-Host ($c.UiResetConfirm -f $row.Name)).Trim().ToUpper()
+                if ($ans -in @('Y', 'O')) {
+                    $dev = Get-BestAdbDevice -Headset $row
+                    $r = if ($dev) { Invoke-HeadsetUiReset -Device $dev -Name ([string]$row.Name) -HeadsetId $id } else { [PSCustomObject]@{ Ok = $false; Error = 'ADB not reachable' } }
+                    if ($r.Ok) { Set-CockpitNotice -Text ($c.UiResetDone -f $row.Name) -Kind ok }
+                    else { Set-CockpitNotice -Text ($c.UiResetFailed -f $row.Name, $r.Error) -Kind err }
+                }
+            }
+            'R' {
+                # Same action as the web "Reboot headset" buttons (Invoke-HeadsetReboot).
+                $ans = (Read-Host ($c.RebootConfirm -f $row.Name)).Trim().ToUpper()
+                if ($ans -in @('Y', 'O')) {
+                    $dev = Get-BestAdbDevice -Headset $row
+                    $ok = if ($dev) { Invoke-HeadsetReboot -Device $dev } else { $false }
+                    if ($ok) { Set-CaptureBlackState -HeadsetId $id -Clear; Set-CockpitNotice -Text ($c.RebootDone -f $row.Name) -Kind ok }
+                    else { Set-CockpitNotice -Text ($c.RebootFailed -f $row.Name) -Kind err }
+                }
             }
             'X' {
                 Show-SubMenu-RemoveHeadset -Headset $row
@@ -1133,12 +1162,23 @@ function Show-MainMenu {
         if ($choice -eq '00') {
             Write-Host $msg.Restarting -ForegroundColor Yellow
             $mainScript = Join-Path $global:ScriptPath "main.ps1"
-            Start-Process powershell.exe -ArgumentList @(
-                "-NoProfile",
-                "-ExecutionPolicy","Bypass",
-                "-File","`"$mainScript`"",
-                "-WaitForPid",$PID
-            ) -WindowStyle Normal
+            Write-RestartTrace -Step "console 00: relaunching '$mainScript' (waits for PID $PID)"
+            # Relaunch through cmd 'start': the new instance gets its own console and is NOT a
+            # child of this one, so it does not depend on this console surviving (a restart asked
+            # from the web closes this console while the new instance is still waiting for us).
+            try {
+                Start-Process cmd.exe -ArgumentList @(
+                    "/c", "start", "`"VR HEADSET MANAGER`"",
+                    "powershell.exe",
+                    "-NoProfile",
+                    "-ExecutionPolicy", "Bypass",
+                    "-File", "`"$mainScript`"",
+                    "-WaitForPid", $PID
+                ) -WindowStyle Hidden
+                Write-RestartTrace -Step 'console 00: relaunch spawned'
+            } catch {
+                Write-RestartTrace -Step ("console 00: relaunch FAILED: " + $_.Exception.Message)
+            }
             Invoke-AppShutdown
             return
         }
