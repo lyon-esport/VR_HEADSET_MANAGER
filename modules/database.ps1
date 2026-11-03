@@ -2114,3 +2114,92 @@ function Import-HeadsetsCsv {
 
     return (ConvertTo-HeadsetImportResult -Outcome $outcome)
 }
+
+
+<#
+.SYNOPSIS
+    Runs ONE named query against ANOTHER installation's database, read-only.
+.DESCRIPTION
+    Opens a SEPARATE connection (Read Only=True, no pooling), runs the query, closes it. Never touches
+    this process's own connection or prepared-command cache, so it is safe next to a live database.
+    If the file cannot be opened in place (read-only media, missing -shm rights) the database and its
+    -wal/-shm sidecars are copied to a temp folder and opened there. Rows come back as PSCustomObject
+    (DBNull -> $null). Returns @() when the query fails; the error is in $script:DbExternalLastError.
+    Used by the previous-installation import (modules\vrhm_import.ps1, queries import.*).
+.EXAMPLE
+    $rows = @(Invoke-DbExternalQuery -DatabasePath 'D:\old\data\vrhm.db' -Name 'import.headsets')
+#>
+function Invoke-DbExternalQuery {
+    param(
+        [Parameter(Mandatory = $true)][string]$DatabasePath,
+        [Parameter(Mandatory = $true)][string]$Name,
+        [hashtable]$Parameters
+    )
+    $script:DbExternalLastError = $null
+    $tempDir = $null
+    $conn = $null
+    try {
+        if (-not (Test-Path -LiteralPath $DatabasePath -PathType Leaf)) { throw ("Database not found: {0}" -f $DatabasePath) }
+        Import-DatabaseAssembly | Out-Null
+        $sql = Get-DbNamedQuery -Name $Name
+        $open = {
+            param($path)
+            $cs = "Data Source={0};Version=3;Read Only=True;BusyTimeout=5000;Pooling=False;DateTimeKind=Utc;DateTimeFormat=ISO8601" -f $path
+            $c = New-Object System.Data.SQLite.SQLiteConnection($cs)
+            try { $c.Open() } catch { $c.Dispose(); throw }
+            return $c
+        }
+        try { $conn = & $open $DatabasePath }
+        catch {
+            $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ('vrhm_extdb_' + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+            $copy = Join-Path $tempDir 'ext.db'
+            Copy-Item -LiteralPath $DatabasePath -Destination $copy -Force
+            foreach ($ext in '-wal', '-shm') {
+                if (Test-Path -LiteralPath ($DatabasePath + $ext)) { Copy-Item -LiteralPath ($DatabasePath + $ext) -Destination ($copy + $ext) -Force -ErrorAction SilentlyContinue }
+            }
+            $conn = & $open $copy
+        }
+        $cmd = $conn.CreateCommand()
+        $cmd.CommandText = $sql
+        if ($Parameters) {
+            foreach ($key in $Parameters.Keys) {
+                $v = $Parameters[$key]
+                if ($null -eq $v) { $v = [System.DBNull]::Value }
+                $pname = if ($key.StartsWith('@')) { $key } else { '@' + $key }
+                $cmd.Parameters.AddWithValue($pname, $v) | Out-Null
+            }
+        }
+        $rows = New-Object System.Collections.Generic.List[object]
+        $reader = $cmd.ExecuteReader()
+        try {
+            $n = $reader.FieldCount
+            $names = New-Object 'string[]' $n
+            for ($i = 0; $i -lt $n; $i++) { $names[$i] = $reader.GetName($i) }
+            while ($reader.Read()) {
+                $row = [ordered]@{}
+                for ($i = 0; $i -lt $n; $i++) {
+                    $v = $reader.GetValue($i)
+                    if ($v -is [System.DBNull]) { $v = $null }
+                    $row[$names[$i]] = $v
+                }
+                $rows.Add([PSCustomObject]$row) | Out-Null
+            }
+        } finally { $reader.Close(); $reader.Dispose(); $cmd.Dispose() }
+        return $rows.ToArray()
+    } catch {
+        $script:DbExternalLastError = $_.Exception.Message
+        return @()
+    } finally {
+        if ($conn) { try { $conn.Close(); $conn.Dispose() } catch { } }
+        if ($tempDir) {
+            [System.GC]::Collect(); [System.GC]::WaitForPendingFinalizers()
+            Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+# Error text of the last Invoke-DbExternalQuery call ($null when it succeeded).
+function Get-DbExternalLastError {
+    return $script:DbExternalLastError
+}

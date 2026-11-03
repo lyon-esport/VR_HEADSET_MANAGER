@@ -76,10 +76,19 @@ function Invoke-RouteBrowseFolder {
     $response = $Context.Response
 
     try {
+        # Optional body {"title":"..."}: the dialog caption (letters, digits, spaces and . , - ( ) only,
+        # 80 chars max, since it is embedded in a command line). Default: the recording folder caption.
+        $title = 'Select recording folder'
+        if ($Context.Request.ContentLength64 -gt 0) {
+            try {
+                $b = (Read-RequestBody -Request $Context.Request -Response $response -MaxBytes 1024) | ConvertFrom-Json
+                if ($b -and $b.title -and ([string]$b.title) -match '^[\w .,()-]{1,80}$') { $title = [string]$b.title }
+            } catch { }
+        }
         $tmp = [System.IO.Path]::GetTempFileName()
         $ps  = "Add-Type -AssemblyName System.Windows.Forms;" +
                "`$d = New-Object System.Windows.Forms.FolderBrowserDialog;" +
-               "`$d.Description = 'Select recording folder';" +
+               "`$d.Description = '$title';" +
                "`$d.ShowNewFolderButton = `$true;" +
                "if (`$d.ShowDialog() -eq 'OK') { [System.IO.File]::WriteAllText('$tmp', `$d.SelectedPath, [System.Text.Encoding]::UTF8) } " +
                "else { [System.IO.File]::WriteAllText('$tmp', '', [System.Text.Encoding]::UTF8) }"

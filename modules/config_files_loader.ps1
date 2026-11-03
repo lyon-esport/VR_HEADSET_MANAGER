@@ -496,6 +496,16 @@ function Get-Config {
             ForEach-Object { [PSCustomObject]@{ name = [string]$_.name; command = [string]$_.command } })
     }
 
+    # Application self-update (ADR-0041). Every value has a default so a config.json written before
+    # the "Update" section existed still loads.
+    $updCfg = $configContent.Update
+    $global:Update_github_repo = 'lyon-esport/VR_HEADSET_MANAGER'
+    if ($updCfg -and $updCfg.github_repo -and ([string]$updCfg.github_repo) -match '^[\w.-]+/[\w.-]+$') { $global:Update_github_repo = [string]$updCfg.github_repo }
+    $global:Update_dev_branch = 'main'
+    if ($updCfg -and $updCfg.dev_branch -and ([string]$updCfg.dev_branch) -match '^[\w./-]+$') { $global:Update_dev_branch = [string]$updCfg.dev_branch }
+    $global:Update_health_timeout_sec = if ($updCfg -and $null -ne $updCfg.health_timeout_sec) { [Math]::Max(60, [int]$updCfg.health_timeout_sec) } else { 300 }
+    $global:Update_catalog_cache_min  = if ($updCfg -and $null -ne $updCfg.catalog_cache_min)  { [Math]::Max(1, [int]$updCfg.catalog_cache_min)  } else { 10 }
+
     # Recordings catalogue and playback (ADR-0029). Every value has a default so a config.json written
     # before the "Recordings" section existed still loads.
     $recCfg = $configContent.Recordings

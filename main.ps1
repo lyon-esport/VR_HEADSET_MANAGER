@@ -52,6 +52,26 @@ if ($WaitForPid -gt 0) {
     } catch { }
 }
 
+# App self-update safety net (ADR-0041): an update was staged but its updater never ran (the app was
+# stopped another way). Hand over to the updater now; it starts this script again when done.
+try {
+    $updJob = Join-Path $PSScriptRoot 'data\update\job.json'
+    $updExe = Join-Path $PSScriptRoot 'data\update\updater.ps1'
+    if ((Test-Path -LiteralPath $updJob) -and (Test-Path -LiteralPath $updExe)) {
+        $updJobObj = (Get-Content -LiteralPath $updJob -Raw -Encoding UTF8).TrimStart([char]0xFEFF) | ConvertFrom-Json
+        $updPhase = [string]$updJobObj.phase
+        $updRunning = @(Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($updExe, [StringComparison]::OrdinalIgnoreCase) -ge 0 }).Count
+        # A MAJOR job is a switch to another folder, never an in-place copy: not the updater's job.
+        if ([string]$updJobObj.mode -ne 'major' -and $updPhase -in @('staged', 'launching') -and $updRunning -eq 0) {
+            Write-Host "A staged application update is pending: starting the updater..." -ForegroundColor Yellow
+            Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass',
+                '-File', ('"{0}"' -f $updExe), '-JobFile', ('"{0}"' -f $updJob))
+            exit 0
+        }
+    }
+} catch { Write-Host ("Update check skipped: " + $_.Exception.Message) -ForegroundColor DarkGray }
+
 # Check if another instance of this script is already running
 $thisScriptName = "main.ps1"
 $currentPID     = $PID
@@ -257,6 +277,15 @@ if ($custom_config) {
     $global:configFilePath = Join-Path -Path $global:ScriptPath -ChildPath "config\config.json"
 }
 
+# Major update (ADR-0041): a previous installation asked for its settings to be carried over. Phase 1 of the
+# import is pure JSON work and creates config.json, so the welcome wizard below is skipped.
+if (-not $custom_config -and -not (Test-Path -LiteralPath $global:configFilePath) -and (Test-Path -LiteralPath (Join-Path $global:ScriptPath 'data\update\import_from.json'))) {
+    try {
+        . (Join-Path $global:ScriptPath 'modules\vrhm_import.ps1')
+        if (Invoke-PreviousInstallConfigStartup -Root $global:ScriptPath) { Write-Host "Settings of the previous installation imported." -ForegroundColor Green }
+    } catch { Write-Host ("Import of the previous settings skipped: " + $_.Exception.Message) -ForegroundColor Yellow }
+}
+
 if (-not (Test-Path -LiteralPath $global:configFilePath)) {
     $templateConfigPath = Join-Path -Path $global:ScriptPath -ChildPath "templates\config\config.json"
     if (-not (Test-Path -LiteralPath $templateConfigPath)) {
@@ -357,6 +386,14 @@ if (-not $global:StartupReported) {
     $totalMs    = $global:StartupStopwatch.ElapsedMilliseconds
     Write-Log ("Startup stages: {0}; total={1}ms" -f $stageText, $totalMs) -Level INFO
     $global:StartupReported = $true
+}
+
+# App self-update (ADR-0041): tell a waiting updater that this version started (data\update\started.ok).
+if (Get-Command -Name Complete-AppUpdateStartup -ErrorAction SilentlyContinue) {
+    try { Complete-AppUpdateStartup } catch { Write-Log ("Update: startup completion failed: " + $_.Exception.Message) -Level WARNING }
+}
+if (Get-Command -Name Resume-AppUpdateChain -ErrorAction SilentlyContinue) {
+    try { Resume-AppUpdateChain } catch { Write-Log ("Update: chain resume failed: " + $_.Exception.Message) -Level WARNING }
 }
 
 # Starting the main menu function that will show the different options to the user

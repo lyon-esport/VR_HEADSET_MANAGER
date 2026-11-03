@@ -520,5 +520,11 @@
                         "Adaptive_Monitoring":  {
                                                     "enabled":  true
                                                 }
-                    }
+                    },
+    "Update":  {
+                    "github_repo":  "lyon-esport/VR_HEADSET_MANAGER",
+                    "dev_branch":  "main",
+                    "health_timeout_sec":  300,
+                    "catalog_cache_min":  10
+                }
 }

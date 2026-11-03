@@ -207,6 +207,7 @@ $sectionRegistry = @(
     [PSCustomObject]@{ Id = 86; Title = 'ADB WiFi modes';        File = '86_wifi_modes.ps1';       Light = 1; Standard = 3;  Full = 5;  Operator = $false }
     [PSCustomObject]@{ Id = 87; Title = 'Session settings';      File = '87_session_settings.ps1'; Light = 0; Standard = 3;  Full = 9;  Operator = $false }
     [PSCustomObject]@{ Id = 88; Title = 'ADB WiFi mode switch';  File = '88_wifi_mode_switch.ps1'; Light = 0; Standard = 5;  Full = 5;  Operator = $false }
+    [PSCustomObject]@{ Id = 89; Title = 'App self-update';       File = '89_app_update.ps1';       Light = 1; Standard = 2;  Full = 3;  Operator = $false }
     [PSCustomObject]@{ Id = 90; Title = 'Shutdown and reaper';  File = '90_shutdown.ps1';         Light = 1; Standard = 2;  Full = 3;  Operator = $false }
 )
 

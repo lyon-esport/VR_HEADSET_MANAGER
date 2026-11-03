@@ -1145,6 +1145,10 @@ function Initialize-ComputerSetup {
     if ($global:ComputerSetupDone) { return }
     $global:ComputerSetupDone = $true
 
+    # The NetSecurity cmdlets (Get-NetFirewallPortFilter on a full check) write progress records;
+    # the console host leaves that progress box painted over the cockpit banner. Function scope only.
+    $ProgressPreference = 'SilentlyContinue'
+
 
     # Load the persisted state from the previous successful run so per-rule
     # drift detection (port changed, program path changed) can also clean up

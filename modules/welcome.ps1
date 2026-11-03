@@ -377,7 +377,13 @@ function Invoke-WelcomeSetup {
 
     Write-WizardAction "The dashboard will open automatically in your default browser once the app has started..."
 
+    # No keypress here (operator request): the summary stays readable for a few seconds and the
+    # application starts by itself.
     Write-Host ""
-    Write-Host "  Press any key to launch VR Headset Manager..." -ForegroundColor Yellow
-    [Console]::ReadKey($true) | Out-Null
+    Write-Host "  Launching VR Headset Manager in " -ForegroundColor Yellow -NoNewline
+    for ($i = 3; $i -ge 1; $i--) {
+        Write-Host "$i " -ForegroundColor Cyan -NoNewline
+        Start-Sleep -Seconds 1
+    }
+    Write-Host ""
 }

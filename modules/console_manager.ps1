@@ -3495,6 +3495,7 @@ function Show-SubMenu-Config {
         $items = @(
             @{ Key = 'W'; Label = $c.CfgWifi },
             @{ Key = 'A'; Label = $c.CfgAdbWifi;   Value = $adbPref },
+            @{ Key = 'U'; Label = $msg.Update.MenuOption },
             @{ Key = 'V'; Label = $c.CfgCapture;   Value = (Get-CaptureModeLabel) }
         )
         if ($global:VQA_Enabled) { $items += @{ Key = 'Q'; Label = $c.CfgQuality } }
@@ -3505,6 +3506,7 @@ function Show-SubMenu-Config {
             'W' { Show-SubMenu-WifiNetworks }
             'V' { Show-SubMenu-CaptureMode }
             'A' { Show-SubMenu-AdbWifiModes }
+            'U' { Show-SubMenu-AppUpdate }
             'Q' {
                 if ($global:VQA_Enabled -and (Get-Command Show-SubMenu-Monitoring -ErrorAction SilentlyContinue)) {
                     Show-SubMenu-Monitoring
@@ -3575,6 +3577,309 @@ function Show-SubMenu-AdbWifiModes {
             Write-Host ""
             Write-Host $msg.AdbWifi.MenuSaved -ForegroundColor Green
             Read-Host $msg.PressEnterToContinue | Out-Null
+        }
+    } while ($true)
+}
+
+
+# ---------------------------------------------------------------------------
+# Application update (spec S12, console part). Same backend as the web Updates
+# accordion: Get-AppUpdateOptions, Start-AppUpdate, Get-AppDevDiff, Get-AppReleaseManifest,
+# Import-PreviousInstall, Get-AppUpdateState. Optional functions are guarded with Get-Command.
+# ---------------------------------------------------------------------------
+
+function Get-AppUpdateOptionsForConsole {
+    # The release list (forced refresh), or $null when the update module is not loaded.
+    if (-not (Get-Command -Name Get-AppUpdateOptions -ErrorAction SilentlyContinue)) { return $null }
+    return (Get-AppUpdateOptions -Force)
+}
+
+function Get-AppDevReasonText {
+    param([string]$Reason)
+    $u = $msg.Update
+    switch ($Reason) {
+        'DevTree'        { return $u.DevReasonDevTree }
+        'Offline'        { return $u.DevReasonOffline }
+        'NoCommit'       { return $u.DevReasonNoCommit }
+        'NewerRelease'   { return $u.DevReasonNewerRelease }
+        'NotUpdatable'   { return $u.DevReasonNotUpdatable }
+        default          { return ($u.DevReasonOther -f $Reason) }
+    }
+}
+
+function Show-AppUpdateReleaseTable {
+    # One line per release: number, type, version, status (reachable, needs X first, not reachable).
+    param([object[]]$Releases)
+    $u = $msg.Update
+    $n = 0
+    foreach ($r in @($Releases)) {
+        $n++
+        $kind = switch ([string]$r.Kind) { 'major' { $u.Major } 'minor' { $u.Minor } default { [string]$r.Kind } }
+        if ($r.Reachable)  { $status = $u.Reachable }
+        elseif ($r.Needs)  { $status = $u.NeedsFirst -f $r.Needs }
+        else               { $status = $u.Unreachable }
+        if ($r.Warning) { $status = '{0} ({1})' -f $status, $u.Prerelease }
+        $color = if ($r.Reachable) { 'Green' } else { 'DarkGray' }
+        Write-Host ($u.ReleaseLine -f ('{0}.' -f $n), $kind, [string]$r.Version, $status) -ForegroundColor $color
+    }
+}
+
+function Invoke-AppUpdateStartAndReport {
+    # Stages an update (Start-AppUpdate) and reports the result. Restarts in place when the
+    # backend says so and Invoke-AppUpdateRestart exists; otherwise tells the operator to use 00.
+    param([string]$Target, [string[]]$ZipPaths = @())
+    $u = $msg.Update
+    if (-not (Get-Command -Name Start-AppUpdate -ErrorAction SilentlyContinue)) {
+        Write-UiMessage -Text ($u.Failed -f 'Start-AppUpdate is not available') -Kind err
+        Wait-UiKey -Prompt $u.PressKey
+        return
+    }
+    $r = Start-AppUpdate -Target $Target -ZipPaths $ZipPaths
+    if ($r.Ok) {
+        Write-UiMessage -Text ($u.Staged -f $Target) -Kind ok
+        if ($r.Mode -eq 'inplace' -and (Get-Command -Name Invoke-AppUpdateRestart -ErrorAction SilentlyContinue)) {
+            Write-UiMessage -Text $u.Restarting -Kind info
+            try { Invoke-AppUpdateRestart | Out-Null } catch { Write-UiMessage -Text ($u.Failed -f $_.Exception.Message) -Kind err }
+        } else {
+            Write-UiMessage -Text $u.RestartHint -Kind info
+        }
+    } else {
+        $why = if ($r.Error) { [string]$r.Error } else { [string]$r.Reason }
+        Write-UiMessage -Text ($u.Failed -f $why) -Kind err
+    }
+    Wait-UiKey -Prompt $u.PressKey
+}
+
+function Invoke-AppUpdateCheckScreen {
+    # Option 1: list every release newer than the installed one.
+    $u = $msg.Update
+    Write-Host $u.CheckNow -ForegroundColor DarkGray
+    $o = Get-AppUpdateOptionsForConsole
+    if (-not $o) {
+        Write-UiMessage -Text ($u.CatalogOffline -f 'update module not loaded') -Kind err
+    } else {
+        if (-not $o.Ok) { Write-UiMessage -Text ($u.CatalogOffline -f $o.Error) -Kind warn }
+        $rels = @($o.Releases)
+        if ($rels.Count -eq 0) { Write-UiMessage -Text $u.NoUpdate -Kind ok }
+        else { Show-AppUpdateReleaseTable -Releases $rels }
+    }
+    Wait-UiKey -Prompt $u.PressKey
+}
+
+function Invoke-AppUpdateToReleaseScreen {
+    # Option 2: pick a reachable release, show hops and breaking notes, confirm, stage.
+    $u = $msg.Update
+    $o = Get-AppUpdateOptionsForConsole
+    if (-not $o) {
+        Write-UiMessage -Text ($u.CatalogOffline -f 'update module not loaded') -Kind err
+        Wait-UiKey -Prompt $u.PressKey
+        return
+    }
+    if (-not $o.Ok) { Write-UiMessage -Text ($u.CatalogOffline -f $o.Error) -Kind warn }
+    $reach = @($o.Releases | Where-Object { $_.Reachable })
+    if ($reach.Count -eq 0) {
+        Write-UiMessage -Text $u.NoReachable -Kind info
+        Wait-UiKey -Prompt $u.PressKey
+        return
+    }
+    Show-AppUpdateReleaseTable -Releases $reach
+    Write-Host ''
+    $raw = ([string](Read-Host $u.ChooseRelease)).Trim()
+    if (-not $raw) { return }
+    if ($raw -notmatch '^\d+$' -or [int]$raw -lt 1 -or [int]$raw -gt $reach.Count) {
+        Write-UiMessage -Text $u.InvalidChoice -Kind warn
+        Wait-UiKey -Prompt $u.PressKey
+        return
+    }
+    $rel = $reach[[int]$raw - 1]
+    Write-Host ''
+    Write-UiMessage -Text ($u.Hops -f (@($rel.Hops) -join ' -> ')) -Kind info
+    $brk = @($rel.Breaking | ForEach-Object { [string]$_ } | Where-Object { $_ })
+    if ($brk.Count -gt 0) { Write-UiMessage -Text ($u.Breaking -f ($brk -join '; ')) -Kind warn }
+    if ($rel.Warning) { Write-UiMessage -Text $u.Prerelease -Kind warn }
+    $ack = ([string](Read-Host $u.ConfirmApply)).Trim().ToUpper()
+    if ($ack -notin @('Y', 'O')) {
+        Write-Host ('  ' + $u.Cancelled) -ForegroundColor DarkGray
+        Wait-UiKey -Prompt $u.PressKey
+        return
+    }
+    Invoke-AppUpdateStartAndReport -Target ([string]$rel.Version)
+}
+
+function Invoke-AppUpdateDevScreen {
+    # Option 3: dev mode - show the local diff (counts, local edits, warnings, blocked reasons), confirm, apply.
+    $u = $msg.Update
+    if (-not (Get-Command -Name Get-AppDevDiff -ErrorAction SilentlyContinue)) {
+        Write-UiMessage -Text $u.DevNotAvailable -Kind warn
+        Wait-UiKey -Prompt $u.PressKey
+        return
+    }
+    $o = Get-AppUpdateOptionsForConsole
+    if ($o -and -not $o.Dev.Available) {
+        Write-UiMessage -Text ($u.DevBlocked -f (Get-AppDevReasonText -Reason ([string]$o.Dev.Reason))) -Kind warn
+        Wait-UiKey -Prompt $u.PressKey
+        return
+    }
+    $d = Get-AppDevDiff
+    if (-not $d -or -not $d.Ok) {
+        $why = if ($d -and $d.Error) { [string]$d.Error } else { 'no result' }
+        Write-UiMessage -Text ($u.Failed -f $why) -Kind err
+        Wait-UiKey -Prompt $u.PressKey
+        return
+    }
+    Write-UiMessage -Text $u.DevAvailable -Kind info
+    if ($d.Counts) {
+        Write-Host ($u.DevCounts -f $d.Counts.Changed, $d.Counts.Added, $d.Counts.Removed)
+    }
+    $edits = @($d.LocalEdits | Where-Object { $_ })
+    if ($edits.Count -gt 0) {
+        Write-Host $u.LocalEdits -ForegroundColor Yellow
+        foreach ($e in $edits) { Write-Host ('  ' + [string]$e) }
+    }
+    foreach ($w in @($d.Warnings | Where-Object { $_ })) { Write-UiMessage -Text ($u.DevWarn -f [string]$w) -Kind warn }
+    $blocked = @($d.Blocked | Where-Object { $_ })
+    foreach ($b in $blocked) { Write-UiMessage -Text ($u.DevBlockedBy -f [string]$b) -Kind err }
+    if ($blocked.Count -gt 0) {
+        Wait-UiKey -Prompt $u.PressKey
+        return
+    }
+    $ack = ([string](Read-Host $u.ConfirmApply)).Trim().ToUpper()
+    if ($ack -notin @('Y', 'O')) {
+        Write-Host ('  ' + $u.Cancelled) -ForegroundColor DarkGray
+        Wait-UiKey -Prompt $u.PressKey
+        return
+    }
+    Invoke-AppUpdateStartAndReport -Target 'dev'
+}
+
+function Invoke-AppUpdateZipScreen {
+    # Option 4: install from one release zip (its release.json gives the version).
+    $u = $msg.Update
+    $p = ([string](Read-Host $u.ZipPrompt)).Trim().Trim('"')
+    if (-not $p) { return }
+    if (-not (Test-Path -LiteralPath $p -PathType Leaf)) {
+        Write-UiMessage -Text ($u.ZipNotFound -f $p) -Kind err
+        Wait-UiKey -Prompt $u.PressKey
+        return
+    }
+    if (-not (Get-Command -Name Get-AppReleaseManifest -ErrorAction SilentlyContinue)) {
+        Write-UiMessage -Text ($u.CatalogOffline -f 'update module not loaded') -Kind err
+        Wait-UiKey -Prompt $u.PressKey
+        return
+    }
+    $m = Get-AppReleaseManifest -ZipPath $p
+    if (-not $m) {
+        Write-UiMessage -Text $u.ZipNoManifest -Kind err
+        Wait-UiKey -Prompt $u.PressKey
+        return
+    }
+    Write-UiMessage -Text ($u.ZipInfo -f [string]$m.version, [string]$m.type) -Kind info
+    $ack = ([string](Read-Host $u.ConfirmApply)).Trim().ToUpper()
+    if ($ack -notin @('Y', 'O')) {
+        Write-Host ('  ' + $u.Cancelled) -ForegroundColor DarkGray
+        Wait-UiKey -Prompt $u.PressKey
+        return
+    }
+    Invoke-AppUpdateStartAndReport -Target ([string]$m.version) -ZipPaths @($p)
+}
+
+function Invoke-AppUpdateImportScreen {
+    # Option I: import selected items from a previous installation folder.
+    $u = $msg.Update
+    if (-not (Get-Command -Name Import-PreviousInstall -ErrorAction SilentlyContinue)) {
+        Write-UiMessage -Text $u.ImportNotAvailable -Kind warn
+        Wait-UiKey -Prompt $u.PressKey
+        return
+    }
+    $p = ([string](Read-Host $u.ImportPathPrompt)).Trim().Trim('"')
+    if (-not $p) { return }
+    # Check the folder before asking for the items: a mistyped path is reported with the path itself.
+    if (-not ((Test-Path -LiteralPath (Join-Path $p 'config\config.json')) -or (Test-Path -LiteralPath (Join-Path $p 'data\vrhm.db')))) {
+        Write-UiMessage -Text ($u.ImportNotInstall -f $p) -Kind err
+        Wait-UiKey -Prompt $u.PressKey
+        return
+    }
+    $ids = @('headsets', 'profiles', 'crops', 'recording', 'kiosks', 'apps', 'wifi')
+    Write-Host $u.ImportTitle -ForegroundColor Cyan
+    for ($i = 0; $i -lt $ids.Count; $i++) {
+        Write-Host ('  {0}. {1}' -f ($i + 1), $u.('ImportItem_' + $ids[$i]))
+    }
+    $raw = ([string](Read-Host $u.ImportItemsPrompt)).Trim()
+    $sel = @()
+    if (-not $raw) { $sel = $ids }
+    else {
+        foreach ($tok in ($raw -split '[,; ]+')) {
+            if ($tok -match '^\d+$' -and [int]$tok -ge 1 -and [int]$tok -le $ids.Count) { $sel += $ids[[int]$tok - 1] }
+        }
+    }
+    if ($sel.Count -eq 0) { Write-UiMessage -Text $u.InvalidChoice -Kind warn; Wait-UiKey -Prompt $u.PressKey; return }
+    try {
+        $r = Import-PreviousInstall -Path $p -Items $sel
+        if ($r -and $r.Ok) { Write-UiMessage -Text $u.ImportDone -Kind ok }
+        else { Write-UiMessage -Text ($u.Failed -f $(if ($r -and $r.Error) { [string]$r.Error } else { 'no result' })) -Kind err }
+        if ($r -and $r.Report) {
+            # One line per imported item instead of the raw JSON report.
+            $rep = $null
+            try { $rep = [string]$r.Report | ConvertFrom-Json } catch { }
+            if ($rep -and $rep.items) {
+                foreach ($it in $rep.items.PSObject.Properties) {
+                    $kind = $(if ($it.Value.ok) { 'ok' } else { 'err' })
+                    Write-UiMessage -Text ('{0}: {1}' -f $it.Name, [string]$it.Value.message) -Kind $kind
+                }
+            } else { Write-UiMessage -Text ($u.ImportReport -f [string]$r.Report) -Kind info }
+        }
+    } catch {
+        Write-UiMessage -Text ($u.Failed -f $_.Exception.Message) -Kind err
+    }
+    Wait-UiKey -Prompt $u.PressKey
+}
+
+function Invoke-AppUpdateStateScreen {
+    # Option S: phase and message of the last update job.
+    $u = $msg.Update
+    Write-Host $u.StateTitle -ForegroundColor Cyan
+    Write-Host ''
+    $st = $null
+    if (Get-Command -Name Get-AppUpdateState -ErrorAction SilentlyContinue) { $st = Get-AppUpdateState }
+    if (-not $st -or (-not $st.Pending -and -not $st.State)) {
+        Write-UiMessage -Text $u.StateNone -Kind info
+    } else {
+        Write-Host ($u.StatePhase -f [string]$st.Phase)
+        $txt = ''
+        if ($st.State -and $st.State.message) { $txt = [string]$st.State.message }
+        elseif ($st.Pending -and $st.Pending.message) { $txt = [string]$st.Pending.message }
+        if ($txt) { Write-Host ($u.StateMessage -f $txt) }
+    }
+    Wait-UiKey -Prompt $u.PressKey
+}
+
+function Show-SubMenu-AppUpdate {
+    # Console counterpart of the web Updates accordion (spec S12). Single-key Write-UiMenu layout.
+    $u = $msg.Update
+    do {
+        $info = $null
+        if (Get-Command -Name Get-AppVersionInfo -ErrorAction SilentlyContinue) { $info = Get-AppVersionInfo }
+        $installedText = $u.MenuInstalled -f $(if ($info) { [string]$info.Version } else { '-' })
+        $items = @(
+            @{ Separator = $true; Label = $installedText },
+            @{ Separator = $true },
+            @{ Key = '1'; Label = $u.MenuCheck },
+            @{ Key = '2'; Label = $u.MenuUpdate },
+            @{ Key = '3'; Label = $u.MenuDev },
+            @{ Key = '4'; Label = $u.MenuZip },
+            @{ Key = 'I'; Label = $u.MenuImport },
+            @{ Key = 'S'; Label = $u.MenuState }
+        )
+        Write-UiMenu -Title $u.Title -Subtitle $u.Subtitle -Items $items -Footer $msg.Console.Back -Bg 'DarkBlue'
+        $choice = Read-UiKey
+        if ($choice -in @('0', 'ESC')) { return }
+        switch ($choice) {
+            '1' { Invoke-AppUpdateCheckScreen }
+            '2' { Invoke-AppUpdateToReleaseScreen }
+            '3' { Invoke-AppUpdateDevScreen }
+            '4' { Invoke-AppUpdateZipScreen }
+            'I' { Invoke-AppUpdateImportScreen }
+            'S' { Invoke-AppUpdateStateScreen }
         }
     } while ($true)
 }

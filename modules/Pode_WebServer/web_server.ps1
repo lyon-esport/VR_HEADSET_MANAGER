@@ -525,6 +525,45 @@ $benchmarkParallelJobBlock = {
     }
 }
 $script:benchmarkJob = $null
+
+# Background job for the application self-update staging (Start-AppUpdate, vrhm_update.ps1).
+# Single slot, loop-bound handle (routes_update.ps1 keeps apply/progress/cancel on the accept loop).
+# Start-AppUpdate writes its own progress file; the restart is triggered by the progress route.
+$appUpdateJobBlock = {
+    param([string]$ScriptPath, [string]$ConfigFilePath, [string]$Target, [string]$TempIdsCsv, [string]$ItemsCsv, [bool]$Force, [string]$ProgressFile)
+    # A failing console write must not end the job (no usable console in a job host).
+    function global:Write-Host { try { Microsoft.PowerShell.Utility\Write-Host @args } catch { } }
+    try {
+        $global:ScriptPath         = $ScriptPath
+        $global:ConfigFilePath     = $ConfigFilePath
+        $global:IsWebServerProcess = $true
+        . (Join-Path $ScriptPath 'modules\scripts_init.ps1')
+        $ids = @()
+        if ($TempIdsCsv) { $ids = @($TempIdsCsv -split ',' | Where-Object { $_ }) }
+        $items = @()
+        if ($ItemsCsv) { $items = @($ItemsCsv -split ',' | Where-Object { $_ }) }
+        if ($Force) {
+            $res = Start-AppUpdate -Target $Target -TempIds $ids -ImportItems $items -ProgressFile $ProgressFile -Force
+        } else {
+            $res = Start-AppUpdate -Target $Target -TempIds $ids -ImportItems $items -ProgressFile $ProgressFile
+        }
+        if (-not $res.Ok) {
+            $msgText = [string]$res.Error
+            if (-not $msgText) { $msgText = [string]$res.Reason }
+            [System.IO.File]::WriteAllText($ProgressFile, (ConvertTo-Json -InputObject ([ordered]@{ status = 'error'; step = 'error'; percent = 0; message = $msgText; reason = [string]$res.Reason; hops = @($res.Hops); current = '' }) -Compress))
+        } elseif ($res.Mode -eq 'major') {
+            [System.IO.File]::WriteAllText($ProgressFile, (ConvertTo-Json -InputObject ([ordered]@{ status = 'staged'; step = 'staged'; percent = 100; message = 'Update staged'; hops = @($res.Hops); current = '' }) -Compress))
+        }
+    } catch {
+        $err = [string]$_
+        try { [System.IO.File]::WriteAllText($ProgressFile, (ConvertTo-Json -InputObject ([ordered]@{ status = 'error'; step = 'error'; percent = 0; message = $err; hops = @(); current = '' }) -Compress)) } catch {}
+    }
+}
+$script:appUpdateJob = $null
+$script:appUpdateRestarting = $false
+$script:appUpdateProgFile = Get-JobFilePath -Name 'vrm_app_update.json'
+# A progress file left "running" by a previous web server session is reported idle by the progress route.
+
 # A progress file left "running" by a previous web server session is stale unless a
 # benchmark still holds the pause flag (a console run, for instance).
 $script:benchmarkProgFile = Get-JobFilePath -Name 'vrm_benchmark.json'
@@ -832,6 +871,7 @@ function Invoke-WebHousekeeping {
         if (Remove-FinishedWebJob -Job $script:resolveJob)        { $script:resolveJob = $null }
         if (Remove-FinishedWebJob -Job $script:updateVersionsJob) { $script:updateVersionsJob = $null }
         if (Remove-FinishedWebJob -Job $script:benchmarkJob)      { $script:benchmarkJob = $null }
+        if (Remove-FinishedWebJob -Job $script:appUpdateJob)      { $script:appUpdateJob = $null }
         # 3. recording playback sessions and finished downloads
         try { Remove-IdleRecordingPlayback | Out-Null } catch { }
         if ($script:RecordingDownloads.Count -gt 0) { Complete-PendingRecordingDownloads }

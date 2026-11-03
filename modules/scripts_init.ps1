@@ -67,6 +67,7 @@ $moduleFiles = Get-ChildItem -LiteralPath $ModulesPath -Filter "*.ps1" -File | S
         $_.Name -notlike "*_init.ps1" -and
 
         $_.Name -notlike "reaper.ps1" -and
+        $_.Name -notlike "updater.ps1" -and
         $_.Name -notlike "*_test.ps1" -and
         ($vqaPreEnabled -or $_.Name -ne "video_quality_automation.ps1")
     }
@@ -306,6 +307,22 @@ if (Get-Command Add-StartupStage -ErrorAction SilentlyContinue) { Add-StartupSta
 if ($dbRole -eq 'Main' -and (Get-Command Initialize-AppNamesCache -ErrorAction SilentlyContinue)) {
     try { Initialize-AppNamesCache }
     catch { Write-Log ("App catalogue seed failed: " + $_.Exception.Message) -Level WARNING }
+}
+
+# App self-update (ADR-0041, spec S9): first start of a new version - merge new template config keys,
+# switch pinned binaries, run modules\upgrade steps. Main process only, before any service starts.
+if ($dbRole -eq 'Main' -and (Get-Command Invoke-AppUpgradeSteps -ErrorAction SilentlyContinue)) {
+    try {
+        $upgradeResult = Invoke-AppUpgradeSteps
+        if ($upgradeResult.Error) { Write-Log ("Upgrade steps reported: " + $upgradeResult.Error) -Level WARNING }
+    } catch { Write-Log ("Upgrade steps failed: " + $_.Exception.Message) -Level WARNING }
+}
+
+# Major update (ADR-0041, spec S11): phase 2 of the import of a previous installation (headsets, kiosks, apps...)
+# when data\update\import_from.json is present. Main process only, database open; failures are reported, never fatal.
+if ($dbRole -eq 'Main' -and (Get-Command Invoke-PreviousInstallDataStartup -ErrorAction SilentlyContinue)) {
+    try { Invoke-PreviousInstallDataStartup | Out-Null }
+    catch { Write-Log ("Previous installation import failed: " + $_.Exception.Message) -Level WARNING }
 }
 
 # Video Quality Automation startup: crash-recovery + history truncation.

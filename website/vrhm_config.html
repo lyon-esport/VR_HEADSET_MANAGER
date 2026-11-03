@@ -143,6 +143,8 @@
     .action-btn:hover { background:#252525; border-color:var(--accent); }
     [data-theme=light] .action-btn:hover { background:#eff6ff; border-color:var(--accent); }
     .action-btn svg { flex-shrink:0; stroke:var(--accent); }
+    .action-btn:disabled, .action-btn:disabled:hover { opacity:.45; cursor:not-allowed; border-color:#2a2a2a !important; background:#1e1e1e; }
+    [data-theme=light] .action-btn:disabled, [data-theme=light] .action-btn:disabled:hover { border-color:#d1d5db !important; background:#f9fafb; }
     .action-btn .btn-desc { font-size:11px; color:var(--muted); margin-top:2px; font-weight:400; }
 
     /* Profiles modal */
@@ -442,6 +444,48 @@
             </div>
           </button>
         </div>
+      </div>
+    </div>
+
+    <!-- Updates -->
+    <div class="acc" id="acc-updates">
+      <button class="acc-hdr" onclick="accToggle('acc-updates')">
+        <svg class="acc-hdr-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+        Updates
+        <span class="acc-chevron">&#9654;</span>
+      </button>
+      <div class="acc-body" id="acc-updates-body">
+        <div class="fld-subgroup">Installed</div>
+        <div id="upd-installed" style="padding:12px 20px">Loading...</div>
+        <div id="upd-progress" style="display:none;padding:10px 20px;font-size:12px;border-top:1px solid var(--card-border)"></div>
+        <div class="fld-subgroup">Releases</div>
+        <div style="padding:12px 20px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="action-btn" id="btn-upd-check" style="width:auto;padding:9px 14px;font-size:12px"><div>Check for updates</div></button>
+          <button class="action-btn" id="btn-upd-zip" style="width:auto;padding:9px 14px;font-size:12px"><div>Install from zip file(s)</div></button>
+          <input type="file" id="upd-zip-input" accept=".zip,application/zip" multiple style="display:none">
+          <span id="upd-check-status" class="fld-def"></span>
+          <span id="upd-upload-status" class="fld-def"></span>
+        </div>
+        <div id="upd-uploads" style="padding:0 20px"></div>
+        <div id="upd-releases"></div>
+        <div class="fld-subgroup">Dev mode</div>
+        <div id="upd-dev"></div>
+        <div class="fld-subgroup">Import from a previous installation</div>
+        <div id="upd-import" style="padding:12px 20px">
+          <div style="font-size:12px;margin-bottom:8px">Copies data from another VR HEADSET MANAGER folder on this PC into this installation. Nothing in the other folder is changed.</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+            <input type="text" id="upd-imp-path" placeholder="Folder of the previous installation (...\VR_HEADSET_MANAGER)" style="flex:1;min-width:320px;padding:8px;font-size:12px">
+            <button class="action-btn" id="btn-upd-imp-browse" style="width:auto;padding:9px 14px;font-size:12px"><div>Browse...</div></button>
+            <span id="upd-imp-check" class="fld-def"></span>
+          </div>
+          <div id="upd-imp-items" style="display:flex;gap:12px;flex-wrap:wrap;font-size:12px;margin-bottom:8px"></div>
+          <button class="action-btn" id="btn-upd-imp-run" style="width:auto;padding:9px 14px;font-size:12px;border-color:var(--accent)" disabled><div>Import</div></button>
+          <div id="upd-imp-report" style="margin-top:8px;font-size:12px"></div>
+        </div>
+        <div class="fld-subgroup">Update settings</div>
+        <div id="acc-updates-settings"></div>
+        <div class="fld-subgroup">Bundled programs</div>
+        <div id="acc-updates-bins"></div>
       </div>
     </div>
   </main>
@@ -949,6 +993,14 @@
 
     // ── Section definitions ──────────────────────────────────────────────────
     var SECTIONS = {
+      'acc-updates-settings': [
+        { path: 'Update.github_repo', label: 'GitHub Repository', type: 'text', desc: 'owner/name of the repository releases are read from.' },
+        { path: 'Update.dev_branch', label: 'Dev Branch', type: 'text', desc: 'Branch used by dev mode updates.' },
+        { path: 'Update.health_timeout_sec', label: 'Health Timeout', type: 'number', min: 60, max: 3600, unit: 'seconds',
+          desc: 'How long the new version has to start healthy before the update is rolled back.' },
+        { path: 'Update.catalog_cache_min', label: 'Release List Cache', type: 'number', min: 1, max: 1440, unit: 'minutes',
+          desc: 'How long the GitHub release list is cached.' }
+      ],
       'acc-general-body': [
         { path: 'language', label: 'Language', type: 'select', options: ['en-US','fr-FR'],
           desc: 'Interface language for the application.' },
@@ -1237,21 +1289,9 @@
           html += '<span class="fld-def">default: ' + esc(defStr) + '</span>';
         }
         html += '</div></div>';
-        if (f.path === 'scrcpy.folder') {
-          html += binVerRowHtml('scrcpy', 'Scrcpy Version', true);
-        }
-        if (f.path === 'ffmpeg.folder') {
-          html += binVerRowHtml('ffmpeg', 'FFmpeg Version', true);
-        }
-        if (f.path === 'mediamtx.folder') {
-          html += binVerRowHtml('mediamtx', 'MediaMTX Version', true);
-        }
       });
       var el = document.getElementById('acc-advanced-fields');
       if (el) el.innerHTML = html;
-      loadScrcpyVersion();
-      loadFfmpegVersion();
-      loadMediaMtxVersion();
     }
 
     function renderAllSections() {
@@ -1259,6 +1299,7 @@
         renderSection(SECTIONS[id], id);
       });
       renderAdvanced();
+      renderUpdates();
     }
 
     // ── Toolbar buttons ──────────────────────────────────────────────────────
@@ -1408,10 +1449,10 @@
       TopBar.apiPost('/api/app-restart', 'Restart Application', null);
     }
 
-    // Buttons live inside #acc-advanced-fields, which is re-rendered (innerHTML
-    // replaced) by renderAdvanced() every time config reloads - delegate from
+    // Buttons live inside #acc-updates-bins, which is re-rendered (innerHTML
+    // replaced) by renderUpdates() every time config reloads - delegate from
     // the stable parent instead of binding directly to the buttons.
-    document.getElementById('acc-advanced-fields').addEventListener('click', function(e) {
+    document.getElementById('acc-updates-bins').addEventListener('click', function(e) {
       Object.keys(BIN_LABELS).forEach(function(key) {
         if (e.target.closest('#btn-' + key + '-check')) { onBinCheckClick(key); }
         else if (e.target.closest('#btn-' + key + '-update')) { onBinUpdateClick(key, e.target.closest('#btn-' + key + '-update')); }
@@ -1541,6 +1582,432 @@
           statusEl.textContent = 'Server unreachable';
         });
     }
+
+    // ── Updates accordion (acc-updates) ──────────────────────────────────────
+    var _updOpts = null;       // last options from POST /api/app-update/check
+    var _updUploads = [];      // [{tempId, manifest, name}]
+    var _updPollTimer = null;
+    var _updBusy = false;
+    var UPD_IMPORT_ITEMS = [
+      { id: 'headsets',  label: 'Headsets',  on: true },
+      { id: 'profiles',  label: 'Profiles',  on: true },
+      { id: 'crops',     label: 'Crops',     on: true },
+      { id: 'recording', label: 'Recording', on: true },
+      { id: 'kiosks',    label: 'Kiosks',    on: true },
+      { id: 'apps',      label: 'Apps',      on: true },
+      { id: 'wifi',      label: 'WiFi networks (same Windows user only)', on: false }
+    ];
+    var UPD_REASONS = {
+      NoManifest: 'no update package',
+      NotUpdatable: 'this installation cannot be updated automatically',
+      NoRoute: 'no update path',
+      Older: 'older than installed',
+      Same: 'same version'
+    };
+
+    function updJson(url, body) {
+      return fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {})
+      }).then(function(r) { return r.json(); });
+    }
+
+    function updBadge(text, color) {
+      return '<span style="display:inline-block;font-size:10px;font-weight:700;letter-spacing:.05em;padding:2px 7px;border-radius:10px;margin-right:6px;border:1px solid ' + color + ';color:' + color + '">' + esc(text) + '</span>';
+    }
+
+    function updAsList(x) {
+      if (x == null || x === '') return [];
+      return Array.isArray(x) ? x : [x];
+    }
+
+    // Bundled programs sub-card (scrcpy / mediamtx / ffmpeg). Moved here from
+    // Advanced / Internal; element ids and handlers are unchanged.
+    function renderUpdates() {
+      var html = '';
+      html += binVerRowHtml('scrcpy', 'Scrcpy Version', true);
+      html += binVerRowHtml('ffmpeg', 'FFmpeg Version', true);
+      html += binVerRowHtml('mediamtx', 'MediaMTX Version', true);
+      var el = document.getElementById('acc-updates-bins');
+      if (el) el.innerHTML = html;
+      loadScrcpyVersion();
+      loadFfmpegVersion();
+      loadMediaMtxVersion();
+    }
+
+    function updLoadStatus() {
+      var el = document.getElementById('upd-installed');
+      if (!el) return;
+      fetch('/api/app-update/status').then(function(r) { return r.json(); }).then(function(j) {
+        if (!j || !j.ok) { el.textContent = 'Status unavailable'; return; }
+        var h = '<div style="font-size:14px;color:#e5e7eb;margin-bottom:6px"><b>' + esc(j.version || '?') + '</b> ';
+        if (j.kind) h += updBadge(String(j.kind).toUpperCase(), 'var(--accent)');
+        if (j.devTree) h += updBadge('DEV TREE', '#d97706');
+        h += '</div>';
+        h += '<div class="fld-def" style="display:block">Commit: ' + esc(j.commit ? String(j.commit).substring(0, 7) : '-')
+          + ' &middot; Updatable: ' + (j.updatable ? 'yes' : 'no') + '</div>';
+        var st = j.state || null;
+        if (st) {
+          var s = st.State || {};
+          var txt = s.status || s.result || st.Phase || '';
+          if (txt) h += '<div class="fld-def" style="display:block">Last update job: ' + esc(typeof txt === 'string' ? txt : JSON.stringify(txt)) + (s.message ? ' - ' + esc(s.message) : '') + '</div>';
+        }
+        if (j.importReport && j.importReport.items) {
+          h += '<div class="fld-def" style="display:block;margin-top:6px">Last import from ' + esc(j.importReport.fromVersion || j.importReport.from || '?') + ':</div>';
+          Object.keys(j.importReport.items).forEach(function(k) {
+            var it = j.importReport.items[k] || {};
+            h += '<div class="fld-def" style="display:block">&nbsp;&nbsp;' + (it.ok ? '&#10003; ' : '&#10007; ') + esc(k)
+              + (it.count != null ? ' (' + esc(it.count) + ')' : '') + (it.message ? ' - ' + esc(it.message) : '') + '</div>';
+          });
+        }
+        el.innerHTML = h;
+      }).catch(function() { el.textContent = 'Server unreachable'; });
+    }
+
+    function updCheck() {
+      var btn = document.getElementById('btn-upd-check');
+      var st = document.getElementById('upd-check-status');
+      btn.disabled = true; st.textContent = 'Checking...';
+      updJson('/api/app-update/check', { force: true, tempIds: _updUploads.map(function(u) { return u.tempId; }) })
+        .then(function(j) {
+          btn.disabled = false;
+          if (!j || !j.ok) { st.textContent = 'Check failed: ' + ((j && j.error) || 'unknown error'); }
+          else { st.textContent = ''; }
+          _updOpts = (j && j.options) ? j.options : null;
+          if (_updOpts && _updOpts.Releases && !_updOpts.Releases.length && j.ok) st.textContent = 'No newer release.';
+          renderUpdateReleases();
+          renderUpdateDev();
+        })
+        .catch(function() { btn.disabled = false; st.textContent = 'Server unreachable'; });
+    }
+
+    function updRelByVersion(v) {
+      var rels = (_updOpts && _updOpts.Releases) || [];
+      for (var i = 0; i < rels.length; i++) { if (rels[i].Version === v) return rels[i]; }
+      return null;
+    }
+
+    function updHopsHaveMajor(r) {
+      if (String(r.Kind).toLowerCase() === 'major') return true;
+      var hops = updAsList(r.Hops);
+      for (var i = 0; i < hops.length; i++) {
+        var h = updRelByVersion(hops[i]);
+        if (h && String(h.Kind).toLowerCase() === 'major') return true;
+      }
+      return false;
+    }
+
+    function renderUpdateReleases() {
+      var el = document.getElementById('upd-releases');
+      if (!el) return;
+      var rels = (_updOpts && _updOpts.Releases) || [];
+      if (!rels.length) { el.innerHTML = ''; return; }
+      var h = '';
+      rels.forEach(function(r, idx) {
+        var ok = !!r.Reachable;
+        h += '<div class="fld-row" style="flex-direction:column;gap:6px;' + (ok ? '' : 'opacity:.55') + '">';
+        h += '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">';
+        h += '<b style="color:#e5e7eb;font-size:14px">' + esc(r.Version) + '</b>';
+        var kind = String(r.Kind || '').toLowerCase();
+        if (kind === 'major') h += updBadge('MAJOR', '#dc2626');
+        else if (kind === 'minor') h += updBadge('MINOR', '#3b82f6');
+        if (r.Warning === 'prerelease') h += updBadge('PRE-RELEASE - may be unstable', '#d97706');
+        if (r.Source === 'zip') h += updBadge('ZIP', '#6b7280');
+        if (r.PublishedAt) h += '<span class="fld-def">' + esc(String(r.PublishedAt).substring(0, 10)) + '</span>';
+        h += '</div>';
+        if (r.Title) h += '<div style="font-size:12px">' + esc(r.Title) + '</div>';
+        var br = updAsList(r.Breaking);
+        if (br.length) {
+          h += '<div style="font-size:12px;color:#d97706"><b>Breaking changes:</b><ul style="margin:2px 0 2px 18px;padding:0">';
+          br.forEach(function(b) { h += '<li>' + esc(typeof b === 'string' ? b : JSON.stringify(b)) + '</li>'; });
+          h += '</ul></div>';
+        }
+        if (r.Notes) {
+          h += '<details><summary style="cursor:pointer;font-size:12px;color:var(--accent)">Release notes</summary>'
+            + '<pre style="white-space:pre-wrap;font-size:12px;margin:6px 0 0;font-family:inherit">' + esc(r.Notes) + '</pre></details>';
+        }
+        if (!ok) {
+          var why = UPD_REASONS[r.Reason] || r.Reason || 'not reachable';
+          if (r.Reason === 'NoRoute' && r.Needs) why = 'Needs ' + r.Needs + ' first';
+          h += '<div class="fld-def" style="display:block">Not available: ' + esc(why) + '</div>';
+        } else {
+          var hops = updAsList(r.Hops);
+          h += '<div class="fld-def" style="display:block">Update path: ' + esc(hops.join(' → ')) + '</div>';
+          if (updHopsHaveMajor(r)) {
+            h += '<div style="font-size:12px"><b>Import from the current installation:</b><div style="display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:4px">';
+            UPD_IMPORT_ITEMS.forEach(function(it) {
+              h += '<label style="display:inline-flex;align-items:center;gap:5px"><input type="checkbox" class="upd-imp-' + idx + '" value="' + esc(it.id) + '"' + (it.on ? ' checked' : '') + '> ' + esc(it.label) + '</label>';
+            });
+            h += '</div></div>';
+          }
+          h += '<div><button class="action-btn" data-upd-apply="' + idx + '" style="width:auto;padding:9px 14px;font-size:12px;border-color:var(--accent)"' + (_updBusy ? ' disabled' : '') + '><div>Update to ' + esc(r.Version) + '</div></button></div>';
+        }
+        h += '</div>';
+      });
+      el.innerHTML = h;
+    }
+
+    function updApply(target, tempIds, importItems, confirmText) {
+      if (!confirm(confirmText)) return;
+      _updBusy = true;
+      updJson('/api/app-update/apply', { target: target, tempIds: tempIds, importItems: importItems, confirm: true })
+        .then(function(j) {
+          if (!j || !j.ok) {
+            _updBusy = false;
+            showToast('Update failed: ' + ((j && j.error) || 'unknown error'), 4000);
+            renderUpdateReleases(); renderUpdateDev();
+            return;
+          }
+          showToast('Update started', 3000);
+          updPollStart();
+        })
+        .catch(function() { _updBusy = false; showToast('Server unreachable', 3000); });
+    }
+
+    function updApplyRelease(idx) {
+      var rels = (_updOpts && _updOpts.Releases) || [];
+      var r = rels[idx];
+      if (!r) return;
+      var hops = updAsList(r.Hops);
+      var major = updHopsHaveMajor(r);
+      var items = [];
+      document.querySelectorAll('.upd-imp-' + idx).forEach(function(c) { if (c.checked) items.push(c.value); });
+      var txt = 'Update to ' + r.Version + '?\n\nSteps: ' + hops.join(' -> ') + '\n';
+      hops.forEach(function(v) {
+        var h = updRelByVersion(v);
+        var b = h ? updAsList(h.Breaking) : [];
+        if (b.length) txt += '\nBreaking changes in ' + v + ':\n - ' + b.map(function(x) { return typeof x === 'string' ? x : JSON.stringify(x); }).join('\n - ') + '\n';
+      });
+      if (major) txt += '\nA MAJOR release installs in a NEW folder and imports the ticked data (' + (items.join(', ') || 'nothing') + '). The current folder is left untouched.\n';
+      txt += '\nThe application will restart and this page will go offline for a moment.';
+      updApply(r.Version, _updUploads.map(function(u) { return u.tempId; }), items, txt);
+    }
+
+    function renderUpdateDev() {
+      var el = document.getElementById('upd-dev');
+      if (!el) return;
+      var d = _updOpts && _updOpts.Dev;
+      if (!d) { el.innerHTML = '<div class="fld-def" style="display:block;padding:10px 20px">Run "Check for updates" to see dev mode availability.</div>'; return; }
+      var h = '<div style="padding:10px 20px"><div style="font-size:12px;margin-bottom:6px">Branch: <b>' + esc(d.Branch || '') + '</b> &middot; '
+        + (d.Available ? updBadge('AVAILABLE', '#16a34a') : updBadge('UNAVAILABLE', '#6b7280'))
+        + (d.Reason ? '<span class="fld-def">' + esc(d.Reason) + '</span>' : '') + '</div>';
+      h += '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">';
+      h += '<button class="action-btn" id="btn-upd-devdiff" style="width:auto;padding:9px 14px;font-size:12px"' + (d.Available ? '' : ' disabled') + '><div>Show changes</div></button>';
+      h += '<button class="action-btn" id="btn-upd-devapply" style="width:auto;padding:9px 14px;font-size:12px;border-color:var(--accent)" disabled><div>Apply dev update</div></button>';
+      h += '</div><div id="upd-devdiff" style="margin-top:8px"></div></div>';
+      el.innerHTML = h;
+    }
+
+    function updDevDiff() {
+      var out = document.getElementById('upd-devdiff');
+      var ap = document.getElementById('btn-upd-devapply');
+      out.textContent = 'Loading changes...';
+      updJson('/api/app-update/dev-diff', {}).then(function(j) {
+        if (!j || !j.ok || !j.diff || j.diff.Ok === false) {
+          var e = (j && j.error) || (j && j.diff && (j.diff.Reason || j.diff.Error)) || 'unknown error';
+          out.innerHTML = '<div class="fld-def" style="display:block">' + esc(e === 'not implemented' ? 'Dev mode is not available in this build yet.' : 'Cannot show changes: ' + e) + '</div>';
+          return;
+        }
+        var d = j.diff;
+        var files = updAsList(d.Files);
+        var inc = files.filter(function(f) { return f.Included; });
+        var local = inc.filter(function(f) { return f.LocalModified; });
+        var h = '<div style="font-size:12px">' + esc(files.length) + ' changed file(s), ' + esc(inc.length) + ' applied, ' + esc(files.length - inc.length) + ' ignored'
+          + (d.AheadBy != null ? ', ' + esc(d.AheadBy) + ' commit(s) ahead' : '') + '. Local edits that will be overwritten: <b>' + local.length + '</b></div>';
+        if (d.Blocked) {
+          h += '<div style="font-size:12px;color:#dc2626;margin-top:4px"><b>Blocked:</b><ul style="margin:2px 0 2px 18px;padding:0">';
+          updAsList(d.BlockReasons).forEach(function(b) { h += '<li>' + esc(b) + '</li>'; });
+          h += '</ul></div>';
+        }
+        var w = updAsList(d.Warnings);
+        if (w.length) {
+          h += '<div style="font-size:12px;color:#d97706;margin-top:4px"><b>Warnings:</b><ul style="margin:2px 0 2px 18px;padding:0">';
+          w.forEach(function(x) { h += '<li>' + esc(x) + '</li>'; });
+          h += '</ul></div>';
+        }
+        var ordered = local.concat(files.filter(function(f) { return !(f.Included && f.LocalModified); }));
+        h += '<div style="max-height:240px;overflow:auto;font-size:11px;margin-top:6px;font-family:monospace">';
+        ordered.forEach(function(f) {
+          h += '<div style="' + (f.Included ? '' : 'opacity:.5') + '">' + (f.LocalModified && f.Included ? '<span style="color:#d97706">[local edit] </span>' : '')
+            + esc(f.Status || '') + ' ' + esc(f.Path) + (f.PreviousPath ? ' (from ' + esc(f.PreviousPath) + ')' : '') + (f.Included ? '' : ' [ignored]') + '</div>';
+        });
+        h += '</div>';
+        out.innerHTML = h;
+        if (ap) ap.disabled = !!d.Blocked || _updBusy || !inc.length;
+      }).catch(function() { out.textContent = 'Server unreachable'; });
+    }
+
+    function updApplyDev() {
+      updApply('dev', [], [],
+        'Apply the dev update?\n\nFiles changed on the development branch are downloaded and applied. ' +
+        'Local edits to those files are overwritten (a backup is kept).\n\nThe application will restart and this page will go offline for a moment.');
+    }
+
+    function renderUpdateUploads() {
+      var el = document.getElementById('upd-uploads');
+      if (!el) return;
+      var h = '';
+      _updUploads.forEach(function(u, i) {
+        var m = u.manifest || {};
+        h += '<div class="fld-def" style="display:block">' + esc(u.name) + ': ' + esc(m.version || m.Version || '?') + ' '
+          + esc(String(m.type || m.Type || '').toUpperCase()) + ' <a href="#" data-upd-rmzip="' + i + '" style="color:var(--accent)">remove</a></div>';
+      });
+      el.innerHTML = h;
+    }
+
+    function updUploadFiles(files) {
+      var st = document.getElementById('upd-upload-status');
+      var list = Array.prototype.slice.call(files || []);
+      if (!list.length) return;
+      st.textContent = 'Uploading ' + list.length + ' file(s)...';
+      var chain = Promise.resolve();
+      list.forEach(function(f) {
+        chain = chain.then(function() {
+          return fetch('/api/app-update/upload', { method: 'POST', headers: { 'Content-Type': 'application/zip' }, body: f })
+            .then(function(r) { return r.json(); })
+            .then(function(j) {
+              if (j && j.ok) { _updUploads.push({ tempId: j.tempId, manifest: j.manifest || {}, name: f.name }); }
+              else { showToast(f.name + ': ' + ((j && j.error) || 'upload failed'), 4000); }
+            });
+        });
+      });
+      chain.then(function() {
+        st.textContent = '';
+        renderUpdateUploads();
+        if (_updUploads.length) updCheck();
+      }).catch(function() { st.textContent = 'Upload failed'; });
+    }
+
+    function updPollStart() {
+      if (_updPollTimer) clearTimeout(_updPollTimer);
+      updPollOnce();
+    }
+
+    function updPollOnce() {
+      var pn = document.getElementById('upd-progress');
+      fetch('/api/app-update/progress').then(function(r) { return r.json(); }).then(function(p) {
+        var s = p && p.status;
+        var active = (s === 'running' || s === 'staged' || s === 'restarting');
+        _updBusy = active;
+        if (!pn) return;
+        if (!s || s === 'idle') { pn.style.display = 'none'; return; }
+        pn.style.display = 'block';
+        var h = '';
+        if (s === 'restarting') {
+          h += '<b>The application is restarting...</b>';
+        } else if (s === 'error') {
+          h += '<b style="color:#dc2626">Update failed</b>: ' + esc(p.message || 'unknown error');
+        } else if (s === 'done') {
+          h += '<b style="color:#16a34a">Update done.</b> ' + esc(p.message || '');
+        } else {
+          h += '<b>' + esc(s === 'staged' ? 'Update staged' : 'Update in progress') + '</b> ' + esc(p.step || '') + ' ' + esc(p.message || '');
+          var pct = Math.max(0, Math.min(100, Number(p.percent) || 0));
+          h += '<div style="height:6px;background:#2a2a2a;border-radius:3px;margin-top:6px"><div style="height:6px;width:' + pct + '%;background:var(--accent);border-radius:3px"></div></div>';
+        }
+        pn.innerHTML = h;
+        if (active) { _updPollTimer = setTimeout(updPollOnce, 2000); }
+        else { renderUpdateReleases(); renderUpdateDev(); }
+      }).catch(function() {
+        if (_updBusy) _updPollTimer = setTimeout(updPollOnce, 2000);
+      });
+    }
+
+    // --- Import from a previous installation (POST /api/app-update/import, same backend as the console) ---
+    function updImpRenderItems() {
+      var el = document.getElementById('upd-imp-items');
+      if (!el) return;
+      var h = '';
+      UPD_IMPORT_ITEMS.forEach(function(it) {
+        h += '<label style="display:inline-flex;align-items:center;gap:5px"><input type="checkbox" class="upd-imp-item" value="' + esc(it.id) + '"' + (it.on ? ' checked' : '') + '> ' + esc(it.label) + '</label>';
+      });
+      el.innerHTML = h;
+    }
+
+    function updImpCheck() {
+      var path = (document.getElementById('upd-imp-path').value || '').trim();
+      var st = document.getElementById('upd-imp-check');
+      var run = document.getElementById('btn-upd-imp-run');
+      run.disabled = true;
+      if (!path) { st.textContent = ''; return; }
+      st.textContent = 'Checking...';
+      updJson('/api/app-update/import', { path: path, check: true }).then(function(j) {
+        if (j && j.ok && j.valid) {
+          st.innerHTML = updBadge('VALID', '#16a34a') + esc(j.version ? 'version ' + j.version : 'version unknown');
+          run.disabled = false;
+        } else {
+          st.textContent = (j && j.error) || 'Invalid folder';
+        }
+      }).catch(function() { st.textContent = 'Server unreachable'; });
+    }
+
+    function updImpBrowse() {
+      var st = document.getElementById('upd-imp-check');
+      st.textContent = 'A folder window is open on the server PC...';
+      updJson('/api/browse-folder', { title: 'Select the folder of the previous VR HEADSET MANAGER installation' }).then(function(j) {
+        if (j && j.ok && j.path) {
+          document.getElementById('upd-imp-path').value = j.path;
+          updImpCheck();
+        } else {
+          st.textContent = (j && j.cancelled) ? '' : ((j && j.error) || 'No folder selected');
+        }
+      }).catch(function() { st.textContent = 'Server unreachable'; });
+    }
+
+    function updImpRun() {
+      var path = (document.getElementById('upd-imp-path').value || '').trim();
+      var items = [];
+      document.querySelectorAll('#upd-imp-items .upd-imp-item').forEach(function(c) { if (c.checked) items.push(c.value); });
+      if (!path || !items.length) { showToast('Choose a folder and at least one item.', true); return; }
+      if (!confirm('Import ' + items.join(', ') + ' from:\n' + path + '\n\nExisting headsets with the same name, address or serial are kept as they are.')) return;
+      var out = document.getElementById('upd-imp-report');
+      var run = document.getElementById('btn-upd-imp-run');
+      run.disabled = true;
+      out.textContent = 'Importing...';
+      updJson('/api/app-update/import', { path: path, items: items }).then(function(j) {
+        var h = '';
+        if (j && j.report) {
+          Object.keys(j.report).forEach(function(k) {
+            var r = j.report[k] || {};
+            h += '<div>' + (r.ok ? updBadge('OK', '#16a34a') : updBadge('FAILED', '#dc2626')) + '<b>' + esc(k) + '</b>: ' + esc(r.message || '') + '</div>';
+          });
+        }
+        if (!j || !j.ok) h = '<div style="color:#dc2626">' + esc((j && j.error) || 'Import failed') + '</div>' + h;
+        else h = '<div style="margin-bottom:4px">Import finished. Reload the other pages to see the imported data.</div>' + h;
+        out.innerHTML = h;
+        run.disabled = false;
+      }).catch(function() { out.textContent = 'Server unreachable'; run.disabled = false; });
+    }
+
+    function initUpdates() {
+      var acc = document.getElementById('acc-updates');
+      if (!acc) return;
+      updImpRenderItems();
+      var impPath = document.getElementById('upd-imp-path');
+      impPath.addEventListener('change', updImpCheck);
+      impPath.addEventListener('keydown', function(e) { if (e.key === 'Enter') updImpCheck(); });
+      acc.addEventListener('click', function(e) {
+        var t = e.target;
+        var ap = t.closest('[data-upd-apply]');
+        if (ap) { updApplyRelease(parseInt(ap.getAttribute('data-upd-apply'), 10)); return; }
+        var rm = t.closest('[data-upd-rmzip]');
+        if (rm) { e.preventDefault(); _updUploads.splice(parseInt(rm.getAttribute('data-upd-rmzip'), 10), 1); renderUpdateUploads(); return; }
+        if (t.closest('#btn-upd-check')) { updCheck(); return; }
+        if (t.closest('#btn-upd-devdiff')) { updDevDiff(); return; }
+        if (t.closest('#btn-upd-devapply')) { updApplyDev(); return; }
+        if (t.closest('#btn-upd-zip')) { document.getElementById('upd-zip-input').click(); return; }
+        if (t.closest('#btn-upd-imp-browse')) { updImpBrowse(); return; }
+        if (t.closest('#btn-upd-imp-run')) { updImpRun(); return; }
+      });
+      document.getElementById('upd-zip-input').addEventListener('change', function() {
+        updUploadFiles(this.files);
+        this.value = '';
+      });
+      updLoadStatus();
+      renderUpdateDev();
+      updPollStart();
+    }
+    initUpdates();
 
     // ── Profiles modal ───────────────────────────────────────────────────────
     var _proCfg      = null;

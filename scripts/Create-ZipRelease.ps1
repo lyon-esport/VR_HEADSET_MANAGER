@@ -29,16 +29,46 @@
     this script's exit code (0 = all passed, 1 = failures, 2 = prerequisites).
     Requires an exclusive run: close the dev app first.
 
+.PARAMETER UpdateType
+    Major or Minor: written as "type" in release.json (self-update manifest, see .dev\update\spec.md S2).
+    When omitted: a TEST version is written as major; any other version is prompted.
+
+.PARAMETER Base
+    Major release that started this update line (release.json "base"). Default: the version itself for a
+    major, the line prefix (YYYY-MM.RCn, checked against `git tag`) for a minor.
+
+.PARAMETER MinUpgradeFrom
+    Oldest installed Release this package applies on (release.json "minUpgradeFrom").
+    Default: empty for a major (any older release may reach it: a major is a new install with an import),
+    the base for a minor.
+
+.PARAMETER Breaking
+    Short sentences shown to the operator before applying (release.json "breaking").
+
+.PARAMETER NotesFile
+    Text/markdown file whose content becomes release.json "notes" (UTF-8).
+
+.NOTES
+    release.json is written at the top folder of the zip and a copy with zipName/zipSha256/zipSize is
+    written beside the zip as <zip name without .zip>.release.json.
+
 .EXAMPLE
     .\Create-ZipRelease.ps1
     .\Create-ZipRelease.ps1 -Version "26.05B"
     .\Create-ZipRelease.ps1 -Version "26.05B" -Unzip
     .\Create-ZipRelease.ps1 -Version "26.05B" -Unzip -TestApp
+    .\Create-ZipRelease.ps1 -Version "2026-11.RC1.2" -UpdateType Minor -Breaking "Restart needed" -NotesFile notes.md
 #>
 param(
     [string]$Version = "",
     [switch]$Unzip,
-    [switch]$TestApp
+    [switch]$TestApp,
+    [ValidateSet('Major', 'Minor')]
+    [string]$UpdateType = "",
+    [string]$Base = "",
+    [string]$MinUpgradeFrom = "",
+    [string[]]$Breaking = @(),
+    [string]$NotesFile = ""
 )
 
 Set-StrictMode -Version Latest
@@ -65,6 +95,54 @@ while ($Version -notmatch '^[\d][\w.\-_]*$') {
     }
 }
 Write-Host "  Version : $Version" -ForegroundColor White
+
+# --- UPDATE TYPE / BASE (release.json) ---
+$isTestVersion = ($Version -match '(?i)\.TEST\d*$')
+if (-not $UpdateType) {
+    if ($isTestVersion) {
+        $UpdateType = 'Major'
+    } else {
+        while ($UpdateType -notin @('Major', 'Minor')) {
+            $UpdateType = (Read-Host "  Update type for release.json [Major/Minor]").Trim()
+            if ($UpdateType -match '(?i)^maj') { $UpdateType = 'Major' }
+            elseif ($UpdateType -match '(?i)^min') { $UpdateType = 'Minor' }
+        }
+    }
+}
+$versionCore = ($Version -replace '(?i)^v', '') -replace '(?i)\+dev\..*$', ''
+if ($UpdateType -eq 'Major') {
+    if (-not $Base)           { $Base = $versionCore }
+    # A major is a new install with an import of the old folder: by default any older release may
+    # reach it (empty = no limit in Get-AppUpdatePath). Pass -MinUpgradeFrom only when the importer
+    # cannot read installs older than a given release.
+} else {
+    if (-not $Base) {
+        # Line prefix YYYY-MM.RCn of the version; the previous release of that line is looked up with git tag.
+        if ($versionCore -match '^(\d{4}-\d{2}\.RC\d+)') {
+            $Base = $Matches[1]
+        } else {
+            Write-Host "  ERROR: cannot derive the base of a minor from '$Version'; pass -Base." -ForegroundColor Red
+            exit 1
+        }
+        $baseTagFound = $false
+        foreach ($tag in @(& git -C $projectRoot tag 2>$null)) {
+            if (([string]$tag -replace '(?i)^v', '') -ieq $Base) { $baseTagFound = $true; break }
+        }
+        if (-not $baseTagFound) {
+            Write-Host "  WARNING: no git tag found for base '$Base'; using it anyway." -ForegroundColor Yellow
+        }
+    }
+    if (-not $MinUpgradeFrom) { $MinUpgradeFrom = $Base }
+}
+$releaseNotes = ""
+if ($NotesFile) {
+    if (-not (Test-Path -LiteralPath $NotesFile)) {
+        Write-Host "  ERROR: NotesFile not found: $NotesFile" -ForegroundColor Red
+        exit 1
+    }
+    $releaseNotes = (Get-Content -LiteralPath $NotesFile -Raw -Encoding UTF8).TrimEnd()
+}
+Write-Host "  Type    : $($UpdateType.ToLower())  base=$Base  minUpgradeFrom=$MinUpgradeFrom" -ForegroundColor White
 Write-Host ""
 
 # --- RESTAMP TOOLBOX EXE WITH THE RELEASE VERSION ---
@@ -106,73 +184,26 @@ if (Test-Path -LiteralPath $zipPath) {
 }
 
 # --- PARSE .releaseinclude ---
+# The matcher lives in modules\release_include.ps1 so the update code uses the SAME rules.
+$releaseIncludeModule = Join-Path $projectRoot "modules\release_include.ps1"
+if (-not (Test-Path -LiteralPath $releaseIncludeModule)) {
+    Write-Host "  ERROR: release_include.ps1 not found at: $releaseIncludeModule" -ForegroundColor Red
+    exit 1
+}
+. $releaseIncludeModule
+
 $releaseIncludePath = Join-Path $PSScriptRoot ".releaseinclude"
 if (-not (Test-Path -LiteralPath $releaseIncludePath)) {
     Write-Host "  ERROR: .releaseinclude not found at: $releaseIncludePath" -ForegroundColor Red
     exit 1
 }
-
-function ConvertTo-PatternRegex {
-    param([string]$Pattern)
-    # Normalize separators to \
-    $p = $Pattern.Replace('/', '\')
-    # Strip leading \
-    if ($p.StartsWith('\')) { $p = $p.Substring(1) }
-    # Folder pattern: ends with \ or \* => match anything under that prefix
-    if ($p.EndsWith('\') -or $p.EndsWith('\*')) {
-        $prefix = $p.TrimEnd('*').TrimEnd('\')
-        return '^' + [regex]::Escape($prefix) + '(\\.+|$)'
-    }
-    # File pattern: replace * wildcard (no path crossing)
-    $escaped = [regex]::Escape($p)
-    $regexStr = $escaped.Replace('\*', '[^\\]*').Replace('\?', '[^\\]')
-    return '^' + $regexStr + '$'
-}
-
-$includeRegexes = [System.Collections.Generic.List[string]]::new()
-$excludeRegexes = [System.Collections.Generic.List[string]]::new()
-
-foreach ($rawLine in (Get-Content -LiteralPath $releaseIncludePath -Encoding UTF8)) {
-    $line = $rawLine.Trim()
-    if ($line -eq '' -or $line.StartsWith('#')) { continue }
-    if ($line.StartsWith('!')) {
-        $excludeRegexes.Add((ConvertTo-PatternRegex -Pattern $line.Substring(1))) | Out-Null
-    } else {
-        $includeRegexes.Add((ConvertTo-PatternRegex -Pattern $line)) | Out-Null
-    }
-}
+$releaseRules = Read-ReleaseIncludeRules -Text (Get-Content -LiteralPath $releaseIncludePath -Raw -Encoding UTF8)
 
 function Test-FileIncluded {
     param([System.IO.FileInfo]$File)
     $rel = $File.FullName.Substring($projectRoot.Length + 1)  # relative path from project root
-
-    # Always exclude: scripts\ folder (the release tooling itself)
-    if ($rel.StartsWith('scripts\') -or $rel -eq 'scripts') { return $false }
-
-    # Always exclude: dot-files and dot-folders at root level
-    $topSegment = ($rel -split '\\')[0]
-    if ($topSegment.StartsWith('.')) { return $false }
-
-    # Always exclude: ffmpeg (~100 MB). It is NEVER part of a release, whatever .releaseinclude says:
-    # a fresh install downloads it (first-run wizard, Configuration > Advanced). Hard-coded so a
-    # re-added include line cannot ship it.
-    if ($rel -match '^sources\\ffmpeg') { return $false }
-
-    # Check include patterns
-    $included = $false
-    foreach ($rx in $includeRegexes) {
-        if ($rel -match $rx) { $included = $true; break }
-    }
-    if (-not $included) { return $false }
-
-    # Check exclude patterns (highest priority)
-    foreach ($rx in $excludeRegexes) {
-        if ($rel -match $rx) { return $false }
-    }
-
-    return $true
+    return (Test-ReleaseIncludePath -Path $rel -Rules $releaseRules)
 }
-
 # --- SCAN FILES ---
 Write-Host "[ Scanning files ]" -ForegroundColor Gray
 $allFiles = @(Get-ChildItem -LiteralPath $projectRoot -Recurse -File -Force -ErrorAction SilentlyContinue)
@@ -184,6 +215,65 @@ foreach ($f in $allFiles) {
 Write-Host "  Including : $($included.Count) files" -ForegroundColor White
 Write-Host "  Excluding : $skipped files" -ForegroundColor DarkGray
 Write-Host ""
+
+# --- MANIFEST HELPERS (release.json) ---
+$utf8NoBom     = New-Object System.Text.UTF8Encoding($false)
+$manifestFiles = [System.Collections.Generic.List[object]]::new()
+
+function Get-BytesSha256Hex {
+    param([byte[]]$Bytes)
+    $s = [System.Security.Cryptography.SHA256]::Create()
+    try { return (($s.ComputeHash($Bytes) | ForEach-Object { $_.ToString('x2') }) -join '') } finally { $s.Dispose() }
+}
+
+# Highest NNN of modules\db\schema\NNN_*.sql
+$dbSchemaMax = 0
+foreach ($sf in @(Get-ChildItem -LiteralPath (Join-Path $projectRoot 'modules\db\schema') -Filter '*.sql' -File -ErrorAction SilentlyContinue)) {
+    if ($sf.Name -match '^(\d+)_') { $nn = [int]$Matches[1]; if ($nn -gt $dbSchemaMax) { $dbSchemaMax = $nn } }
+}
+
+# Git state: HEAD and whether uncommitted changes touch the release set
+$gitCommit = ''
+$gitDirty  = $false
+try {
+    $gitCommit = ([string](& git -C $projectRoot rev-parse HEAD 2>$null)).Trim()
+    if ($gitCommit -notmatch '^[0-9a-f]{40}$') { $gitCommit = '' }
+    $relSet = @($included | ForEach-Object { $_.FullName.Substring($projectRoot.Length + 1).Replace('\', '/') })
+    foreach ($pl in @(& git -c core.quotepath=off -C $projectRoot status --porcelain 2>$null)) {
+        $p = ([string]$pl)
+        if ($p.Length -lt 4) { continue }
+        $p = $p.Substring(3)
+        if ($p -match ' -> ') { $p = ($p -split ' -> ')[-1] }
+        $p = $p.Trim('"')
+        $hit = $false
+        foreach ($r in $relSet) {
+            if ($r -eq $p -or ($p.EndsWith('/') -and $r.StartsWith($p))) { $hit = $true; break }
+        }
+        # a removed/renamed-away tracked file that would have been shipped also counts
+        if (-not $hit -and (Test-ReleaseIncludePath -Path $p -Rules $releaseRules)) { $hit = $true }
+        if ($hit) { $gitDirty = $true; break }
+    }
+} catch {
+    Write-Host "  WARNING: git state unavailable ($($_.Exception.Message))" -ForegroundColor Yellow
+}
+
+function New-ReleaseManifestObject {
+    return [ordered]@{
+        schema         = 1
+        app            = 'VRHM'
+        version        = $Version
+        type           = $UpdateType.ToLower()
+        base           = $Base
+        minUpgradeFrom = $MinUpgradeFrom
+        dbSchema       = $dbSchemaMax
+        commit         = $gitCommit
+        dirty          = $gitDirty
+        createdAt      = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+        breaking       = @($Breaking)
+        notes          = $releaseNotes
+        files          = @($manifestFiles | Sort-Object path)
+    }
+}
 
 # --- CREATE ZIP ---
 Write-Host "[ Creating zip: $zipName ]" -ForegroundColor Gray
@@ -202,9 +292,24 @@ try {
         } else {
             $file.FullName
         }
-        $es = $entry.Open()
-        $fs = [System.IO.File]::OpenRead($sourcePath)
-        $fs.CopyTo($es)
+        # Copy while hashing the exact bytes that go into the zip (release.json files[]).
+        $es   = $entry.Open()
+        $fs   = [System.IO.File]::OpenRead($sourcePath)
+        $sha  = [System.Security.Cryptography.SHA256]::Create()
+        $size = [long]0
+        $buf  = New-Object byte[] 262144
+        while (($n = $fs.Read($buf, 0, $buf.Length)) -gt 0) {
+            $es.Write($buf, 0, $n)
+            [void]$sha.TransformBlock($buf, 0, $n, $null, 0)
+            $size += $n
+        }
+        [void]$sha.TransformFinalBlock($buf, 0, 0)
+        $manifestFiles.Add([pscustomobject][ordered]@{
+            path   = $rel.Replace('\', '/')
+            sha256 = (($sha.Hash | ForEach-Object { $_.ToString('x2') }) -join '')
+            size   = $size
+        })
+        $sha.Dispose()
         $fs.Dispose()
         $es.Dispose()
         $counter++
@@ -219,10 +324,32 @@ try {
     $vBytes  = [System.Text.Encoding]::UTF8.GetBytes($Version)
     $vStream.Write($vBytes, 0, $vBytes.Length)
     $vStream.Dispose()
+    $manifestFiles.Add([pscustomobject][ordered]@{
+        path   = 'version.txt'
+        sha256 = Get-BytesSha256Hex -Bytes $vBytes
+        size   = [long]$vBytes.Length
+    })
+
+    # release.json (self-update manifest, spec S2) - lists every file above except itself
+    $manifest = New-ReleaseManifestObject
+    $manifestBytes = $utf8NoBom.GetBytes((ConvertTo-Json -InputObject $manifest -Depth 6))
+    $mEntry  = $zip.CreateEntry("$folderName\release.json")
+    $mStream = $mEntry.Open()
+    $mStream.Write($manifestBytes, 0, $manifestBytes.Length)
+    $mStream.Dispose()
 
 } finally {
     $zip.Dispose()
 }
+
+# Copy of the manifest beside the zip, with the zip identity (release asset)
+$zipInfo = Get-Item -LiteralPath $zipPath
+$manifest['zipName']   = $zipName
+$manifest['zipSha256'] = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLower()
+$manifest['zipSize']   = [long]$zipInfo.Length
+$assetPath = Join-Path $outputDir ([System.IO.Path]::GetFileNameWithoutExtension($zipName) + '.release.json')
+[System.IO.File]::WriteAllBytes($assetPath, $utf8NoBom.GetBytes((ConvertTo-Json -InputObject $manifest -Depth 6)))
+Write-Host "  Manifest : $assetPath" -ForegroundColor White
 
 $zipSizeMB = [math]::Round((Get-Item -LiteralPath $zipPath).Length / 1MB, 1)
 Write-Host ""

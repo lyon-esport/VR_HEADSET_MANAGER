@@ -251,6 +251,9 @@ $script:SlowRoutes = @{
     '/api/installadbwifiapk'             = $true
     '/api/installadbautoenable'          = $true   # adb install + grants + tcpip, ~15 s
     '/api/headsets/push-wifi'            = $true
+    '/api/app-update/check'              = $true   # GitHub API
+    '/api/app-update/dev-diff'           = $true   # GitHub compare + raw
+    '/api/app-update/import'             = $true   # reads another install's database, copies icons
 }
 
 $script:PriorityRoutes = @{
@@ -267,7 +270,7 @@ $script:PriorityRoutes = @{
 # Paths after which config\config.json may have changed and Get-Config re-ran in the runspace
 # that served them. The OTHER runspace's $global: values are then stale (adb path after a
 # scrcpy update, streaming settings after a save): see Set-WebRouteConfigWritten.
-$script:ConfigWriterPattern = '^/api/(config/|[a-z]+-update$|[a-z]+-switch-version$|vqa/|eye-merge/|capture-mode$|benchmark/apply$|appnames/clear$)'
+$script:ConfigWriterPattern = '^/api/(config/|[a-z]+-update$|[a-z]+-switch-version$|vqa/|eye-merge/|capture-mode$|benchmark/apply$|appnames/clear$|app-update/import$)'
 
 function Get-MainProcessList {
     # The main.ps1 console process(es): the one whose menu loop owns Invoke-AppShutdown, and
@@ -446,6 +449,14 @@ foreach ($routeRow in @(
     ,@('POST',  '/api/install-cancel',                    'Invoke-RouteInstallCancel')
     ,@('POST',  '/api/resolve-app-names',                 'Invoke-RouteResolveAppNames')
     ,@('GET',   '/api/resolve-progress',                  'Invoke-RouteResolveProgress')
+    ,@('GET',   '/api/app-update/status',                 'Invoke-RouteAppUpdateStatus')
+    ,@('POST',  '/api/app-update/check',                  'Invoke-RouteAppUpdateCheck')
+    ,@('POST',  '/api/app-update/dev-diff',               'Invoke-RouteAppUpdateDevDiff')
+    ,@('POST',  '/api/app-update/import',                 'Invoke-RouteAppUpdateImport')
+    ,@('POST',  '/api/app-update/upload',                 'Invoke-RouteAppUpdateUpload')
+    ,@('POST',  '/api/app-update/apply',                  'Invoke-RouteAppUpdateApply')
+    ,@('GET',   '/api/app-update/progress',               'Invoke-RouteAppUpdateProgress')
+    ,@('POST',  '/api/app-update/cancel',                 'Invoke-RouteAppUpdateCancel')
     ,@('GET',   '/api/benchmark/options',                 'Invoke-RouteBenchmarkOptions')
     ,@('POST',  '/api/benchmark/plan',                    'Invoke-RouteBenchmarkPlan')
     ,@('POST',  '/api/benchmark/start',                   'Invoke-RouteBenchmarkStart')
@@ -608,6 +619,7 @@ foreach ($routeFileName in @(
     'routes_usb.ps1'
     'routes_wifi.ps1'
     'routes_benchmark.ps1'
+    'routes_update.ps1'
     'routes_recordings.ps1'
     'routes_vqa.ps1'
     'routes_config.ps1'
