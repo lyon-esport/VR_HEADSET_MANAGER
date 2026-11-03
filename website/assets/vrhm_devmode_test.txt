@@ -1,1 +1,0 @@
-Dev mode test file (ADR-0041). Temporary: reverted right after the test.
