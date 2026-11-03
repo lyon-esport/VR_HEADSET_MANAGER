@@ -1272,3 +1272,142 @@ function Initialize-ComputerSetup {
     # Keep the PC awake for the duration of the session
     Set-AwakeMode
 }
+
+
+# ---------------------------------------------------------------------------
+# Desktop / Windows-startup shortcuts
+# One implementation shared by the first-run wizard (welcome.ps1), the web config page
+# (/api/shortcuts) and the console Config menu (Show-SubMenu-Shortcuts).
+# ---------------------------------------------------------------------------
+
+function Get-AppShortcutFolder {
+    <#
+    .SYNOPSIS
+        Folder that holds the shortcut of a location: the user's Desktop, or the user's Startup folder
+        (programs there start at Windows logon). $null when Windows cannot give it.
+    .EXAMPLE
+        Get-AppShortcutFolder -Location Startup
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][ValidateSet('Desktop', 'Startup')][string]$Location)
+    try {
+        $f = [Environment]::GetFolderPath($Location)
+        if ([string]::IsNullOrWhiteSpace($f)) { return $null }
+        return $f
+    } catch { return $null }
+}
+
+function Get-AppShortcutFiles {
+    <#
+    .SYNOPSIS
+        The "VR Headset Manager v*.lnk" files of a location that start THIS install (target or start
+        folder under -Root). Returns @(@{Path;Target}); never throws.
+    .EXAMPLE
+        @(Get-AppShortcutFiles -Location Desktop)
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][ValidateSet('Desktop', 'Startup')][string]$Location, [string]$Root = $global:ScriptPath)
+    $found = @()
+    try {
+        $folder = Get-AppShortcutFolder -Location $Location
+        if (-not $folder -or -not $Root -or -not (Test-Path -LiteralPath $folder -PathType Container)) { return @() }
+        $rootNorm = $Root.TrimEnd('\')
+        $shell = New-Object -ComObject WScript.Shell
+        foreach ($f in @(Get-ChildItem -LiteralPath $folder -Filter 'VR Headset Manager v*.lnk' -File -ErrorAction SilentlyContinue)) {
+            try {
+                $s = $shell.CreateShortcut($f.FullName)
+                $t = [string]$s.TargetPath; $w = [string]$s.WorkingDirectory
+                if ($t.StartsWith($rootNorm + '\', [StringComparison]::OrdinalIgnoreCase) -or $w.TrimEnd('\') -ieq $rootNorm) {
+                    $found += @{ Path = $f.FullName; Target = $t }
+                }
+            } catch { }
+        }
+    } catch { }
+    return $found
+}
+
+function Get-AppShortcutState {
+    <#
+    .SYNOPSIS
+        @{Desktop;Startup} booleans: whether a shortcut of this install exists in each location.
+    .EXAMPLE
+        (Get-AppShortcutState).Startup
+    #>
+    [CmdletBinding()]
+    param([string]$Root = $global:ScriptPath)
+    return @{
+        Desktop = (@(Get-AppShortcutFiles -Location Desktop -Root $Root).Count -gt 0)
+        Startup = (@(Get-AppShortcutFiles -Location Startup -Root $Root).Count -gt 0)
+    }
+}
+
+function New-AppShortcut {
+    <#
+    .SYNOPSIS
+        Creates "VR Headset Manager v<version>.lnk" in the Desktop or Startup folder of the current user
+        (no admin needed). The version is the content of version.txt without a leading V. Older
+        "VR Headset Manager v*.lnk" of this install in that folder are removed first, so an update
+        does not leave a stale-named duplicate. Target is START_VR_HEADSET_MANAGER.exe (the .cmd in
+        sources\ when the exe is missing). Returns @{Ok;Path;Error}; never throws.
+    .EXAMPLE
+        $r = New-AppShortcut -Location Startup; if (-not $r.Ok) { $r.Error }
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][ValidateSet('Desktop', 'Startup')][string]$Location, [string]$Root = $global:ScriptPath)
+    try {
+        $folder = Get-AppShortcutFolder -Location $Location
+        if (-not $folder) { return @{ Ok = $false; Path = ''; Error = "Windows folder '$Location' not found." } }
+        if (-not (Test-Path -LiteralPath $folder -PathType Container)) { New-Item -ItemType Directory -Path $folder -Force | Out-Null }
+
+        $target = Join-Path $Root 'START_VR_HEADSET_MANAGER.exe'
+        if (-not (Test-Path -LiteralPath $target)) { $target = Join-Path $Root 'sources\START_VR_HEADSET_MANAGER.cmd' }
+        if (-not (Test-Path -LiteralPath $target)) { return @{ Ok = $false; Path = ''; Error = 'START_VR_HEADSET_MANAGER launcher not found.' } }
+
+        $version = 'unknown'
+        $vf = Join-Path $Root 'version.txt'
+        if (Test-Path -LiteralPath $vf) {
+            $v = (Get-Content -LiteralPath $vf -Raw -Encoding UTF8).Trim() -replace '^[vV]', ''
+            if ($v) { $version = $v }
+        }
+        $safeVersion = ($version -replace '[\/:*?"<>|]', '_')
+        $lnkPath = Join-Path $folder ("VR Headset Manager v{0}.lnk" -f $safeVersion)
+
+        foreach ($old in @(Get-AppShortcutFiles -Location $Location -Root $Root)) {
+            Remove-Item -LiteralPath $old.Path -Force -ErrorAction SilentlyContinue
+        }
+
+        $shell = New-Object -ComObject WScript.Shell
+        $s = $shell.CreateShortcut($lnkPath)
+        $s.TargetPath       = $target
+        $s.WorkingDirectory = $Root
+        $s.IconLocation     = $target + ',0'
+        $s.Description      = 'VR Headset Manager'
+        $s.Save()
+        if (-not (Test-Path -LiteralPath $lnkPath)) { return @{ Ok = $false; Path = $lnkPath; Error = 'The shortcut file was not created.' } }
+        return @{ Ok = $true; Path = $lnkPath; Error = '' }
+    } catch {
+        return @{ Ok = $false; Path = ''; Error = $_.Exception.Message }
+    }
+}
+
+function Remove-AppShortcut {
+    <#
+    .SYNOPSIS
+        Deletes the shortcut(s) of this install from the Desktop or Startup folder. Returns
+        @{Ok;Removed;Error} (Removed = number of files deleted, 0 is not an error); never throws.
+    .EXAMPLE
+        Remove-AppShortcut -Location Startup
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][ValidateSet('Desktop', 'Startup')][string]$Location, [string]$Root = $global:ScriptPath)
+    $removed = 0
+    try {
+        foreach ($f in @(Get-AppShortcutFiles -Location $Location -Root $Root)) {
+            Remove-Item -LiteralPath $f.Path -Force -ErrorAction Stop
+            $removed++
+        }
+        return @{ Ok = $true; Removed = $removed; Error = '' }
+    } catch {
+        return @{ Ok = $false; Removed = $removed; Error = $_.Exception.Message }
+    }
+}

@@ -141,7 +141,7 @@ function Invoke-WelcomeSetup {
         [string]$ConfigOutputPath
     )
 
-    $totalSteps = 5
+    $totalSteps = 6
 
     # Early-load the modules needed for port-conflict resolution during the
     # port prompts (steps 3-4). The auth phase (step 6) re-uses the same
@@ -291,6 +291,37 @@ function Invoke-WelcomeSetup {
     $config.ffmpeg.folder = $ffmpegFolder
 
     # ------------------------------------------------------------------
+    # Step 5 - Shortcuts (Desktop + Windows startup)
+    # ------------------------------------------------------------------
+    Show-WizardStep -Step 5 -Total $totalSteps -Title "Shortcuts"
+    Write-Host "  Shortcuts are named 'VR Headset Manager v<version>'. They can be changed later" -ForegroundColor DarkGray
+    Write-Host "  in the web configuration page (General) or the console Configuration menu." -ForegroundColor DarkGray
+    Write-Host ""
+    $shortcutSummary = @()
+    Write-Host "  Create a shortcut on the Desktop? [Y/N, default Y]: " -ForegroundColor Yellow -NoNewline
+    $key = Read-WizardKey -EchoMap @{
+        'y' = 'Create a Desktop shortcut'
+        'n' = 'No Desktop shortcut'
+    } -DefaultLabel 'Create a Desktop shortcut (default)'
+    if ($key -notin @('n', 'N')) {
+        $r = New-AppShortcut -Location Desktop
+        if ($r.Ok) { Write-Host "  Desktop shortcut created: $($r.Path)" -ForegroundColor Green; $shortcutSummary += 'Desktop' }
+        else { Write-Host "  Could not create the Desktop shortcut: $($r.Error)" -ForegroundColor Yellow }
+    }
+    Write-Host ""
+    Write-Host "  Start VR Headset Manager automatically when Windows starts?" -ForegroundColor White
+    Write-Host "  (adds a shortcut to your Startup folder) [Y/N, default N]: " -ForegroundColor Yellow -NoNewline
+    $key = Read-WizardKey -EchoMap @{
+        'y' = 'Start with Windows'
+        'n' = 'Do not start with Windows'
+    } -DefaultLabel 'Do not start with Windows (default)'
+    if ($key -in @('y', 'Y')) {
+        $r = New-AppShortcut -Location Startup
+        if ($r.Ok) { Write-Host "  Startup shortcut created: $($r.Path)" -ForegroundColor Green; $shortcutSummary += 'Windows startup' }
+        else { Write-Host "  Could not create the Startup shortcut: $($r.Error)" -ForegroundColor Yellow }
+    }
+
+    # ------------------------------------------------------------------
     # Write config.json
     # ------------------------------------------------------------------
     Write-Host ""
@@ -311,7 +342,7 @@ function Invoke-WelcomeSetup {
     # Bundled into ONE elevated console so the operator deals with admin
     # rights once before the app launches.
     # ------------------------------------------------------------------
-    Show-WizardStep -Step 5 -Total $totalSteps -Title "System Authorizations"
+    Show-WizardStep -Step 6 -Total $totalSteps -Title "System Authorizations"
     Write-Host "  The next step will request administrator rights once to register:" -ForegroundColor White
     Write-Host "    - ADB firewall rule" -ForegroundColor DarkGray
     Write-Host "    - MediaMTX firewall rules (RTSP/HLS/WebRTC ports)" -ForegroundColor DarkGray
@@ -372,6 +403,8 @@ function Invoke-WelcomeSetup {
     Write-Host ("  Web server  : http://localhost:" + $config.WebServer.port) -ForegroundColor White
     Write-Host ("  RTSP stream : rtsp://localhost:" + $config.mediamtx.rtsp_port) -ForegroundColor White
     Write-Host ("  ffmpeg      : " + $config.ffmpeg.folder) -ForegroundColor White
+    $scText = if ($shortcutSummary.Count -gt 0) { $shortcutSummary -join ', ' } else { 'none' }
+    Write-Host ("  Shortcuts   : " + $scText) -ForegroundColor White
     Write-Host "  $line" -ForegroundColor Cyan
     Write-Host ""
 

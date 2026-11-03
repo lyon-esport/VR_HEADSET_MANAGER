@@ -920,6 +920,17 @@
         FolderCreated    = "Dossier minuterie cree : {0}"
     }
 
+    Shortcuts = @{
+        Title        = "RACCOURCIS"
+        Desktop      = "Raccourci sur le Bureau"
+        Startup      = "Demarrer avec Windows (raccourci dans le dossier Demarrage)"
+        On           = "present"
+        Off          = "absent"
+        Created      = "Raccourci cree : {0}"
+        Removed      = "Raccourci supprime."
+        Failed       = "Echec du raccourci : {0}"
+        Hint         = "Appuyez sur 1 ou 2 pour creer ou supprimer un raccourci nomme 'VR Headset Manager v<version>'."
+    }
     AdbWifi = @{
         AutoEnableNoUsb       = "Aucun casque USB detecte."
         TlsUnsupportedBrand   = "L'ADB over TLS (Debogage sans fil) n'est pas pris en charge sur les casques {0} : le firmware ne peut pas afficher la boite de confirmation. Utilisez l'ADB WiFi classique (adb tcpip)."
@@ -1203,6 +1214,7 @@
         ConfigTitle       = "CONFIGURATION"
         CfgWifi           = "Reseaux WiFi"
         CfgAdbWifi        = "Modes WiFi ADB"
+        CfgShortcuts      = "Raccourcis (Bureau, demarrage Windows)"
         CfgCapture        = "Mode de capture video"
         CfgQuality        = "Automatisation de la qualite video"
         CaptureStreamOnly = "flux seul"

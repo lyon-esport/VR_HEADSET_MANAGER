@@ -525,6 +525,8 @@ foreach ($routeRow in @(
     ,@('POST',  '/api/favorites/reorder',                 'Invoke-RouteFavoritesReorder')
     ,@('GET',   '/api/config',                            'Invoke-RouteConfig')
     ,@('GET',   '/api/config/defaults',                   'Invoke-RouteConfigDefaults')
+    ,@('GET',   '/api/shortcuts',                         'Invoke-RouteShortcuts')
+    ,@('POST',  '/api/shortcuts',                         'Invoke-RouteShortcutsSet')
     ,@('GET',   '/api/server-info',                       'Invoke-RouteServerInfo')
     ,@('GET',   '/api/gpu-list',                          'Invoke-RouteGpuList')
     ,@('POST',  '/api/config/save',                       'Invoke-RouteConfigSave')

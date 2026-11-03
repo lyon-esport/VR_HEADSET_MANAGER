@@ -392,3 +392,42 @@ function Invoke-RouteConfigReset {
     } finally { Close-HttpResponse -Response $response }
     return
 }
+
+# API: GET /api/shortcuts  - whether this install has a Desktop / Windows-startup shortcut
+function Invoke-RouteShortcuts {
+    # GET /api/shortcuts
+    param([Parameter(Mandatory = $true)] $Context)
+    $response = $Context.Response
+    try {
+        $st = Get-AppShortcutState
+        Send-JsonResponse -Response $response -Body @{ ok = $true; desktop = [bool]$st.Desktop; startup = [bool]$st.Startup }
+    } catch {
+        try { Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'server error' } -StatusCode 500 } catch {}
+    } finally { Close-HttpResponse -Response $response }
+    return
+}
+
+# API: POST /api/shortcuts  body {location:'desktop'|'startup', enabled:bool}
+# Creates ("VR Headset Manager v<version>.lnk") or removes the shortcut of this install.
+function Invoke-RouteShortcutsSet {
+    # POST /api/shortcuts
+    param([Parameter(Mandatory = $true)] $Context)
+    $response = $Context.Response
+    try {
+        $b = (Read-RequestBody -Request $Context.Request -Response $response -MaxBytes 1024) | ConvertFrom-Json
+        $loc = if ($b) { ([string]$b.location).ToLowerInvariant() } else { '' }
+        if ($loc -notin @('desktop', 'startup') -or $null -eq $b.enabled -or $b.enabled -isnot [bool]) {
+            Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'bad request' } -StatusCode 400
+            return
+        }
+        $location = if ($loc -eq 'desktop') { 'Desktop' } else { 'Startup' }
+        $r = if ($b.enabled) { New-AppShortcut -Location $location } else { Remove-AppShortcut -Location $location }
+        $st = Get-AppShortcutState
+        Write-Log ("Shortcut {0} {1}: {2}" -f $location, $(if ($b.enabled) { 'created' } else { 'removed' }), $(if ($r.Ok) { 'ok' } else { $r.Error })) -Level INFO
+        Send-JsonResponse -Response $response -Body @{ ok = [bool]$r.Ok; error = [string]$r.Error; desktop = [bool]$st.Desktop; startup = [bool]$st.Startup }
+    } catch {
+        if ($_.Exception.Message -match 'BODY_TOO_LARGE') { return }
+        try { Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'server error' } -StatusCode 500 } catch {}
+    } finally { Close-HttpResponse -Response $response }
+    return
+}

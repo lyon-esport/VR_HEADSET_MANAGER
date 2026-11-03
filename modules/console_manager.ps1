@@ -3496,7 +3496,8 @@ function Show-SubMenu-Config {
             @{ Key = 'W'; Label = $c.CfgWifi },
             @{ Key = 'A'; Label = $c.CfgAdbWifi;   Value = $adbPref },
             @{ Key = 'U'; Label = $msg.Update.MenuOption },
-            @{ Key = 'V'; Label = $c.CfgCapture;   Value = (Get-CaptureModeLabel) }
+            @{ Key = 'V'; Label = $c.CfgCapture;   Value = (Get-CaptureModeLabel) },
+            @{ Key = 'S'; Label = $c.CfgShortcuts }
         )
         if ($global:VQA_Enabled) { $items += @{ Key = 'Q'; Label = $c.CfgQuality } }
         Write-UiMenu -Title $c.ConfigTitle -Subtitle 'VRHM > Config' -Items $items -Footer $c.Back -Bg 'DarkBlue'
@@ -3507,12 +3508,45 @@ function Show-SubMenu-Config {
             'V' { Show-SubMenu-CaptureMode }
             'A' { Show-SubMenu-AdbWifiModes }
             'U' { Show-SubMenu-AppUpdate }
+            'S' { Show-SubMenu-Shortcuts }
             'Q' {
                 if ($global:VQA_Enabled -and (Get-Command Show-SubMenu-Monitoring -ErrorAction SilentlyContinue)) {
                     Show-SubMenu-Monitoring
                 }
             }
             '0' { return }
+        }
+    } while ($true)
+}
+
+
+function Show-SubMenu-Shortcuts {
+    # Console counterpart of the Shortcuts block of the General section of vrhm_config.html
+    # (/api/shortcuts, ADR-0012): create or remove the Desktop and Windows-startup shortcuts.
+    $s = $msg.Shortcuts
+    $note = $null
+    do {
+        $st = Get-AppShortcutState
+        $onOff = { param($v) if ($v) { $s.On } else { $s.Off } }
+        $items = @(
+            @{ Key = '1'; Label = $s.Desktop; Value = (& $onOff $st.Desktop); ValueColor = $(if ($st.Desktop) { 'Green' } else { 'DarkGray' }) },
+            @{ Key = '2'; Label = $s.Startup; Value = (& $onOff $st.Startup); ValueColor = $(if ($st.Startup) { 'Green' } else { 'DarkGray' }) }
+        )
+        Write-UiMenu -Title $s.Title -Subtitle 'VRHM > Config > Shortcuts' -Items $items -Footer $msg.Console.Back -Bg 'DarkBlue'
+        Write-Host ''
+        Write-Host ('  ' + $s.Hint) -ForegroundColor DarkGray
+        if ($note) { Write-Host ''; Write-UiMessage -Text $note.Text -Kind $note.Kind; $note = $null }
+        $choice = Read-UiKey
+        if ($choice -in @('0', 'ESC')) { return }
+        $loc = switch ($choice) { '1' { 'Desktop' } '2' { 'Startup' } default { $null } }
+        if (-not $loc) { continue }
+        $on = if ($loc -eq 'Desktop') { $st.Desktop } else { $st.Startup }
+        if ($on) {
+            $r = Remove-AppShortcut -Location $loc
+            $note = if ($r.Ok) { @{ Text = $s.Removed; Kind = 'ok' } } else { @{ Text = ($s.Failed -f $r.Error); Kind = 'err' } }
+        } else {
+            $r = New-AppShortcut -Location $loc
+            $note = if ($r.Ok) { @{ Text = ($s.Created -f $r.Path); Kind = 'ok' } } else { @{ Text = ($s.Failed -f $r.Error); Kind = 'err' } }
         }
     } while ($true)
 }

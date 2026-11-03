@@ -307,7 +307,11 @@
         General
         <span class="acc-chevron">&#9654;</span>
       </button>
-      <div class="acc-body" id="acc-general-body"></div>
+      <div class="acc-body" id="acc-general-wrap">
+        <div id="acc-general-body"></div>
+        <div class="fld-subgroup">Shortcuts</div>
+        <div id="acc-general-shortcuts" style="padding:12px 20px">Loading...</div>
+      </div>
     </div>
 
     <!-- 2: WiFi Networks -->
@@ -1300,6 +1304,7 @@
       });
       renderAdvanced();
       renderUpdates();
+      loadShortcuts();
     }
 
     // ── Toolbar buttons ──────────────────────────────────────────────────────
@@ -1624,6 +1629,42 @@
 
     // Bundled programs sub-card (scrcpy / mediamtx / ffmpeg). Moved here from
     // Advanced / Internal; element ids and handlers are unchanged.
+    // â”€â”€ Shortcuts (General): Desktop + Windows startup, /api/shortcuts â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    function renderShortcuts(st) {
+      var el = document.getElementById('acc-general-shortcuts');
+      if (!el) return;
+      if (!st) { el.textContent = 'Shortcuts unavailable'; return; }
+      function row(loc, label, hint, on) {
+        return '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px">'
+          + '<label style="display:flex;gap:8px;align-items:center;font-size:13px;cursor:pointer">'
+          + '<input type="checkbox" data-sc="' + loc + '"' + (on ? ' checked' : '') + '> ' + esc(label) + '</label>'
+          + '<span class="fld-def">' + esc(hint) + '</span></div>';
+      }
+      el.innerHTML = row('desktop', 'Desktop shortcut', 'Creates "VR Headset Manager v<version>" on your Desktop.', st.desktop)
+        + row('startup', 'Start with Windows', 'Adds the shortcut to your Startup folder: the application starts when you log in to Windows.', st.startup)
+        + '<div id="sc-status" class="fld-def"></div>';
+      Array.prototype.forEach.call(el.querySelectorAll('input[data-sc]'), function(cb) {
+        cb.addEventListener('change', function() {
+          var box = cb; box.disabled = true;
+          fetch('/api/shortcuts', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ location: box.getAttribute('data-sc'), enabled: box.checked }) })
+            .then(function(r) { return r.json(); })
+            .then(function(j) {
+              box.disabled = false;
+              if (j && j.ok) { showToast(box.checked ? 'Shortcut created' : 'Shortcut removed'); }
+              else { showToast('Shortcut failed: ' + ((j && j.error) || 'error')); }
+              if (j && j.desktop != null) renderShortcuts(j);
+            })
+            .catch(function() { box.disabled = false; box.checked = !box.checked; showToast('Server unreachable'); });
+        });
+      });
+    }
+    function loadShortcuts() {
+      fetch('/api/shortcuts').then(function(r) { return r.json(); })
+        .then(function(j) { renderShortcuts(j && j.ok ? j : null); })
+        .catch(function() { renderShortcuts(null); });
+    }
+
     function renderUpdates() {
       var html = '';
       html += binVerRowHtml('scrcpy', 'Scrcpy Version', true);

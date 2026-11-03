@@ -920,6 +920,17 @@
         FolderCreated    = "Timer folder created: {0}"
     }
 
+    Shortcuts = @{
+        Title        = "SHORTCUTS"
+        Desktop      = "Desktop shortcut"
+        Startup      = "Start with Windows (Startup folder shortcut)"
+        On           = "present"
+        Off          = "absent"
+        Created      = "Shortcut created: {0}"
+        Removed      = "Shortcut removed."
+        Failed       = "Shortcut failed: {0}"
+        Hint         = "Press 1 or 2 to create or remove a shortcut named 'VR Headset Manager v<version>'."
+    }
     AdbWifi = @{
         AutoEnableNoUsb       = "No USB headset detected."
         TlsUnsupportedBrand   = "ADB over TLS (Wireless debugging) is not supported on {0} headsets: the firmware cannot show the confirmation dialog. Use classic WiFi ADB (adb tcpip) instead."
@@ -1203,6 +1214,7 @@
         ConfigTitle       = "CONFIGURATION"
         CfgWifi           = "WiFi networks"
         CfgAdbWifi        = "ADB WiFi modes"
+        CfgShortcuts      = "Shortcuts (Desktop, Windows startup)"
         CfgCapture        = "Video capture mode"
         CfgQuality        = "Video quality automation"
         CaptureStreamOnly = "stream only"
