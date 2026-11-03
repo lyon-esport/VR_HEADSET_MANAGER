@@ -79,6 +79,8 @@ function Update-HeadsetMonitoringFile {
             battery_ctrl_left  = if ($headset.BatteryControllerLeft  -ne "-") { [convert]::ToInt32($($headset.BatteryControllerLeft  -replace ' %','') , 10) } else { $headset.BatteryControllerLeft }
             battery_ctrl_right = if ($headset.BatteryControllerRight -ne "-") { [convert]::ToInt32($($headset.BatteryControllerRight -replace ' %','') , 10) } else { $headset.BatteryControllerRight }
             charging        = [bool]$headset.Charging
+            charging_wattage   = if ($headset.ChargingWattage -and $headset.ChargingWattage -ne "-") { ([string]$headset.ChargingWattage -replace ',','.') } else { "0" }
+            fast_charge_wattage = ([string]$global:Monitoring_fast_charge_wattage -replace ',','.')
             temp            = if ($headset.Temp -ne "-"){ ([int]($headset.Temp -replace ',','.')) } else { $headset.Temp } # convert to int
             temperature_highLevel             = $global:Monitoring_temperature_highLevel
             model                            = if ($ownerModel -and $ownerModel -ne "-") { $ownerModel } else { "" }

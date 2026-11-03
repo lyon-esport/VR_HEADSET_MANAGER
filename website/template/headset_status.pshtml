@@ -195,7 +195,7 @@
             </span>
             <strong id="batt-value"><%= $battery %> %</strong>
             <span class="muted" id="charge-emoji">
-              <% if ($ping -and $charging) { %>&#x26A1;<% } else { %>&#x1F6AB;<% } %>
+              <% if ($ping -and $charging) { %><% if ([double]::Parse([string]$charging_wattage, [Globalization.CultureInfo]::InvariantCulture) -ge [double]::Parse([string]$fast_charge_wattage, [Globalization.CultureInfo]::InvariantCulture)) { %>&#x1F680;<% } else { %>&#x26A1;<% } %><% } else { %>&#x1F6AB;<% } %>
             </span>
             <span id="time-remaining-wrap"<% if (-not $timeDisplay) { %> style="display:none"<% } %>>
               <% if ($power_state) { %><span id="power-state-arrow" style="font-size:0.85em;margin-left:4px;color:<% if ($power_state -eq 'charging') { %>limegreen<% } else { %>crimson<% } %>;font-weight:bold"><% if ($power_state -eq 'charging') { %>&#x2197;<% } else { %>&#x2198;<% } %></span><% } else { %><span id="power-state-arrow" style="display:none"></span><% } %><span class="muted" id="time-val" style="font-size:0.75em;margin-left:2px">~<%= $timeDisplay %></span>
@@ -221,6 +221,7 @@
       var _CTRL_CRIT = <%= $controllers_battery_criticalLevel %>;
       var _CTRL_WARN = <%= $controllers_battery_warningLevel %>;
       var _TEMP_HIGH = <%= $temperature_highLevel %>;
+      var _FAST_W    = <%= $fast_charge_wattage %>;
 
       function applyBatteryClass() {
         var batt = document.querySelector('.batt');
@@ -287,7 +288,8 @@
         // Battery
         _setText('batt-value', d.battery != null ? d.battery + ' %' : '- %');
         _setText('batt-emoji', d.battery != null && d.battery < _CRIT ? '🪫' : '🔋');
-        _setText('charge-emoji', d.ping && d.charging ? '⚡' : '🚫');
+        var _w = parseFloat(String(d.charging_wattage).replace(',', '.'));
+        _setText('charge-emoji', d.ping && d.charging ? (_w >= _FAST_W ? '🚀' : '⚡') : '🚫');
 
         // Time remaining
         var tw = document.getElementById('time-remaining-wrap');

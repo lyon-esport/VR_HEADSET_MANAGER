@@ -399,6 +399,7 @@ function Invoke-RouteHeadsetStatus {
             battery_ctrl_left    = $battLeft
             battery_ctrl_right   = $battRight
             charging             = [bool]($row.Charging -eq 'True')
+            charging_wattage     = if ($row.ChargingWattage -and $row.ChargingWattage -ne '-') { $row.ChargingWattage } else { '' }
             temp                 = $temp
             power_state          = if ($row.PowerState -and $row.PowerState -ne '-') { $row.PowerState } else { '' }
             time_remaining_min   = $timeMin

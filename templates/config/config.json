@@ -419,7 +419,8 @@
                                           "cpu_temperature_highLevel":  85,
                                           "cpu_temperature_warningLevel":  75,
                                           "gpu_temperature_highLevel":  85,
-                                          "gpu_temperature_warningLevel":  75
+                                          "gpu_temperature_warningLevel":  75,
+                                          "fast_charge_wattage":  15
                                       }
                    },
     "mediamtx":  {

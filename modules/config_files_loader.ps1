@@ -368,6 +368,7 @@ function Get-Config {
     # landed here as $null, which website_generator.ps1 then baked into every
     # overlay as "var _TEMP_HIGH = ;" - a syntax error taking the whole overlay
     # script down, from one absent config value.
+    $global:Monitoring_fast_charge_wattage              = if ($null -ne $configContent.Monitoring.thresholds.fast_charge_wattage)              { [double]$configContent.Monitoring.thresholds.fast_charge_wattage            } else { 15 }
     $global:Monitoring_temperature_highLevel            = if ($null -ne $configContent.Monitoring.thresholds.temperature_highLevel)            { [int]$configContent.Monitoring.thresholds.temperature_highLevel            } else { 50 }
     $global:Monitoring_temperature_warningLevel         = if ($null -ne $configContent.Monitoring.thresholds.temperature_warningLevel)         { [int]$configContent.Monitoring.thresholds.temperature_warningLevel         } else { 42 }
     # CPU and GPU run much hotter than the battery under load (a Quest 3 sits at 60-65 C while
