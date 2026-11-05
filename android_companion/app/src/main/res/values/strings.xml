@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">VRHM Companion</string>
+    <!-- Launcher/app-list label; the .: :. prefix sorts it to the top of the Quest app list. -->
+    <string name="launcher_label">.: VRHM Companion :.</string>
+    <string name="subtitle">Headset ADB companion</string>
     <string name="notification_channel_name">VR Headset Manager Companion</string>
     <string name="notification_channel_desc">Background service for ADB WiFi and HTTP API</string>
     <string name="notification_title">VRHM Companion Active</string>
@@ -11,4 +14,10 @@
     <string name="btn_grant_settings">Grant WRITE_SETTINGS</string>
     <string name="btn_grant_settings_ok">WRITE_SETTINGS: Granted</string>
     <string name="hint_grant_adb">Grant WRITE_SECURE_SETTINGS via ADB once:\nadb shell pm grant com.vrheadsetmanager.companion android.permission.WRITE_SECURE_SETTINGS</string>
+    <string name="label_boot_mode">ADB WiFi mode at boot</string>
+    <string name="label_classic_port">Classic ADB port</string>
+    <string name="btn_apply_connect">Apply and connect now</string>
+    <string name="mode_tls">ADB over TLS (wireless debugging)</string>
+    <string name="mode_classic">ADB classic (custom port)</string>
+    <string name="mode_none">Disabled</string>
 </resources>

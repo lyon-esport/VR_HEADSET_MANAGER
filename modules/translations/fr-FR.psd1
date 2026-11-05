@@ -943,7 +943,6 @@
         Switched              = "{0} est passe du WiFi ADB {1} au WiFi ADB {2}."
         PreferredUnavailable  = "Le WiFi ADB {2} ne peut pas etre active sur {0} ({3}) : il reste en {1} jusqu au prochain changement de mode prefere, redemarrage du casque ou de l application."
         PreferenceChanged     = "Reglages des modes WiFi ADB modifies (prefere : {0}) - verification de tous les casques et captures."
-        MenuNoPreference      = "sans preference (classique d abord)"
         SwitchDeferred        = "{0} est en WiFi ADB TLS pendant une capture : le passage en classique attend la fin de la capture (scrcpy.usb_switch_mode = {1})."
         ScrcpyModeSwitch      = "Le WiFi ADB de {0} est maintenant {2} - la capture quitte {1}."
         ScrcpyEndpointLost    = "Le point d'acces WiFi ADB {1} de {0} a disparu - redemarrage de la capture."
@@ -955,6 +954,19 @@
         MenuDisabled          = "desactive"
         MenuSaved             = "Modes WiFi ADB enregistres. VRMonitor les applique a son prochain cycle lent."
         MenuSaveFailed        = "Modes WiFi ADB : config.json non mis a jour - {0}"
+        MenuInfoSource        = "  4. Source des informations  - {0}"
+        InfoSourceCompanion   = "VRHM Companion (push)"
+        InfoSourceTls         = "ADB via TLS"
+        InfoSourceClassic     = "ADB classique (port {0})"
+        InfoSourceHint        = "  Companion = l'app du casque pousse batterie/temperature/apps ; TLS/Classique = VRHM les lit via ADB."
+    }
+
+    # Installation/provisionnement de l'appli VRHM Companion (ADR-0042 ; console ajout casque C, web).
+    Companion = @{
+        InstallDone    = "VRHM Companion installe et provisionne."
+        InstallFailed  = "Echec de l'installation de VRHM Companion : {0}"
+        InstallNoUsb   = "Aucun casque USB detecte. Branchez d'abord un casque en USB."
+        Installing     = "Installation de VRHM Companion sur {0}..."
     }
 
     # Mise a jour de l'application (console Config > U, accordeon Mises a jour du web ; spec S12 / S13).
@@ -1197,7 +1209,8 @@
         HsWifiAdb         = "Activer le WiFi ADB d'un casque USB"
         HsSerial          = "Enregistrer / mettre a jour par numero de serie (USB)"
         HsDiscovered      = "Appareils decouverts"
-        HsAutoEnable      = "Installer l'appli ADB auto-enable (USB)"
+        HsCompanion       = "Installer l'appli VRHM Companion (USB, recommande)"
+        HsAutoEnable      = "Installer l'appli ADB auto-enable (USB, secondaire)"
         HsDiscoveredNone  = "Aucun appareil decouvert en attente."
         ToggleHint        = "Tapez l'ID d'un casque + Entree pour basculer - Entree seule pour revenir."
         AutoCastTitle     = "AUTO-CAPTURE"

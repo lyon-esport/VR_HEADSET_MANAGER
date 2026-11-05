@@ -361,7 +361,7 @@ function Get-AdbWifiModeOrder {
         if (-not $classicOn -and -not $tlsOn) { $classicOn = $true }
         $pref = [string]$global:ADB_wifi_effective_preferred
         if (-not $pref) { $pref = [string]$global:ADB_wifi_preferred_mode }
-        $order = if ($pref -eq 'tls') { @('TLS', 'Classic') } else { @('Classic', 'TLS') }
+        $order = if ($pref -eq 'classic') { @('Classic', 'TLS') } else { @('TLS', 'Classic') }
         return @($order | Where-Object { ($_ -eq 'Classic' -and $classicOn) -or ($_ -eq 'TLS' -and $tlsOn) })
     } catch {
         return @('Classic')
@@ -375,11 +375,9 @@ function Get-AdbWifiPreferredMode {
     The WiFi ADB mode headsets are moved to: 'Classic', 'TLS', or '' for no preference.
 
     .DESCRIPTION
-    ADB.wifi_preferred_mode 'auto' (the default, ADR-0037) means no preference: the resolver uses
-    whatever mode answers (classic first, Get-AdbWifiModeOrder) and nothing is ever switched. ''
-    also when only one mode is enabled (nothing to switch to). THE single read used by the switch
-    engine, the running-capture rule, DIAG and the console - never Get-AdbWifiModeOrder's first
-    entry, which is classic under 'auto' too. Never throws.
+    ADB.wifi_preferred_mode is 'tls' (the default) or 'classic'. '' only when a single mode is
+    enabled (nothing to switch to). THE single read used by the switch engine, the running-capture
+    rule, DIAG and the console. Never throws.
 
     .EXAMPLE
     if (Get-AdbWifiPreferredMode) { 'switching to ' + (Get-AdbWifiPreferredMode) }
@@ -404,7 +402,7 @@ function Test-AdbWifiModeConfig {
 
     .DESCRIPTION
     Used by /api/config/save before it writes config.json (ADR-0037). wifi_preferred_mode must be
-    auto, classic or tls (case-insensitive); wifi_classic_enabled / wifi_tls_enabled must be
+    classic or tls (case-insensitive); wifi_classic_enabled / wifi_tls_enabled must be
     booleans; adbPort_default 1..65535. Missing keys are valid (the loader defaults them).
 
     .EXAMPLE
@@ -415,8 +413,8 @@ function Test-AdbWifiModeConfig {
         if ($null -eq $Adb) { return '' }
         $p = $Adb.PSObject.Properties
         if ($p['wifi_preferred_mode'] -and $null -ne $Adb.wifi_preferred_mode -and
-            ([string]$Adb.wifi_preferred_mode).Trim().ToLowerInvariant() -notin @('auto', 'classic', 'tls')) {
-            return 'ADB.wifi_preferred_mode must be auto, classic or tls.'
+            ([string]$Adb.wifi_preferred_mode).Trim().ToLowerInvariant() -notin @('classic', 'tls')) {
+            return 'ADB.wifi_preferred_mode must be classic or tls.'
         }
         foreach ($b in 'wifi_classic_enabled', 'wifi_tls_enabled') {
             if ($p[$b] -and $null -ne $Adb.$b -and -not ($Adb.$b -is [bool])) { return ('ADB.{0} must be true or false.' -f $b) }

@@ -1217,6 +1217,89 @@ function Update-InstalledAppsCache {
 }
 
 
+function Update-InstalledAppsCacheFromList {
+    # ADR-0043: ingest a VRHM Companion push of the installed apps (no ADB). The companion reports
+    # the user/third-party packages it reads from PackageManager; this writes them into the same
+    # installed-apps cache the ADB path (Update-InstalledAppsCache) fills, with a clear-then-insert
+    # in ONE transaction so an uninstall is expressed by absence. New packages get a catalogue row
+    # (third_party=1) so the apps UI has a name. -Apps is an array of objects/hashtables carrying
+    # pkg (or package/packageName), version (optional) and label (optional display name).
+    # Returns the number of rows written. Never throws.
+    # Example: Update-InstalledAppsCacheFromList -HeadsetId 3 -Apps @(@{ pkg='com.x'; version='1.2'; label='X' })
+    param(
+        [Parameter(Mandatory=$true)][int]$HeadsetId,
+        [object[]]$Apps = @()
+    )
+    if ($HeadsetId -le 0) { return 0 }
+    try {
+        $getField = {
+            param($o, $names)
+            foreach ($n in $names) {
+                if ($o -is [hashtable]) { if ($o.ContainsKey($n) -and $null -ne $o[$n]) { return [string]$o[$n] } }
+                else { $p = $o.PSObject.Properties[$n]; if ($p -and $null -ne $p.Value) { return [string]$p.Value } }
+            }
+            return ''
+        }
+        $norm = @()
+        foreach ($a in $Apps) {
+            if (-not $a) { continue }
+            $pkg = (& $getField $a @('pkg', 'package', 'packageName')).Trim()
+            if ($pkg -notmatch '^[a-zA-Z][a-zA-Z0-9_.]*$') { continue }
+            $norm += [PSCustomObject]@{
+                Pkg     = $pkg
+                Version = (& $getField $a @('version', 'versionName'))
+                Label   = (& $getField $a @('label', 'name', 'displayName'))
+            }
+        }
+        $norm = @($norm | Sort-Object Pkg -Unique)
+        if ($norm.Count -eq 0) { return 0 }
+
+        $appNames = Get-AppCatalogMap
+
+        # Catalogue rows for packages not yet known (third-party; a label becomes the display name).
+        $catalogBatch = @()
+        foreach ($n in $norm) {
+            if ($appNames[$n.Pkg]) { continue }
+            $display = if ($n.Label) { $n.Label } elseif ($n.Pkg.StartsWith('com.')) { $n.Pkg.Substring(4) } else { $n.Pkg }
+            $catalogBatch += @{
+                package_name    = $n.Pkg
+                display_name    = $display
+                icon_url        = ''
+                local_icon_path = ''
+                third_party     = 1
+                latest_version  = ''
+            }
+        }
+        if ($catalogBatch.Count -gt 0) { Invoke-DbBatch -Name 'catalog.upsert' -Rows $catalogBatch | Out-Null }
+
+        $storeVersionMap = @{}
+        foreach ($key in $appNames.Keys) { $l = $appNames[$key].LatestVersion; if ($l) { $storeVersionMap[$key] = $l } }
+
+        $rows = @($norm | ForEach-Object {
+            $ver  = [string]$_.Version
+            $sver = if ($storeVersionMap.ContainsKey($_.Pkg) -and $storeVersionMap[$_.Pkg] -and $storeVersionMap[$_.Pkg] -ne $ver) { $storeVersionMap[$_.Pkg] } else { '' }
+            @{
+                headset_id      = $HeadsetId
+                package_name    = $_.Pkg
+                version         = $ver
+                pending_version = ''
+                store_version   = [string]$sver
+                size_bytes      = [int64]0
+            }
+        })
+        Invoke-DbTransaction -Script {
+            Invoke-DbNonQuery -Name 'installed.delete_for_headset' -Parameters @{ headset_id = $HeadsetId } | Out-Null
+            Invoke-DbBatch -Name 'installed.insert' -Rows $rows | Out-Null
+        } | Out-Null
+        Write-Log ("Companion apps ingest: headset {0}, {1} packages" -f $HeadsetId, $rows.Count) -Level DEBUG
+        return $rows.Count
+    } catch {
+        Write-Log ("Update-InstalledAppsCacheFromList failed for headset {0}: {1}" -f $HeadsetId, $_) -Level DEBUG
+        return 0
+    }
+}
+
+
 function Get-HeadsetPendingAppUpdates {
     # Returns staged update sessions as @{PackageName;CurrentVersion;PendingVersion;SessionId}.
     # Returns empty array when none found - never throws or returns $false for the no-updates case.

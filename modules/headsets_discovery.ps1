@@ -354,6 +354,31 @@ function Invoke-HeadsetNetworkSweep {
         Write-Log ("Headset discovery: live status unavailable, probing every address - " + $_.Exception.Message) -Level DEBUG
     }
 
+    # Live ADB connections (ip:port in state "device") are, by definition, headsets this PC is
+    # already talking to - they cannot be "new", and re-probing them (an adb connect) re-pops the
+    # "Allow debugging" dialog on any headset whose key is not persistently trusted. This set comes
+    # straight from one `adb devices` call, so it works even when the DB status read above failed
+    # (the WAL-lock case), where $knownUp would otherwise be empty and every address re-probed.
+    if ($doClassic) {
+        try {
+            $dev = Invoke-Adb -Arguments @('devices') -Adb $adb -TimeoutSeconds 10
+            if ($dev -and $dev.Ok) {
+                foreach ($line in @(($dev.StdOut -split "`r?`n"))) {
+                    $t = ([string]$line).Trim()
+                    if (-not $t -or $t -like 'List of devices*') { continue }
+                    $parts = @($t -split '\s+')
+                    if ($parts.Count -lt 2) { continue }
+                    if ($parts[-1] -ne 'device') { continue }
+                    $id = [string]$parts[0]
+                    $m  = [regex]::Match($id, '^(\d{1,3}(?:\.\d{1,3}){3}):\d+$')
+                    if ($m.Success) { $knownUp[$m.Groups[1].Value] = $true }
+                }
+            }
+        } catch {
+            Write-Log ("Headset discovery: could not read live adb devices - " + $_.Exception.Message) -Level DEBUG
+        }
+    }
+
     # ---- Classic part: port sweep of the LAN holding the default route ----
     if ($doClassic) {
         $networks = @(Get-PrivateNetworks)

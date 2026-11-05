@@ -360,6 +360,12 @@
     .adv-loading { text-align: center; padding: 24px 0; opacity: .5; font-size: .85rem; }
     .adv-error { color: #ef4444; font-size: .8rem; margin-top: 6px; text-align: right; }
     .adv-field-col { flex-direction: column; align-items: flex-start; gap: 6px; }
+    .adv-tabs { display: flex; gap: 2px; border-bottom: 1px solid #333; margin-bottom: 4px; flex: 0 0 auto; }
+    .adv-tab { background: none; border: none; border-bottom: 2px solid transparent; color: #9aa0a6; padding: 7px 12px; cursor: pointer; font-size: .82rem; font-weight: 600; white-space: nowrap; }
+    .adv-tab:hover { color: var(--text); opacity: .85; }
+    .adv-tab.active { color: var(--text); border-bottom-color: #22a06b; }
+    .adv-tab-panel { display: none; flex-direction: column; gap: 13px; }
+    .adv-tab-panel.active { display: flex; }
     .adv-btn-group { display: flex; gap: 6px; flex-wrap: wrap; }
     .adv-storage-wrap { display: flex; flex-direction: column; gap: 3px; width: 100%; }
     .adv-storage-track { height: 8px; border-radius: 4px; background: rgba(255,255,255,0.1); overflow: hidden; display: flex; }
@@ -1047,129 +1053,152 @@
       <div class="advsettings-modal-body" id="adv-body">
         <div class="adv-loading" id="adv-loading">Loading current settings...</div>
         <div id="adv-fields" style="display:none; flex-direction:column; gap:13px;">
-          <div class="adv-field" id="adv-reapply-row">
-            <label title="The settings marked 'session only' below are lost when the headset restarts. When on, VRHM puts the ones you set back by itself after each restart (the headset must be reachable over ADB).">Re-apply session settings after reboot</label>
-            <button class="toggle-btn" id="adv-reapply-toggle" style="font-size:.8rem;">
-              <span id="adv-reapply-label">--</span>
-            </button>
+          <div class="adv-tabs" role="tablist">
+            <button type="button" class="adv-tab active" data-adv-tab="headset">Headset settings</button>
+            <button type="button" class="adv-tab" data-adv-tab="display">Display quality</button>
+            <button type="button" class="adv-tab" data-adv-tab="connectivity">Connectivity</button>
           </div>
-          <div class="adv-field">
-            <label for="adv-sound-level">Sound Level</label>
-            <div class="adv-slider-wrap">
-              <input type="range" id="adv-sound-level" min="0" max="100" step="1" value="50">
-              <span class="adv-slider-val" id="adv-sound-level-val">50%</span>
-            </div>
-          </div>
-          <div class="adv-field">
-            <label for="adv-brightness">Brightness</label>
-            <div class="adv-slider-wrap">
-              <input type="range" id="adv-brightness" min="0" max="100" step="1" value="50">
-              <span class="adv-slider-val" id="adv-brightness-val">50%</span>
-            </div>
-          </div>
-          <div class="adv-field">
-            <label>Guardian Mode</label>
-            <div style="display:flex;gap:6px;flex-wrap:nowrap;">
-              <button class="hs-adv-btn" id="adv-guardian-init" style="font-size:.8rem">
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
-                </svg>
-                Initialization
-              </button>
-              <button class="hs-adv-btn" id="adv-guardian-pause" style="font-size:.8rem" title="Session only - resets on reboot">
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                  <circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
-                </svg>
-                <span id="adv-guardian-pause-label">Disable (session)</span>
+
+          <!-- Tab: Headset settings -->
+          <div class="adv-tab-panel active" data-adv-panel="headset">
+            <div class="adv-field" id="adv-reapply-row">
+              <label title="The settings marked 'session only' below are lost when the headset restarts. When on, VRHM puts the ones you set back by itself after each restart (the headset must be reachable over ADB).">Re-apply session settings after reboot</label>
+              <button class="toggle-btn" id="adv-reapply-toggle" style="font-size:.8rem;">
+                <span id="adv-reapply-label">--</span>
               </button>
             </div>
+            <div class="adv-field">
+              <label for="adv-sound-level">Sound Level</label>
+              <div class="adv-slider-wrap">
+                <input type="range" id="adv-sound-level" min="0" max="100" step="1" value="50">
+                <span class="adv-slider-val" id="adv-sound-level-val">50%</span>
+              </div>
+            </div>
+            <div class="adv-field">
+              <label for="adv-brightness">Brightness</label>
+              <div class="adv-slider-wrap">
+                <input type="range" id="adv-brightness" min="0" max="100" step="1" value="50">
+                <span class="adv-slider-val" id="adv-brightness-val">50%</span>
+              </div>
+            </div>
+            <div class="adv-field">
+              <label>Guardian Mode</label>
+              <div style="display:flex;gap:6px;flex-wrap:nowrap;">
+                <button class="hs-adv-btn" id="adv-guardian-init" style="font-size:.8rem">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+                  </svg>
+                  Initialization
+                </button>
+                <button class="hs-adv-btn" id="adv-guardian-pause" style="font-size:.8rem" title="Session only - resets on reboot">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
+                  </svg>
+                  <span id="adv-guardian-pause-label">Disable (session)</span>
+                </button>
+              </div>
+            </div>
+            <div class="adv-field">
+              <label title="Off bypasses the sensor: the headset behaves as if it was worn and stays awake. Lost when the headset restarts (see the re-apply switch at the top).">Proximity Sensor <span class="adv-note">(session only)</span></label>
+              <button class="toggle-btn" id="adv-prox-disable" style="font-size:.8rem;">
+                <span id="adv-prox-label">--</span>
+              </button>
+            </div>
+            <div class="adv-field" id="adv-doubletap-row">
+              <label title="The tap on the side of the headset that toggles passthrough. Disabling it is lost when the headset restarts (see the re-apply switch at the top).">Side double tap <span class="adv-note">(session only)</span></label>
+              <button class="toggle-btn" id="adv-doubletap-toggle" style="font-size:.8rem;">
+                <span id="adv-doubletap-label">--</span>
+              </button>
+            </div>
+            <div class="adv-field" id="adv-widemotion-row">
+              <label title="Tracks hands beyond the cameras' field of view using body tracking. Lost when the headset restarts (see the re-apply switch at the top).">Hand wide-motion mode <span class="adv-note">(session only)</span></label>
+              <button class="toggle-btn" id="adv-widemotion-toggle" style="font-size:.8rem;">
+                <span id="adv-widemotion-label">--</span>
+              </button>
+            </div>
+            <div class="adv-field">
+              <label>Block Updates</label>
+              <button class="toggle-btn" id="adv-updates-toggle" style="font-size:.8rem;">
+                <span id="adv-updates-toggle-label">--</span>
+              </button>
+            </div>
+            <div class="adv-field">
+              <label>Screen Timeout <span class="adv-note">(info only)</span></label>
+              <span class="adv-info-val" id="adv-screen-timeout">--</span>
+            </div>
+            <div class="adv-field">
+              <label>Sleep Timeout <span class="adv-note">(info only)</span></label>
+              <span class="adv-info-val" id="adv-sleep-timeout">--</span>
+            </div>
+            <div class="adv-field">
+              <label title="Restart the Meta interface (shell) of this headset, e.g. when the capture is black. The player drops to a loading screen for a few seconds.">Reset interface (UI)</label>
+              <button class="hs-adv-btn" id="adv-reset-ui" style="font-size:.8rem;">Reset UI</button>
+            </div>
+            <div class="adv-field adv-field-col" id="adv-storage-row" style="display:none;width:100%">
+              <label>Storage</label>
+              <div class="adv-storage-wrap">
+                <div class="adv-storage-track">
+                  <div class="adv-storage-fill" id="adv-storage-used-fill" style="width:0%"></div>
+                </div>
+                <div class="adv-storage-labels">
+                  <span id="adv-storage-used-lbl">--</span>
+                  <span id="adv-storage-free-lbl">--</span>
+                  <span id="adv-storage-total-lbl">--</span>
+                </div>
+              </div>
+            </div>
           </div>
 
-
-          <div class="adv-field">
-            <label title="Off bypasses the sensor: the headset behaves as if it was worn and stays awake. Lost when the headset restarts (see the re-apply switch at the top).">Proximity Sensor <span class="adv-note">(session only)</span></label>
-            <button class="toggle-btn" id="adv-prox-disable" style="font-size:.8rem;">
-              <span id="adv-prox-label">--</span>
-            </button>
-          </div>
-
-          <div class="adv-field" id="adv-doubletap-row">
-            <label title="The tap on the side of the headset that toggles passthrough. Disabling it is lost when the headset restarts (see the re-apply switch at the top).">Side double tap <span class="adv-note">(session only)</span></label>
-            <button class="toggle-btn" id="adv-doubletap-toggle" style="font-size:.8rem;">
-              <span id="adv-doubletap-label">--</span>
-            </button>
-          </div>
-
-          <div class="adv-field" id="adv-widemotion-row">
-            <label title="Tracks hands beyond the cameras' field of view using body tracking. Lost when the headset restarts (see the re-apply switch at the top).">Hand wide-motion mode <span class="adv-note">(session only)</span></label>
-            <button class="toggle-btn" id="adv-widemotion-toggle" style="font-size:.8rem;">
-              <span id="adv-widemotion-label">--</span>
-            </button>
-          </div>
-
-          <div class="adv-field" id="adv-sharpening-row">
-            <label for="adv-sharpening" title="Image sharpening applied to every app (the QGO 'Image Sharpening Algorithm' setting): FidelityFX CAS gives a subtle effect, Meta Quest Super Resolution a stronger one but may add color artifacts and GPU load. Lost when the headset restarts (see the re-apply switch at the top).">Image sharpening <span class="adv-note">(session only)</span></label>
-            <select id="adv-sharpening" style="font-size:.8rem;">
-              <option value="none">Off</option>
-              <option value="fcas">FidelityFX CAS</option>
-              <option value="mqsr">Meta Quest Super Resolution</option>
-            </select>
-          </div>
-
-          <div class="adv-field">
-            <label for="adv-refresh-rate" title="Rates above 120 Hz are Quest 3 only. Lost when the headset restarts.">Refresh Rate <span class="adv-note">(session only)</span></label>
-            <div style="display:flex;gap:6px;flex-wrap:nowrap;align-items:center;">
-              <select id="adv-refresh-rate" style="font-size:.8rem;">
-                <option value="72">72 Hz</option>
-                <option value="80">80 Hz</option>
-                <option value="90">90 Hz</option>
-                <option value="96">96 Hz</option>
-                <option value="100">100 Hz</option>
-                <option value="120">120 Hz</option>
-                <option value="144">144 Hz (Quest 3)</option>
-                <option value="180">180 Hz (Quest 3)</option>
-                <option value="200">200 Hz (Quest 3)</option>
+          <!-- Tab: Display quality -->
+          <div class="adv-tab-panel" data-adv-panel="display">
+            <div class="adv-field" id="adv-sharpening-row">
+              <label for="adv-sharpening" title="Image sharpening applied to every app (the QGO 'Image Sharpening Algorithm' setting): FidelityFX CAS gives a subtle effect, Meta Quest Super Resolution a stronger one but may add color artifacts and GPU load. Lost when the headset restarts (see the re-apply switch on the Headset settings tab).">Image sharpening <span class="adv-note">(session only)</span></label>
+              <select id="adv-sharpening" style="font-size:.8rem;">
+                <option value="none">Off</option>
+                <option value="fcas">FidelityFX CAS</option>
+                <option value="mqsr">Meta Quest Super Resolution</option>
               </select>
-              <button class="hs-adv-btn" id="adv-refresh-rate-apply" style="font-size:.8rem;">Apply</button>
+            </div>
+            <div class="adv-field">
+              <label for="adv-refresh-rate" title="Rates above 120 Hz are Quest 3 only. Lost when the headset restarts.">Refresh Rate <span class="adv-note">(session only)</span></label>
+              <div style="display:flex;gap:6px;flex-wrap:nowrap;align-items:center;">
+                <select id="adv-refresh-rate" style="font-size:.8rem;">
+                  <option value="72">72 Hz</option>
+                  <option value="80">80 Hz</option>
+                  <option value="90">90 Hz</option>
+                  <option value="96">96 Hz</option>
+                  <option value="100">100 Hz</option>
+                  <option value="120">120 Hz</option>
+                  <option value="144">144 Hz (Quest 3)</option>
+                  <option value="180">180 Hz (Quest 3)</option>
+                  <option value="200">200 Hz (Quest 3)</option>
+                </select>
+                <button class="hs-adv-btn" id="adv-refresh-rate-apply" style="font-size:.8rem;">Apply</button>
+              </div>
+            </div>
+            <div class="adv-field">
+              <label>Capture Display Size</label>
+              <button class="hs-adv-btn" id="adv-display-reset" style="font-size:.8rem;">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>
+                </svg>
+                Reset display size
+              </button>
             </div>
           </div>
 
-          <div class="adv-field">
-            <label>Capture Display Size</label>
-            <button class="hs-adv-btn" id="adv-display-reset" style="font-size:.8rem;">
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>
-              </svg>
-              Reset display size
-            </button>
-          </div>
-
-          <div class="adv-field">
-            <label>Block Updates</label>
-            <button class="toggle-btn" id="adv-updates-toggle" style="font-size:.8rem;">
-              <span id="adv-updates-toggle-label">--</span>
-            </button>
-          </div>
-
-          <div class="adv-field">
-            <label>Screen Timeout <span class="adv-note">(info only)</span></label>
-            <span class="adv-info-val" id="adv-screen-timeout">--</span>
-          </div>
-          <div class="adv-field">
-            <label>Sleep Timeout <span class="adv-note">(info only)</span></label>
-            <span class="adv-info-val" id="adv-sleep-timeout">--</span>
-          </div>
-          <div class="adv-field adv-field-col" id="adv-storage-row" style="display:none;width:100%">
-            <label>Storage</label>
-            <div class="adv-storage-wrap">
-              <div class="adv-storage-track">
-                <div class="adv-storage-fill" id="adv-storage-used-fill" style="width:0%"></div>
-              </div>
-              <div class="adv-storage-labels">
-                <span id="adv-storage-used-lbl">--</span>
-                <span id="adv-storage-free-lbl">--</span>
-                <span id="adv-storage-total-lbl">--</span>
-              </div>
+          <!-- Tab: Connectivity -->
+          <div class="adv-tab-panel" data-adv-panel="connectivity">
+            <div class="adv-field" id="adv-infosource-row">
+              <label for="adv-infosource" title="Where VRHM reads this headset's battery/temperature/apps. VRHM Companion = the headset app pushes them (needs the app installed); ADB = VRHM polls over ADB. Companion automatically falls back to ADB polling when no push arrives. Defaults to Companion when the app is installed on this headset, otherwise ADB.">Information source</label>
+              <select id="adv-infosource" style="font-size:.8rem;">
+                <option value="companion">VRHM Companion (push)</option>
+                <option value="adb">ADB (poll)</option>
+              </select>
+            </div>
+            <div class="adv-field adv-field-col" style="width:100%">
+              <label title="Headset-side helper apps that re-enable ADB after a reboot. Acts on THIS headset over its own ADB link (USB or WiFi).">ADB helper apps</label>
+              <div id="adv-adbtools-body" style="width:100%;font-size:.8rem;"></div>
             </div>
           </div>
         </div>
@@ -1534,8 +1563,7 @@
             '</span>' +
             '<span style="display:inline-flex;gap:6px">' +
               '<a class="hs-adv-btn" data-diag="' + dn + '" href="headset_diag.html?id=' + encodeURIComponent(cfg.ID) + '" title="Diagnostics for this headset" style="text-decoration:none;display:inline-block">DIAG</a>' +
-              '<button class="hs-adv-btn" data-reset-ui="' + dn + '" data-reset-ui-id="' + esc(String(cfg.ID)) + '" title="Restart the Meta interface (shell) of this headset, e.g. when the capture is black. The player drops to a loading screen for a few seconds.">Reset UI</button>' +
-              '<button class="hs-adv-btn" data-adv-settings="' + dn + '" data-adv-brand="' + esc(cfg.Brand || '') + '">Configure</button>' +
+              '<button class="hs-adv-btn" data-adv-settings="' + dn + '" data-adv-id="' + esc(String(cfg.ID)) + '" data-adv-brand="' + esc(cfg.Brand || '') + '">Configure</button>' +
             '</span>' +
           '</div>' +
           '<div class="card-ipd-row" data-ipd-row="' + dn + '" style="display:none">' +
@@ -1669,28 +1697,10 @@
           openProfileModal(editProfileBtn.dataset.editProfile);
           return;
         }
-        // Reset headset interface (same action as DIAG > Recovery > Reset headset interface)
-        var resetUiBtn = e.target.closest('[data-reset-ui]');
-        if (resetUiBtn) {
-          if (resetUiBtn.disabled) return;
-          if (!confirm('Restart the Meta interface of ' + resetUiBtn.dataset.resetUi.replace(/_/g, ' ') + '? The player will drop to a loading screen for a few seconds.')) return;
-          var ruLabel = resetUiBtn.textContent;
-          resetUiBtn.disabled = true; resetUiBtn.textContent = 'Resetting...';
-          fetch('/api/headset-diag/action', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: parseInt(resetUiBtn.dataset.resetUiId, 10), action: 'recover_reset_ui' })
-          })
-            .then(function(r) { return r.json().catch(function() { return {}; }); })
-            .then(function(j) { if (!j.ok) alert('Reset failed: ' + (j.message || 'unknown error')); })
-            .catch(function(err) { alert('Reset failed: ' + err); })
-            .then(function() { setTimeout(function() { resetUiBtn.disabled = false; resetUiBtn.textContent = ruLabel; }, 8000); });
-          return;
-        }
         // Advanced settings button
         var advBtn = e.target.closest('[data-adv-settings]');
         if (advBtn) {
-          openAdvSettingsModal(advBtn.dataset.advSettings, advBtn.dataset.advBrand || '');
+          openAdvSettingsModal(advBtn.dataset.advSettings, advBtn.dataset.advBrand || '', advBtn.dataset.advId || '');
           return;
         }
         // Name edit button
@@ -2299,7 +2309,6 @@
           document.querySelector('[data-launch-app="' + dn + '"]'),
           document.querySelector('[data-adv-settings="' + dn + '"]'),
           document.querySelector('[data-diag="' + dn + '"]'),
-          document.querySelector('[data-reset-ui="' + dn + '"]'),
           document.querySelector('[data-power="reboot"][data-power-headset="' + dn + '"]'),
           document.querySelector('[data-power="shutdown"][data-power-headset="' + dn + '"]')
         ].forEach(function(b) { if (b) b.classList.toggle('btn-adb-disabled', !adbOk); });
@@ -2851,6 +2860,7 @@
 
     // -- Advanced settings modal --------------------------------------------------
     var _advDn = null;
+    var _advId = '';
     var _advBrand = '';
 
     function refreshAdvSettings() {
@@ -2916,6 +2926,17 @@
               updBtn.dataset.blocked = '';
             }
             updBtn.disabled = false;
+          }
+          // Info source (ADR-0043): Companion vs ADB only. An explicit per-headset override wins;
+          // otherwise default to Companion when the app is installed on this headset, else ADB.
+          // (Companion polling always falls back to ADB automatically when no push arrives.)
+          var isSel = document.getElementById('adv-infosource');
+          if (isSel) {
+            var cur = (j.infoSource === 'companion' || j.infoSource === 'adb')
+              ? j.infoSource
+              : (j.companionInstalled ? 'companion' : 'adb');
+            isSel.value = cur;
+            isSel.disabled = false;
           }
           // Session-only settings (ADR-0040): live state where the headset can tell.
           setAdvToggleState('adv-reapply-toggle', 'adv-reapply-label', j.sessionReapply === true, 'On', 'Off');
@@ -3013,9 +3034,10 @@
       if (sleepRow) sleepRow.style.display = isPico ? 'none' : '';
     }
 
-    function openAdvSettingsModal(dn, brand) {
+    function openAdvSettingsModal(dn, brand, id) {
       _advDn = dn;
       _advBrand = brand || '';
+      _advId = id || '';
       document.getElementById('adv-headset').textContent = dn.replace(/_/g, ' ');
       document.getElementById('advsettings-modal').style.display = 'flex';
       var proxBtn = document.getElementById('adv-prox-disable');
@@ -3026,8 +3048,34 @@
       var updLabel = document.getElementById('adv-updates-toggle-label');
       if (updLabel) updLabel.textContent = '...';
       applyAdvBrandVisibility(_advBrand);
+      // ADB helper apps panel talks to the headset: reset it; it loads when the Connectivity
+      // tab is first shown (not on every open - most opens land on the Headset settings tab).
+      advResetAdbTools();
+      advShowTab('headset');   // every open starts on the first tab
       refreshAdvSettings();
     }
+
+    // Tabs of the Advanced Settings modal: show one panel at a time.
+    function advShowTab(name) {
+      var modal = document.getElementById('advsettings-modal');
+      if (!modal) return;
+      Array.prototype.forEach.call(modal.querySelectorAll('.adv-tab'), function(t) {
+        t.classList.toggle('active', t.dataset.advTab === name);
+      });
+      Array.prototype.forEach.call(modal.querySelectorAll('.adv-tab-panel'), function(p) {
+        p.classList.toggle('active', p.dataset.advPanel === name);
+      });
+      // The ADB helper apps read is done lazily, the first time the Connectivity tab is viewed.
+      if (name === 'connectivity' && typeof advLoadAdbTools === 'function') advLoadAdbTools();
+    }
+    (function() {
+      var modal = document.getElementById('advsettings-modal');
+      if (!modal) return;
+      modal.addEventListener('click', function(e) {
+        var tab = e.target.closest('.adv-tab');
+        if (tab && tab.dataset.advTab) advShowTab(tab.dataset.advTab);
+      });
+    })();
 
     function closeAdvSettingsModal() {
       document.getElementById('advsettings-modal').style.display = 'none';
@@ -3037,6 +3085,139 @@
 
     document.getElementById('adv-cancel').addEventListener('click', closeAdvSettingsModal);
     document.getElementById('adv-refresh').addEventListener('click', refreshAdvSettings);
+    // Info source override (ADR-0042): POST immediately on change; no ADB, no apply button.
+    (function() {
+      var isSel = document.getElementById('adv-infosource');
+      if (!isSel) return;
+      isSel.addEventListener('change', function() {
+        if (!_advId) return;
+        isSel.disabled = true;
+        fetch('/api/headset-info-source', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: parseInt(_advId, 10), source: isSel.value })
+        }).then(function(r) { return r.json(); })
+          .then(function(j) { if (!j.ok) alert('Info source: ' + (j.error || 'failed')); })
+          .catch(function(err) { alert('Info source: ' + err); })
+          .then(function() { isSel.disabled = false; });
+      });
+    })();
+    // Reset headset interface (UI) - moved here from the card. Same action as DIAG > Recovery.
+    (function() {
+      var rb = document.getElementById('adv-reset-ui');
+      if (!rb) return;
+      rb.addEventListener('click', function() {
+        if (rb.disabled || !_advId) return;
+        if (!confirm('Restart the Meta interface of ' + (_advDn || '').replace(/_/g, ' ') + '? The player will drop to a loading screen for a few seconds.')) return;
+        var lbl = rb.textContent;
+        rb.disabled = true; rb.textContent = 'Resetting...';
+        fetch('/api/headset-diag/action', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: parseInt(_advId, 10), action: 'recover_reset_ui' })
+        })
+          .then(function(r) { return r.json().catch(function() { return {}; }); })
+          .then(function(j) { if (!j.ok) alert('Reset failed: ' + (j.message || 'unknown error')); })
+          .catch(function(err) { alert('Reset failed: ' + err); })
+          .then(function() { setTimeout(function() { rb.disabled = false; rb.textContent = lbl; }, 8000); });
+      });
+    })();
+
+    // ADB helper apps manager (ADR-0042/0043): lazy status + install/upgrade/uninstall for THIS
+    // headset over its own ADB link. Install routes take the headset id (per-headset targeting).
+    // Exposed to module scope so advShowTab() can auto-expand the panel and openAdvSettingsModal
+    // can reset it. The ADB read still only happens when the Connectivity tab is viewed, not on
+    // every modal open (most opens land on the Headset settings tab), so it stays off the hot path.
+    var advLoadAdbTools = function() {};
+    var advResetAdbTools = function() {};
+    (function() {
+      var body = document.getElementById('adv-adbtools-body');
+      if (!body) return;
+      var loaded = false;
+
+      function renderApps(apps) {
+        if (!apps || !apps.length) { body.innerHTML = '<span style="color:var(--muted,#888)">No helper apps reported.</span>'; return; }
+        var bothInstalled = apps.filter(function(a) { return a.installed; }).length > 1;
+        var html = '';
+        if (bothInstalled) {
+          html += '<div style="color:#c90;margin-bottom:6px">Both helper apps are installed. Running only one is recommended to avoid them fighting over the ADB-on-boot setting.</div>';
+        }
+        apps.forEach(function(a) {
+          var name = esc(a.name || a.key || a.packageName || '');
+          var tag = a.recommended ? ' <span style="color:#4a9">(recommended)</span>' : '';
+          var ver = a.installed
+            ? ('installed ' + esc(a.installedVersion || '?') + (a.upgrade ? (' -> ' + esc(a.availableVersion || '?')) : ''))
+            : 'not installed';
+          html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 0;border-top:1px solid var(--card-border)">';
+          html += '<span>' + name + tag + '<br><span style="color:var(--muted,#888)">' + ver + '</span></span>';
+          html += '<span style="display:inline-flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">';
+          if (!a.installed) {
+            html += '<button class="hs-adv-btn" data-at-install="' + esc(a.key) + '" style="font-size:.78rem">Install</button>';
+          } else {
+            if (a.upgrade) { html += '<button class="hs-adv-btn" data-at-install="' + esc(a.key) + '" style="font-size:.78rem">Upgrade to ' + esc(a.availableVersion || '?') + '</button>'; }
+            html += '<button class="hs-adv-btn" data-at-install="' + esc(a.key) + '" style="font-size:.78rem">Reinstall</button>';
+            html += '<button class="hs-adv-btn" data-at-uninstall="' + esc(a.packageName) + '" style="font-size:.78rem">Uninstall</button>';
+          }
+          html += '</span></div>';
+        });
+        body.innerHTML = html;
+      }
+
+      advResetAdbTools = function() { loaded = false; body.innerHTML = ''; };
+
+      advLoadAdbTools = function() {
+        if (!_advId || loaded) return;
+        loaded = true;
+        body.innerHTML = '<span style="color:var(--muted,#888)">Reading from the headset...</span>';
+        fetch('/api/headset-adb-tools-status?id=' + encodeURIComponent(_advId))
+          .then(function(r) { return r.json().catch(function() { return {}; }); })
+          .then(function(j) {
+            if (!j.ok) { loaded = false; body.innerHTML = '<span style="color:#c66">' + esc(j.error || 'Could not read helper apps.') + '</span>'; return; }
+            renderApps(j.apps);
+          })
+          .catch(function(err) { loaded = false; body.innerHTML = '<span style="color:#c66">' + esc(String(err)) + '</span>'; });
+      };
+
+      body.addEventListener('click', function(e) {
+        if (!_advId) return;
+        var ins = e.target.closest('[data-at-install]');
+        if (ins) {
+          var key = ins.dataset.atInstall;
+          var ep = (key === 'companion') ? '/api/installvrhmcompanion' : '/api/installadbautoenable';
+          var lbl = ins.textContent;
+          Array.prototype.forEach.call(body.querySelectorAll('button'), function(b) { b.disabled = true; });
+          ins.textContent = 'Installing...';
+          fetch(ep, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: parseInt(_advId, 10) })
+          })
+            .then(function(r) { return r.json().catch(function() { return {}; }); })
+            .then(function(j) {
+              if (!j.ok) alert('Install failed: ' + (j.error || 'unknown error'));
+              loaded = false; advLoadAdbTools();
+            })
+            .catch(function(err) { alert('Install failed: ' + err); ins.textContent = lbl; loaded = false; advLoadAdbTools(); });
+          return;
+        }
+        var un = e.target.closest('[data-at-uninstall]');
+        if (un) {
+          var pkg = un.dataset.atUninstall;
+          if (!confirm('Uninstall ' + pkg + ' from this headset?')) return;
+          Array.prototype.forEach.call(body.querySelectorAll('button'), function(b) { b.disabled = true; });
+          un.textContent = 'Uninstalling...';
+          fetch('/api/uninstall-headset-app', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: parseInt(_advId, 10), pkg: pkg })
+          })
+            .then(function(r) { return r.json().catch(function() { return {}; }); })
+            .then(function(j) {
+              if (!j.ok) alert('Uninstall failed: ' + (j.error || 'unknown error'));
+              loaded = false; advLoadAdbTools();
+            })
+            .catch(function(err) { alert('Uninstall failed: ' + err); loaded = false; advLoadAdbTools(); });
+          return;
+        }
+      });
+    })();
+
     document.getElementById('advsettings-modal').addEventListener('click', function(e) {
       if (e.target === this) closeAdvSettingsModal();
     });
@@ -3725,22 +3906,12 @@
           }
           html += '</div>';
 
-          // ADB auto-enable app section (S10-6)
-          html += '<div class="ndm-section"><div class="ndm-section-label">ADB auto-enable app (TLS)</div>';
-          if (_ndmData.autoEnableInstalled) {
-            html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px">' +
-                      '<div style="display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:#22c55e">' +
-                        '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>' +
-                        'App already installed' +
-                      '</div>' +
-                      '<button class="pm-btn" id="ndm-btn-reinstall-autoenable" style="font-size:11px;padding:4px 12px;color:#3b82f6;border-color:rgba(59,130,246,0.35);background:rgba(59,130,246,0.08)">Reinstall</button>' +
-                    '</div>';
-          } else {
-            html += '<button class="ndm-action-btn" id="ndm-btn-install-autoenable">' +
-                      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>' +
-                      '<span><strong>Install ADB auto-enable app</strong><br><span style="font-size:11px;opacity:0.6">Install, grant permissions, enable accessibility and start at boot</span></span>' +
-                    '</button>';
-          }
+          // Headset ADB tools (ADR-0042): one entry that opens a sub-view managing both enabler apps.
+          html += '<div class="ndm-section"><div class="ndm-section-label">Headset ADB tools</div>';
+          html += '<button class="ndm-action-btn" id="ndm-btn-adb-tools" style="border-color:rgba(37,99,235,0.45);background:rgba(37,99,235,0.08)">' +
+                    '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>' +
+                    '<span><strong>Install ADB auto-enabler</strong><br><span style="font-size:11px;opacity:0.6">Install, update or remove the VRHM Companion and ADB Auto Enable apps</span></span>' +
+                  '</button>';
           html += '</div>';
 
         } else {
@@ -3783,10 +3954,8 @@
         if (connectWifiBtn) connectWifiBtn.addEventListener('click', function() { submitConnectWifi(); });
         var installBtn = document.getElementById('ndm-btn-install-apk');
         if (installBtn) installBtn.addEventListener('click', function() { renderNdmStep('installing', { reinstall: false }); submitInstallAdbWifiApk(); });
-        var installAeBtn = document.getElementById('ndm-btn-install-autoenable');
-        if (installAeBtn) installAeBtn.addEventListener('click', function() { renderNdmStep('installing', { kind: 'autoenable', reinstall: false }); submitInstallAdbAutoEnable(); });
-        var reinstallAeBtn = document.getElementById('ndm-btn-reinstall-autoenable');
-        if (reinstallAeBtn) reinstallAeBtn.addEventListener('click', function() { renderNdmStep('installing', { kind: 'autoenable', reinstall: true }); submitInstallAdbAutoEnable(); });
+        var adbToolsBtn = document.getElementById('ndm-btn-adb-tools');
+        if (adbToolsBtn) adbToolsBtn.addEventListener('click', function() { renderNdmStep('adb-tools'); });
         var reinstallBtn = document.getElementById('ndm-btn-reinstall');
         if (reinstallBtn) reinstallBtn.addEventListener('click', function() { renderNdmStep('installing', { reinstall: true }); submitInstallAdbWifiApk(); });
         document.getElementById('ndm-btn-add-manual').addEventListener('click', function() { _ndmIp = ''; renderNdmStep('add-ip'); });
@@ -3917,32 +4086,98 @@
         document.getElementById('ndm-btn-back').addEventListener('click', function() { renderNdmStep('main'); });
         document.getElementById('ndm-btn-done').addEventListener('click', closeNewDevicesModal);
 
+      // -- Headset ADB tools: manage both enabler apps ------------------------
+      } else if (step === 'adb-tools') {
+        _ndmSetTitle('Headset ADB tools');
+        body.innerHTML = '<div class="wifi-step-row">' + _spinSvg + 'Checking installed apps...</div>';
+        footer.innerHTML = '';
+        fetch('/api/headset-adb-tools-status')
+          .then(function(r) { return r.json(); })
+          .then(function(j) {
+            if (!j.ok) { renderNdmStep('error', { error: j.error || 'Could not read the headset apps.' }); return; }
+            var apps = j.apps || [];
+            var installed = {};
+            apps.forEach(function(a) { installed[a.key] = a.installed; });
+            var bothInstalled = apps.length === 2 && apps[0].installed && apps[1].installed;
+            var h = '';
+            if (bothInstalled) {
+              h += '<div class="wifi-step-row" style="color:#f59e0b;align-items:flex-start;gap:8px">' + _warnSvg +
+                   '<div>Both apps are installed. They both re-enable wireless debugging at boot and can conflict - keep only the <strong>VRHM Companion</strong> unless you specifically need the fallback.</div></div>';
+            }
+            apps.forEach(function(a) {
+              var ver = a.installed ? ('installed v' + esc(a.installedVersion)) : 'not installed';
+              var avail = a.availableVersion ? ('available v' + esc(a.availableVersion)) : '';
+              var badge = a.recommended ? '<span style="font-size:10px;color:#2563eb;margin-left:6px">recommended</span>'
+                                        : '<span style="font-size:10px;opacity:0.6;margin-left:6px">secondary</span>';
+              h += '<div class="ndm-section"><div class="ndm-section-label">' + esc(a.name) + badge + '</div>';
+              h += '<div style="font-size:12px;margin-bottom:8px;color:' + (a.installed ? '#22c55e' : '#888') + '">' + ver +
+                   (avail ? ' <span style="opacity:0.6;color:#888">(' + avail + ')</span>' : '') + '</div>';
+              h += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
+              if (!a.installed) {
+                h += '<button class="pm-btn tool-install" data-k="' + a.key + '" style="color:#2563eb;border-color:rgba(37,99,235,0.35)">Install</button>';
+              } else if (a.upgrade) {
+                h += '<button class="pm-btn tool-install" data-k="' + a.key + '" style="color:#2563eb;border-color:rgba(37,99,235,0.35)">Upgrade to v' + esc(a.availableVersion) + '</button>';
+                h += '<button class="pm-btn tool-uninstall" data-p="' + esc(a.packageName) + '" data-n="' + esc(a.name) + '" style="color:#ef4444;border-color:rgba(239,68,68,0.35)">Uninstall</button>';
+              } else {
+                h += '<button class="pm-btn tool-install" data-k="' + a.key + '">Reinstall</button>';
+                h += '<button class="pm-btn tool-uninstall" data-p="' + esc(a.packageName) + '" data-n="' + esc(a.name) + '" style="color:#ef4444;border-color:rgba(239,68,68,0.35)">Uninstall</button>';
+              }
+              h += '</div></div>';
+            });
+            body.innerHTML = h;
+            footer.innerHTML = '<button class="pm-btn" id="ndm-tools-back">Back</button>';
+            document.getElementById('ndm-tools-back').addEventListener('click', function() { renderNdmStep('main', _ndmData); });
+            Array.prototype.forEach.call(document.querySelectorAll('.tool-install'), function(btn) {
+              btn.addEventListener('click', function() {
+                var k = btn.getAttribute('data-k');
+                var other = (k === 'companion') ? 'autoenable' : 'companion';
+                if (installed[other] && !confirm('The other ADB enabler is already installed. Running both apps can cause conflicts (both toggle wireless debugging at boot). Install this one as well?')) return;
+                if (k === 'companion') { renderNdmStep('installing', { kind: 'companion', reinstall: installed['companion'] }); submitInstallVrhmCompanion(); }
+                else { renderNdmStep('installing', { kind: 'autoenable', reinstall: installed['autoenable'] }); submitInstallAdbAutoEnable(); }
+              });
+            });
+            Array.prototype.forEach.call(document.querySelectorAll('.tool-uninstall'), function(btn) {
+              btn.addEventListener('click', function() {
+                var p = btn.getAttribute('data-p'); var n = btn.getAttribute('data-n');
+                if (!confirm('Uninstall ' + n + ' from this headset?')) return;
+                body.innerHTML = '<div class="wifi-step-row">' + _spinSvg + 'Uninstalling ' + esc(n) + '...</div>';
+                footer.innerHTML = '';
+                submitUninstallHeadsetApp(p);
+              });
+            });
+          })
+          .catch(function() { renderNdmStep('error', { error: 'Could not communicate with server.' }); });
+
       // -- Install APK: busy --------------------------------------------------
       } else if (step === 'installing') {
+        var isComp = data && data.kind === 'companion';
         var isAe = data && data.kind === 'autoenable';
-        _ndmSetTitle(isAe ? 'Install ADB auto-enable app' : 'Install ADB WiFi App');
+        _ndmSetTitle(isComp ? 'Install VRHM Companion' : (isAe ? 'Install ADB auto-enable app' : 'Install ADB WiFi App'));
         var isReinstall = data && data.reinstall;
-        if (isAe) {
+        if (isComp || isAe) {
+          var appLabel = isComp ? 'VRHM Companion' : 'ADB auto-enable app';
           body.innerHTML =
-            '<div class="wifi-step-row">' + _spinSvg + (isReinstall ? 'Reinstalling' : 'Installing') + ' ADB auto-enable app... this may take ~20 seconds.</div>' +
-            '<div class="wifi-hint">The app is installed, permissions granted, its accessibility service enabled and the app started once.</div>';
-        } else 
+            '<div class="wifi-step-row">' + _spinSvg + (isReinstall ? 'Reinstalling' : 'Installing') + ' ' + appLabel + '... this may take ~20 seconds.</div>' +
+            '<div class="wifi-hint">The app is installed, permissions granted, its accessibility service enabled, provisioned and started.</div>';
+        } else
         body.innerHTML =
           '<div class="wifi-step-row">' + _spinSvg + (isReinstall ? 'Reinstalling' : 'Installing') + ' ADB WiFi app... this may take ~15 seconds.</div>' +
           '<div class="wifi-hint">The app will be installed, permissions granted, and WiFi ADB enabled automatically.</div>';
 
       // -- Install APK: success -----------------------------------------------
       } else if (step === 'success-install') {
-        _ndmSetTitle((data && data.kind === 'autoenable') ? 'Install ADB auto-enable app' : 'Install ADB WiFi App');
-        if (data && data.kind === 'autoenable') {
+        var isCompOk = data && data.kind === 'companion';
+        _ndmSetTitle(isCompOk ? 'Install VRHM Companion' : ((data && data.kind === 'autoenable') ? 'Install ADB auto-enable app' : 'Install ADB WiFi App'));
+        if (isCompOk || (data && data.kind === 'autoenable')) {
           var stepsHtml = ((data.steps || []).map(function(s) {
             return '<div style="font-size:11px;color:' + (s.ok ? '#22c55e' : '#ef4444') + '">' + (s.ok ? '&#10003; ' : '&#10007; ') + esc(s.name) + ' - ' + esc(s.detail || '') + '</div>';
           }).join(''));
+          var doneHint = isCompOk ? 'Cable-free ADB will come back by itself at every boot.' : 'WiFi ADB over TLS will be re-enabled at every boot.';
           body.innerHTML =
             '<div class="wifi-step-row" style="color:#22c55e">' + _checkSvg + (data.reinstalled ? 'Reinstalled' : 'Installed') + ' on <strong>' + esc(data.model || 'Headset') + '</strong>.</div>' +
             '<div style="margin:6px 0">' + stepsHtml + '</div>' +
-            '<div class="wifi-hint">WiFi ADB over TLS will be re-enabled at every boot.</div>';
-        } else 
+            '<div class="wifi-hint">' + doneHint + '</div>';
+        } else
         body.innerHTML =
           '<div class="wifi-step-row" style="color:#22c55e">' + _checkSvg +
             ((data && data.reinstalled) ? 'Reinstalled' : 'Installed') + ' on <strong>' + esc((data && data.model) || 'Headset') + '</strong>.' +
@@ -4027,6 +4262,26 @@
         .then(function(j) {
           if (j.ok) { j.kind = 'autoenable'; renderNdmStep('success-install', j); }
           else      { renderNdmStep('error', { error: j.error || 'Install failed.' }); }
+        })
+        .catch(function() { renderNdmStep('error', { error: 'Could not communicate with server.' }); });
+    }
+
+    function submitInstallVrhmCompanion() {
+      fetch('/api/installvrhmcompanion', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          if (j.ok) { j.kind = 'companion'; renderNdmStep('success-install', j); }
+          else      { renderNdmStep('error', { error: j.error || 'Install failed.' }); }
+        })
+        .catch(function() { renderNdmStep('error', { error: 'Could not communicate with server.' }); });
+    }
+
+    function submitUninstallHeadsetApp(pkg) {
+      fetch('/api/uninstall-headset-app', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pkg: pkg }) })
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          if (j.ok) { renderNdmStep('adb-tools'); }
+          else      { renderNdmStep('error', { error: j.error || 'Uninstall failed.' }); }
         })
         .catch(function() { renderNdmStep('error', { error: 'Could not communicate with server.' }); });
     }

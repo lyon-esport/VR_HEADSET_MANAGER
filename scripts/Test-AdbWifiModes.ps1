@@ -157,7 +157,7 @@ function Set-Modes([bool]$Classic, [bool]$Tls, [string]$Pref) {
 }
 
 Set-Modes $true $true 'classic'
-Assert-Case 'order: default = Classic, TLS' ((@(Get-AdbWifiModeOrder) -join ',') -eq 'Classic,TLS')
+Assert-Case 'order: classic preferred = Classic, TLS' ((@(Get-AdbWifiModeOrder) -join ',') -eq 'Classic,TLS')
 Set-Modes $true $true 'tls'
 Assert-Case 'order: tls preferred = TLS, Classic' ((@(Get-AdbWifiModeOrder) -join ',') -eq 'TLS,Classic')
 Set-Modes $false $true 'classic'
@@ -165,7 +165,7 @@ Assert-Case 'order: classic disabled = TLS only' ((@(Get-AdbWifiModeOrder) -join
 Set-Modes $true $false 'tls'
 Assert-Case 'order: tls disabled = Classic only' ((@(Get-AdbWifiModeOrder) -join ',') -eq 'Classic')
 Remove-Variable -Name ADB_wifi_classic_enabled, ADB_wifi_tls_enabled, ADB_wifi_preferred_mode, ADB_wifi_effective_preferred -Scope Global -ErrorAction SilentlyContinue
-Assert-Case 'order: no globals = Classic, TLS' ((@(Get-AdbWifiModeOrder) -join ',') -eq 'Classic,TLS')
+Assert-Case 'order: no globals = TLS, Classic (default)' ((@(Get-AdbWifiModeOrder) -join ',') -eq 'TLS,Classic')
 
 $global:adbPort_default = 70000
 Assert-Case 'classic port: out of range -> 5555' ((Get-ClassicAdbPort) -eq 5555)
@@ -496,27 +496,27 @@ $script:mdnsText = & $mdnsQ2 38987; $script:openPorts = @('192.168.1.242:5555');
 $r = Update-AdbWifiModeState -KnownHeadsets @($q2Row) -HeadsetInfo $infoTls -ScrcpyPids @{} -Now $t0
 Assert-Case 'loop: classic already answering, stale live TLS -> no tcpip' ($r.Issued.Count -eq 0 -and -not ($script:adbCalls -match 'tcpip'))
 
-# ------------------------------------------------------------------ ADR-0037: 'auto' = no preference
-Set-Modes $true $true 'auto'
-Assert-Case 'auto: order is Classic, TLS' ((@(Get-AdbWifiModeOrder) -join ',') -eq 'Classic,TLS')
-Assert-Case 'auto: no preferred mode' ((Get-AdbWifiPreferredMode) -eq '')
+# ------------------------------------------------------------------ no preference only when ONE mode is enabled
+Set-Modes $true $false 'tls'
+Assert-Case 'one mode: order is Classic only' ((@(Get-AdbWifiModeOrder) -join ',') -eq 'Classic')
+Assert-Case 'one mode: no preferred mode' ((Get-AdbWifiPreferredMode) -eq '')
 Set-Modes $true $true 'tls';     Assert-Case 'preferred: tls -> TLS' ((Get-AdbWifiPreferredMode) -eq 'TLS')
 Set-Modes $true $true 'classic'; Assert-Case 'preferred: classic -> Classic' ((Get-AdbWifiPreferredMode) -eq 'Classic')
 Set-Modes $true $false 'classic'; Assert-Case 'preferred: one mode enabled -> none' ((Get-AdbWifiPreferredMode) -eq '')
 Remove-Variable -Name ADB_wifi_classic_enabled, ADB_wifi_tls_enabled, ADB_wifi_preferred_mode, ADB_wifi_effective_preferred -Scope Global -ErrorAction SilentlyContinue
 Assert-Case 'preferred: no globals -> none' ((Get-AdbWifiPreferredMode) -eq '')
-Set-Modes $true $true 'auto'
-Assert-Case 'auto: TLS headset -> no switch' ((Get-AdbWifiModeSwitchDecision -Headset $q2Row -Info $infoTls['192.168.1.242']).Action -eq 'none')
+Set-Modes $false $true 'tls'
+Assert-Case 'one mode: TLS headset -> no switch' ((Get-AdbWifiModeSwitchDecision -Headset $q2Row -Info $infoTls['192.168.1.242']).Action -eq 'none')
 Reset-SwitchState
 $script:mdnsText = & $mdnsQ2 38987; $script:upEndpoints = @('192.168.1.242:38987')
 $r = Update-AdbWifiModeState -KnownHeadsets @($q2Row) -HeadsetInfo $infoTls -Now $t0
-Assert-Case 'auto: nothing issued, TLS still refreshed' ($r.Issued.Count -eq 0 -and $null -ne (Find-AdbTlsEndpointBySerial -Serial '1WMHH8242N0366' -MaxAgeSec 0))
+Assert-Case 'one mode: nothing issued, TLS still refreshed' ($r.Issued.Count -eq 0 -and $null -ne (Find-AdbTlsEndpointBySerial -Serial '1WMHH8242N0366' -MaxAgeSec 0))
 $script:AdbWifiCaptureState = $null; $script:openPorts = @('192.168.1.242:38987', '192.168.1.242:5555')
-Assert-Case 'auto: a capture on TLS is not moved' (-not (Get-AdbWifiCaptureModeDecision -Headset $q2Row -CurrentWifiMode TLS -CurrentEndpoint '192.168.1.242:38987' -LiveWifiMode Classic -SwitchMode immediate).Restart)
+Assert-Case 'one mode: a capture on TLS is not moved' (-not (Get-AdbWifiCaptureModeDecision -Headset $q2Row -CurrentWifiMode TLS -CurrentEndpoint '192.168.1.242:38987' -LiveWifiMode Classic -SwitchMode immediate).Restart)
 $script:openPorts = @()
 $c1 = Get-AdbWifiCaptureModeDecision -Headset $q2Row -CurrentWifiMode TLS -CurrentEndpoint '192.168.1.242:38987' -LiveWifiMode Classic
 $c2 = Get-AdbWifiCaptureModeDecision -Headset $q2Row -CurrentWifiMode TLS -CurrentEndpoint '192.168.1.242:38987' -LiveWifiMode Classic
-Assert-Case 'auto: a dead endpoint still restarts the capture' ($c2.Restart -and $c2.Dead)
+Assert-Case 'one mode: a dead endpoint still restarts the capture' ($c2.Restart -and $c2.Dead)
 
 # Preference change = trigger: memos reset (a given-up headset is tried again), watchdog nudged.
 Set-Modes $true $true 'classic'
@@ -536,7 +536,8 @@ Assert-Case 'pref change: given-up headset tried again at once' ($r.Issued -cont
 Assert-Case 'pref change: one INFO line per change' (@($script:logLines | Where-Object { $_ -like 'INFO|WiFi ADB mode settings changed*' }).Count -eq 2) ($script:logLines -join ' / ')
 
 # /api/config/save validation of the ADB section.
-Assert-Case 'config: auto/classic/tls accepted' ((Test-AdbWifiModeConfig -Adb ([PSCustomObject]@{ wifi_preferred_mode = 'AUTO'; wifi_classic_enabled = $true; wifi_tls_enabled = $false; adbPort_default = 5555 })) -eq '')
+Assert-Case 'config: classic/tls accepted' ((Test-AdbWifiModeConfig -Adb ([PSCustomObject]@{ wifi_preferred_mode = 'TLS'; wifi_classic_enabled = $true; wifi_tls_enabled = $false; adbPort_default = 5555 })) -eq '')
+Assert-Case 'config: auto (removed) refused' ((Test-AdbWifiModeConfig -Adb ([PSCustomObject]@{ wifi_preferred_mode = 'auto' })) -ne '')
 Assert-Case 'config: unknown preferred mode refused' ((Test-AdbWifiModeConfig -Adb ([PSCustomObject]@{ wifi_preferred_mode = 'usb' })) -ne '')
 Assert-Case 'config: non-boolean toggle refused' ((Test-AdbWifiModeConfig -Adb ([PSCustomObject]@{ wifi_tls_enabled = 'yes' })) -ne '')
 Assert-Case 'config: bad classic port refused' ((Test-AdbWifiModeConfig -Adb ([PSCustomObject]@{ adbPort_default = 70000 })) -ne '')
@@ -548,8 +549,8 @@ $script:openPorts = @('192.168.1.242:5555')
 Assert-Case 'memo: fallback device, preferred classic answers -> drop' (Test-AdbWifiPreferredModeBack -Device $tlsDev -Headset $q2Row)
 $script:openPorts = @()
 Assert-Case 'memo: preferred classic closed -> keep' (-not (Test-AdbWifiPreferredModeBack -Device $tlsDev -Headset $q2Row))
-Set-Modes $true $true 'auto'; $script:openPorts = @('192.168.1.242:5555')
-Assert-Case 'memo: no preference -> keep' (-not (Test-AdbWifiPreferredModeBack -Device $tlsDev -Headset $q2Row))
+Set-Modes $true $false 'tls'; $script:openPorts = @('192.168.1.242:5555')
+Assert-Case 'memo: one mode enabled -> keep' (-not (Test-AdbWifiPreferredModeBack -Device $tlsDev -Headset $q2Row))
 Set-Modes $true $true 'classic'
 
 # mDNS address repair (2026-10-23): adb listed Q3 BLUE (registry .243, TLS 42547) with the IP of

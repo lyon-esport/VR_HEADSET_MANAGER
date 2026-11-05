@@ -78,3 +78,12 @@ auto.key
 !/sources/scrcpy/scrcpy-win64-v5.0.1/
 # END vrhm-managed scrcpy
 START_VR_HEADSET_MANAGER AutoApprove.lnk
+
+# Claude / dev material stays on the operator PC only - never pushed (operator rule 2026-11-03).
+# Already covered by /.claude/, /.dev/, /.github/, /docs/adr/ and *.md above; explicit so a change of those rules cannot leak them.
+/CLAUDE.md
+/AGENT.md
+/.claude/
+/.dev/
+/.github/
+/docs/adr/

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="AppTheme" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:colorAccent">@color/vrhm_blue</item>
+        <item name="android:colorBackground">@color/vrhm_bg</item>
+        <item name="android:windowBackground">@color/vrhm_bg</item>
+        <item name="android:textColorPrimary">@color/vrhm_text</item>
+        <item name="android:textColorSecondary">@color/vrhm_text_secondary</item>
+        <item name="android:statusBarColor">@color/vrhm_bg</item>
+    </style>
+</resources>

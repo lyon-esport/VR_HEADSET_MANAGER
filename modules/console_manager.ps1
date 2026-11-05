@@ -1239,6 +1239,7 @@ function Show-SubMenu-AddHeadset {
             @{ Separator = $true; Label = 'USB' },
             @{ Key = '6'; Label = $c.HsWifiAdb },
             @{ Key = '7'; Label = $c.HsSerial },
+            @{ Key = 'C'; Label = $c.HsCompanion },
             @{ Key = '9'; Label = $c.HsAutoEnable }
         )
         if ($pendingDiscovered.Count -gt 0) {
@@ -1249,10 +1250,10 @@ function Show-SubMenu-AddHeadset {
         Show-HeadsetsTableColored
         $userInput = Read-UiKey
         if ($userInput -in @('0', 'ESC')) { return }
-        if ($userInput -notin @('1', '2', '3', '4', '5', '6', '7', '8', '9')) { continue }
+        if ($userInput -notin @('1', '2', '3', '4', '5', '6', '7', '8', '9', 'C')) { continue }
         Write-Host ''
         Invoke-HeadsetsMenuChoice -Choice $userInput
-        if ($userInput -in @('1', '6', '7', '9')) { Wait-UiKey }
+        if ($userInput -in @('1', '6', '7', '9', 'C')) { Wait-UiKey }
     }
 }
 
@@ -1330,6 +1331,27 @@ function Invoke-HeadsetsMenuChoice {
                         Write-Host ("  {0,-22} {1}" -f $s.Name, $s.Detail) -ForegroundColor $c
                     }
                     if ($r.Ok) { Write-Host $msg.AdbWifi.AutoEnableDone -ForegroundColor Green }
+                    else { Write-Host $r.Error -ForegroundColor Red }
+                } finally {
+                    Set-UsbBusy -Seconds 10
+                }
+            }
+        }
+        'C' {
+            $usbInfo = Get-AdbUsbDeviceDetails
+            if (-not $usbInfo) {
+                Write-Host $msg.AdbWifi.AutoEnableNoUsb -ForegroundColor Yellow
+            } else {
+                # Holds the USB claim: provisioning ends with adb tcpip (classic), which re-enumerates USB.
+                Set-UsbBusy -Seconds 180
+                try {
+                    $mode = if ($global:ADB_wifi_tls_enabled) { 'TLS' } else { 'CLASSIC' }
+                    $r = Install-VrhmCompanion -Device $usbInfo -Mode $mode
+                    foreach ($s in $r.Steps) {
+                        $c = if ($s.Ok) { 'Green' } else { 'Red' }
+                        Write-Host ("  {0,-22} {1}" -f $s.Name, $s.Detail) -ForegroundColor $c
+                    }
+                    if ($r.Ok) { Write-Host $msg.Companion.InstallDone -ForegroundColor Green }
                     else { Write-Host $r.Error -ForegroundColor Red }
                 } finally {
                     Set-UsbBusy -Seconds 10
@@ -3491,7 +3513,7 @@ function Get-CaptureModeLabel {
 function Show-SubMenu-Config {
     $c = $msg.Console
     do {
-        $adbPref = switch ([string]$global:ADB_wifi_effective_preferred) { 'tls' { 'TLS' } 'classic' { 'classic' } default { $msg.AdbWifi.MenuNoPreference } }
+        $adbPref = if ([string]$global:ADB_wifi_effective_preferred -eq 'classic') { 'classic' } else { 'TLS' }
         $items = @(
             @{ Key = 'W'; Label = $c.CfgWifi },
             @{ Key = 'A'; Label = $c.CfgAdbWifi;   Value = $adbPref },
@@ -3564,18 +3586,22 @@ function Show-SubMenu-AdbWifiModes {
         $onText = { param($v) if ($v) { $msg.AdbWifi.MenuEnabled } else { $msg.AdbWifi.MenuDisabled } }
         Write-Host ($msg.AdbWifi.MenuClassic -f (& $onText $global:ADB_wifi_classic_enabled), (Get-ClassicAdbPort))
         Write-Host ($msg.AdbWifi.MenuTls -f (& $onText $global:ADB_wifi_tls_enabled))
-        # auto = no preference (ADR-0037); the "in use" value is auto too when one mode is disabled.
-        $modeText = { param($v) switch ([string]$v) { 'tls' { 'TLS' } 'classic' { 'classic' } default { $msg.AdbWifi.MenuNoPreference } } }
+        # The "in use" value is the single enabled mode when the other one is disabled.
+        $modeText = { param($v) if ([string]$v -eq 'classic') { 'classic' } else { 'TLS' } }
         $prefText = & $modeText $global:ADB_wifi_preferred_mode
         $effText  = & $modeText $global:ADB_wifi_effective_preferred
         Write-Host ($msg.AdbWifi.MenuPreferred -f $prefText, $effText)
+        # Information source (ADR-0043): companion push vs ADB (TLS/classic) telemetry.
+        $srcText = if ($global:ADB_info_source -eq 'companion') { $msg.AdbWifi.InfoSourceCompanion } elseif ($global:ADB_wifi_preferred_mode -eq 'classic') { ($msg.AdbWifi.InfoSourceClassic -f (Get-ClassicAdbPort)) } else { $msg.AdbWifi.InfoSourceTls }
+        Write-Host ($msg.AdbWifi.MenuInfoSource -f $srcText)
         Write-Host ""
         Write-Host $msg.AdbWifi.MenuHint -ForegroundColor DarkGray
+        Write-Host $msg.AdbWifi.InfoSourceHint -ForegroundColor DarkGray
         Write-Host ""
         Write-Host ('  ' + $msg.Console.Back) -ForegroundColor DarkGray
         $choice = Read-UiKey
         if ($choice -in @('0', 'ESC')) { return }
-        if ($choice -notin @('1', '2', '3')) { continue }
+        if ($choice -notin @('1', '2', '3', '4')) { continue }
 
         $cfgPath = if ($global:ConfigFilePath) { $global:ConfigFilePath } else { Join-Path $global:ScriptPath "config\config.json" }
         $saved = $false
@@ -3588,14 +3614,29 @@ function Show-SubMenu-AdbWifiModes {
                 # process last ran Get-Config), with the loader's defaults when a key is absent.
                 $curClassic = if ($null -ne $cfg.ADB.wifi_classic_enabled) { [bool]$cfg.ADB.wifi_classic_enabled } else { $true }
                 $curTls     = if ($null -ne $cfg.ADB.wifi_tls_enabled)     { [bool]$cfg.ADB.wifi_tls_enabled }     else { $true }
-                $curPref    = if ($cfg.ADB.wifi_preferred_mode) { ([string]$cfg.ADB.wifi_preferred_mode).Trim().ToLowerInvariant() } else { 'auto' }
+                $curPref    = if ($cfg.ADB.wifi_preferred_mode) { ([string]$cfg.ADB.wifi_preferred_mode).Trim().ToLowerInvariant() } else { 'tls' }
                 switch ($choice) {
                     '1' { $cfg.ADB | Add-Member -NotePropertyName wifi_classic_enabled -NotePropertyValue (-not $curClassic) -Force }
                     '2' { $cfg.ADB | Add-Member -NotePropertyName wifi_tls_enabled     -NotePropertyValue (-not $curTls) -Force }
                     '3' {
-                        # Cycles auto -> classic -> tls -> auto.
-                        $nextPref = switch ($curPref) { 'auto' { 'classic' } 'classic' { 'tls' } default { 'auto' } }
+                        # Toggles tls <-> classic.
+                        $nextPref = if ($curPref -eq 'classic') { 'tls' } else { 'classic' }
                         $cfg.ADB | Add-Member -NotePropertyName wifi_preferred_mode -NotePropertyValue $nextPref -Force
+                    }
+                    '4' {
+                        # Information source (ADR-0043). Cycles companion -> TLS -> classic -> companion.
+                        # TLS/classic also pin wifi_preferred_mode (the headline selector the operator sees);
+                        # companion leaves the transport preference untouched.
+                        $curSrc = if ($cfg.ADB.info_source) { ([string]$cfg.ADB.info_source).Trim().ToLowerInvariant() } else { 'adb' }
+                        if ($curSrc -eq 'companion') {
+                            $cfg.ADB | Add-Member -NotePropertyName info_source -NotePropertyValue 'adb' -Force
+                            $cfg.ADB | Add-Member -NotePropertyName wifi_preferred_mode -NotePropertyValue 'tls' -Force
+                        } elseif ($curPref -eq 'tls') {
+                            $cfg.ADB | Add-Member -NotePropertyName info_source -NotePropertyValue 'adb' -Force
+                            $cfg.ADB | Add-Member -NotePropertyName wifi_preferred_mode -NotePropertyValue 'classic' -Force
+                        } else {
+                            $cfg.ADB | Add-Member -NotePropertyName info_source -NotePropertyValue 'companion' -Force
+                        }
                     }
                 }
                 Write-ConfigJson -Object $cfg -Path $cfgPath -Depth 20

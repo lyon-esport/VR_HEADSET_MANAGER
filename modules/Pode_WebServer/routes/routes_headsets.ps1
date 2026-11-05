@@ -395,6 +395,10 @@ function Invoke-RouteHeadsetStatus {
             ping                 = [bool]($row.Ping -eq 'True')
             adb_transport        = if ($row.AdbTransport -and $row.AdbTransport -ne '-') { $row.AdbTransport } else { '' }
             adb_wifi_mode        = if ($row.AdbWifiMode  -and $row.AdbWifiMode  -ne '-') { $row.AdbWifiMode }  else { '' }
+            # Info source (ADR-0043): the per-headset override ('default'/'companion'/'adb'/...) and
+            # whether a companion push is currently fresh.
+            info_source          = $(if (Get-Command Get-HeadsetInfoSource -ErrorAction SilentlyContinue) { try { Get-HeadsetInfoSource -HeadsetId ([int]$headsetRow.ID) } catch { 'default' } } else { 'default' })
+            companion_fresh      = $(if (Get-Command Get-CompanionTelemetry -ErrorAction SilentlyContinue) { try { [bool](Get-CompanionTelemetry -HeadsetId ([int]$headsetRow.ID)) } catch { $false } } else { $false })
             battery              = $battery
             battery_ctrl_left    = $battLeft
             battery_ctrl_right   = $battRight
@@ -472,6 +476,21 @@ function Invoke-RouteHeadsetSettings {
             blockUpdates     = $blockUpdates
             refreshRate      = $refreshRate
             refreshRates     = @(Get-HeadsetRefreshRateChoices)
+            # Info source (ADR-0043): the per-headset override and the fleet default.
+            infoSource       = $(if (Get-Command Get-HeadsetInfoSource -ErrorAction SilentlyContinue) { Get-HeadsetInfoSource -HeadsetId ([int]$headset.ID) } else { 'default' })
+            infoSourceGlobal = $(if ($global:ADB_info_source) { [string]$global:ADB_info_source } else { 'adb' })
+            # Whether the VRHM Companion app is installed on this headset (from the installed-apps
+            # cache, no ADB): the UI defaults the info source to Companion when it is, else ADB.
+            companionInstalled = $(
+                $ci = $false
+                try {
+                    $cpk = [string]$global:CompanionPackageName
+                    if ($cpk -and (Get-Command Get-HeadsetInstalledAppsCached -ErrorAction SilentlyContinue)) {
+                        $ci = @(Get-HeadsetInstalledAppsCached -headsetName ([string]$headset.Name) | Where-Object { [string]$_.PackageName -eq $cpk }).Count -gt 0
+                    }
+                } catch {}
+                $ci
+            )
         }
     } catch {
         Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
@@ -699,6 +718,31 @@ function Invoke-RouteHeadsetSettingsApply {
     return
 }
 
+function Invoke-RouteHeadsetinfosource {
+    # POST /api/headset-info-source  body { id, source } (ADR-0043). Sets the per-headset info-source
+    # override; 'default' clears it (follow the global ADB.info_source). Accepts companion/adb/
+    # tls/classic/default (tls/classic are forward-compat; they resolve to adb telemetry today).
+    param([Parameter(Mandatory = $true)] $Context)
+    $request  = $Context.Request
+    $response = $Context.Response
+    try {
+        $json = (Read-RequestBody -Request $request -Response $response -MaxBytes 4096) | ConvertFrom-Json
+        $hid    = [int]$json.id
+        $source = ([string]$json.source).Trim().ToLowerInvariant()
+        if ($hid -le 0) { Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = 'id required' }; return }
+        if (-not (Set-HeadsetInfoSource -HeadsetId $hid -Source $source)) {
+            Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = 'invalid source' }
+            return
+        }
+        Send-JsonResponse -Response $response -Body @{ ok = $true; id = $hid; source = $source }
+    } catch {
+        Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+    } finally {
+        Close-HttpResponse -Response $response
+    }
+    return
+}
+
 # API: GET /api/headsets  - returns all known headsets as JSON (from Get-KnownHeadsets)
 function Invoke-RouteHeadsets {
     # GET /api/headsets
@@ -791,6 +835,9 @@ function Invoke-RouteHeadsetsStatus {
                     temp                  = if ($info.Temp -and $info.Temp -ne '-') { $info.Temp } else { '-' }
                     cpu_temp              = if ($info.CpuTemp -and $info.CpuTemp -ne '-') { $info.CpuTemp } else { '-' }
                     adb_transport         = if ($info.AdbTransport -and $info.AdbTransport -ne '-') { $info.AdbTransport } else { '' }
+                    # Info source (ADR-0043): per-headset override + companion-push freshness.
+                    info_source           = $(if (Get-Command Get-HeadsetInfoSource -ErrorAction SilentlyContinue) { try { Get-HeadsetInfoSource -HeadsetId ([int]$h.ID) } catch { 'default' } } else { 'default' })
+                    companion_fresh       = $(if (Get-Command Get-CompanionTelemetry -ErrorAction SilentlyContinue) { try { [bool](Get-CompanionTelemetry -HeadsetId ([int]$h.ID)) } catch { $false } } else { $false })
                     # WiFi ADB mode (ADR-0034, migration 009): Classic / TLS, '' when WiFi ADB is not up.
                     adb_wifi_mode         = if ($info.AdbWifiMode -and $info.AdbWifiMode -ne '-') { $info.AdbWifiMode } else { '' }
                     # TCP port of the WiFi ADB session: classic = configured port, TLS = published

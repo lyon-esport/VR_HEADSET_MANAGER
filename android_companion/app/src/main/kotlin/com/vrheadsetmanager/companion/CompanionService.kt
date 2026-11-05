@@ -16,6 +16,8 @@ class CompanionService : Service() {
     private var httpServer: HttpApiServer? = null
     private var discoveryServer: DiscoveryServer? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    private var watchdog: AdbWatchdog? = null
+    private var telemetry: TelemetryReporter? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -33,6 +35,14 @@ class CompanionService : Service() {
 
         discoveryServer = DiscoveryServer(applicationContext, UDP_PORT)
         discoveryServer?.start()
+
+        watchdog = AdbWatchdog(applicationContext)
+        watchdog?.start()
+
+        // Telemetry push (ADR-0042): starts only when a report_url has been provisioned.
+        telemetry = TelemetryReporter(applicationContext)
+        TelemetryReporter.active = telemetry
+        telemetry?.start()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -49,6 +59,9 @@ class CompanionService : Service() {
     }
 
     override fun onDestroy() {
+        telemetry?.stop()
+        TelemetryReporter.active = null
+        watchdog?.stop()
         httpServer?.stop()
         discoveryServer?.stop()
         if (wakeLock?.isHeld == true) wakeLock?.release()

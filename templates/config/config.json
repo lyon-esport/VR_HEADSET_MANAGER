@@ -10,8 +10,16 @@
                 "adbWirelessActivatorPackageName":  "tdg.oculuswirelessadb",
                 "adbAutoEnableFolder":  "ADB Wireless activator",
                 "adbAutoEnableApk":  "eu.project_simple.adbautoenable-3.0.0.apk",
-                "adbAutoEnablePackageName":  "eu.project_simple.adbautoenable"
+                "adbAutoEnablePackageName":  "eu.project_simple.adbautoenable",
+                "companionFolder":  "VRHM Companion",
+                "companionApk":  "VRHM-Companion.apk",
+                "companionPackageName":  "com.vrheadsetmanager.companion",
+                "companionVersion":  "1.0"
             },
+    "companion":  {
+                      "telemetry_stale_sec":  10,
+                      "report_interval_sec":  1
+                  },
     "Logging":  {
                     "Comment-possibleValues":  "DEBUG,INFO,SUCCESS,WARNING,ERROR,NONE",
                     "debugLevelToFile":  "SUCCESS",
@@ -58,7 +66,8 @@
                 "prefer_usb":  true,
                 "wifi_classic_enabled":  true,
                 "wifi_tls_enabled":  true,
-                "wifi_preferred_mode":  "auto"
+                "wifi_preferred_mode":  "tls",
+                "info_source":  "companion"
             },
     "scrcpy":  {
                    "folder":  "scrcpy\\scrcpy-win64-v5.0.1",

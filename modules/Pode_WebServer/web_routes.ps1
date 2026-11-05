@@ -250,6 +250,9 @@ $script:SlowRoutes = @{
     '/api/enablewifiadb'                 = $true   # adb tcpip re-enumerates USB, ~10 s
     '/api/installadbwifiapk'             = $true
     '/api/installadbautoenable'          = $true   # adb install + grants + tcpip, ~15 s
+    '/api/installvrhmcompanion'          = $true   # adb install + grants + provision + tcpip, ~20 s
+    '/api/headset-adb-tools-status'      = $true   # 2x dumpsys package over adb
+    '/api/uninstall-headset-app'         = $true   # adb uninstall
     '/api/headsets/push-wifi'            = $true
     '/api/app-update/check'              = $true   # GitHub API
     '/api/app-update/dev-diff'           = $true   # GitHub compare + raw
@@ -430,6 +433,7 @@ foreach ($routeRow in @(
     ,@('POST',  '/api/kiosks/power',                      'Invoke-RouteKiosksPower')
     ,@('GET',   '/api/headset-storage',                   'Invoke-RouteHeadsetStorage')
     ,@('POST',  '/api/headset-settings/apply',            'Invoke-RouteHeadsetSettingsApply')
+    ,@('POST',  '/api/headset-info-source',               'Invoke-RouteHeadsetinfosource')   # per-headset info source (ADR-0043)
     ,@('POST',  '/api/updateprofile',                     'Invoke-RouteUpdateprofile')
     ,@('GET',   '/api/scrcpyviews',                       'Invoke-RouteScrcpyviews')
     ,@('POST',  '/api/autorestart',                       'Invoke-RouteAutorestart')
@@ -480,6 +484,10 @@ foreach ($routeRow in @(
     ,@('POST',  '/api/enablewifiadb',                     'Invoke-RouteEnablewifiadb')
     ,@('POST',  '/api/installadbwifiapk',                 'Invoke-RouteInstalladbwifiapk')
     ,@('POST',  '/api/installadbautoenable',              'Invoke-RouteInstalladbautoenable')
+    ,@('POST',  '/api/installvrhmcompanion',              'Invoke-RouteInstallvrhmcompanion')
+    ,@('GET',   '/api/headset-adb-tools-status',          'Invoke-RouteHeadsetadbtoolsstatus')
+    ,@('POST',  '/api/uninstall-headset-app',             'Invoke-RouteUninstallheadsetapp')
+    ,@('POST',  '/api/companion/telemetry',               'Invoke-RouteCompaniontelemetry')   # inbound push, fast lane (ADR-0043)
     ,@('POST',  '/api/connectwifi',                       'Invoke-RouteConnectwifi')
     ,@('GET',   '/api/wifi-detect',                       'Invoke-RouteWifiDetect')
     ,@('GET',   '/api/wifi-networks',                     'Invoke-RouteWifiNetworks')

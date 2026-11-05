@@ -748,7 +748,10 @@ function Start-VRMonitor {
             # adb_*.ps1 (S9-2 split of adb_functions.ps1): transport + telemetry for the poll,
             # apps for Update-InstalledAppsCache, device_settings for headset_diag (updater, WiFi).
             # adb_wifi_modes.ps1 (ADR-0034, S10-3): the mode-aware resolver and stage 1 probe.
-            foreach ($mod in @("logging.ps1","config_files_loader.ps1","utils.ps1","wifi_store.ps1","network_scanner.ps1","adb_transport.ps1","adb_wifi_modes.ps1","adb_telemetry.ps1","adb_apps.ps1","adb_device_settings.ps1","database.ps1","usb_manager.ps1","headset_diag.ps1","headsets_monitoring.ps1")) {
+            # companion_api.ps1 (ADR-0043): Resolve-HeadsetInfoSource / Get-CompanionTelemetry /
+            # Set-HeadsetInfoFromCompanion, so a headset whose info source is the companion is
+            # filled from the pushed values and the per-cycle ADB telemetry reads are skipped.
+            foreach ($mod in @("logging.ps1","config_files_loader.ps1","utils.ps1","wifi_store.ps1","network_scanner.ps1","adb_transport.ps1","adb_wifi_modes.ps1","adb_telemetry.ps1","adb_apps.ps1","adb_device_settings.ps1","database.ps1","usb_manager.ps1","headset_diag.ps1","companion_api.ps1","headsets_monitoring.ps1")) {
                 $f = Join-Path $modPath $mod
                 if (Test-Path -LiteralPath $f) { . $f }
             }
@@ -812,6 +815,8 @@ function Start-VRMonitor {
             # Session-only settings re-applied after a headset restart (ADR-0040).
             $nextSessionAt    = [datetime]::MinValue
             $sessionState     = @{}
+            # Companion report-target push cadence (ADR-0043): tell the companion where to POST.
+            $nextReportAt     = [datetime]::MinValue
             $blackState       = @{}
             # The serial this runspace learned from the headset itself. $headset was captured
             # at startup, so a row added from an IP alone has no serial in it - without this
@@ -850,6 +855,50 @@ function Start-VRMonitor {
                         $workingInfo.AdbWifiMode = [string]$cachedDev.WifiMode
                     }
 
+                    # --- Companion telemetry (ADR-0043): when this headset's info source is the
+                    # VRHM Companion and a FRESH push exists, fill battery/temperature/controllers/
+                    # foreground from it every tick (~1 s latency) and skip the ADB telemetry reads
+                    # below. Identity (brand/model/serial) stays from the registry, no ADB. Runs even
+                    # when ADB is down, so pushed values keep flowing; falls back to the ADB poll
+                    # when the push is stale or absent. ---
+                    $companionActive = $false
+                    if (Get-Command Resolve-HeadsetInfoSource -ErrorAction SilentlyContinue) {
+                        $infoSrc = 'adb'
+                        try { $infoSrc = Resolve-HeadsetInfoSource -HeadsetId ([int]$headset.ID) } catch { $infoSrc = 'adb' }
+                        if ($infoSrc -eq 'companion') {
+                            # Tell the companion where to report, off this runspace's hot path, at
+                            # most once a minute (memoised in Set-CompanionReportTarget). Only when
+                            # the headset is reachable, so an unreachable companion's 4 s HTTP
+                            # timeout cannot stall anything but this one headset's cycle.
+                            if ($workingInfo.Ping -and [datetime]::Now -ge $nextReportAt -and (Get-Command Set-CompanionReportTarget -ErrorAction SilentlyContinue)) {
+                                $nextReportAt = [datetime]::Now.AddSeconds(60)
+                                $rptUrl = [string]$sharedState['_companion_report_url']
+                                if ($rptUrl -and $liveHeadset.IPAddress -and -not (Test-UnknownIp $liveHeadset.IPAddress)) {
+                                    try { [void](Set-CompanionReportTarget -IP ([string]$liveHeadset.IPAddress) -ReportUrl $rptUrl) } catch { }
+                                }
+                            }
+                            try {
+                                $ct = Get-CompanionTelemetry -HeadsetId ([int]$headset.ID)
+                                if ($ct) {
+                                    if ($liveHeadset.Brand) { $workingInfo.Brand = [string]$liveHeadset.Brand }
+                                    if ($liveHeadset.Model -and ([string]$liveHeadset.Model) -ne '') { $workingInfo.Model = [string]$liveHeadset.Model }
+                                    $regSerial = [string]$liveHeadset.SerialNumber
+                                    if ($regSerial -and $regSerial -ne '-') { $workingInfo.SerialNumber = $regSerial }
+                                    Set-HeadsetInfoFromCompanion -Info $workingInfo -Telemetry $ct
+                                    $fa = if ($ct.PSObject.Properties['foregroundApp']) { [string]$ct.foregroundApp } else { '' }
+                                    if ($fa) {
+                                        try {
+                                            $appInfo = Get-AppInfo -PackageName $fa -searchOnline $false
+                                            $workingInfo.RunningApp     = if ($appInfo.DisplayName) { $appInfo.DisplayName } else { $fa }
+                                            $workingInfo.RunningAppIcon = if ($appInfo.LocalIconPath) { $appInfo.LocalIconPath } elseif ($appInfo.IconUrl) { $appInfo.IconUrl } else { '' }
+                                        } catch { }
+                                    }
+                                    $companionActive = $true
+                                }
+                            } catch { }
+                        }
+                    }
+
                     # --- Stage 2/3: identity, battery, foreground app (every refresh_timer) ---
                     $timer = if ($sharedState["_refresh_timer"]) { [int]$sharedState["_refresh_timer"] } else { 5 }
                     if ([datetime]::Now -ge $nextStatsAt) {
@@ -885,12 +934,20 @@ function Start-VRMonitor {
                                 }
 
                                 # --- Stage 2: identity + battery ---
-                                $pollData = @{}
-                                $s2 = Get-HeadsetInfoStage2Identity -knownHeadset $liveHeadset -Device $device -PollData $pollData
-                                foreach ($k in $s2.Keys) { $workingInfo.$k = $s2[$k] }
-                                # The combined read failed (transport gone, timeout): resolve again next cycle.
-                                if ($pollData.CallFailed) { $pollDeviceCache.Clear() }
-                                if ($workingInfo.SerialNumber -and $workingInfo.SerialNumber -ne "-") { $learnedSerial = [string]$workingInfo.SerialNumber }
+                                # Skipped when the companion push already filled the telemetry
+                                # (ADR-0043): $pollData then carries only the companion foreground app
+                                # so the slow blocks below still behave, and no ADB battery/thermal
+                                # read is issued for this headset.
+                                if ($companionActive) {
+                                    $pollData = @{ ForegroundRead = $true; ForegroundPackage = $(if ($ct.PSObject.Properties['foregroundApp']) { [string]$ct.foregroundApp } else { '' }) }
+                                } else {
+                                    $pollData = @{}
+                                    $s2 = Get-HeadsetInfoStage2Identity -knownHeadset $liveHeadset -Device $device -PollData $pollData
+                                    foreach ($k in $s2.Keys) { $workingInfo.$k = $s2[$k] }
+                                    # The combined read failed (transport gone, timeout): resolve again next cycle.
+                                    if ($pollData.CallFailed) { $pollDeviceCache.Clear() }
+                                    if ($workingInfo.SerialNumber -and $workingInfo.SerialNumber -ne "-") { $learnedSerial = [string]$workingInfo.SerialNumber }
+                                }
 
                                 # --- Firmware history (slow cadence, one adb call) ---
                                 if ([datetime]::Now -ge $nextFirmwareAt) {
@@ -958,12 +1015,17 @@ function Start-VRMonitor {
                                 }
 
                                 # --- Stage 3: foreground app + installed-apps cache ---
-                                $s3 = Get-HeadsetInfoStage3App -knownHeadset $headset -Device $device -PollData $pollData
-                                foreach ($k in $s3.Keys) { $workingInfo.$k = $s3[$k] }
-                                if ($appsCacheCounter % $appsCacheEvery -eq 0) {
-                                    Update-InstalledAppsCache -Device $device -headsetName $headset.Name -HeadsetId ([int]$headset.ID)
+                                # Skipped when companion-fed (ADR-0043): the foreground app is already
+                                # set from the push and the apps list is ingested by the telemetry
+                                # endpoint, so no ADB foreground read and no heavy pm/dumpsys refresh.
+                                if (-not $companionActive) {
+                                    $s3 = Get-HeadsetInfoStage3App -knownHeadset $headset -Device $device -PollData $pollData
+                                    foreach ($k in $s3.Keys) { $workingInfo.$k = $s3[$k] }
+                                    if ($appsCacheCounter % $appsCacheEvery -eq 0) {
+                                        Update-InstalledAppsCache -Device $device -headsetName $headset.Name -HeadsetId ([int]$headset.ID)
+                                    }
+                                    $appsCacheCounter++
                                 }
-                                $appsCacheCounter++
                             }
                         }
                     }
@@ -1942,6 +2004,18 @@ function Start-VRMonitor {
                         } catch {
                             Write-Log ("VRMonitor: WiFi ADB mode tick failed: " + $_.Exception.Message) -Level WARNING
                         }
+                    }
+
+                    # Companion telemetry report target (ADR-0043): this server's LAN report URL,
+                    # published for the poll runspaces (which do not import kiosk_functions, so they
+                    # cannot resolve Get-ServerLanUrl). Each companion-sourced headset's runspace
+                    # pushes it to the companion off-thread so an unreachable companion cannot block
+                    # this slow tick. Cheap: Get-ServerLanUrl is cached.
+                    if (Get-Command Get-CompanionReportUrl -ErrorAction SilentlyContinue) {
+                        try {
+                            $compUrl = Get-CompanionReportUrl
+                            if ($compUrl) { $sharedState['_companion_report_url'] = $compUrl }
+                        } catch { }
                     }
 
                     # COMPANION DISCOVERY DISABLED (operator, 2026-10-18): the companion app is paused and

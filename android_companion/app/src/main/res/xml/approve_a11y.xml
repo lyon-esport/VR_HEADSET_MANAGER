@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- isAccessibilityTool="true" is REQUIRED on Horizon: the "allow debugging" popup is marked
+     accessibility-data-sensitive, so its window content is hidden from services that do not declare
+     themselves an accessibility tool (this was why getWindows() came back empty). No canPerformGestures
+     (it installs an input filter that breaks Horizon input); we click nodes by id instead. -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowsChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagRetrieveInteractiveWindows|flagReportViewIds"
+    android:canRetrieveWindowContent="true"
+    android:isAccessibilityTool="true"
+    android:notificationTimeout="100" />

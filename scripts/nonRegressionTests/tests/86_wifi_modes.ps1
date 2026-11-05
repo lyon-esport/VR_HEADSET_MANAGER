@@ -130,8 +130,8 @@ Invoke-RegressionTest -Name '/api/config/defaults serves the ADB WiFi mode defau
     Add-TestEvidence ("defaults: classic={0} tls={1} preferred={2}" -f $cfg.ADB.wifi_classic_enabled, $cfg.ADB.wifi_tls_enabled, $cfg.ADB.wifi_preferred_mode)
     Assert-True ([bool]$cfg.ADB.wifi_classic_enabled) 'default classic is on'
     Assert-True ([bool]$cfg.ADB.wifi_tls_enabled) 'default tls is on'
-    # ADR-0037: the shipped default is 'auto' (no preference, classic first, no switching).
-    Assert-Equal 'auto' ([string]$cfg.ADB.wifi_preferred_mode) 'default preferred mode'
+    # The shipped default is 'tls' (there is no "no preference" value any more).
+    Assert-Equal 'tls' ([string]$cfg.ADB.wifi_preferred_mode) 'default preferred mode'
 }
 
 Invoke-RegressionTest -Name '/api/headsets-status carries adb_wifi_mode' -Test {

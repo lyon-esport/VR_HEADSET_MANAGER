@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#161616</color>
+
+    <color name="vrhm_bg">#0F1115</color>
+    <color name="vrhm_surface">#1A1D24</color>
+    <color name="vrhm_surface_alt">#232733</color>
+    <color name="vrhm_stroke">#2A2F3A</color>
+    <color name="vrhm_blue">#2563EB</color>
+    <color name="vrhm_blue_dark">#1D4ED8</color>
+    <color name="vrhm_green">#22C55E</color>
+    <color name="vrhm_green_bg">#0E2A1A</color>
+    <color name="vrhm_text">#FFFFFF</color>
+    <color name="vrhm_text_secondary">#9AA3B2</color>
+    <color name="vrhm_text_dim">#6B7280</color>
+</resources>

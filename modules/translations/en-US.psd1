@@ -943,7 +943,6 @@
         Switched              = "Switched {0} from {1} to {2} WiFi ADB."
         PreferredUnavailable  = "{2} WiFi ADB cannot be enabled on {0} ({3}): it stays on {1} until the preferred mode changes, the headset reboots or the app restarts."
         PreferenceChanged     = "WiFi ADB mode settings changed (preferred: {0}) - re-checking every headset and capture."
-        MenuNoPreference      = "no preference (classic first)"
         SwitchDeferred        = "{0} is on TLS WiFi ADB while capturing: the switch to classic waits until the capture stops (scrcpy.usb_switch_mode = {1})."
         ScrcpyModeSwitch      = "WiFi ADB of {0} is now {2} - moving the capture from {1}."
         ScrcpyEndpointLost    = "WiFi ADB endpoint {1} of {0} is gone - restarting the capture."
@@ -955,6 +954,19 @@
         MenuDisabled          = "disabled"
         MenuSaved             = "ADB WiFi modes saved. VRMonitor applies them on its next slow tick."
         MenuSaveFailed        = "ADB WiFi modes: config.json not updated - {0}"
+        MenuInfoSource        = "  4. Information source  - {0}"
+        InfoSourceCompanion   = "VRHM Companion (push)"
+        InfoSourceTls         = "ADB over TLS"
+        InfoSourceClassic     = "Classic ADB (port {0})"
+        InfoSourceHint        = "  Companion = the headset app pushes battery/temperature/apps; TLS/Classic = VRHM reads them over ADB."
+    }
+
+    # VRHM Companion app install/provision (ADR-0042; console Add-headset C, web add-headset).
+    Companion = @{
+        InstallDone    = "VRHM Companion installed and provisioned."
+        InstallFailed  = "VRHM Companion install failed: {0}"
+        InstallNoUsb   = "No USB headset detected. Connect a headset over USB first."
+        Installing     = "Installing the VRHM Companion on {0}..."
     }
 
     # Application update (console Config > U, web Updates accordion; spec S12 / S13).
@@ -1197,7 +1209,8 @@
         HsWifiAdb         = "Enable WiFi ADB on a USB headset"
         HsSerial          = "Register / update by serial number (USB)"
         HsDiscovered      = "Discovered devices"
-        HsAutoEnable      = "Install the ADB auto-enable app (USB)"
+        HsCompanion       = "Install the VRHM Companion app (USB, recommended)"
+        HsAutoEnable      = "Install the ADB auto-enable app (USB, secondary)"
         HsDiscoveredNone  = "No discovered device is waiting."
         ToggleHint        = "Type a headset ID + Enter to toggle it - Enter alone goes back."
         AutoCastTitle     = "AUTO-CAST"

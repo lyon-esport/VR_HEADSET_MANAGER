@@ -267,6 +267,26 @@ function Get-Config {
     $global:ADBAutoEnableAPK = Join-Path -Path (Join-Path -Path $sourcesPath -ChildPath $autoEnableFolder) -ChildPath $autoEnableApk
     $global:ADBAutoEnablePackageName = if ($configContent.apk.adbAutoEnablePackageName) { [string]$configContent.apk.adbAutoEnablePackageName } else { "eu.project_simple.adbautoenable" }
 
+    # VRHM Companion app (ADR-0042). Null guards: a config.json written before it has no such keys.
+    $companionFolder = if ($configContent.apk.companionFolder) { [string]$configContent.apk.companionFolder } else { "VRHM Companion" }
+    $companionApk    = if ($configContent.apk.companionApk) { [string]$configContent.apk.companionApk } else { "VRHM-Companion.apk" }
+    $global:CompanionAPK = Join-Path -Path (Join-Path -Path $sourcesPath -ChildPath $companionFolder) -ChildPath $companionApk
+    $global:CompanionPackageName = if ($configContent.apk.companionPackageName) { [string]$configContent.apk.companionPackageName } else { "com.vrheadsetmanager.companion" }
+    $global:CompanionApproveService = "$($global:CompanionPackageName)/$($global:CompanionPackageName).ApproveService"
+    # Keep in sync with android_companion\app\build.gradle versionName (used for "upgrade available").
+    $global:CompanionVersion = if ($configContent.apk.companionVersion) { [string]$configContent.apk.companionVersion } else { "1.0" }
+
+    # Companion telemetry push (ADR-0043). telemetry_stale_sec: how long a pushed snapshot stays
+    # trusted before the ADB telemetry poll resumes as fallback (floor 2 s). report_interval_sec:
+    # the tick period the companion app is asked to use (floor 1 s). Null guards: a config.json
+    # written before this feature has no 'companion' section.
+    $compStale = if ($null -ne $configContent.companion.telemetry_stale_sec) { try { [int]$configContent.companion.telemetry_stale_sec } catch { 10 } } else { 10 }
+    if ($compStale -lt 2) { $compStale = 2 }
+    $global:Companion_telemetry_stale_sec = $compStale
+    $compInterval = if ($null -ne $configContent.companion.report_interval_sec) { try { [int]$configContent.companion.report_interval_sec } catch { 1 } } else { 1 }
+    if ($compInterval -lt 1) { $compInterval = 1 }
+    $global:Companion_report_interval_sec = $compInterval
+
     $global:VRMonitor_refresh_timer = $configContent.VRMonitor.refresh_timer
 
     # Background LAN discovery of headsets (VRMonitor.networkDiscovery).
@@ -345,20 +365,34 @@ function Get-Config {
     # Applied on the next config reload (slow tick), no restart.
     $global:ADB_wifi_classic_enabled = if ($null -ne $configContent.ADB.wifi_classic_enabled) { [bool]$configContent.ADB.wifi_classic_enabled } else { $true }
     $global:ADB_wifi_tls_enabled     = if ($null -ne $configContent.ADB.wifi_tls_enabled)     { [bool]$configContent.ADB.wifi_tls_enabled }     else { $true }
-    # 'auto' (default, ADR-0037) = no preference: whatever mode answers is used, classic first when
-    # both do, and no headset is ever switched. 'classic' / 'tls' = switch to that mode (S10-5).
-    $wifiPreferred = if ($configContent.ADB.wifi_preferred_mode) { ([string]$configContent.ADB.wifi_preferred_mode).Trim().ToLowerInvariant() } else { 'auto' }
-    if ($wifiPreferred -notin @('auto', 'classic', 'tls')) { $wifiPreferred = 'auto' }
+    # 'tls' (default) or 'classic' = the mode headsets are switched to (S10-5). There is no "no
+    # preference" value any more: a missing, legacy ('auto') or unknown value reads as 'tls'.
+    $wifiPreferred = if ($configContent.ADB.wifi_preferred_mode) { ([string]$configContent.ADB.wifi_preferred_mode).Trim().ToLowerInvariant() } else { 'tls' }
+    if ($wifiPreferred -notin @('classic', 'tls')) { $wifiPreferred = 'tls' }
     $global:ADB_wifi_preferred_mode = $wifiPreferred
     if (-not $global:ADB_wifi_classic_enabled -and -not $global:ADB_wifi_tls_enabled) {
         # Both off would leave no way to reach a headset over WiFi: classic is forced back on.
         $global:ADB_wifi_classic_enabled = $true
         Write-Log "ADB.wifi_classic_enabled and ADB.wifi_tls_enabled are both false - classic WiFi ADB forced on" -Level WARNING
     }
-    # With only one mode enabled there is nothing to prefer or to switch to: 'auto'. A preferred
-    # mode that is disabled therefore yields to the other one, without any switching.
+    # With only one mode enabled there is nothing to switch to: the effective mode is that one. A
+    # preferred mode that is disabled therefore yields to the other one, without any switching.
     $global:ADB_wifi_effective_preferred = $wifiPreferred
-    if (-not ($global:ADB_wifi_classic_enabled -and $global:ADB_wifi_tls_enabled)) { $global:ADB_wifi_effective_preferred = 'auto' }
+    if (-not ($global:ADB_wifi_classic_enabled -and $global:ADB_wifi_tls_enabled)) {
+        $global:ADB_wifi_effective_preferred = if ($global:ADB_wifi_tls_enabled) { 'tls' } else { 'classic' }
+    }
+
+    # Preferred information source (ADR-0043 telemetry push). 'companion' (default) = the VRHM
+    # Companion app pushes battery/temperature/apps (POST /api/companion/telemetry) and the per-cycle
+    # ADB telemetry reads are paused for that headset; a headset with no companion app (so no push)
+    # simply falls back to ADB in the poll runspace. 'adb' = VRHM always polls over ADB each cycle
+    # (transport per wifi_preferred_mode). This is the GLOBAL default; a per-headset override lives
+    # in app_kv headset_info_source_<id> (Resolve-HeadsetInfoSource). An unknown value reads as 'companion'.
+    # Default 'companion' (the fleet default is the VRHM Companion push); a headset without the
+    # app or push simply falls back to ADB in the poll runspace, so this is safe as a default.
+    $infoSource = if ($configContent.ADB.info_source) { ([string]$configContent.ADB.info_source).Trim().ToLowerInvariant() } else { 'companion' }
+    if ($infoSource -notin @('adb', 'companion')) { $infoSource = 'companion' }
+    $global:ADB_info_source = $infoSource
 
 
     $global:Monitoring_headsetTemplate = Join-Path -Path $global:ScriptPath -ChildPath ("\website\template\"+$configContent.Monitoring.HeadsetTemplate)

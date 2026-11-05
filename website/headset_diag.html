@@ -632,7 +632,7 @@
         lastTls = res.data;
         $('tls-result').innerHTML = kvBlock([
           kv('WiFi ADB mode in use', (res.data.AdbWifiMode && res.data.AdbWifiMode !== '-') ? esc(res.data.AdbWifiMode) + (res.data.PreferredWifiMode && res.data.AdbWifiMode !== res.data.PreferredWifiMode ? ' <span class="dg-muted">(fallback, preferred: ' + esc(res.data.PreferredWifiMode) + ')</span>' : '') : '<span class="dg-muted">none</span>'),
-          kv('Preferred WiFi ADB mode', res.data.PreferredWifiMode ? esc(res.data.PreferredWifiMode) : '<span class="dg-muted">no preference (whatever answers, classic first)</span>'),
+          kv('Preferred WiFi ADB mode', res.data.PreferredWifiMode ? esc(res.data.PreferredWifiMode) : '<span class="dg-muted">none (only one mode enabled)</span>'),
           (res.data.SwitchState && res.data.SwitchState.Unavailable)
             ? kv('Mode switch', badge('given up', 'bad') + ' ' + esc(res.data.SwitchState.Reason || '') + ' <span class="dg-muted">(retried after a preference change, a reboot or an app restart)</span>')
             : (res.data.SwitchState && (res.data.SwitchState.Pending || res.data.SwitchState.Failures))

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- VRHM logo mark (same as website/assets/favicon.svg): blue-bordered dark rounded square
+     with the white headset. 64-unit art centered in the 108 adaptive-icon safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group android:translateX="22" android:translateY="22">
+        <path
+            android:fillColor="#161616"
+            android:strokeColor="#2563EB"
+            android:strokeWidth="5"
+            android:pathData="M16,5 L48,5 A11,11 0 0 1 59,16 L59,48 A11,11 0 0 1 48,59 L16,59 A11,11 0 0 1 5,48 L5,16 A11,11 0 0 1 16,5 Z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M23,23 L41,23 A9,9 0 0 1 50,32 L50,33 A9,9 0 0 1 41,42 L23,42 A9,9 0 0 1 14,33 L14,32 A9,9 0 0 1 23,23 Z" />
+        <path
+            android:fillColor="#161616"
+            android:pathData="M26,43 A6,6 0 1 0 38,43 A6,6 0 1 0 26,43 Z" />
+    </group>
+</vector>

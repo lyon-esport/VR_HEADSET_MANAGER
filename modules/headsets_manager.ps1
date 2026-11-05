@@ -932,6 +932,10 @@ function Remove-Headset {
         if (Get-Command Remove-HeadsetSessionSettings -ErrorAction SilentlyContinue) {
             try { Remove-HeadsetSessionSettings -HeadsetId ([int]$headsetToRemove.ID) } catch { }
         }
+        # Same for the per-headset info-source override (ADR-0042), another app_kv row.
+        if (Get-Command Remove-HeadsetInfoSource -ErrorAction SilentlyContinue) {
+            try { Remove-HeadsetInfoSource -HeadsetId ([int]$headsetToRemove.ID) } catch { }
+        }
         $timerTxt = Get-TimerFilePath    -headsetId ([int]$headsetToRemove.ID)
         $timerRun = Get-TimerRunFilePath -headsetId ([int]$headsetToRemove.ID)
         foreach ($f in @($timerTxt, $timerRun)) {

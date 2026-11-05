@@ -186,33 +186,225 @@ function Invoke-RouteInstalladbwifiapk {
     return
 }
 
-# API: POST /api/installadbautoenable  - installs and configures the ADB auto-enable app (S10-6)
+# API: POST /api/installadbautoenable  body (optional): {"id":<headsetId>}  - installs and configures
+# the ADB auto-enable app (S10-6). With an id it acts on that headset over its own ADB link; without
+# one, on the USB-cabled headset. Mirrors /api/installvrhmcompanion (ADR-0043 per-headset targeting).
 function Invoke-RouteInstalladbautoenable {
     # POST /api/installadbautoenable
     param([Parameter(Mandatory = $true)] $Context)
+    $request  = $Context.Request
     $response = $Context.Response
-
+    $claimed  = $false
     try {
-        # Claim USB: the final classic step runs 'adb tcpip', which re-enumerates the transport.
-        Set-UsbBusy -Seconds 180
-        $device = Get-AdbUsbDeviceDetails -adb $adbPath
-        if (-not $device) {
-            Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'No USB headset detected' }
+        $hsId = 0
+        try {
+            $body = Read-RequestBody -Request $request -Response $response -MaxBytes 4096
+            if ($body) { $json = $body | ConvertFrom-Json; [void][int]::TryParse([string]$json.id, [ref]$hsId) }
+        } catch {}
+        $r = Resolve-AdbToolsRouteDevice -Id $hsId
+        if (-not $r.Ok) {
+            Send-JsonResponse -Response $response -Body @{ ok = $false; error = $r.Error }
         } else {
-            $r = Install-AdbAutoEnableApk -Device $device -adb $adbPath
+            # Claim USB only for a cabled target: the final classic step runs 'adb tcpip',
+            # which re-enumerates the USB transport. A WiFi target needs no claim.
+            if ($r.Usb) { Set-UsbBusy -Seconds 180; $claimed = $true }
+            $res = Install-AdbAutoEnableApk -Device $r.Device -adb $adbPath
             Send-JsonResponse -Response $response -Body @{
-                ok          = [bool]$r.Ok
-                model       = [string]$device.Model
-                reinstalled = [bool]$r.Reinstalled
-                steps       = @($r.Steps)
-                error       = [string]$r.Error
+                ok          = [bool]$res.Ok
+                model       = [string]$r.Model
+                reinstalled = [bool]$res.Reinstalled
+                steps       = @($res.Steps)
+                error       = [string]$res.Error
             }
         }
     } catch {
         try { Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'server error' } -StatusCode 500 } catch {}
     } finally {
         # Same shrink as the other USB-mutating routes: the watcher yields while the claim is held.
-        Set-UsbBusy -Seconds 10
+        if ($claimed) { Set-UsbBusy -Seconds 10 }
+        Close-HttpResponse -Response $response
+    }
+    return
+}
+
+# Resolves the ADB device the adb-tools routes act on. With a positive headset id it targets
+# THAT registered headset over its own ADB link (USB when cabled, else WiFi; Resolve-HeadsetAdbDevice,
+# ADR-0024); with id 0/absent it falls back to the USB-cabled device (the add-headset onboarding path).
+# Returns @{Ok;Device;Model;Usb;Error}. Usb drives whether the caller must hold Set-UsbBusy
+# (tcpip re-enumerates USB; a WiFi target needs no claim).
+function Resolve-AdbToolsRouteDevice {
+    param([int]$Id = 0)
+    if ($Id -gt 0) {
+        if (-not (Get-Command Get-HeadsetDiagTarget -ErrorAction SilentlyContinue)) {
+            return @{ Ok = $false; Error = 'Headset lookup unavailable' }
+        }
+        $row = Get-HeadsetDiagTarget -Id $Id
+        if (-not $row) { return @{ Ok = $false; Error = 'Unknown headset' } }
+        $device = Resolve-HeadsetAdbDevice -Headset $row
+        if (-not $device) { return @{ Ok = $false; Error = 'Headset not reachable over ADB' } }
+        $model = if ($device.Model) { [string]$device.Model } else { [string]$row.Model }
+        return @{ Ok = $true; Device = $device; Model = $model; Usb = ([string]$device.ConnectionType -eq 'USB') }
+    }
+    $device = Get-AdbUsbDeviceDetails -adb $adbPath
+    if (-not $device) { return @{ Ok = $false; Error = 'No USB headset detected' } }
+    return @{ Ok = $true; Device = $device; Model = [string]$device.Model; Usb = $true }
+}
+
+# API: POST /api/installvrhmcompanion  body (optional): {"id":<headsetId>}  - installs and provisions
+# the VRHM Companion app (ADR-0042), the recommended cable-free-ADB-at-boot agent. With an id it acts on
+# that headset over its own ADB link; without one, on the USB-cabled headset. Mirrors /api/installadbautoenable.
+function Invoke-RouteInstallvrhmcompanion {
+    # POST /api/installvrhmcompanion
+    param([Parameter(Mandatory = $true)] $Context)
+    $request  = $Context.Request
+    $response = $Context.Response
+    $claimed  = $false
+    try {
+        $hsId = 0
+        try {
+            $body = Read-RequestBody -Request $request -Response $response -MaxBytes 4096
+            if ($body) { $json = $body | ConvertFrom-Json; [void][int]::TryParse([string]$json.id, [ref]$hsId) }
+        } catch {}
+        $r = Resolve-AdbToolsRouteDevice -Id $hsId
+        if (-not $r.Ok) {
+            Send-JsonResponse -Response $response -Body @{ ok = $false; error = $r.Error }
+        } else {
+            # Claim USB only for a cabled target: provisioning ends with 'adb tcpip' (classic),
+            # which re-enumerates the USB transport. A WiFi target needs no claim.
+            if ($r.Usb) { Set-UsbBusy -Seconds 180; $claimed = $true }
+            $mode = if ($global:ADB_wifi_tls_enabled) { 'TLS' } else { 'CLASSIC' }
+            $res = Install-VrhmCompanion -Device $r.Device -Mode $mode -adb $adbPath
+            Send-JsonResponse -Response $response -Body @{
+                ok          = [bool]$res.Ok
+                model       = [string]$r.Model
+                reinstalled = [bool]$res.Reinstalled
+                mode        = $mode
+                steps       = @($res.Steps)
+                error       = [string]$res.Error
+            }
+        }
+    } catch {
+        try { Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'server error' } -StatusCode 500 } catch {}
+    } finally {
+        if ($claimed) { Set-UsbBusy -Seconds 10 }
+        Close-HttpResponse -Response $response
+    }
+    return
+}
+
+# API: GET /api/headset-adb-tools-status  [?id=<headsetId>]  - install state + versions of the two
+# headset ADB-enabler apps (VRHM Companion, ADB Auto Enable). With an id, reads THAT headset over its
+# ADB link; without one, the USB-cabled headset (ADR-0042).
+function Invoke-RouteHeadsetadbtoolsstatus {
+    # GET /api/headset-adb-tools-status
+    param([Parameter(Mandatory = $true)] $Context)
+    $request  = $Context.Request
+    $response = $Context.Response
+    try {
+        $hsId = 0
+        [void][int]::TryParse([string]$request.QueryString['id'], [ref]$hsId)
+        $r = Resolve-AdbToolsRouteDevice -Id $hsId
+        if (-not $r.Ok) {
+            Send-JsonResponse -Response $response -Body @{ ok = $false; error = $r.Error }
+        } else {
+            $apps = @(Get-HeadsetAdbToolsStatus -Device $r.Device -adb $adbPath)
+            Send-JsonResponse -Response $response -Body @{ ok = $true; model = [string]$r.Model; apps = $apps }
+        }
+    } catch {
+        try { Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'server error' } -StatusCode 500 } catch {}
+    } finally {
+        Close-HttpResponse -Response $response
+    }
+    return
+}
+
+# API: POST /api/uninstall-headset-app  body: {"pkg":"com.vrheadsetmanager.companion"[,"id":<headsetId>]}
+# Uninstalls one of the two managed ADB-enabler apps. With an id, from THAT headset over its ADB link;
+# without one, from the USB-cabled headset (ADR-0042).
+function Invoke-RouteUninstallheadsetapp {
+    # POST /api/uninstall-headset-app
+    param([Parameter(Mandatory = $true)] $Context)
+    $request  = $Context.Request
+    $response = $Context.Response
+    $claimed  = $false
+    try {
+        $json = (Read-RequestBody -Request $request -Response $response -MaxBytes 4096) | ConvertFrom-Json
+        $pkg  = [string]$json.pkg
+        $hsId = 0
+        [void][int]::TryParse([string]$json.id, [ref]$hsId)
+        $r = Resolve-AdbToolsRouteDevice -Id $hsId
+        if (-not $r.Ok) {
+            Send-JsonResponse -Response $response -Body @{ ok = $false; error = $r.Error }
+        } else {
+            if ($r.Usb) { Set-UsbBusy -Seconds 60; $claimed = $true }
+            $res = Uninstall-HeadsetAdbTool -Device $r.Device -Pkg $pkg -adb $adbPath
+            Send-JsonResponse -Response $response -Body @{ ok = [bool]$res.Ok; pkg = $pkg; error = [string]$res.Error }
+        }
+    } catch {
+        try { Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'server error' } -StatusCode 500 } catch {}
+    } finally {
+        if ($claimed) { Set-UsbBusy -Seconds 10 }
+        Close-HttpResponse -Response $response
+    }
+    return
+}
+
+# API: POST /api/companion/telemetry - inbound telemetry push from the VRHM Companion app (ADR-0043)
+function Invoke-RouteCompaniontelemetry {
+    # POST /api/companion/telemetry
+    # Serial-keyed from the body (serial is the permanent identity, ADR-0016), token-gated with
+    # X-VRHM-Token (the per-fleet companion token, Get-CompanionToken). Writes the pushed values to
+    # app_kv companion_telemetry_<id> (full = replace, otherwise merge) and ingests any apps list.
+    # Same LAN-trust posture as /api/kiosks/agent-report. Fast lane - must never queue.
+    param([Parameter(Mandatory = $true)] $Context)
+    $request  = $Context.Request
+    $response = $Context.Response
+    try {
+        # Token gate (the companion was provisioned with this token at install).
+        $expected = Get-CompanionToken
+        $sent     = [string]$request.Headers['X-VRHM-Token']
+        if ($expected -and $sent -ne $expected) {
+            Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'unauthorized' } -StatusCode 401
+            return
+        }
+        # 256 KB, not 8 KB: a full push carries the installed-apps list, which on a headset with a
+        # few hundred third-party packages is ~20-30 KB (measured 223 pkgs). An 8 KB cap 413'd every
+        # push, so nothing was ever stored and the reporter never advanced past its full+apps resend.
+        $json = (Read-RequestBody -Request $request -Response $response -MaxBytes 262144) | ConvertFrom-Json
+        $serial = ([string]$json.serial).Trim()
+        if (-not $serial) {
+            Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'serial required' } -StatusCode 400
+            return
+        }
+        # Resolve serial -> permanent id (registry).
+        $row = @(Get-KnownHeadsetsCached) | Where-Object { [string]$_.SerialNumber -eq $serial } | Select-Object -First 1
+        if (-not $row) {
+            # Unknown serial is not an error (a companion may report before the headset is registered).
+            Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'unknown serial' }
+            return
+        }
+        $hid = [int]$row.ID
+        $full = [bool]$json.full
+
+        $wireFields = @('battery', 'charging', 'wattage', 'temp', 'cpuTemp', 'gpuTemp', 'skinTemp', 'ctrlLeft', 'ctrlRight', 'foregroundApp')
+        $fields = @{}
+        foreach ($f in $wireFields) {
+            $p = $json.PSObject.Properties[$f]
+            if ($p -and $null -ne $p.Value) { $fields[$f] = $p.Value }
+        }
+        Set-CompanionTelemetry -HeadsetId $hid -Fields $fields -Full:$full | Out-Null
+
+        $appsProp = $json.PSObject.Properties['apps']
+        $appCount = 0
+        if ($appsProp -and $appsProp.Value) {
+            $appCount = Update-InstalledAppsCacheFromList -HeadsetId $hid -Apps @($appsProp.Value)
+        }
+        Send-JsonResponse -Response $response -Body @{ ok = $true; id = $hid; apps = $appCount }
+    } catch [System.IO.InvalidDataException] {
+        # Read-RequestBody already answered (413 body too large); nothing to send.
+    } catch {
+        try { Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'server error' } -StatusCode 500 } catch {}
+    } finally {
         Close-HttpResponse -Response $response
     }
     return
