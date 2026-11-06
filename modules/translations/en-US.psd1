@@ -977,6 +977,7 @@
         NotVerified    = "not verified"
         StepFailed     = "failed"
         StepProvisioned = "provisioned"
+        SerialUnreadable = "serial not readable over adb"
         StepRequested  = "requested"
         StepKeys       = "{0} key(s)"
         NoAdbKey       = "no adb key fingerprint (run the adb server once)"

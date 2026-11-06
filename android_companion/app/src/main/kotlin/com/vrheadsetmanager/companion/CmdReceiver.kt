@@ -14,6 +14,7 @@ import com.google.gson.Gson
  *   adb shell am broadcast -a com.vrheadsetmanager.companion.CMD -n com.vrheadsetmanager.companion/.CmdReceiver --es cmd <cmd> [extras]
  * Commands: status | key | setmode NONE|CLASSIC|TLS (--es mode) | setport (--ei port)
  *           forceclassic | forcetls | approve_on | approve_off | trust_add (--es fp) | trust_clear
+ *           settoken (--es token) | cleartoken | setserial (--es serial: the adb serial, ro.serialno)
  * Results are logged to tag VRHMCmd.
  *
  * Access: the manifest guards this receiver with android:permission="android.permission.DUMP".
@@ -45,6 +46,10 @@ class CmdReceiver : BroadcastReceiver() {
                 else Log.w(TAG, "settoken refused: blank or missing token")
             }
             "cleartoken" -> { TokenConfig.clearToken(ctx); Log.i(TAG, "cleartoken done") }
+            "setserial" -> {
+                if (DeviceInfo.setProvisionedSerial(ctx, intent.getStringExtra("serial"))) Log.i(TAG, "setserial done")
+                else Log.w(TAG, "setserial refused: missing or invalid serial")
+            }
             "a11y_on" -> { enableSelfA11y(ctx) }
             else -> Log.i(TAG, "unknown cmd $cmd")
         }

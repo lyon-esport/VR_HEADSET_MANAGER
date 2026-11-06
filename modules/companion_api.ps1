@@ -555,12 +555,16 @@ function Install-VrhmCompanion {
         } catch { $Mode = 'TLS' }
     }
     $devBrand = ''
+    $devSerial = ''
     try { if ($Device.PSObject.Properties['Brand']) { $devBrand = [string]$Device.Brand } } catch { $devBrand = '' }
-    if (-not $devBrand -and (Get-Command Get-HeadsetBrandModel -ErrorAction SilentlyContinue)) {
+    # The adb serial is read here (shell can read ro.serialno, the app cannot) and handed to the
+    # companion so its telemetry pushes carry the serial the registry knows.
+    if (Get-Command Get-HeadsetBrandModel -ErrorAction SilentlyContinue) {
         try {
-            $bm = Get-HeadsetBrandModel -Device $Device -adb $adb
-            if ($bm -and $bm.Brand) { $devBrand = [string]$bm.Brand }
-        } catch { $devBrand = '' }
+            $bm = Get-HeadsetBrandModel -Device $Device -adb $adb -IncludeSerial
+            if ($bm -and $bm.Brand -and -not $devBrand) { $devBrand = [string]$bm.Brand }
+            if ($bm -and $bm.Serial) { $devSerial = ([string]$bm.Serial).Trim() }
+        } catch { }
     }
     $tlsOk = $true
     try { if (Get-Command Test-HeadsetAdbTlsSupported -ErrorAction SilentlyContinue) { $tlsOk = [bool](Test-HeadsetAdbTlsSupported -Brand $devBrand) } } catch { $tlsOk = $true }
@@ -626,6 +630,14 @@ function Install-VrhmCompanion {
     # d. provision token (over the trusted ADB channel, never first over HTTP)
     $okTok = & $cmd 'settoken' @('--es','token',$Token)
     & $addStep 'token' $okTok $(if ($okTok) { Get-CompanionText -Key 'StepProvisioned' -Fallback 'provisioned' } else { $failTxt })
+
+    # d2. provision the adb serial (the identity the telemetry route matches on)
+    if ($devSerial -match '^[A-Za-z0-9._-]{4,64}$') {
+        $okSer = & $cmd 'setserial' @('--es','serial',$devSerial)
+        & $addStep 'serial' $okSer $(if ($okSer) { $devSerial } else { $failTxt })
+    } else {
+        & $addStep 'serial' $false (Get-CompanionText -Key 'SerialUnreadable' -Fallback 'serial not readable over adb')
+    }
 
     # e. allowlist this PC's adb key (+ any extra keys) for auto-approve
     $fp = $null

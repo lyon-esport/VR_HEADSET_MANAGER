@@ -14,7 +14,7 @@
                 "companionFolder":  "VRHM Companion",
                 "companionApk":  "VRHM-Companion.apk",
                 "companionPackageName":  "com.vrheadsetmanager.companion",
-                "companionVersion":  "1.2.1"
+                "companionVersion":  "1.2.2"
             },
     "companion":  {
                       "telemetry_stale_sec":  10,

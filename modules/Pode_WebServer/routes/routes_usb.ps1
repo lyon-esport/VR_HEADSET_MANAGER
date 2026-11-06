@@ -386,7 +386,30 @@ function Invoke-RouteCompaniontelemetry {
             return
         }
         # Resolve serial -> permanent id (registry).
-        $row = @(Get-KnownHeadsetsCached) | Where-Object { [string]$_.SerialNumber -eq $serial } | Select-Object -First 1
+        $known = @(Get-KnownHeadsetsCached)
+        $row = $known | Where-Object { [string]$_.SerialNumber -eq $serial } | Select-Object -First 1
+        if (-not $row) {
+            # An app that was never given its adb serial (installed before setserial existed) sends
+            # its ANDROID_ID ("aid-..."), which the registry does not know. The token is already
+            # checked, so accept the push when exactly ONE registry row holds the sender's address.
+            $sender = ''
+            try {
+                $addr = $request.RemoteEndPoint.Address
+                if ($addr.IsIPv4MappedToIPv6) { $addr = $addr.MapToIPv4() }
+                $sender = $addr.ToString()
+            } catch { $sender = '' }
+            if ($sender) {
+                $byIp = @($known | Where-Object { [string]$_.IPAddress -eq $sender })
+                if ($byIp.Count -eq 1) {
+                    $row = $byIp[0]
+                    if (-not $script:CompanionSerialFallbackLogged) { $script:CompanionSerialFallbackLogged = @{} }
+                    if (-not $script:CompanionSerialFallbackLogged.ContainsKey($serial)) {
+                        $script:CompanionSerialFallbackLogged[$serial] = $true
+                        Write-Log ("Companion telemetry: serial '{0}' unknown, matched {1} by its address {2} (reinstall the companion to give it its adb serial)" -f $serial, $row.Name, $sender) -Level INFO
+                    }
+                }
+            }
+        }
         if (-not $row) {
             # 404 so the companion keeps retrying a FULL push until the headset is registered.
             Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'unknown serial' } -StatusCode 404

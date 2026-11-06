@@ -977,6 +977,7 @@
         NotVerified    = "non verifie"
         StepFailed     = "echec"
         StepProvisioned = "provisionne"
+        SerialUnreadable = "numero de serie illisible via adb"
         StepRequested  = "demande"
         StepKeys       = "{0} cle(s)"
         NoAdbKey       = "aucune empreinte de cle adb (lancez une fois le serveur adb)"

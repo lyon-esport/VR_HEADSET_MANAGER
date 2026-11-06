@@ -32,14 +32,37 @@ object DeviceInfo {
             ?.takeIf { it.isNotBlank() }
     } catch (_: Exception) { null }
 
-    /** "ro.serialno" or "android_id" (the latter is NOT the adb serial; prefixed "aid-"). */
+    // The adb serial as provisioned by VRHM over adb (CmdReceiver setserial). An ordinary app cannot
+    // read ro.serialno on Horizon OS (SELinux denies it), so without this the app only has ANDROID_ID,
+    // which VRHM's registry does not know: every telemetry push was refused as an unknown serial.
+    private const val SERIAL_PREFS = "companion_api"
+    private const val SERIAL_KEY = "adb_serial"
+    private val SERIAL_RE = Regex("^[A-Za-z0-9._-]{4,64}$")
+
+    private fun provisionedSerial(ctx: Context?): String? = try {
+        ctx?.let { SelfAdb.dpCtx(it.applicationContext).getSharedPreferences(SERIAL_PREFS, Context.MODE_PRIVATE).getString(SERIAL_KEY, null) }
+            ?.takeIf { SERIAL_RE.matches(it) }
+    } catch (_: Exception) { null }
+
+    /** Stores the adb serial sent by VRHM; refuses anything that does not look like a serial. */
+    fun setProvisionedSerial(ctx: Context, serial: String?): Boolean {
+        val s = serial?.trim() ?: return false
+        if (!SERIAL_RE.matches(s)) return false
+        SelfAdb.dpCtx(ctx.applicationContext).getSharedPreferences(SERIAL_PREFS, Context.MODE_PRIVATE)
+            .edit().putString(SERIAL_KEY, s).apply()
+        return true
+    }
+
+    /** "provisioned", "ro.serialno" or "android_id" (the latter is NOT the adb serial; prefixed "aid-"). */
     fun serialSource(ctx: Context? = null): String {
         if (ctx != null) appCtx = ctx.applicationContext
+        if (provisionedSerial(appCtx) != null) return "provisioned"
         return if (roSerial() != null) "ro.serialno" else "android_id"
     }
 
     fun getSerial(ctx: Context? = null): String {
         if (ctx != null) appCtx = ctx.applicationContext
+        provisionedSerial(appCtx)?.let { return it }
         // ro.serialno matches what `adb devices` shows; no runtime permission needed when read-only
         roSerial()?.let { return it }
         // Fallback: Android ID is stable but not the adb serial, so it is clearly prefixed
