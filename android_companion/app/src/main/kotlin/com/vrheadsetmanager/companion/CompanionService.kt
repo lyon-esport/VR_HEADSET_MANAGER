@@ -8,7 +8,6 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.os.IBinder
-import android.os.PowerManager
 import android.provider.Settings
 
 class CompanionService : Service() {
@@ -16,7 +15,6 @@ class CompanionService : Service() {
     @Volatile private var httpServer: HttpApiServer? = null
     @Volatile private var stopping = false
     private var discoveryServer: DiscoveryServer? = null
-    private var wakeLock: PowerManager.WakeLock? = null
     private var watchdog: AdbWatchdog? = null
     private var telemetry: TelemetryReporter? = null
 
@@ -27,9 +25,8 @@ class CompanionService : Service() {
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification())
 
-        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "VRHM:CompanionService")
-        wakeLock?.acquire()
+        // No permanent partial wake lock any more: the keep-awake switch (default ON) decides.
+        KeepAwake.onServiceStart(applicationContext)
 
         startHttpWithRetry()
 
@@ -93,7 +90,7 @@ class CompanionService : Service() {
         watchdog?.stop()
         httpServer?.stop()
         discoveryServer?.stop()
-        if (wakeLock?.isHeld == true) wakeLock?.release()
+        KeepAwake.release()
         super.onDestroy()
     }
 

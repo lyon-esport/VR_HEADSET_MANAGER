@@ -228,6 +228,7 @@ $script:SlowRoutes = @{
     '/api/kiosks/power'                  = $true
     '/api/companion-info'                = $true   # HTTP to the headset
     '/api/companion-settings'            = $true
+    '/api/headset-keep-awake'            = $true   # companion HTTP or ADB to the headset
     '/api/headset-screen-frame'          = $true   # scrcpy capture, 3-5 s
     '/api/eye-merge/frame'               = $true
     '/api/eye-merge/calibrate'           = $true
@@ -433,7 +434,8 @@ foreach ($routeRow in @(
     ,@('POST',  '/api/kiosks/power',                      'Invoke-RouteKiosksPower')
     ,@('GET',   '/api/headset-storage',                   'Invoke-RouteHeadsetStorage')
     ,@('POST',  '/api/headset-settings/apply',            'Invoke-RouteHeadsetSettingsApply')
-    ,@('POST',  '/api/headset-info-source',               'Invoke-RouteHeadsetinfosource')   # per-headset info source (ADR-0043)
+    ,@('POST',  '/api/headset-keep-awake',                'Invoke-RouteHeadsetkeepawake')    # keep headset awake, default ON (T2.1b)
+    ,@('POST',  '/api/headset-info-source',              'Invoke-RouteHeadsetinfosource')   # per-headset info source (ADR-0043)
     ,@('POST',  '/api/updateprofile',                     'Invoke-RouteUpdateprofile')
     ,@('GET',   '/api/scrcpyviews',                       'Invoke-RouteScrcpyviews')
     ,@('POST',  '/api/autorestart',                       'Invoke-RouteAutorestart')

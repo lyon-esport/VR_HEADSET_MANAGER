@@ -981,6 +981,9 @@
         StepRequested  = "demande"
         StepKeys       = "{0} cle(s)"
         NoAdbKey       = "aucune empreinte de cle adb (lancez une fois le serveur adb)"
+        TokenHealed    = "Companion sur {0} : jeton renvoye via ADB apres des envois refuses a repetition (jeton {1}, serie {2})"
+        SerialHealed   = "Companion sur {0} : numero de serie adb renvoye via ADB (l'application n'etait reconnue que par son adresse) - {1}"
+        TokenEpochForeign = "Companion sur {0} utilise l'epoque de jeton {1}, plus recente que ce serveur ({2}) : il appartient a une autre base VRHM. Pas de reparation automatique."
     }
 
     # Mise a jour de l'application (console Config > U, accordeon Mises a jour du web ; spec S12 / S13).
@@ -1171,6 +1174,12 @@
         SessionDone       = "{0} : {1}"
         SessionFailed     = "Le casque n'a pas accepte le changement."
         SessionPico       = "Les reglages de session ne sont disponibles que sur les casques Meta Quest."
+        KeepAwake         = "Garder le casque eveille"
+        KeepAwakeNoAdb    = "Pas de reglages de session (pas de lien ADB) : seul le reglage garder eveille est disponible."
+        KeepAwakeDone     = "{0} : {1} (applique via {2})"
+        KeepAwakeSaved    = "Enregistre, mais non applique maintenant : {0}. Il sera applique quand le casque sera joignable."
+        KeepAwakeViaCompanion = "application compagnon"
+        KeepAwakeViaAdb   = "ADB"
         PanelLaunchApp    = "Lancer une appli"
         PanelPushWifi     = "Envoyer le WiFi"
         PanelFrame        = "Capturer une image"

@@ -358,22 +358,98 @@ function Test-CompanionTokenMatch {
     return ($diff -eq 0)
 }
 
-# API: POST /api/companion/telemetry - inbound telemetry push from the VRHM Companion app (ADR-0043)
+# Registry row of the headset a companion push belongs to: serial first (the permanent identity,
+# ADR-0016), else - an app never given its adb serial sends its ANDROID_ID ("aid-...") - the ONE row
+# holding the sender's address (the token was already checked). Returns @{Row;Match='serial'|'address'|''}.
+# -Known = @(Get-KnownHeadsetsCached). Example: Resolve-CompanionPushHeadset -Request $request -Serial $s -Known $known
+function Resolve-CompanionPushHeadset {
+    param($Request, [string]$Serial, $Known)
+    $row = @($Known) | Where-Object { [string]$_.SerialNumber -eq $Serial } | Select-Object -First 1
+    if ($row) { return @{ Row = $row; Match = 'serial' } }
+    $sender = ''
+    try {
+        $addr = $Request.RemoteEndPoint.Address
+        if ($addr.IsIPv4MappedToIPv6) { $addr = $addr.MapToIPv4() }
+        $sender = $addr.ToString()
+    } catch { $sender = '' }
+    if ($sender) {
+        $byIp = @(@($Known) | Where-Object { [string]$_.IPAddress -eq $sender })
+        if ($byIp.Count -eq 1) {
+            if (-not $script:CompanionSerialFallbackLogged) { $script:CompanionSerialFallbackLogged = @{} }
+            if (-not $script:CompanionSerialFallbackLogged.ContainsKey($Serial)) {
+                $script:CompanionSerialFallbackLogged[$Serial] = $true
+                Write-Log ("Companion telemetry: serial '{0}' unknown, matched {1} by its address {2} (reinstall the companion to give it its adb serial)" -f $Serial, $byIp[0].Name, $sender) -Level INFO
+            }
+            return @{ Row = $byIp[0]; Match = 'address' }
+        }
+    }
+    return @{ Row = $null; Match = '' }
+}
+
+# True while a capture or recording runs (or starts) for the headset: the "hot" flag of the push
+# response, which lets the app keep its fast keepalive. Reads published state only. Never throws.
+function Test-CompanionHeadsetHot {
+    param([int]$HeadsetId)
+    try {
+        $st = Get-ScrcpyCaptureState
+        if (@($st.Starting) -contains $HeadsetId -or @($st.Settling) -contains $HeadsetId) { return $true }
+        $infos = Get-HeadsetInfosCache
+        if ($infos) {
+            $i = $infos[[string]$HeadsetId]
+            if ($i -and ([string]$i.SCRCPY) -eq 'ok') { return $true }
+        }
+    } catch { }
+    return $false
+}
+
+# API: POST /api/companion/telemetry - inbound telemetry push from the VRHM Companion app (ADR-0043,
+# telemetry v2 = docs/improvement_plan/companion-hardening/telemetry-v2.md)
 function Invoke-RouteCompaniontelemetry {
     # POST /api/companion/telemetry
     # Serial-keyed from the body (serial is the permanent identity, ADR-0016), token-gated with
-    # X-VRHM-Token (the per-fleet companion token, Get-CompanionToken). Writes the pushed values to
-    # app_kv companion_telemetry_<id> (full = replace, otherwise merge) and ingests any apps list.
-    # Same LAN-trust posture as /api/kiosks/agent-report. Fast lane - must never queue.
+    # X-VRHM-Token (the per-fleet companion token, Get-CompanionToken). Per-field merge into
+    # app_kv companion_telemetry_<id> (full / new run = replace), apps only when appsSig changed
+    # (full list or appsAdd/appsDel), ONE database transaction per push, 200 ms rate guard, and the
+    # server config (intervalSec, keepaliveSec, staleSec, hot, requestFull, appsSig, tokenEpoch,
+    # serverTime) in every 2xx. v1 apps (flat fields, no proto/seq) keep working. A 401 records the
+    # rejection for VRMonitor's token heal and answers with tokenEpoch (no secret). Same LAN-trust
+    # posture as /api/kiosks/agent-report. Fast lane - must stay O(1), never queue.
     param([Parameter(Mandatory = $true)] $Context)
     $request  = $Context.Request
     $response = $Context.Response
+    $sw       = [System.Diagnostics.Stopwatch]::StartNew()
+    $statId   = 0
+    $kind     = 'error'
+    $bytes    = 0
+    try { $bytes = [int64]$request.ContentLength64; if ($bytes -lt 0) { $bytes = 0 } } catch { $bytes = 0 }
     try {
         # Token gate (the companion was provisioned with this token at install).
         $expected = Get-CompanionToken
         $sent     = [string]$request.Headers['X-VRHM-Token']
         if (-not (Test-CompanionTokenMatch -Expected $expected -Sent $sent)) {
-            Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'unauthorized' } -StatusCode 401
+            $kind = '401'
+            $epoch = Get-CompanionTokenEpoch
+            # Parse the (bounded) body only to know WHICH headset is being rejected, so the drift can
+            # be healed over ADB. Anything unreadable is simply not recorded.
+            try {
+                $j0  = (Read-RequestBody -Request $request -Response $response -MaxBytes 262144) | ConvertFrom-Json
+                $ser = ([string]$j0.serial).Trim()
+                if ($ser) {
+                    $res0 = Resolve-CompanionPushHeadset -Request $request -Serial $ser -Known @(Get-KnownHeadsetsCached)
+                    if ($res0.Row) {
+                        $statId = [int]$res0.Row.ID
+                        $fail = Register-CompanionAuthFailure -HeadsetId $statId -SentEpoch ([string]$request.Headers['X-VRHM-Token-Epoch'])
+                        if ($fail.Foreign) {
+                            if (-not $script:CompanionForeignEpochLogged) { $script:CompanionForeignEpochLogged = @{} }
+                            if (-not $script:CompanionForeignEpochLogged.ContainsKey($statId)) {
+                                $script:CompanionForeignEpochLogged[$statId] = $true
+                                Write-Log ((Get-CompanionText -Key 'TokenEpochForeign' -Fallback 'Companion on {0} uses token epoch {1}, newer than this server ({2}): it belongs to another VRHM database. Not healed automatically.') -f $res0.Row.Name, $fail.Sent, $fail.Ours) -Level WARNING
+                            }
+                        }
+                    }
+                }
+            } catch [System.IO.InvalidDataException] { throw } catch { }
+            Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'unauthorized'; tokenEpoch = $epoch } -StatusCode 401
             return
         }
         # 256 KB, not 8 KB: a full push carries the installed-apps list, which on a headset with a
@@ -385,62 +461,107 @@ function Invoke-RouteCompaniontelemetry {
             Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'serial required' } -StatusCode 400
             return
         }
-        # Resolve serial -> permanent id (registry).
-        $known = @(Get-KnownHeadsetsCached)
-        $row = $known | Where-Object { [string]$_.SerialNumber -eq $serial } | Select-Object -First 1
-        if (-not $row) {
-            # An app that was never given its adb serial (installed before setserial existed) sends
-            # its ANDROID_ID ("aid-..."), which the registry does not know. The token is already
-            # checked, so accept the push when exactly ONE registry row holds the sender's address.
-            $sender = ''
-            try {
-                $addr = $request.RemoteEndPoint.Address
-                if ($addr.IsIPv4MappedToIPv6) { $addr = $addr.MapToIPv4() }
-                $sender = $addr.ToString()
-            } catch { $sender = '' }
-            if ($sender) {
-                $byIp = @($known | Where-Object { [string]$_.IPAddress -eq $sender })
-                if ($byIp.Count -eq 1) {
-                    $row = $byIp[0]
-                    if (-not $script:CompanionSerialFallbackLogged) { $script:CompanionSerialFallbackLogged = @{} }
-                    if (-not $script:CompanionSerialFallbackLogged.ContainsKey($serial)) {
-                        $script:CompanionSerialFallbackLogged[$serial] = $true
-                        Write-Log ("Companion telemetry: serial '{0}' unknown, matched {1} by its address {2} (reinstall the companion to give it its adb serial)" -f $serial, $row.Name, $sender) -Level INFO
-                    }
-                }
-            }
-        }
+        $res = Resolve-CompanionPushHeadset -Request $request -Serial $serial -Known @(Get-KnownHeadsetsCached)
+        $row = $res.Row
         if (-not $row) {
             # 404 so the companion keeps retrying a FULL push until the headset is registered.
+            $kind = '404'
             Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'unknown serial' } -StatusCode 404
             return
         }
-        $hid = [int]$row.ID
-        $full = [bool]$json.full
+        $hid    = [int]$row.ID
+        $statId = $hid
+        $full   = [bool]$json.full
 
-        $wireFields = @('battery', 'charging', 'wattage', 'temp', 'cpuTemp', 'gpuTemp', 'skinTemp', 'ctrlLeft', 'ctrlRight', 'foregroundApp')
-        $fields = @{}
-        foreach ($f in $wireFields) {
-            $p = $json.PSObject.Properties[$f]
-            if ($p -and $null -ne $p.Value) { $fields[$f] = $p.Value }
-        }
-        $stored = Set-CompanionTelemetry -HeadsetId $hid -Fields $fields -Full:$full
-        if ($stored -eq $false) {
-            Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'store failed' } -StatusCode 500
+        $proto = 1
+        $pp = $json.PSObject.Properties['proto']
+        if ($pp -and $null -ne $pp.Value) { $pn = 0; if ([int]::TryParse([string]$pp.Value, [ref]$pn) -and $pn -ge 2) { $proto = 2 } }
+        $run = ''; $seq = $null
+        if ($json.PSObject.Properties['run'] -and $null -ne $json.run) { $run = ([string]$json.run); if ($run.Length -gt 64) { $run = $run.Substring(0, 64) } }
+        if ($json.PSObject.Properties['seq'] -and $null -ne $json.seq) { $sn = [int64]0; if ([int64]::TryParse([string]$json.seq, [ref]$sn)) { $seq = $sn } }
+
+        $hot = Test-CompanionHeadsetHot -HeadsetId $hid
+
+        # Rate guard: a push right after the previous processed one is acknowledged, not stored.
+        if (-not $full -and (Test-CompanionPushTooSoon -HeadsetId $hid)) {
+            $kind = 'dropped'
+            $cfg0 = Get-CompanionServerConfig -HeadsetId $hid -Hot $hot -AppsSig ([string](Get-CompanionTelemetryDoc -HeadsetId $hid).appsSig) -Slow
+            Send-JsonResponse -Response $response -Body $cfg0
             return
         }
 
-        $appsProp = $json.PSObject.Properties['apps']
-        $appCount = 0
-        if ($appsProp -and $appsProp.Value) {
-            $appCount = Update-InstalledAppsCacheFromList -HeadsetId $hid -Apps @($appsProp.Value)
+        $wireFields = Get-CompanionTelemetryFieldNames
+        $fields = @{}
+        foreach ($f in $wireFields) {
+            $p = $json.PSObject.Properties[$f]
+            if (-not $p) { continue }
+            if ($null -ne $p.Value) { $fields[$f] = $p.Value }
+            elseif ($proto -ge 2) { $fields[$f] = $null }      # explicit null = known absent (v2 only)
         }
-        Send-JsonResponse -Response $response -Body @{ ok = $true; id = $hid; apps = $appCount }
+        $ageMs = @{}
+        $ap = $json.PSObject.Properties['age']
+        if ($ap -and $ap.Value) { foreach ($q in $ap.Value.PSObject.Properties) { if ($null -ne $q.Value) { $ageMs[$q.Name] = $q.Value } } }
+        $cap = $null
+        if ($json.PSObject.Properties['cap'] -and $json.cap) { $cap = $json.cap }
+        $rtt = $null
+        if ($json.PSObject.Properties['rtt'] -and $null -ne $json.rtt) { $rv = 0; if ([int]::TryParse([string]$json.rtt, [ref]$rv)) { $rtt = $rv } }
+        $pushSig = ''
+        if ($json.PSObject.Properties['appsSig'] -and $json.appsSig) { $pushSig = [string]$json.appsSig; if ($pushSig.Length -gt 64) { $pushSig = $pushSig.Substring(0, 64) } }
+        $appsProp = $json.PSObject.Properties['apps']
+        $addProp  = $json.PSObject.Properties['appsAdd']
+        $delProp  = $json.PSObject.Properties['appsDel']
+        $key = "companion_telemetry_{0}" -f $hid
+
+        # ONE transaction: the telemetry row and the apps ingest commit together.
+        $out = Invoke-DbTransaction -Script {
+            $prevDoc = $null
+            try { $prevDoc = Get-DbKeyValue -Key $key } catch { $prevDoc = $null }
+            $prevSig = if ($prevDoc -and $prevDoc.appsSig) { [string]$prevDoc.appsSig } else { '' }
+            $stateOk = [bool]($prevDoc -and (([string]$prevDoc.run) -eq $run))
+            $newSig = ''; $appCount = 0
+            if ($proto -ge 2) {
+                if ($pushSig -and $pushSig -ne $prevSig) {
+                    if ($appsProp -and $appsProp.Value) {
+                        $appCount = Update-InstalledAppsCacheFromList -HeadsetId $hid -Apps @($appsProp.Value)
+                        if ($appCount -gt 0) { $newSig = $pushSig }
+                    }
+                    elseif (($addProp -or $delProp) -and $prevSig -and $stateOk) {
+                        $adds = if ($addProp -and $addProp.Value) { @($addProp.Value) } else { @() }
+                        $dels = if ($delProp -and $delProp.Value) { @(@($delProp.Value) | ForEach-Object { [string]$_ }) } else { @() }
+                        $appCount = Update-InstalledAppsCacheDelta -HeadsetId $hid -Add $adds -Remove $dels
+                        $newSig = $pushSig
+                    }
+                    # else: the delta cannot be applied on unknown state -> the response keeps the old
+                    # signature and the app sends the full list.
+                }
+                elseif (-not $pushSig -and $appsProp -and $appsProp.Value) {
+                    $appCount = Update-InstalledAppsCacheFromList -HeadsetId $hid -Apps @($appsProp.Value)
+                    if ($appCount -gt 0) { $newSig = '*' }
+                }
+            }
+            elseif ($appsProp -and $appsProp.Value) {
+                $appCount = Update-InstalledAppsCacheFromList -HeadsetId $hid -Apps @($appsProp.Value)
+                if ($appCount -gt 0) { $newSig = '*' }     # marks "a push carried apps" for the ADB fallback
+            }
+            $push = @{ Proto = $proto; Run = $run; Seq = $seq; Full = $full; Fields = $fields; AgeMs = $ageMs
+                       Cap = $cap; StoreAppsSig = $newSig; IdMatch = $res.Match; Rtt = $rtt }
+            $r = Update-CompanionTelemetryRow -HeadsetId $hid -Push $push
+            return @{ Row = $r; Apps = $appCount }
+        }
+        if (-not $out -or -not $out.Row -or -not $out.Row.Ok) {
+            Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'store failed' } -StatusCode 500
+            return
+        }
+        $kind = 'ok'
+        $cfg = Get-CompanionServerConfig -HeadsetId $hid -Hot $hot -RequestFull ([bool]$out.Row.RequestFull) -AppsSig ([string]$out.Row.AppsSig)
+        $cfg['apps'] = [int]$out.Apps
+        Send-JsonResponse -Response $response -Body $cfg
     } catch [System.IO.InvalidDataException] {
         # Read-RequestBody already answered (413 body too large); nothing to send.
     } catch {
         try { Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'server error' } -StatusCode 500 } catch {}
     } finally {
+        try { Add-CompanionPushStat -HeadsetId $statId -Kind $kind -Bytes $bytes -HandlerMs $sw.Elapsed.TotalMilliseconds } catch { }
         Close-HttpResponse -Response $response
     }
     return

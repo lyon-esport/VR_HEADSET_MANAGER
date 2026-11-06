@@ -1315,6 +1315,52 @@ function Update-InstalledAppsCacheFromList {
 }
 
 
+function Update-InstalledAppsCacheDelta {
+    # Telemetry v2 (appsAdd / appsDel): applies an installed-apps DELTA from the VRHM Companion to the
+    # cache. The merged list (cached rows minus -Remove, plus -Add with their version/label) goes
+    # through Update-InstalledAppsCacheFromList, which keeps size and pending version of rows already
+    # cached; an emptied list clears the cache. Joins the caller's transaction. Returns the number of
+    # rows now cached. Never throws.
+    # Example: Update-InstalledAppsCacheDelta -HeadsetId 3 -Add @(@{ pkg='com.x'; version='2'; label='X' }) -Remove @('com.old')
+    param(
+        [Parameter(Mandatory=$true)][int]$HeadsetId,
+        [object[]]$Add = @(),
+        [string[]]$Remove = @()
+    )
+    if ($HeadsetId -le 0) { return 0 }
+    try {
+        $removeSet = @{}
+        foreach ($r in $Remove) { if ($r) { $removeSet[([string]$r).Trim()] = $true } }
+        $merged = @{}
+        foreach ($c in @(Invoke-DbQuery -Name 'installed.list' -Parameters @{ headset_id = $HeadsetId })) {
+            $p = [string]$c.PackageName
+            if ($p -and -not $removeSet.ContainsKey($p)) { $merged[$p] = @{ pkg = $p; version = [string]$c.Version; label = '' } }
+        }
+        foreach ($a in $Add) {
+            if (-not $a) { continue }
+            $pkg = ''; $ver = ''; $lab = ''
+            if ($a -is [hashtable]) {
+                $pkg = [string]$a['pkg']; $ver = [string]$a['version']; $lab = [string]$a['label']
+            } else {
+                if ($a.PSObject.Properties['pkg']) { $pkg = [string]$a.pkg }
+                if ($a.PSObject.Properties['version']) { $ver = [string]$a.version }
+                if ($a.PSObject.Properties['label']) { $lab = [string]$a.label }
+            }
+            $pkg = $pkg.Trim()
+            if ($pkg -match '^[a-zA-Z][a-zA-Z0-9_.]*$' -and -not $removeSet.ContainsKey($pkg)) { $merged[$pkg] = @{ pkg = $pkg; version = $ver; label = $lab } }
+        }
+        if ($merged.Count -eq 0) {
+            Invoke-DbNonQuery -Name 'installed.delete_for_headset' -Parameters @{ headset_id = $HeadsetId } | Out-Null
+            return 0
+        }
+        return (Update-InstalledAppsCacheFromList -HeadsetId $HeadsetId -Apps @($merged.Values))
+    } catch {
+        Write-Log ("Update-InstalledAppsCacheDelta failed for headset {0}: {1}" -f $HeadsetId, $_) -Level DEBUG
+        return 0
+    }
+}
+
+
 function Get-HeadsetPendingAppUpdates {
     # Returns staged update sessions as @{PackageName;CurrentVersion;PendingVersion;SessionId}.
     # Returns empty array when none found - never throws or returns $false for the no-updates case.

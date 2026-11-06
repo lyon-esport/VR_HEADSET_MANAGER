@@ -22,6 +22,7 @@ class MainActivity : Activity() {
     private lateinit var tvEngine: TextView
     private lateinit var tvHint: TextView
     private lateinit var switchAutoAdb: Switch
+    private lateinit var switchKeepAwake: Switch
     private lateinit var btnEnableAdb: Button
     private lateinit var btnGrantSettings: Button
     private lateinit var spinnerMode: Spinner
@@ -41,6 +42,7 @@ class MainActivity : Activity() {
         tvEngine         = findViewById(R.id.tv_engine)
         tvHint           = findViewById(R.id.tv_hint)
         switchAutoAdb    = findViewById(R.id.switch_auto_adb)
+        switchKeepAwake  = findViewById(R.id.switch_keep_awake)
         btnEnableAdb     = findViewById(R.id.btn_enable_adb)
         btnGrantSettings = findViewById(R.id.btn_grant_settings)
         spinnerMode      = findViewById(R.id.spinner_mode)
@@ -56,6 +58,9 @@ class MainActivity : Activity() {
             if (checked) AdbBootManager.applyAsync(this)
             updateUi()
         }
+
+        switchKeepAwake.isChecked = KeepAwake.isEnabled(this)
+        switchKeepAwake.setOnCheckedChangeListener { _, checked -> KeepAwake.setEnabled(this, checked) }
 
         // Boot ADB mode dropdown (TLS / classic). On/off is the switch above.
         val labels = listOf(getString(R.string.mode_tls), getString(R.string.mode_classic))

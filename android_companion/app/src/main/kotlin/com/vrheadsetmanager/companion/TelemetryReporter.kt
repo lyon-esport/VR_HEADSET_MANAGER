@@ -1,371 +1,373 @@
 package com.vrheadsetmanager.companion
 
 import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
-import android.content.pm.ApplicationInfo
-import android.content.pm.PackageManager
-import android.os.BatteryManager
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.SystemClock
 import com.google.gson.Gson
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
-import java.io.File
+import com.google.gson.JsonParser
 import java.net.HttpURLConnection
 import java.net.URL
-import java.security.MessageDigest
+import java.util.Random
+import java.util.UUID
 
 /**
- * ADR-0042: pushes this headset's telemetry to VRHM's POST /api/companion/telemetry so the PC does
- * not have to poll it over ADB. Values: battery / charging / headset + CPU/GPU/skin temperature /
- * controller batteries / foreground app / installed apps + versions.
+ * Telemetry v2 sender (ADR-0042, ADR-0043; spec docs/improvement_plan/companion-hardening/telemetry-v2.md).
  *
- * Delta protocol: the first POST after a (re)start carries everything (full=true) and replaces the
- * stored set; afterwards only changed fields are sent. A keepalive (bare {serial, full:false}) is
- * sent at least every KEEPALIVE_MS so VRHM's staleness window never expires while nothing changes.
+ * One owner HandlerThread per start ([Loop]). [TelemetryCollector] keeps the latest value per field
+ * on that same thread and calls back when something moved. The loop diffs against the last ACKED
+ * (2xx) values, coalesces changes (min gap 1-2 s), sends a bare keepalive when nothing changed, and
+ * reads the server config (intervalSec, keepaliveSec, staleSec, hot, requestFull, appsSig, tokenEpoch)
+ * from each response. Failures back off 1,2,4..60 s (+-20 %); 401 waits 60 s, 404 waits 30 s and the
+ * next push is full. Against a v1 PC (no "proto":2 in the response) it falls back to the v1 behaviour:
+ * apps sent whole, full resend every 5 min, fixed 5 s keepalive.
  *
- * Cheap reads (battery, temperatures via /sys and BatteryManager, apps via PackageManager) run on
- * the tick interval. Controller batteries and the foreground app need a shell, so they are read
- * over self-ADB at a slower sub-cadence and cached (a failed read just keeps the last value).
- *
- * Started/reconfigured by CompanionService from the device-protected prefs report_url /
- * report_interval_sec (written by HttpApiServer.serveSettings). The POST carries the per-fleet
- * token in X-VRHM-Token.
+ * No self-ADB session is opened here any more (finding F12): controllers, CPU/GPU/skin temperature
+ * are read by the PC over ADB.
  */
 class TelemetryReporter(private val ctx: Context) {
 
-    private var thread: HandlerThread? = null
-    private var handler: Handler? = null
-    @Volatile private var running = false
-    private val gson = Gson()
-
-    private var reportUrl: String = ""
-    private var intervalMs: Long = 1000
-    private var serial: String = ""
-
-    // Last values actually sent (for the delta); last apps signature; timing.
-    private val lastSent = HashMap<String, Any?>()
-    private var lastAppsSig = ""
-    private var lastFullAt = 0L
-    private var lastPostAt = 0L
-    private var tick = 0L
-
-    // Cached control-read results (controllers + foreground), refreshed over self-ADB slowly.
-    private var ctrlLeft: Int? = null
-    private var ctrlRight: Int? = null
-    private var foregroundApp: String? = null
-
-    // Persistent self-ADB session of the control read, and when the next read is due (elapsedRealtime).
-    private var controlMgr: io.github.muntashirakon.adb.AbsAdbConnectionManager? = null
-    private var nextControlAt = 0L
-    private var controlFailures = 0
+    @Volatile private var loop: Loop? = null
+    @Volatile private var reportUrl: String = ""
+    @Volatile private var intervalSec: Int = 1
 
     fun start() {
         reload()
         if (reportUrl.isBlank()) { stop(); return }
-        if (running) return
-        running = true
-        val t = HandlerThread("vrhm-telemetry").also { it.start() }
-        thread = t
-        handler = Handler(t.looper)
-        serial = DeviceInfo.getSerial()
-        lastSent.clear(); lastAppsSig = ""; lastFullAt = 0L; lastPostAt = 0L; tick = 0L
-        schedule(0)
+        if (loop != null) return
+        loop = Loop().also { it.begin() }
     }
 
     fun stop() {
-        running = false
-        dropControlSession()
-        nextControlAt = 0L; controlFailures = 0
-        try { handler?.removeCallbacksAndMessages(null) } catch (_: Throwable) {}
-        try { thread?.quitSafely() } catch (_: Throwable) {}
-        thread = null; handler = null
+        val l = loop ?: return
+        loop = null
+        l.end()
     }
 
-    /** Re-read the prefs; (re)start or stop the loop if the target or interval changed. */
+    /** Re-read the prefs; (re)start or stop if the target changed. */
     fun reconfigure() {
-        val oldUrl = reportUrl; val oldInterval = intervalMs
+        val oldUrl = reportUrl
         reload()
+        val l = loop
         when {
             reportUrl.isBlank() -> stop()
-            !running -> start()
-            reportUrl != oldUrl || intervalMs != oldInterval -> { stop(); start() }
+            l == null -> start()
+            reportUrl != oldUrl -> l.urlChanged()
         }
     }
 
     private fun reload() {
         val p = SelfAdb.dpCtx(ctx).getSharedPreferences(BootReceiver.PREFS_NAME, Context.MODE_PRIVATE)
-        // A stored URL that is not http(s) with a host is treated as "no target" (reporting off).
         reportUrl = (p.getString(PREF_REPORT_URL, "") ?: "").trim().takeIf { isValidReportUrl(it) } ?: ""
         val iv = p.getInt(PREF_REPORT_INTERVAL, 1)
-        intervalMs = (if (iv < 1) 1 else iv).toLong() * 1000L
+        intervalSec = if (iv < 1) 1 else iv
     }
 
-    private fun schedule(delay: Long) {
-        val h = handler ?: return
-        h.postDelayed({
-            if (running) {
-                try { tickOnce() } catch (_: Throwable) {}
-                schedule(intervalMs)
+    private inner class Loop {
+        private val gson = Gson()
+        private val rnd = Random()
+        private val thread = HandlerThread("vrhm-telemetry")
+        private lateinit var handler: Handler
+        private lateinit var collector: TelemetryCollector
+        @Volatile private var alive = false
+
+        private val run = UUID.randomUUID().toString().replace("-", "").substring(0, 8)
+        private var seq = 0L
+
+        // Acked state (diff base)
+        private val acked = HashMap<String, Any>()
+        private var ackedApps: Map<String, String> = emptyMap()   // pkg -> version
+        private var ackedAppsSig = ""
+        private var ackedCap = ""
+        private var forcedAppsSig = ""
+        private var forcedAppsAt = 0L
+
+        // Negotiated / server config
+        private var proto2 = false
+        private var needFull = true
+        private var serverIntervalSec = this@TelemetryReporter.intervalSec
+        private var serverKeepaliveSec = 5
+        private var serverAppsSig: String? = null
+        private var hot = false
+
+        // Timing (elapsedRealtime)
+        private var lastAttemptAt = 0L
+        private var lastOkAt = 0L
+        private var lastFullAt = 0L
+        private var blockedUntil = 0L
+        private var fails = 0
+        private var lastRtt = 0L
+
+        private val pumpR = Runnable { pump() }
+
+        fun begin() {
+            alive = true
+            thread.start()
+            handler = Handler(thread.looper)
+            collector = TelemetryCollector(ctx.applicationContext, handler) { wake() }
+            Status.reset(run)
+            collector.start()
+        }
+
+        fun end() {
+            alive = false
+            try { collector.stop() } catch (_: Throwable) {}
+            try { handler.removeCallbacksAndMessages(null) } catch (_: Throwable) {}
+            try { thread.quitSafely() } catch (_: Throwable) {}
+        }
+
+        fun urlChanged() {
+            if (!alive) return
+            handler.post { needFull = true; blockedUntil = 0L; proto2 = false; pump() }
+        }
+
+        /** Something changed (collector thread = this thread): re-evaluate, coalesced by the min gap. */
+        private fun wake() {
+            if (!alive) return
+            handler.removeCallbacks(pumpR)
+            handler.post(pumpR)
+        }
+
+        private fun now() = SystemClock.elapsedRealtime()
+
+        private fun scheduleAt(t: Long) {
+            handler.removeCallbacks(pumpR)
+            handler.postDelayed(pumpR, maxOf(1L, t - now()))
+        }
+
+        private fun keepaliveMs(): Long {
+            if (!proto2) return 5_000L
+            val base = serverKeepaliveSec.coerceIn(2, 120)
+            val s = when {
+                hot || collector.isInteractive() -> base
+                collector.isCharging() -> maxOf(base, 60)
+                else -> maxOf(base, 30)
             }
-        }, delay)
-    }
+            return s * 1000L
+        }
 
-    private fun tickOnce() {
-        if (reportUrl.isBlank()) return
-        tick++
+        private fun minGapMs(): Long {
+            val bat = collector.values["battery"]?.v as? Int
+            val own = if (hot || (collector.isCharging() && (bat == null || bat < 100))) 1000L else 2000L
+            return maxOf(own, serverIntervalSec.coerceIn(1, 60) * 1000L)
+        }
 
-        // Control read (controllers + foreground) over self-ADB at a slower cadence.
-        val nowMs = android.os.SystemClock.elapsedRealtime()
-        if (nowMs >= nextControlAt) { readControlOverAdb() }
+        private inner class Built(val body: JsonObject, val changed: Boolean, val sentFields: Map<String, Any>,
+                            val appsSnap: Map<String, String>?, val appsSig: String?, val capJson: String?)
 
-        val cur = collect()
-        val now = System.currentTimeMillis()
-        val isFull = lastSent.isEmpty() || (now - lastFullAt) > FULL_EVERY_MS
-
-        val body = JsonObject()
-        body.addProperty("serial", serial)
-        var changed = false
-
-        if (isFull) {
-            for ((k, v) in cur) addField(body, k, v)
-            body.addProperty("full", true)
-            changed = true
-        } else {
-            for ((k, v) in cur) {
-                if (lastSent[k] != v) { addField(body, k, v); changed = true }
+        private fun build(full: Boolean): Built {
+            val body = JsonObject()
+            val t = now()
+            body.addProperty("proto", 2)
+            body.addProperty("serial", DeviceInfo.getSerial(ctx))
+            body.addProperty("run", run)
+            body.addProperty("seq", seq + 1)
+            body.addProperty("full", full)
+            var changed = full
+            val sent = LinkedHashMap<String, Any>()
+            val age = JsonObject()
+            for ((k, o) in collector.values) {
+                if (full || acked[k] != o.v) {
+                    addField(body, k, o.v); sent[k] = o.v
+                    age.addProperty(k, maxOf(0L, t - o.at))
+                    changed = true
+                }
             }
-            body.addProperty("full", false)
+            if (sent.isNotEmpty()) body.add("age", age)
+            if (lastRtt > 0) body.addProperty("rtt", lastRtt)
+
+            // Capability block: on full pushes and when it changed.
+            val capJson = gson.toJson(collector.capabilities((keepaliveMs() / 1000).toInt()))
+            var capOut: String? = null
+            if (full || capJson != ackedCap) {
+                body.add("cap", JsonParser.parseString(capJson)); capOut = capJson; changed = true
+            }
+
+            // Apps: only on change (or full / when the PC asks by signature).
+            val ourSig = collector.appsSig
+            var snap: Map<String, String>? = null
+            var sigOut: String? = null
+            if (ourSig.isNotEmpty()) {
+                val cur = collector.appsMap
+                val pcDiffers = proto2 && serverAppsSig != null && serverAppsSig != ourSig
+                val needList = full || !proto2 && ourSig != ackedAppsSig ||
+                    (pcDiffers && !(forcedAppsSig == ourSig && t - forcedAppsAt < 600_000L))
+                if (needList) {
+                    body.addProperty("appsSig", ourSig)
+                    body.add("apps", appsArray(cur.keys))
+                    snap = cur.mapValues { it.value.version }; sigOut = ourSig; changed = true
+                    if (pcDiffers) { forcedAppsSig = ourSig; forcedAppsAt = t }
+                } else if (proto2 && ourSig != ackedAppsSig) {
+                    val add = cur.keys.filter { ackedApps[it] != cur[it]!!.version }
+                    val del = ackedApps.keys.filter { !cur.containsKey(it) }
+                    body.addProperty("appsSig", ourSig)
+                    body.add("appsAdd", appsArray(add))
+                    val da = JsonArray(); del.forEach { da.add(it) }
+                    body.add("appsDel", da)
+                    snap = cur.mapValues { it.value.version }; sigOut = ourSig; changed = true
+                }
+            }
+            return Built(body, changed, sent, snap, sigOut, capOut)
         }
 
-        // Apps (package + version): sent whole when the set/versions changed, or on a full push.
-        val apps = collectApps()
-        if (isFull || apps.first != lastAppsSig) {
-            body.add("apps", apps.second)
-            changed = true
+        private fun appsArray(pkgs: Collection<String>): JsonArray {
+            val arr = JsonArray()
+            for (p in pkgs) {
+                val a = collector.appsMap[p] ?: continue
+                val o = JsonObject()
+                o.addProperty("pkg", p); o.addProperty("version", a.version); o.addProperty("label", a.label)
+                arr.add(o)
+            }
+            return arr
         }
 
-        // Keepalive when nothing changed, so VRHM keeps the push "fresh".
-        val keepalive = (now - lastPostAt) >= KEEPALIVE_MS
-        if (!changed && !keepalive) return
+        private fun pump() {
+            if (!alive) return
+            val url = this@TelemetryReporter.reportUrl
+            if (url.isBlank()) return
+            val t = now()
+            if (t < blockedUntil) { scheduleAt(blockedUntil); return }
 
-        if (post(body)) {
-            lastPostAt = now
-            if (isFull) lastFullAt = now
-            for ((k, v) in cur) lastSent[k] = v
-            if (isFull || apps.first != lastAppsSig) lastAppsSig = apps.first
-        }
-    }
+            val full = needFull || (!proto2 && t - lastFullAt > 300_000L)
+            val b = build(full)
+            val keepaliveDue = t - lastOkAt >= keepaliveMs()
+            if (!b.changed && !keepaliveDue) { scheduleAt(lastOkAt + keepaliveMs()); return }
+            if (b.changed && !full && t - lastAttemptAt < minGapMs()) { scheduleAt(lastAttemptAt + minGapMs()); return }
 
-    /** Current cheap telemetry (no shell). Null fields are omitted from the push. */
-    private fun collect(): LinkedHashMap<String, Any?> {
-        val m = LinkedHashMap<String, Any?>()
-        val bat = readBattery()
-        m["battery"] = bat.level
-        m["charging"] = bat.charging
-        if (bat.tempC != null) m["temp"] = bat.tempC
-        val th = readThermals()
-        if (th.cpu != null) m["cpuTemp"] = th.cpu
-        if (th.gpu != null) m["gpuTemp"] = th.gpu
-        if (th.skin != null) m["skinTemp"] = th.skin
-        if (ctrlLeft != null) m["ctrlLeft"] = ctrlLeft
-        if (ctrlRight != null) m["ctrlRight"] = ctrlRight
-        if (!foregroundApp.isNullOrBlank()) m["foregroundApp"] = foregroundApp
-        return m
-    }
-
-    private data class Battery(val level: Int?, val charging: Boolean, val tempC: Double?)
-
-    private fun readBattery(): Battery {
-        return try {
-            val intent = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-            val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
-            val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
-            val status = intent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
-            val tempRaw = intent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1) ?: -1
-            Battery(
-                level = if (level >= 0 && scale > 0) level * 100 / scale else null,
-                charging = (status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL),
-                tempC = if (tempRaw > 0) tempRaw / 10.0 else null
-            )
-        } catch (_: Throwable) { Battery(null, false, null) }
-    }
-
-    private data class Thermals(val cpu: Double?, val gpu: Double?, val skin: Double?)
-
-    /** Best-effort CPU/GPU/skin from /sys/class/thermal (max per family). Needs headset validation. */
-    private fun readThermals(): Thermals {
-        var cpu: Double? = null; var gpu: Double? = null; var skin: Double? = null
-        try {
-            File("/sys/class/thermal").listFiles()
-                ?.filter { it.name.startsWith("thermal_zone") }
-                ?.forEach { zone ->
-                    val tf = File(zone, "temp"); if (!tf.exists()) return@forEach
-                    val milli = tf.readText().trim().toLongOrNull() ?: return@forEach
-                    val c = milli / 1000.0
-                    if (c <= 0.0 || c > 150.0) return@forEach
-                    val type = (File(zone, "type").takeIf { it.exists() }?.readText()?.trim() ?: "").lowercase()
-                    when {
-                        type.contains("cpu") -> if (cpu == null || c > cpu!!) cpu = c
-                        type.contains("gpu") -> if (gpu == null || c > gpu!!) gpu = c
-                        type.contains("skin") || type.contains("skt") -> if (skin == null || c > skin!!) skin = c
+            lastAttemptAt = t
+            val r = post(url, b.body)
+            if (!alive) return
+            val t2 = now()
+            if (r.code in 200..299) {
+                lastOkAt = t2; fails = 0; lastRtt = t2 - t
+                if (full) { lastFullAt = t2; needFull = false }
+                for ((k, v) in b.sentFields) acked[k] = v
+                if (full) acked.keys.retainAll(collector.values.keys)
+                b.appsSnap?.let { ackedApps = it }
+                b.appsSig?.let { ackedAppsSig = it }
+                b.capJson?.let { ackedCap = it }
+                seq++
+                applyConfig(r.json)
+                Status.ok(seq, proto2, serverKeepaliveSec, hot)
+                // More to send right away (changes that arrived during the call)?
+                scheduleAt(t2 + minGapMs())
+            } else {
+                val wait: Long
+                when (r.code) {
+                    401 -> { wait = 60_000L; Status.authFailure(); Status.error("401 unauthorized") }
+                    404 -> { wait = 30_000L; needFull = true; Status.error("404 unknown serial") }
+                    else -> {
+                        fails++
+                        val base = minOf(60L, 1L shl minOf(fails - 1, 6)) * 1000L
+                        wait = (base * (0.8 + rnd.nextDouble() * 0.4)).toLong()
+                        Status.error(r.err ?: ("http " + r.code))
                     }
                 }
-        } catch (_: Throwable) {}
-        fun r(d: Double?) = d?.let { Math.round(it * 10.0) / 10.0 }
-        return Thermals(r(cpu), r(gpu), r(skin))
-    }
-
-    /** Installed user apps with versions, plus a stable signature of (pkg@version) for change detection. */
-    private fun collectApps(): Pair<String, JsonArray> {
-        val arr = JsonArray()
-        val sb = StringBuilder()
-        try {
-            val pm = ctx.packageManager
-            val apps = pm.getInstalledApplications(PackageManager.GET_META_DATA)
-                .filter { (it.flags and ApplicationInfo.FLAG_SYSTEM) == 0 }
-                .sortedBy { it.packageName }
-            for (app in apps) {
-                val pkg = app.packageName
-                val version = try { pm.getPackageInfo(pkg, 0).versionName ?: "" } catch (_: Throwable) { "" }
-                val label = try { pm.getApplicationLabel(app).toString() } catch (_: Throwable) { pkg }
-                val o = JsonObject()
-                o.addProperty("pkg", pkg)
-                o.addProperty("version", version)
-                o.addProperty("label", label)
-                arr.add(o)
-                sb.append(pkg).append('@').append(version).append(';')
+                blockedUntil = t2 + wait
+                scheduleAt(blockedUntil)
             }
-        } catch (_: Throwable) {}
-        val sig = try {
-            MessageDigest.getInstance("MD5").digest(sb.toString().toByteArray())
-                .joinToString("") { "%02x".format(it) }
-        } catch (_: Throwable) { sb.toString() }
-        return Pair(sig, arr)
-    }
+        }
 
-    /** Reads the controllers + foreground app over self-ADB in ONE short session. Best-effort. */
-    private fun readControlOverAdb() {
-        // Pico has no usable self-ADB shell (see AdbBootManager.isPico): telemetry-only there, so we
-        // never open a self-ADB session - it would only fail and churn. Battery/thermals/storage/wifi
-        // still come from the Android APIs; controllers and foreground app are simply not reported.
-        if (AdbBootManager.isPico()) return
-        // ONE persistent self-ADB session, reused between reads. A fresh connect per read (the old
-        // behaviour, every ~5 s) made Horizon raise the "Allow USB debugging?" popup each time the
-        // companion key was not trusted yet. A failed connect backs off (30 s doubling to 10 min) so
-        // an untrusted key raises the popup at most once per backoff window, not continuously.
-        var mgr = controlMgr
-        if (mgr == null || !isSessionAlive(mgr)) {
-            try { mgr?.disconnect() } catch (_: Throwable) {}
-            controlMgr = null
-            AdbBootManager.log("control read: opening self-ADB session")
-            mgr = try { AdbBootManager.selfConnect(ctx) } catch (_: Throwable) { null }
-            if (mgr == null) {
-                controlFailures++
-                val wait = minOf(CONTROL_BACKOFF_MAX_MS, CONTROL_BACKOFF_MIN_MS shl minOf(controlFailures - 1, 5))
-                nextControlAt = android.os.SystemClock.elapsedRealtime() + wait
-                AdbBootManager.log("control read: no self-ADB session, retry in ${wait / 1000} s")
-                return
+        private fun applyConfig(j: JsonObject?) {
+            val p = j?.get("proto")?.takeIf { it.isJsonPrimitive }?.asInt ?: 0
+            if (p >= 2) {
+                proto2 = true
+                j!!.get("intervalSec")?.takeIf { it.isJsonPrimitive }?.asInt?.let { serverIntervalSec = it }
+                j.get("keepaliveSec")?.takeIf { it.isJsonPrimitive }?.asInt?.let { serverKeepaliveSec = it }
+                j.get("staleSec")?.takeIf { it.isJsonPrimitive }?.asInt?.let { Status.staleSec = it }
+                j.get("hot")?.takeIf { it.isJsonPrimitive }?.asBoolean?.let { hot = it }
+                if (j.get("requestFull")?.takeIf { it.isJsonPrimitive }?.asBoolean == true) needFull = true
+                serverAppsSig = j.get("appsSig")?.takeIf { it.isJsonPrimitive }?.asString
+                j.get("tokenEpoch")?.takeIf { it.isJsonPrimitive }?.asInt?.let { storeEpoch(it) }
+            } else {
+                proto2 = false   // PC rolled back (or v1): own full resend, fixed keepalive
+                serverAppsSig = null
             }
-            controlMgr = mgr
-            controlFailures = 0
         }
-        nextControlAt = android.os.SystemClock.elapsedRealtime() + CONTROL_EVERY_MS
-        try {
-            val marker = "===VRHM==="
-            val script = "dumpsys OVRRemoteService 2>/dev/null; echo $marker; " +
-                "dumpsys activity activities 2>/dev/null | grep -E 'mResumedActivity|topResumedActivity'"
-            val out = AdbBootManager.runShell(mgr!!, script, 8000)
-            if (out.startsWith("shell-ex")) {
-                AdbBootManager.log("control read: shell failed (${out.take(80)}), dropping session")
-                dropControlSession(); return
+
+        private fun storeEpoch(e: Int) {
+            try {
+                SelfAdb.dpCtx(ctx.applicationContext).getSharedPreferences(TokenConfig.PREFS, Context.MODE_PRIVATE)
+                    .edit().putInt(PREF_TOKEN_EPOCH, e).apply()
+                Status.tokenEpoch = e
+            } catch (_: Throwable) {}
+        }
+
+        private fun addField(o: JsonObject, key: String, value: Any) {
+            when (value) {
+                is Boolean -> o.addProperty(key, value)
+                is Int -> o.addProperty(key, value)
+                is Long -> o.addProperty(key, value)
+                is Double -> o.addProperty(key, value)
+                else -> o.addProperty(key, value.toString())
             }
-            val parts = out.split(marker)
-            val ctrl = parseControllers(parts.getOrElse(0) { "" })
-            ctrlLeft = ctrl.first ?: ctrlLeft
-            ctrlRight = ctrl.second ?: ctrlRight
-            val fg = parseForeground(parts.getOrElse(1) { "" })
-            if (!fg.isNullOrBlank()) foregroundApp = fg
-        } catch (_: Throwable) {
-            dropControlSession()
         }
-    }
 
-    private fun isSessionAlive(mgr: io.github.muntashirakon.adb.AbsAdbConnectionManager): Boolean =
-        try { mgr.isConnected } catch (_: Throwable) { false }
+        private inner class Resp(val code: Int, val json: JsonObject?, val err: String?)
 
-    private fun dropControlSession() {
-        try { controlMgr?.disconnect() } catch (_: Throwable) {}
-        controlMgr = null
-    }
-
-    /**
-     * Pulls the two controller battery levels out of `dumpsys OVRRemoteService`. The exact field
-     * layout varies by firmware; this looks for "left"/"right" near a percentage and falls back to
-     * the first two "battery=NN" values. TODO: align with ConvertFrom-ControllerDump on a headset.
-     */
-    private fun parseControllers(text: String): Pair<Int?, Int?> {
-        if (text.isBlank()) return Pair(null, null)
-        var left: Int? = null; var right: Int? = null
-        val lineRe = Regex("(?i)(left|right)[^0-9]{0,40}?(\\d{1,3})\\s*%?")
-        for (m in lineRe.findAll(text)) {
-            val side = m.groupValues[1].lowercase()
-            val v = m.groupValues[2].toIntOrNull() ?: continue
-            if (v !in 0..100) continue
-            if (side == "left" && left == null) left = v
-            if (side == "right" && right == null) right = v
-        }
-        if (left == null && right == null) {
-            val vals = Regex("(?i)battery[^0-9]{0,8}?(\\d{1,3})").findAll(text)
-                .mapNotNull { it.groupValues[1].toIntOrNull()?.takeIf { n -> n in 0..100 } }.toList()
-            if (vals.isNotEmpty()) left = vals[0]
-            if (vals.size > 1) right = vals[1]
-        }
-        return Pair(left, right)
-    }
-
-    /** Pulls the foreground package out of the mResumedActivity / topResumedActivity lines. */
-    private fun parseForeground(text: String): String? {
-        if (text.isBlank()) return null
-        val m = Regex("[uU]\\d+\\s+([a-zA-Z0-9_.]+)/").find(text)
-            ?: Regex("cmp=([a-zA-Z0-9_.]+)/").find(text)
-        return m?.groupValues?.getOrNull(1)
-    }
-
-    private fun addField(o: JsonObject, key: String, value: Any?) {
-        when (value) {
-            null -> {}
-            is Boolean -> o.addProperty(key, value)
-            is Int -> o.addProperty(key, value)
-            is Long -> o.addProperty(key, value)
-            is Double -> o.addProperty(key, value)
-            is Float -> o.addProperty(key, value)
-            else -> o.addProperty(key, value.toString())
-        }
-    }
-
-    private fun post(body: JsonObject): Boolean {
-        val url = reportUrl
-        if (url.isBlank()) return false
-        var conn: HttpURLConnection? = null
-        return try {
-            conn = (URL(url).openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"
-                connectTimeout = 3000
-                readTimeout = 3000
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json")
-                TokenConfig.token(ctx)?.let { setRequestProperty("X-VRHM-Token", it) }
+        /** Keep-alive POST: the body is read to the end and the connection is NOT disconnected. */
+        private fun post(url: String, body: JsonObject): Resp {
+            var c: HttpURLConnection? = null
+            return try {
+                val bytes = gson.toJson(body).toByteArray(Charsets.UTF_8)
+                c = (URL(url).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    connectTimeout = 3000
+                    readTimeout = 4000
+                    doOutput = true
+                    setFixedLengthStreamingMode(bytes.size)
+                    setRequestProperty("Content-Type", "application/json")
+                    TokenConfig.token(ctx)?.let { setRequestProperty("X-VRHM-Token", it) }
+                    try {
+                        val ep = SelfAdb.dpCtx(ctx.applicationContext)
+                            .getSharedPreferences(TokenConfig.PREFS, Context.MODE_PRIVATE).getInt(PREF_TOKEN_EPOCH, -1)
+                        if (ep >= 0) setRequestProperty("X-VRHM-Token-Epoch", ep.toString())
+                    } catch (_: Throwable) {}
+                }
+                c.outputStream.use { it.write(bytes) }
+                val code = c.responseCode
+                val stream = if (code >= 400) c.errorStream else c.inputStream
+                val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+                val j = try { JsonParser.parseString(text).takeIf { it.isJsonObject }?.asJsonObject } catch (_: Throwable) { null }
+                Resp(code, j, null)
+            } catch (e: Throwable) {
+                try { c?.disconnect() } catch (_: Throwable) {}   // drop a broken socket only
+                Resp(-1, null, e.javaClass.simpleName + ": " + (e.message ?: ""))
             }
-            conn.outputStream.use { it.write(gson.toJson(body).toByteArray(Charsets.UTF_8)) }
-            val code = conn.responseCode
-            code in 200..299
-        } catch (_: Throwable) {
-            false
-        } finally {
-            try { conn?.disconnect() } catch (_: Throwable) {}
         }
+    }
+
+    /** Process-wide reporter status, read by HttpApiServer /status. */
+    object Status {
+        @Volatile var run = ""
+        @Volatile var seq = 0L
+        @Volatile var proto = 1
+        @Volatile var keepaliveSec = 5
+        @Volatile var staleSec = 0
+        @Volatile var hot = false
+        @Volatile var tokenEpoch = -1
+        @Volatile var lastPushOk = 0L        // epoch ms
+        @Volatile var lastError = ""
+        @Volatile var lastErrorAt = 0L
+        @Volatile var authFailures = 0
+        @Volatile var pushes = 0L
+
+        fun reset(r: String) { run = r; seq = 0; pushes = 0; lastError = "" }
+        fun ok(s: Long, p2: Boolean, ka: Int, h: Boolean) {
+            seq = s; proto = if (p2) 2 else 1; keepaliveSec = ka; hot = h
+            lastPushOk = System.currentTimeMillis(); authFailures = 0; lastError = ""; pushes++
+        }
+        fun error(m: String) { lastError = m; lastErrorAt = System.currentTimeMillis() }
+        fun authFailure() { authFailures++ }
+
+        fun asMap(): Map<String, Any?> = linkedMapOf(
+            "run" to run, "seq" to seq, "proto" to proto, "pushes" to pushes,
+            "lastPushOk" to lastPushOk, "lastError" to lastError, "lastErrorAt" to lastErrorAt,
+            "authFailures" to authFailures, "keepaliveSec" to keepaliveSec, "staleSec" to staleSec,
+            "hot" to hot, "tokenEpoch" to tokenEpoch
+        )
     }
 
     companion object {
@@ -385,10 +387,6 @@ class TelemetryReporter(private val ctx: Context) {
 
         const val PREF_REPORT_URL = "report_url"
         const val PREF_REPORT_INTERVAL = "report_interval_sec"
-        private const val CONTROL_EVERY_MS = 10_000L        // controllers + foreground every 10 s on the open session
-        private const val CONTROL_BACKOFF_MIN_MS = 30_000L  // first retry after a failed self-ADB connect
-        private const val CONTROL_BACKOFF_MAX_MS = 600_000L // then doubling, capped at 10 min
-        private const val FULL_EVERY_MS = 300_000L // resend everything every 5 min (resync)
-        private const val KEEPALIVE_MS = 5_000L    // refresh freshness at least every 5 s
+        const val PREF_TOKEN_EPOCH = "token_epoch"
     }
 }

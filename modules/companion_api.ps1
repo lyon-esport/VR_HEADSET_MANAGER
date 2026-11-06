@@ -601,6 +601,13 @@ function Install-VrhmCompanion {
         } catch { & $addStep "grant $perm" $false $_.Exception.Message }
     }
 
+    # b2. usage-stats appop: the foreground-app fallback of telemetry v2 (UsageStatsManager) needs it,
+    # and it can only be granted over adb (telemetry-v2.md section 1, decision D2)
+    try {
+        $r = Invoke-AdbCmd -Device $Device -Command "appops set $pkg GET_USAGE_STATS allow" -ShellScript -adb $adb
+        & $addStep 'grant GET_USAGE_STATS' ($r -ne $false) $(if ($r -ne $false) { 'granted' } else { 'appops set failed' })
+    } catch { & $addStep 'grant GET_USAGE_STATS' $false $_.Exception.Message }
+
     # c. accessibility (ApproveService): append, never overwrite another enabled service
     try {
         $component = $global:CompanionApproveService
@@ -784,6 +791,96 @@ function Resolve-HeadsetInfoSource {
     return 'adb'
 }
 
+# ---------------------------------------------------------------------------
+# Keep headset awake (T2.1b): the headset must not go to sleep. DEFAULT ON.
+# The wish lives in the app_kv row headset_keep_awake_<id> = { enabled; at }. It is applied by the
+# VRHM Companion app when it answers (wake lock + proximity override through the app's own ADB),
+# otherwise over PC ADB with the proximity override (Meta only), which ADR-0040 re-applies after
+# every reboot (proxKeepAwake + reapply).
+# ---------------------------------------------------------------------------
+
+# Desired keep-awake state of one headset: $true unless the operator switched it off. Memo 2 s.
+# -Stored returns instead whether an operator wish exists (ADB-only headsets are only managed
+# over ADB once it does). Never throws. Example: Get-HeadsetKeepAwake -HeadsetId 3
+function Get-HeadsetKeepAwake {
+    param([Parameter(Mandatory)][int]$HeadsetId, [switch]$Stored, [switch]$NoMemo)
+    if ($HeadsetId -le 0) { if ($Stored) { return $false } else { return $true } }
+    if (-not $script:HeadsetKeepAwakeMemo) { $script:HeadsetKeepAwakeMemo = @{} }
+    $m = $script:HeadsetKeepAwakeMemo[$HeadsetId]
+    if (-not $NoMemo -and $m -and ([datetime]::UtcNow - $m.At).TotalSeconds -lt 2) {
+        if ($Stored) { return $m.Stored } else { return $m.Val }
+    }
+    $val = $true; $has = $false
+    try {
+        $raw = Get-DbKeyValue -Key ("headset_keep_awake_{0}" -f $HeadsetId)
+        if ($raw -and $null -ne $raw.enabled) { $val = [bool]$raw.enabled; $has = $true }
+    } catch { $val = $true; $has = $false }
+    $script:HeadsetKeepAwakeMemo[$HeadsetId] = @{ At = [datetime]::UtcNow; Val = $val; Stored = $has }
+    if ($Stored) { return $has } else { return $val }
+}
+
+# Forgets a removed headset's keep-awake wish. Called by Remove-Headset. Never throws.
+# Example: Remove-HeadsetKeepAwake -HeadsetId 3
+function Remove-HeadsetKeepAwake {
+    param([Parameter(Mandatory)][int]$HeadsetId)
+    try { Remove-DbKeyValue -Key ("headset_keep_awake_{0}" -f $HeadsetId) } catch { }
+    if ($script:HeadsetKeepAwakeMemo) { $script:HeadsetKeepAwakeMemo.Remove($HeadsetId) }
+}
+
+# Stores the keep-awake wish of a headset, then applies it: companion POST /settings keep_awake when
+# the companion answers, else the PC ADB proximity override (Meta only). The ADB path also records
+# proxKeepAwake + re-apply (ADR-0040) so the override comes back after a reboot; the companion path
+# does not need that (the app re-applies it itself at each boot).
+# Returns @{Ok;Via='companion'|'adb'|'none';Applied;Error}. Ok = the wish is stored (Applied says
+# whether the headset took it now). Never throws.
+# Example: $r = Set-HeadsetKeepAwake -Headset $row -Enabled $true
+function Set-HeadsetKeepAwake {
+    param(
+        [Parameter(Mandatory)]$Headset,
+        [Parameter(Mandatory)][bool]$Enabled
+    )
+    $res = @{ Ok = $false; Via = 'none'; Applied = $false; Error = '' }
+    try {
+        $id = [int]$Headset.ID
+        if ($id -le 0) { $res.Error = 'invalid headset'; return $res }
+        Set-DbKeyValue -Key ("headset_keep_awake_{0}" -f $id) -Value ([PSCustomObject]@{ enabled = $Enabled; at = [datetime]::UtcNow.ToString('o') })
+        if ($script:HeadsetKeepAwakeMemo) { $script:HeadsetKeepAwakeMemo.Remove($id) }
+        $res.Ok = $true
+
+        $ip = [string]$Headset.IPAddress
+        # 1. Companion app.
+        if ($ip -and -not (Test-UnknownIp $ip)) {
+            $st = Get-CompanionStatus -IP $ip
+            if ($st) {
+                $p = Invoke-CompanionPost -IP $ip -Path '/settings' -Body @{ keep_awake = $Enabled } -Token (Get-CompanionToken)
+                if ($p -and $p.ok) { $res.Via = 'companion'; $res.Applied = $true; return $res }
+                $res.Error = 'companion refused the setting'
+            }
+        }
+        # 2. PC ADB proximity override (Meta only).
+        if ([string]$Headset.Brand -eq 'Pico') {
+            if (-not $res.Error) { $res.Error = 'not supported on Pico without the companion app' }
+            return $res
+        }
+        $dev = $null
+        try { $dev = Resolve-HeadsetAdbDevice -Headset $Headset } catch { $dev = $null }
+        if ($dev) {
+            $okPx = if ($Enabled) { Set-HeadsetProximitySensorOverride -Device $dev } else { Set-HeadsetProximitySensorOverride -Device $dev -Clear }
+            if ($okPx) { $res.Via = 'adb'; $res.Applied = $true; $res.Error = '' }
+            else { $res.Error = 'the proximity override failed' }
+        } elseif (-not $res.Error) { $res.Error = 'headset not reachable (companion or ADB)' }
+        # Remember it for the post-reboot re-apply (ADR-0040), also when the headset is unreachable now.
+        if (Get-Command Set-HeadsetSessionSettings -ErrorAction SilentlyContinue) {
+            if ($Enabled) { [void](Set-HeadsetSessionSettings -HeadsetId $id -Reapply $true -Desired @{ proxKeepAwake = $true }) }
+            else          { [void](Set-HeadsetSessionSettings -HeadsetId $id -Desired @{ proxKeepAwake = $false }) }
+        }
+        return $res
+    } catch {
+        $res.Error = $_.Exception.Message
+        return $res
+    }
+}
+
 
 # ---------------------------------------------------------------------------
 # Companion telemetry push (ADR-0043): the per-fleet HTTP token, the report-target
@@ -878,13 +975,136 @@ function Get-CompanionReportUrl {
     } catch { return '' }
 }
 
-# The telemetry value field names carried on the wire and stored in the kv row.
-$script:CompanionTelemetryFields = @('battery', 'charging', 'wattage', 'temp', 'cpuTemp', 'gpuTemp', 'skinTemp', 'ctrlLeft', 'ctrlRight', 'foregroundApp')
+# The telemetry value field names carried on the wire and stored in the kv row. thermalStatus and
+# rssi (telemetry v2, D4) are stored in the row only; no database column and no info-record field.
+$script:CompanionTelemetryFields = @('battery', 'charging', 'wattage', 'temp', 'cpuTemp', 'gpuTemp', 'skinTemp', 'ctrlLeft', 'ctrlRight', 'foregroundApp', 'thermalStatus', 'rssi')
 
-# Writes one companion telemetry push into app_kv companion_telemetry_<id>. -Full replaces the
-# stored set (first push after a connect); otherwise the named fields MERGE onto what is stored
-# (delta push; absent fields keep their previous value). Stamps 'at' (UTC ISO-8601). -Fields is a
-# hashtable of the wire field names present in this push. Returns $true when written. Never throws.
+# Telemetry v2 server-side constants (telemetry-v2.md section 3 and 6).
+$script:CompanionKeepaliveSec = 5
+$script:CompanionRateGuardMs  = 200
+
+# The wire/stored field names (route and tests read them through this, not the script variable).
+# Example: Get-CompanionTelemetryFieldNames
+function Get-CompanionTelemetryFieldNames { return @($script:CompanionTelemetryFields) }
+
+# Culture-proof ISO-8601 (or any date text) to a UTC DateTime, $null when unreadable.
+# Example: ConvertTo-CompanionUtc -Text '2026-11-06T10:00:00.0000000Z'
+function ConvertTo-CompanionUtc {
+    param($Text)
+    if ($null -eq $Text -or "$Text" -eq '') { return $null }
+    try {
+        if ($Text -is [datetime]) { return $Text.ToUniversalTime() }
+        return [datetime]::Parse([string]$Text, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal)
+    } catch { return $null }
+}
+
+# The raw stored telemetry document of one headset (app_kv companion_telemetry_<id>), memoised 1 s
+# per process/runspace. $null when none. Never throws. Example: $doc = Get-CompanionTelemetryDoc -HeadsetId 3
+function Get-CompanionTelemetryDoc {
+    param([Parameter(Mandatory)][int]$HeadsetId)
+    if ($HeadsetId -le 0) { return $null }
+    if (-not $script:CompanionTelemetryMemo) { $script:CompanionTelemetryMemo = @{} }
+    $m = $script:CompanionTelemetryMemo[$HeadsetId]
+    if ($m -and ([datetime]::UtcNow - $m.At).TotalSeconds -lt 1) { return $m.Val }
+    $val = $null
+    try { $val = Get-DbKeyValue -Key ("companion_telemetry_{0}" -f $HeadsetId) } catch { $val = $null }
+    $script:CompanionTelemetryMemo[$HeadsetId] = @{ At = [datetime]::UtcNow; Val = $val }
+    return $val
+}
+
+# Merges ONE push into app_kv companion_telemetry_<id> (telemetry v2, section 6). Call it inside the
+# caller's transaction (the route does) so the row and the apps ingest commit together. -Push keys:
+# Proto (1|2), Run, Seq, Full, Fields (hashtable wire name -> value; a $null value = explicit "known
+# absent", proto 2 only), AgeMs (hashtable name -> ms between observation and send), Cap (object or
+# $null: kept from the previous row when absent), StoreAppsSig (string; '' keeps the previous one),
+# IdMatch ('serial'|'address'), Rtt (ms).
+# Semantics: Full (or a new run) replaces the field set, otherwise the named fields MERGE. A proto 2
+# non-full push with no state for this run, or after a seq gap, sets RequestFull. Returns
+# @{Ok;RequestFull;Gap;PrevAppsSig;AppsSig}. Never throws.
+# Example: Update-CompanionTelemetryRow -HeadsetId 3 -Push @{ Proto = 2; Run = 'a1'; Seq = 5; Full = $false; Fields = @{ battery = 80 } }
+function Update-CompanionTelemetryRow {
+    param(
+        [Parameter(Mandatory)][int]$HeadsetId,
+        [Parameter(Mandatory)][hashtable]$Push
+    )
+    $res = @{ Ok = $false; RequestFull = $false; Gap = $false; PrevAppsSig = ''; AppsSig = '' }
+    if ($HeadsetId -le 0) { return $res }
+    try {
+        $key  = "companion_telemetry_{0}" -f $HeadsetId
+        $prev = $null
+        try { $prev = Get-DbKeyValue -Key $key } catch { $prev = $null }
+        $proto = if ($Push.ContainsKey('Proto') -and $null -ne $Push.Proto) { [int]$Push.Proto } else { 1 }
+        $run   = if ($Push.ContainsKey('Run')) { [string]$Push.Run } else { '' }
+        $seq   = if ($Push.ContainsKey('Seq') -and $null -ne $Push.Seq) { [int64]$Push.Seq } else { -1 }
+        $full  = [bool]$Push.Full
+        $now   = [datetime]::UtcNow
+        $fields = if ($Push.ContainsKey('Fields') -and $Push.Fields) { $Push.Fields } else { @{} }
+        $ageMs  = if ($Push.ContainsKey('AgeMs') -and $Push.AgeMs) { $Push.AgeMs } else { @{} }
+
+        $runChanged = ($proto -ge 2 -and $prev -and ([string]$prev.run) -ne $run)
+        $gap = $false
+        if ($proto -ge 2 -and $prev -and -not $runChanged -and $null -ne $prev.seq -and $seq -gt ([int64]$prev.seq + 1)) { $gap = $true }
+        $res.Gap = $gap
+        $res.RequestFull = ($proto -ge 2 -and -not $full -and ((-not $prev) -or $runChanged -or $gap))
+        if ($prev -and $prev.appsSig) { $res.PrevAppsSig = [string]$prev.appsSig }
+
+        $doc    = [ordered]@{}
+        $absent = New-Object System.Collections.ArrayList
+        $obs    = [ordered]@{}
+        $names  = Get-CompanionTelemetryFieldNames
+        $carry  = ($prev -and -not $full -and -not $runChanged)
+        if ($carry) {
+            foreach ($k in $names) { if ($null -ne $prev.$k) { $doc[$k] = $prev.$k } }
+            foreach ($a in @($prev.absent)) { if ($a) { [void]$absent.Add([string]$a) } }
+            if ($prev.obs) { foreach ($p in $prev.obs.PSObject.Properties) { $obs[$p.Name] = $p.Value } }
+        }
+        foreach ($k in $names) {
+            if (-not $fields.ContainsKey($k)) { continue }
+            $v = $fields[$k]
+            $obsAt = $now
+            if ($ageMs.ContainsKey($k) -and $null -ne $ageMs[$k]) { try { $obsAt = $now.AddMilliseconds(-1.0 * [double]$ageMs[$k]) } catch { $obsAt = $now } }
+            if ($null -eq $v) {
+                if ($doc.Contains($k)) { $doc.Remove($k) }
+                if (-not $absent.Contains($k)) { [void]$absent.Add($k) }
+            } else {
+                $doc[$k] = $v
+                while ($absent.Contains($k)) { $absent.Remove($k) }
+            }
+            $obs[$k] = $obsAt.ToString('o')
+        }
+
+        $doc['proto'] = $proto
+        $doc['run']   = $run
+        $doc['seq']   = $seq
+        $cap = $null
+        if ($Push.ContainsKey('Cap') -and $Push.Cap) { $cap = $Push.Cap } elseif ($prev -and $prev.cap) { $cap = $prev.cap }
+        if ($cap) { $doc['cap'] = $cap }
+        $sig = ''
+        if ($Push.ContainsKey('StoreAppsSig') -and $Push.StoreAppsSig) { $sig = [string]$Push.StoreAppsSig }
+        elseif ($prev -and $prev.appsSig) { $sig = [string]$prev.appsSig }
+        if ($sig) { $doc['appsSig'] = $sig }
+        $res.AppsSig = $sig
+        $idm = ''
+        if ($Push.ContainsKey('IdMatch') -and $Push.IdMatch) { $idm = [string]$Push.IdMatch }
+        if ($idm) { $doc['idMatch'] = $idm }
+        if ($Push.ContainsKey('Rtt') -and $null -ne $Push.Rtt) { $doc['rtt'] = $Push.Rtt }
+        elseif ($prev -and $null -ne $prev.rtt) { $doc['rtt'] = $prev.rtt }
+        $doc['absent'] = @($absent)
+        $doc['obs']    = [PSCustomObject]$obs
+        $doc['at']     = $now.ToString('o')
+        Set-DbKeyValue -Key $key -Value ([PSCustomObject]$doc)
+        if ($script:CompanionTelemetryMemo) { $script:CompanionTelemetryMemo.Remove($HeadsetId) }
+        $res.Ok = $true
+        return $res
+    } catch {
+        Write-Log ("Update-CompanionTelemetryRow failed for headset {0}: {1}" -f $HeadsetId, $_.Exception.Message) -Level DEBUG
+        return $res
+    }
+}
+
+# Writes one companion telemetry push (proto 1 semantics: flat fields, -Full replaces, otherwise the
+# named fields MERGE onto what is stored). Kept for v1 callers; a thin wrapper over
+# Update-CompanionTelemetryRow. Returns $true when written. Never throws.
 # Example: Set-CompanionTelemetry -HeadsetId 3 -Full -Fields @{ battery = 87; charging = $true }
 function Set-CompanionTelemetry {
     param(
@@ -892,62 +1112,72 @@ function Set-CompanionTelemetry {
         [hashtable]$Fields = @{},
         [switch]$Full
     )
-    if ($HeadsetId -le 0) { return $false }
-    try {
-        $doc = [ordered]@{}
-        if (-not $Full) {
-            $prev = $null
-            try { $prev = Get-DbKeyValue -Key ("companion_telemetry_{0}" -f $HeadsetId) } catch { $prev = $null }
-            if ($prev) { foreach ($k in $script:CompanionTelemetryFields) { if ($null -ne $prev.$k) { $doc[$k] = $prev.$k } } }
-        }
-        foreach ($k in $script:CompanionTelemetryFields) {
-            if ($Fields.ContainsKey($k)) { $doc[$k] = $Fields[$k] }
-        }
-        $doc['at'] = [datetime]::UtcNow.ToString('o')
-        Set-DbKeyValue -Key ("companion_telemetry_{0}" -f $HeadsetId) -Value ([PSCustomObject]$doc)
-        if ($script:CompanionTelemetryMemo) { $script:CompanionTelemetryMemo.Remove($HeadsetId) }
-        return $true
-    } catch { return $false }
+    $r = Update-CompanionTelemetryRow -HeadsetId $HeadsetId -Push @{ Proto = 1; Full = [bool]$Full; Fields = $Fields }
+    return [bool]$r.Ok
 }
 
-# The last companion telemetry push for one headset, or $null when absent or older than
-# -MaxAgeSec (default $global:Companion_telemetry_stale_sec, floor 2). Memoised 1 s per
-# process/runspace. The returned object carries the wire fields + 'at'. Never throws.
-# Example: $t = Get-CompanionTelemetry -HeadsetId 3; if ($t) { $t.battery }
+# The last companion telemetry for one headset, or $null when the last push (of any kind, a keepalive
+# included) is older than the window: -MaxAgeSec when given, else max(Companion_telemetry_stale_sec,
+# 2.5 x cap.keepaliveSec), floor 2 s. The returned object carries the flat field values the current run
+# reported (non-null only) plus: 'at'; '_absent' (fields explicitly reported as known-absent: fresh,
+# shown as '-', no ADB fallback); '_fresh' (every field name that is fresh, present or absent); '_age'
+# (name -> seconds since the device observed it); '_proto'; '_cap'; '_idMatch'; 'appsSig'; '_pushAgeSec'.
+# A field missing from '_fresh' is read over ADB by the poll runspace. Never throws.
+# Example: $t = Get-CompanionTelemetry -HeadsetId 3; if ($t -and $t._fresh -contains 'battery') { $t.battery }
 function Get-CompanionTelemetry {
     param(
         [Parameter(Mandatory)][int]$HeadsetId,
         [int]$MaxAgeSec = 0
     )
     if ($HeadsetId -le 0) { return $null }
-    if ($MaxAgeSec -le 0) { $MaxAgeSec = if ($global:Companion_telemetry_stale_sec) { [int]$global:Companion_telemetry_stale_sec } else { 10 } }
-    if ($MaxAgeSec -lt 2) { $MaxAgeSec = 2 }
-    if (-not $script:CompanionTelemetryMemo) { $script:CompanionTelemetryMemo = @{} }
-    $m = $script:CompanionTelemetryMemo[$HeadsetId]
-    if ($m -and ([datetime]::UtcNow - $m.At).TotalSeconds -lt 1) { $val = $m.Val }
-    else {
-        $val = $null
-        try { $val = Get-DbKeyValue -Key ("companion_telemetry_{0}" -f $HeadsetId) } catch { $val = $null }
-        $script:CompanionTelemetryMemo[$HeadsetId] = @{ At = [datetime]::UtcNow; Val = $val }
-    }
+    $val = Get-CompanionTelemetryDoc -HeadsetId $HeadsetId
     if (-not $val -or -not $val.at) { return $null }
-    # A keepalive-only document (no measurement) must not count as fresh.
-    $hasValue = $false
-    foreach ($k in $script:CompanionTelemetryFields) { if ($null -ne $val.$k) { $hasValue = $true; break } }
-    if (-not $hasValue) { return $null }
-    try {
-        $age = ([datetime]::UtcNow - ([datetime]::Parse($val.at, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal))).TotalSeconds
-        if ($age -gt $MaxAgeSec) { return $null }
-    } catch { return $null }
-    return $val
+    $stale = if ($global:Companion_telemetry_stale_sec) { [int]$global:Companion_telemetry_stale_sec } else { 10 }
+    $keep = 0.0
+    try { if ($val.cap -and $val.cap.keepaliveSec) { $keep = [double]$val.cap.keepaliveSec } } catch { $keep = 0.0 }
+    $win = if ($MaxAgeSec -gt 0) { [double]$MaxAgeSec } else { [Math]::Max([double]$stale, 2.5 * $keep) }
+    if ($win -lt 2) { $win = 2 }
+    $at = ConvertTo-CompanionUtc -Text $val.at
+    if (-not $at) { return $null }
+    $now = [datetime]::UtcNow
+    $pushAge = ($now - $at).TotalSeconds
+    if ($pushAge -gt $win) { return $null }
+
+    $out   = [ordered]@{}
+    $fresh = New-Object System.Collections.ArrayList
+    foreach ($k in (Get-CompanionTelemetryFieldNames)) {
+        if ($null -ne $val.$k) { $out[$k] = $val.$k; [void]$fresh.Add($k) }
+    }
+    $absent = @(@($val.absent) | Where-Object { $_ } | ForEach-Object { [string]$_ })
+    foreach ($a in $absent) { if (-not $fresh.Contains($a)) { [void]$fresh.Add($a) } }
+    # A keepalive-only document (no measurement at all) must not count as fresh.
+    if ($fresh.Count -eq 0) { return $null }
+    $age = @{}
+    if ($val.obs) {
+        foreach ($f in $fresh) {
+            $o = ConvertTo-CompanionUtc -Text $val.obs.$f
+            if ($o) { $age[$f] = [Math]::Max(0, [int][Math]::Round(($now - $o).TotalSeconds)) }
+        }
+    }
+    $out['at']          = $val.at
+    $out['appsSig']     = if ($val.appsSig) { [string]$val.appsSig } else { '' }
+    $out['_absent']     = $absent
+    $out['_fresh']      = @($fresh)
+    $out['_age']        = $age
+    $out['_proto']      = if ($val.proto) { [int]$val.proto } else { 1 }
+    $out['_cap']        = $val.cap
+    $out['_idMatch']    = if ($val.idMatch) { [string]$val.idMatch } else { '' }
+    $out['_pushAgeSec'] = [Math]::Round($pushAge, 1)
+    return [PSCustomObject]$out
 }
 
 
 # Fills a headset info record ($Info, a New-DefaultHeadsetInfo object) IN PLACE from one companion
 # telemetry object ($Telemetry from Get-CompanionTelemetry), matching the string formats the ADB
 # stage 2 produces (battery "87 %", temps "36.4", controllers "90 %"). Only fields the push carried
-# are overwritten. Used by the VRMonitor poll runspace when the info source is companion. Never
-# throws. Example: Set-HeadsetInfoFromCompanion -Info $workingInfo -Telemetry $ct
+# are overwritten; a field the push reported as known-absent ('_absent') becomes '-'. Used by the
+# VRMonitor poll runspace when the info source is companion. Never throws.
+# Example: Set-HeadsetInfoFromCompanion -Info $workingInfo -Telemetry $ct
 function Set-HeadsetInfoFromCompanion {
     param(
         [Parameter(Mandatory)]$Info,
@@ -969,5 +1199,281 @@ function Set-HeadsetInfoFromCompanion {
         if ($null -ne $Telemetry.skinTemp) { $Info.SkinTemp = ([double]$Telemetry.skinTemp).ToString("0.0", $inv) }
         if ($null -ne $Telemetry.ctrlLeft)  { $Info.BatteryControllerLeft  = ("{0} %" -f [int]$Telemetry.ctrlLeft) }
         if ($null -ne $Telemetry.ctrlRight) { $Info.BatteryControllerRight = ("{0} %" -f [int]$Telemetry.ctrlRight) }
+        $ab = @()
+        if ($Telemetry.PSObject.Properties['_absent']) { $ab = @($Telemetry._absent) }
+        foreach ($a in $ab) {
+            switch ([string]$a) {
+                'battery'   { $Info.Battery = '-' }
+                'wattage'   { $Info.ChargingWattage = '-' }
+                'temp'      { $Info.Temp = '-' }
+                'cpuTemp'   { $Info.CpuTemp = '-' }
+                'gpuTemp'   { $Info.GpuTemp = '-' }
+                'skinTemp'  { $Info.SkinTemp = '-' }
+                'ctrlLeft'  { $Info.BatteryControllerLeft = '-' }
+                'ctrlRight' { $Info.BatteryControllerRight = '-' }
+            }
+        }
     } catch { }
+}
+
+
+# ---------------------------------------------------------------------------
+# Telemetry v2 (telemetry-v2.md): token epoch, 401 drift records, server config
+# sent in every 2xx, per-headset push counters, bootstrap and self-heal.
+# ---------------------------------------------------------------------------
+
+# The token epoch (app_kv companion_token_epoch, int >= 1): bumped on any token rotation, returned in
+# every 2xx/401 of the telemetry route and echoed by the app in X-VRHM-Token-Epoch. Created at 1 on
+# first read (insert_if_absent). Memoised 5 s. Never throws (1 on failure).
+# Example: $e = Get-CompanionTokenEpoch
+function Get-CompanionTokenEpoch {
+    if ($script:CompanionEpochMemo -and ([datetime]::UtcNow - $script:CompanionEpochMemo.At).TotalSeconds -lt 5) { return [int]$script:CompanionEpochMemo.Val }
+    $v = 1
+    try {
+        $raw = Get-DbKeyValue -Key 'companion_token_epoch'
+        if ($null -eq $raw) {
+            Invoke-DbNonQuery -Name 'kv.insert_if_absent' -Parameters @{ key = 'companion_token_epoch'; value_json = '1' } | Out-Null
+            $raw = Get-DbKeyValue -Key 'companion_token_epoch'
+        }
+        $n = 0
+        if ([int]::TryParse([string]$raw, [ref]$n) -and $n -ge 1) { $v = $n }
+    } catch { $v = 1 }
+    $script:CompanionEpochMemo = @{ At = [datetime]::UtcNow; Val = $v }
+    return $v
+}
+
+# Bumps the token epoch by one (call after ANY rotation of the fleet token). Returns the new epoch.
+# Never throws. Example: Update-CompanionTokenEpoch
+function Update-CompanionTokenEpoch {
+    $n = (Get-CompanionTokenEpoch) + 1
+    try { Set-DbKeyValue -Key 'companion_token_epoch' -Value $n } catch { }
+    $script:CompanionEpochMemo = $null
+    return $n
+}
+
+# Records one rejected (401) push in app_kv companion_auth_fail_<id> = {count, firstAt, lastAt,
+# sentEpoch, foreign, healedAt}: count restarts when the first failure is older than 2 min. A sent
+# epoch higher than ours means the app belongs to another server database (foreign: never healed
+# automatically). Returns @{Count;Foreign;Sent;Ours}. Never throws.
+# Example: Register-CompanionAuthFailure -HeadsetId 3 -SentEpoch '4'
+function Register-CompanionAuthFailure {
+    param([Parameter(Mandatory)][int]$HeadsetId, [string]$SentEpoch = '')
+    $r = @{ Count = 0; Foreign = $false; Sent = 0; Ours = 1 }
+    if ($HeadsetId -le 0) { return $r }
+    try {
+        $key = "companion_auth_fail_{0}" -f $HeadsetId
+        $now = [datetime]::UtcNow
+        $row = Get-DbKeyValue -Key $key
+        $count = 1; $first = $now
+        if ($row -and $row.firstAt) {
+            $f = ConvertTo-CompanionUtc -Text $row.firstAt
+            if ($f -and ($now - $f).TotalSeconds -le 120) { $count = [int]$row.count + 1; $first = $f }
+        }
+        $sent = 0
+        [void][int]::TryParse($SentEpoch, [ref]$sent)
+        $ours = Get-CompanionTokenEpoch
+        $healed = if ($row -and $row.healedAt) { [string]$row.healedAt } else { '' }
+        $doc = [PSCustomObject]@{ count = $count; firstAt = $first.ToString('o'); lastAt = $now.ToString('o'); sentEpoch = $sent; foreign = ($sent -gt $ours); healedAt = $healed }
+        Set-DbKeyValue -Key $key -Value $doc
+        $r = @{ Count = $count; Foreign = ($sent -gt $ours); Sent = $sent; Ours = $ours }
+    } catch { }
+    return $r
+}
+
+# Per-headset push counters of the telemetry route (in memory, web server process): count (stored +
+# rate-guarded), bytes, last handler ms, dropped, 401/404 counts, 401 window for "token drift". One
+# plain hashtable: the route and /api/headsets-status both run on the accept loop. Never throws.
+# Kind: ok | dropped | 401 | 404 | error. Example: Add-CompanionPushStat -HeadsetId 3 -Kind ok -Bytes 220 -HandlerMs 4.2
+function Add-CompanionPushStat {
+    param([int]$HeadsetId, [string]$Kind = 'ok', [int64]$Bytes = 0, [double]$HandlerMs = 0)
+    if ($HeadsetId -le 0) { return }
+    try {
+        if (-not $script:CompanionPushStats) { $script:CompanionPushStats = @{} }
+        $s = $script:CompanionPushStats[$HeadsetId]
+        if (-not $s) {
+            $s = @{ Count = [int64]0; Bytes = [int64]0; Dropped = [int64]0; N401 = [int64]0; N404 = [int64]0; Errors = [int64]0
+                    LastHandlerMs = 0.0; LastPushUtc = [datetime]::MinValue; LastProcessedUtc = [datetime]::MinValue
+                    AuthWindowStart = [datetime]::MinValue; AuthWindowCount = 0; Ring = New-Object System.Collections.ArrayList }
+            $script:CompanionPushStats[$HeadsetId] = $s
+        }
+        $now = [datetime]::UtcNow
+        switch ($Kind) {
+            'ok'      { $s.Count++; $s.Bytes += $Bytes; $s.LastPushUtc = $now; $s.LastProcessedUtc = $now; $s.LastHandlerMs = $HandlerMs
+                        [void]$s.Ring.Add($HandlerMs); if ($s.Ring.Count -gt 60) { $s.Ring.RemoveAt(0) }
+                        $s.AuthWindowCount = 0 }
+            'dropped' { $s.Count++; $s.Dropped++; $s.Bytes += $Bytes; $s.LastPushUtc = $now; $s.LastHandlerMs = $HandlerMs }
+            '401'     { $s.N401++
+                        if (($now - $s.AuthWindowStart).TotalSeconds -gt 120) { $s.AuthWindowStart = $now; $s.AuthWindowCount = 1 } else { $s.AuthWindowCount++ } }
+            '404'     { $s.N404++ }
+            default   { $s.Errors++ }
+        }
+    } catch { }
+}
+
+# True when the previous PROCESSED push of this headset is younger than -Ms (default 200): the route
+# then answers 200 with a raised interval and does not store (rate guard). Never throws.
+# Example: if (Test-CompanionPushTooSoon -HeadsetId 3) { ... }
+function Test-CompanionPushTooSoon {
+    param([int]$HeadsetId, [int]$Ms = 0)
+    if ($Ms -le 0) { $Ms = $script:CompanionRateGuardMs }
+    try {
+        $s = if ($script:CompanionPushStats) { $script:CompanionPushStats[$HeadsetId] } else { $null }
+        if (-not $s) { return $false }
+        return (([datetime]::UtcNow - $s.LastProcessedUtc).TotalMilliseconds -lt $Ms)
+    } catch { return $false }
+}
+
+# Counters of one headset for /api/headsets-status and Measure-CompanionLoad.ps1, or $null.
+# Example: (Get-CompanionPushStats -HeadsetId 3).Count
+function Get-CompanionPushStats {
+    param([Parameter(Mandatory)][int]$HeadsetId)
+    try {
+        $s = if ($script:CompanionPushStats) { $script:CompanionPushStats[$HeadsetId] } else { $null }
+        if (-not $s) { return $null }
+        $p95 = 0.0
+        if ($s.Ring.Count -gt 0) {
+            $sorted = @($s.Ring | Sort-Object)
+            $p95 = [double]$sorted[[Math]::Min($sorted.Count - 1, [int][Math]::Floor(0.95 * $sorted.Count))]
+        }
+        $ageMs = -1
+        if ($s.LastPushUtc -gt [datetime]::MinValue) { $ageMs = [int64]([datetime]::UtcNow - $s.LastPushUtc).TotalMilliseconds }
+        $drift = (($s.AuthWindowCount -ge 3) -and (([datetime]::UtcNow - $s.AuthWindowStart).TotalSeconds -le 120))
+        return @{ Count = $s.Count; Bytes = $s.Bytes; Dropped = $s.Dropped; N401 = $s.N401; N404 = $s.N404
+                  LastHandlerMs = $s.LastHandlerMs; HandlerMsP95 = $p95; LastPushAgeMs = $ageMs; TokenDrift = $drift }
+    } catch { return $null }
+}
+
+# The status fields added to each /api/headsets-status record: companion_age_ms (since the last push,
+# from the stored row, -1 none), companion_proto, companion_cap, companion_rtt_ms and the route
+# counters. Always returns a hashtable. Never throws. Example: $c = Get-CompanionPushSummary -HeadsetId 3
+function Get-CompanionPushSummary {
+    param([Parameter(Mandatory)][int]$HeadsetId)
+    $o = @{ companion_age_ms = -1; companion_proto = 0; companion_cap = $null; companion_rtt_ms = $null
+            push_count = 0; push_bytes = 0; last_push_handler_ms = 0; last_push_age_ms = -1; push_dropped = 0; push_handler_ms_p95 = 0; token_drift = $false }
+    try {
+        $doc = Get-CompanionTelemetryDoc -HeadsetId $HeadsetId
+        if ($doc -and $doc.at) {
+            $at = ConvertTo-CompanionUtc -Text $doc.at
+            if ($at) { $o.companion_age_ms = [int64]([datetime]::UtcNow - $at).TotalMilliseconds }
+            $o.companion_proto = if ($doc.proto) { [int]$doc.proto } else { 1 }
+            $o.companion_cap   = $doc.cap
+            if ($null -ne $doc.rtt) { $o.companion_rtt_ms = $doc.rtt }
+        }
+        $s = Get-CompanionPushStats -HeadsetId $HeadsetId
+        if ($s) {
+            $o.push_count = $s.Count; $o.push_bytes = $s.Bytes; $o.last_push_handler_ms = [Math]::Round($s.LastHandlerMs, 1)
+            $o.last_push_age_ms = $s.LastPushAgeMs; $o.push_dropped = $s.Dropped; $o.push_handler_ms_p95 = [Math]::Round($s.HandlerMsP95, 1)
+            $o.token_drift = [bool]$s.TokenDrift
+        }
+    } catch { }
+    return $o
+}
+
+# The server config returned in every 2xx of the telemetry route (spec section 3). -Hot = a capture or
+# recording runs for the headset, -RequestFull = ask for a full push, -AppsSig = signature the PC
+# holds, -Slow = rate guard hit (interval doubled). Never throws.
+# Example: Get-CompanionServerConfig -HeadsetId 3 -Hot $true -AppsSig 'abc'
+function Get-CompanionServerConfig {
+    param([int]$HeadsetId, [bool]$Hot = $false, [bool]$RequestFull = $false, [string]$AppsSig = '', [switch]$Slow)
+    $interval = if ($global:Companion_report_interval_sec) { [int]$global:Companion_report_interval_sec } else { 1 }
+    if ($interval -lt 1) { $interval = 1 }
+    if ($Slow) { $interval = [Math]::Max(2, $interval * 2) }
+    $stale = if ($global:Companion_telemetry_stale_sec) { [int]$global:Companion_telemetry_stale_sec } else { 10 }
+    return @{
+        ok = $true; proto = 2; id = $HeadsetId
+        serverTime = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        intervalSec = $interval; keepaliveSec = [int]$script:CompanionKeepaliveSec; staleSec = $stale
+        hot = $Hot; requestFull = $RequestFull; appsSig = $AppsSig; tokenEpoch = (Get-CompanionTokenEpoch)
+    }
+}
+
+# Whether the legacy /settings bootstrap push (Set-CompanionReportTarget) is still needed for one
+# headset. A proto-2 app gets its config from every push response, so it is bootstrap only: needed when
+# the app is proto 1 or never pushed, when nothing was pushed for 5 min, or when the server LAN URL
+# changed since this process last saw it. Never throws.
+# Example: if (Test-CompanionBootstrapNeeded -HeadsetId 3 -IP $ip -ReportUrl $url) { Set-CompanionReportTarget ... }
+function Test-CompanionBootstrapNeeded {
+    param([Parameter(Mandatory)][int]$HeadsetId, [string]$IP = '', [string]$ReportUrl = '')
+    try {
+        if (-not $script:CompanionBootUrl) { $script:CompanionBootUrl = @{} }
+        $changed = $false
+        if ($IP) {
+            $seen = $script:CompanionBootUrl[$IP]
+            if ($seen -and $seen -ne $ReportUrl) { $changed = $true }
+            $script:CompanionBootUrl[$IP] = $ReportUrl
+        }
+        if ($changed) { return $true }
+        $doc = Get-CompanionTelemetryDoc -HeadsetId $HeadsetId
+        if (-not $doc -or [int]$doc.proto -lt 2 -or -not $doc.at) { return $true }
+        $at = ConvertTo-CompanionUtc -Text $doc.at
+        if (-not $at) { return $true }
+        return (([datetime]::UtcNow - $at).TotalSeconds -gt 300)
+    } catch { return $true }
+}
+
+# Self-heal of the companion identity over ANY ADB transport (spec section 6, operator decision D1):
+# (a) token drift: 3 rejected pushes in 2 min (companion_auth_fail_<id>) -> settoken with the current
+# token (plus setserial when the serial is not provisioned); (b) serial: the route matched the push by
+# address, or cap.serialSource is not 'provisioned' -> setserial. At most once per 10 min per headset
+# and kind, ONE WARNING each; a foreign token epoch (app of another server database) is never healed.
+# Runs in the poll runspace after the ADB device is resolved, never on the web request path. Returns
+# @{Token;Serial} booleans (attempted). Never throws.
+# Example: Invoke-CompanionIdentityHeal -Headset $liveHeadset -Device $device
+function Invoke-CompanionIdentityHeal {
+    param(
+        [Parameter(Mandatory)]$Headset,
+        [Parameter(Mandatory)]$Device,
+        [string]$adb = $global:adbPath
+    )
+    $did = @{ Token = $false; Serial = $false }
+    try {
+        $id = [int]$Headset.ID
+        if ($id -le 0 -or -not $Device) { return $did }
+        if (-not $script:CompanionHealState) { $script:CompanionHealState = @{} }
+        $st = $script:CompanionHealState[$id]
+        if (-not $st) { $st = @{ TokenAt = [datetime]::MinValue; SerialAt = [datetime]::MinValue }; $script:CompanionHealState[$id] = $st }
+        $now = [datetime]::UtcNow
+        $name = [string]$Headset.Name
+        $serial = ([string]$Headset.SerialNumber).Trim()
+        $serialOk = ($serial -match '^[A-Za-z0-9._-]{4,64}$')
+
+        $needSerial = $false
+        $doc = Get-CompanionTelemetryDoc -HeadsetId $id
+        if ($doc) {
+            $src = ''
+            try { if ($doc.cap -and $doc.cap.serialSource) { $src = [string]$doc.cap.serialSource } } catch { $src = '' }
+            if (([string]$doc.idMatch) -eq 'address') { $needSerial = $true }
+            elseif ($src -and $src -ne 'provisioned') { $needSerial = $true }
+        }
+
+        $needToken = $false
+        $row = $null
+        try { $row = Get-DbKeyValue -Key ("companion_auth_fail_{0}" -f $id) } catch { $row = $null }
+        if ($row -and [int]$row.count -ge 3 -and -not [bool]$row.foreign) {
+            $last = ConvertTo-CompanionUtc -Text $row.lastAt
+            $healed = ConvertTo-CompanionUtc -Text $row.healedAt
+            if ($last -and ($now - $last).TotalSeconds -le 300 -and (-not $healed -or $healed -lt $last)) { $needToken = $true }
+        }
+
+        if ($needToken -and ($now - $st.TokenAt).TotalMinutes -ge 10) {
+            $st.TokenAt = $now
+            $did.Token = $true
+            $okTok = [bool](Invoke-CompanionCmd -Device $Device -Cmd 'settoken' -Extra @('--es', 'token', (Get-CompanionToken)) -adb $adb)
+            $okSer = $true
+            if ($serialOk) { $okSer = [bool](Invoke-CompanionCmd -Device $Device -Cmd 'setserial' -Extra @('--es', 'serial', $serial) -adb $adb) }
+            $st.SerialAt = $now
+            try {
+                $upd = [PSCustomObject]@{ count = 0; firstAt = [string]$row.firstAt; lastAt = [string]$row.lastAt; sentEpoch = $row.sentEpoch; foreign = $false; healedAt = $now.ToString('o') }
+                Set-DbKeyValue -Key ("companion_auth_fail_{0}" -f $id) -Value $upd
+            } catch { }
+            Write-Log ((Get-CompanionText -Key 'TokenHealed' -Fallback 'Companion on {0}: token re-sent over ADB after repeated rejected pushes (token {1}, serial {2})') -f $name, $(if ($okTok) { 'ok' } else { 'failed' }), $(if ($okSer) { 'ok' } else { 'failed' })) -Level WARNING
+        }
+        elseif ($needSerial -and $serialOk -and ($now - $st.SerialAt).TotalMinutes -ge 10) {
+            $st.SerialAt = $now
+            $did.Serial = $true
+            $okSer = [bool](Invoke-CompanionCmd -Device $Device -Cmd 'setserial' -Extra @('--es', 'serial', $serial) -adb $adb)
+            Write-Log ((Get-CompanionText -Key 'SerialHealed' -Fallback 'Companion on {0}: adb serial re-sent over ADB (it was matched by address) - {1}') -f $name, $(if ($okSer) { 'ok' } else { 'failed' })) -Level WARNING
+        }
+    } catch { }
+    return $did
 }

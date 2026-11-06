@@ -131,10 +131,13 @@ object AdbBootManager {
     }
 
     fun runShell(mgr: AbsAdbConnectionManager, cmd: String, timeoutMs: Long = 15000): String {
+        // libadb raises "Stream closed" when a short command ends instead of returning -1, so the
+        // output read so far is kept: the command did run (measured with prox_close: the broadcast
+        // was enqueued while the read threw). "shell-ex" is returned only when nothing was read.
+        val sb = StringBuilder()
         return try {
             mgr.openStream("shell:$cmd").use { stream ->
                 val input = stream.openInputStream()
-                val sb = StringBuilder()
                 val buf = ByteArray(4096)
                 val deadline = System.currentTimeMillis() + timeoutMs
                 while (System.currentTimeMillis() < deadline) {
@@ -145,7 +148,7 @@ object AdbBootManager {
                 }
                 sb.toString()
             }
-        } catch (e: Throwable) { "shell-ex ${e.message}" }
+        } catch (e: Throwable) { if (sb.isNotEmpty()) sb.toString() else "shell-ex ${e.message}" }
     }
 
     /** "tcpip <port>" restarts adbd in classic mode; the connection usually drops, which is fine. */

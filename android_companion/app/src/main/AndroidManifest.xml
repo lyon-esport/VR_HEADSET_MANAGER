@@ -18,6 +18,9 @@
          adb shell pm grant com.vrheadsetmanager.companion android.permission.BATTERY_STATS -->
     <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
     <uses-permission android:name="android.permission.BATTERY_STATS" />
+    <!-- Foreground-app fallback when accessibility events are silent. Appop GET_USAGE_STATS is granted
+         over adb at install (appops set ... GET_USAGE_STATS allow); the app works without it. -->
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" />
 
     <!-- Granted via Settings > Special app access > Modify system settings -->
     <uses-permission android:name="android.permission.WRITE_SETTINGS" />

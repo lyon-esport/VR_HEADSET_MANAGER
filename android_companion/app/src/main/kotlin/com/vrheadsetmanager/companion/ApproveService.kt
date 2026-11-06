@@ -40,6 +40,7 @@ class ApproveService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        TelemetryCollector.a11yConnected = true
         Log.i(TAG, "connected; autoApprove=${ApproveConfig.autoApprove(this)} trusted=${ApproveConfig.trustedFingerprints(this).size}; tool=${isTool()}")
         kick()
     }
@@ -47,12 +48,17 @@ class ApproveService : AccessibilityService() {
     override fun onUnbind(intent: android.content.Intent?): Boolean {
         handler.removeCallbacksAndMessages(null)
         scheduled = false
+        TelemetryCollector.a11yConnected = false
         return super.onUnbind(intent)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         val t = event.eventType
+        // Telemetry v2: foreground app from window-state events (cheap: the collector debounces).
+        if (t == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            TelemetryCollector.onWindowEvent(event.packageName?.toString())
+        }
         if (t != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
             t != AccessibilityEvent.TYPE_WINDOWS_CHANGED) return
         kick()

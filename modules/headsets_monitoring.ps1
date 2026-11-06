@@ -865,6 +865,7 @@ function Start-VRMonitor {
                     $companionActive = $false
                     $ct = $null
                     $gapCtrl = $false; $gapFg = $false; $gapWatt = $false
+                    $gapBatt = $false; $gapThermal = $false; $gapApps = $false; $freshSet = @()
                     $statsRan = $false
                     if (Get-Command Resolve-HeadsetInfoSource -ErrorAction SilentlyContinue) {
                         $infoSrc = 'adb'
@@ -878,7 +879,16 @@ function Start-VRMonitor {
                                 $nextReportAt = [datetime]::Now.AddSeconds(60)
                                 $rptUrl = [string]$sharedState['_companion_report_url']
                                 if ($rptUrl -and $liveHeadset.IPAddress -and -not (Test-UnknownIp $liveHeadset.IPAddress)) {
-                                    try { [void](Set-CompanionReportTarget -IP ([string]$liveHeadset.IPAddress) -ReportUrl $rptUrl) } catch { }
+                                    # Telemetry v2: a proto-2 app gets its config from every push
+                                    # response, so /settings is BOOTSTRAP ONLY (proto-1 or silent
+                                    # app, nothing pushed for 5 min, server URL changed).
+                                    $bootNeeded = $true
+                                    if (Get-Command Test-CompanionBootstrapNeeded -ErrorAction SilentlyContinue) {
+                                        try { $bootNeeded = [bool](Test-CompanionBootstrapNeeded -HeadsetId ([int]$headset.ID) -IP ([string]$liveHeadset.IPAddress) -ReportUrl $rptUrl) } catch { $bootNeeded = $true }
+                                    }
+                                    if ($bootNeeded) {
+                                        try { [void](Set-CompanionReportTarget -IP ([string]$liveHeadset.IPAddress) -ReportUrl $rptUrl) } catch { }
+                                    }
                                 }
                             }
                             try {
@@ -900,9 +910,18 @@ function Start-VRMonitor {
                                     $companionActive = $true
                                     # Per-field gaps: what the push does not carry is read over ADB
                                     # at the slow cadence below (never every cycle).
-                                    $gapCtrl = -not ($ct.PSObject.Properties['ctrlLeft'] -and $ct.PSObject.Properties['ctrlRight'])
-                                    $gapFg   = -not $ct.PSObject.Properties['foregroundApp']
-                                    $gapWatt = -not $ct.PSObject.Properties['wattage']
+                                    # Telemetry v2, per-field freshness: '_fresh' lists every field the
+                                    # current push run carries (present or known-absent); anything else
+                                    # is read over ADB as before. An old record without '_fresh' falls
+                                    # back to "present property".
+                                    $freshSet = if ($ct.PSObject.Properties['_fresh']) { @($ct._fresh) } else { @($ct.PSObject.Properties.Name) }
+                                    $gapBatt    = -not (($freshSet -contains 'battery') -and ($freshSet -contains 'charging') -and ($freshSet -contains 'temp'))
+                                    $gapThermal = -not (($freshSet -contains 'cpuTemp') -and ($freshSet -contains 'gpuTemp') -and ($freshSet -contains 'skinTemp'))
+                                    $gapCtrl = -not (($freshSet -contains 'ctrlLeft') -and ($freshSet -contains 'ctrlRight'))
+                                    $gapFg   = -not ($freshSet -contains 'foregroundApp')
+                                    $chgNow  = ($null -ne $ct.charging) -and [bool]$ct.charging
+                                    $gapWatt = $chgNow -and -not ($freshSet -contains 'wattage')
+                                    $gapApps = -not ($ct.PSObject.Properties['appsSig'] -and [string]$ct.appsSig)
                                 }
                             } catch { }
                         }
@@ -943,27 +962,56 @@ function Start-VRMonitor {
                                     $workingInfo.AdbWifiMode = [string]$device.WifiMode
                                 }
 
+                                # --- Companion identity self-heal (telemetry v2, D1): 3 rejected pushes
+                                # in 2 min, or an app matched by address only, re-send the token /
+                                # serial over this ADB link (any transport), at most once per 10 min
+                                # per headset, one WARNING. Cheap: two memoised database reads. ---
+                                if ($infoSrc -eq 'companion' -and (Get-Command Invoke-CompanionIdentityHeal -ErrorAction SilentlyContinue)) {
+                                    try { [void](Invoke-CompanionIdentityHeal -Headset $liveHeadset -Device $device) } catch { }
+                                }
+
                                 # --- Stage 2: identity + battery ---
-                                # Skipped when the companion push already filled the telemetry
-                                # (ADR-0043): $pollData then carries only the companion foreground app
-                                # so the slow blocks below still behave, and no ADB battery/thermal
-                                # read is issued for this headset.
+                                # With a fresh companion push (ADR-0043) the full Stage 2 is not run:
+                                # $pollData carries the companion foreground app so the slow blocks
+                                # below still behave, and only the fields the push lacks are read
+                                # over ADB (per-field fallback below).
                                 if ($companionActive) {
                                     $pollData = @{ ForegroundRead = $true; ForegroundPackage = $(if ($ct.PSObject.Properties['foregroundApp']) { [string]$ct.foregroundApp } else { '' }) }
-                                    # Per-field fallback: when the push lacks controllers / wattage /
-                                    # foreground, read them over ADB every 30 s and copy ONLY those fields.
-                                    if (($gapCtrl -or $gapFg -or $gapWatt) -and [datetime]::Now -ge $nextGapAt) {
-                                        $nextGapAt = [datetime]::Now.AddSeconds(30)
+                                    # Per-field fallback (telemetry v2, section 6): every field the push
+                                    # does not carry (or carries stale) is read over ADB and ONLY those
+                                    # fields are copied. battery/charging/temp ride the refresh cadence
+                                    # (Stage 2); controllers / wattage / foreground every 30 s;
+                                    # CPU/GPU/skin temperatures through the 30 s thermal memo.
+                                    $gapDue = (($gapCtrl -or $gapFg -or $gapWatt) -and [datetime]::Now -ge $nextGapAt)
+                                    if ($gapBatt -or $gapDue) {
+                                        if ($gapDue) { $nextGapAt = [datetime]::Now.AddSeconds(30) }
                                         $gapData = @{}
                                         $g2 = Get-HeadsetInfoStage2Identity -knownHeadset $liveHeadset -Device $device -PollData $gapData
                                         if ($gapData.CallFailed) { $pollDeviceCache.Clear() }
-                                        if ($gapCtrl) {
-                                            foreach ($k in @('BatteryControllerLeft', 'BatteryControllerRight')) { if ($g2.Contains($k)) { $workingInfo.$k = $g2[$k] } }
+                                        elseif ($g2) {
+                                            if ($gapBatt) {
+                                                foreach ($k in @('Battery', 'Charging', 'Temp')) { if ($g2.Contains($k)) { $workingInfo.$k = $g2[$k] } }
+                                                if ($g2.Contains('ChargingWattage')) { $workingInfo.ChargingWattage = $g2['ChargingWattage'] }
+                                            }
+                                            if ($gapThermal) {
+                                                foreach ($k in @('CpuTemp', 'GpuTemp', 'SkinTemp')) { if ($g2.Contains($k) -and $g2[$k] -ne '-') { $workingInfo.$k = $g2[$k] } }
+                                            }
+                                            if ($gapDue -and $gapCtrl) {
+                                                foreach ($k in @('BatteryControllerLeft', 'BatteryControllerRight')) { if ($g2.Contains($k)) { $workingInfo.$k = $g2[$k] } }
+                                            }
+                                            if ($gapDue -and $gapWatt -and $g2.Contains('ChargingWattage')) { $workingInfo.ChargingWattage = $g2['ChargingWattage'] }
                                         }
-                                        if ($gapWatt -and $g2.Contains('ChargingWattage')) { $workingInfo.ChargingWattage = $g2['ChargingWattage'] }
-                                        if ($gapFg) {
+                                        if ($gapDue -and $gapFg) {
                                             $g3 = Get-HeadsetInfoStage3App -knownHeadset $headset -Device $device -PollData $gapData
                                             foreach ($k in @('RunningApp', 'RunningAppIcon')) { if ($g3.Contains($k)) { $workingInfo.$k = $g3[$k] } }
+                                        }
+                                    }
+                                    elseif ($gapThermal) {
+                                        $gt = Get-HeadsetThermalCached -Device $device -Key $liveHeadset.IPAddress
+                                        if ($gt) {
+                                            if ($gt.CpuTemp)  { $workingInfo.CpuTemp  = $gt.CpuTemp }
+                                            if ($gt.GpuTemp)  { $workingInfo.GpuTemp  = $gt.GpuTemp }
+                                            if ($gt.SkinTemp) { $workingInfo.SkinTemp = $gt.SkinTemp }
                                         }
                                     }
                                 } else {
@@ -1039,6 +1087,14 @@ function Start-VRMonitor {
                                     }
                                     $appsCacheCounter++
                                 }
+                                elseif ($gapApps) {
+                                    # Companion-fed but no push ever carried the apps list: ADB refresh
+                                    # (same cadence as the pure ADB path) as the safety net.
+                                    if ($appsCacheCounter % $appsCacheEvery -eq 0) {
+                                        Update-InstalledAppsCache -Device $device -headsetName $headset.Name -HeadsetId ([int]$headset.ID)
+                                    }
+                                    $appsCacheCounter++
+                                }
                             }
                         }
                     }
@@ -1071,6 +1127,12 @@ function Start-VRMonitor {
                         $pollDeviceCache.Clear()
                         $workingInfo.AdbTransport = "-"
                         $workingInfo.AdbWifiMode  = "-"
+                        if ($freshSet -notcontains 'battery')  { $workingInfo.Battery = "-" }
+                        if ($freshSet -notcontains 'charging') { $workingInfo.Charging = "-" }
+                        if ($freshSet -notcontains 'temp')     { $workingInfo.Temp = "-" }
+                        if ($freshSet -notcontains 'cpuTemp')  { $workingInfo.CpuTemp = "-" }
+                        if ($freshSet -notcontains 'gpuTemp')  { $workingInfo.GpuTemp = "-" }
+                        if ($freshSet -notcontains 'skinTemp') { $workingInfo.SkinTemp = "-" }
                         if ($gapCtrl) { $workingInfo.BatteryControllerLeft = "-"; $workingInfo.BatteryControllerRight = "-" }
                         if ($gapWatt) { $workingInfo.ChargingWattage = "-" }
                         if ($gapFg)   { $workingInfo.RunningApp = "-"; $workingInfo.RunningAppIcon = "" }

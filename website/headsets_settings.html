@@ -1099,10 +1099,11 @@
               </div>
             </div>
             <div class="adv-field">
-              <label title="Off bypasses the sensor: the headset behaves as if it was worn and stays awake. Lost when the headset restarts (see the re-apply switch at the top).">Proximity Sensor <span class="adv-note">(session only)</span></label>
-              <button class="toggle-btn" id="adv-prox-disable" style="font-size:.8rem;">
-                <span id="adv-prox-label">--</span>
+              <label title="On (default): the headset must not go to sleep. Applied by the VRHM Companion app when installed (wake lock plus the proximity override), otherwise by VRHM over ADB (proximity override, Meta only; put back after each restart once switched here).">Keep headset awake</label>
+              <button class="toggle-btn" id="adv-keepawake-toggle" style="font-size:.8rem;">
+                <span id="adv-keepawake-label">--</span>
               </button>
+              <span class="adv-note" id="adv-keepawake-note"></span>
             </div>
             <div class="adv-field" id="adv-doubletap-row">
               <label title="The tap on the side of the headset that toggles passthrough. Disabling it is lost when the headset restarts (see the re-apply switch at the top).">Side double tap <span class="adv-note">(session only)</span></label>
@@ -2977,7 +2978,13 @@
             sharpSel.disabled = false;
           }
           setAdvToggleState('adv-guardian-pause', 'adv-guardian-pause-label', j.guardianPaused, 'Enable (session)', 'Disable (session)');
-          setAdvToggleState('adv-prox-disable', 'adv-prox-label', j.proxKeepAwake === true, 'Off', 'On', true);
+          setAdvToggleState('adv-keepawake-toggle', 'adv-keepawake-label', j.keepAwake !== false, 'On', 'Off');
+          var kaNote = document.getElementById('adv-keepawake-note');
+          if (kaNote) {
+            var ka = j.keepAwakeApplied;
+            if (ka && ka.enabled !== undefined) kaNote.textContent = 'companion: wake lock ' + (ka.wakeLock ? 'held' : 'no') + ', proximity ' + (ka.proxOverride || '?');
+            else kaNote.textContent = (j.companionInstalled || j.keepAwakeStored) ? '' : 'default on; not applied over ADB until switched here';
+          }
           document.getElementById('adv-loading').style.display = 'none';
           document.getElementById('adv-fields').style.display = 'flex';
           applyAdvBrandVisibility(_advBrand);
@@ -3052,8 +3059,7 @@
         if (row) row.style.display = isPico ? 'none' : '';
       });
       document.getElementById('adv-guardian-pause').style.display = isPico ? 'none' : '';
-      var proxRow = document.getElementById('adv-prox-disable').closest('.adv-field');
-      if (proxRow) proxRow.style.display = isPico ? 'none' : '';
+      // Keep headset awake stays visible on a Pico: the companion app applies it there.
       var updRow = document.getElementById('adv-updates-toggle').closest('.adv-field');
       if (updRow) updRow.style.display = isPico ? 'none' : '';
       var rrRow = document.getElementById('adv-refresh-rate').closest('.adv-field');
@@ -3068,9 +3074,9 @@
       _advId = id || '';
       document.getElementById('adv-headset').textContent = dn.replace(/_/g, ' ');
       document.getElementById('advsettings-modal').style.display = 'flex';
-      var proxBtn = document.getElementById('adv-prox-disable');
-      proxBtn.classList.remove('on');
-      proxBtn.disabled = false;
+      var kaBtn = document.getElementById('adv-keepawake-toggle');
+      kaBtn.classList.remove('on');
+      kaBtn.disabled = false;
       var updBtn = document.getElementById('adv-updates-toggle');
       if (updBtn) { updBtn.dataset.blocked = ''; updBtn.classList.remove('on'); updBtn.disabled = true; }
       var updLabel = document.getElementById('adv-updates-toggle-label');
@@ -3280,7 +3286,28 @@
     // Session-only settings (ADR-0040). The Guardian pause now reads its real state from the
     // headset and the proximity override can be handed back; the three new ones share the helper.
     bindAdvToggle('adv-guardian-pause', 'adv-guardian-pause-label', 'guardianPause', 'Enable (session)', 'Disable (session)');
-    bindAdvToggle('adv-prox-disable', 'adv-prox-label', 'proxOverride', 'Off', 'On', true);
+    (function() {
+      var btn = document.getElementById('adv-keepawake-toggle');
+      if (!btn) return;
+      btn.addEventListener('click', function() {
+        if (!_advId) return;
+        var next = btn.dataset.state !== 'true';
+        var note = document.getElementById('adv-keepawake-note');
+        btn.disabled = true;
+        fetch('/api/headset-keep-awake', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: parseInt(_advId, 10), enabled: next })
+        }).then(function(r) { return r.json(); })
+          .then(function(j) {
+            if (j.ok) {
+              setAdvToggleState('adv-keepawake-toggle', 'adv-keepawake-label', next, 'On', 'Off');
+              if (note) note.textContent = j.applied ? ('applied via ' + (j.via === 'companion' ? 'companion app' : 'ADB')) : ('saved, not applied now' + (j.error ? ': ' + j.error : ''));
+            } else { btn.disabled = false; alert(j.error || 'The change was not accepted.'); }
+          })
+          .catch(function() { btn.disabled = false; alert('Could not reach the server.'); });
+      });
+    })();
     bindAdvToggle('adv-doubletap-toggle', 'adv-doubletap-label', 'doubleTapDisabled', 'Disabled', 'Enabled', true);
     bindAdvToggle('adv-widemotion-toggle', 'adv-widemotion-label', 'wideMotion', 'On', 'Off');
     bindAdvToggle('adv-reapply-toggle', 'adv-reapply-label', 'sessionReapply', 'On', 'Off');

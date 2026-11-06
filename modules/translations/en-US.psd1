@@ -981,6 +981,9 @@
         StepRequested  = "requested"
         StepKeys       = "{0} key(s)"
         NoAdbKey       = "no adb key fingerprint (run the adb server once)"
+        TokenHealed    = "Companion on {0}: token re-sent over ADB after repeated rejected pushes (token {1}, serial {2})"
+        SerialHealed   = "Companion on {0}: adb serial re-sent over ADB (the app was matched by address only) - {1}"
+        TokenEpochForeign = "Companion on {0} uses token epoch {1}, newer than this server ({2}): it belongs to another VRHM database. Not healed automatically."
     }
 
     # Application update (console Config > U, web Updates accordion; spec S12 / S13).
@@ -1171,6 +1174,12 @@
         SessionDone       = "{0}: {1}"
         SessionFailed     = "The headset did not accept the change."
         SessionPico       = "Session settings are only available on Meta Quest headsets."
+        KeepAwake         = "Keep headset awake"
+        KeepAwakeNoAdb    = "No session settings (no ADB link): only the keep-awake switch is available."
+        KeepAwakeDone     = "{0}: {1} (applied via {2})"
+        KeepAwakeSaved    = "Saved, but not applied now: {0}. It is applied when the headset is reachable."
+        KeepAwakeViaCompanion = "companion app"
+        KeepAwakeViaAdb   = "ADB"
         PanelLaunchApp    = "Launch app"
         PanelPushWifi     = "Push WiFi"
         PanelFrame        = "Capture frame"

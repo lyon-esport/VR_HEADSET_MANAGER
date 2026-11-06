@@ -447,6 +447,15 @@ function Invoke-RouteHeadsetSettings {
         $infoSrc = 'default'
         try { if (Get-Command Get-HeadsetInfoSource -ErrorAction SilentlyContinue) { $infoSrc = Get-HeadsetInfoSource -HeadsetId ([int]$headset.ID) } } catch {}
         $infoSrcGlobal = if ($global:ADB_info_source) { [string]$global:ADB_info_source } else { 'companion' }
+        # Keep headset awake (T2.1b), no ADB: the operator's wish (default ON), whether one is stored,
+        # and what the companion reports as applied (only asked when the app is installed).
+        $kaWish = $true; $kaStored = $false; $kaApplied = $null
+        try {
+            if (Get-Command Get-HeadsetKeepAwake -ErrorAction SilentlyContinue) {
+                $kaWish   = Get-HeadsetKeepAwake -HeadsetId ([int]$headset.ID) -NoMemo
+                $kaStored = Get-HeadsetKeepAwake -HeadsetId ([int]$headset.ID) -Stored
+            }
+        } catch {}
         # Whether the VRHM Companion app is installed on this headset (installed-apps cache, no ADB).
         $ci = $false
         try {
@@ -455,6 +464,14 @@ function Invoke-RouteHeadsetSettings {
                 $ci = @(Get-HeadsetInstalledAppsCached -headsetName ([string]$headset.Name) | Where-Object { [string]$_.PackageName -eq $cpk }).Count -gt 0
             }
         } catch {}
+        if ($ci) {
+            try {
+                if ($headset.IPAddress -and -not (Test-UnknownIp ([string]$headset.IPAddress))) {
+                    $cst = Get-CompanionStatus -IP ([string]$headset.IPAddress)
+                    if ($cst -and $cst.PSObject.Properties['keepAwake']) { $kaApplied = $cst.keepAwake }
+                }
+            } catch {}
+        }
 
         try {
         $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort -adb $adbPath
@@ -494,12 +511,16 @@ function Invoke-RouteHeadsetSettings {
             infoSource       = $infoSrc
             infoSourceGlobal = $infoSrcGlobal
             companionInstalled = $ci
+            keepAwake        = $kaWish
+            keepAwakeStored  = $kaStored
+            keepAwakeApplied = $kaApplied
         }
         } catch {
             # ADB part failed: still return the info source fields (no ADB needed for them).
             Send-JsonResponse -Response $response -StatusCode 500 -Body @{
                 ok = $false; error = $_.Exception.Message
                 infoSource = $infoSrc; infoSourceGlobal = $infoSrcGlobal; companionInstalled = $ci
+                keepAwake = $kaWish; keepAwakeStored = $kaStored; keepAwakeApplied = $kaApplied
             }
         }
     } catch {
@@ -590,7 +611,7 @@ function Invoke-RouteCompanionSettings {
         $in = $bodyRaw | ConvertFrom-Json
         # Forward only the known fields.
         $fwd = [ordered]@{}
-        foreach ($k in @('auto_adb_wifi', 'brightness', 'report_url', 'report_interval_sec')) {
+        foreach ($k in @('auto_adb_wifi', 'brightness', 'keep_awake', 'report_url', 'report_interval_sec')) {
             $p = $in.PSObject.Properties[$k]
             if ($p -and $null -ne $p.Value) { $fwd[$k] = $p.Value }
         }
@@ -741,6 +762,29 @@ function Invoke-RouteHeadsetSettingsApply {
     return
 }
 
+function Invoke-RouteHeadsetkeepawake {
+    # POST /api/headset-keep-awake  body { id, enabled } (T2.1b). Stores the per-headset keep-awake
+    # wish (default ON) and applies it now: through the companion app when it answers, else over
+    # ADB (proximity override, Meta only). Slow lane: it calls the headset.
+    param([Parameter(Mandatory = $true)] $Context)
+    $request  = $Context.Request
+    $response = $Context.Response
+    try {
+        $json = (Read-RequestBody -Request $request -Response $response -MaxBytes 4096) | ConvertFrom-Json
+        $hid = [int]$json.id
+        if ($hid -le 0 -or $null -eq $json.enabled) { Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = 'id and enabled required' }; return }
+        $headset = @(Get-KnownHeadsetsCached) | Where-Object { [int]$_.ID -eq $hid } | Select-Object -First 1
+        if (-not $headset) { Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = 'unknown headset' }; return }
+        $r = Set-HeadsetKeepAwake -Headset $headset -Enabled ([bool]$json.enabled)
+        Send-JsonResponse -Response $response -Body @{ ok = [bool]$r.Ok; id = $hid; enabled = [bool]$json.enabled; via = [string]$r.Via; applied = [bool]$r.Applied; error = [string]$r.Error }
+    } catch {
+        Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+    } finally {
+        Close-HttpResponse -Response $response
+    }
+    return
+}
+
 function Invoke-RouteHeadsetinfosource {
     # POST /api/headset-info-source  body { id, source } (ADR-0043). Sets the per-headset info-source
     # override; 'default' clears it (follow the global ADB.info_source). Accepts companion/adb/
@@ -838,6 +882,7 @@ function Invoke-RouteHeadsetsStatus {
             ForEach-Object {
                 $h    = $_
                 $info = if ($infosCache) { $infosCache[[string]$h.ID] } else { $null }
+                $cs   = if (Get-Command Get-CompanionPushSummary -ErrorAction SilentlyContinue) { Get-CompanionPushSummary -HeadsetId ([int]$h.ID) } else { @{} }
                 @{
                     display_name          = Convert-Displayname $h.Name
                     name                  = $h.Name
@@ -861,6 +906,18 @@ function Invoke-RouteHeadsetsStatus {
                     # Info source (ADR-0043): per-headset override + companion-push freshness.
                     info_source           = $(if (Get-Command Get-HeadsetInfoSource -ErrorAction SilentlyContinue) { try { Get-HeadsetInfoSource -HeadsetId ([int]$h.ID) } catch { 'default' } } else { 'default' })
                     companion_fresh       = $(if (Get-Command Get-CompanionTelemetry -ErrorAction SilentlyContinue) { try { [bool](Get-CompanionTelemetry -HeadsetId ([int]$h.ID)) } catch { $false } } else { $false })
+                    # Telemetry v2 (spec section 6/8): last push age, protocol, capability block, push counters.
+                    companion_age_ms      = $cs.companion_age_ms
+                    companion_proto       = $cs.companion_proto
+                    companion_cap         = $cs.companion_cap
+                    companion_rtt_ms      = $cs.companion_rtt_ms
+                    push_count            = $cs.push_count
+                    push_bytes            = $cs.push_bytes
+                    last_push_handler_ms  = $cs.last_push_handler_ms
+                    push_handler_ms_p95   = $cs.push_handler_ms_p95
+                    last_push_age_ms      = $cs.last_push_age_ms
+                    push_dropped          = $cs.push_dropped
+                    token_drift           = $cs.token_drift
                     # WiFi ADB mode (ADR-0034, migration 009): Classic / TLS, '' when WiFi ADB is not up.
                     adb_wifi_mode         = if ($info.AdbWifiMode -and $info.AdbWifiMode -ne '-') { $info.AdbWifiMode } else { '' }
                     # TCP port of the WiFi ADB session: classic = configured port, TLS = published

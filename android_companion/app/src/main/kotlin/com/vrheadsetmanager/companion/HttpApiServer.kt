@@ -19,8 +19,8 @@ import fi.iki.elonen.NanoHTTPD
  *   GET  /info         -> full device state JSON
  *   GET  /apps         -> list of installed third-party apps
  *   POST /adb/enable   -> {"enable":true|false}  - toggle ADB WiFi immediately
- *   POST /settings     -> {"auto_adb_wifi":bool, "brightness":0-100}
- *   POST /wake         -> {"acquire":true|false}  - FULL_WAKE_LOCK for demo mode
+ *   POST /settings     -> {"auto_adb_wifi":bool, "brightness":0-100, "keep_awake":bool}
+ *   POST /wake         -> {"acquire":true|false}  - FULL_WAKE_LOCK for demo mode (max 30 min)
  */
 class HttpApiServer(port: Int, private val context: Context) : NanoHTTPD(port) {
 
@@ -75,12 +75,21 @@ class HttpApiServer(port: Int, private val context: Context) : NanoHTTPD(port) {
         m["autoApprove"] = ApproveConfig.autoApprove(context)
         m["trustedCount"] = ApproveConfig.trustedFingerprints(context).size
         m["autoEnabled"] = AdbBootManager.autoEnabled(context)
+        m["keepAwake"] = KeepAwake.status(context)
         m["tokenSet"] = TokenConfig.hasToken(context)
         val tp = SelfAdb.dpCtx(context).getSharedPreferences(BootReceiver.PREFS_NAME, Context.MODE_PRIVATE)
         val rUrl = tp.getString(TelemetryReporter.PREF_REPORT_URL, "") ?: ""
         m["reportUrl"] = rUrl
         m["reporting"] = rUrl.isNotBlank()
         m["reportIntervalSec"] = tp.getInt(TelemetryReporter.PREF_REPORT_INTERVAL, 1)
+        m["reporter"] = TelemetryReporter.Status.asMap()
+        m["cap"] = linkedMapOf(
+            "brand" to android.os.Build.MANUFACTURER, "model" to android.os.Build.MODEL,
+            "appVersion" to BuildConfig.VERSION_NAME, "versionCode" to BuildConfig.VERSION_CODE,
+            "hasTls" to !AdbBootManager.isPico(), "canSelfAdb" to !AdbBootManager.isPico(),
+            "canReadControllers" to false, "serialSource" to DeviceInfo.serialSource(context),
+            "keepAwake" to KeepAwake.isEnabled(context), "a11yBound" to TelemetryCollector.a11yConnected, "a11yEvents" to TelemetryCollector.a11yEvents
+        )
         return jsonOk(m)
     }
 
@@ -186,6 +195,9 @@ class HttpApiServer(port: Int, private val context: Context) : NanoHTTPD(port) {
             if (json.has("auto_adb_wifi")) {
                 prefs.edit().putBoolean(BootReceiver.PREF_AUTO_ADB, json["auto_adb_wifi"].asBoolean).apply()
             }
+            if (json.has("keep_awake")) {
+                KeepAwake.setEnabled(context, json["keep_awake"].asBoolean)
+            }
             if (json.has("brightness")) {
                 val pct = json["brightness"].asInt.coerceIn(0, 100)
                 try { Settings.System.putInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS, pct * 255 / 100) } catch (_: Exception) {}
@@ -222,7 +234,7 @@ class HttpApiServer(port: Int, private val context: Context) : NanoHTTPD(port) {
                 screenWakeLock = pm.newWakeLock(
                     PowerManager.FULL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
                     "VRHM:DemoWakeLock"
-                ).also { it.acquire(8 * 60 * 60 * 1000L) }
+                ).also { it.acquire(30 * 60 * 1000L) }
             }
         } else {
             if (screenWakeLock?.isHeld == true) screenWakeLock?.release()

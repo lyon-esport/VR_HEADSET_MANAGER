@@ -2063,17 +2063,20 @@ function Show-SubMenu-HeadsetSessionSettings {
         return
     }
     $brand = [string]$headset.Brand
+    # The keep-awake switch (key 7) works without a session ADB link (companion app, Pico), so a Pico or a
+    # headset with no ADB link no longer ends the menu: it only hides the session rows 1-6.
+    $device = $null
     if ($brand -eq 'Pico') {
         Write-UiMessage -Text $c.SessionPico -Kind warn
         Start-Sleep -Seconds 2
-        return
+    } else {
+        $device = Get-BestAdbDevice -Headset $headset
+        if (-not $device) {
+            Write-UiMessage -Text ($c.SessionNoAdb -f $headset.Name) -Kind err
+            Start-Sleep -Seconds 2
+        }
     }
-    $device = Get-BestAdbDevice -Headset $headset
-    if (-not $device) {
-        Write-UiMessage -Text ($c.SessionNoAdb -f $headset.Name) -Kind err
-        Start-Sleep -Seconds 3
-        return
-    }
+    $sessionOk = [bool]$device
     $id = [int]$headset.ID
 
     $onOff = {
@@ -2085,37 +2088,45 @@ function Show-SubMenu-HeadsetSessionSettings {
 
     do {
         $saved = Get-HeadsetSessionSettings -HeadsetId $id -NoMemo
-        $dt = Get-HeadsetDoubleTapDisabled -Device $device -Brand $brand
-        $wm = Get-HeadsetWideMotionMode    -Device $device -Brand $brand
-        $gp = Get-HeadsetGuardianPause     -Device $device -Brand $brand
-        $px = [bool]$saved.desired.proxKeepAwake
-        $re = & $onOff ([bool]$saved.reapply)
-        $dtv = if ($null -eq $dt) { @{ Text = $c.SessionUnknown; Color = 'DarkGray' } } elseif ($dt) { @{ Text = $c.SessionDisabled; Color = 'Yellow' } } else { @{ Text = $c.SessionEnabled; Color = 'Green' } }
-        $wmv = & $onOff $wm
-        $gpv = & $onOff $gp
-        $pxv = & $onOff (-not $px)   # On = the sensor works, Off = bypassed (headset stays awake)
-        $sh = Get-HeadsetSharpening -Device $device -Brand $brand
-        $shv = switch ($sh) {
-            'none' { @{ Text = $c.SessionSharpOff;  Color = 'DarkGray' } }
-            'fcas' { @{ Text = $c.SessionSharpFcas; Color = 'Green' } }
-            'mqsr' { @{ Text = $c.SessionSharpMqsr; Color = 'Green' } }
-            'custom' { @{ Text = $c.SessionSharpOther; Color = 'Yellow' } }
-            default { @{ Text = $c.SessionUnknown; Color = 'DarkGray' } }
+        $ka = Get-HeadsetKeepAwake -HeadsetId $id -NoMemo
+        $kav = & $onOff $ka
+        $items = @()
+        if ($sessionOk) {
+            $dt = Get-HeadsetDoubleTapDisabled -Device $device -Brand $brand
+            $wm = Get-HeadsetWideMotionMode    -Device $device -Brand $brand
+            $gp = Get-HeadsetGuardianPause     -Device $device -Brand $brand
+            $re = & $onOff ([bool]$saved.reapply)
+            $dtv = if ($null -eq $dt) { @{ Text = $c.SessionUnknown; Color = 'DarkGray' } } elseif ($dt) { @{ Text = $c.SessionDisabled; Color = 'Yellow' } } else { @{ Text = $c.SessionEnabled; Color = 'Green' } }
+            $wmv = & $onOff $wm
+            $gpv = & $onOff $gp
+            $sh = Get-HeadsetSharpening -Device $device -Brand $brand
+            $shv = switch ($sh) {
+                'none' { @{ Text = $c.SessionSharpOff;  Color = 'DarkGray' } }
+                'fcas' { @{ Text = $c.SessionSharpFcas; Color = 'Green' } }
+                'mqsr' { @{ Text = $c.SessionSharpMqsr; Color = 'Green' } }
+                'custom' { @{ Text = $c.SessionSharpOther; Color = 'Yellow' } }
+                default { @{ Text = $c.SessionUnknown; Color = 'DarkGray' } }
+            }
+            $items += @(
+                @{ Separator = $true; Label = $c.SessionNote },
+                @{ Separator = $true },
+                @{ Key = '1'; Label = $c.SessionReapply;    Value = $re.Text;  ValueColor = $re.Color },
+                @{ Separator = $true },
+                @{ Key = '2'; Label = $c.SessionDoubleTap;  Value = $dtv.Text; ValueColor = $dtv.Color },
+                @{ Key = '3'; Label = $c.SessionWideMotion; Value = $wmv.Text; ValueColor = $wmv.Color },
+                @{ Key = '4'; Label = $c.SessionGuardian;   Value = $gpv.Text; ValueColor = $gpv.Color },
+                @{ Key = '6'; Label = $c.SessionSharpening; Value = $shv.Text; ValueColor = $shv.Color },
+                @{ Separator = $true }
+            )
+        } else {
+            $items += @(@{ Separator = $true; Label = $c.KeepAwakeNoAdb }, @{ Separator = $true })
         }
-        $items = @(
-            @{ Separator = $true; Label = $c.SessionNote },
-            @{ Separator = $true },
-            @{ Key = '1'; Label = $c.SessionReapply;    Value = $re.Text;  ValueColor = $re.Color },
-            @{ Separator = $true },
-            @{ Key = '2'; Label = $c.SessionDoubleTap;  Value = $dtv.Text; ValueColor = $dtv.Color },
-            @{ Key = '3'; Label = $c.SessionWideMotion; Value = $wmv.Text; ValueColor = $wmv.Color },
-            @{ Key = '4'; Label = $c.SessionGuardian;   Value = $gpv.Text; ValueColor = $gpv.Color },
-            @{ Key = '5'; Label = $c.SessionProx;       Value = $pxv.Text; ValueColor = $pxv.Color },
-            @{ Key = '6'; Label = $c.SessionSharpening; Value = $shv.Text; ValueColor = $shv.Color }
-        )
+        # Keep headset awake (T2.1b, default On): replaces the former proximity row (key 5).
+        $items += @{ Key = '7'; Label = $c.KeepAwake; Value = $kav.Text; ValueColor = $kav.Color }
         Write-UiMenu -Title $c.SessionTitle -Subtitle ($c.SessionSubtitle -f $headset.Name) -Items $items -Footer $c.Back -Bg 'DarkBlue'
         $choice = Read-UiKey
         if ($choice -in @('0', 'ESC')) { return }
+        if (-not $sessionOk -and $choice -ne '7') { continue }
 
         $label = $null; $ok = $null; $after = $null
         switch ($choice) {
@@ -2146,12 +2157,20 @@ function Show-SubMenu-HeadsetSessionSettings {
                 if ($ok) { [void](Set-HeadsetSessionSettings -HeadsetId $id -Desired @{ guardianPause = $new }) }
                 $after = $(if ($new) { $c.On } else { $c.Off })
             }
-            '5' {
-                $label = $c.SessionProx
-                $new = -not $px
-                $ok = $(if ($new) { Set-HeadsetProximitySensorOverride -Device $device } else { Set-HeadsetProximitySensorOverride -Device $device -Clear })
-                if ($ok) { [void](Set-HeadsetSessionSettings -HeadsetId $id -Desired @{ proxKeepAwake = $new }) }
-                $after = $(if ($new) { $c.On } else { $c.Off })
+            '7' {
+                $label = $c.KeepAwake
+                $new = -not $ka
+                $kr = Set-HeadsetKeepAwake -Headset $headset -Enabled $new
+                if ($kr.Applied) {
+                    $via = $(if ($kr.Via -eq 'companion') { $c.KeepAwakeViaCompanion } else { $c.KeepAwakeViaAdb })
+                    Write-UiMessage -Text ($c.KeepAwakeDone -f $label, $(if ($new) { $c.On } else { $c.Off }), $via) -Kind ok
+                } elseif ($kr.Ok) {
+                    Write-UiMessage -Text ($c.KeepAwakeSaved -f $kr.Error) -Kind warn
+                } else {
+                    Write-UiMessage -Text $c.SessionFailed -Kind err
+                }
+                $label = $null
+                Wait-UiKey
             }
             '6' {
                 $label = $c.SessionSharpening
