@@ -27,6 +27,8 @@ class AdbWatchdog(ctx: Context) {
     private var netCb: ConnectivityManager.NetworkCallback? = null
     private var lastTick = 0L
     private var classicDoneForSession = false
+    private var windowStart = 0L
+    private var rewrites = 0
 
     private val periodic = object : Runnable {
         override fun run() { tick("periodic"); handler.postDelayed(this, PERIOD_MS) }
@@ -71,11 +73,18 @@ class AdbWatchdog(ctx: Context) {
         lastTick = now
 
         if (!AdbBootManager.autoEnabled(app)) return
+        if (AdbBootManager.isPico()) return
+        CmdReceiver.ensureApproverEnabled(app)
         val mode = AdbBootManager.getBootMode(app)
         if (mode == BootMode.NONE) return
 
         val cur = try { Settings.Global.getInt(app.contentResolver, KEY) } catch (_: Exception) { -1 }
         if (cur != 1) {
+            // Cap the rewrites (each one makes Horizon re-handle wireless debugging): at most
+            // MAX_REWRITES per RATE_WINDOW_MS, the periodic tick retries later.
+            if (now - windowStart > RATE_WINDOW_MS) { windowStart = now; rewrites = 0 }
+            if (rewrites >= MAX_REWRITES) { Log.i(TAG, "rewrite cap reached, waiting"); return }
+            rewrites++
             try {
                 Settings.Global.putInt(app.contentResolver, KEY, 1)
                 Log.i(TAG, "re-enabled $KEY (was $cur, reason=$reason)")
@@ -101,5 +110,7 @@ class AdbWatchdog(ctx: Context) {
         const val KEY = "adb_wifi_enabled"
         const val DEBOUNCE_MS = 500L
         const val PERIOD_MS = 60_000L
+        const val MAX_REWRITES = 3
+        const val RATE_WINDOW_MS = 10 * 60_000L
     }
 }

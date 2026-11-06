@@ -587,7 +587,6 @@ function Initialize-SandboxConfig {
     $config.WebServer.openBrowserOnStartup = $false
     $config.VRMonitor.refresh_timer        = 5
     $config.Logging.debugLevelToFile       = 'DEBUG'   # max verbosity - see the log block below
-    $config.Logging.debugLevelToConsole    = 'ERROR'
     $config.scrcpy.recordFolder            = $paths.RecordFolder
     $config.ComputerMonitoring.refresh_timer_sec = 15
     # Every log at DEBUG (operator standing rule): a test run exists to be analysed, and a

@@ -443,6 +443,20 @@ function Invoke-RouteHeadsetSettings {
         $rows    = Get-KnownHeadsetsCached
         $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
         if (-not $headset) { throw "Headset not found" }
+        # Info source (ADR-0043) first: needs no ADB, so the page learns it even when ADB is down.
+        $infoSrc = 'default'
+        try { if (Get-Command Get-HeadsetInfoSource -ErrorAction SilentlyContinue) { $infoSrc = Get-HeadsetInfoSource -HeadsetId ([int]$headset.ID) } } catch {}
+        $infoSrcGlobal = if ($global:ADB_info_source) { [string]$global:ADB_info_source } else { 'companion' }
+        # Whether the VRHM Companion app is installed on this headset (installed-apps cache, no ADB).
+        $ci = $false
+        try {
+            $cpk = [string]$global:CompanionPackageName
+            if ($cpk -and (Get-Command Get-HeadsetInstalledAppsCached -ErrorAction SilentlyContinue)) {
+                $ci = @(Get-HeadsetInstalledAppsCached -headsetName ([string]$headset.Name) | Where-Object { [string]$_.PackageName -eq $cpk }).Count -gt 0
+            }
+        } catch {}
+
+        try {
         $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort -adb $adbPath
         if (-not $device) { throw "Could not connect to headset via ADB" }
 
@@ -477,20 +491,16 @@ function Invoke-RouteHeadsetSettings {
             refreshRate      = $refreshRate
             refreshRates     = @(Get-HeadsetRefreshRateChoices)
             # Info source (ADR-0043): the per-headset override and the fleet default.
-            infoSource       = $(if (Get-Command Get-HeadsetInfoSource -ErrorAction SilentlyContinue) { Get-HeadsetInfoSource -HeadsetId ([int]$headset.ID) } else { 'default' })
-            infoSourceGlobal = $(if ($global:ADB_info_source) { [string]$global:ADB_info_source } else { 'adb' })
-            # Whether the VRHM Companion app is installed on this headset (from the installed-apps
-            # cache, no ADB): the UI defaults the info source to Companion when it is, else ADB.
-            companionInstalled = $(
-                $ci = $false
-                try {
-                    $cpk = [string]$global:CompanionPackageName
-                    if ($cpk -and (Get-Command Get-HeadsetInstalledAppsCached -ErrorAction SilentlyContinue)) {
-                        $ci = @(Get-HeadsetInstalledAppsCached -headsetName ([string]$headset.Name) | Where-Object { [string]$_.PackageName -eq $cpk }).Count -gt 0
-                    }
-                } catch {}
-                $ci
-            )
+            infoSource       = $infoSrc
+            infoSourceGlobal = $infoSrcGlobal
+            companionInstalled = $ci
+        }
+        } catch {
+            # ADB part failed: still return the info source fields (no ADB needed for them).
+            Send-JsonResponse -Response $response -StatusCode 500 -Body @{
+                ok = $false; error = $_.Exception.Message
+                infoSource = $infoSrc; infoSourceGlobal = $infoSrcGlobal; companionInstalled = $ci
+            }
         }
     } catch {
         Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
@@ -577,10 +587,23 @@ function Invoke-RouteCompanionSettings {
         if (-not $headset) { throw "Headset not found" }
 
         $bodyRaw = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
-        $json = $bodyRaw | ConvertFrom-Json
+        $in = $bodyRaw | ConvertFrom-Json
+        # Forward only the known fields.
+        $fwd = [ordered]@{}
+        foreach ($k in @('auto_adb_wifi', 'brightness', 'report_url', 'report_interval_sec')) {
+            $p = $in.PSObject.Properties[$k]
+            if ($p -and $null -ne $p.Value) { $fwd[$k] = $p.Value }
+        }
+        $fwdJson = $fwd | ConvertTo-Json -Compress
 
-        $url  = "http://$($headset.IPAddress):8765/settings"
-        $resp2 = Invoke-RestMethod -Uri $url -Method POST -Body $bodyRaw `
+        $port = 8765
+        try {
+            $info = Get-CompanionInfo -IP ([string]$headset.IPAddress)
+            if ($info -and $info.PSObject.Properties['port'] -and [int]$info.port -gt 0) { $port = [int]$info.port }
+        } catch { $port = 8765 }
+        $url  = "http://$($headset.IPAddress):$port/settings"
+        $hdrs = Get-CompanionHttpHeaders -Token (Get-CompanionToken)
+        $resp2 = Invoke-RestMethod -Uri $url -Method POST -Body $fwdJson -Headers $hdrs `
                      -ContentType "application/json" -TimeoutSec 3 -ErrorAction Stop
         Send-JsonResponse -Response $response -Body @{ ok = [bool]$resp2.ok }
     } catch {

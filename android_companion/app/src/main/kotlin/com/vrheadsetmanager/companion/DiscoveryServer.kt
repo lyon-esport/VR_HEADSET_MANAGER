@@ -52,7 +52,9 @@ class DiscoveryServer(private val context: Context, private val port: Int) {
                     } catch (_: java.net.SocketTimeoutException) { /* idle tick */ }
                 }
             } catch (e: Exception) {
-                if (running) Thread.sleep(3000)
+                if (running) {
+                    try { Thread.sleep(3000) } catch (_: InterruptedException) { if (!running) return }
+                }
             } finally {
                 socket?.close()
             }
@@ -64,9 +66,10 @@ class DiscoveryServer(private val context: Context, private val port: Int) {
             val json = JsonParser.parseString(message).asJsonObject
             if (json.get("type")?.asString != "VRHM_DISCOVER") return
 
-            val prefs = context.getSharedPreferences(BootReceiver.PREFS_NAME, Context.MODE_PRIVATE)
+            val prefs = SelfAdb.dpCtx(context.applicationContext)
+                .getSharedPreferences(BootReceiver.PREFS_NAME, Context.MODE_PRIVATE)
             val autoAdb = prefs.getBoolean(BootReceiver.PREF_AUTO_ADB, true)
-            val adbEnabled = Settings.Secure.getInt(context.contentResolver, "adb_wifi_enabled", 0) == 1
+            val adbEnabled = Settings.Global.getInt(context.contentResolver, "adb_wifi_enabled", 0) == 1
 
             val ipInt = (context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager)
                 .connectionInfo.ipAddress
@@ -74,13 +77,14 @@ class DiscoveryServer(private val context: Context, private val port: Int) {
 
             val reply = gson.toJson(mapOf(
                 "type"             to "VRHM_COMPANION",
-                "serial"           to DeviceInfo.getSerial(),
+                "serial"           to DeviceInfo.getSerial(context),
                 "model"            to Build.MODEL,
                 "ip"               to ip,
                 "companion_port"   to CompanionService.HTTP_PORT,
                 "auto_adb_wifi"    to autoAdb,
                 "adb_wifi_enabled" to adbEnabled,
-                "version"          to "1.0"
+                "version"          to BuildConfig.VERSION_NAME,
+                "versionCode"      to BuildConfig.VERSION_CODE
             ))
 
             val replyBytes = reply.toByteArray(Charsets.UTF_8)

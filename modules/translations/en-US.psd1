@@ -967,6 +967,19 @@
         InstallFailed  = "VRHM Companion install failed: {0}"
         InstallNoUsb   = "No USB headset detected. Connect a headset over USB first."
         Installing     = "Installing the VRHM Companion on {0}..."
+        NoUsb          = "No USB headset detected"
+        ApkNotFound    = "VRHM Companion APK not found at {0}"
+        InvalidPackage = "Invalid package name: {0}"
+        InstallStepFailed = "install failed: {0}"
+        UninstallRefused  = "Refused: {0} is not a managed headset ADB tool"
+        ModeForcedClassic = "ADB over TLS is not supported on this brand: CLASSIC mode used"
+        SkippedWifiTarget = "skipped (WiFi target)"
+        NotVerified    = "not verified"
+        StepFailed     = "failed"
+        StepProvisioned = "provisioned"
+        StepRequested  = "requested"
+        StepKeys       = "{0} key(s)"
+        NoAdbKey       = "no adb key fingerprint (run the adb server once)"
     }
 
     # Application update (console Config > U, web Updates accordion; spec S12 / S13).

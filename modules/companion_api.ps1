@@ -7,6 +7,17 @@
 ###############################################################
 
 
+# Operator text from the nested $msg.Companion group, with a literal English fallback for runspaces
+# that never loaded the translations. Example: Get-CompanionText -Key 'NoUsb' -Fallback 'No USB headset detected'
+function Get-CompanionText {
+    param([Parameter(Mandatory)][string]$Key, [string]$Fallback = '')
+    $t = ''
+    try { $t = [string](Get-MessageString -Key ("Companion.{0}" -f $Key) -Fallback '') } catch { $t = '' }
+    if (-not $t -or $t -eq ("Companion.{0}" -f $Key)) { $t = $Fallback }
+    return $t
+}
+
+
 function Get-CompanionInfo {
     <#
     .SYNOPSIS
@@ -23,11 +34,13 @@ function Get-CompanionInfo {
         [Parameter(Mandatory)]
         [string]$IP,
         [int]$CompanionPort = 8765,
-        [int]$TimeoutSec    = 2
+        [int]$TimeoutSec    = 2,
+        [string]$Token      = ''
     )
     try {
+        if (-not $Token) { $Token = Get-CompanionToken }
         $url  = "http://${IP}:${CompanionPort}/info"
-        $resp = Invoke-RestMethod -Uri $url -Method GET -TimeoutSec $TimeoutSec -ErrorAction Stop
+        $resp = Invoke-RestMethod -Uri $url -Method GET -Headers (Get-CompanionHttpHeaders -Token $Token) -TimeoutSec $TimeoutSec -ErrorAction Stop
         return $resp
     } catch {
         Write-Log "Get-CompanionInfo $IP :${CompanionPort} unreachable: $_" -Level DEBUG
@@ -53,12 +66,14 @@ function Set-CompanionAutoAdb {
         [string]$IP,
         [Parameter(Mandatory)]
         [bool]$Enabled,
-        [int]$CompanionPort = 8765
+        [int]$CompanionPort = 8765,
+        [string]$Token = ''
     )
     try {
+        if (-not $Token) { $Token = Get-CompanionToken }
         $body = ConvertTo-Json -Compress @{ auto_adb_wifi = $Enabled }
         $url  = "http://${IP}:${CompanionPort}/settings"
-        $resp = Invoke-RestMethod -Uri $url -Method POST -Body $body `
+        $resp = Invoke-RestMethod -Uri $url -Method POST -Body $body -Headers (Get-CompanionHttpHeaders -Token $Token) `
                     -ContentType "application/json" -TimeoutSec 3 -ErrorAction Stop
         if ($resp.ok) {
             Write-Log "Set-CompanionAutoAdb $IP -> auto_adb_wifi=$Enabled" -Level DEBUG
@@ -99,11 +114,13 @@ function Get-CompanionStatus {
     param(
         [Parameter(Mandatory)][string]$IP,
         [int]$CompanionPort = 8765,
-        [int]$TimeoutSec    = 2
+        [int]$TimeoutSec    = 2,
+        [string]$Token      = ''
     )
     try {
+        if (-not $Token) { $Token = Get-CompanionToken }
         $url = "http://${IP}:${CompanionPort}/status"
-        return Invoke-RestMethod -Uri $url -Method GET -Headers (Get-CompanionHttpHeaders) -TimeoutSec $TimeoutSec -ErrorAction Stop
+        return Invoke-RestMethod -Uri $url -Method GET -Headers (Get-CompanionHttpHeaders -Token $Token) -TimeoutSec $TimeoutSec -ErrorAction Stop
     } catch {
         Write-Log "Get-CompanionStatus $IP :${CompanionPort} unreachable: $_" -Level DEBUG
         return $null
@@ -119,11 +136,13 @@ function Get-CompanionKey {
     param(
         [Parameter(Mandatory)][string]$IP,
         [int]$CompanionPort = 8765,
-        [int]$TimeoutSec    = 2
+        [int]$TimeoutSec    = 2,
+        [string]$Token      = ''
     )
     try {
+        if (-not $Token) { $Token = Get-CompanionToken }
         $url  = "http://${IP}:${CompanionPort}/key"
-        $resp = Invoke-RestMethod -Uri $url -Method GET -Headers (Get-CompanionHttpHeaders) -TimeoutSec $TimeoutSec -ErrorAction Stop
+        $resp = Invoke-RestMethod -Uri $url -Method GET -Headers (Get-CompanionHttpHeaders -Token $Token) -TimeoutSec $TimeoutSec -ErrorAction Stop
         if ($resp.ok) { return [string]$resp.fingerprint }
         return $null
     } catch {
@@ -278,12 +297,14 @@ function Set-HeadsetBrightnessCompanion {
         [Parameter(Mandatory)]
         [ValidateRange(0, 100)]
         [int]$Percent,
-        [int]$CompanionPort = 8765
+        [int]$CompanionPort = 8765,
+        [string]$Token = ''
     )
     try {
+        if (-not $Token) { $Token = Get-CompanionToken }
         $body = ConvertTo-Json -Compress @{ brightness = $Percent }
         $url  = "http://${IP}:${CompanionPort}/settings"
-        $resp = Invoke-RestMethod -Uri $url -Method POST -Body $body `
+        $resp = Invoke-RestMethod -Uri $url -Method POST -Body $body -Headers (Get-CompanionHttpHeaders -Token $Token) `
                     -ContentType "application/json" -TimeoutSec 3 -ErrorAction Stop
         return [bool]$resp.ok
     } catch {
@@ -351,8 +372,14 @@ function Invoke-CompanionCmd {
     $pkg = $global:CompanionPackageName
     $amArgs = "am broadcast -a $pkg.CMD -n $pkg/.CmdReceiver --es cmd $Cmd"
     if ($Extra.Count -gt 0) { $amArgs += ' ' + ($Extra -join ' ') }
-    $r = Invoke-AdbCmd -Device $Device -Command $amArgs -ShellScript -adb $adb -SilentOnFail
-    return ($r -ne $false)
+    try {
+        $r = Invoke-AdbCmd -Device $Device -Command $amArgs -ShellScript -adb $adb -SilentOnFail
+    } catch { return $false }
+    if ($r -eq $false -or $null -eq $r) { return $false }
+    $text = (@($r) | ForEach-Object { [string]$_ }) -join "`n"
+    if ($text -notmatch 'Broadcast completed') { return $false }
+    if ($text -match 'Error|Exception|No receiver') { return $false }
+    return $true
 }
 
 
@@ -422,7 +449,7 @@ function Uninstall-HeadsetAdbTool {
         [string]$adb = $global:adbPath
     )
     if ($Pkg -ne $global:CompanionPackageName -and $Pkg -ne $global:ADBAutoEnablePackageName) {
-        return @{ Ok = $false; Error = "Refused: $Pkg is not a managed headset ADB tool" }
+        return @{ Ok = $false; Error = ((Get-CompanionText -Key 'UninstallRefused' -Fallback 'Refused: {0} is not a managed headset ADB tool') -f $Pkg) }
     }
     try {
         $out = Invoke-AdbCmd -Device $Device -Command "uninstall $Pkg" -TimeoutSeconds 60 -adb $adb
@@ -449,7 +476,10 @@ function Install-VrhmCompanion {
     .PARAMETER Device
     A resolved USB ADB device object (Get-AdbUsbDeviceDetails). Resolved if omitted.
     .PARAMETER Mode
-    Boot ADB mode to set: 'TLS' (default) or 'CLASSIC'.
+    Boot ADB mode to set: 'TLS' or 'CLASSIC'. When omitted: the effective preferred WiFi mode
+    (Get-AdbWifiPreferredMode, fallback TLS). A brand without ADB-over-TLS (Pico) is forced to CLASSIC.
+    .PARAMETER ResetAllowlist
+    Empty the companion's auto-approve allowlist (trust_clear) before adding keys. Without it keys are only added.
     .PARAMETER ClassicPort
     Classic port for CLASSIC mode (default from Get-ClassicAdbPort).
     .PARAMETER AutoApprove
@@ -464,9 +494,10 @@ function Install-VrhmCompanion {
     #>
     param(
         [PSCustomObject]$Device = $null,
-        [ValidateSet('TLS','CLASSIC')][string]$Mode = 'TLS',
+        [ValidateSet('TLS','CLASSIC')][string]$Mode,
         [int]$ClassicPort = 0,
         [switch]$AutoApprove,
+        [switch]$ResetAllowlist,
         [string]$Token = '',
         [string[]]$TrustedFingerprints = @(),
         [string]$adb = $global:adbPath
@@ -496,14 +527,14 @@ function Install-VrhmCompanion {
         $result.Error = ($msg.ADBNotFound -f $global:adbFolder); Write-Log $result.Error -Level ERROR; return $result
     }
     if (-not $apkPath -or -not (Test-Path -LiteralPath $apkPath)) {
-        $result.Error = "VRHM Companion APK not found at $apkPath"; Write-Log $result.Error -Level ERROR; return $result
+        $result.Error = ((Get-CompanionText -Key 'ApkNotFound' -Fallback 'VRHM Companion APK not found at {0}') -f $apkPath); Write-Log $result.Error -Level ERROR; return $result
     }
     if ($pkg -notmatch '^[A-Za-z0-9._]+$') {
-        $result.Error = "Invalid package name: $pkg"; Write-Log $result.Error -Level ERROR; return $result
+        $result.Error = ((Get-CompanionText -Key 'InvalidPackage' -Fallback 'Invalid package name: {0}') -f $pkg); Write-Log $result.Error -Level ERROR; return $result
     }
     if (-not $Device) {
         $Device = Get-AdbUsbDevice -adb $adb
-        if (-not $Device) { $result.Error = 'No USB headset detected'; Write-Log $result.Error -Level WARNING; return $result }
+        if (-not $Device) { $result.Error = (Get-CompanionText -Key 'NoUsb' -Fallback 'No USB headset detected'); Write-Log $result.Error -Level WARNING; return $result }
     }
 
     if (-not $ClassicPort) { $ClassicPort = Get-ClassicAdbPort }
@@ -512,7 +543,36 @@ function Install-VrhmCompanion {
     if (-not $Token) { $Token = Get-CompanionToken }
     $result.Token = $Token
 
+    # Mode: explicit, else the effective preferred WiFi mode, else TLS. No TLS on a Pico (ADR-0038).
+    $modeNote = ''
+    if (-not $Mode) {
+        $Mode = 'TLS'
+        try {
+            if (Get-Command Get-AdbWifiPreferredMode -ErrorAction SilentlyContinue) {
+                $pm = [string](Get-AdbWifiPreferredMode)
+                if ($pm -eq 'Classic') { $Mode = 'CLASSIC' }
+            }
+        } catch { $Mode = 'TLS' }
+    }
+    $devBrand = ''
+    try { if ($Device.PSObject.Properties['Brand']) { $devBrand = [string]$Device.Brand } } catch { $devBrand = '' }
+    if (-not $devBrand -and (Get-Command Get-HeadsetBrandModel -ErrorAction SilentlyContinue)) {
+        try {
+            $bm = Get-HeadsetBrandModel -Device $Device -adb $adb
+            if ($bm -and $bm.Brand) { $devBrand = [string]$bm.Brand }
+        } catch { $devBrand = '' }
+    }
+    $tlsOk = $true
+    try { if (Get-Command Test-HeadsetAdbTlsSupported -ErrorAction SilentlyContinue) { $tlsOk = [bool](Test-HeadsetAdbTlsSupported -Brand $devBrand) } } catch { $tlsOk = $true }
+    if (-not $tlsOk -and $Mode -eq 'TLS') {
+        $Mode = 'CLASSIC'
+        $modeNote = (Get-CompanionText -Key 'ModeForcedClassic' -Fallback 'ADB over TLS is not supported on this brand: CLASSIC mode used')
+    }
+    $isUsbTarget = $false
+    try { $isUsbTarget = [bool](Test-AdbDeviceIdIsUsb -Id ([string]$Device.DeviceId)) } catch { $isUsbTarget = $false }
+
     Write-Log "Installing VRHM Companion on $($Device.DeviceId)" -Level INFO
+    if ($modeNote) { & $addStep 'mode forced' $true $modeNote }
 
     # a. install / reinstall
     try {
@@ -522,7 +582,12 @@ function Install-VrhmCompanion {
         $okInstall = ($out -ne $false) -and [bool](@($out) -match 'Success')
         & $addStep 'install' $okInstall $(if ($okInstall) { if ($result.Reinstalled) { 'reinstalled' } else { 'installed' } } else { (@($out) -join ' ') })
     } catch { & $addStep 'install' $false $_.Exception.Message }
-    if (-not $steps[0].Ok) { $result.Steps = @($steps); $result.Error = "install failed: $($steps[0].Detail)"; return $result }
+    $installStep = @($steps | Where-Object { $_.Name -eq 'install' })[0]
+    if (-not $installStep -or -not $installStep.Ok) {
+        $result.Steps = @($steps)
+        $result.Error = ((Get-CompanionText -Key 'InstallStepFailed' -Fallback 'install failed: {0}') -f $(if ($installStep) { $installStep.Detail } else { '?' }))
+        return $result
+    }
 
     # b. permissions
     foreach ($perm in 'WRITE_SECURE_SETTINGS', 'POST_NOTIFICATIONS') {
@@ -551,44 +616,75 @@ function Install-VrhmCompanion {
         & $addStep 'accessibility' $did $detail
     } catch { & $addStep 'accessibility' $false $_.Exception.Message }
 
+    # Runs one companion broadcast; a throw counts as failure. Returns a strict bool.
+    $cmd = {
+        param([string]$Cmd, [string[]]$Extra = @())
+        try { return [bool](Invoke-CompanionCmd -Device $Device -Cmd $Cmd -Extra $Extra -adb $adb) } catch { return $false }
+    }
+    $failTxt = Get-CompanionText -Key 'StepFailed' -Fallback 'failed'
+
     # d. provision token (over the trusted ADB channel, never first over HTTP)
-    & $addStep 'token' (Invoke-CompanionCmd -Device $Device -Cmd 'settoken' -Extra @('--es','token',$Token) -adb $adb) 'provisioned'
+    $okTok = & $cmd 'settoken' @('--es','token',$Token)
+    & $addStep 'token' $okTok $(if ($okTok) { Get-CompanionText -Key 'StepProvisioned' -Fallback 'provisioned' } else { $failTxt })
 
     # e. allowlist this PC's adb key (+ any extra keys) for auto-approve
-    $fp = Get-VrhmAdbKeyFingerprint
+    $fp = $null
+    try { $fp = Get-VrhmAdbKeyFingerprint } catch { $fp = $null }
     $result.Fingerprint = [string]$fp
     $allKeys = @(); if ($fp) { $allKeys += $fp }; $allKeys += @($TrustedFingerprints | Where-Object { $_ })
     if ($allKeys.Count -gt 0) {
         $okTrust = $true
-        $okTrust = $okTrust -and (Invoke-CompanionCmd -Device $Device -Cmd 'trust_clear' -adb $adb)
-        foreach ($k in $allKeys) { $okTrust = $okTrust -and (Invoke-CompanionCmd -Device $Device -Cmd 'trust_add' -Extra @('--es','fp',$k) -adb $adb) }
-        & $addStep 'allowlist' $okTrust "$($allKeys.Count) key(s)"
+        if ($ResetAllowlist) { $okTrust = $okTrust -and (& $cmd 'trust_clear') }
+        foreach ($k in $allKeys) { $okTrust = $okTrust -and (& $cmd 'trust_add' @('--es','fp',$k)) }
+        & $addStep 'allowlist' $okTrust $(if ($okTrust) { ((Get-CompanionText -Key 'StepKeys' -Fallback '{0} key(s)') -f $allKeys.Count) } else { $failTxt })
     } else {
-        & $addStep 'allowlist' $false 'no adb key fingerprint (run the adb server once)'
+        & $addStep 'allowlist' $false (Get-CompanionText -Key 'NoAdbKey' -Fallback 'no adb key fingerprint (run the adb server once)')
     }
 
     # f. mode + optional auto-approve
-    $okPort = Invoke-CompanionCmd -Device $Device -Cmd 'setport' -Extra @('--ei','port',"$ClassicPort") -adb $adb
-    $okMode = Invoke-CompanionCmd -Device $Device -Cmd 'setmode' -Extra @('--es','mode',$Mode) -adb $adb
-    & $addStep 'mode' ($okPort -and $okMode) "$Mode (port $ClassicPort)"
+    $okPort = & $cmd 'setport' @('--ei','port',"$ClassicPort")
+    $okMode = & $cmd 'setmode' @('--es','mode',$Mode)
+    & $addStep 'mode' ($okPort -and $okMode) $(if ($okPort -and $okMode) { "$Mode (port $ClassicPort)" } else { $failTxt })
     if ($AutoApprove) {
-        & $addStep 'auto-approve' (Invoke-CompanionCmd -Device $Device -Cmd 'approve_on' -adb $adb) 'on'
+        $okAp = & $cmd 'approve_on'
+        & $addStep 'auto-approve' $okAp $(if ($okAp) { 'on' } else { $failTxt })
     }
 
     # g. enable its accessibility service to actually bind, and start the app once
-    & $addStep 'a11y bind' (Invoke-CompanionCmd -Device $Device -Cmd 'a11y_on' -adb $adb) 'requested'
+    $okA11y = & $cmd 'a11y_on'
+    & $addStep 'a11y bind' $okA11y $(if ($okA11y) { Get-CompanionText -Key 'StepRequested' -Fallback 'requested' } else { $failTxt })
     try {
         $r = Invoke-AdbCmd -Device $Device -Command "am start -n `"$pkg/.MainActivity`"" -ShellScript -adb $adb
         & $addStep 'start' ($r -ne $false) $(if ($r -ne $false) { 'started' } else { 'am start failed' })
     } catch { & $addStep 'start' $false $_.Exception.Message }
 
-    # h. CLASSIC: open tcpip now (usable without waiting for a reboot). tcpip drops USB for seconds.
+    # h. CLASSIC: open tcpip now (usable without waiting for a reboot). tcpip drops USB for seconds,
+    # so it is only fired on a USB target.
     if ($Mode -eq 'CLASSIC') {
-        & $addStep 'classic tcpip' (Invoke-CompanionCmd -Device $Device -Cmd 'forceclassic' -adb $adb) "port $ClassicPort"
+        if ($isUsbTarget) {
+            $okTcp = & $cmd 'forceclassic'
+            & $addStep 'classic tcpip' $okTcp $(if ($okTcp) { "port $ClassicPort" } else { $failTxt })
+        } else {
+            & $addStep 'classic tcpip' $true (Get-CompanionText -Key 'SkippedWifiTarget' -Fallback 'skipped (WiFi target)')
+        }
     }
+
+    # i. verify over HTTP when the headset address is known (best effort, never fails the install)
+    $verifyIp = ''
+    try { if ($Device.PSObject.Properties['IP'] -and $Device.IP) { $verifyIp = [string]$Device.IP } } catch { $verifyIp = '' }
+    $verified = $false
+    if ($verifyIp -and -not (Test-UnknownIp -IPAddress $verifyIp)) {
+        try {
+            Start-Sleep -Milliseconds 1500
+            $st = Get-CompanionStatus -IP $verifyIp -Token $Token
+            if ($st) { $verified = $true; & $addStep 'verify' ([bool]$st.tokenSet) ("bootMode={0} tokenSet={1}" -f $st.bootMode, $st.tokenSet) }
+        } catch { $verified = $false }
+    }
+    if (-not $verified) { & $addStep 'verify' $true (Get-CompanionText -Key 'NotVerified' -Fallback 'not verified') }
 
     $result.Steps = @($steps)
     $failed = @($steps | Where-Object { -not $_.Ok })
+    $result.Mode = $Mode
     $result.Ok = ($failed.Count -eq 0)
     if ($result.Ok) { Write-Log 'VRHM Companion installed and provisioned' -Level SUCCESS }
     else { $result.Error = ('steps failed: ' + (($failed | ForEach-Object { $_.Name }) -join ', ')) }
@@ -693,8 +789,13 @@ function Get-CompanionToken {
         $raw = Get-DbKeyValue -Key 'companion_token'
         if ($raw -and $raw.token) { $tok = [string]$raw.token }
         if (-not $tok) {
-            $tok = [Guid]::NewGuid().ToString('N')
-            Set-DbKeyValue -Key 'companion_token' -Value ([PSCustomObject]@{ token = $tok; at = [datetime]::UtcNow.ToString('o') })
+            # Race-safe: insert only when absent (kv.insert_if_absent), then ALWAYS re-read the stored
+            # value so two runspaces creating at once end up with the same token.
+            $cand = [Guid]::NewGuid().ToString('N')
+            $json = ([PSCustomObject]@{ token = $cand; at = [datetime]::UtcNow.ToString('o') } | ConvertTo-Json -Compress)
+            Invoke-DbNonQuery -Name 'kv.insert_if_absent' -Parameters @{ key = 'companion_token'; value_json = $json } | Out-Null
+            $raw = Get-DbKeyValue -Key 'companion_token'
+            if ($raw -and $raw.token) { $tok = [string]$raw.token } else { $tok = $cand }
         }
     } catch {
         if (-not $tok) { $tok = [Guid]::NewGuid().ToString('N') }
@@ -720,15 +821,32 @@ function Set-CompanionReportTarget {
     if ($IntervalSec -le 0) { $IntervalSec = if ($global:Companion_report_interval_sec) { [int]$global:Companion_report_interval_sec } else { 1 } }
     if (-not $script:CompanionReportMemo) { $script:CompanionReportMemo = @{} }
     $sig = "$ReportUrl|$IntervalSec"
-    if (-not $Force -and $script:CompanionReportMemo[$IP] -eq $sig) { return $true }
+    $now = [datetime]::UtcNow
+    # Memo per IP: Sig (last signature pushed OK), CheckAt (last /status check), FailAt / FailSec (back-off).
+    $m = $script:CompanionReportMemo[$IP]
+    if (-not $m) { $m = @{ Sig = ''; CheckAt = [datetime]::MinValue; FailAt = [datetime]::MinValue; FailSec = 0 }; $script:CompanionReportMemo[$IP] = $m }
+    if (-not $Force -and $m.FailSec -gt 0 -and ($now - $m.FailAt).TotalSeconds -lt $m.FailSec) { return $false }
+    if (-not $Force -and $m.Sig -eq $sig) {
+        # Same target as last push: trust it, but at most every 5 min confirm with GET /status.
+        if (($now - $m.CheckAt).TotalSeconds -lt 300) { return $true }
+        $m.CheckAt = $now
+        $st = $null
+        try { $st = Get-CompanionStatus -IP $IP -CompanionPort $CompanionPort } catch { $st = $null }
+        if (-not $st) { return $true }                      # unreachable: nothing to repair now
+        if ($st.PSObject.Properties['reportUrl'] -and ([string]$st.reportUrl -eq $ReportUrl)) { return $true }
+        if (-not $st.PSObject.Properties['reportUrl']) { return $true }   # older app: cannot tell
+        Write-Log "Set-CompanionReportTarget ${IP}: stored report url differs, re-pushing" -Level DEBUG
+    }
     try {
         $body = @{ report_url = $ReportUrl; report_interval_sec = $IntervalSec }
         $r = Invoke-CompanionPost -IP $IP -Path '/settings' -Body $body -Token (Get-CompanionToken) -CompanionPort $CompanionPort
         if ($r -and $r.ok) {
-            $script:CompanionReportMemo[$IP] = $sig
+            $m.Sig = $sig; $m.CheckAt = $now; $m.FailSec = 0
             Write-Log "Set-CompanionReportTarget $IP -> $ReportUrl (every ${IntervalSec}s)" -Level DEBUG
             return $true
         }
+        $m.FailAt = $now
+        $m.FailSec = if ($m.FailSec -le 0) { 60 } else { [Math]::Min(600, $m.FailSec * 2) }
         return $false
     } catch {
         Write-Log "Set-CompanionReportTarget $IP failed: $_" -Level DEBUG
@@ -801,6 +919,10 @@ function Get-CompanionTelemetry {
         $script:CompanionTelemetryMemo[$HeadsetId] = @{ At = [datetime]::UtcNow; Val = $val }
     }
     if (-not $val -or -not $val.at) { return $null }
+    # A keepalive-only document (no measurement) must not count as fresh.
+    $hasValue = $false
+    foreach ($k in $script:CompanionTelemetryFields) { if ($null -ne $val.$k) { $hasValue = $true; break } }
+    if (-not $hasValue) { return $null }
     try {
         $age = ([datetime]::UtcNow - ([datetime]::Parse($val.at, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal))).TotalSeconds
         if ($age -gt $MaxAgeSec) { return $null }

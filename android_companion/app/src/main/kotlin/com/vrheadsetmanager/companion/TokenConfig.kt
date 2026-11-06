@@ -11,7 +11,13 @@ object TokenConfig {
         SelfAdb.dpCtx(ctx.applicationContext).getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     fun token(ctx: Context): String? = prefs(ctx).getString(KEY, null)?.takeIf { it.isNotBlank() }
-    fun setToken(ctx: Context, token: String) { prefs(ctx).edit().putString(KEY, token).apply() }
+    /** Stores the token; refuses a blank/whitespace one (would leave the API unprotected). */
+    fun setToken(ctx: Context, token: String?): Boolean {
+        val t = token?.trim() ?: return false
+        if (t.isEmpty()) return false
+        prefs(ctx).edit().putString(KEY, t).apply()
+        return true
+    }
     fun clearToken(ctx: Context) { prefs(ctx).edit().remove(KEY).apply() }
     fun hasToken(ctx: Context): Boolean = token(ctx) != null
 

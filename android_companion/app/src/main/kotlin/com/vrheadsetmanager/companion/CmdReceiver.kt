@@ -15,6 +15,11 @@ import com.google.gson.Gson
  * Commands: status | key | setmode NONE|CLASSIC|TLS (--es mode) | setport (--ei port)
  *           forceclassic | forcetls | approve_on | approve_off | trust_add (--es fp) | trust_clear
  * Results are logged to tag VRHMCmd.
+ *
+ * Access: the manifest guards this receiver with android:permission="android.permission.DUMP".
+ * DUMP is signature|privileged|development: the adb shell user (uid 2000) holds it, root bypasses
+ * permission checks, and no ordinary installed app can obtain it, so only `adb shell am broadcast`
+ * (or root) reaches these commands. It stays exported so the explicit -n broadcast still works.
  */
 class CmdReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -35,26 +40,41 @@ class CmdReceiver : BroadcastReceiver() {
             "approve_off" -> { ApproveConfig.setAutoApprove(ctx, false); Log.i(TAG, "approve OFF") }
             "trust_add" -> { intent.getStringExtra("fp")?.let { ApproveConfig.addTrusted(ctx, it) }; Log.i(TAG, "trust now=" + ApproveConfig.trustedFingerprints(ctx)) }
             "trust_clear" -> { ApproveConfig.clearTrusted(ctx); Log.i(TAG, "trust cleared") }
-            "settoken" -> { intent.getStringExtra("token")?.let { TokenConfig.setToken(ctx, it) }; Log.i(TAG, "settoken done") }
+            "settoken" -> {
+                if (TokenConfig.setToken(ctx, intent.getStringExtra("token"))) Log.i(TAG, "settoken done")
+                else Log.w(TAG, "settoken refused: blank or missing token")
+            }
             "cleartoken" -> { TokenConfig.clearToken(ctx); Log.i(TAG, "cleartoken done") }
             "a11y_on" -> { enableSelfA11y(ctx) }
             else -> Log.i(TAG, "unknown cmd $cmd")
         }
     }
 
-    /** Self-enable the approver accessibility service (needs WRITE_SECURE_SETTINGS); no reboot/toggle. */
-    private fun enableSelfA11y(ctx: Context) {
-        val svc = ctx.packageName + "/" + ApproveService::class.java.name
-        try {
-            val cur = Settings.Secure.getString(ctx.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: ""
-            if (!cur.split(":").any { it.equals(svc, ignoreCase = true) }) {
-                val next = if (cur.isBlank()) svc else "$cur:$svc"
-                Settings.Secure.putString(ctx.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, next)
-            }
-            Settings.Secure.putInt(ctx.contentResolver, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
-            Log.i(TAG, "a11y self-enabled: $svc")
-        } catch (e: Exception) { Log.i(TAG, "a11y self-enable failed: ${e.message}") }
-    }
+    private fun enableSelfA11y(ctx: Context) { ensureApproverEnabled(ctx, force = true) }
 
-    companion object { const val TAG = "VRHMCmd" }
+    companion object {
+        const val TAG = "VRHMCmd"
+
+        /**
+         * Makes sure the approver accessibility service is enabled (needs WRITE_SECURE_SETTINGS).
+         * An app update or a Horizon reset can leave it off, which silently disables every auto-approve.
+         * Cheap when already enabled (one settings read, no write, no log) so it can run on every
+         * service start and watchdog tick. `force` logs even when nothing had to be changed.
+         */
+        fun ensureApproverEnabled(ctx: Context, force: Boolean = false) {
+            val svc = ctx.packageName + "/" + ApproveService::class.java.name
+            try {
+                val cur = Settings.Secure.getString(ctx.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: ""
+                val listed = cur.split(":").any { it.equals(svc, ignoreCase = true) }
+                val on = Settings.Secure.getInt(ctx.contentResolver, Settings.Secure.ACCESSIBILITY_ENABLED, 0) == 1
+                if (listed && on) { if (force) Log.i(TAG, "a11y already enabled: $svc"); return }
+                if (!listed) {
+                    val next = if (cur.isBlank()) svc else "$cur:$svc"
+                    Settings.Secure.putString(ctx.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, next)
+                }
+                Settings.Secure.putInt(ctx.contentResolver, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
+                Log.i(TAG, "a11y self-enabled: $svc")
+            } catch (e: Exception) { Log.i(TAG, "a11y self-enable failed: ${e.message}") }
+        }
+    }
 }

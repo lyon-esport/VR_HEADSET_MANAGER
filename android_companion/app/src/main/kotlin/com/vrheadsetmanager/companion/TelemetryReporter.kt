@@ -56,6 +56,11 @@ class TelemetryReporter(private val ctx: Context) {
     private var ctrlRight: Int? = null
     private var foregroundApp: String? = null
 
+    // Persistent self-ADB session of the control read, and when the next read is due (elapsedRealtime).
+    private var controlMgr: io.github.muntashirakon.adb.AbsAdbConnectionManager? = null
+    private var nextControlAt = 0L
+    private var controlFailures = 0
+
     fun start() {
         reload()
         if (reportUrl.isBlank()) { stop(); return }
@@ -71,6 +76,8 @@ class TelemetryReporter(private val ctx: Context) {
 
     fun stop() {
         running = false
+        dropControlSession()
+        nextControlAt = 0L; controlFailures = 0
         try { handler?.removeCallbacksAndMessages(null) } catch (_: Throwable) {}
         try { thread?.quitSafely() } catch (_: Throwable) {}
         thread = null; handler = null
@@ -89,7 +96,8 @@ class TelemetryReporter(private val ctx: Context) {
 
     private fun reload() {
         val p = SelfAdb.dpCtx(ctx).getSharedPreferences(BootReceiver.PREFS_NAME, Context.MODE_PRIVATE)
-        reportUrl = p.getString(PREF_REPORT_URL, "") ?: ""
+        // A stored URL that is not http(s) with a host is treated as "no target" (reporting off).
+        reportUrl = (p.getString(PREF_REPORT_URL, "") ?: "").trim().takeIf { isValidReportUrl(it) } ?: ""
         val iv = p.getInt(PREF_REPORT_INTERVAL, 1)
         intervalMs = (if (iv < 1) 1 else iv).toLong() * 1000L
     }
@@ -109,7 +117,8 @@ class TelemetryReporter(private val ctx: Context) {
         tick++
 
         // Control read (controllers + foreground) over self-ADB at a slower cadence.
-        if (tick == 1L || tick % CONTROL_EVERY == 0L) { readControlOverAdb() }
+        val nowMs = android.os.SystemClock.elapsedRealtime()
+        if (nowMs >= nextControlAt) { readControlOverAdb() }
 
         val cur = collect()
         val now = System.currentTimeMillis()
@@ -242,12 +251,36 @@ class TelemetryReporter(private val ctx: Context) {
         // never open a self-ADB session - it would only fail and churn. Battery/thermals/storage/wifi
         // still come from the Android APIs; controllers and foreground app are simply not reported.
         if (AdbBootManager.isPico()) return
-        val mgr = try { AdbBootManager.selfConnect(ctx) } catch (_: Throwable) { null } ?: return
+        // ONE persistent self-ADB session, reused between reads. A fresh connect per read (the old
+        // behaviour, every ~5 s) made Horizon raise the "Allow USB debugging?" popup each time the
+        // companion key was not trusted yet. A failed connect backs off (30 s doubling to 10 min) so
+        // an untrusted key raises the popup at most once per backoff window, not continuously.
+        var mgr = controlMgr
+        if (mgr == null || !isSessionAlive(mgr)) {
+            try { mgr?.disconnect() } catch (_: Throwable) {}
+            controlMgr = null
+            AdbBootManager.log("control read: opening self-ADB session")
+            mgr = try { AdbBootManager.selfConnect(ctx) } catch (_: Throwable) { null }
+            if (mgr == null) {
+                controlFailures++
+                val wait = minOf(CONTROL_BACKOFF_MAX_MS, CONTROL_BACKOFF_MIN_MS shl minOf(controlFailures - 1, 5))
+                nextControlAt = android.os.SystemClock.elapsedRealtime() + wait
+                AdbBootManager.log("control read: no self-ADB session, retry in ${wait / 1000} s")
+                return
+            }
+            controlMgr = mgr
+            controlFailures = 0
+        }
+        nextControlAt = android.os.SystemClock.elapsedRealtime() + CONTROL_EVERY_MS
         try {
             val marker = "===VRHM==="
             val script = "dumpsys OVRRemoteService 2>/dev/null; echo $marker; " +
                 "dumpsys activity activities 2>/dev/null | grep -E 'mResumedActivity|topResumedActivity'"
-            val out = AdbBootManager.runShell(mgr, script, 8000)
+            val out = AdbBootManager.runShell(mgr!!, script, 8000)
+            if (out.startsWith("shell-ex")) {
+                AdbBootManager.log("control read: shell failed (${out.take(80)}), dropping session")
+                dropControlSession(); return
+            }
             val parts = out.split(marker)
             val ctrl = parseControllers(parts.getOrElse(0) { "" })
             ctrlLeft = ctrl.first ?: ctrlLeft
@@ -255,9 +288,16 @@ class TelemetryReporter(private val ctx: Context) {
             val fg = parseForeground(parts.getOrElse(1) { "" })
             if (!fg.isNullOrBlank()) foregroundApp = fg
         } catch (_: Throwable) {
-        } finally {
-            try { mgr.disconnect() } catch (_: Throwable) {}
+            dropControlSession()
         }
+    }
+
+    private fun isSessionAlive(mgr: io.github.muntashirakon.adb.AbsAdbConnectionManager): Boolean =
+        try { mgr.isConnected } catch (_: Throwable) { false }
+
+    private fun dropControlSession() {
+        try { controlMgr?.disconnect() } catch (_: Throwable) {}
+        controlMgr = null
     }
 
     /**
@@ -333,9 +373,21 @@ class TelemetryReporter(private val ctx: Context) {
         @Volatile var active: TelemetryReporter? = null
         fun notifySettingsChanged() { try { active?.reconfigure() } catch (_: Throwable) {} }
 
+        /** True only for an http/https URL with a non-empty host (no file:, content:, etc.). */
+        fun isValidReportUrl(url: String?): Boolean {
+            if (url.isNullOrBlank()) return false
+            return try {
+                val u = URL(url.trim())
+                val proto = u.protocol?.lowercase()
+                (proto == "http" || proto == "https") && !u.host.isNullOrBlank()
+            } catch (_: Throwable) { false }
+        }
+
         const val PREF_REPORT_URL = "report_url"
         const val PREF_REPORT_INTERVAL = "report_interval_sec"
-        private const val CONTROL_EVERY = 5L       // controllers + foreground every 5 ticks
+        private const val CONTROL_EVERY_MS = 10_000L        // controllers + foreground every 10 s on the open session
+        private const val CONTROL_BACKOFF_MIN_MS = 30_000L  // first retry after a failed self-ADB connect
+        private const val CONTROL_BACKOFF_MAX_MS = 600_000L // then doubling, capped at 10 min
         private const val FULL_EVERY_MS = 300_000L // resend everything every 5 min (resync)
         private const val KEEPALIVE_MS = 5_000L    // refresh freshness at least every 5 s
     }

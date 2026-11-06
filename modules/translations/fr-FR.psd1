@@ -967,6 +967,19 @@
         InstallFailed  = "Echec de l'installation de VRHM Companion : {0}"
         InstallNoUsb   = "Aucun casque USB detecte. Branchez d'abord un casque en USB."
         Installing     = "Installation de VRHM Companion sur {0}..."
+        NoUsb          = "Aucun casque USB detecte"
+        ApkNotFound    = "APK VRHM Companion introuvable : {0}"
+        InvalidPackage = "Nom de paquet invalide : {0}"
+        InstallStepFailed = "echec de l'installation : {0}"
+        UninstallRefused  = "Refuse : {0} n'est pas un outil ADB gere pour casque"
+        ModeForcedClassic = "ADB sur TLS non pris en charge sur cette marque : mode CLASSIC utilise"
+        SkippedWifiTarget = "ignore (cible WiFi)"
+        NotVerified    = "non verifie"
+        StepFailed     = "echec"
+        StepProvisioned = "provisionne"
+        StepRequested  = "demande"
+        StepKeys       = "{0} cle(s)"
+        NoAdbKey       = "aucune empreinte de cle adb (lancez une fois le serveur adb)"
     }
 
     # Mise a jour de l'application (console Config > U, accordeon Mises a jour du web ; spec S12 / S13).

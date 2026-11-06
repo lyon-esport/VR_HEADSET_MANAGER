@@ -1340,16 +1340,15 @@ function Invoke-HeadsetsMenuChoice {
         'C' {
             $usbInfo = Get-AdbUsbDeviceDetails
             if (-not $usbInfo) {
-                Write-Host $msg.AdbWifi.AutoEnableNoUsb -ForegroundColor Yellow
+                Write-Host $msg.Companion.InstallNoUsb -ForegroundColor Yellow
             } else {
                 # Holds the USB claim: provisioning ends with adb tcpip (classic), which re-enumerates USB.
                 Set-UsbBusy -Seconds 180
                 try {
-                    $mode = if ($global:ADB_wifi_tls_enabled) { 'TLS' } else { 'CLASSIC' }
-                    $r = Install-VrhmCompanion -Device $usbInfo -Mode $mode
+                    $r = Install-VrhmCompanion -Device $usbInfo
                     foreach ($s in $r.Steps) {
                         $c = if ($s.Ok) { 'Green' } else { 'Red' }
-                        Write-Host ("  {0,-22} {1}" -f $s.Name, $s.Detail) -ForegroundColor $c
+                        Write-Host ("  {0,-22} {1,-5} {2}" -f $s.Name, $(if ($s.Ok) { 'OK' } else { 'FAIL' }), $s.Detail) -ForegroundColor $c
                     }
                     if ($r.Ok) { Write-Host $msg.Companion.InstallDone -ForegroundColor Green }
                     else { Write-Host $r.Error -ForegroundColor Red }
@@ -3627,7 +3626,7 @@ function Show-SubMenu-AdbWifiModes {
                         # Information source (ADR-0043). Cycles companion -> TLS -> classic -> companion.
                         # TLS/classic also pin wifi_preferred_mode (the headline selector the operator sees);
                         # companion leaves the transport preference untouched.
-                        $curSrc = if ($cfg.ADB.info_source) { ([string]$cfg.ADB.info_source).Trim().ToLowerInvariant() } else { 'adb' }
+                        $curSrc = if ($cfg.ADB.info_source) { ([string]$cfg.ADB.info_source).Trim().ToLowerInvariant() } else { 'companion' }
                         if ($curSrc -eq 'companion') {
                             $cfg.ADB | Add-Member -NotePropertyName info_source -NotePropertyValue 'adb' -Force
                             $cfg.ADB | Add-Member -NotePropertyName wifi_preferred_mode -NotePropertyValue 'tls' -Force

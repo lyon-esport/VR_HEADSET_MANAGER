@@ -272,13 +272,12 @@ function Invoke-RouteInstallvrhmcompanion {
             # Claim USB only for a cabled target: provisioning ends with 'adb tcpip' (classic),
             # which re-enumerates the USB transport. A WiFi target needs no claim.
             if ($r.Usb) { Set-UsbBusy -Seconds 180; $claimed = $true }
-            $mode = if ($global:ADB_wifi_tls_enabled) { 'TLS' } else { 'CLASSIC' }
-            $res = Install-VrhmCompanion -Device $r.Device -Mode $mode -adb $adbPath
+            $res = Install-VrhmCompanion -Device $r.Device -adb $adbPath
             Send-JsonResponse -Response $response -Body @{
                 ok          = [bool]$res.Ok
                 model       = [string]$r.Model
                 reinstalled = [bool]$res.Reinstalled
-                mode        = $mode
+                mode        = $(if ($res.ContainsKey('Mode')) { [string]$res.Mode } else { '' })
                 steps       = @($res.Steps)
                 error       = [string]$res.Error
             }
@@ -349,6 +348,16 @@ function Invoke-RouteUninstallheadsetapp {
     return
 }
 
+# Constant-time, case-sensitive ordinal token compare. An empty expected token never matches.
+function Test-CompanionTokenMatch {
+    param([string]$Expected, [string]$Sent)
+    if ([string]::IsNullOrEmpty($Expected) -or $null -eq $Sent) { return $false }
+    if ($Expected.Length -ne $Sent.Length) { return $false }
+    $diff = 0
+    for ($i = 0; $i -lt $Expected.Length; $i++) { $diff = $diff -bor ([int][char]$Expected[$i] -bxor [int][char]$Sent[$i]) }
+    return ($diff -eq 0)
+}
+
 # API: POST /api/companion/telemetry - inbound telemetry push from the VRHM Companion app (ADR-0043)
 function Invoke-RouteCompaniontelemetry {
     # POST /api/companion/telemetry
@@ -363,7 +372,7 @@ function Invoke-RouteCompaniontelemetry {
         # Token gate (the companion was provisioned with this token at install).
         $expected = Get-CompanionToken
         $sent     = [string]$request.Headers['X-VRHM-Token']
-        if ($expected -and $sent -ne $expected) {
+        if (-not (Test-CompanionTokenMatch -Expected $expected -Sent $sent)) {
             Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'unauthorized' } -StatusCode 401
             return
         }
@@ -379,8 +388,8 @@ function Invoke-RouteCompaniontelemetry {
         # Resolve serial -> permanent id (registry).
         $row = @(Get-KnownHeadsetsCached) | Where-Object { [string]$_.SerialNumber -eq $serial } | Select-Object -First 1
         if (-not $row) {
-            # Unknown serial is not an error (a companion may report before the headset is registered).
-            Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'unknown serial' }
+            # 404 so the companion keeps retrying a FULL push until the headset is registered.
+            Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'unknown serial' } -StatusCode 404
             return
         }
         $hid = [int]$row.ID
@@ -392,7 +401,11 @@ function Invoke-RouteCompaniontelemetry {
             $p = $json.PSObject.Properties[$f]
             if ($p -and $null -ne $p.Value) { $fields[$f] = $p.Value }
         }
-        Set-CompanionTelemetry -HeadsetId $hid -Fields $fields -Full:$full | Out-Null
+        $stored = Set-CompanionTelemetry -HeadsetId $hid -Fields $fields -Full:$full
+        if ($stored -eq $false) {
+            Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'store failed' } -StatusCode 500
+            return
+        }
 
         $appsProp = $json.PSObject.Properties['apps']
         $appCount = 0

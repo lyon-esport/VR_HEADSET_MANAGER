@@ -53,8 +53,7 @@ Location and package name of the bundled [oculus-wireless-adb](https://github.co
 
 | Key | Default | Description |
 |---|---|---|
-| `debugLevelToFile` | `SUCCESS` | Minimum severity written to `logs\<COMPUTER>\log_<date>.txt` |
-| `debugLevelToConsole` | `ERROR` | Minimum severity shown in the console |
+| `debugLevelToFile` | `SUCCESS` | Minimum severity written to `logs\<COMPUTER>\log_<date>.txt` and shown in the console |
 | `logRetentionDays` | `30` | Log files older than this are deleted at startup |
 
 Levels: `DEBUG` < `INFO` < `SUCCESS` < `WARNING` < `ERROR` < `NONE`.

@@ -14,7 +14,7 @@
                 "companionFolder":  "VRHM Companion",
                 "companionApk":  "VRHM-Companion.apk",
                 "companionPackageName":  "com.vrheadsetmanager.companion",
-                "companionVersion":  "1.0"
+                "companionVersion":  "1.2.1"
             },
     "companion":  {
                       "telemetry_stale_sec":  10,
@@ -23,7 +23,6 @@
     "Logging":  {
                     "Comment-possibleValues":  "DEBUG,INFO,SUCCESS,WARNING,ERROR,NONE",
                     "debugLevelToFile":  "SUCCESS",
-                    "debugLevelToConsole":  "ERROR",
                     "logFile":  "logfile.txt",
                     "logRetentionDays":  30
                 },
@@ -77,6 +76,7 @@
                    "defaultBitrateMbps":  8,
                    "usb_switch_mode":  "stable",
                    "usb_switch_stable_sec":  10,
+                   "boot_settle_sec":  15,
                    "log_level":  "info",
                    "parameters":  {
                                       "Quest 3":  {

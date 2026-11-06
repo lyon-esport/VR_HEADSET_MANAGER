@@ -1318,6 +1318,54 @@ function Get-HeadsetDisplayState {
     return ConvertFrom-PowerDisplayState -Lines (@($seg[0]) + @($seg[1]))
 }
 
+function Wait-HeadsetBootSettled {
+    <#
+    .SYNOPSIS
+    A capture started while the headset is still booting records black frames (the compositor is
+    not up yet, and only a UI reset brings it back). Waits until the headset uptime reaches
+    -MinUptimeSec (default $global:scrcpyBootSettleSec = scrcpy.boot_settle_sec, 15) AND
+    sys.boot_completed is 1. One adb call per check (/proc/uptime + getprop). Never waits longer
+    than the remaining settle time + -MaxExtraSec (60) for boot_completed, and never throws: an
+    unreadable uptime means "go ahead". Returns $true when it had to wait.
+
+    .EXAMPLE
+    Wait-HeadsetBootSettled -Device $captureDevice -Name 'Q3 RED'
+    #>
+    param(
+        [Parameter(Mandatory=$true)] $Device,
+        [string]$Name = '',
+        [int]$MinUptimeSec = -1,
+        [int]$MaxExtraSec = 60
+    )
+    try {
+        if ($MinUptimeSec -lt 0) { $MinUptimeSec = if ($null -ne $global:scrcpyBootSettleSec) { [int]$global:scrcpyBootSettleSec } else { 15 } }
+        if ($MinUptimeSec -le 0) { return $false }
+        $waited = $false
+        $deadline = [DateTime]::UtcNow.AddSeconds($MinUptimeSec + $MaxExtraSec)
+        while ($true) {
+            $out = Invoke-AdbCmd -Device $Device -Command 'echo "U=$(cut -d. -f1 /proc/uptime) C=$(getprop sys.boot_completed)"' -ShellScript -SilentOnFail
+            if ($out -is [bool]) { return $waited }
+            $text = (@($out) -join ' ')
+            if (-not ($text -match 'U=(\d+)\s+C=(\S*)')) { return $waited }
+            $uptime = [int]$Matches[1]; $completed = ($Matches[2] -eq '1')
+            if ($uptime -ge $MinUptimeSec -and $completed) { return $waited }
+            if ([DateTime]::UtcNow -ge $deadline) {
+                Write-Log ("{0}: boot not settled after the wait limit (uptime {1}s, boot_completed={2}) - starting the capture anyway" -f $Name, $uptime, $completed) -Level WARNING
+                return $waited
+            }
+            if (-not $waited) {
+                Write-Log ("{0} is still booting (uptime {1}s, boot_completed={2}): waiting until {3}s before starting the capture" -f $Name, $uptime, $completed, $MinUptimeSec) -Level INFO
+                $waited = $true
+            }
+            $sleepMs = if ($uptime -lt $MinUptimeSec) { [Math]::Min(5000, ($MinUptimeSec - $uptime) * 1000 + 200) } else { 2000 }
+            Start-Sleep -Milliseconds $sleepMs
+        }
+    } catch {
+        Write-Log ("Wait-HeadsetBootSettled: " + $_.Exception.Message) -Level DEBUG
+        return $false
+    }
+}
+
 function Invoke-HeadsetCaptureWake {
     <#
     .SYNOPSIS

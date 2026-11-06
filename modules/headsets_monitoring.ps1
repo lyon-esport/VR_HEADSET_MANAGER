@@ -817,7 +817,8 @@ function Start-VRMonitor {
             $sessionState     = @{}
             # Companion report-target push cadence (ADR-0043): tell the companion where to POST.
             $nextReportAt     = [datetime]::MinValue
-            $blackState       = @{}
+            $nextGapAt        = [datetime]::MinValue
+            $blackState      = @{}
             # The serial this runspace learned from the headset itself. $headset was captured
             # at startup, so a row added from an IP alone has no serial in it - without this
             # the USB-first transport could not tell the headset is cabled.
@@ -862,6 +863,9 @@ function Start-VRMonitor {
                     # when ADB is down, so pushed values keep flowing; falls back to the ADB poll
                     # when the push is stale or absent. ---
                     $companionActive = $false
+                    $ct = $null
+                    $gapCtrl = $false; $gapFg = $false; $gapWatt = $false
+                    $statsRan = $false
                     if (Get-Command Resolve-HeadsetInfoSource -ErrorAction SilentlyContinue) {
                         $infoSrc = 'adb'
                         try { $infoSrc = Resolve-HeadsetInfoSource -HeadsetId ([int]$headset.ID) } catch { $infoSrc = 'adb' }
@@ -894,6 +898,11 @@ function Start-VRMonitor {
                                         } catch { }
                                     }
                                     $companionActive = $true
+                                    # Per-field gaps: what the push does not carry is read over ADB
+                                    # at the slow cadence below (never every cycle).
+                                    $gapCtrl = -not ($ct.PSObject.Properties['ctrlLeft'] -and $ct.PSObject.Properties['ctrlRight'])
+                                    $gapFg   = -not $ct.PSObject.Properties['foregroundApp']
+                                    $gapWatt = -not $ct.PSObject.Properties['wattage']
                                 }
                             } catch { }
                         }
@@ -903,6 +912,7 @@ function Start-VRMonitor {
                     $timer = if ($sharedState["_refresh_timer"]) { [int]$sharedState["_refresh_timer"] } else { 5 }
                     if ([datetime]::Now -ge $nextStatsAt) {
                         $nextStatsAt = [datetime]::Now.AddSeconds($timer)
+                        $statsRan = $true
 
                         # Follow config edits (one file stat when nothing changed, S3-3), like the
                         # other VRMonitor runspaces. Without it this runspace kept the WiFi ADB mode
@@ -940,6 +950,22 @@ function Start-VRMonitor {
                                 # read is issued for this headset.
                                 if ($companionActive) {
                                     $pollData = @{ ForegroundRead = $true; ForegroundPackage = $(if ($ct.PSObject.Properties['foregroundApp']) { [string]$ct.foregroundApp } else { '' }) }
+                                    # Per-field fallback: when the push lacks controllers / wattage /
+                                    # foreground, read them over ADB every 30 s and copy ONLY those fields.
+                                    if (($gapCtrl -or $gapFg -or $gapWatt) -and [datetime]::Now -ge $nextGapAt) {
+                                        $nextGapAt = [datetime]::Now.AddSeconds(30)
+                                        $gapData = @{}
+                                        $g2 = Get-HeadsetInfoStage2Identity -knownHeadset $liveHeadset -Device $device -PollData $gapData
+                                        if ($gapData.CallFailed) { $pollDeviceCache.Clear() }
+                                        if ($gapCtrl) {
+                                            foreach ($k in @('BatteryControllerLeft', 'BatteryControllerRight')) { if ($g2.Contains($k)) { $workingInfo.$k = $g2[$k] } }
+                                        }
+                                        if ($gapWatt -and $g2.Contains('ChargingWattage')) { $workingInfo.ChargingWattage = $g2['ChargingWattage'] }
+                                        if ($gapFg) {
+                                            $g3 = Get-HeadsetInfoStage3App -knownHeadset $headset -Device $device -PollData $gapData
+                                            foreach ($k in @('RunningApp', 'RunningAppIcon')) { if ($g3.Contains($k)) { $workingInfo.$k = $g3[$k] } }
+                                        }
+                                    }
                                 } else {
                                     $pollData = @{}
                                     $s2 = Get-HeadsetInfoStage2Identity -knownHeadset $liveHeadset -Device $device -PollData $pollData
@@ -1001,19 +1027,6 @@ function Start-VRMonitor {
                                     } catch { }
                                 }
 
-                                # Battery history + time estimate (local var persists across cycles)
-                                if ($workingInfo.Battery -ne "-") {
-                                    $currentLevel = [int]($workingInfo.Battery -replace ' %','')
-                                    $allEntries   = @($localBattHistory -split '\|' | Where-Object { $_ -match '=' })
-                                    $lastLevel    = if ($allEntries.Count -gt 0) { [int](($allEntries[-1] -split '=')[1]) } else { -1 }
-                                    if ($currentLevel -ne $lastLevel) { $allEntries += "$([datetime]::Now.ToString('yyyy-MM-ddTHH:mm:ss'))=$currentLevel" }
-                                    $localBattHistory           = ($allEntries | Select-Object -Last 3) -join '|'
-                                    $workingInfo.BatteryHistory = $localBattHistory
-                                    $estimate = Get-BatteryTimeEstimate -HistoryString $localBattHistory
-                                    if ($null -ne $estimate.PowerState)       { $workingInfo.PowerState = $estimate.PowerState }
-                                    $workingInfo.TimeRemainingMin = if ($null -ne $estimate.MinutesRemaining) { $estimate.MinutesRemaining } else { "-" }
-                                }
-
                                 # --- Stage 3: foreground app + installed-apps cache ---
                                 # Skipped when companion-fed (ADR-0043): the foreground app is already
                                 # set from the push and the apps list is ingested by the telemetry
@@ -1035,9 +1048,35 @@ function Start-VRMonitor {
                     # which device answers at this address; a stale one would queue a bogus
                     # Set-HeadsetIdentity fix that rewrites the whole registry. Clearing here also
                     # reproduces the old build-from-defaults-every-cycle semantics.
-                    if (-not $workingInfo.ADBWifi) {
+                    # Battery history + time estimate (local var persists across cycles). Runs on
+                    # the stats cadence over ADB, and every tick while a fresh companion push
+                    # exists (also when ADB is down).
+                    if (($workingInfo.ADBWifi -or $companionActive) -and ($statsRan -or $companionActive) -and $workingInfo.Battery -ne "-") {
+                        $currentLevel = 0
+                        if ([int]::TryParse(([string]$workingInfo.Battery -replace '[^\d]',''), [ref]$currentLevel)) {
+                            $allEntries   = @($localBattHistory -split '\|' | Where-Object { $_ -match '=' })
+                            $lastLevel    = if ($allEntries.Count -gt 0) { [int](($allEntries[-1] -split '=')[1]) } else { -1 }
+                            if ($currentLevel -ne $lastLevel) { $allEntries += "$([datetime]::Now.ToString('yyyy-MM-ddTHH:mm:ss'))=$currentLevel" }
+                            $localBattHistory           = ($allEntries | Select-Object -Last 3) -join '|'
+                            $workingInfo.BatteryHistory = $localBattHistory
+                            $estimate = Get-BatteryTimeEstimate -HistoryString $localBattHistory
+                            if ($null -ne $estimate.PowerState)       { $workingInfo.PowerState = $estimate.PowerState }
+                            $workingInfo.TimeRemainingMin = if ($null -ne $estimate.MinutesRemaining) { $estimate.MinutesRemaining } else { "-" }
+                        }
+                    }
+
+                    if (-not $workingInfo.ADBWifi -and $companionActive) {
+                        # ADB down but a fresh push feeds the telemetry: keep it, drop only the ADB
+                        # fields and any gap field the push does not carry.
                         $pollDeviceCache.Clear()
-                        $workingInfo.Battery                = "-"
+                        $workingInfo.AdbTransport = "-"
+                        $workingInfo.AdbWifiMode  = "-"
+                        if ($gapCtrl) { $workingInfo.BatteryControllerLeft = "-"; $workingInfo.BatteryControllerRight = "-" }
+                        if ($gapWatt) { $workingInfo.ChargingWattage = "-" }
+                        if ($gapFg)   { $workingInfo.RunningApp = "-"; $workingInfo.RunningAppIcon = "" }
+                    } elseif (-not $workingInfo.ADBWifi) {
+                        $pollDeviceCache.Clear()
+                        $workingInfo.Battery              = "-"
                         $workingInfo.Charging               = "-"
                         $workingInfo.ChargingWattage        = "-"
                         $workingInfo.Temp                   = "-"
@@ -2010,11 +2049,23 @@ function Start-VRMonitor {
                     # published for the poll runspaces (which do not import kiosk_functions, so they
                     # cannot resolve Get-ServerLanUrl). Each companion-sourced headset's runspace
                     # pushes it to the companion off-thread so an unreachable companion cannot block
-                    # this slow tick. Cheap: Get-ServerLanUrl is cached.
+                    # this slow tick. Get-ServerLanUrl is not cached, so the URL is computed at most
+                    # every 60 s and only when some headset (or the global source) uses the companion.
                     if (Get-Command Get-CompanionReportUrl -ErrorAction SilentlyContinue) {
                         try {
-                            $compUrl = Get-CompanionReportUrl
-                            if ($compUrl) { $sharedState['_companion_report_url'] = $compUrl }
+                            if (-not $script:compUrlAt -or ([datetime]::Now - $script:compUrlAt).TotalSeconds -ge 60) {
+                                $script:compUrlAt = [datetime]::Now
+                                $wantComp = ([string]$global:ADB_info_source -eq 'companion')
+                                if (-not $wantComp -and (Get-Command Resolve-HeadsetInfoSource -ErrorAction SilentlyContinue)) {
+                                    foreach ($kh in @($knownHeadsets)) {
+                                        try { if ((Resolve-HeadsetInfoSource -HeadsetId ([int]$kh.ID)) -eq 'companion') { $wantComp = $true; break } } catch { }
+                                    }
+                                }
+                                if ($wantComp) {
+                                    $script:compUrl = Get-CompanionReportUrl
+                                    if ($script:compUrl) { $sharedState['_companion_report_url'] = $script:compUrl }
+                                }
+                            }
                         } catch { }
                     }
 

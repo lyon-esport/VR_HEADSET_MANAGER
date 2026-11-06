@@ -1740,6 +1740,25 @@ function start-screenCopy {
     $startHoldSec = 0
     try {
 
+    # next_start: a restart is the moment USB is allowed, but only once the cable has been in
+    # for scrcpy.usb_switch_stable_sec (a freshly plugged or loose cable must not take the
+    # capture). Until then WiFi goes first; USB stays the fallback if WiFi cannot be established.
+    if ($transport -eq 'Auto' -and $global:scrcpyUsbSwitchMode -eq 'next_start') {
+        $nsSerial = if ($knownRow.SerialNumber) { ([string]$knownRow.SerialNumber).Trim() } else { '' }
+        if ($nsSerial -and $nsSerial -ne '-') {
+            $nsCabled = @(Get-PublishedUsbDevices | Where-Object { $_.Serial -eq $nsSerial }) | Select-Object -First 1
+            if ($nsCabled) {
+                $nsSince = [datetime]::MinValue
+                $nsOk = [datetime]::TryParse([string]$nsCabled.Since, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AdjustToUniversal, [ref]$nsSince)
+                $nsStable = if ($global:scrcpyUsbSwitchStableSec) { [int]$global:scrcpyUsbSwitchStableSec } else { 10 }
+                if (-not $nsOk -or (([datetime]::UtcNow - $nsSince).TotalSeconds -lt $nsStable)) {
+                    Write-Log ("USB cable on {0} present for less than {1}s (next_start mode) - starting on WiFi." -f $knownRow.Name, $nsStable) -Level INFO
+                    $transport = 'WiFi'
+                }
+            }
+        }
+    }
+
     $captureDevice = $null
     try {
         Write-Log -Message ($msg.Scrcpy.CheckingAdb -f "$headsetIP`:$adbPort") -Level "INFO"
@@ -1757,6 +1776,8 @@ function start-screenCopy {
         return
     }
     $adb_device = $captureDevice.DeviceId
+    # A headset that is still booting (uptime under scrcpy.boot_settle_sec) captures black: wait it out.
+    if (Get-Command Wait-HeadsetBootSettled -ErrorAction SilentlyContinue) { Wait-HeadsetBootSettled -Device $captureDevice -Name $displayName | Out-Null }
     # A sleeping headset (not worn, display off) streams black frames: log its state and wake it once.
     if (Get-Command Invoke-HeadsetCaptureWake -ErrorAction SilentlyContinue) { Invoke-HeadsetCaptureWake -Device $captureDevice -Name $displayName | Out-Null }
     # WiFi mode and endpoint of the capture (ADR-0034): 'Classic' / 'TLS' and 'ip:port', '' over USB.

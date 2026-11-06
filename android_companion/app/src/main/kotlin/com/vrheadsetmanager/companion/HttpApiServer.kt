@@ -10,8 +10,12 @@ import fi.iki.elonen.NanoHTTPD
 /**
  * Embedded HTTP server (NanoHTTPD) on [port] (default 8765).
  *
+ * Auth: every endpoint except GET /health requires header X-VRHM-Token. With no token provisioned
+ * the API fails closed (401); the first token is set over adb only (CmdReceiver settoken), and
+ * POST /token is rotation (needs the current token).
+ *
  * Endpoints:
- *   GET  /health       -> {"ok":true,"version":"1.0"}
+ *   GET  /health       -> {"ok":true,"version":"<versionName>","versionCode":n}
  *   GET  /info         -> full device state JSON
  *   GET  /apps         -> list of installed third-party apps
  *   POST /adb/enable   -> {"enable":true|false}  - toggle ADB WiFi immediately
@@ -25,6 +29,15 @@ class HttpApiServer(port: Int, private val context: Context) : NanoHTTPD(port) {
 
     override fun serve(session: IHTTPSession): Response {
         return try {
+            // Only GET /health is open. Everything else needs the token; with NO token set the API
+            // fails closed (initial provisioning is over adb only: CmdReceiver settoken).
+            if (!(session.method == Method.GET && session.uri == "/health")) {
+                if (!TokenConfig.hasToken(context)) {
+                    android.util.Log.w("VRHMApi", session.method.toString() + " " + session.uri + " refused: no token provisioned")
+                    return jsonError(401, "no token provisioned (set it over adb)")
+                }
+                if (!TokenConfig.matches(context, session.headers["x-vrhm-token"])) return jsonError(401, "bad or missing token")
+            }
             when {
                 session.method == Method.GET  && session.uri == "/health"     -> serveHealth()
                 session.method == Method.GET  && session.uri == "/info"       -> serveInfo()
@@ -39,12 +52,8 @@ class HttpApiServer(port: Int, private val context: Context) : NanoHTTPD(port) {
         }
     }
 
+    /** Token already checked by [serve]. */
     private fun servePost(session: IHTTPSession): Response {
-        if (TokenConfig.hasToken(context)) {
-            if (!TokenConfig.matches(context, session.headers["x-vrhm-token"])) return jsonError(401, "bad or missing token")
-        } else {
-            android.util.Log.w("VRHMApi", "POST " + session.uri + " accepted with NO token set (unprotected)")
-        }
         return when (session.uri) {
             "/adb/enable"   -> serveAdbEnable(session)
             "/settings"     -> serveSettings(session)
@@ -83,11 +92,11 @@ class HttpApiServer(port: Int, private val context: Context) : NanoHTTPD(port) {
         return try {
             val j = bodyObj(session)
             val mode = BootMode.valueOf(j.get("mode")?.asString?.uppercase() ?: "")
-            AdbBootManager.setBootMode(context, mode)
             if (j.has("port")) {
                 val p = j.get("port").asInt
                 if (p in 1024..65535) AdbBootManager.setClassicPort(context, p)
             }
+            AdbBootManager.setBootMode(context, mode)
             jsonOk(AdbBootManager.status(context))
         } catch (e: Exception) { jsonError(400, "bad mode or body") }
     }
@@ -134,18 +143,18 @@ class HttpApiServer(port: Int, private val context: Context) : NanoHTTPD(port) {
         } catch (e: Exception) { jsonError(400, "bad body") }
     }
 
+    /** Token ROTATION only: the caller already proved the current token (checked in [serve]). */
     private fun serveToken(session: IHTTPSession): Response {
         return try {
             val t = bodyObj(session).get("token")!!.asString
-            if (t.isBlank()) return jsonError(400, "empty token")
-            TokenConfig.setToken(context, t)
+            if (!TokenConfig.setToken(context, t)) return jsonError(400, "empty token")
             jsonOk()
         } catch (e: Exception) { jsonError(400, "bad body") }
     }
 
     private fun serveHealth() =
         newFixedLengthResponse(Response.Status.OK, "application/json",
-            """{"ok":true,"version":"1.0"}""")
+            """{"ok":true,"version":"${BuildConfig.VERSION_NAME}","versionCode":${BuildConfig.VERSION_CODE}}""")
 
     private fun serveInfo() =
         newFixedLengthResponse(Response.Status.OK, "application/json", DeviceInfo.getInfo(context))
@@ -156,6 +165,7 @@ class HttpApiServer(port: Int, private val context: Context) : NanoHTTPD(port) {
     private fun serveAdbEnable(session: IHTTPSession): Response {
         val body = readBody(session)
         val enable = try { JsonParser.parseString(body).asJsonObject.get("enable")?.asBoolean ?: true } catch (_: Exception) { true }
+        if (AdbBootManager.isPico()) return jsonError(400, "not supported on Pico")
         return try {
             // adb_wifi_enabled is a GLOBAL setting on Horizon (Settings.Secure reverts); the watchdog
             // keeps it on via Settings.Global too.
@@ -183,7 +193,12 @@ class HttpApiServer(port: Int, private val context: Context) : NanoHTTPD(port) {
             // Telemetry report target (ADR-0042): where to POST telemetry, and how often.
             var reportChanged = false
             if (json.has("report_url")) {
-                prefs.edit().putString(TelemetryReporter.PREF_REPORT_URL, json["report_url"].asString).apply()
+                // "" disables reporting; anything else must be http(s) with a host.
+                val url = json["report_url"].asString.trim()
+                if (url.isNotEmpty() && !TelemetryReporter.isValidReportUrl(url)) {
+                    return jsonError(400, "report_url must be http or https with a host")
+                }
+                prefs.edit().putString(TelemetryReporter.PREF_REPORT_URL, url).apply()
                 reportChanged = true
             }
             if (json.has("report_interval_sec")) {

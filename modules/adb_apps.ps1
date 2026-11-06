@@ -986,7 +986,7 @@ function Clear-AppNamesCache {
             }
             Get-ChildItem -LiteralPath $iconCacheDir -File |
                 Where-Object { -not $sourceNames.ContainsKey($_.Name) } |
-                Remove-Item -Force -ErrorAction SilentlyContinue
+                ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
             Write-Log "App icons cache cleared (operator icons preserved)" -Level INFO
         }
 
@@ -1275,16 +1275,31 @@ function Update-InstalledAppsCacheFromList {
         $storeVersionMap = @{}
         foreach ($key in $appNames.Keys) { $l = $appNames[$key].LatestVersion; if ($l) { $storeVersionMap[$key] = $l } }
 
+        # Keep what only the ADB path knows (size, staged update) for rows already cached.
+        $cached = @{}
+        try {
+            foreach ($c in @(Invoke-DbQuery -Name 'installed.list' -Parameters @{ headset_id = $HeadsetId })) {
+                $cached[[string]$c.PackageName] = $c
+            }
+        } catch { $cached = @{} }
+
         $rows = @($norm | ForEach-Object {
             $ver  = [string]$_.Version
             $sver = if ($storeVersionMap.ContainsKey($_.Pkg) -and $storeVersionMap[$_.Pkg] -and $storeVersionMap[$_.Pkg] -ne $ver) { $storeVersionMap[$_.Pkg] } else { '' }
+            $size = [int64]0
+            $pend = ''
+            $old  = $cached[$_.Pkg]
+            if ($old) {
+                try { if ($null -ne $old.SizeBytes) { $size = [int64]$old.SizeBytes } } catch { $size = [int64]0 }
+                if ($old.PendingVersion) { $pend = [string]$old.PendingVersion }
+            }
             @{
                 headset_id      = $HeadsetId
                 package_name    = $_.Pkg
                 version         = $ver
-                pending_version = ''
+                pending_version = $pend
                 store_version   = [string]$sver
-                size_bytes      = [int64]0
+                size_bytes      = $size
             }
         })
         Invoke-DbTransaction -Script {

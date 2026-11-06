@@ -20,16 +20,22 @@ class BootReceiver : BroadcastReceiver() {
 
         // On/off is the "auto-enable ADB WiFi on boot" switch (PREF_AUTO_ADB); the mode (TLS/classic)
         // is AdbBootManager's own pref (TLS by default). applyBootMode itself re-checks the switch.
-        if (action == Intent.ACTION_LOCKED_BOOT_COMPLETED) {
-            // Engine first (before the service), on a background thread.
+        // Wireless debugging is switched on from BOOT_COMPLETED only, never at LOCKED_BOOT_COMPLETED:
+        // forcing it before the user and the WiFi network are settled made Horizon raise the
+        // "allow wireless debugging" alert at every boot. The service still starts early (it only
+        // reads and pushes telemetry); the watchdog it hosts re-enables ADB once the network is up.
+        if (action == Intent.ACTION_BOOT_COMPLETED) {
             val pending = goAsync()
             AdbBootManager.applyAsync(context) { pending.finish() }
         }
 
         if (action == Intent.ACTION_BOOT_COMPLETED || action == Intent.ACTION_LOCKED_BOOT_COMPLETED) {
-            if (prefs.getBoolean(PREF_AUTO_ADB, true)) {
+            if (action == Intent.ACTION_BOOT_COMPLETED && prefs.getBoolean(PREF_AUTO_ADB, true) && !AdbBootManager.isPico()) {
                 try {
-                    Settings.Global.putInt(context.contentResolver, "adb_wifi_enabled", 1)
+                    // Only write when it is not already on (QGO or a previous write may have set it).
+                    if (Settings.Global.getInt(context.contentResolver, "adb_wifi_enabled", 0) != 1) {
+                        Settings.Global.putInt(context.contentResolver, "adb_wifi_enabled", 1)
+                    }
                 } catch (e: SecurityException) {
                     // WRITE_SECURE_SETTINGS not yet granted via adb shell pm grant
                 }

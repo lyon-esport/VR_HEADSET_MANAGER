@@ -18,26 +18,41 @@ object DeviceInfo {
 
     private val gson = Gson()
 
-    fun getSerial(): String {
+    @Volatile private var appCtx: Context? = null
+
+    private fun roSerial(): String? = try {
+        (Class.forName("android.os.SystemProperties")
+            .getMethod("get", String::class.java)
+            .invoke(null, "ro.serialno") as? String)
+            ?.takeIf { it.isNotBlank() && !it.equals("unknown", true) && it != Build.UNKNOWN }
+    } catch (_: Exception) { null }
+
+    private fun androidId(ctx: Context?): String? = try {
+        ctx?.let { Settings.Secure.getString(it.contentResolver, Settings.Secure.ANDROID_ID) }
+            ?.takeIf { it.isNotBlank() }
+    } catch (_: Exception) { null }
+
+    /** "ro.serialno" or "android_id" (the latter is NOT the adb serial; prefixed "aid-"). */
+    fun serialSource(ctx: Context? = null): String {
+        if (ctx != null) appCtx = ctx.applicationContext
+        return if (roSerial() != null) "ro.serialno" else "android_id"
+    }
+
+    fun getSerial(ctx: Context? = null): String {
+        if (ctx != null) appCtx = ctx.applicationContext
         // ro.serialno matches what `adb devices` shows; no runtime permission needed when read-only
-        return try {
-            (Class.forName("android.os.SystemProperties")
-                .getMethod("get", String::class.java)
-                .invoke(null, "ro.serialno") as? String)
-                ?.takeIf { it.isNotBlank() && it != "unknown" }
-                ?: Build.UNKNOWN
-        } catch (_: Exception) {
-            // Fallback: Android ID is stable but not the same as ADB serial
-            Settings.Secure.getString(null, Settings.Secure.ANDROID_ID) ?: Build.UNKNOWN
-        }
+        roSerial()?.let { return it }
+        // Fallback: Android ID is stable but not the adb serial, so it is clearly prefixed
+        return androidId(appCtx)?.let { "aid-$it" } ?: "aid-unknown"
     }
 
     fun getInfo(context: Context): String {
         val bat = getBattery(context)
         val wifi = getWifi(context)
-        val prefs = context.getSharedPreferences(BootReceiver.PREFS_NAME, Context.MODE_PRIVATE)
+        val prefs = SelfAdb.dpCtx(context.applicationContext)
+            .getSharedPreferences(BootReceiver.PREFS_NAME, Context.MODE_PRIVATE)
         val info = mapOf(
-            "serial"           to getSerial(),
+            "serial"           to getSerial(context),
             "model"            to Build.MODEL,
             "android_version"  to Build.VERSION.RELEASE,
             "battery_level"    to bat["level"],
@@ -49,10 +64,11 @@ object DeviceInfo {
             "cpu_usage_pct"    to getCpuUsage(),
             "storage"          to getStorage(),
             "thermals"         to getThermals(),
-            "adb_wifi_enabled" to (Settings.Secure.getInt(context.contentResolver, "adb_wifi_enabled", 0) == 1),
+            "adb_wifi_enabled" to (Settings.Global.getInt(context.contentResolver, "adb_wifi_enabled", 0) == 1),
             "auto_adb_wifi"    to prefs.getBoolean(BootReceiver.PREF_AUTO_ADB, true),
             "companion_port"   to CompanionService.HTTP_PORT,
-            "version"          to "1.0"
+            "version"          to BuildConfig.VERSION_NAME,
+            "versionCode"      to BuildConfig.VERSION_CODE
         )
         return gson.toJson(info)
     }

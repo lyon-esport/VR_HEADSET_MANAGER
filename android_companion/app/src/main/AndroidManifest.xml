@@ -26,6 +26,7 @@
         android:label="@string/launcher_label"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
+        android:banner="@drawable/banner"
         android:allowBackup="false"
         android:directBootAware="true"
         android:theme="@style/AppTheme"
@@ -44,9 +45,12 @@
             </intent-filter>
         </receiver>
 
+        <!-- CmdReceiver: only the adb shell (uid 2000, holds DUMP) or root may send to it.
+             DUMP is signature|privileged|development, so no third-party app can hold it. -->
         <receiver
             android:name=".CmdReceiver"
             android:exported="true"
+            android:permission="android.permission.DUMP"
             android:directBootAware="true">
             <intent-filter>
                 <action android:name="com.vrheadsetmanager.companion.CMD" />

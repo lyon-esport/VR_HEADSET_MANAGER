@@ -1192,9 +1192,13 @@
             <div class="adv-field" id="adv-infosource-row">
               <label for="adv-infosource" title="Where VRHM reads this headset's battery/temperature/apps. VRHM Companion = the headset app pushes them (needs the app installed); ADB = VRHM polls over ADB. Companion automatically falls back to ADB polling when no push arrives. Defaults to Companion when the app is installed on this headset, otherwise ADB.">Information source</label>
               <select id="adv-infosource" style="font-size:.8rem;">
+                <option value="default">Default</option>
                 <option value="companion">VRHM Companion (push)</option>
                 <option value="adb">ADB (poll)</option>
+                <option value="tls">ADB over TLS</option>
+                <option value="classic">ADB classic (tcpip)</option>
               </select>
+              <span id="adv-companion-chip" style="font-size:.72rem;margin-left:8px;"></span>
             </div>
             <div class="adv-field adv-field-col" style="width:100%">
               <label title="Headset-side helper apps that re-enable ADB after a reboot. Acts on THIS headset over its own ADB link (USB or WiFi).">ADB helper apps</label>
@@ -2447,10 +2451,13 @@
               runningApp:     item.running_app     || '',
               runningAppIcon: item.running_app_icon || '',
               ipd:            item.ipd || '',
-              id:             item.id
+              id:             item.id,
+              infoSource:     item.info_source || 'default',
+              companionFresh: !!item.companion_fresh
             };
           });
           if (cardsBuilt) { updateStatusDots(); updateIpdRows(); }
+          if (_advDn) updateAdvCompanionChip();
         })
         .catch(function() {})
         .finally(ensureFastStatus);
@@ -2863,6 +2870,34 @@
     var _advId = '';
     var _advBrand = '';
 
+    var _advInfoGlobal = 'companion';
+    var _advInfoOverride = 'default';
+    // Info source select (ADR-0043): shows the override as stored; 'default' is labelled with the
+    // fleet value. Works from a partial answer (ADB down) as long as infoSource is present.
+    function updateAdvInfoSource(j) {
+      var isSel = document.getElementById('adv-infosource');
+      if (!isSel || !j || j.infoSource === undefined) return;
+      var names = { companion: 'Companion', adb: 'ADB', tls: 'ADB over TLS', classic: 'ADB classic' };
+      _advInfoGlobal = j.infoSourceGlobal || 'companion';
+      var ov = names[j.infoSource] ? j.infoSource : 'default';
+      _advInfoOverride = ov;
+      var dOpt = isSel.querySelector('option[value="default"]');
+      if (dOpt) dOpt.textContent = 'Default (' + (names[_advInfoGlobal] || _advInfoGlobal) + ')';
+      isSel.value = ov;
+      isSel.disabled = false;
+      updateAdvCompanionChip();
+    }
+    // Companion status chip: live / no data (ADB fallback) / nothing when the source is ADB.
+    function updateAdvCompanionChip() {
+      var chip = document.getElementById('adv-companion-chip');
+      if (!chip) return;
+      var eff = (_advInfoOverride === 'default') ? _advInfoGlobal : _advInfoOverride;
+      var st = headsetStatus[_advDn];
+      if (eff !== 'companion' || !st) { chip.textContent = ''; return; }
+      if (st.companionFresh) { chip.textContent = 'Companion: live'; chip.style.color = '#22c55e'; }
+      else { chip.textContent = 'Companion: no data (ADB fallback)'; chip.style.color = '#f59e0b'; }
+    }
+
     function refreshAdvSettings() {
       var dn = _advDn;
       if (!dn) return;
@@ -2874,7 +2909,7 @@
       fetch('/api/headset-settings?name=' + encodeURIComponent(dn))
         .then(function(r) { return r.json(); })
         .then(function(j) {
-          if (!j.ok) { throw new Error(j.error || 'Failed'); }
+          if (!j.ok) { updateAdvInfoSource(j); throw new Error(j.error || 'Failed'); }
           var msToLabel = function(ms) {
             if (!ms || ms === '-1' || ms === -1) return 'Never';
             var s = parseInt(ms, 10) / 1000;
@@ -2930,14 +2965,7 @@
           // Info source (ADR-0043): Companion vs ADB only. An explicit per-headset override wins;
           // otherwise default to Companion when the app is installed on this headset, else ADB.
           // (Companion polling always falls back to ADB automatically when no push arrives.)
-          var isSel = document.getElementById('adv-infosource');
-          if (isSel) {
-            var cur = (j.infoSource === 'companion' || j.infoSource === 'adb')
-              ? j.infoSource
-              : (j.companionInstalled ? 'companion' : 'adb');
-            isSel.value = cur;
-            isSel.disabled = false;
-          }
+          updateAdvInfoSource(j);
           // Session-only settings (ADR-0040): live state where the headset can tell.
           setAdvToggleState('adv-reapply-toggle', 'adv-reapply-label', j.sessionReapply === true, 'On', 'Off');
           setAdvToggleState('adv-doubletap-toggle', 'adv-doubletap-label', j.doubleTapDisabled, 'Disabled', 'Enabled', true);
@@ -3096,7 +3124,7 @@
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id: parseInt(_advId, 10), source: isSel.value })
         }).then(function(r) { return r.json(); })
-          .then(function(j) { if (!j.ok) alert('Info source: ' + (j.error || 'failed')); })
+          .then(function(j) { if (!j.ok) alert('Info source: ' + (j.error || 'failed')); else { _advInfoOverride = isSel.value; updateAdvCompanionChip(); } })
           .catch(function(err) { alert('Info source: ' + err); })
           .then(function() { isSel.disabled = false; });
       });
@@ -4170,7 +4198,7 @@
         _ndmSetTitle(isCompOk ? 'Install VRHM Companion' : ((data && data.kind === 'autoenable') ? 'Install ADB auto-enable app' : 'Install ADB WiFi App'));
         if (isCompOk || (data && data.kind === 'autoenable')) {
           var stepsHtml = ((data.steps || []).map(function(s) {
-            return '<div style="font-size:11px;color:' + (s.ok ? '#22c55e' : '#ef4444') + '">' + (s.ok ? '&#10003; ' : '&#10007; ') + esc(s.name) + ' - ' + esc(s.detail || '') + '</div>';
+            return '<div style="font-size:11px;color:' + ((s.Ok !== undefined ? s.Ok : s.ok) ? '#22c55e' : '#ef4444') + '">' + ((s.Ok !== undefined ? s.Ok : s.ok) ? '&#10003; ' : '&#10007; ') + esc(s.Name || s.name) + ' - ' + esc(s.Detail || s.detail || '') + '</div>';
           }).join(''));
           var doneHint = isCompOk ? 'Cable-free ADB will come back by itself at every boot.' : 'WiFi ADB over TLS will be re-enabled at every boot.';
           body.innerHTML =

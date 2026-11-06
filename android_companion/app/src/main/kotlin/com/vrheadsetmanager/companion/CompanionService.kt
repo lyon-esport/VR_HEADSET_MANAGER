@@ -13,7 +13,8 @@ import android.provider.Settings
 
 class CompanionService : Service() {
 
-    private var httpServer: HttpApiServer? = null
+    @Volatile private var httpServer: HttpApiServer? = null
+    @Volatile private var stopping = false
     private var discoveryServer: DiscoveryServer? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var watchdog: AdbWatchdog? = null
@@ -30,11 +31,14 @@ class CompanionService : Service() {
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "VRHM:CompanionService")
         wakeLock?.acquire()
 
-        httpServer = HttpApiServer(HTTP_PORT, applicationContext)
-        httpServer?.start()
+        startHttpWithRetry()
 
         discoveryServer = DiscoveryServer(applicationContext, UDP_PORT)
         discoveryServer?.start()
+
+        // The approver (accessibility service) can be left off by an app update or a reset; put it
+        // back before the watchdog turns wireless debugging on, so the prompt that follows is handled.
+        CmdReceiver.ensureApproverEnabled(applicationContext)
 
         watchdog = AdbWatchdog(applicationContext)
         watchdog?.start()
@@ -49,8 +53,8 @@ class CompanionService : Service() {
         when (intent?.action) {
             ACTION_ENABLE_ADB -> {
                 val enable = intent.getBooleanExtra(EXTRA_ENABLE, true)
-                try {
-                    Settings.Secure.putInt(contentResolver, "adb_wifi_enabled", if (enable) 1 else 0)
+                if (!AdbBootManager.isPico()) try {
+                    Settings.Global.putInt(contentResolver, "adb_wifi_enabled", if (enable) 1 else 0)
                 } catch (_: SecurityException) {}
             }
             ACTION_STOP -> stopSelf()
@@ -58,7 +62,32 @@ class CompanionService : Service() {
         return START_STICKY
     }
 
+    /** Starts the HTTP API; a failure (port in use) is logged and retried 5 s / 30 s / 60 s, never crashes the service. */
+    private fun startHttpWithRetry() {
+        stopping = false
+        Thread({
+            val delays = longArrayOf(5_000, 30_000, 60_000)
+            var i = 0
+            while (!stopping) {
+                try {
+                    val s = HttpApiServer(HTTP_PORT, applicationContext)
+                    s.start()
+                    httpServer = s
+                    AdbBootManager.reportError(null)
+                    return@Thread
+                } catch (e: Throwable) {
+                    val msg = "http server start failed: ${e.message}"
+                    android.util.Log.w("VrhmService", msg)
+                    AdbBootManager.reportError(msg)
+                }
+                try { Thread.sleep(delays[minOf(i, delays.size - 1)]) } catch (_: InterruptedException) { return@Thread }
+                i++
+            }
+        }, "VRHM-HttpStart").also { it.isDaemon = true; it.start() }
+    }
+
     override fun onDestroy() {
+        stopping = true
         telemetry?.stop()
         TelemetryReporter.active = null
         watchdog?.stop()

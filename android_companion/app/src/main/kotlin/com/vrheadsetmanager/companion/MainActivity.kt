@@ -62,8 +62,14 @@ class MainActivity : Activity() {
         spinnerMode.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, labels)
         spinnerMode.setSelection(modes.indexOf(AdbBootManager.getBootMode(this)).coerceAtLeast(0))
         spinnerMode.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            private var first = true
             override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
                 val mode = modes[pos]
+                if (first) {   // the initial programmatic setSelection must not apply anything
+                    first = false
+                    rowPort.visibility = if (mode == BootMode.CLASSIC) View.VISIBLE else View.GONE
+                    return
+                }
                 AdbBootManager.setBootMode(this@MainActivity, mode)
                 rowPort.visibility = if (mode == BootMode.CLASSIC) View.VISIBLE else View.GONE
             }
@@ -86,6 +92,11 @@ class MainActivity : Activity() {
         }
 
         btnEnableAdb.setOnClickListener {
+            if (AdbBootManager.isPico()) {
+                tvHint.visibility = View.VISIBLE
+                tvHint.text = "Not supported on Pico."
+                return@setOnClickListener
+            }
             try {
                 val cur = Settings.Global.getInt(contentResolver, "adb_wifi_enabled", 0)
                 Settings.Global.putInt(contentResolver, "adb_wifi_enabled", if (cur == 0) 1 else 0)

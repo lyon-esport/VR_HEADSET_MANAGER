@@ -256,6 +256,10 @@ function Get-Config {
     if (@('stable','immediate','next_start') -notcontains $usbSwitchMode) { $usbSwitchMode = 'stable' }
     $global:scrcpyUsbSwitchMode      = $usbSwitchMode
     $global:scrcpyUsbSwitchStableSec = if ($null -ne $configContent.scrcpy.usb_switch_stable_sec) { [Math]::Max(1, [int]$configContent.scrcpy.usb_switch_stable_sec) } else { 10 }
+    # A capture started while the headset is still booting records black frames (the compositor is
+    # not up yet). start-screenCopy waits until the headset uptime reaches this many seconds
+    # (Wait-HeadsetBootSettled). 0 = never wait.
+    $global:scrcpyBootSettleSec = if ($null -ne $configContent.scrcpy.boot_settle_sec) { [Math]::Max(0, [int]$configContent.scrcpy.boot_settle_sec) } else { 15 }
 
 
     $global:ADBWirelessActivatorAPK = Join-Path -Path $(Join-Path -Path $sourcesPath -ChildPath $configContent.apk.adbWirelessActivatorFolder) -ChildPath $configContent.apk.adbWirelessActivatorApk
@@ -281,10 +285,12 @@ function Get-Config {
     # the tick period the companion app is asked to use (floor 1 s). Null guards: a config.json
     # written before this feature has no 'companion' section.
     $compStale = if ($null -ne $configContent.companion.telemetry_stale_sec) { try { [int]$configContent.companion.telemetry_stale_sec } catch { 10 } } else { 10 }
-    if ($compStale -lt 2) { $compStale = 2 }
-    $global:Companion_telemetry_stale_sec = $compStale
     $compInterval = if ($null -ne $configContent.companion.report_interval_sec) { try { [int]$configContent.companion.report_interval_sec } catch { 1 } } else { 1 }
     if ($compInterval -lt 1) { $compInterval = 1 }
+    # Stale window must cover at least two report intervals (and never under 6 s), or a healthy push looks stale.
+    $compStaleFloor = [Math]::Max(6, 2 * $compInterval)
+    if ($compStale -lt $compStaleFloor) { $compStale = $compStaleFloor }
+    $global:Companion_telemetry_stale_sec = $compStale
     $global:Companion_report_interval_sec = $compInterval
 
     $global:VRMonitor_refresh_timer = $configContent.VRMonitor.refresh_timer
@@ -608,7 +614,6 @@ function Get-Config {
     $global:logFile = Join-Path -Path $global:logFolder -ChildPath "log_$dateString.txt"
     
     $global:debugLevelToFile = $configContent.Logging.debugLevelToFile
-    $global:debugLevelToConsole = $configContent.Logging.debugLevelToConsole
 
     # Log files retention policy (days). Default 30; clamp invalid values.
     $parsedRetention = $null
@@ -628,13 +633,11 @@ function Get-Config {
 
     $validLogLevels = @("DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "NONE")
     if ($global:debugLevelToFile -notin $validLogLevels) {
-        Write-Host "Unknown display log level: $global:debugLevelToFile. Set 'DEBUG' as default." -ForegroundColor Yellow
-        $global:debugLevelToConsole = "DEBUG"
+        Write-Host "Unknown log level: $global:debugLevelToFile. Set 'DEBUG' as default." -ForegroundColor Yellow
+        $global:debugLevelToFile = "DEBUG"
     }
-    if ($global:debugLevelToConsole -notin $validLogLevels) {
-        Write-Host "Unknown console log level: $global:debugLevelToConsole. Set 'DEBUG' as default." -ForegroundColor Yellow
-        $global:debugLevelToConsole = "DEBUG"
-    }
+    # The console follows the file level (no separate config setting).
+    $global:debugLevelToConsole = $global:debugLevelToFile
 
 
     # Verify the loaded variables

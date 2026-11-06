@@ -25,7 +25,8 @@ import java.text.Normalizer
  *
  * Safety (our add over adbautoenable): the per-COMPUTER popup shows an RSA fingerprint; we approve it
  * only if that fingerprint is on the allowlist ApproveConfig provisioned from VRHM. The network popup
- * (no fingerprint) is approved only because the operator opted in. Every decision is logged.
+ * is approved (operator opted in) only when positively identified by its SSID/BSSID lines; a popup
+ * with no readable fingerprint that is not identified is left alone. Every decision is logged.
  */
 class ApproveService : AccessibilityService() {
 
@@ -90,27 +91,53 @@ class ApproveService : AccessibilityService() {
         collectText(root, texts, 0, budget)
         Log.i(TAG, "VrUsb popup: " + texts.joinToString(" | ").take(400))
 
-        if (!ApproveConfig.autoApprove(this)) {
+        val fp = extractFingerprint(texts)
+        val ownKeyFp = try { SelfAdb.get(this).fingerprint() } catch (_: Throwable) { null }
+        val popupIsOwnKey = fp != null && ownKeyFp != null && ownKeyFp.equals(fp, ignoreCase = true)
+
+        // The companion's OWN self-ADB key is always approved, whatever the switch: it is the app
+        // trusting itself, and without it the popup returns at every boot and reconnect.
+        // The "allow wireless debugging on this network" popup is approved whenever the master
+        // "auto-enable ADB WiFi on boot" switch is on: the operator asked for cable-free ADB, and
+        // that popup is the step that otherwise keeps it off until someone taps it in the headset.
+        val networkOk = AdbBootManager.autoEnabled(this) && fp == null && isNetworkPopup(texts)
+        if (!ApproveConfig.autoApprove(this) && !popupIsOwnKey && !networkOk) {
             Log.i(TAG, "autoApprove OFF - observe only")
             return true // found it; nothing to do, stop the burst
         }
 
-        val fp = extractFingerprint(texts)
         if (fp != null) {
             // The companion's OWN self-ADB connection raises this popup with the companion's own
             // key; always approve that (it is the engine trusting itself). Other computers must be
             // on the operator-provisioned allowlist.
-            val ownKey = try { SelfAdb.get(this).fingerprint() } catch (_: Throwable) { null }
-            val isOwn = ownKey != null && ownKey.equals(fp, ignoreCase = true)
+            val isOwn = popupIsOwnKey
             if (!isOwn && ApproveConfig.trustedFingerprints(this).none { it.equals(fp, ignoreCase = true) }) {
                 Log.i(TAG, "per-computer fingerprint $fp NOT own and NOT on allowlist - leaving popup for a human")
                 return true
             }
             Log.i(TAG, "per-computer fingerprint $fp approved (" + (if (isOwn) "own self-ADB key" else "allowlist") + ")")
+        } else if (isNetworkPopup(texts)) {
+            Log.i(TAG, "wireless-debugging NETWORK popup (SSID/BSSID shown, no fingerprint) - approving (operator opted in)")
         } else {
-            Log.i(TAG, "network popup (no fingerprint) - approving (operator opted in)")
+            // No readable fingerprint and not positively the network popup: could be a per-computer
+            // popup whose key we cannot read. Never click it blind.
+            Log.w(TAG, "popup not identified (no fingerprint, not the network popup) - leaving it for a human")
+            return true
         }
         return approve(root)
+    }
+
+    /**
+     * Positive identification of the "allow wireless debugging on this network" popup: it shows the
+     * network name (SSID) and/or Wi-Fi address (BSSID) - these acronyms appear untranslated in every
+     * locale - and carries no per-computer key wording (RSA / fingerprint / empreinte / cle).
+     */
+    private fun isNetworkPopup(texts: List<String>): Boolean {
+        val all = fold(texts.joinToString(" "))
+        val hasNetworkId = Regex("\\bb?ssid\\b").containsMatchIn(all)
+        val perComputer = all.contains("rsa") || all.contains("fingerprint") || all.contains("empreinte") ||
+            Regex("\\bcle\\b").containsMatchIn(all)
+        return hasNetworkId && !perComputer
     }
 
     /**
@@ -141,6 +168,14 @@ class ApproveService : AccessibilityService() {
             val ok = btn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             Log.i(TAG, "clicked button3 (always allow) -> $ok")
             return ok
+        }
+        // Horizon VR panel: the choice is a clickable node with no android:id, matched by its text
+        // ("Toujours autoriser depuis cet ordinateur" / "Always allow from this computer").
+        find(root) { it.isClickable && fold(nodeText(it)).let { s ->
+            s.contains("toujours autoriser") || s.contains("always allow") } }?.let { btn ->
+            val ok = btn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            Log.i(TAG, "clicked always-allow by text (${btn.text}) -> $ok")
+            if (ok) return true
         }
         // Fallback shape: tick an "always allow" checkbox, then click the positive button.
         find(root) { (it.isCheckable || it.className?.contains("CheckBox") == true) &&

@@ -48,11 +48,14 @@ object AdbBootManager {
     // Mode preference (TLS default). On/off is the separate "auto-enable on boot" switch
     // (BootReceiver.PREF_AUTO_ADB), so there is no NONE option in the UI dropdown any more.
     fun getBootMode(ctx: Context): BootMode = try {
-        when (BootMode.valueOf(prefs(ctx).getString(KEY_MODE, BootMode.TLS.name) ?: BootMode.TLS.name)) {
-            BootMode.CLASSIC -> BootMode.CLASSIC
-            else -> BootMode.TLS   // NONE from an older install reads as TLS; the switch gates it
-        }
+        BootMode.valueOf(prefs(ctx).getString(KEY_MODE, BootMode.TLS.name) ?: BootMode.TLS.name)
     } catch (e: Exception) { BootMode.TLS }
+
+    /** Lets other components (service) surface an error through /status. */
+    fun reportError(msg: String?) { lastError = msg }
+
+    private val applyRunning = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val applyRerun = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /** The master on/off: the "auto-enable ADB WiFi on boot" switch (companion_prefs). */
     fun autoEnabled(ctx: Context): Boolean =
@@ -65,7 +68,7 @@ object AdbBootManager {
     fun setBootMode(ctx: Context, mode: BootMode) {
         prefs(ctx).edit().putString(KEY_MODE, mode.name).apply()
         log("boot mode set to $mode")
-        if (mode != BootMode.NONE) applyAsync(ctx)
+        applyAsync(ctx)
     }
 
     fun setClassicPort(ctx: Context, port: Int) {
@@ -80,7 +83,10 @@ object AdbBootManager {
      * once by hand.
      */
     fun ensureWirelessDebugging(ctx: Context) {
+        if (isPico()) return
         try {
+            // Already on: writing again only re-triggers Horizon's wireless-debugging handling.
+            if (adbWifiEnabled(ctx) == 1) return
             Settings.Global.putInt(ctx.contentResolver, "adb_wifi_enabled", 1)
         } catch (e: SecurityException) {
             lastError = "WRITE_SECURE_SETTINGS not granted"
@@ -200,9 +206,24 @@ object AdbBootManager {
     /** Runs applyBootMode on a background thread; finish() is called when done (goAsync use). */
     fun applyAsync(ctx: Context, finish: (() -> Unit)? = null) {
         val app = ctx.applicationContext
+        // Single-flight: a request during a run only asks for one more pass afterwards.
+        if (!applyRunning.compareAndSet(false, true)) {
+            applyRerun.set(true)
+            try { finish?.invoke() } catch (_: Throwable) {}
+            return
+        }
         Thread {
-            try { applyBootMode(app) } catch (e: Throwable) { log("applyAsync: ${e.message}") }
-            finally { try { finish?.invoke() } catch (_: Throwable) {} }
+            try {
+                do {
+                    applyRerun.set(false)
+                    try { applyBootMode(app) } catch (e: Throwable) { log("applyAsync: ${e.message}") }
+                } while (applyRerun.get())
+            } finally {
+                applyRunning.set(false)
+                // a request that slipped in between the last check and the release
+                if (applyRerun.get()) applyAsync(app)
+                try { finish?.invoke() } catch (_: Throwable) {}
+            }
         }.start()
     }
 
@@ -236,6 +257,9 @@ object AdbBootManager {
         val fp = try { SelfAdb.get(app).fingerprint() } catch (e: Throwable) { null }
         return mapOf(
             "bootMode" to getBootMode(app).name,
+            "version" to BuildConfig.VERSION_NAME,
+            "versionCode" to BuildConfig.VERSION_CODE,
+            "serialSource" to DeviceInfo.serialSource(app),
             "classicPort" to getClassicPort(app),
             "adbWifiEnabled" to adbWifiEnabled(app),
             "keyFingerprint" to fp,
