@@ -752,13 +752,41 @@ function Invoke-CompanionDiscovery {
         )
 
         # Bind on the discovery port so replies come back to us on that same port
-        $udp = [System.Net.Sockets.UdpClient]::new($UdpPort)
+        # ReuseAddress: the original bind failed with "only one usage of each socket address"
+        # (a previous socket of this same process still closing, or a second discovery call),
+        # which disabled the feature. The reply must arrive on 5556 (the program firewall rule
+        # is scoped to it), so the port stays fixed but may now be shared briefly.
+        $udp = [System.Net.Sockets.UdpClient]::new()
+        $udp.Client.SetSocketOption([System.Net.Sockets.SocketOptionLevel]::Socket, [System.Net.Sockets.SocketOptionName]::ReuseAddress, $true)
+        $udp.Client.Bind([System.Net.IPEndPoint]::new([System.Net.IPAddress]::Any, $UdpPort))
         $udp.EnableBroadcast = $true
         $udp.Client.ReceiveTimeout = $TimeoutMs
 
-        $bcastEp = [System.Net.IPEndPoint]::new([System.Net.IPAddress]::Broadcast, $UdpPort)
-        [void]$udp.Send($probe, $probe.Length, $bcastEp)
-        Write-Log "Invoke-CompanionDiscovery: broadcast sent on port $UdpPort, waiting ${TimeoutMs}ms" -Level DEBUG
+        # Send to the DIRECTED broadcast of every usable LAN interface (Get-PrivateNetworks drops
+        # virtual / link-down adapters). 255.255.255.255 alone leaves through ONE interface chosen by
+        # Windows, measured on a PC with Hyper-V: it went out on vEthernet (172.23.128.1) and no
+        # headset ever saw it, while 192.168.1.255 got the reply at once. Cached 60 s (Get-NetAdapter).
+        if (-not $script:CompanionBcastCache -or ((Get-Date) - $script:CompanionBcastCacheAt).TotalSeconds -gt 60) {
+            $targets = @()
+            try {
+                foreach ($n in @(Get-PrivateNetworks)) {
+                    $ipBytes = ([System.Net.IPAddress]::Parse([string]$n.IPAddress)).GetAddressBytes()
+                    $bits = [int]$n.PrefixLength
+                    if ($bits -lt 8 -or $bits -gt 30) { continue }
+                    $mask = [uint32]([math]::Pow(2, 32) - [math]::Pow(2, 32 - $bits))
+                    $ipVal = ([uint32]$ipBytes[0] -shl 24) -bor ([uint32]$ipBytes[1] -shl 16) -bor ([uint32]$ipBytes[2] -shl 8) -bor [uint32]$ipBytes[3]
+                    $bc = ($ipVal -band $mask) -bor (-bnot $mask -band [uint32]::MaxValue)
+                    $targets += ('{0}.{1}.{2}.{3}' -f (($bc -shr 24) -band 255), (($bc -shr 16) -band 255), (($bc -shr 8) -band 255), ($bc -band 255))
+                }
+            } catch { }
+            $script:CompanionBcastCache = @($targets | Select-Object -Unique)
+            $script:CompanionBcastCacheAt = Get-Date
+        }
+        $sendTo = @($script:CompanionBcastCache) + '255.255.255.255'
+        foreach ($t in $sendTo) {
+            try { [void]$udp.Send($probe, $probe.Length, [System.Net.IPEndPoint]::new([System.Net.IPAddress]::Parse($t), $UdpPort)) } catch { }
+        }
+        Write-Log ("Invoke-CompanionDiscovery: probe sent to {0} on port {1}, waiting {2}ms" -f ($sendTo -join ', '), $UdpPort, $TimeoutMs) -Level DEBUG
 
         # ONE overall deadline: the receive timeout is re-set to the time that remains on
         # every loop, so ignored datagrams (our own probe looping back) never re-arm a full wait.
@@ -773,6 +801,16 @@ function Invoke-CompanionDiscovery {
 
                 if ($json.type -ne "VRHM_COMPANION") { continue }
                 if (-not $json.serial) { continue }
+                # Security: a serial must look like a serial, and the IP the reply claims must be
+                # the UDP sender address (a LAN device cannot steer a headset row to a third host).
+                if ([string]$json.serial -notmatch '^[A-Za-z0-9._-]{4,64}$') {
+                    Write-Log "Invoke-CompanionDiscovery: ignored reply with invalid serial from $($remoteEp.Address)" -Level DEBUG
+                    continue
+                }
+                if ([string]$json.ip -ne $remoteEp.Address.ToString()) {
+                    Write-Log "Invoke-CompanionDiscovery: ignored reply, claimed ip $($json.ip) differs from sender $($remoteEp.Address)" -Level DEBUG
+                    continue
+                }
 
                 $companion = [PSCustomObject]@{
                     Serial         = $json.serial

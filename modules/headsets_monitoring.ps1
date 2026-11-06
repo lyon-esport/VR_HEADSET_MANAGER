@@ -1370,7 +1370,7 @@ function Start-VRMonitor {
                     Write-Log ("Companion discovery runspace: " + $_.Exception.Message) -Level DEBUG
                 }
                 try { if (Test-ConfigChanged -ConfigFilePath $configFilePath) { Get-Config -ConfigFilePath $configFilePath | Out-Null } } catch {}
-                $interval = [Math]::Max(5, [int]$global:VRMonitor_refresh_timer)
+                $interval = [Math]::Max(30, [int]$global:VRMonitor_refresh_timer)
                 for ($s = 0; $s -lt $interval; $s++) {
                     Start-Sleep -Seconds 1
                     if ($sharedState["_stop_all"] -or $sharedState["_stop_companion"]) { return }
@@ -2131,31 +2131,40 @@ function Start-VRMonitor {
                         } catch { }
                     }
 
-                    # COMPANION DISCOVERY DISABLED (operator, 2026-10-18): the companion app is paused and
-                    # will be reworked. Its UDP bind on 5556 also failed every 5 s here ("only one usage of
-                    # each socket address"; the port was held by this very process). To re-enable, remove the
-                    # leading '#| ' markers of the block below. Nothing else changes: Sync-CompanionDiscoveryRunspace,
-                    # Invoke-CompanionDiscovery, $companionPollBlock and the shutdown handling stay in place.
-#|                     # Companion apps: discovery runs in its own runspace (S3-1, no blocking UDP
-#|                     # receive here). Apply what it published: heals IP drift by serial.
-#|                     try {
-#|                         Sync-CompanionDiscoveryRunspace -registry ([ref]$companionRunspace) -sharedState $sharedState `
-#|                             -scriptPath $global:ScriptPath -configFilePath $global:ConfigFilePath `
-#|                             -pollBlock $companionPollBlock
-#|                         if ($sharedState["_companion_results"]) {
-#|                             $companions = @($sharedState["_companion_results"])
-#|                             $sharedState["_companion_results"] = $null
-#|                             foreach ($c in $companions) {
-#|                                 if ($c.Serial -and $c.IP) {
-#|                                     Set-HeadsetIdentity -SerialNumber $c.Serial -IPAddress $c.IP `
-#|                                                         -Model $c.Model -Source 'companion' | Out-Null
-#|                                 }
-#|                             }
-#|                         }
-#|                     } catch {
-#|                         Write-Log ("VRMonitor: companion discovery failed: " + $_.Exception.Message) -Level DEBUG
-#|                     }
-
+                    # Companion apps: discovery runs in its own runspace (S3-1, no blocking UDP
+                    # receive here). Apply what it published: heals IP drift by SERIAL, only for a
+                    # serial already in the registry (Set-HeadsetIdentity without -AllowAdd never
+                    # adds). Replies were already checked in Invoke-CompanionDiscovery (serial
+                    # shape, claimed ip == UDP sender).
+                    try {
+                        Sync-CompanionDiscoveryRunspace -registry ([ref]$companionRunspace) -sharedState $sharedState `
+                            -scriptPath $global:ScriptPath -configFilePath $global:ConfigFilePath `
+                            -pollBlock $companionPollBlock
+                        if ($sharedState["_companion_results"]) {
+                            $companions = @($sharedState["_companion_results"])
+                            $sharedState["_companion_results"] = $null
+                            foreach ($c in $companions) {
+                                if (-not ($c.Serial -and $c.IP)) { continue }
+                                if (([string]$c.Serial) -like 'aid-*') {
+                                    # Unprovisioned app (Android id, not the headset serial): never move a row.
+                                    if (-not $script:companionAidLogged) { $script:companionAidLogged = @{} }
+                                    if (-not $script:companionAidLogged.ContainsKey([string]$c.IP)) {
+                                        $script:companionAidLogged[[string]$c.IP] = $true
+                                        Write-Log ("VRMonitor: companion at {0} answers with an unprovisioned serial ({1}); registry not updated" -f $c.IP, $c.Serial) -Level INFO
+                                    }
+                                    continue
+                                }
+                                $res = Set-HeadsetIdentity -SerialNumber $c.Serial -IPAddress $c.IP `
+                                                           -Model $c.Model -Source 'companion'
+                                if ($res -and $res.Action -eq 'updated') {
+                                    $knownHeadsets = @(Get-KnownHeadsets)
+                                    $lastFingerprint = ""
+                                }
+                            }
+                        }
+                    } catch {
+                        Write-Log ("VRMonitor: companion discovery failed: " + $_.Exception.Message) -Level DEBUG
+                    }
                     # Background LAN discovery: start/stop to match the config toggle, then
                     # drain whatever the sweep runspace published. Applying the results here
                     # keeps every registry write in the main thread, like the fast path above.

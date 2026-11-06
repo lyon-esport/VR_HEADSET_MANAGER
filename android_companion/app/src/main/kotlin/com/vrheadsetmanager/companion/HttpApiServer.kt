@@ -83,6 +83,7 @@ class HttpApiServer(port: Int, private val context: Context) : NanoHTTPD(port) {
         m["reporting"] = rUrl.isNotBlank()
         m["reportIntervalSec"] = tp.getInt(TelemetryReporter.PREF_REPORT_INTERVAL, 1)
         m["reporter"] = TelemetryReporter.Status.asMap()
+        m["components"] = CompanionService.componentsStatus()
         m["cap"] = linkedMapOf(
             "brand" to android.os.Build.MANUFACTURER, "model" to android.os.Build.MODEL,
             "appVersion" to BuildConfig.VERSION_NAME, "versionCode" to BuildConfig.VERSION_CODE,
@@ -163,7 +164,7 @@ class HttpApiServer(port: Int, private val context: Context) : NanoHTTPD(port) {
 
     private fun serveHealth() =
         newFixedLengthResponse(Response.Status.OK, "application/json",
-            """{"ok":true,"version":"${BuildConfig.VERSION_NAME}","versionCode":${BuildConfig.VERSION_CODE}}""")
+            """{"ok":true,"version":"${BuildConfig.VERSION_NAME}","versionCode":${BuildConfig.VERSION_CODE},"components":${CompanionService.componentsHealthJson()}}""")
 
     private fun serveInfo() =
         newFixedLengthResponse(Response.Status.OK, "application/json", DeviceInfo.getInfo(context))

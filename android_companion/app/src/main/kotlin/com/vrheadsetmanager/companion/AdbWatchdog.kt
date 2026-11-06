@@ -29,9 +29,10 @@ class AdbWatchdog(ctx: Context) {
     private var classicDoneForSession = false
     private var windowStart = 0L
     private var rewrites = 0
+    @Volatile var lastPeriodicAt = 0L
 
     private val periodic = object : Runnable {
-        override fun run() { tick("periodic"); handler.postDelayed(this, PERIOD_MS) }
+        override fun run() { lastPeriodicAt = SystemClock.elapsedRealtime(); tick("periodic"); handler.postDelayed(this, PERIOD_MS) }
     }
 
     fun start() {

@@ -4,7 +4,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.os.Build
-import android.provider.Settings
 
 class BootReceiver : BroadcastReceiver() {
 
@@ -13,10 +12,6 @@ class BootReceiver : BroadcastReceiver() {
         if (action != Intent.ACTION_LOCKED_BOOT_COMPLETED &&
             action != Intent.ACTION_BOOT_COMPLETED &&
             action != Intent.ACTION_USER_UNLOCKED) return
-
-        val dp = SelfAdb.dpCtx(context)
-        // Device-protected prefs are readable before first unlock.
-        val prefs = dp.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
         // On/off is the "auto-enable ADB WiFi on boot" switch (PREF_AUTO_ADB); the mode (TLS/classic)
         // is AdbBootManager's own pref (TLS by default). applyBootMode itself re-checks the switch.
@@ -30,16 +25,6 @@ class BootReceiver : BroadcastReceiver() {
         }
 
         if (action == Intent.ACTION_BOOT_COMPLETED || action == Intent.ACTION_LOCKED_BOOT_COMPLETED) {
-            if (action == Intent.ACTION_BOOT_COMPLETED && prefs.getBoolean(PREF_AUTO_ADB, true) && !AdbBootManager.isPico()) {
-                try {
-                    // Only write when it is not already on (QGO or a previous write may have set it).
-                    if (Settings.Global.getInt(context.contentResolver, "adb_wifi_enabled", 0) != 1) {
-                        Settings.Global.putInt(context.contentResolver, "adb_wifi_enabled", 1)
-                    }
-                } catch (e: SecurityException) {
-                    // WRITE_SECURE_SETTINGS not yet granted via adb shell pm grant
-                }
-            }
             try {
                 val svc = Intent(context, CompanionService::class.java)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
