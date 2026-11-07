@@ -96,6 +96,24 @@
       background: rgba(59,130,246,0.1);
     }
 
+    /* Headset name in table: opens the headset settings overlay */
+    .mon-name-btn {
+      background: none; border: 0; padding: 0; margin: 0; cursor: pointer;
+      color: inherit; font: inherit; font-weight: 700; text-align: center;
+    }
+    .mon-name-btn:hover { color: #3b82f6; text-decoration: underline; }
+
+    /* Headset settings overlay (embeds headsets_settings.html?embed=1), same as the capture view */
+    #settings-overlay { position: fixed; inset: 0; z-index: 10000; background: rgba(0,0,0,0.6);
+      display: flex; align-items: center; justify-content: center; }
+    #settings-overlay[hidden] { display: none; }
+    .settings-overlay-box { position: absolute; inset: 0; }
+    #settings-overlay-frame { width: 100%; height: 100%; border: 0; display: block; background: transparent; }
+    #settings-overlay-close { position: absolute; top: 12px; right: 16px; z-index: 1; width: 34px; height: 34px;
+      border: 1px solid rgba(255,255,255,0.35); border-radius: 50%; background: rgba(20,20,20,0.85); color: #fff;
+      font-size: 22px; line-height: 1; cursor: pointer; }
+    #settings-overlay-close:hover { background: #000; }
+
     /* Status pills */
     .pill {
       display: inline-flex;
@@ -390,6 +408,15 @@
     </div>
   </header>
 
+  <!-- Headset settings overlay (embeds headsets_settings.html?embed=1), same as the capture view.
+       Must sit before the page script: that script looks the close button up at load time. -->
+  <div id="settings-overlay" hidden>
+    <div class="settings-overlay-box">
+      <button type="button" id="settings-overlay-close" title="Close (Esc)" aria-label="Close">&times;</button>
+      <iframe id="settings-overlay-frame" src="about:blank"></iframe>
+    </div>
+  </div>
+
   <div class="page">
     <div class="table-wrap">
       <table id="headsets-table">
@@ -401,7 +428,8 @@
             <th>Ping</th>
             <th>ADB</th>
             <th>Scrcpy</th>
-            <th>Charging</th>
+            <th>Power source</th>
+            <th>Battery charge</th>
             <th>Power</th>
             <th>Battery</th>
             <th>Remaining Time</th>
@@ -415,7 +443,7 @@
           </tr>
         </thead>
         <tbody id="table-body">
-          <tr><td colspan="16" id="empty-msg">Loading...</td></tr>
+          <tr><td colspan="18" id="empty-msg">Loading...</td></tr>
         </tbody>
       </table>
     </div>
@@ -600,7 +628,7 @@
     function renderTable(rows) {
       var body = document.getElementById('table-body');
       if (!rows.length) {
-        body.innerHTML = '<tr><td colspan="17" id="empty-msg">' +
+        body.innerHTML = '<tr><td colspan="18" id="empty-msg">' +
           '<div class="empty-title">No headsets found in the known headsets list.</div>' +
           '<div><a class="empty-add-btn" href="headsets_settings.html#manage">' +
             '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>' +
@@ -633,25 +661,48 @@
 
         var pingStr   = pingOk   ? 'true' : 'false';
         var scrcpyStr = scrcpyOk ? 'true' : 'false';
-        var chargingCell = (charging && chargingWattage)
-          ? metricButton(r, 'wattage', chargingWattage)
-          : (charging ? pill('Yes', 'pill-green') : pill('No', 'pill-red'));
+        // Power source: charger rating in W; '0' = unplugged; '' / '-' = unknown.
+        var srcV = metricNumber(chargingWattage);
+        var sourceCell;
+        if (srcV !== null && srcV > 0) sourceCell = metricButton(r, 'wattage', chargingWattage);
+        else if (srcV === 0 && !charging) sourceCell = '<span style="color:#888">Unplugged</span>';
+        else if (charging) sourceCell = pill('Yes', 'pill-green');
+        else sourceCell = '<span style="color:#333">-</span>';
+        // Battery charge: signed W into the battery (green charging, amber discharging).
+        var battV = metricNumber(r['battery_power']);
+        var battCell;
+        var battId = parseInt(r['id'], 10) || 0;
+        if (battV === null || !battId) {
+          battCell = '<span style="color:#333">-</span>';
+        } else {
+          var bTxt = (battV > 0 ? '+' : '') + battV.toFixed(1) + ' W';
+          var bCol = battV > 0 ? '#4ade80' : (battV < 0 ? '#fb923c' : '#888');
+          battCell = '<button class="batt-btn" data-metric-id="' + battId + '" data-metric-key="batt_power" ' +
+                     'data-metric-name="' + esc(r['name'] || '') + '" data-metric-val="' + battV + '" ' +
+                     'aria-label="Battery charge history for ' + esc(r['name'] || '') + '">' +
+                     '<span class="batt-val" style="color:' + bCol + '">' + esc(bTxt) + '</span></button>';
+        }
+        // Local probes (ADR-0046): companion-only fields, absent for ADB-only headsets.
+        var modelTip = r['refresh_hz'] ? (r['refresh_hz'] + ' Hz' + (r['refresh_forced_hz'] ? ' (forced)' : '')) : '';
+        var ctrlLTip = r['ctrl_left_state'] ? ('Left controller: ' + r['ctrl_left_state']) : '';
+        var ctrlRTip = r['ctrl_right_state'] ? ('Right controller: ' + r['ctrl_right_state']) : '';
         return '<tr data-ping="' + pingStr + '" data-scrcpy="' + scrcpyStr + '">' +
           '<td>' + esc(r['id'] || '') + '</td>' +
-          '<td><strong>' + esc(r['name'] || '') + '</strong></td>' +
+          '<td><button type="button" class="mon-name-btn" data-settings-headset="' + dn + '" title="Headset settings" aria-label="Headset settings for ' + esc(r['name'] || '') + '">' + esc(r['name'] || '') + '</button></td>' +
           '<td style="font-family:monospace;font-size:12px">' + esc(r['ip_address'] || '') + '</td>' +
           '<td class="center">' + pill(pingOk ? 'OK' : 'KO', pingOk ? 'pill-green' : 'pill-red') + '</td>' +
           '<td class="center">' + pill(adbOk  ? ('OK' + (r['adb_transport'] ? ' ' + r['adb_transport'] + (r['adb_transport'] === 'WiFi' && r['adb_wifi_mode'] ? ' (' + r['adb_wifi_mode'] + ')' : '') : '')) : 'KO', adbOk  ? 'pill-green' : 'pill-red') + '</td>' +
           '<td class="center">' + pill(scrcpyOk ? 'OK' : 'OFF', scrcpyOk ? 'pill-blue' : 'pill-orange') + '</td>' +
-          '<td class="center">' + chargingCell + '</td>' +
+          '<td class="center">' + sourceCell + '</td>' +
+          '<td class="center">' + battCell + '</td>' +
           '<td class="center">' + powerPill + '</td>' +
           '<td>' + metricButton(r, 'battery', r['battery']) + '</td>' +
           '<td style="color:#888;font-size:12px">' + esc(timeCell) + '</td>' +
-          '<td>' + metricButton(r, 'ctrl_left', r['battery_ctrl_left']) + '</td>' +
-          '<td>' + metricButton(r, 'ctrl_right', r['battery_ctrl_right']) + '</td>' +
+          '<td title="' + esc(ctrlLTip) + '">' + metricButton(r, 'ctrl_left', r['battery_ctrl_left']) + '</td>' +
+          '<td title="' + esc(ctrlRTip) + '">' + metricButton(r, 'ctrl_right', r['battery_ctrl_right']) + '</td>' +
           '<td>' + metricButton(r, 'temp', r['temp']) + '</td>' +
           '<td>' + metricButton(r, 'cpu_temp', r['cpu_temp']) + '</td>' +
-          '<td style="color:#666">' + esc(r['model'] || '-') + '</td>' +
+          '<td style="color:#666" title="' + esc(modelTip) + '">' + esc(r['model'] || '-') + (r['refresh_hz'] ? ' <span style="font-size:11px">' + esc(r['refresh_hz']) + ' Hz' + (r['refresh_forced_hz'] ? ' (forced)' : '') + '</span>' : '') + '</td>' +
           '<td>' + appCell + '</td>' +
           '<td><button class="mon-launch-btn" data-launch-app="' + dn + '" title="Launch an app on ' + esc(r['name'] || '') + '">' +
             '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>' +
@@ -1267,7 +1318,35 @@
     // above stays as the fallback when the push channel is unavailable.
     if (window.LiveEvents) { LiveEvents.subscribe('headset_status', pollHeadsetsStatus); }
 
+    // Headset settings shown over the table (the page stays loaded), same overlay as the capture view
+    function openSettingsOverlay(dn) {
+      document.getElementById('settings-overlay-frame').src =
+        'headsets_settings.html?embed=1&headset=' + encodeURIComponent(dn);
+      document.getElementById('settings-overlay').hidden = false;
+    }
+    function closeSettingsOverlay() {
+      var ov = document.getElementById('settings-overlay');
+      if (ov.hidden) return;
+      ov.hidden = true;
+      document.getElementById('settings-overlay-frame').src = 'about:blank';
+    }
+    document.getElementById('settings-overlay-close').addEventListener('click', closeSettingsOverlay);
+    document.getElementById('settings-overlay').addEventListener('click', function(e) {
+      if (e.target === this) closeSettingsOverlay();
+    });
+    document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeSettingsOverlay(); });
+    window.addEventListener('message', function(e) {
+      if (e.data === 'vrhm-close-settings') closeSettingsOverlay();
+    });
+
     document.getElementById('headsets-table').addEventListener('click', function(e) {
+      var nameBtn = e.target.closest('[data-settings-headset]');
+      if (nameBtn && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) {
+        e.preventDefault();
+        openSettingsOverlay(nameBtn.dataset.settingsHeadset);
+        return;
+      }
+
       var btn = e.target.closest('[data-launch-app]');
       if (btn) { openLaunchModal(btn.dataset.launchApp); return; }
 

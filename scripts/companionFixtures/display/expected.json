@@ -1,0 +1,5 @@
+{
+  "q3_72_forced.txt": { "refreshHz": 72, "refreshForcedHz": 72 },
+  "synthetic_not_forced.txt": { "refreshHz": 90, "refreshForcedHz": null },
+  "synthetic_render_only.txt": { "refreshHz": 120, "refreshForcedHz": null }
+}

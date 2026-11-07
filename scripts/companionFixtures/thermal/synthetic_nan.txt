@@ -1,0 +1,9 @@
+Thermal Status: 0
+Current temperatures from HAL:
+	Temperature{mValue=NaN, mType=0, mName=cpu-0, mStatus=0}
+	Temperature{mValue=0.0, mType=0, mName=cpu-1, mStatus=0}
+	Temperature{mValue=200.0, mType=0, mName=cpu-2, mStatus=0}
+	Temperature{mValue=55.5, mType=1, mName=gpuss-0, mStatus=0}
+	Temperature{mValue=44.0, mType=3, mName=soc-usr, mStatus=0}
+	Temperature{mValue=47.0, mType=3, mName=rf-usr, mStatus=0}
+Current cooling devices from HAL:

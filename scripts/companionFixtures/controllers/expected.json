@@ -1,0 +1,7 @@
+{
+  "q3_searching.txt": { "ctrlLeft": null, "ctrlRight": null, "ctrlLeftState": "searching", "ctrlRightState": "searching" },
+  "synthetic_none.txt": { "ctrlLeft": null, "ctrlRight": null, "ctrlLeftState": "none", "ctrlRightState": "none" },
+  "synthetic_connected.txt": { "ctrlLeft": 85, "ctrlRight": 90, "ctrlLeftState": "connected", "ctrlRightState": "connected" },
+  "synthetic_left_only.txt": { "ctrlLeft": 55, "ctrlRight": null, "ctrlLeftState": "connected", "ctrlRightState": "none" },
+  "synthetic_no_external_status.txt": { "ctrlLeft": null, "ctrlRight": 70, "ctrlLeftState": "none", "ctrlRightState": "unknown" }
+}

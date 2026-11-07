@@ -61,6 +61,8 @@
 /sources/MediaMTX/mediamtx_v1.20.1_windows_amd64/
 /sources/scrcpy/scrcpy-win64-v5.0.1/
 /sources/sqlite/System.Data.SQLite-1.0.119/
+# Brand icon only (console window icon, Set-ConsoleWindowIcon); the rest of graph_assets is design art.
+/sources/graph_assets/VR_HEADSET_MANAGER.ico
 
 # --- ffmpeg is never shipped (exclusions win over any include above) ---
 !/sources/ffmpeg/

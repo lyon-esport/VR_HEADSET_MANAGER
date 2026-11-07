@@ -1,0 +1,1 @@
+  Paired device: 59bbdc5721872096, Type:  Right, Model: RUBY, Battery:  70%, isAttached: 0, Status: Connected, TrackingStatus: TRACKING

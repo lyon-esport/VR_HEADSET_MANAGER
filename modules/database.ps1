@@ -1469,6 +1469,7 @@ function Import-LegacyDataFiles {
                 Battery                = [string](Get-LegacyField $r 'Battery' '-')
                 Charging               = [string](Get-LegacyField $r 'Charging' '-')
                 ChargingWattage        = [string](Get-LegacyField $r 'ChargingWattage' '-')
+                BatteryPower           = [string](Get-LegacyField $r 'BatteryPower' '-')
                 Temp                   = [string](Get-LegacyField $r 'Temp' '-')
                 CpuTemp                = [string](Get-LegacyField $r 'CpuTemp' '-')
                 GpuTemp                = [string](Get-LegacyField $r 'GpuTemp' '-')

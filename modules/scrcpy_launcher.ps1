@@ -167,7 +167,7 @@ function Get-HeadsetScreenFrame {
         $scrcpyArgs = @('-s', $device.DeviceId, '--no-window', '--no-playback', '--no-audio',
                         '--video-codec=h264', "--record=`"$tmpMkv`"", '--record-format=mkv',
                         "--time-limit=$DurationSec")
-        $tpl = if ($Headset.Model) { $global:scrcpyParameters.($Headset.Model) } else { $null }
+        $tpl = if ($Headset.Model) { $global:scrcpyParameters.(Resolve-ScrcpyModelKey -Model ([string]$Headset.Model)) } else { $null }
         if ($tpl -and $tpl.video_encoder -and (-not $tpl.video_codec -or $tpl.video_codec -eq 'h264')) {
             $scrcpyArgs += ("--video-encoder={0}" -f $tpl.video_encoder)
         }
@@ -1786,7 +1786,7 @@ function start-screenCopy {
     $launchWifiMode = if ($captureDevice.ConnectionType -eq 'WiFi' -and $captureDevice.PSObject.Properties['WifiMode']) { [string]$captureDevice.WifiMode } else { '' }
     $launchWifiEndpoint = if ($captureDevice.ConnectionType -eq 'WiFi') { [string]$adb_device } else { '' }
     Write-Log ("scrcpy capture for {0} over {1}{2} ({3})" -f $displayName, $captureDevice.ConnectionType, $(if ($launchWifiMode) { " $launchWifiMode" } else { '' }), $adb_device) -Level INFO
-    $headsetModel   = Get-HeadsetModel -Device $captureDevice
+    $headsetModel   = Resolve-ScrcpyModelKey -Model (Get-HeadsetModel -Device $captureDevice)
     Write-Log -Message ($msg.Scrcpy.ModelDetected -f $headsetModel) -Level "INFO"
     $modelTemplate  = $global:scrcpyParameters.$headsetModel
     $sourceCodec    = if ($modelTemplate -and $modelTemplate.video_codec) { $modelTemplate.video_codec } else { 'h264' }
@@ -3245,7 +3245,7 @@ function Watch-ScrcpyProcesses {
                 $shouldRestart = $false
                 $headsetProfile = if ($headset.ScrcpyProfile) { $headset.ScrcpyProfile } else { "R-N-45-20" }
                 $expectedRecording = ($headset.Record -eq "True")
-                $headsetModel = $headsetInfos.Model
+                $headsetModel = Resolve-ScrcpyModelKey -Model ([string]$headsetInfos.Model)
                 $safeName = Convert-Displayname $headset.Name
 
                 $pipeline = $global:HeadsetPipelines[$safeName]

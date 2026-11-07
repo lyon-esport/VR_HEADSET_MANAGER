@@ -1,0 +1,7 @@
+Thermal Status: 1
+Cached temperatures:
+	Temperature{mValue=50.25, mType=0, mName=cpu0, mStatus=0}
+	Temperature{mValue=48.0, mType=0, mName=cpu1, mStatus=0}
+	Temperature{mValue=52.0, mType=1, mName=gpu0, mStatus=0}
+	Temperature{mValue=35.0, mType=3, mName=VIRTUAL-SKIN, mStatus=0}
+	Temperature{mValue=47.0, mType=3, mName=soc-usr, mStatus=0}

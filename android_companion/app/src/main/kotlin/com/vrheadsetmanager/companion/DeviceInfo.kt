@@ -90,6 +90,7 @@ object DeviceInfo {
             "adb_wifi_enabled" to (Settings.Global.getInt(context.contentResolver, "adb_wifi_enabled", 0) == 1),
             "auto_adb_wifi"    to prefs.getBoolean(BootReceiver.PREF_AUTO_ADB, true),
             "companion_port"   to CompanionService.HTTP_PORT,
+            "watchdog"         to OnDeviceWatchdog.status(),
             "version"          to BuildConfig.VERSION_NAME,
             "versionCode"      to BuildConfig.VERSION_CODE
         )

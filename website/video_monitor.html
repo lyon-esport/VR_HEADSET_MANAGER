@@ -133,6 +133,18 @@
     }
     .cell:hover .drag-handle-btn { opacity: 1; }
     .cell-action-btn.drag-handle-btn:active { cursor: grabbing; }
+    /* Headset settings button: top-left, under the drag handle (30px + 4px gap) */
+    .cell-action-btn.settings-corner-btn {
+      position: absolute;
+      top: 42px; left: 8px;
+      z-index: 30;
+      opacity: 0;
+      transition: opacity 0.15s, background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    /* Hidden by default like the drag handle; shown on hover, or while the window has focus (clicked) */
+    .cell:hover .settings-corner-btn,
+    .cell:focus-within .settings-corner-btn,
+    .cell-action-btn.settings-corner-btn:focus-visible { opacity: 1; }
     /* Iframes swallow dragover/drop events: let them reach the cells while dragging */
     #grid.reordering iframe { pointer-events: none; }
     .cell.dragging { opacity: 0.5; }
@@ -148,7 +160,6 @@
     }
     .cell.no-stream .video-frame    { display: none; }
     .cell.no-stream .status-wrapper { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 3px; }
-    .cell.no-stream .cell-actions   { opacity: 1; }
     .cell.no-stream .running-app    { display: none !important; }
 
     /* Flex row-break: forces streaming cells into their own row above offline tiles */
@@ -222,7 +233,8 @@
       opacity: 0;
       transition: opacity 0.15s;
     }
-    .cell:hover .cell-actions { opacity: 1; }
+    .cell:hover .cell-actions,
+    .cell:focus-within .cell-actions { opacity: 1; }
     .cell-action-btn {
       display: flex;
       align-items: center;
@@ -1701,19 +1713,19 @@
           '<iframe class="status-frame" src="' + dn + '[monitoring].html" scrolling="no"></iframe>' +
         '</div>' +
         dragHandle +
+        '<a class="cell-action-btn settings-corner-btn" data-settings-headset="' + dn + '" href="headsets_settings.html?headset=' + dn + '" title="Headset settings" aria-label="Headset settings">' +
+          '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+            '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/>' +
+            '<line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/>' +
+            '<line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/>' +
+            '<line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>' +
+          '</svg>' +
+        '</a>' +
         '<div class="cell-actions">' +
           '<a class="cell-action-btn" href="' + dn + '[video].html" target="_blank" title="Open fullscreen" aria-label="Open fullscreen">' +
             '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
               '<polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>' +
               '<line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>' +
-            '</svg>' +
-          '</a>' +
-          '<a class="cell-action-btn" data-settings-headset="' + dn + '" href="headsets_settings.html?headset=' + dn + '" title="Headset settings" aria-label="Headset settings">' +
-            '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
-              '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/>' +
-              '<line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/>' +
-              '<line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/>' +
-              '<line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>' +
             '</svg>' +
           '</a>' +
           '<button class="cell-action-btn launch-app-btn" data-launch-app="' + dn + '" title="Launch app" aria-label="Launch app">' +

@@ -24,8 +24,9 @@ import java.util.UUID
  * next push is full. Against a v1 PC (no "proto":2 in the response) it falls back to the v1 behaviour:
  * apps sent whole, full resend every 5 min, fixed 5 s keepalive.
  *
- * No self-ADB session is opened here any more (finding F12): controllers, CPU/GPU/skin temperature
- * are read by the PC over ADB.
+ * No self-ADB session is opened here: the local shell probes (ADR-0046, [ProbeEngine] over the one
+ * [ShellSession]) feed controllers, CPU/GPU/skin temperature and the refresh rate into the collector.
+ * A withdrawn probe is announced as "unknown"; every [fullResendMs] a periodic full push is sent.
  */
 class TelemetryReporter(private val ctx: Context) {
 
@@ -66,7 +67,8 @@ class TelemetryReporter(private val ctx: Context) {
     }
 
     private inner class Loop {
-        private val gson = Gson()
+        private val gson = Gson()   // cap and other objects: null entries dropped as before
+        private val gsonNulls = com.google.gson.GsonBuilder().serializeNulls().create()   // POST body: null = known-absent field
         private val rnd = Random()
         private val thread = HandlerThread("vrhm-telemetry")
         private lateinit var handler: Handler
@@ -91,6 +93,7 @@ class TelemetryReporter(private val ctx: Context) {
         private var serverKeepaliveSec = 5
         private var serverAppsSig: String? = null
         private var hot = false
+        private var fullResendMs = 300_000L
 
         // Timing (elapsedRealtime)
         private var lastAttemptAt = 0L
@@ -155,9 +158,10 @@ class TelemetryReporter(private val ctx: Context) {
         }
 
         private inner class Built(val body: JsonObject, val changed: Boolean, val sentFields: Map<String, Any>,
-                            val appsSnap: Map<String, String>?, val appsSig: String?, val capJson: String?)
+                            val appsSnap: Map<String, String>?, val appsSig: String?, val capJson: String?,
+                            val unknownSent: List<String>)
 
-        private fun build(full: Boolean): Built {
+        private fun build(full: Boolean, periodic: Boolean): Built {
             val body = JsonObject()
             val t = now()
             body.addProperty("proto", 2)
@@ -165,6 +169,7 @@ class TelemetryReporter(private val ctx: Context) {
             body.addProperty("run", run)
             body.addProperty("seq", seq + 1)
             body.addProperty("full", full)
+            if (periodic) body.addProperty("periodic", true)
             var changed = full
             val sent = LinkedHashMap<String, Any>()
             val age = JsonObject()
@@ -176,6 +181,14 @@ class TelemetryReporter(private val ctx: Context) {
                 }
             }
             if (sent.isNotEmpty()) body.add("age", age)
+
+            // Fields a probe no longer delivers: the PC hands them back to its ADB fallback.
+            if (full) collector.withdrawn.clear()
+            val unk = if (full) emptyList() else collector.withdrawn.toList()
+            if (unk.isNotEmpty()) {
+                val ua = JsonArray(); unk.forEach { ua.add(it) }
+                body.add("unknown", ua); changed = true
+            }
             if (lastRtt > 0) body.addProperty("rtt", lastRtt)
 
             // Capability block: on full pushes and when it changed.
@@ -191,8 +204,9 @@ class TelemetryReporter(private val ctx: Context) {
             var sigOut: String? = null
             if (ourSig.isNotEmpty()) {
                 val cur = collector.appsMap
+                if (periodic) body.addProperty("appsSig", ourSig)
                 val pcDiffers = proto2 && serverAppsSig != null && serverAppsSig != ourSig
-                val needList = full || !proto2 && ourSig != ackedAppsSig ||
+                val needList = (full && !periodic) || !proto2 && ourSig != ackedAppsSig ||
                     (pcDiffers && !(forcedAppsSig == ourSig && t - forcedAppsAt < 600_000L))
                 if (needList) {
                     body.addProperty("appsSig", ourSig)
@@ -209,7 +223,7 @@ class TelemetryReporter(private val ctx: Context) {
                     snap = cur.mapValues { it.value.version }; sigOut = ourSig; changed = true
                 }
             }
-            return Built(body, changed, sent, snap, sigOut, capOut)
+            return Built(body, changed, sent, snap, sigOut, capOut, unk)
         }
 
         private fun appsArray(pkgs: Collection<String>): JsonArray {
@@ -230,8 +244,9 @@ class TelemetryReporter(private val ctx: Context) {
             val t = now()
             if (t < blockedUntil) { scheduleAt(blockedUntil); return }
 
-            val full = needFull || (!proto2 && t - lastFullAt > 300_000L)
-            val b = build(full)
+            val periodic = !needFull && t - lastFullAt > fullResendMs
+            val full = needFull || periodic
+            val b = build(full, periodic)
             val keepaliveDue = t - lastOkAt >= keepaliveMs()
             if (!b.changed && !keepaliveDue) { scheduleAt(lastOkAt + keepaliveMs()); return }
             if (b.changed && !full && t - lastAttemptAt < minGapMs()) { scheduleAt(lastAttemptAt + minGapMs()); return }
@@ -245,6 +260,10 @@ class TelemetryReporter(private val ctx: Context) {
                 if (full) { lastFullAt = t2; needFull = false }
                 for ((k, v) in b.sentFields) acked[k] = v
                 if (full) acked.keys.retainAll(collector.values.keys)
+                if (b.unknownSent.isNotEmpty()) {
+                    acked.keys.removeAll(b.unknownSent.toSet())
+                    collector.withdrawn.removeAll(b.unknownSent.toSet())
+                }
                 b.appsSnap?.let { ackedApps = it }
                 b.appsSig?.let { ackedAppsSig = it }
                 b.capJson?.let { ackedCap = it }
@@ -278,13 +297,37 @@ class TelemetryReporter(private val ctx: Context) {
                 j.get("keepaliveSec")?.takeIf { it.isJsonPrimitive }?.asInt?.let { serverKeepaliveSec = it }
                 j.get("staleSec")?.takeIf { it.isJsonPrimitive }?.asInt?.let { Status.staleSec = it }
                 j.get("hot")?.takeIf { it.isJsonPrimitive }?.asBoolean?.let { hot = it }
+                fullResendMs = (j.get("fullResendMin")?.takeIf { it.isJsonPrimitive }?.asInt?.coerceIn(1, 60) ?: 5) * 60_000L
+                applyProbeControl(j)
                 if (j.get("requestFull")?.takeIf { it.isJsonPrimitive }?.asBoolean == true) needFull = true
                 serverAppsSig = j.get("appsSig")?.takeIf { it.isJsonPrimitive }?.asString
                 j.get("tokenEpoch")?.takeIf { it.isJsonPrimitive }?.asInt?.let { storeEpoch(it) }
             } else {
                 proto2 = false   // PC rolled back (or v1): own full resend, fixed keepalive
+                fullResendMs = 300_000L
                 serverAppsSig = null
             }
+        }
+
+        /** probesEnabled / probes (local-probes.md section 7); unknown keys and ids are ignored by the engine. */
+        private fun applyProbeControl(j: JsonObject) {
+            try {
+                val en = j.get("probesEnabled")?.takeIf { it.isJsonPrimitive }?.asBoolean
+                var ov: MutableMap<String, Pair<Boolean?, Int?>>? = null
+                val po = j.get("probes")?.takeIf { it.isJsonObject }?.asJsonObject
+                if (po != null) {
+                    ov = HashMap()
+                    for ((id, v) in po.entrySet()) {
+                        if (!v.isJsonObject) continue
+                        val o = v.asJsonObject
+                        ov[id] = Pair(
+                            o.get("enabled")?.takeIf { it.isJsonPrimitive }?.asBoolean,
+                            o.get("everySec")?.takeIf { it.isJsonPrimitive }?.asInt
+                        )
+                    }
+                } else if (j.has("probesEnabled")) ov = HashMap()   // a v2 PC without overrides = catalogue defaults
+                ProbeEngine.applyControl(en, ov)
+            } catch (_: Throwable) {}
         }
 
         private fun storeEpoch(e: Int) {
@@ -297,6 +340,7 @@ class TelemetryReporter(private val ctx: Context) {
 
         private fun addField(o: JsonObject, key: String, value: Any) {
             when (value) {
+                is Absent -> o.add(key, com.google.gson.JsonNull.INSTANCE)
                 is Boolean -> o.addProperty(key, value)
                 is Int -> o.addProperty(key, value)
                 is Long -> o.addProperty(key, value)
@@ -311,7 +355,7 @@ class TelemetryReporter(private val ctx: Context) {
         private fun post(url: String, body: JsonObject): Resp {
             var c: HttpURLConnection? = null
             return try {
-                val bytes = gson.toJson(body).toByteArray(Charsets.UTF_8)
+                val bytes = gsonNulls.toJson(body).toByteArray(Charsets.UTF_8)
                 c = (URL(url).openConnection() as HttpURLConnection).apply {
                     requestMethod = "POST"
                     connectTimeout = 3000

@@ -292,6 +292,13 @@ function Get-Config {
     if ($compStale -lt $compStaleFloor) { $compStale = $compStaleFloor }
     $global:Companion_telemetry_stale_sec = $compStale
     $global:Companion_report_interval_sec = $compInterval
+    # Periodic full resend (E4, local-probes 7) in minutes (floor 1, cap 60) and the per-probe overrides
+    # sent back to the companion (id -> @{enabled;everySec}); both optional in an older config.json.
+    $compFullMin = if ($null -ne $configContent.companion.full_resend_min) { try { [int]$configContent.companion.full_resend_min } catch { 5 } } else { 5 }
+    if ($compFullMin -lt 1) { $compFullMin = 1 }
+    if ($compFullMin -gt 60) { $compFullMin = 60 }
+    $global:Companion_full_resend_min = $compFullMin
+    $global:Companion_probe_overrides = if ($null -ne $configContent.companion.probe_overrides) { $configContent.companion.probe_overrides } else { $null }
 
     $global:VRMonitor_refresh_timer = $configContent.VRMonitor.refresh_timer
 

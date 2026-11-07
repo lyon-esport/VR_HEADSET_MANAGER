@@ -1,0 +1,8 @@
+Current Battery Service state:
+  AC powered: false
+  USB powered: false
+  Wireless powered: false
+  Dock powered: false
+  Charge counter: 0
+  status: 3
+  level: 50

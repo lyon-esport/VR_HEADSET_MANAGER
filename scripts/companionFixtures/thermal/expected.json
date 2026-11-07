@@ -1,0 +1,5 @@
+{
+  "q3_hal.txt": { "cpuTemp": 61.4, "gpuTemp": 60.7, "skinTemp": 38.8 },
+  "synthetic_no_hal.txt": { "cpuTemp": 50.3, "gpuTemp": 52.0, "skinTemp": 35.0 },
+  "synthetic_nan.txt": { "cpuTemp": null, "gpuTemp": 55.5, "skinTemp": 47.0 }
+}

@@ -3,6 +3,9 @@ plugins {
     id 'kotlin-android'
 }
 
+def probeCatalogSrc = file("$rootDir/../templates/companion/probes.json")
+def probeAssetsDir = layout.buildDirectory.dir("generated/vrhm-assets").get().asFile
+
 android {
     namespace 'com.vrheadsetmanager.companion'
     compileSdk 34
@@ -11,8 +14,8 @@ android {
         applicationId "com.vrheadsetmanager.companion"
         minSdk 29
         targetSdk 34
-        versionCode 9
-        versionName "1.3.3"
+        versionCode 14
+        versionName "1.4.3"
     }
 
     buildFeatures {
@@ -47,11 +50,34 @@ android {
     sourceSets {
         main {
             kotlin.srcDirs = ['src/main/kotlin']
+            assets.srcDirs += [probeAssetsDir]
+        }
+        test {
+            kotlin.srcDirs = ['src/test/kotlin']
+        }
+    }
+
+    testOptions {
+        unitTests.all {
+            // Shared parity fixtures and the catalogue (T6.1 owns both files).
+            systemProperty 'vrhm.fixtures', file('../../scripts/companionFixtures').absolutePath
+            systemProperty 'vrhm.catalog', probeCatalogSrc.absolutePath
         }
     }
 }
 
+// Single-source probe catalogue (local-probes.md 2.1): copied into the APK assets at build time.
+tasks.register('copyProbeCatalog', Copy) {
+    doFirst {
+        if (!probeCatalogSrc.exists()) throw new GradleException("Probe catalogue missing: " + probeCatalogSrc)
+    }
+    from(probeCatalogSrc)
+    into(probeAssetsDir)
+}
+tasks.named('preBuild') { dependsOn 'copyProbeCatalog' }
+
 dependencies {
+    testImplementation 'junit:junit:4.13.2'
     implementation 'androidx.core:core-ktx:1.12.0'
     // Embedded HTTP server (~250 KB)
     implementation 'org.nanohttpd:nanohttpd:2.3.1'

@@ -190,6 +190,8 @@ function ConvertFrom-BatteryDump {
         MaxChargingCurrentA    = $null
         MaxChargingVoltageV    = $null
         MaxChargingWattageW    = $null
+        ChargeCounterUah       = $null
+        VoltageMv              = $null
         BatteryControllerLeft  = $null
         BatteryControllerRight = $null
     }
@@ -203,9 +205,10 @@ function ConvertFrom-BatteryDump {
     }
 
     # Charging state
-    $chargingMatch = $batteryInfo | Select-String "AC powered:\s+(true|false)"
-    if ($chargingMatch) {
-        $result.Charging = $chargingMatch.Matches[0].Groups[1].Value -eq "true"
+    # Charging = connected to power: AC, USB or wireless source plugged (same meaning as the companion).
+    $chargingMatch = @($batteryInfo | Select-String "(AC|USB|Wireless) powered:\s+(true|false)")
+    if ($chargingMatch.Count -gt 0) {
+        $result.Charging = (@($chargingMatch | Where-Object { $_.Matches[0].Groups[2].Value -eq "true" }).Count -gt 0)
     }
 
     # Temperature (tenths of degree)
@@ -229,7 +232,53 @@ function ConvertFrom-BatteryDump {
     if ($result.MaxChargingCurrentA -and $result.MaxChargingVoltageV) {
         $result.MaxChargingWattageW = [math]::Round($result.MaxChargingCurrentA * $result.MaxChargingVoltageV, 2)
     }
+
+    # Charge counter (uAh) and battery voltage (mV), for the battery charge power estimate.
+    # The voltage pattern is anchored so "Max charging voltage:" is not matched.
+    $counterMatch = $batteryInfo | Select-String "^\s*Charge counter:\s+(-?\d+)"
+    if ($counterMatch) { $result.ChargeCounterUah = [int64]$counterMatch.Matches[0].Groups[1].Value }
+    $battVoltMatch = $batteryInfo | Select-String "^\s*voltage:\s+(\d+)"
+    if ($battVoltMatch) { $result.VoltageMv = [int]$battVoltMatch.Matches[0].Groups[1].Value }
     return $result
+}
+
+function Get-BatteryChargePower {
+    <#
+    .SYNOPSIS
+    Battery charge power in watts (signed, + = into the battery) from the charge counter
+    delta between two polls, times the battery voltage. Pure apart from -State, a hashtable
+    the caller keeps per headset (Plugged, Uah, At, Last).
+
+    .DESCRIPTION
+    Returns '-' until two samples at least -MinSec apart exist, and again right after a plug
+    change (the baseline is reset). Between two valid samples the last value is returned.
+    The result is clamped to -100..100 and formatted with one decimal, invariant culture.
+
+    .EXAMPLE
+    Get-BatteryChargePower -State $st -Plugged $true -ChargeUah 3530000 -VoltageMv 4200 -Now $t
+    #>
+    param (
+        [Parameter(Mandatory=$true)][hashtable]$State,
+        [Parameter(Mandatory=$true)][bool]$Plugged,
+        $ChargeUah,
+        $VoltageMv,
+        [datetime]$Now = [datetime]::UtcNow,
+        [int]$MinSec = 20
+    )
+    if ($null -eq $ChargeUah -or $null -eq $VoltageMv -or [double]$VoltageMv -le 0) { return '-' }
+    $uah = [double]$ChargeUah
+    if (-not $State.ContainsKey('At') -or $null -eq $State.At -or $State.Plugged -ne $Plugged) {
+        $State.Plugged = $Plugged; $State.Uah = $uah; $State.At = $Now; $State.Last = '-'
+        return '-'
+    }
+    $dt = ($Now - [datetime]$State.At).TotalSeconds
+    if ($dt -lt $MinSec) { return [string]$State.Last }
+    $amps = (($uah - [double]$State.Uah) / 1000000.0) / ($dt / 3600.0)
+    $watts = $amps * ([double]$VoltageMv / 1000.0)
+    if ($watts -gt 100.0) { $watts = 100.0 } elseif ($watts -lt -100.0) { $watts = -100.0 }
+    $State.Uah = $uah; $State.At = $Now
+    $State.Last = $watts.ToString('0.0', [System.Globalization.CultureInfo]::InvariantCulture)
+    return [string]$State.Last
 }
 
 

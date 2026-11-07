@@ -963,6 +963,14 @@
 
     # VRHM Companion app install/provision (ADR-0042; console Add-headset C, web add-headset).
     Companion = @{
+        CapLabel       = "Companion"
+        CapLine        = "{0} - foreground: {1} - controllers: {2} - thermal: {3}"
+        RefreshLine    = "{0} Hz{1}"
+        RefreshForced  = " (forced)"
+        PowerLabel     = "Power"
+        PowerLine      = "Power source {0} - battery {1}"
+        PowerUnplugged = "unplugged"
+        PowerUnknown   = "-"
         InstallDone    = "VRHM Companion installed and provisioned."
         InstallFailed  = "VRHM Companion install failed: {0}"
         InstallNoUsb   = "No USB headset detected. Connect a headset over USB first."
@@ -981,6 +989,7 @@
         StepRequested  = "requested"
         StepKeys       = "{0} key(s)"
         NoAdbKey       = "no adb key fingerprint (run the adb server once)"
+        Revived        = "Companion on {0}: app was stopped, revived over ADB (service start, power allowlist, accessibility re-bound)"
         TokenHealed    = "Companion on {0}: token re-sent over ADB after repeated rejected pushes (token {1}, serial {2})"
         SerialHealed   = "Companion on {0}: adb serial re-sent over ADB (the app was matched by address only) - {1}"
         TokenEpochForeign = "Companion on {0} uses token epoch {1}, newer than this server ({2}): it belongs to another VRHM database. Not healed automatically."

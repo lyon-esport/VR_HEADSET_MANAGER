@@ -4,7 +4,6 @@ import android.content.Context
 import android.provider.Settings
 import android.util.Log
 import io.github.muntashirakon.adb.AbsAdbConnectionManager
-import java.util.concurrent.TimeUnit
 
 enum class BootMode { NONE, CLASSIC, TLS }
 
@@ -100,55 +99,26 @@ object AdbBootManager {
     private fun adbWifiEnabled(ctx: Context): Int =
         try { Settings.Global.getInt(ctx.contentResolver, "adb_wifi_enabled") } catch (e: Exception) { -1 }
 
-    /** Try TLS first (mDNS autoConnect), then classic on loopback. Null when neither works. */
-    fun selfConnect(ctx: Context): AbsAdbConnectionManager? {
-        val app = ctx.applicationContext
-        val mgr: AbsAdbConnectionManager = try { SelfAdb.get(app) } catch (e: Throwable) {
-            lastError = "key init: ${e.message}"; lastOk = false; lastWhen = System.currentTimeMillis()
-            log("SelfAdb init failed: ${e.message}")
-            return null
-        }
-        try { mgr.setTimeout(20_000, TimeUnit.MILLISECONDS) } catch (_: Throwable) {}
-        // TODO(orchestrator): the per-key "Allow debugging" dialog must be accepted by the
-        // approver before TLS connect can succeed. Assumed already trusted here.
-        // Pico never gets a usable TLS self-ADB session (see isPico): skip it entirely.
-        if (!isPico()) {
-            try {
-                if (mgr.autoConnect(app, 10_000)) { record(true, "tls", null); return mgr }
-            } catch (e: Throwable) { log("tls connect failed: ${e.message}") }
-        }
-        try {
-            if (mgr.connect("127.0.0.1", getClassicPort(app))) { record(true, "classic", null); return mgr }
-        } catch (e: Throwable) { log("classic connect failed: ${e.message}") }
-        record(false, null, if (isPico()) "pico: TLS self-ADB not supported" else "no adb transport reachable")
-        return null
-    }
-
-    private fun record(ok: Boolean, transport: String?, err: String?) {
+    /** Reports a connection attempt of [ShellSession] (the only owner of the self-ADB connection). */
+    fun recordConnect(ok: Boolean, transport: String?, err: String?) {
         lastOk = ok; lastWhen = System.currentTimeMillis(); lastTransport = transport
         lastError = if (ok) null else (err ?: lastError)
         log("connect ok=$ok transport=$transport err=$err")
     }
 
-    fun runShell(mgr: AbsAdbConnectionManager, cmd: String, timeoutMs: Long = 15000): String {
-        // libadb raises "Stream closed" when a short command ends instead of returning -1, so the
-        // output read so far is kept: the command did run (measured with prox_close: the broadcast
-        // was enqueued while the read threw). "shell-ex" is returned only when nothing was read.
-        val sb = StringBuilder()
-        return try {
-            mgr.openStream("shell:$cmd").use { stream ->
-                val input = stream.openInputStream()
-                val buf = ByteArray(4096)
-                val deadline = System.currentTimeMillis() + timeoutMs
-                while (System.currentTimeMillis() < deadline) {
-                    val n = input.read(buf)
-                    if (n < 0) break
-                    sb.append(String(buf, 0, n, Charsets.UTF_8))
-                    if (sb.length > 16384) break
-                }
-                sb.toString()
-            }
-        } catch (e: Throwable) { if (sb.isNotEmpty()) sb.toString() else "shell-ex ${e.message}" }
+    /**
+     * Runs "tcpip:<port>" through the shared session, then drops it (adbd restarts). Null when no
+     * connection could be made.
+     */
+    private fun runTcpip(app: Context): String? {
+        ShellSession.init(app)
+        // The lock is re-entrant: invalidate inside the block runs right after tcpip, before anyone else.
+        val res = ShellSession.withConnection(force = true) {
+            val r = openTcpip(it, getClassicPort(app))
+            ShellSession.invalidate("tcpip")
+            r
+        }
+        return res
     }
 
     /** "tcpip <port>" restarts adbd in classic mode; the connection usually drops, which is fine. */
@@ -161,10 +131,6 @@ object AdbBootManager {
                 if (n > 0) String(buf, 0, n, Charsets.UTF_8) else "(no reply)"
             }
         } catch (e: Throwable) { "tcpip-ex ${e.message}" }
-    }
-
-    private fun disconnectQuietly(mgr: AbsAdbConnectionManager?) {
-        try { mgr?.disconnect() } catch (_: Throwable) {}
     }
 
     /**
@@ -190,11 +156,9 @@ object AdbBootManager {
                     log("TLS mode: wireless debugging enabled (attempt $attempt)")
                     return
                 }
-                val mgr = selfConnect(app)
-                if (mgr != null) {
-                    val res = openTcpip(mgr, getClassicPort(app))
+                val res = runTcpip(app)
+                if (res != null) {
                     log("tcpip ${getClassicPort(app)} -> $res")
-                    disconnectQuietly(mgr)
                     return
                 }
             } catch (e: Throwable) {
@@ -235,11 +199,7 @@ object AdbBootManager {
         Thread {
             try {
                 ensureWirelessDebugging(app)
-                val mgr = selfConnect(app)
-                if (mgr != null) {
-                    log("forceClassic tcpip -> " + openTcpip(mgr, getClassicPort(app)))
-                    disconnectQuietly(mgr)
-                }
+                runTcpip(app)?.let { log("forceClassic tcpip -> $it") }
             } catch (e: Throwable) { lastError = e.message; log("forceClassicNow: ${e.message}") }
         }.start()
     }
@@ -249,8 +209,9 @@ object AdbBootManager {
         Thread {
             try {
                 ensureWirelessDebugging(app)
-                val mgr = selfConnect(app)
-                disconnectQuietly(mgr)
+                ShellSession.init(app)
+                // Connect through the single owner; the session then stays open (no disconnect).
+                if (ShellSession.withConnection(force = true) { true } != true) log("forceTlsNow: cannot connect (${ShellSession.lastError})")
             } catch (e: Throwable) { lastError = e.message; log("forceTlsNow: ${e.message}") }
         }.start()
     }

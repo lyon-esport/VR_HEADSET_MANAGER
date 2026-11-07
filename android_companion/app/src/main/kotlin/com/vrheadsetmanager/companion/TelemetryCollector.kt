@@ -27,12 +27,15 @@ import java.util.concurrent.Executor
  * A reading overwrites the previous one (latest-value map, no queue); [onChange] tells the reporter
  * something moved so it can coalesce and send.
  *
- * What is NOT collected, on purpose (the PC reads it over ADB): CPU/GPU/skin temperature (sysfs is
- * SELinux-denied on Horizon, so it is never probed in a loop) and controller batteries.
+ * CPU/GPU/skin temperature, controllers and the display refresh rate come from the local shell
+ * probes ([ProbeEngine], ADR-0046) through [applyProbe]; sysfs is SELinux-denied on Horizon.
  *
- * Fields: battery, charging, temp (battery), wattage (charging only), thermalStatus, headroom, rssi,
+ * Fields: battery, charging, temp (battery), sourceW (charger rating), battW (signed, + into battery), thermalStatus, headroom, rssi,
  * foregroundApp; plus the installed apps (pkg -> version/label).
  */
+/** Known-absent marker: travels as JSON null (e.g. controller not connected, refresh not forced). */
+object Absent
+
 class TelemetryCollector(
     private val ctx: Context,
     private val handler: Handler,
@@ -57,8 +60,16 @@ class TelemetryCollector(
     // Battery bookkeeping
     private var charging = false
     private var voltageMv = 0
-    private var wattOk = true
-    private var wattBad = 0
+    private var srcOk = true
+    private var battOk = true
+    private var battBad = 0
+    private var lastMaxCurrentUa = 0
+    private var lastMaxVoltageUv = 0
+    private var lastStatus = -1
+    private var signMul = 1
+    private var signConfirmed = false
+    private var cntRefUah = 0L
+    private var cntRefAt = 0L
 
     // Thermal
     private var headroomSeen = false
@@ -72,6 +83,9 @@ class TelemetryCollector(
     private var lastUsageQuery = 0L
 
     private var tick = 0
+
+    /** Wire fields the engine withdrew (probe stopped working); the reporter sends them as "unknown". */
+    val withdrawn = LinkedHashSet<String>()
 
     private val batteryReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context?, i: Intent?) { if (!stopped && i != null) handleBattery(i) }
@@ -172,30 +186,107 @@ class TelemetryCollector(
         val status = i.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
         val tempRaw = i.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1)
         voltageMv = i.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 0)
-        charging = status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL
+        val plugBits = i.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0)
+        charging = plugBits != 0
+        lastStatus = status
+        lastMaxCurrentUa = i.getIntExtra("max_charging_current", 0)
+        lastMaxVoltageUv = i.getIntExtra("max_charging_voltage", 0)
         if (level >= 0 && scale > 0) ch = put("battery", level * 100 / scale) or ch
         ch = put("charging", charging) or ch
+        ch = put("plugged", BatteryPowerMapper.pluggedName(plugBits)) or ch
+        ch = put("battStatus", BatteryPowerMapper.statusName(status)) or ch
+        try {
+            val bm = ctx.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+            val uah = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER).toLong()
+            val mah = BatteryPowerMapper.counterMah(uah)
+            if (mah != null) {
+                val cur = values["chargeCounterMah"]?.v as? Int
+                if (cur == null || Math.abs(cur - mah) >= 20) ch = put("chargeCounterMah", mah) or ch
+            }
+        } catch (_: Throwable) {}
         if (tempRaw > 0) ch = put("temp", tempRaw / 10.0) or ch
         ch = updateWattage() or ch
         if (ch) onChange()
     }
 
-    /** current_now x voltage, only while charging. Units/sign vary by vendor (VOD): implausible = never sent. */
+    /**
+     * Power source (sourceW: charger rating from the battery intent, 0 unplugged) and battery charge
+     * (battW: signed, + = into the battery). Raw CURRENT_NOW sign varies by vendor, so it is
+     * normalised: provisional from the status (CHARGING/DISCHARGING), then confirmed by the
+     * charge-counter trend, and the decided multiplier is kept.
+     */
     private fun updateWattage(): Boolean {
-        if (!wattOk) return false
-        if (!charging) return putNum("wattage", 0.0, 0.0)
-        return try {
+        var ch = false
+        if (srcOk) {
+            val w = if (!charging) 0.0 else {
+                val a = lastMaxCurrentUa.toDouble() * lastMaxVoltageUv.toDouble() / 1e12
+                Math.round(a * 10.0) / 10.0
+            }
+            if (w in 0.0..150.0) ch = putNum("sourceW", w, if (w == 0.0) 0.0 else 0.5) or ch
+        }
+        if (!battOk) return ch
+        try {
             val bm = ctx.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
             val raw = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)
-            if (raw == Int.MIN_VALUE || raw == 0 || voltageMv <= 0) return false
+            if (raw == Int.MIN_VALUE || voltageMv <= 0) return ch
             val a = Math.abs(raw.toDouble())
             val amps = if (a > 20000.0) a / 1e6 else a / 1e3
-            val w = Math.round(amps * voltageMv / 1000.0 * 10.0) / 10.0
-            if (w < 0.1 || w > 100.0) {
-                if (++wattBad >= 3) wattOk = false
-                false
-            } else { wattBad = 0; putNum("wattage", w, 0.5) }
-        } catch (_: Throwable) { wattOk = false; false }
+            calibrateSign(bm, raw)
+            val w = Math.round(signMul * Math.signum(raw.toDouble()) * amps * voltageMv / 1000.0 * 10.0) / 10.0
+            if (w < -100.0 || w > 100.0) {
+                if (++battBad >= 3) battOk = false
+            } else { battBad = 0; ch = putNum("battW", if (raw == 0) 0.0 else w, 0.5) or ch }
+        } catch (_: Throwable) { battOk = false }
+        return ch
+    }
+
+    private fun calibrateSign(bm: BatteryManager, raw: Int) {
+        if (raw == 0) return
+        val r = if (raw > 0) 1 else -1
+        // Provisional: the battery status says which way the current flows.
+        if (!signConfirmed) {
+            if (lastStatus == BatteryManager.BATTERY_STATUS_CHARGING) signMul = r
+            else if (lastStatus == BatteryManager.BATTERY_STATUS_DISCHARGING) signMul = -r
+        }
+        try {
+            val uah = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER).toLong()
+            val now = SystemClock.elapsedRealtime()
+            if (uah <= 0) return
+            if (cntRefAt == 0L) { cntRefUah = uah; cntRefAt = now; return }
+            val d = uah - cntRefUah
+            if (Math.abs(d) >= 3000 && now - cntRefAt >= 60_000L) {
+                signMul = (if (d > 0) 1 else -1) * r
+                signConfirmed = true
+                cntRefUah = uah; cntRefAt = now
+            } else if (now - cntRefAt > 600_000L) { cntRefUah = uah; cntRefAt = now }
+        } catch (_: Throwable) {}
+    }
+    // ---- local probes (ADR-0046) ------------------------------------------------------------------
+
+    /** Posts a probe result onto the owner thread. A null value is "known absent". */
+    fun applyProbe(fields: Map<String, Any?>) {
+        handler.post {
+            if (stopped) return@post
+            var ch = false
+            for ((k, v) in fields) {
+                withdrawn.remove(k)
+                ch = put(k, v ?: Absent) or ch
+            }
+            if (ch) onChange()
+        }
+    }
+
+    /** A probe stopped working: its fields leave the map and are announced as "unknown". */
+    fun withdraw(names: Collection<String>) {
+        handler.post {
+            if (stopped) return@post
+            var ch = false
+            for (k in names) {
+                if (values.remove(k) != null) ch = true
+                if (withdrawn.add(k)) ch = true
+            }
+            if (ch) onChange()
+        }
     }
 
     // ---- thermal headroom / rssi --------------------------------------------------------------
@@ -309,7 +400,7 @@ class TelemetryCollector(
         tick++
         if (tick % 2 == 0) {                 // every 30 s
             readHeadroom(); readRssi()
-            if (charging && updateWattage()) onChange()
+            if (updateWattage()) onChange()
         }
         if (tick % 40 == 0) { if (refreshApps()) onChange() }   // 10 min safety check
         if (foregroundMode() == "usage") queryUsageForeground()
@@ -320,20 +411,27 @@ class TelemetryCollector(
     fun isInteractive(): Boolean = try { pm.isInteractive } catch (_: Throwable) { true }
     fun isCharging(): Boolean = charging
 
+    private fun brandFamily(): String = family()
+
     fun capabilities(keepaliveSec: Int): Map<String, Any?> = linkedMapOf(
+        "family" to brandFamily(),
         "brand" to Build.MANUFACTURER,
         "model" to Build.MODEL,
         "appVersion" to BuildConfig.VERSION_NAME,
         "versionCode" to BuildConfig.VERSION_CODE,
         "hasTls" to !AdbBootManager.isPico(),
         "canSelfAdb" to !AdbBootManager.isPico(),
-        "canReadControllers" to false,
+        "canReadControllers" to (brandFamily() == "meta" && ProbeEngine.probeStates()["controllers"] == "ok"),
         "canForeground" to foregroundMode(),
-        "canThermal" to if (headroomSeen) "headroom" else "battery",
-        "canWattage" to wattOk,
+        "canThermal" to (if (ProbeEngine.probeStates()["thermal"] == "ok") "probe" else if (headroomSeen) "headroom" else "battery"),
+        "canSourceW" to (srcOk && lastMaxCurrentUa > 0 || !charging),
+        "canBattW" to battOk,
         "serialSource" to DeviceInfo.serialSource(ctx),
         "keepAwake" to KeepAwake.status(ctx),
-        "keepaliveSec" to keepaliveSec
+        "keepaliveSec" to keepaliveSec,
+        "probeCatalog" to ProbeEngine.catalogVersion(),
+        "probes" to ProbeEngine.probeStates(),
+        "shell" to ProbeEngine.shellState()
     )
 
     companion object {
@@ -343,6 +441,24 @@ class TelemetryCollector(
         @Volatile var a11yEvents = 0L
 
         /** Called by ApproveService on every window-state event (cheap: it just posts). */
+        /** Capabilities of the live collector, or null when none runs (single source for /status). */
+        fun liveCapabilities(keepaliveSec: Int): Map<String, Any?>? =
+            try { instance?.capabilities(keepaliveSec) } catch (_: Throwable) { null }
+
+        /** Brand family: pico / meta / other (same rule as the PC Get-HeadsetBrandFamily). */
+        fun family(): String {
+            if (AdbBootManager.isPico()) return "pico"
+            val s = ((Build.MANUFACTURER ?: "") + " " + (Build.BRAND ?: "")).lowercase()
+            return if (s.contains("oculus") || s.contains("meta")) "meta" else "other"
+        }
+
+        fun hasLive(): Boolean = instance != null
+        fun applyProbeLive(fields: Map<String, Any?>) { try { instance?.applyProbe(fields) } catch (_: Throwable) {} }
+        fun withdrawLive(names: Collection<String>) { try { instance?.withdraw(names) } catch (_: Throwable) {} }
+
+        /** A probe state moved (cap.probes changed): wake the reporter so the cap goes out. */
+        fun probeStateChangedLive() { try { instance?.let { c -> c.handler.post { if (!c.stopped) c.onChange() } } } catch (_: Throwable) {} }
+
         fun onWindowEvent(pkg: String?) { try { instance?.postWindow(pkg) } catch (_: Throwable) {} }
     }
 }

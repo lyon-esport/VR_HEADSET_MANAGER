@@ -389,7 +389,15 @@ function Invoke-RouteHeadsetStatus {
         $temp       = if ($row.Temp -and $row.Temp -ne '-') { [int]($row.Temp -replace ',','.') } else { $null }
         $timeMin    = if ($row.TimeRemainingMin -and $row.TimeRemainingMin -ne '-' -and $row.TimeRemainingMin -ne '') { [int]$row.TimeRemainingMin } else { $null }
 
+        $pw = if (Get-Command Get-CompanionPowerDisplay -ErrorAction SilentlyContinue) { Get-CompanionPowerDisplay -HeadsetId ([int]$headsetRow.ID) } else { @{} }
         $result = @{
+            plugged              = $pw.plugged
+            batt_status          = $pw.batt_status
+            charge_counter_mah   = $pw.charge_counter_mah
+            refresh_hz           = $pw.refresh_hz
+            refresh_forced_hz    = $pw.refresh_forced_hz
+            ctrl_left_state      = $pw.ctrl_left_state
+            ctrl_right_state     = $pw.ctrl_right_state
             id                   = [int]$headsetRow.ID
             name                 = $headsetRow.Name
             ping                 = [bool]($row.Ping -eq 'True')
@@ -404,6 +412,7 @@ function Invoke-RouteHeadsetStatus {
             battery_ctrl_right   = $battRight
             charging             = [bool]($row.Charging -eq 'True')
             charging_wattage     = if ($row.ChargingWattage -and $row.ChargingWattage -ne '-') { $row.ChargingWattage } else { '' }
+            battery_power        = if ($row.BatteryPower -and $row.BatteryPower -ne '-') { $row.BatteryPower } else { '' }
             temp                 = $temp
             power_state          = if ($row.PowerState -and $row.PowerState -ne '-') { $row.PowerState } else { '' }
             time_remaining_min   = $timeMin
@@ -473,6 +482,13 @@ function Invoke-RouteHeadsetSettings {
             } catch {}
         }
 
+        # T3.1 brand capability table (no ADB): what the companion reported, and whether TLS is possible.
+        $compCap = $null; $tlsOk = $true
+        try {
+            if (Get-Command Get-CompanionCapability -ErrorAction SilentlyContinue) { $compCap = Get-CompanionCapability -HeadsetId ([int]$headset.ID) }
+            if (Get-Command Test-HeadsetTlsCapable -ErrorAction SilentlyContinue) { $tlsOk = Test-HeadsetTlsCapable -Headset $headset }
+        } catch {}
+
         try {
         $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort -adb $adbPath
         if (-not $device) { throw "Could not connect to headset via ADB" }
@@ -511,6 +527,8 @@ function Invoke-RouteHeadsetSettings {
             infoSource       = $infoSrc
             infoSourceGlobal = $infoSrcGlobal
             companionInstalled = $ci
+            companionCap     = $compCap
+            tlsSupported     = $tlsOk
             keepAwake        = $kaWish
             keepAwakeStored  = $kaStored
             keepAwakeApplied = $kaApplied
@@ -520,6 +538,7 @@ function Invoke-RouteHeadsetSettings {
             Send-JsonResponse -Response $response -StatusCode 500 -Body @{
                 ok = $false; error = $_.Exception.Message
                 infoSource = $infoSrc; infoSourceGlobal = $infoSrcGlobal; companionInstalled = $ci
+                companionCap = $compCap; tlsSupported = $tlsOk
                 keepAwake = $kaWish; keepAwakeStored = $kaStored; keepAwakeApplied = $kaApplied
             }
         }
@@ -797,6 +816,13 @@ function Invoke-RouteHeadsetinfosource {
         $hid    = [int]$json.id
         $source = ([string]$json.source).Trim().ToLowerInvariant()
         if ($hid -le 0) { Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = 'id required' }; return }
+        if ($source -eq 'tls' -and (Get-Command Test-HeadsetTlsCapable -ErrorAction SilentlyContinue)) {
+            $hrow = @(Get-KnownHeadsetsCached) | Where-Object { [int]$_.ID -eq $hid } | Select-Object -First 1
+            if ($hrow -and -not (Test-HeadsetTlsCapable -Headset $hrow)) {
+                Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = 'ADB over TLS not supported on this headset' }
+                return
+            }
+        }
         if (-not (Set-HeadsetInfoSource -HeadsetId $hid -Source $source)) {
             Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = 'invalid source' }
             return
@@ -883,7 +909,15 @@ function Invoke-RouteHeadsetsStatus {
                 $h    = $_
                 $info = if ($infosCache) { $infosCache[[string]$h.ID] } else { $null }
                 $cs   = if (Get-Command Get-CompanionPushSummary -ErrorAction SilentlyContinue) { Get-CompanionPushSummary -HeadsetId ([int]$h.ID) } else { @{} }
+                $pw = if (Get-Command Get-CompanionPowerDisplay -ErrorAction SilentlyContinue) { Get-CompanionPowerDisplay -HeadsetId ([int]$h.ID) } else { @{} }
                 @{
+                    plugged                      = $pw.plugged
+                    batt_status          = $pw.batt_status
+                    charge_counter_mah   = $pw.charge_counter_mah
+                            refresh_hz           = $pw.refresh_hz
+                    refresh_forced_hz    = $pw.refresh_forced_hz
+                    ctrl_left_state      = $pw.ctrl_left_state
+                    ctrl_right_state     = $pw.ctrl_right_state
                     display_name          = Convert-Displayname $h.Name
                     name                  = $h.Name
                     id                    = [int]$h.ID
@@ -895,6 +929,7 @@ function Invoke-RouteHeadsetsStatus {
                     adb                 = [bool]($info.ADBWifi -eq 'True')
                     charging              = [bool]($info.Charging -eq 'True')
                     charging_wattage      = if ($info.ChargingWattage -and $info.ChargingWattage -ne '-') { $info.ChargingWattage } else { '' }
+                    battery_power         = if ($info.BatteryPower -and $info.BatteryPower -ne '-') { $info.BatteryPower } else { '' }
                     power_state           = if ($info.PowerState -and $info.PowerState -ne '-') { $info.PowerState } else { '' }
                     time_remaining_min    = if ($info.TimeRemainingMin -and $info.TimeRemainingMin -ne '-') { $info.TimeRemainingMin } else { '' }
                     battery               = if ($info.Battery -and $info.Battery -ne '-') { $info.Battery } else { '-' }

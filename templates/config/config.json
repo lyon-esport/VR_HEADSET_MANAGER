@@ -14,11 +14,13 @@
                 "companionFolder":  "VRHM Companion",
                 "companionApk":  "VRHM-Companion.apk",
                 "companionPackageName":  "com.vrheadsetmanager.companion",
-                "companionVersion":  "1.3.3"
+                "companionVersion": "1.4.3"
             },
     "companion":  {
                       "telemetry_stale_sec":  10,
-                      "report_interval_sec":  1
+                      "report_interval_sec":  1,
+                      "full_resend_min":  5,
+                      "probe_overrides":  {}
                   },
     "Logging":  {
                     "Comment-possibleValues":  "DEBUG,INFO,SUCCESS,WARNING,ERROR,NONE",
@@ -354,6 +356,9 @@
                                                                         }
                                                   },
                                       "PICO 4 Ultra":  {
+                                                           "model_codes":  [
+                                                                               "A92Y0"
+                                                                           ],
                                                            "views":  {
                                                                          "max":  {
                                                                                      "left_eye":  {

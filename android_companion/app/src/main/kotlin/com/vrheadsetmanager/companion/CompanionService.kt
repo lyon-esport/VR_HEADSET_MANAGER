@@ -50,6 +50,11 @@ class CompanionService : Service() {
         TelemetryReporter.active = telemetry
         telemetry?.start()
 
+        // Local shell probes (ADR-0046): one ShellSession, Meta only; results flow into the collector.
+        ShellSession.init(applicationContext)
+        ProbeEngine.start(applicationContext)
+        OnDeviceWatchdog.syncAsync(applicationContext)
+
         registerComponents()
         supHandler.postDelayed(superviseTick, SUP_FIRST_MS)
         }
@@ -130,6 +135,7 @@ class CompanionService : Service() {
 
     private fun supervise() {
         if (stopping) return
+        OnDeviceWatchdog.syncAsync(applicationContext)
         val now = SystemClock.elapsedRealtime()
         for (c in Comp.all) {
             if (c.probe()) { c.failures = 0; continue }
@@ -184,6 +190,7 @@ class CompanionService : Service() {
         stopping = true
         supHandler.removeCallbacksAndMessages(null)
         clearComponents()
+        ProbeEngine.stop()
         telemetry?.stop()
         TelemetryReporter.active = null
         watchdog?.stop()

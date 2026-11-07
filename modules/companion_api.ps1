@@ -415,7 +415,8 @@ function Get-HeadsetAdbToolsStatus {
     #>
     param(
         [Parameter(Mandatory)]$Device,
-        [string]$adb = $global:adbPath
+        [string]$adb = $global:adbPath,
+        [string]$Brand = ''
     )
     $compPkg = $global:CompanionPackageName
     $aePkg   = $global:ADBAutoEnablePackageName
@@ -424,16 +425,19 @@ function Get-HeadsetAdbToolsStatus {
     if ($global:ADBAutoEnableAPK -match '[-_](\d+(?:\.\d+)+)\.apk$') { $aeAvail = $Matches[1] }
 
     $compVer = Get-HeadsetAppVersion -Device $Device -Pkg $compPkg -adb $adb
-    $aeVer   = Get-HeadsetAppVersion -Device $Device -Pkg $aePkg   -adb $adb
-
-    return @(
+    $result = @(
         @{ key = 'companion'; packageName = $compPkg; name = 'VRHM Companion'; recommended = $true
            installed = [bool]$compVer; installedVersion = $compVer; availableVersion = $compAvail
-           upgrade = ([bool]$compVer -and $compAvail -and ($compVer -ne $compAvail)) },
-        @{ key = 'autoenable'; packageName = $aePkg; name = 'ADB Auto Enable'; recommended = $false
+           upgrade = ([bool]$compVer -and $compAvail -and ($compVer -ne $compAvail)) }
+    )
+    # ADB Auto Enable is refused on a Pico (ADR-0038): the entry is not offered for that brand.
+    if (Test-HeadsetAdbTlsSupported -Brand $Brand) {
+        $aeVer = Get-HeadsetAppVersion -Device $Device -Pkg $aePkg -adb $adb
+        $result += @{ key = 'autoenable'; packageName = $aePkg; name = 'ADB Auto Enable'; recommended = $false
            installed = [bool]$aeVer; installedVersion = $aeVer; availableVersion = $aeAvail
            upgrade = ([bool]$aeVer -and $aeAvail -and ($aeVer -ne $aeAvail)) }
-    )
+    }
+    return $result
 }
 
 
@@ -607,6 +611,12 @@ function Install-VrhmCompanion {
         $r = Invoke-AdbCmd -Device $Device -Command "appops set $pkg GET_USAGE_STATS allow" -ShellScript -adb $adb
         & $addStep 'grant GET_USAGE_STATS' ($r -ne $false) $(if ($r -ne $false) { 'granted' } else { 'appops set failed' })
     } catch { & $addStep 'grant GET_USAGE_STATS' $false $_.Exception.Message }
+
+    # b3. power-save allowlist: exempts the app from the background foreground-service start restriction
+    try {
+        $r = Invoke-AdbCmd -Device $Device -Command "dumpsys deviceidle whitelist +$pkg" -ShellScript -adb $adb
+        & $addStep 'battery allowlist' ($r -ne $false) $(if ($r -ne $false) { 'allowlisted' } else { 'deviceidle failed' })
+    } catch { & $addStep 'battery allowlist' $false $_.Exception.Message }
 
     # c. accessibility (ApproveService): append, never overwrite another enabled service
     try {
@@ -977,7 +987,7 @@ function Get-CompanionReportUrl {
 
 # The telemetry value field names carried on the wire and stored in the kv row. thermalStatus and
 # rssi (telemetry v2, D4) are stored in the row only; no database column and no info-record field.
-$script:CompanionTelemetryFields = @('battery', 'charging', 'wattage', 'temp', 'cpuTemp', 'gpuTemp', 'skinTemp', 'ctrlLeft', 'ctrlRight', 'foregroundApp', 'thermalStatus', 'rssi')
+$script:CompanionTelemetryFields = @('battery', 'charging', 'sourceW', 'battW', 'wattage', 'temp', 'cpuTemp', 'gpuTemp', 'skinTemp', 'ctrlLeft', 'ctrlRight', 'foregroundApp', 'thermalStatus', 'rssi', 'ctrlLeftState', 'ctrlRightState', 'plugged', 'battStatus', 'chargeCounterMah', 'refreshHz', 'refreshForcedHz')
 
 # Telemetry v2 server-side constants (telemetry-v2.md section 3 and 6).
 $script:CompanionKeepaliveSec = 5
@@ -1012,12 +1022,73 @@ function Get-CompanionTelemetryDoc {
     return $val
 }
 
+# T3.1 brand capability table. The normalised capability block the companion last reported
+# (`cap` of its full pushes): @{Known;Brand;Family;HasTls;CanSelfAdb;CanReadControllers;CanForeground;
+# CanThermal;CanSourceW;CanBattW;CanWattage (= either);SerialSource;AppVersion;VersionCode}. Known = $false (all other values $null)
+# when no cap was ever stored. Never throws. Example: (Get-CompanionCapability -HeadsetId 3).Family
+function Get-CompanionCapability {
+    param([Parameter(Mandatory)][int]$HeadsetId)
+    $r = [ordered]@{ Known = $false; Brand = $null; Family = $null; HasTls = $null; CanSelfAdb = $null
+        CanReadControllers = $null; CanForeground = $null; CanThermal = $null; CanSourceW = $null; CanBattW = $null; CanWattage = $null
+        SerialSource = $null; AppVersion = $null; VersionCode = $null; ProbeCatalog = $null; Probes = $null; Shell = $null }
+    try {
+        $doc = Get-CompanionTelemetryDoc -HeadsetId $HeadsetId
+        $cap = if ($doc -and $doc.PSObject.Properties['cap']) { $doc.cap } else { $null }
+        if ($cap) {
+            $get = { param($n) if ($cap.PSObject.Properties[$n]) { $cap.$n } else { $null } }
+            $r.Known = $true
+            $r.Brand = & $get 'brand'; $r.Family = & $get 'family'
+            $r.HasTls = & $get 'hasTls'; $r.CanSelfAdb = & $get 'canSelfAdb'
+            $r.CanReadControllers = & $get 'canReadControllers'; $r.CanForeground = & $get 'canForeground'
+            $r.CanThermal = & $get 'canThermal'
+            $legacyW = & $get 'canWattage'
+            $r.CanSourceW = & $get 'canSourceW'; if ($null -eq $r.CanSourceW) { $r.CanSourceW = $legacyW }
+            $r.CanBattW = & $get 'canBattW'; if ($null -eq $r.CanBattW) { $r.CanBattW = $legacyW }
+            $r.CanWattage = if ($null -eq $r.CanSourceW -and $null -eq $r.CanBattW) { $null } else { [bool]($r.CanSourceW -or $r.CanBattW) }
+            $r.SerialSource = & $get 'serialSource'; $r.AppVersion = & $get 'appVersion'
+            $r.VersionCode = & $get 'versionCode'
+            $r.ProbeCatalog = & $get 'probeCatalog'; $r.Probes = & $get 'probes'; $r.Shell = & $get 'shell'
+        }
+    } catch { }
+    return $r
+}
+
+# T3.1. Can this headset (registry row) do ADB over TLS? $false when its brand cannot
+# (Test-HeadsetAdbTlsSupported, ADR-0038) or the companion reported hasTls = false; else $true.
+# Never throws. Example: Test-HeadsetTlsCapable -Headset $row
+function Test-HeadsetTlsCapable {
+    param([Parameter(Mandatory)]$Headset)
+    try {
+        if (Get-Command Test-HeadsetAdbTlsSupported -ErrorAction SilentlyContinue) {
+            if (-not (Test-HeadsetAdbTlsSupported -Brand ([string]$Headset.Brand))) { return $false }
+        }
+        $id = 0
+        if ($Headset.PSObject.Properties['ID']) { [void][int]::TryParse([string]$Headset.ID, [ref]$id) }
+        if ($id -gt 0) {
+            $cap = Get-CompanionCapability -HeadsetId $id
+            if ($cap.Known -and $null -ne $cap.HasTls -and -not [bool]$cap.HasTls) { return $false }
+        }
+        return $true
+    } catch { return $true }
+}
+
+# T3.1. Pure. What ADB can fill per telemetry field for a brand: @{battery;thermal;wattage;foreground;
+# apps;controllers}. Controllers are not readable on a Pico (Get-HeadsetPollSnapshot skips
+# OVRRemoteService there). Example: (Get-HeadsetAdbFieldSupport -Brand 'Pico').controllers -> $false
+function Get-HeadsetAdbFieldSupport {
+    param([string]$Brand)
+    return @{
+        battery = $true; thermal = $true; wattage = $true; sourceW = $true; battW = $true; foreground = $true; apps = $true
+        controllers = -not ($Brand -match 'pico')
+    }
+}
+
 # Merges ONE push into app_kv companion_telemetry_<id> (telemetry v2, section 6). Call it inside the
 # caller's transaction (the route does) so the row and the apps ingest commit together. -Push keys:
 # Proto (1|2), Run, Seq, Full, Fields (hashtable wire name -> value; a $null value = explicit "known
 # absent", proto 2 only), AgeMs (hashtable name -> ms between observation and send), Cap (object or
 # $null: kept from the previous row when absent), StoreAppsSig (string; '' keeps the previous one),
-# IdMatch ('serial'|'address'), Rtt (ms).
+# IdMatch ('serial'|'address'), Rtt (ms), Unknown (string[] of field names the app withdrew).
 # Semantics: Full (or a new run) replaces the field set, otherwise the named fields MERGE. A proto 2
 # non-full push with no state for this run, or after a seq gap, sets RequestFull. Returns
 # @{Ok;RequestFull;Gap;PrevAppsSig;AppsSig}. Never throws.
@@ -1057,6 +1128,15 @@ function Update-CompanionTelemetryRow {
             foreach ($k in $names) { if ($null -ne $prev.$k) { $doc[$k] = $prev.$k } }
             foreach ($a in @($prev.absent)) { if ($a) { [void]$absent.Add([string]$a) } }
             if ($prev.obs) { foreach ($p in $prev.obs.PSObject.Properties) { $obs[$p.Name] = $p.Value } }
+        }
+        # Withdrawn fields (push key 'unknown'): no longer known by the app, so no longer fresh (local-probes 6.2).
+        if ($Push.ContainsKey('Unknown') -and $Push.Unknown) {
+            foreach ($u in @($Push.Unknown)) {
+                $un = [string]$u
+                if ($doc.Contains($un)) { $doc.Remove($un) }
+                while ($absent.Contains($un)) { $absent.Remove($un) }
+                if ($obs.Contains($un)) { $obs.Remove($un) }
+            }
         }
         foreach ($k in $names) {
             if (-not $fields.ContainsKey($k)) { continue }
@@ -1190,8 +1270,22 @@ function Set-HeadsetInfoFromCompanion {
         if ($null -ne $Telemetry.charging) {
             $chg = [bool]$Telemetry.charging
             $Info.Charging = $chg
-            if ($chg -and $null -ne $Telemetry.wattage) { $Info.ChargingWattage = ("{0}" -f [int]$Telemetry.wattage) }
-            elseif (-not $chg) { $Info.ChargingWattage = "-" }
+            # Power source = charger rating (sourceW). Unplugged = 0 W, not '-': metric_history only
+            # samples numeric values, so '-' left the last value on the graph until the next charge.
+            if (-not $chg) { $Info.ChargingWattage = "0" }
+            elseif ($null -ne $Telemetry.sourceW) { $Info.ChargingWattage = ([double]$Telemetry.sourceW).ToString("0.#", $inv) }
+        }
+        # Battery charge power: signed, + = into the battery, sent plugged or not. An app <= 1.4.2
+        # sends the magnitude as 'wattage': positive while charging, negative otherwise.
+        $bw = $null
+        if ($null -ne $Telemetry.battW) { $bw = [double]$Telemetry.battW }
+        elseif ($null -ne $Telemetry.wattage) {
+            $bw = [Math]::Abs([double]$Telemetry.wattage)
+            if ($null -ne $Telemetry.charging -and -not [bool]$Telemetry.charging) { $bw = -$bw }
+        }
+        if ($null -ne $bw) {
+            if ($bw -gt 100.0) { $bw = 100.0 } elseif ($bw -lt -100.0) { $bw = -100.0 }
+            $Info.BatteryPower = $bw.ToString("0.0", $inv)
         }
         if ($null -ne $Telemetry.temp)     { $Info.Temp     = ([double]$Telemetry.temp).ToString("0.0", $inv) }
         if ($null -ne $Telemetry.cpuTemp)  { $Info.CpuTemp  = ([double]$Telemetry.cpuTemp).ToString("0.0", $inv) }
@@ -1204,7 +1298,9 @@ function Set-HeadsetInfoFromCompanion {
         foreach ($a in $ab) {
             switch ([string]$a) {
                 'battery'   { $Info.Battery = '-' }
-                'wattage'   { $Info.ChargingWattage = '-' }
+                'sourceW'   { $Info.ChargingWattage = '-' }
+                'battW'     { $Info.BatteryPower = '-' }
+                'wattage'   { $Info.BatteryPower = '-' }
                 'temp'      { $Info.Temp = '-' }
                 'cpuTemp'   { $Info.CpuTemp = '-' }
                 'gpuTemp'   { $Info.GpuTemp = '-' }
@@ -1369,17 +1465,75 @@ function Get-CompanionPushSummary {
     return $o
 }
 
+# The per-probe overrides sent to the companion (local-probes section 7): $global:Companion_probe_overrides
+# (id -> @{enabled;everySec}), only ids present in the PC catalogue, everySec clamped to its min/max.
+# Returns an empty hashtable when none. Never throws. Example: Get-CompanionProbeOverrides
+function Get-CompanionProbeOverrides {
+    $out = @{}
+    try {
+        $ov = $global:Companion_probe_overrides
+        if (-not $ov) { return $out }
+        $props = if ($ov -is [hashtable]) { $ov.GetEnumerator() | ForEach-Object { [PSCustomObject]@{ Name = $_.Key; Value = $_.Value } } } else { $ov.PSObject.Properties }
+        foreach ($pr in $props) {
+            $id = [string]$pr.Name; $v = $pr.Value
+            if (-not $v) { continue }
+            $cat = $null
+            if (Get-Command Get-CompanionProbe -ErrorAction SilentlyContinue) { $cat = Get-CompanionProbe -Id $id }
+            if (-not $cat) { continue }
+            $e = @{}
+            $en = if ($v -is [hashtable]) { $v['enabled'] } else { $v.enabled }
+            $ev = if ($v -is [hashtable]) { $v['everySec'] } else { $v.everySec }
+            if ($null -ne $en) { $e.enabled = [bool]$en }
+            if ($null -ne $ev) {
+                $s = [int]$ev
+                if ($cat.PSObject.Properties['minEverySec'] -and $s -lt [int]$cat.minEverySec) { $s = [int]$cat.minEverySec }
+                if ($cat.PSObject.Properties['maxEverySec'] -and $s -gt [int]$cat.maxEverySec) { $s = [int]$cat.maxEverySec }
+                $e.everySec = $s
+            }
+            if ($e.Count -gt 0) { $out[$id] = $e }
+        }
+    } catch { }
+    return $out
+}
+
+# Display fields of the local probes for one headset (local-probes section 8.5), from the FRESH companion
+# telemetry only: @{plugged;batt_status;charge_counter_mah;refresh_hz;refresh_forced_hz;
+# ctrl_left_state;ctrl_right_state}; every value is $null when not fresh. Never throws.
+# Example: (Get-CompanionPowerDisplay -HeadsetId 3).refresh_hz
+function Get-CompanionPowerDisplay {
+    param([Parameter(Mandatory)][int]$HeadsetId)
+    $o = [ordered]@{ plugged = $null; batt_status = $null; charge_counter_mah = $null
+        refresh_hz = $null; refresh_forced_hz = $null; ctrl_left_state = $null; ctrl_right_state = $null }
+    try {
+        $t = Get-CompanionTelemetry -HeadsetId $HeadsetId
+        if ($t) {
+            $fr = @($t._fresh)
+            $g = { param($n) if ($fr -contains $n -and $null -ne $t.$n) { $t.$n } else { $null } }
+            $o.plugged = & $g 'plugged'; $o.batt_status = & $g 'battStatus'; $o.charge_counter_mah = & $g 'chargeCounterMah'
+            $o.refresh_hz = & $g 'refreshHz'; $o.refresh_forced_hz = & $g 'refreshForcedHz'
+            $o.ctrl_left_state = & $g 'ctrlLeftState'; $o.ctrl_right_state = & $g 'ctrlRightState'
+        }
+    } catch { }
+    return $o
+}
+
 # The server config returned in every 2xx of the telemetry route (spec section 3). -Hot = a capture or
 # recording runs for the headset, -RequestFull = ask for a full push, -AppsSig = signature the PC
 # holds, -Slow = rate guard hit (interval doubled). Never throws.
 # Example: Get-CompanionServerConfig -HeadsetId 3 -Hot $true -AppsSig 'abc'
 function Get-CompanionServerConfig {
-    param([int]$HeadsetId, [bool]$Hot = $false, [bool]$RequestFull = $false, [string]$AppsSig = '', [switch]$Slow)
+    param([int]$HeadsetId, [bool]$Hot = $false, [bool]$RequestFull = $false, [string]$AppsSig = '', [switch]$Slow, [switch]$ProbesEnabled)
     $interval = if ($global:Companion_report_interval_sec) { [int]$global:Companion_report_interval_sec } else { 1 }
     if ($interval -lt 1) { $interval = 1 }
     if ($Slow) { $interval = [Math]::Max(2, $interval * 2) }
     $stale = if ($global:Companion_telemetry_stale_sec) { [int]$global:Companion_telemetry_stale_sec } else { 10 }
+    $fullMin = 5
+    try { if ($null -ne $global:Companion_full_resend_min) { $fullMin = [int]$global:Companion_full_resend_min } } catch { $fullMin = 5 }
+    if ($fullMin -lt 1) { $fullMin = 1 }
+    if ($fullMin -gt 60) { $fullMin = 60 }
+    $probeCfg = Get-CompanionProbeOverrides
     return @{
+        fullResendMin = $fullMin; probesEnabled = [bool]$ProbesEnabled; probes = $probeCfg
         ok = $true; proto = 2; id = $HeadsetId
         serverTime = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         intervalSec = $interval; keepaliveSec = [int]$script:CompanionKeepaliveSec; staleSec = $stale
@@ -1411,6 +1565,62 @@ function Test-CompanionBootstrapNeeded {
     } catch { return $true }
 }
 
+# Revives a force-stopped companion over ADB (something on the headset ran a bulk am force-stop; a
+# stopped app never restarts alone). Runs only when the last telemetry push (doc.at) is older than 60 s
+# and at most once per 3 min per headset. ONE adb shell script: when the service is not running it
+# allowlists the app against power saving and sends the cmd 'start' broadcast with -f 0x20 (includes
+# stopped packages; the receiver then calls startForegroundService); it also re-appends the
+# ApproveService to enabled_accessibility_services when missing (append, never overwrite). Never
+# brings an activity to the foreground. ONE WARNING (Companion.Revived) when it did something.
+# Returns @{Attempted;Started;A11y}. Never throws. The caller guarantees the info source is companion.
+# Example: Invoke-CompanionRevive -Headset $row -Device $device -Doc (Get-CompanionTelemetryDoc -HeadsetId 3)
+function Invoke-CompanionRevive {
+    param(
+        [Parameter(Mandatory)]$Headset,
+        [Parameter(Mandatory)]$Device,
+        $Doc = $null,
+        [switch]$Force,
+        [string]$adb = $global:adbPath
+    )
+    $res = @{ Attempted = $false; Started = $false; A11y = $false }
+    try {
+        $id = [int]$Headset.ID
+        if ($id -le 0 -or -not $Device) { return $res }
+        $pkg = [string]$global:CompanionPackageName
+        if (-not $pkg) { $pkg = 'com.vrheadsetmanager.companion' }
+        if ($pkg -notmatch '^[A-Za-z0-9._]+$') { return $res }
+        if (-not $Force) {
+            if (-not $Doc) { return $res }
+            $at = ConvertTo-CompanionUtc -Text $Doc.at
+            if (-not $at -or ([datetime]::UtcNow - $at).TotalSeconds -le 60) { return $res }
+        }
+        if (-not $script:CompanionReviveState) { $script:CompanionReviveState = @{} }
+        $last = $script:CompanionReviveState[$id]
+        if (-not $Force -and $last -and ([datetime]::UtcNow - $last).TotalMinutes -lt 3) { return $res }
+        $script:CompanionReviveState[$id] = [datetime]::UtcNow
+        $res.Attempted = $true
+
+        $script = @(
+            "pkg=$pkg",
+            'svc=$pkg/$pkg.ApproveService',
+            'n=$(dumpsys activity services $pkg | grep -c ServiceRecord)',
+            'if [ "$n" = 0 ]; then dumpsys deviceidle whitelist +$pkg >/dev/null 2>&1; am broadcast -f 0x20 -n $pkg/.CmdReceiver -a $pkg.CMD --es cmd start >/dev/null 2>&1; echo REVIVE_START; fi',
+            'cur=$(settings get secure enabled_accessibility_services)',
+            'case ":$cur:" in *":$svc:"*) ;; *) if [ -z "$cur" ] || [ "$cur" = null ]; then new=$svc; else new="$cur:$svc"; fi; settings put secure enabled_accessibility_services "$new"; settings put secure accessibility_enabled 1; echo REVIVE_A11Y;; esac',
+            'echo REVIVE_DONE'
+        ) -join "`n"
+        $out = Invoke-AdbCmd -Device $Device -Command $script -ShellScript -adb $adb -SilentOnFail
+        if ($out -eq $false) { return $res }
+        $txt = (@($out) -join ' ')
+        $res.Started = ($txt -match 'REVIVE_START')
+        $res.A11y = ($txt -match 'REVIVE_A11Y')
+        if ($res.Started -or $res.A11y) {
+            Write-Log ((Get-CompanionText -Key 'Revived' -Fallback 'Companion on {0}: app was stopped, revived over ADB') -f [string]$Headset.Name) -Level WARNING
+        }
+    } catch { }
+    return $res
+}
+
 # Self-heal of the companion identity over ANY ADB transport (spec section 6, operator decision D1):
 # (a) token drift: 3 rejected pushes in 2 min (companion_auth_fail_<id>) -> settoken with the current
 # token (plus setserial when the serial is not provisioned); (b) serial: the route matched the push by
@@ -1440,6 +1650,7 @@ function Invoke-CompanionIdentityHeal {
         $needSerial = $false
         $doc = Get-CompanionTelemetryDoc -HeadsetId $id
         if ($doc) {
+            try { [void](Invoke-CompanionRevive -Headset $Headset -Device $Device -Doc $doc -adb $adb) } catch { }
             $src = ''
             try { if ($doc.cap -and $doc.cap.serialSource) { $src = [string]$doc.cap.serialSource } } catch { $src = '' }
             if (([string]$doc.idMatch) -eq 'address') { $needSerial = $true }

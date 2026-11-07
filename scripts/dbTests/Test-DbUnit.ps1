@@ -500,6 +500,13 @@ Invoke-RegressionTest -Name 'temperature is sampled at 0.1 C, comma decimal incl
             $v = [double](Invoke-DbScalar -Sql ("SELECT value FROM metric_history WHERE headset_id = 1 AND metric = '{0}' ORDER BY ts DESC LIMIT 1;" -f $pair[0]))
             Assert-Equal ([double]$pair[1]) $v ("{0} sampled from its own column" -f $pair[0])
         }
+
+        # batt_power: signed values are sampled, the dash placeholder is not (migration 010).
+        Invoke-DbNonQuery -Sql "UPDATE headset_status SET battery_power = '-4.8' WHERE headset_id = 1;" | Out-Null
+        Assert-Equal (-4.8) ([double](Invoke-DbScalar -Sql "SELECT value FROM metric_history WHERE headset_id = 1 AND metric = 'batt_power' ORDER BY ts DESC LIMIT 1;")) 'negative battery power sampled'
+        $bpN = [int](Invoke-DbScalar -Sql "SELECT COUNT(*) FROM metric_history WHERE headset_id = 1 AND metric = 'batt_power';")
+        Invoke-DbNonQuery -Sql "UPDATE headset_status SET battery_power = '-' WHERE headset_id = 1;" | Out-Null
+        Assert-Equal $bpN ([int](Invoke-DbScalar -Sql "SELECT COUNT(*) FROM metric_history WHERE headset_id = 1 AND metric = 'batt_power';")) 'dash battery power not sampled'
     } finally {
         Remove-TempDatabaseRoot -Sandbox $sandbox | Out-Null
     }
@@ -578,7 +585,7 @@ Invoke-RegressionTest -Name 'metric.prune removes only samples past the cutoff' 
 
         $old   = [datetime]::UtcNow.AddHours(-48).ToString('yyyy-MM-ddTHH:mm:ssZ')
         $fresh = [datetime]::UtcNow.AddMinutes(-5).ToString('yyyy-MM-ddTHH:mm:ssZ')
-        foreach ($m in @('battery','temp','ctrl_left','ctrl_right','wattage','cpu_temp','gpu_temp','skin_temp')) {
+        foreach ($m in @('battery','temp','ctrl_left','ctrl_right','wattage','cpu_temp','gpu_temp','skin_temp','batt_power')) {
             Invoke-DbNonQuery -Sql ("INSERT INTO metric_history(headset_id, metric, ts, value) VALUES (1,'{0}','{1}',10),(1,'{0}','{2}',20);" -f $m, $old, $fresh) | Out-Null
         }
 
@@ -586,11 +593,11 @@ Invoke-RegressionTest -Name 'metric.prune removes only samples past the cutoff' 
         # folding the per-metric tables into one.
         $cutoff  = [datetime]::UtcNow.AddHours(-24).ToString('yyyy-MM-ddTHH:mm:ssZ')
         $removed = Invoke-DbNonQuery -Name 'metric.prune' -Parameters @{ cutoff = $cutoff }
-        Add-TestEvidence ("pruned {0} row(s) across 8 metrics" -f $removed)
-        Assert-Equal 8 ([int]$removed) 'exactly the eight stale rows went'
+        Add-TestEvidence ("pruned {0} row(s) across 9 metrics" -f $removed)
+        Assert-Equal 9 ([int]$removed) 'exactly the nine stale rows went'
 
         $left = [int](Invoke-DbScalar -Sql 'SELECT COUNT(*) FROM metric_history;')
-        Assert-Equal 8 $left 'the eight fresh rows survived'
+        Assert-Equal 9 $left 'the nine fresh rows survived'
     } finally {
         Remove-TempDatabaseRoot -Sandbox $sandbox | Out-Null
     }

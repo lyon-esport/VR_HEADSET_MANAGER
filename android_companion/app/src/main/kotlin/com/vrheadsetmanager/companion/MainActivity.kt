@@ -54,7 +54,7 @@ class MainActivity : Activity() {
         val prefs = SelfAdb.dpCtx(this).getSharedPreferences(BootReceiver.PREFS_NAME, MODE_PRIVATE)
         switchAutoAdb.isChecked = prefs.getBoolean(BootReceiver.PREF_AUTO_ADB, true)
         switchAutoAdb.setOnCheckedChangeListener { _, checked ->
-            prefs.edit().putBoolean(BootReceiver.PREF_AUTO_ADB, checked).apply()
+            prefs.edit().putBoolean(BootReceiver.PREF_AUTO_ADB, checked).apply(); OnDeviceWatchdog.syncAsync(this)
             if (checked) AdbBootManager.applyAsync(this)
             updateUi()
         }

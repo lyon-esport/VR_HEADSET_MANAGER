@@ -1191,15 +1191,15 @@
           <!-- Tab: Connectivity -->
           <div class="adv-tab-panel" data-adv-panel="connectivity">
             <div class="adv-field" id="adv-infosource-row">
-              <label for="adv-infosource" title="Where VRHM reads this headset's battery/temperature/apps. VRHM Companion = the headset app pushes them (needs the app installed); ADB = VRHM polls over ADB. Companion automatically falls back to ADB polling when no push arrives. Defaults to Companion when the app is installed on this headset, otherwise ADB.">Information source</label>
-              <select id="adv-infosource" style="font-size:.8rem;">
+              <label for="adv-infosource" title="Where VRHM reads this headset's battery/temperature/apps. VRHM Companion = the headset app pushes them (needs the app installed); ADB = VRHM polls over ADB. Companion automatically falls back to ADB polling (TLS, then classic) when no push arrives. The classic port is set in the global config. Defaults to Companion when the app is installed on this headset, otherwise ADB.">Information source</label>
+              <select id="adv-infosource" style="font-size:.8rem;min-width:150px;">
                 <option value="default">Default</option>
                 <option value="companion">VRHM Companion (push)</option>
-                <option value="adb">ADB (poll)</option>
-                <option value="tls">ADB over TLS</option>
-                <option value="classic">ADB classic (tcpip)</option>
+                <option value="adb">ADB (preferred WiFi mode)</option>
+                <option value="tls">ADB TLS (pull)</option>
+                <option value="classic">ADB Classic (pull)</option>
               </select>
-              <span id="adv-companion-chip" style="font-size:.72rem;margin-left:8px;"></span>
+              <span id="adv-companion-chip" style="font-size:.72rem;white-space:nowrap;flex-shrink:0;"></span>
             </div>
             <div class="adv-field adv-field-col" style="width:100%">
               <label title="Headset-side helper apps that re-enable ADB after a reboot. Acts on THIS headset over its own ADB link (USB or WiFi).">ADB helper apps</label>
@@ -2454,7 +2454,9 @@
               ipd:            item.ipd || '',
               id:             item.id,
               infoSource:     item.info_source || 'default',
-              companionFresh: !!item.companion_fresh
+              companionFresh: !!item.companion_fresh,
+              refreshHz:      item.refresh_hz || 0,
+              refreshForcedHz: item.refresh_forced_hz || 0
             };
           });
           if (cardsBuilt) { updateStatusDots(); updateIpdRows(); }
@@ -2878,12 +2880,27 @@
     function updateAdvInfoSource(j) {
       var isSel = document.getElementById('adv-infosource');
       if (!isSel || !j || j.infoSource === undefined) return;
-      var names = { companion: 'Companion', adb: 'ADB', tls: 'ADB over TLS', classic: 'ADB classic' };
+      var names = { companion: 'Companion', adb: 'ADB', tls: 'ADB TLS', classic: 'ADB Classic' };
       _advInfoGlobal = j.infoSourceGlobal || 'companion';
       var ov = names[j.infoSource] ? j.infoSource : 'default';
       _advInfoOverride = ov;
       var dOpt = isSel.querySelector('option[value="default"]');
       if (dOpt) dOpt.textContent = 'Default (' + (names[_advInfoGlobal] || _advInfoGlobal) + ')';
+      // Plain ADB is redundant with TLS / classic: offered only for a legacy stored value.
+      var adbOpt = isSel.querySelector('option[value="adb"]');
+      if (adbOpt) {
+        adbOpt.hidden = (ov !== 'adb');
+        adbOpt.disabled = (ov !== 'adb');
+        adbOpt.textContent = 'ADB (preferred WiFi mode)';
+      }
+      // T3.1: TLS option only where the headset can do it (Pico cannot).
+      var tlsOpt = isSel.querySelector('option[value="tls"]');
+      var tlsOk = (j.tlsSupported === undefined) ? (_advBrand !== 'Pico') : (j.tlsSupported !== false);
+      if (tlsOpt) {
+        if (tlsOk) { tlsOpt.hidden = false; tlsOpt.disabled = false; tlsOpt.textContent = 'ADB TLS (pull)'; }
+        else if (ov === 'tls') { tlsOpt.hidden = false; tlsOpt.disabled = true; tlsOpt.textContent = 'ADB TLS (not supported)'; }
+        else { tlsOpt.hidden = true; tlsOpt.disabled = true; }
+      }
       isSel.value = ov;
       isSel.disabled = false;
       updateAdvCompanionChip();
@@ -2894,9 +2911,9 @@
       if (!chip) return;
       var eff = (_advInfoOverride === 'default') ? _advInfoGlobal : _advInfoOverride;
       var st = headsetStatus[_advDn];
-      if (eff !== 'companion' || !st) { chip.textContent = ''; return; }
-      if (st.companionFresh) { chip.textContent = 'Companion: live'; chip.style.color = '#22c55e'; }
-      else { chip.textContent = 'Companion: no data (ADB fallback)'; chip.style.color = '#f59e0b'; }
+      if (eff !== 'companion' || !st) { chip.textContent = ''; chip.title = ''; return; }
+      if (st.companionFresh) { chip.textContent = 'Companion: live'; chip.title = ''; chip.style.color = '#22c55e'; }
+      else { chip.textContent = 'No data (ADB)'; chip.title = 'Companion: no data, falling back to ADB polling'; chip.style.color = '#f59e0b'; }
     }
 
     function refreshAdvSettings() {

@@ -51,6 +51,11 @@ class CmdReceiver : BroadcastReceiver() {
                 else Log.w(TAG, "setserial refused: missing or invalid serial")
             }
             "a11y_on" -> { enableSelfA11y(ctx) }
+            "start" -> {
+                // Revive after a force-stop: the broadcast (-f 0x20) restarted the process, this starts the service.
+                try { ctx.startForegroundService(Intent(ctx, CompanionService::class.java)); Log.i(TAG, "start ok") }
+                catch (e: Throwable) { Log.w(TAG, "start failed: $e") }
+            }
             else -> Log.i(TAG, "unknown cmd $cmd")
         }
     }

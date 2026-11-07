@@ -76,6 +76,7 @@ class HttpApiServer(port: Int, private val context: Context) : NanoHTTPD(port) {
         m["trustedCount"] = ApproveConfig.trustedFingerprints(context).size
         m["autoEnabled"] = AdbBootManager.autoEnabled(context)
         m["keepAwake"] = KeepAwake.status(context)
+        m["watchdog"] = OnDeviceWatchdog.status()
         m["tokenSet"] = TokenConfig.hasToken(context)
         val tp = SelfAdb.dpCtx(context).getSharedPreferences(BootReceiver.PREFS_NAME, Context.MODE_PRIVATE)
         val rUrl = tp.getString(TelemetryReporter.PREF_REPORT_URL, "") ?: ""
@@ -84,13 +85,24 @@ class HttpApiServer(port: Int, private val context: Context) : NanoHTTPD(port) {
         m["reportIntervalSec"] = tp.getInt(TelemetryReporter.PREF_REPORT_INTERVAL, 1)
         m["reporter"] = TelemetryReporter.Status.asMap()
         m["components"] = CompanionService.componentsStatus()
-        m["cap"] = linkedMapOf(
-            "brand" to android.os.Build.MANUFACTURER, "model" to android.os.Build.MODEL,
-            "appVersion" to BuildConfig.VERSION_NAME, "versionCode" to BuildConfig.VERSION_CODE,
-            "hasTls" to !AdbBootManager.isPico(), "canSelfAdb" to !AdbBootManager.isPico(),
-            "canReadControllers" to false, "serialSource" to DeviceInfo.serialSource(context),
-            "keepAwake" to KeepAwake.isEnabled(context), "a11yBound" to TelemetryCollector.a11yConnected, "a11yEvents" to TelemetryCollector.a11yEvents
+        ProbeEngine.status().let { m["shell"] = it["shell"]; m["probes"] = it["probes"]; m["probeCatalog"] = it["probeCatalog"] }
+        val cap = LinkedHashMap<String, Any?>(
+            TelemetryCollector.liveCapabilities(5) ?: linkedMapOf<String, Any?>(
+                "family" to (if (AdbBootManager.isPico()) "pico" else {
+                    val s = ((android.os.Build.MANUFACTURER ?: "") + " " + (android.os.Build.BRAND ?: "")).lowercase()
+                    if (s.contains("oculus") || s.contains("meta")) "meta" else "other"
+                }),
+                "brand" to android.os.Build.MANUFACTURER, "model" to android.os.Build.MODEL,
+                "appVersion" to BuildConfig.VERSION_NAME, "versionCode" to BuildConfig.VERSION_CODE,
+                "hasTls" to !AdbBootManager.isPico(), "canSelfAdb" to !AdbBootManager.isPico(),
+                "canReadControllers" to false, "canForeground" to "none", "canThermal" to "battery",
+                "canSourceW" to false, "canBattW" to false, "serialSource" to DeviceInfo.serialSource(context),
+                "keepAwake" to KeepAwake.status(context), "watchdog" to OnDeviceWatchdog.status(), "keepaliveSec" to 5
+            )
         )
+        cap["a11yBound"] = TelemetryCollector.a11yConnected
+        cap["a11yEvents"] = TelemetryCollector.a11yEvents
+        m["cap"] = cap
         return jsonOk(m)
     }
 
@@ -128,6 +140,7 @@ class HttpApiServer(port: Int, private val context: Context) : NanoHTTPD(port) {
             val en = bodyObj(session).get("enabled")!!.asBoolean
             SelfAdb.dpCtx(context).getSharedPreferences(BootReceiver.PREFS_NAME, Context.MODE_PRIVATE)
                 .edit().putBoolean(BootReceiver.PREF_AUTO_ADB, en).apply()
+            OnDeviceWatchdog.syncAsync(context)
             if (en) AdbBootManager.applyAsync(context)
             jsonOk(mapOf("autoEnabled" to en))
         } catch (e: Exception) { jsonError(400, "bad body") }
@@ -194,7 +207,7 @@ class HttpApiServer(port: Int, private val context: Context) : NanoHTTPD(port) {
             val prefs = SelfAdb.dpCtx(context).getSharedPreferences(BootReceiver.PREFS_NAME, Context.MODE_PRIVATE)
 
             if (json.has("auto_adb_wifi")) {
-                prefs.edit().putBoolean(BootReceiver.PREF_AUTO_ADB, json["auto_adb_wifi"].asBoolean).apply()
+                prefs.edit().putBoolean(BootReceiver.PREF_AUTO_ADB, json["auto_adb_wifi"].asBoolean).apply(); OnDeviceWatchdog.syncAsync(context)
             }
             if (json.has("keep_awake")) {
                 KeepAwake.setEnabled(context, json["keep_awake"].asBoolean)

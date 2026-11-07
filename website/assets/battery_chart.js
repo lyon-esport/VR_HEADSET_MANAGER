@@ -70,7 +70,10 @@
       warn: 30, crit: 20
     },
     wattage: {
-      label: 'Charging power', unit: 'W', dir: 'neutral', scale: 'auto', dp: 1
+      label: 'Power source', unit: 'W', dir: 'neutral', scale: 'auto', dp: 1
+    },
+    batt_power: {
+      label: 'Battery charge', unit: 'W', dir: 'neutral', scale: 'auto', dp: 1
     },
     // CPU / GPU / skin temperatures from thermalservice (migration 007). Skin reuses the
     // battery-temperature bands on purpose: one operator setting, one meaning of "hot".

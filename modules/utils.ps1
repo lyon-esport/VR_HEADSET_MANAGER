@@ -298,6 +298,51 @@ function Get-AppCommandRequest {
     } catch { return $null }
 }
 
+# Set the VRHM brand icon on the console window (title bar and taskbar button).
+# Sends WM_SETICON to GetConsoleWindow(). Works for a classic console host (conhost);
+# Windows Terminal owns its own window, so there the call changes nothing.
+# Never throws: a missing icon or console must not block startup.
+# Example: Set-ConsoleWindowIcon -IconPath (Join-Path $global:ScriptPath 'sources\graph_assets\VR_HEADSET_MANAGER.ico')
+function Set-ConsoleWindowIcon {
+    [CmdletBinding()]
+    param(
+        [string]$IconPath = (Join-Path -Path $global:ScriptPath -ChildPath 'sources\graph_assets\VR_HEADSET_MANAGER.ico')
+    )
+    try {
+        if (-not (Test-Path -LiteralPath $IconPath)) { return $false }
+        if (-not ('VrhmConsoleIcon' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class VrhmConsoleIcon {
+    [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+    [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr LoadImage(IntPtr hInst, string name, uint type, int cx, int cy, uint load);
+    [DllImport("user32.dll")] public static extern int GetSystemMetrics(int index);
+}
+'@
+        }
+        $hwnd = [VrhmConsoleIcon]::GetConsoleWindow()
+        if ($hwnd -eq [IntPtr]::Zero) { return $false }
+        $wmSetIcon = 0x80
+        $imageIcon = 1
+        $lrLoadFromFile = 0x10
+        $smCxIcon = 11
+        $smCxSmIcon = 49
+        $big = [VrhmConsoleIcon]::LoadImage([IntPtr]::Zero, $IconPath, $imageIcon, [VrhmConsoleIcon]::GetSystemMetrics($smCxIcon), [VrhmConsoleIcon]::GetSystemMetrics($smCxIcon), $lrLoadFromFile)
+        $small = [VrhmConsoleIcon]::LoadImage([IntPtr]::Zero, $IconPath, $imageIcon, [VrhmConsoleIcon]::GetSystemMetrics($smCxSmIcon), [VrhmConsoleIcon]::GetSystemMetrics($smCxSmIcon), $lrLoadFromFile)
+        if ($big -eq [IntPtr]::Zero -or $small -eq [IntPtr]::Zero) { return $false }
+        [void][VrhmConsoleIcon]::SendMessage($hwnd, $wmSetIcon, [IntPtr]::Zero, $small)
+        [void][VrhmConsoleIcon]::SendMessage($hwnd, $wmSetIcon, [IntPtr]::new(1), $big)
+        return $true
+    } catch {
+        if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
+            Write-Log "Console icon not set: $($_.Exception.Message)" -Level DEBUG
+        }
+        return $false
+    }
+}
+
 # Write text to a file as UTF-8 WITHOUT BOM.
 # .ps1 files in this project must not have a BOM (CLAUDE.md rule 1).
 # Many web/HTML/YAML outputs also need this.
@@ -558,6 +603,49 @@ function Get-ClassicAdbPort {
     try { if ($null -ne $global:adbPort_default) { $p = [int]$global:adbPort_default } } catch { $p = 0 }
     if ($p -lt 1 -or $p -gt 65535) { $p = 5555 }
     return $p
+}
+
+#################
+# HEADSET MODEL KEY (code vs display name)
+# A headset has a real model code (Build.MODEL, e.g. "A92Y0") and a display name
+# ("PICO 4 Ultra"). scrcpy.parameters is keyed on the display name; model_codes lists
+# the codes that belong to that key. Lives here because the poll runspaces and the
+# registry writers all load utils.ps1.
+#################
+function Resolve-ScrcpyModelKey {
+    <#
+    .SYNOPSIS
+    Maps a reported model (display name or real model code) to the key of its
+    scrcpy.parameters template; any unknown value is returned unchanged.
+
+    .DESCRIPTION
+    Matches the key name or an entry of that template's model_codes, case-insensitive.
+    Used before a Model is written to the registry or compared to build a launch stamp, so a
+    source reporting "A92Y0" and a source reporting "PICO 4 Ultra" agree. Never throws.
+
+    .EXAMPLE
+    Resolve-ScrcpyModelKey -Model 'A92Y0'    # 'PICO 4 Ultra' with the shipped config
+    #>
+    param ([string]$Model)
+
+    if ([string]::IsNullOrWhiteSpace($Model) -or $Model -eq '-') { return $Model }
+    $name = $Model.Trim()
+    try {
+        $params = $global:scrcpyParameters
+        if ($params -is [System.Array]) { $params = $params[0] }
+        if ($null -eq $params) { return $name }
+        foreach ($p in $params.PSObject.Properties) {
+            if ($p.Name -ieq $name) { return $p.Name }
+        }
+        foreach ($p in $params.PSObject.Properties) {
+            $codes = $null
+            if ($p.Value -and $p.Value.PSObject.Properties['model_codes']) { $codes = $p.Value.model_codes }
+            foreach ($c in @($codes)) {
+                if ($c -and ([string]$c).Trim() -ieq $name) { return $p.Name }
+            }
+        }
+    } catch { }
+    return $name
 }
 
 #################

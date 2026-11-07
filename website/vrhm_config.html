@@ -1047,6 +1047,8 @@
           desc: 'When a headset using the Companion information source has pushed nothing for this long, VRHM resumes polling it over ADB. Keep it above the report interval. Takes effect on the next monitor cycle, no restart.' },
         { path: 'companion.report_interval_sec', label: 'Companion report interval', type: 'number', min: 1, max: 600, unit: 'seconds',
           desc: 'How often the VRHM Companion app on each headset pushes its telemetry to this server. Takes effect on the next monitor cycle, no restart.' },
+        { path: 'companion.full_resend_min', label: 'Companion full resend', type: 'number', min: 1, max: 60, unit: 'minutes',
+          desc: 'Even when nothing changed, the VRHM Companion app re-sends every value once per this period, so a missed update heals itself. Takes effect on the next push, no restart.' },
         { type: 'subgroup', label: 'MediaMTX (Restreaming)' },
         { path: 'mediamtx.enabled', label: 'Enabled', type: 'boolean',
           desc: 'Enable MediaMTX for RTSP / HLS / WebRTC restreaming.' },

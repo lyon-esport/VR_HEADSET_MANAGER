@@ -751,7 +751,7 @@ function Start-VRMonitor {
             # companion_api.ps1 (ADR-0043): Resolve-HeadsetInfoSource / Get-CompanionTelemetry /
             # Set-HeadsetInfoFromCompanion, so a headset whose info source is the companion is
             # filled from the pushed values and the per-cycle ADB telemetry reads are skipped.
-            foreach ($mod in @("logging.ps1","config_files_loader.ps1","utils.ps1","wifi_store.ps1","network_scanner.ps1","adb_transport.ps1","adb_wifi_modes.ps1","adb_telemetry.ps1","adb_apps.ps1","adb_device_settings.ps1","database.ps1","usb_manager.ps1","headset_diag.ps1","companion_api.ps1","headsets_monitoring.ps1")) {
+            foreach ($mod in @("logging.ps1","config_files_loader.ps1","utils.ps1","wifi_store.ps1","network_scanner.ps1","adb_transport.ps1","adb_wifi_modes.ps1","adb_telemetry.ps1","adb_apps.ps1","adb_device_settings.ps1","database.ps1","usb_manager.ps1","headset_diag.ps1","companion_api.ps1","companion_probes.ps1","headsets_monitoring.ps1")) {
                 $f = Join-Path $modPath $mod
                 if (Test-Path -LiteralPath $f) { . $f }
             }
@@ -864,7 +864,7 @@ function Start-VRMonitor {
                     # when the push is stale or absent. ---
                     $companionActive = $false
                     $ct = $null
-                    $gapCtrl = $false; $gapFg = $false; $gapWatt = $false
+                    $gapCtrl = $false; $gapFg = $false; $gapSource = $false; $gapBattW = $false
                     $gapBatt = $false; $gapThermal = $false; $gapApps = $false; $freshSet = @()
                     $statsRan = $false
                     if (Get-Command Resolve-HeadsetInfoSource -ErrorAction SilentlyContinue) {
@@ -920,8 +920,24 @@ function Start-VRMonitor {
                                     $gapCtrl = -not (($freshSet -contains 'ctrlLeft') -and ($freshSet -contains 'ctrlRight'))
                                     $gapFg   = -not ($freshSet -contains 'foregroundApp')
                                     $chgNow  = ($null -ne $ct.charging) -and [bool]$ct.charging
-                                    $gapWatt = $chgNow -and -not ($freshSet -contains 'wattage')
+                                    $gapSource = $chgNow -and -not ($freshSet -contains 'sourceW')
+                                    # Legacy apps (<= 1.4.2) push 'wattage' = battery power.
+                                    $gapBattW  = -not (($freshSet -contains 'battW') -or ($freshSet -contains 'wattage'))
                                     $gapApps = -not ($ct.PSObject.Properties['appsSig'] -and [string]$ct.appsSig)
+                                    # T3.1: a field ADB cannot fill for this brand is never a gap (shown as "-")
+                                    if (Get-Command Get-HeadsetAdbFieldSupport -ErrorAction SilentlyContinue) {
+                                        $adbCan = Get-HeadsetAdbFieldSupport -Brand ([string]$liveHeadset.Brand)
+                                        if ($gapBatt    -and -not $adbCan.battery)    { $gapBatt = $false }
+                                        if ($gapThermal -and -not $adbCan.thermal)    { $gapThermal = $false }
+                                        if ($gapFg      -and -not $adbCan.foreground) { $gapFg = $false }
+                                        if ($gapSource  -and -not $adbCan.sourceW)    { $gapSource = $false }
+                                        if ($gapBattW   -and -not $adbCan.battW)      { $gapBattW = $false }
+                                        if ($gapApps    -and -not $adbCan.apps)       { $gapApps = $false }
+                                        if ($gapCtrl    -and -not $adbCan.controllers) {
+                                            $gapCtrl = $false
+                                            $workingInfo.BatteryControllerLeft = '-'; $workingInfo.BatteryControllerRight = '-'
+                                        }
+                                    }
                                 }
                             } catch { }
                         }
@@ -982,7 +998,7 @@ function Start-VRMonitor {
                                     # fields are copied. battery/charging/temp ride the refresh cadence
                                     # (Stage 2); controllers / wattage / foreground every 30 s;
                                     # CPU/GPU/skin temperatures through the 30 s thermal memo.
-                                    $gapDue = (($gapCtrl -or $gapFg -or $gapWatt) -and [datetime]::Now -ge $nextGapAt)
+                                    $gapDue = (($gapCtrl -or $gapFg -or $gapSource -or $gapBattW) -and [datetime]::Now -ge $nextGapAt)
                                     if ($gapBatt -or $gapDue) {
                                         if ($gapDue) { $nextGapAt = [datetime]::Now.AddSeconds(30) }
                                         $gapData = @{}
@@ -992,6 +1008,7 @@ function Start-VRMonitor {
                                             if ($gapBatt) {
                                                 foreach ($k in @('Battery', 'Charging', 'Temp')) { if ($g2.Contains($k)) { $workingInfo.$k = $g2[$k] } }
                                                 if ($g2.Contains('ChargingWattage')) { $workingInfo.ChargingWattage = $g2['ChargingWattage'] }
+                                                if ($gapBattW -and $g2.Contains('BatteryPower')) { $workingInfo.BatteryPower = $g2['BatteryPower'] }
                                             }
                                             if ($gapThermal) {
                                                 foreach ($k in @('CpuTemp', 'GpuTemp', 'SkinTemp')) { if ($g2.Contains($k) -and $g2[$k] -ne '-') { $workingInfo.$k = $g2[$k] } }
@@ -999,7 +1016,8 @@ function Start-VRMonitor {
                                             if ($gapDue -and $gapCtrl) {
                                                 foreach ($k in @('BatteryControllerLeft', 'BatteryControllerRight')) { if ($g2.Contains($k)) { $workingInfo.$k = $g2[$k] } }
                                             }
-                                            if ($gapDue -and $gapWatt -and $g2.Contains('ChargingWattage')) { $workingInfo.ChargingWattage = $g2['ChargingWattage'] }
+                                            if ($gapDue -and $gapSource -and $g2.Contains('ChargingWattage')) { $workingInfo.ChargingWattage = $g2['ChargingWattage'] }
+                                            if ($gapDue -and $gapBattW -and $g2.Contains('BatteryPower')) { $workingInfo.BatteryPower = $g2['BatteryPower'] }
                                         }
                                         if ($gapDue -and $gapFg) {
                                             $g3 = Get-HeadsetInfoStage3App -knownHeadset $headset -Device $device -PollData $gapData
@@ -1134,14 +1152,16 @@ function Start-VRMonitor {
                         if ($freshSet -notcontains 'gpuTemp')  { $workingInfo.GpuTemp = "-" }
                         if ($freshSet -notcontains 'skinTemp') { $workingInfo.SkinTemp = "-" }
                         if ($gapCtrl) { $workingInfo.BatteryControllerLeft = "-"; $workingInfo.BatteryControllerRight = "-" }
-                        if ($gapWatt) { $workingInfo.ChargingWattage = "-" }
+                        if ($gapSource) { $workingInfo.ChargingWattage = "-" }
+                        if ($gapBattW)  { $workingInfo.BatteryPower = "-" }
                         if ($gapFg)   { $workingInfo.RunningApp = "-"; $workingInfo.RunningAppIcon = "" }
                     } elseif (-not $workingInfo.ADBWifi) {
                         $pollDeviceCache.Clear()
                         $workingInfo.Battery              = "-"
                         $workingInfo.Charging               = "-"
                         $workingInfo.ChargingWattage        = "-"
-                        $workingInfo.Temp                   = "-"
+                        $workingInfo.BatteryPower           = "-"
+                        $workingInfo.Temp                 = "-"
                         $workingInfo.CpuTemp                = "-"
                         $workingInfo.GpuTemp                = "-"
                         $workingInfo.SkinTemp               = "-"
@@ -1865,7 +1885,7 @@ function Start-VRMonitor {
                 # more but stay in the fingerprint: they gate the Update-HeadsetField write-back
                 # and the Set-HeadsetIdentity queueing in the block below.
                 $fp = ($knownHeadsetsInfo | ForEach-Object {
-                    "$($_.ID)|$($_.Ping)|$($_.ADBWifi)|$($_.Battery)|$($_.Charging)|$($_.ChargingWattage)|$($_.Temp)|$($_.CpuTemp)|$($_.GpuTemp)|$($_.SkinTemp)|$($_.BatteryControllerLeft)|$($_.BatteryControllerRight)|$($_.PowerState)|$($_.TimeRemainingMin)|$($_.AdbTransport)|$($_.AdbWifiMode)|$($_.SCRCPY)|$($_.Brand)|$($_.Model)|$($_.SerialNumber)|$($_.RunningApp)"
+                    "$($_.ID)|$($_.Ping)|$($_.ADBWifi)|$($_.Battery)|$($_.Charging)|$($_.ChargingWattage)|$($_.BatteryPower)|$($_.Temp)|$($_.CpuTemp)|$($_.GpuTemp)|$($_.SkinTemp)|$($_.BatteryControllerLeft)|$($_.BatteryControllerRight)|$($_.PowerState)|$($_.TimeRemainingMin)|$($_.AdbTransport)|$($_.AdbWifiMode)|$($_.SCRCPY)|$($_.Brand)|$($_.Model)|$($_.SerialNumber)|$($_.RunningApp)"
                 }) -join '~'
 
                 if ($fp -ne $lastFingerprint -and $knownHeadsets.Count -gt 0) {
@@ -1886,6 +1906,7 @@ function Start-VRMonitor {
                         if (-not $headset) { continue }
 
                         $fetchedModel = $headsetInfo.Model
+                        if ($fetchedModel -and (Get-Command Resolve-ScrcpyModelKey -ErrorAction SilentlyContinue)) { $fetchedModel = Resolve-ScrcpyModelKey -Model ([string]$fetchedModel) }
                         if ((ConvertTo-BoolField $headsetInfo.ADBWifi) `
                             -and -not [string]::IsNullOrWhiteSpace($fetchedModel) `
                             -and $fetchedModel -ne "-" -and $fetchedModel -ne $headset.Model) {
@@ -1984,6 +2005,7 @@ function Start-VRMonitor {
                                 Battery                = [string](Get-StatusFieldOrDash $info.Battery)
                                 Charging               = [string](Get-StatusFieldOrDash $info.Charging)
                                 ChargingWattage        = [string](Get-StatusFieldOrDash $info.ChargingWattage)
+                                BatteryPower           = [string](Get-StatusFieldOrDash $info.BatteryPower)
                                 Temp                   = [string](Get-StatusFieldOrDash $info.Temp)
                                 CpuTemp                = [string](Get-StatusFieldOrDash $info.CpuTemp)
                                 GpuTemp                = [string](Get-StatusFieldOrDash $info.GpuTemp)
@@ -2371,7 +2393,8 @@ function Get-HeadsetMetricDefinition {
         temp       = @{ Label = 'Temperature';    Unit = 'C'; Column = 'temp';                     IsPercent = $false }
         ctrl_left  = @{ Label = 'Controller L';   Unit = '%'; Column = 'battery_controller_left';  IsPercent = $true  }
         ctrl_right = @{ Label = 'Controller R';   Unit = '%'; Column = 'battery_controller_right'; IsPercent = $true  }
-        wattage    = @{ Label = 'Charging power'; Unit = 'W'; Column = 'charging_wattage';         IsPercent = $false }
+        wattage    = @{ Label = 'Power source';   Unit = 'W'; Column = 'charging_wattage';         IsPercent = $false }
+        batt_power = @{ Label = 'Battery charge'; Unit = 'W'; Column = 'battery_power';            IsPercent = $false }
         cpu_temp   = @{ Label = 'CPU temperature'; Unit = 'C'; Column = 'cpu_temp';                IsPercent = $false }
         gpu_temp   = @{ Label = 'GPU temperature'; Unit = 'C'; Column = 'gpu_temp';                IsPercent = $false }
         skin_temp  = @{ Label = 'Skin temperature'; Unit = 'C'; Column = 'skin_temp';              IsPercent = $false }
@@ -2483,6 +2506,7 @@ function Get-HeadsetInfosCsvColumn {
         "Battery",
         "Charging",
         "ChargingWattage",
+        "BatteryPower",
         "Temp",
         "CpuTemp",
         "GpuTemp",
@@ -2519,6 +2543,7 @@ function New-DefaultHeadsetInfo {
         Battery         = "-"
         Charging        = "-"
         ChargingWattage = "-"
+        BatteryPower    = "-"
         Temp            = "-"
         CpuTemp         = "-"
         GpuTemp         = "-"
@@ -2699,9 +2724,12 @@ function Get-HeadsetPollSnapshot {
     }
 
     $isPico = ($Brand -eq "Pico")
+    # Same command text as the companion (local-probes 8.3): the catalogue when available, else the literal.
+    $ctrlCmd = 'dumpsys OVRRemoteService | grep "Paired device:"'
+    if (Get-Command Get-CompanionProbeCommand -ErrorAction SilentlyContinue) { try { $pc = Get-CompanionProbeCommand -Id 'controllers'; if ($pc) { $ctrlCmd = $pc } } catch { } }
     $cmds = @(
         'dumpsys battery',
-        $(if ($isPico) { 'true' } else { 'dumpsys OVRRemoteService | grep "Paired device:"' }),
+        $(if ($isPico) { 'true' } else { $ctrlCmd }),
         'dumpsys activity activities | grep -E -A1 "topResumedActivity=|mResumedActivity"'
     )
     $seg = Invoke-HeadsetDiagShell -Device $Device -Commands $cmds -TimeoutSeconds 15
@@ -2806,7 +2834,7 @@ function Get-HeadsetInfoStage2Identity {
     )
     $out = @{
         Brand = ""; Model = "-"; SerialNumber = "-"
-        Battery = "-"; Charging = "-"; ChargingWattage = "-"; Temp = "-"
+        Battery = "-"; Charging = "-"; ChargingWattage = "-"; BatteryPower = "-"; Temp = "-"
         CpuTemp = "-"; GpuTemp = "-"; SkinTemp = "-"
         BatteryControllerLeft = "-"; BatteryControllerRight = "-"
     }
@@ -2833,7 +2861,17 @@ function Get-HeadsetInfoStage2Identity {
             if ($null -ne $batteryInfo.Level)    { $out.Battery  = "$($batteryInfo.Level) %" }
             if ($null -ne $batteryInfo.Charging) { $out.Charging = $batteryInfo.Charging }
             if ($null -ne $batteryInfo.MaxChargingWattageW -and $batteryInfo.Charging -eq $true) { $out.ChargingWattage = "$($batteryInfo.MaxChargingWattageW)" }
-            if ($null -ne $batteryInfo.TempC)    { $out.Temp     = $batteryInfo.TempC.ToString("0.0") }
+            # Unplugged = 0 W (a '-' is never sampled, so the graph kept the last charging value).
+            elseif ($batteryInfo.Charging -eq $false) { $out.ChargingWattage = "0" }
+            # Battery charge power: signed charge-counter delta between polls x voltage, kept per
+            # headset in this runspace ('-' until two samples >= 20 s apart; reset on a plug change).
+            if ($null -ne $batteryInfo.Charging -and (Get-Command Get-BatteryChargePower -ErrorAction SilentlyContinue)) {
+                if (-not $script:BattPowerStates) { $script:BattPowerStates = @{} }
+                $bpKey = [string]$knownHeadset.IPAddress
+                if (-not $script:BattPowerStates.ContainsKey($bpKey)) { $script:BattPowerStates[$bpKey] = @{} }
+                $out.BatteryPower = Get-BatteryChargePower -State $script:BattPowerStates[$bpKey] -Plugged ([bool]$batteryInfo.Charging) -ChargeUah $batteryInfo.ChargeCounterUah -VoltageMv $batteryInfo.VoltageMv
+            }
+            if ($null -ne $batteryInfo.TempC)   { $out.Temp     = $batteryInfo.TempC.ToString("0.0") }
             $out.BatteryControllerLeft  = if ($null -ne $batteryInfo.BatteryControllerLeft)  { "$($batteryInfo.BatteryControllerLeft) %" }  else { "-" }
             $out.BatteryControllerRight = if ($null -ne $batteryInfo.BatteryControllerRight) { "$($batteryInfo.BatteryControllerRight) %" } else { "-" }
         }
@@ -2892,7 +2930,9 @@ function Get-HeadsetThermalCached {
     if ($prev) { $st.CpuTemp = $prev.CpuTemp; $st.GpuTemp = $prev.GpuTemp; $st.SkinTemp = $prev.SkinTemp }
 
     try {
-        $lines = Invoke-AdbCmd -Device $Device -Command "shell dumpsys thermalservice" -TimeoutSeconds 10 -adb $adb -SilentOnFail
+        $thermCmd = $null
+        if (Get-Command Get-CompanionProbeCommand -ErrorAction SilentlyContinue) { try { $thermCmd = Get-CompanionProbeCommand -Id 'thermal' } catch { $thermCmd = $null } }
+        $lines = if ($thermCmd) { Invoke-AdbCmd -Device $Device -Command $thermCmd -ShellScript -TimeoutSeconds 10 -adb $adb -SilentOnFail } else { Invoke-AdbCmd -Device $Device -Command "shell dumpsys thermalservice" -TimeoutSeconds 10 -adb $adb -SilentOnFail }
         if ($lines) {
             $t   = ConvertFrom-ThermalService -Lines $lines
             $inv = [System.Globalization.CultureInfo]::InvariantCulture

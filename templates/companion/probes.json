@@ -1,0 +1,62 @@
+{
+  "schema": 1,
+  "version": "2026-11-06.1",
+  "probes": [
+    {
+      "id": "controllers",
+      "description": "Controller batteries and connection state (Meta OVRRemoteService)",
+      "command": "dumpsys OVRRemoteService | grep 'Paired device:'",
+      "parser": "controllers",
+      "everySec": 15, "minEverySec": 5, "maxEverySec": 300, "screenOffFactor": 4,
+      "timeoutMs": 3000, "maxOutputBytes": 8192,
+      "brands": ["meta"], "runOn": ["companion", "pc"], "enabled": true,
+      "fields": [
+        { "name": "ctrlLeft", "type": "int", "unit": "%" },
+        { "name": "ctrlRight", "type": "int", "unit": "%" },
+        { "name": "ctrlLeftState", "type": "string", "unit": "" },
+        { "name": "ctrlRightState", "type": "string", "unit": "" }
+      ]
+    },
+    {
+      "id": "thermal",
+      "description": "CPU / GPU / skin temperature from the thermal HAL",
+      "command": "dumpsys thermalservice | sed -n -e '/^Thermal Status:/p' -e '/^Current temperatures from HAL/,/^Current cooling devices/p'",
+      "parser": "thermal",
+      "everySec": 10, "minEverySec": 5, "maxEverySec": 300, "screenOffFactor": 6,
+      "timeoutMs": 4000, "maxOutputBytes": 16384,
+      "brands": ["meta"], "runOn": ["companion", "pc"], "enabled": true,
+      "fields": [
+        { "name": "cpuTemp", "type": "number", "unit": "C" },
+        { "name": "gpuTemp", "type": "number", "unit": "C" },
+        { "name": "skinTemp", "type": "number", "unit": "C" }
+      ]
+    },
+    {
+      "id": "display",
+      "description": "Active display refresh rate and the forced rate (debug.oculus.refreshRate)",
+      "command": "dumpsys display | grep -m1 'mActiveSfDisplayMode='; echo \"forced=$(getprop debug.oculus.refreshRate)\"",
+      "parser": "display",
+      "everySec": 30, "minEverySec": 10, "maxEverySec": 600, "screenOffFactor": 10,
+      "timeoutMs": 3000, "maxOutputBytes": 4096,
+      "brands": ["meta"], "runOn": ["companion", "pc"], "enabled": true,
+      "fields": [
+        { "name": "refreshHz", "type": "int", "unit": "Hz" },
+        { "name": "refreshForcedHz", "type": "int", "unit": "Hz" }
+      ]
+    },
+    {
+      "id": "battery_power",
+      "description": "Plug type, charge status and charge counter (parity: the app reads the battery intent)",
+      "command": "dumpsys battery",
+      "parser": "battery_power",
+      "everySec": 30, "minEverySec": 10, "maxEverySec": 600, "screenOffFactor": 1,
+      "timeoutMs": 3000, "maxOutputBytes": 4096,
+      "brands": ["meta", "pico", "other"], "runOn": ["pc"], "enabled": true,
+      "fields": [
+        { "name": "plugged", "type": "string", "unit": "" },
+        { "name": "battStatus", "type": "string", "unit": "" },
+        { "name": "chargeCounterMah", "type": "int", "unit": "mAh" }
+      ]
+    }
+  ]
+}

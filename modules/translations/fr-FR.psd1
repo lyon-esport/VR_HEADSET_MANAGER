@@ -963,6 +963,14 @@
 
     # Installation/provisionnement de l'appli VRHM Companion (ADR-0042 ; console ajout casque C, web).
     Companion = @{
+        CapLabel       = "Companion"
+        CapLine        = "{0} - premier plan : {1} - manettes : {2} - thermique : {3}"
+        RefreshLine    = "{0} Hz{1}"
+        RefreshForced  = " (force)"
+        PowerLabel     = "Alim."
+        PowerLine      = "Source d'alimentation {0} - batterie {1}"
+        PowerUnplugged = "debranchee"
+        PowerUnknown   = "-"
         InstallDone    = "VRHM Companion installe et provisionne."
         InstallFailed  = "Echec de l'installation de VRHM Companion : {0}"
         InstallNoUsb   = "Aucun casque USB detecte. Branchez d'abord un casque en USB."
@@ -981,6 +989,7 @@
         StepRequested  = "demande"
         StepKeys       = "{0} cle(s)"
         NoAdbKey       = "aucune empreinte de cle adb (lancez une fois le serveur adb)"
+        Revived        = "Companion sur {0} : l'application etait arretee, relancee via ADB (demarrage du service, liste d'economie d'energie, accessibilite relie)"
         TokenHealed    = "Companion sur {0} : jeton renvoye via ADB apres des envois refuses a repetition (jeton {1}, serie {2})"
         SerialHealed   = "Companion sur {0} : numero de serie adb renvoye via ADB (l'application n'etait reconnue que par son adresse) - {1}"
         TokenEpochForeign = "Companion sur {0} utilise l'epoque de jeton {1}, plus recente que ce serveur ({2}) : il appartient a une autre base VRHM. Pas de reparation automatique."

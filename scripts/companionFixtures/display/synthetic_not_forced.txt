@@ -1,0 +1,2 @@
+    mActiveSfDisplayMode=DisplayMode{id=136, width=4128, height=2208, xDpi=319.668, yDpi=320.475, refreshRate=90.0, appVsyncOffsetNanos=1000000, presentationDeadlineNanos=13888888, supportedHdrTypes=[3, 2, 1], group=136}
+forced=

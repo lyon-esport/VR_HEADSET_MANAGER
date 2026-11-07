@@ -1,0 +1,2 @@
+  Paired device: 59bbdc5721872096, Type:  Right, Model: RUBY, HardwareRev: , Firmware: , ImuModel: , Battery:  30%, isAttached: 0, Serial Number: , Status: Searching, ExternalStatus: SEARCHING, TrackingStatus: NONE, BrightnessLevel: GOOD, SuppressFirmwareUpdate: 0
+  Paired device: 7b31ac34b6c7db33, Type:   Left, Model: RUBY, HardwareRev: , Firmware: , ImuModel: , Battery:  30%, isAttached: 0, Serial Number: , Status: Searching, ExternalStatus: SEARCHING, TrackingStatus: NONE, BrightnessLevel: GOOD, SuppressFirmwareUpdate: 0

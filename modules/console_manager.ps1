@@ -917,6 +917,47 @@ function Write-HeadsetPanelCard {
         ((& $cell $c.PanelRec $(if ($rec) { $c.On } else { $c.Off }) $(if ($rec) { 'Red' } else { 'DarkGray' }) $half) + (& $cell $c.PanelProfile ([string]$row.ScrcpyProfile) 'Cyan' ($Width - $half))),
         (& $cell $c.PanelApp $app 'Gray' $Width)
     )
+    # T3.1: companion capability summary (only when the app reported its capabilities)
+    try {
+        if (Get-Command Get-CompanionCapability -ErrorAction SilentlyContinue) {
+            $cap = Get-CompanionCapability -HeadsetId $Id
+            if ($cap.Known) {
+                $ctl = if ($cap.CanReadControllers) { 'app' } elseif ($cap.Family -eq 'pico' -or [string]$row.Brand -match 'pico') { 'none' } else { 'ADB' }
+                $capText = $msg.Companion.CapLine -f $cap.AppVersion, $cap.CanForeground, $ctl, $cap.CanThermal
+                $lines += , (& $cell $msg.Companion.CapLabel $capText 'Gray' $Width)
+            }
+        }
+    } catch { }
+    # Local probes (ADR-0046): refresh rate, from fresh companion fields only.
+    try {
+        if (Get-Command Get-CompanionPowerDisplay -ErrorAction SilentlyContinue) {
+            $pw = Get-CompanionPowerDisplay -HeadsetId $Id
+            $rf = if ($null -ne $pw.refresh_hz) { $msg.Companion.RefreshLine -f $pw.refresh_hz, $(if ($null -ne $pw.refresh_forced_hz) { $msg.Companion.RefreshForced } else { '' }) } else { '' }
+            if ($rf) { $lines += , (& $cell $msg.Companion.CapLabel $rf 'Gray' $Width) }
+        }
+    } catch { }
+    # Power: charger rating and signed battery charge, skipped when both are unknown.
+    try {
+        $srcW  = [string]$row.ChargingWattage
+        $battW = [string]$row.BatteryPower
+        $srcKnown  = ($srcW -and $srcW -ne '-')
+        $battKnown = ($battW -and $battW -ne '-')
+        if ($srcKnown -or $battKnown) {
+            $srcTxt = if (-not $srcKnown) { $msg.Companion.PowerUnknown } elseif ($srcW -match '^\s*0([.,]0+)?\s*$') { $msg.Companion.PowerUnplugged } else { ('{0} W' -f $srcW.Trim()) }
+            $battTxt = $msg.Companion.PowerUnknown
+            $battColor = 'Gray'
+            if ($battKnown) {
+                $bv = 0.0
+                if ([double]::TryParse($battW.Replace(',', '.'), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$bv)) {
+                    $sign = if ($bv -gt 0) { '+' } else { '' }
+                    $battTxt = ('{0}{1} W' -f $sign, $bv.ToString('0.0', [System.Globalization.CultureInfo]::InvariantCulture))
+                    $battColor = if ($bv -gt 0) { 'Green' } elseif ($bv -lt 0) { 'Yellow' } else { 'Gray' }
+                }
+            }
+            $pwText = $msg.Companion.PowerLine -f $srcTxt, $battTxt
+            $lines += , (& $cell $msg.Companion.PowerLabel $pwText $battColor $Width)
+        }
+    } catch { }
     foreach ($l in $lines) { Write-UiSegments -Segments (@(New-UiSegment '  ') + $l) -Width $Width -Pad:$Pad }
     return $lines.Count
 }

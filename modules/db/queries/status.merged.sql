@@ -7,7 +7,7 @@
 -- outlive its headset, and one without a headset is not displayable.
 SELECT ID, Name, IPAddress, scrcpy_AutoRestart, Record, ScrcpyProfile,
        Brand, Model, SerialNumber,
-       Ping, ADBWifi, Battery, Charging, ChargingWattage, Temp,
+       Ping, ADBWifi, Battery, Charging, ChargingWattage, BatteryPower, Temp,
        CpuTemp, GpuTemp, SkinTemp,
        BatteryControllerLeft, BatteryControllerRight, PowerState,
        TimeRemainingMin, AdbTransport, AdbWifiMode, SCRCPY, RunningApp, RunningAppIcon

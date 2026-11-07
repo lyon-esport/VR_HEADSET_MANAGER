@@ -4,13 +4,14 @@
 -- metric_history TABLE, written by the triggers this statement fires.
 -- cpu_temp / gpu_temp / skin_temp / adb_transport arrived with migration 007,
 -- adb_wifi_mode (Classic / TLS / dash, ADR-0034) with migration 009.
+-- battery_power (signed W into the battery, power source stays charging_wattage) with 010.
 INSERT INTO headset_status (headset_id, ping, adb_wifi, battery, charging,
-       charging_wattage, temp, cpu_temp, gpu_temp, skin_temp,
+       charging_wattage, battery_power, temp, cpu_temp, gpu_temp, skin_temp,
        battery_controller_left, battery_controller_right,
        power_state, time_remaining_min, adb_transport, adb_wifi_mode, scrcpy, running_app,
        running_app_icon, updated_at)
 VALUES (@ID, @Ping, @ADBWifi, @Battery, @Charging,
-        @ChargingWattage, @Temp, @CpuTemp, @GpuTemp, @SkinTemp,
+        @ChargingWattage, @BatteryPower, @Temp, @CpuTemp, @GpuTemp, @SkinTemp,
         @BatteryControllerLeft, @BatteryControllerRight,
         @PowerState, @TimeRemainingMin, @AdbTransport, @AdbWifiMode, @SCRCPY, @RunningApp,
         @RunningAppIcon, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
@@ -20,6 +21,7 @@ ON CONFLICT(headset_id) DO UPDATE SET
     battery                  = excluded.battery,
     charging                 = excluded.charging,
     charging_wattage         = excluded.charging_wattage,
+    battery_power            = excluded.battery_power,
     temp                     = excluded.temp,
     cpu_temp                 = excluded.cpu_temp,
     gpu_temp                 = excluded.gpu_temp,

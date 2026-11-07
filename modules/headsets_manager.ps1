@@ -569,6 +569,9 @@ function Set-HeadsetIdentity {
     }
 
     # Model/Brand are merged opportunistically - only overwrite with a real value.
+    # A real model code (Companion: "A92Y0") is mapped to its display-name key first, so two
+    # sources naming one headset differently do not overwrite each other.
+    if ($Model -and (Get-Command Resolve-ScrcpyModelKey -ErrorAction SilentlyContinue)) { $Model = Resolve-ScrcpyModelKey -Model $Model }
     if ($Model -and $Model -ne "-" -and $Model -ne $owner.Model) {
         $owner.Model = $Model
         $changed = $true

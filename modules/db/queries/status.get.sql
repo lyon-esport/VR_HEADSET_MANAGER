@@ -4,7 +4,7 @@
 -- that column is gone (migration 005) and the runspace reads battery.recent
 -- instead. Kept because "one status row by id" is the natural single-row read
 -- of this table.
-SELECT ID, Ping, ADBWifi, Battery, Charging, ChargingWattage, Temp,
+SELECT ID, Ping, ADBWifi, Battery, Charging, ChargingWattage, BatteryPower, Temp,
        CpuTemp, GpuTemp, SkinTemp,
        BatteryControllerLeft, BatteryControllerRight, PowerState,
        TimeRemainingMin, AdbTransport, AdbWifiMode, SCRCPY, RunningApp, RunningAppIcon

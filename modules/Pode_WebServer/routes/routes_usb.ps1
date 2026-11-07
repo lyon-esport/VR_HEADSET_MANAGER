@@ -243,7 +243,7 @@ function Resolve-AdbToolsRouteDevice {
         $device = Resolve-HeadsetAdbDevice -Headset $row
         if (-not $device) { return @{ Ok = $false; Error = 'Headset not reachable over ADB' } }
         $model = if ($device.Model) { [string]$device.Model } else { [string]$row.Model }
-        return @{ Ok = $true; Device = $device; Model = $model; Usb = ([string]$device.ConnectionType -eq 'USB') }
+        return @{ Ok = $true; Device = $device; Model = $model; Brand = [string]$row.Brand; Usb = ([string]$device.ConnectionType -eq 'USB') }
     }
     $device = Get-AdbUsbDeviceDetails -adb $adbPath
     if (-not $device) { return @{ Ok = $false; Error = 'No USB headset detected' } }
@@ -306,7 +306,7 @@ function Invoke-RouteHeadsetadbtoolsstatus {
         if (-not $r.Ok) {
             Send-JsonResponse -Response $response -Body @{ ok = $false; error = $r.Error }
         } else {
-            $apps = @(Get-HeadsetAdbToolsStatus -Device $r.Device -adb $adbPath)
+            $apps = @(Get-HeadsetAdbToolsStatus -Device $r.Device -adb $adbPath -Brand ([string]$r.Brand))
             Send-JsonResponse -Response $response -Body @{ ok = $true; model = [string]$r.Model; apps = $apps }
         }
     } catch {
@@ -714,3 +714,4 @@ function Invoke-RouteAdbWifiApk {
     }
     return
 }
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               

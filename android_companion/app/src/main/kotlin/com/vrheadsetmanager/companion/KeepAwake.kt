@@ -12,7 +12,7 @@ import android.provider.Settings
  *     but still honoured for a background foreground service; ACQUIRE_CAUSES_WAKEUP wakes a sleeping
  *     screen once at acquire). VERIFY ON DEVICE: Horizon OS may still sleep on the proximity sensor.
  *  2. Meta only: the proximity override "prox_close" (headset behaves as if worn) sent through the app's
- *     OWN ADB session, ONE short session when the switch turns on and one after each boot. Off sends
+ *     OWN ADB session (ShellSession, which owns the connection), one command through the shared ShellSession when the switch turns on and one after each boot. Off sends
  *     "automation_disable" once. Never periodic (telemetry v2 spec: no steady-state self-ADB).
  * Pico has no ADB over TLS, so only the wake lock applies there ("not-supported" for the override).
  * With the switch OFF no wake lock of any kind is held.
@@ -85,24 +85,19 @@ object KeepAwake {
                 if (delayMs > 0) try { Thread.sleep(delayMs) } catch (_: InterruptedException) { return@Thread }
                 for (attempt in 1..ATTEMPTS) {
                     val want = isEnabled(app)
-                    var mgr: io.github.muntashirakon.adb.AbsAdbConnectionManager? = null
                     try {
-                        mgr = AdbBootManager.selfConnect(app)
-                        if (mgr != null) {
-                            val out = AdbBootManager.runShell(mgr, if (want) CMD_ON else CMD_OFF, 10_000)
-                            AdbBootManager.log("keepAwake prox ${if (want) "on" else "off"} -> ${out.trim().take(120)}")
-                            // "Stream closed" = libadb ended the stream as the short command finished;
-                            // the broadcast is enqueued (measured), it is only unconfirmed: "sent".
-                            val confirmed = out.contains("Broadcast completed") && !out.startsWith("shell-ex")
-                            val sent = out.startsWith("shell-ex") && out.contains("Stream closed", ignoreCase = true)
-                            val ok = confirmed || sent
-                            prox = if (confirmed) (if (want) "ok" else "off") else if (sent) (if (want) "sent" else "off") else "failed"
-                            if (ok) { onOk?.invoke(); return@Thread }
-                        }
+                        ShellSession.init(app)
+                        val r = ShellSession.run(if (want) CMD_ON else CMD_OFF, 10_000, 4096, force = true)
+                        val out = r.lines.joinToString(" ")
+                        AdbBootManager.log("keepAwake prox ${if (want) "on" else "off"} -> ${(r.error ?: out).trim().take(120)}")
+                        // Broadcast completed = confirmed; the shell ran the command (exit 0) but printed
+                        // nothing we recognise = "sent" (unconfirmed).
+                        val confirmed = r.ok && out.contains("Broadcast completed")
+                        val sent = r.ok && !confirmed && r.exit == 0
+                        prox = if (confirmed) (if (want) "ok" else "off") else if (sent) (if (want) "sent" else "off") else "failed"
+                        if (confirmed || sent) { onOk?.invoke(); return@Thread }
                     } catch (e: Throwable) {
                         AdbBootManager.log("keepAwake prox attempt $attempt: ${e.message}")
-                    } finally {
-                        try { mgr?.disconnect() } catch (_: Throwable) {}
                     }
                     prox = "failed"
                     if (attempt < ATTEMPTS) try { Thread.sleep(BACKOFF_MS) } catch (_: InterruptedException) { return@Thread }

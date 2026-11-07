@@ -305,6 +305,8 @@ $scripts_init = Join-Path -Path $global:ScriptPath -ChildPath "\modules\scripts_
 if (Test-Path -LiteralPath $scripts_init) {
     . $scripts_init
     Add-StartupStage -Name 'scripts_init (total)'
+    # Brand icon on the console window (title bar + taskbar). Best effort, never blocks startup.
+    [void](Set-ConsoleWindowIcon)
 } else {
     Write-Host "Error: The initialization modules script is missing!" -ForegroundColor Red
     Read-Host "Press enter for exit"
