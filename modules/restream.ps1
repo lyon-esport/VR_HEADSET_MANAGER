@@ -185,7 +185,7 @@ function Start-MediaMtx {
     if ($running) {
         Write-Log ($msg.MediaMtxAlreadyRunning -f $running.Id) -Level DEBUG
         # Refresh stale PID file (e.g. crash + restart by user): exactly one PID
-        ([string]$running.Id) | Set-Content -LiteralPath $mediamtxPidFile -Encoding ASCII -Force -ErrorAction SilentlyContinue
+        try { Write-FileWithoutBom -Path $mediamtxPidFile -Content ([string]$running.Id) } catch { }
         return
     }
     Write-Log $msg.MediaMtxStarting -Level INFO
@@ -202,7 +202,7 @@ function Start-MediaMtx {
         $mtxWait = [System.Diagnostics.Stopwatch]::StartNew()
         $mtxReady = Wait-MediaMtxReady -Process $proc -TimeoutMs 1500
         Write-Log ("Start-MediaMtx: ports ready={0} after {1} ms" -f $mtxReady, $mtxWait.ElapsedMilliseconds) -Level DEBUG
-        $proc.Id | Set-Content -LiteralPath $mediamtxPidFile -Encoding ASCII -Force -ErrorAction SilentlyContinue
+        try { Write-FileWithoutBom -Path $mediamtxPidFile -Content ([string]$proc.Id) } catch { }
         Write-Log ($msg.MediaMtxStarted -f $proc.Id) -Level SUCCESS
     }
     catch {

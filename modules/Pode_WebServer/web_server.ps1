@@ -264,7 +264,7 @@ try {
 # Claim the lock file only once the port is actually bound, so data\webserver.pid
 # never points at a process that failed to become the web server.
 if ($PidFile) {
-    $PID | Set-Content -LiteralPath $PidFile -Force -Encoding ASCII -ErrorAction SilentlyContinue
+    try { Write-FileWithoutBom -Path $PidFile -Content ([string]$PID) } catch { }
 }
 
 Write-Log ($msg.WebServerListening -f $port) -Level SUCCESS

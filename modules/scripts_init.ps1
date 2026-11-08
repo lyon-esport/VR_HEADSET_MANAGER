@@ -809,7 +809,7 @@ function Start-WebServer {
     # relaunch the server again. web_server.ps1 rewrites the same value once it has
     # successfully bound the port.
     if ($global:WebServerProcess) {
-        $global:WebServerProcess.Id | Set-Content -LiteralPath $webServerPidFile -Force -Encoding ASCII -ErrorAction SilentlyContinue
+        try { Write-FileWithoutBom -Path $webServerPidFile -Content ([string]$global:WebServerProcess.Id) } catch { }
         Write-Log ($msg.WebServerStarted -f $global:WebServer_port, $global:WebServerProcess.Id) -Level INFO
     }
 }
