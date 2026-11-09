@@ -25,6 +25,27 @@ param (
 
 if ($AutoApprove) { $env:VRHM_AUTO_APPROVE_SETUP = '1' }
 
+# The root folder MUST be named exactly "VR_HEADSET_MANAGER" (modules\scripts_init.ps1 requires it too).
+# Checked first, before any side effect: on a wrong name, explain, wait for a key and stop here.
+$rootCheckPath = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+if ((Split-Path $rootCheckPath -Leaf) -eq 'modules') { $rootCheckPath = Split-Path $rootCheckPath -Parent }
+$rootCheckName = Split-Path $rootCheckPath -Leaf
+if ($rootCheckName -ne 'VR_HEADSET_MANAGER') {
+    Write-Host ""
+    Write-Host "  ============================================================" -ForegroundColor Red
+    Write-Host "  ERROR: the application folder has the wrong name." -ForegroundColor Red
+    Write-Host "  ============================================================" -ForegroundColor Red
+    Write-Host ("  Current folder name : '{0}'" -f $rootCheckName) -ForegroundColor Yellow
+    Write-Host "  Required folder name: 'VR_HEADSET_MANAGER'  (exactly, nothing added before or after)" -ForegroundColor Yellow
+    Write-Host ("  Full path           : {0}" -f $rootCheckPath) -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  Close this window, rename the folder to 'VR_HEADSET_MANAGER', then start the application again." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "  Press any key to close..." -ForegroundColor White
+    try { [void][Console]::ReadKey($true) } catch { Read-Host | Out-Null }
+    exit 1
+}
+
 
 
 #Check on startup the main script if it can identify where it is, and make sure it finds the path of $PSScriptRoot. Otherwise, check if the current execution is in a folder whose name contains "VR_HEADSET_MANAGER".
@@ -103,11 +124,7 @@ if ($otherInstances) {
 # Get the current script path
 $global:ScriptPath = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 
-if ((Split-Path $global:ScriptPath -Leaf) -notmatch "VR_HEADSET_MANAGER") {
-    Write-Host "Error: Please run this script from a folder named 'VR_HEADSET_MANAGER'." -ForegroundColor Red
-    Read-Host "Press enter for exit"
-    exit
-}
+# (the root folder name is verified at the very top of this script)
 # check if the current folder name is "modules", if yes, move up one level
 if ((Split-Path $global:ScriptPath -Leaf) -eq "modules") {
     $global:ScriptPath = Split-Path $global:ScriptPath -Parent

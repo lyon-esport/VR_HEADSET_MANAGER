@@ -125,6 +125,50 @@ function Invoke-HeadsetApp {
 }
 
 
+function Stop-HeadsetApp {
+    <#
+    .SYNOPSIS
+    Kills (force-stops) an application running on a headset via ADB.
+
+    .DESCRIPTION
+    Runs "am force-stop <package>". Refuses the Meta shell packages (Home / System UX):
+    they are not a running app, restarting them is the DIAG "Reset UI" action.
+    Returns $true on success, $false on any failure.
+
+    .EXAMPLE
+    Stop-HeadsetApp -Device $device -PackageName "com.beatgames.beatsaber"
+    #>
+    param (
+        [Parameter(Mandatory=$true)]
+        [PSCustomObject]$Device,
+        [Parameter(Mandatory=$true)]
+        [string]$PackageName,
+        [string]$adb = $global:adbPath
+    )
+    if (-not $Device) { return $false }
+    if ($PackageName -notmatch '^[\w\.\-]+$') {
+        Write-Log ($msg.ErrorOccurred -f "Invalid package name '$PackageName'.") -Level ERROR
+        return $false
+    }
+    if ($PackageName -in @('com.oculus.vrshell', 'com.oculus.systemux')) {
+        Write-Log ($msg.ErrorOccurred -f "Refusing to kill shell package '$PackageName'.") -Level WARNING
+        return $false
+    }
+    try {
+        $out = Invoke-AdbCmd -Device $Device -Command "shell am force-stop $PackageName" -adb $adb
+        if ($out -eq $false -or ($out -match 'error|Error|Exception')) {
+            Write-Log ($msg.ErrorOccurred -f "Failed to kill '$PackageName': $out") -Level ERROR
+            return $false
+        }
+        Write-Log "Killed app '$PackageName' on $($Device.DeviceId)." -Level INFO
+        return $true
+    } catch {
+        Write-Log ($msg.ErrorOccurred -f $_) -Level ERROR
+        return $false
+    }
+}
+
+
 function Get-HeadsetInstalledApps {
     <#
     .SYNOPSIS

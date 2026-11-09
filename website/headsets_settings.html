@@ -1201,6 +1201,7 @@
               </select>
               <span id="adv-companion-chip" style="font-size:.72rem;white-space:nowrap;flex-shrink:0;"></span>
             </div>
+            <div class="adv-field adv-field-col" id="adv-companion-notice" style="width:100%;display:none;font-size:.8rem;"></div>
             <div class="adv-field adv-field-col" style="width:100%">
               <label title="Headset-side helper apps that re-enable ADB after a reboot. Acts on THIS headset over its own ADB link (USB or WiFi).">ADB helper apps</label>
               <div id="adv-adbtools-body" style="width:100%;font-size:.8rem;"></div>
@@ -2903,8 +2904,44 @@
       }
       isSel.value = ov;
       isSel.disabled = false;
+      _advOwner = j.companionOwner || null;
+      _advVerState = j.companionVersionState || 'ok';
       updateAdvCompanionChip();
+      renderAdvCompanionNotice();
     }
+    // Companion owned by another VRHM server / outdated companion: notice + operator buttons.
+    var _advOwner = null, _advVerState = 'ok';
+    function renderAdvCompanionNotice() {
+      var box = document.getElementById('adv-companion-notice');
+      if (!box) return;
+      var html = '';
+      if (_advOwner && _advOwner.state === 'foreign') {
+        var where = _advOwner.reportUrl ? (' (' + esc(_advOwner.reportUrl) + ')') : '';
+        html += '<div style="color:#f59e0b;display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
+          '<span>The companion on this headset is attached to another VRHM server' + where + '.</span>' +
+          '<button class="hs-adv-btn" id="adv-companion-reattach" style="font-size:.78rem">Attach to this server</button></div>';
+      }
+      if (_advVerState === 'older') {
+        html += '<div style="color:#f59e0b;margin-top:4px">The companion is older than the version bundled with this server. Use Upgrade in "ADB helper apps" below.</div>';
+      } else if (_advVerState === 'newer') {
+        html += '<div style="color:var(--muted,#888);margin-top:4px">The companion is newer than the version bundled with this server.</div>';
+      }
+      box.innerHTML = html;
+      box.style.display = html ? '' : 'none';
+    }
+    document.addEventListener('click', function(e) {
+      var b = e.target.closest ? e.target.closest('#adv-companion-reattach') : null;
+      if (!b || !_advId) return;
+      if (!confirm('Attach this headset\'s companion to THIS server? The other VRHM server will stop receiving its data. This needs an ADB connection to the headset.')) return;
+      var lbl = b.textContent; b.disabled = true; b.textContent = 'Attaching...';
+      fetch('/api/headset-companion-reattach', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: parseInt(_advId, 10) }) })
+        .then(function(r) { return r.json().catch(function() { return {}; }); })
+        .then(function(j) {
+          if (j.ok) { _advOwner = { state: 'ours' }; renderAdvCompanionNotice(); }
+          else { alert('Attach failed: ' + (j.error || 'unknown error')); b.disabled = false; b.textContent = lbl; }
+        })
+        .catch(function(err) { alert('Attach failed: ' + err); b.disabled = false; b.textContent = lbl; });
+    });
     // Companion status chip: live / no data (ADB fallback) / nothing when the source is ADB.
     function updateAdvCompanionChip() {
       var chip = document.getElementById('adv-companion-chip');
@@ -3195,7 +3232,7 @@
           var name = esc(a.name || a.key || a.packageName || '');
           var tag = a.recommended ? ' <span style="color:#4a9">(recommended)</span>' : '';
           var ver = a.installed
-            ? ('installed ' + esc(a.installedVersion || '?') + (a.upgrade ? (' -> ' + esc(a.availableVersion || '?')) : ''))
+            ? ('installed ' + esc(a.installedVersion || '?') + (a.upgrade ? (' - update available (' + esc(a.availableVersion || '?') + ')') : ''))
             : 'not installed';
           html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 0;border-top:1px solid var(--card-border)">';
           html += '<span>' + name + tag + '<br><span style="color:var(--muted,#888)">' + ver + '</span></span>';
@@ -3204,7 +3241,7 @@
             html += '<button class="hs-adv-btn" data-at-install="' + esc(a.key) + '" style="font-size:.78rem">Install</button>';
           } else {
             if (a.upgrade) { html += '<button class="hs-adv-btn" data-at-install="' + esc(a.key) + '" style="font-size:.78rem">Upgrade to ' + esc(a.availableVersion || '?') + '</button>'; }
-            html += '<button class="hs-adv-btn" data-at-install="' + esc(a.key) + '" style="font-size:.78rem">Reinstall</button>';
+            if (!a.upgrade) { html += '<button class="hs-adv-btn" data-at-install="' + esc(a.key) + '" style="font-size:.78rem">Reinstall</button>'; }
             html += '<button class="hs-adv-btn" data-at-uninstall="' + esc(a.packageName) + '" style="font-size:.78rem">Uninstall</button>';
           }
           html += '</span></div>';
@@ -3222,6 +3259,7 @@
           .then(function(r) { return r.json().catch(function() { return {}; }); })
           .then(function(j) {
             if (!j.ok) { loaded = false; body.innerHTML = '<span style="color:#c66">' + esc(j.error || 'Could not read helper apps.') + '</span>'; return; }
+            if (j.owner) { _advOwner = j.owner; renderAdvCompanionNotice(); }
             renderApps(j.apps);
           })
           .catch(function(err) { loaded = false; body.innerHTML = '<span style="color:#c66">' + esc(String(err)) + '</span>'; });

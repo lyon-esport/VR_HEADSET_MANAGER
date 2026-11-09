@@ -20,6 +20,8 @@ class MainActivity : Activity() {
     private lateinit var tvStatus: TextView
     private lateinit var tvAdbPill: TextView
     private lateinit var tvEngine: TextView
+    private lateinit var tvServer: TextView
+    private lateinit var tvVersion: TextView
     private lateinit var tvHint: TextView
     private lateinit var switchAutoAdb: Switch
     private lateinit var switchKeepAwake: Switch
@@ -40,6 +42,9 @@ class MainActivity : Activity() {
         tvStatus         = findViewById(R.id.tv_status)
         tvAdbPill        = findViewById(R.id.tv_adb_pill)
         tvEngine         = findViewById(R.id.tv_engine)
+        tvServer         = findViewById(R.id.tv_server)
+        tvVersion        = findViewById(R.id.tv_version)
+        tvVersion.text   = "v${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})"
         tvHint           = findViewById(R.id.tv_hint)
         switchAutoAdb    = findViewById(R.id.switch_auto_adb)
         switchKeepAwake  = findViewById(R.id.switch_keep_awake)
@@ -125,11 +130,28 @@ class MainActivity : Activity() {
         updateUi()
     }
 
+    // host:port of a report URL ("http://192.168.1.37:80/api/..." -> "192.168.1.37:80"); the default
+    // port of the scheme is shown too, so the operator sees which of two servers it is. "" when invalid.
+    private fun serverHostPort(url: String): String {
+        return try {
+            val u = Uri.parse(url)
+            val host = u.host ?: return ""
+            val port = if (u.port > 0) u.port else if (u.scheme == "https") 443 else 80
+            "$host:$port"
+        } catch (_: Exception) { "" }
+    }
+
     private fun updateUi() {
         val adbEnabled = try { Settings.Global.getInt(contentResolver, "adb_wifi_enabled", 0) == 1 } catch (_: Exception) { false }
         val canWrite = Settings.System.canWrite(this)
 
         tvStatus.text = "HTTP :${CompanionService.HTTP_PORT}    UDP :${CompanionService.UDP_PORT}"
+
+        // The VRHM server this companion reports to (host:port of the report URL), or a hint.
+        val rUrl = SelfAdb.dpCtx(this).getSharedPreferences(BootReceiver.PREFS_NAME, MODE_PRIVATE)
+            .getString(TelemetryReporter.PREF_REPORT_URL, "") ?: ""
+        val hostPort = serverHostPort(rUrl)
+        tvServer.text = if (hostPort.isNotEmpty()) "VRHM server  $hostPort" else "VRHM server  not attached yet"
 
         tvAdbPill.text = if (adbEnabled) "ENABLED" else "DISABLED"
         tvAdbPill.setBackgroundResource(if (adbEnabled) R.drawable.bg_pill_on else R.drawable.bg_pill_off)

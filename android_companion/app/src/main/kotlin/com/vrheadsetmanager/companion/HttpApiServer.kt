@@ -175,9 +175,19 @@ class HttpApiServer(port: Int, private val context: Context) : NanoHTTPD(port) {
         } catch (e: Exception) { jsonError(400, "bad body") }
     }
 
-    private fun serveHealth() =
-        newFixedLengthResponse(Response.Status.OK, "application/json",
-            """{"ok":true,"version":"${BuildConfig.VERSION_NAME}","versionCode":${BuildConfig.VERSION_CODE},"components":${CompanionService.componentsHealthJson()}}""")
+    // Open endpoint: alive + version + the host:port of the VRHM server it reports to (no path, no
+    // token), so another VRHM server can say WHICH server owns this companion.
+    private fun serveHealth(): Response {
+        val rUrl = SelfAdb.dpCtx(context).getSharedPreferences(BootReceiver.PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(TelemetryReporter.PREF_REPORT_URL, "") ?: ""
+        val reportHost = try {
+            val u = android.net.Uri.parse(rUrl)
+            val h = u.host
+            if (h.isNullOrEmpty()) "" else h + ":" + (if (u.port > 0) u.port else if (u.scheme == "https") 443 else 80)
+        } catch (e: Exception) { "" }
+        return newFixedLengthResponse(Response.Status.OK, "application/json",
+            """{"ok":true,"version":"${BuildConfig.VERSION_NAME}","versionCode":${BuildConfig.VERSION_CODE},"reportHost":"$reportHost","components":${CompanionService.componentsHealthJson()}}""")
+    }
 
     private fun serveInfo() =
         newFixedLengthResponse(Response.Status.OK, "application/json", DeviceInfo.getInfo(context))

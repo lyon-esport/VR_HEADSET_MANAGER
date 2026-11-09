@@ -871,6 +871,7 @@ function Get-HeadsetPanelKeymap {
         @{ Key = 'G'; Group = 'Device';  Label = $c.PanelFrame },
         @{ Key = 'E'; Group = 'Device';  Label = $c.PanelEdit },
         @{ Key = 'B'; Group = 'Device';  Label = $c.PanelDiag },
+        @{ Key = 'C'; Group = 'Setup';   Label = $c.PanelCompanion },
         @{ Key = 'U'; Group = 'Device';  Label = $c.PanelUiReset },
         @{ Key = 'R'; Group = 'Device';  Label = $c.PanelReboot },
         @{ Key = 'X'; Group = 'Device';  Label = $c.PanelRemove }
@@ -925,6 +926,21 @@ function Write-HeadsetPanelCard {
                 $ctl = if ($cap.CanReadControllers) { 'app' } elseif ($cap.Family -eq 'pico' -or [string]$row.Brand -match 'pico') { 'none' } else { 'ADB' }
                 $capText = $msg.Companion.CapLine -f $cap.AppVersion, $cap.CanForeground, $ctl, $cap.CanThermal
                 $lines += , (& $cell $msg.Companion.CapLabel $capText 'Gray' $Width)
+            }
+        }
+    } catch { }
+    # Companion owner (which VRHM server it reports to) and version state, from stored data (no ADB).
+    try {
+        if (Get-Command Get-CompanionOwnerState -ErrorAction SilentlyContinue) {
+            $os = Get-CompanionOwnerState -HeadsetId $Id
+            if ($os -and [string]$os.state -eq 'foreign') {
+                $where = if ($os.reportUrl) { "($($os.reportUrl)) " } else { '' }
+                $lines += , (& $cell $msg.Companion.OwnerLabel ($msg.Companion.OwnerForeign -f $where) 'Yellow' $Width)
+            }
+            $seenVer = ''
+            if ($cap -and $cap.Known -and $cap.AppVersion) { $seenVer = [string]$cap.AppVersion } elseif ($os -and $os.version) { $seenVer = [string]$os.version }
+            if ((Get-CompanionVersionState -Installed $seenVer -Available ([string]$global:CompanionVersion)) -eq 'older') {
+                $lines += , (& $cell $msg.Companion.OwnerLabel ($msg.Companion.VersionOlder -f $seenVer, $global:CompanionVersion) 'Yellow' $Width)
             }
         }
     } catch { }
@@ -1036,6 +1052,38 @@ function Show-HeadsetPanel {
                     Start-Process ("http://localhost:{0}/headset_diag.html?id={1}" -f $global:WebServer_port, $id)
                     Set-CockpitNotice -Text $c.WebOpened -Kind ok
                 } else { Set-CockpitNotice -Text $c.PanelWebDisabled -Kind err }
+            }
+            'C' {
+                # Same actions as the web Connectivity tab: attach the companion to THIS server when it
+                # reports to another one (Invoke-CompanionReattach), else update it when older
+                # (Install-VrhmCompanion, same as the web Upgrade button).
+                $o = Get-CompanionOwnership -IP ([string]$row.IPAddress)
+                try { [void](Set-CompanionOwnerState -HeadsetId $id -Ownership $o) } catch { }
+                $cap = $null; try { $cap = Get-CompanionCapability -HeadsetId $id } catch { }
+                $seenVer = if ($o.Version) { [string]$o.Version } elseif ($cap -and $cap.Known) { [string]$cap.AppVersion } else { '' }
+                $verState = Get-CompanionVersionState -Installed $seenVer -Available ([string]$global:CompanionVersion)
+                if ($o.State -eq 'foreign') {
+                    $ans = (Read-Host ($msg.Companion.ReattachConfirm -f $row.Name)).Trim().ToUpper()
+                    if ($ans -in @('Y', 'O')) {
+                        $dev = Get-BestAdbDevice -Headset $row
+                        $r = if ($dev) { Invoke-CompanionReattach -Headset $row -Device $dev } else { @{ Ok = $false; Error = 'ADB not reachable' } }
+                        if ($r.Ok) { Set-CockpitNotice -Text ($msg.Companion.ReattachDone -f $row.Name) -Kind ok }
+                        else { Set-CockpitNotice -Text ($msg.Companion.ReattachFailed -f $row.Name, $r.Error) -Kind err }
+                    }
+                }
+                elseif ($verState -eq 'older') {
+                    $ans = (Read-Host ($msg.Companion.UpdateConfirm -f $row.Name)).Trim().ToUpper()
+                    if ($ans -in @('Y', 'O')) {
+                        $dev = Get-BestAdbDevice -Headset $row
+                        $usb = $dev -and ([string]$dev.ConnectionType -eq 'USB')
+                        if ($usb) { Set-UsbBusy -Seconds 180 }
+                        try { $r = if ($dev) { Install-VrhmCompanion -Device $dev } else { @{ Ok = $false; Error = 'ADB not reachable' } } }
+                        finally { if ($usb) { Set-UsbBusy -Seconds 10 } }
+                        if ($r.Ok) { Set-CockpitNotice -Text ($msg.Companion.UpdateDone -f $row.Name) -Kind ok }
+                        else { Set-CockpitNotice -Text ($msg.Companion.UpdateFailed -f $row.Name, $r.Error) -Kind err }
+                    }
+                }
+                else { Set-CockpitNotice -Text ($msg.Companion.CompanionOk -f $row.Name) -Kind info }
             }
             'U' {
                 # Same action as the web "Reset headset interface" buttons (Invoke-HeadsetUiReset).
@@ -1776,6 +1824,18 @@ function Show-SubMenu-LaunchApp {
         Write-Host " Headset: $($headset.Name) [$($headset.IPAddress)]" -ForegroundColor Gray
         Write-Host ""
         Write-Host $msg.LaunchAppSelectApp -ForegroundColor Cyan
+        # Running app (kill with K); the Meta shell is not an app
+        $runningPkg = ''
+        $runDevice  = Get-BestAdbDevice -Headset $headset
+        if ($runDevice) {
+            $fg = Get-HeadsetForegroundApp -Device $runDevice
+            if ($fg -and $fg -notin @('com.oculus.vrshell', 'com.oculus.systemux')) { $runningPkg = [string]$fg }
+        }
+        if ($runningPkg) {
+            $runInfo  = $installedApps | Where-Object { $_.PackageName -eq $runningPkg } | Select-Object -First 1
+            $runLabel = if ($runInfo -and $runInfo.DisplayName) { $runInfo.DisplayName } else { $runningPkg }
+            Write-Host ("  " + ($msg.Console.LaunchAppRunning -f $runLabel)) -ForegroundColor Green
+        }
         Write-Host ""
 
         $index = 1
@@ -1816,6 +1876,17 @@ function Show-SubMenu-LaunchApp {
         $menuInput = (Read-Host " >>").Trim()
 
         if ($menuInput -eq '0') { return }
+
+        # Kill the running app: K
+        if ($menuInput -match '^[Kk]$' -and $runningPkg) {
+            Write-Host ($msg.Console.LaunchAppKilling -f $runLabel, $headset.Name) -ForegroundColor Cyan
+            $killDevice = Get-BestAdbDevice -Headset $headset
+            $ok = if ($killDevice) { Stop-HeadsetApp -Device $killDevice -PackageName $runningPkg } else { $false }
+            if ($ok) { Write-Host $msg.Console.LaunchAppKilled -ForegroundColor Green }
+            else     { Write-Host $msg.Console.LaunchAppKillFail -ForegroundColor Red }
+            Start-Sleep -Seconds 2
+            continue
+        }
 
         # Toggle favorite: F<number>
         if ($menuInput -match '^[Ff](\d+)$') {

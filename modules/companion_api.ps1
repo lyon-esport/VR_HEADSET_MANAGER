@@ -1688,3 +1688,159 @@ function Invoke-CompanionIdentityHeal {
     } catch { }
     return $did
 }
+
+
+# ---------------------------------------------------------------------------------------------
+# Companion ownership (which VRHM server the companion reports to) and version state.
+# Each server has its OWN companion token, so a companion provisioned by another server answers
+# 401 to this one. /health is the only open endpoint (alive + version).
+# ---------------------------------------------------------------------------------------------
+
+# One GET returning the HTTP status code (0 = no answer) and the parsed JSON body ($null when none).
+# Unlike Invoke-RestMethod it tells a 401 from a timeout. Never throws.
+# Example: $r = Invoke-CompanionHttpGet -Url 'http://192.168.1.243:8765/health'; $r.Code
+function Invoke-CompanionHttpGet {
+    param([Parameter(Mandatory)][string]$Url, [string]$Token = '', [int]$TimeoutSec = 2)
+    $res = @{ Code = 0; Body = $null }
+    try {
+        $r = Invoke-WebRequest -Uri $Url -Method GET -Headers (Get-CompanionHttpHeaders -Token $Token) -TimeoutSec $TimeoutSec -UseBasicParsing -ErrorAction Stop
+        $res.Code = [int]$r.StatusCode
+        try { $res.Body = ($r.Content | ConvertFrom-Json) } catch { $res.Body = $null }
+    } catch {
+        try {
+            $resp = $_.Exception.Response
+            if ($resp) { $res.Code = [int]$resp.StatusCode }
+        } catch { }
+    }
+    return $res
+}
+
+# Pure. Compares two dotted companion versions (1.4.3): returns 'ok' (equal or one unknown),
+# 'older' (installed < available) or 'newer' (installed > available). Never throws.
+# Example: Get-CompanionVersionState -Installed '1.4.2' -Available '1.4.3'   # older
+function Get-CompanionVersionState {
+    param([string]$Installed = '', [string]$Available = '')
+    try {
+        $i = ([string]$Installed).Trim().TrimStart('vV'); $a = ([string]$Available).Trim().TrimStart('vV')
+        if (-not $i -or -not $a) { return 'ok' }
+        $pi = @($i -split '[.\-]' | ForEach-Object { $n = 0; if ([int]::TryParse($_, [ref]$n)) { $n } else { 0 } })
+        $pa = @($a -split '[.\-]' | ForEach-Object { $n = 0; if ([int]::TryParse($_, [ref]$n)) { $n } else { 0 } })
+        $len = [Math]::Max($pi.Count, $pa.Count)
+        for ($k = 0; $k -lt $len; $k++) {
+            $x = if ($k -lt $pi.Count) { $pi[$k] } else { 0 }
+            $y = if ($k -lt $pa.Count) { $pa[$k] } else { 0 }
+            if ($x -lt $y) { return 'older' }
+            if ($x -gt $y) { return 'newer' }
+        }
+        return 'ok'
+    } catch { return 'ok' }
+}
+
+# Pure mapping of the two HTTP answers to an ownership record. -HealthCode/-StatusCode are HTTP codes
+# (0 = no answer); -Health/-Status the parsed bodies; -OurUrl this server's report URL.
+# State: unreachable (no /health answer), ours, foreign (401 on /status with our token, or a different
+# reportUrl), unknown (answered, but neither). ReportUrl is what the companion reports to when known
+# ('' otherwise; a 1.4.4+ app also gives the host in /health.reportHost).
+# Example: ConvertTo-CompanionOwnership -HealthCode 200 -StatusCode 401 -Health $h -OurUrl $url
+function ConvertTo-CompanionOwnership {
+    param([int]$HealthCode = 0, [int]$StatusCode = 0, $Health = $null, $Status = $null, [string]$OurUrl = '')
+    $o = @{ State = 'unreachable'; Version = ''; VersionCode = 0; ReportUrl = ''; Reason = '' }
+    if ($HealthCode -ne 200) { $o.Reason = 'no /health answer'; return $o }
+    try {
+        if ($Health -and $Health.PSObject.Properties['version']) { $o.Version = [string]$Health.version }
+        if ($Health -and $Health.PSObject.Properties['versionCode']) { $o.VersionCode = [int]$Health.versionCode }
+        if ($Health -and $Health.PSObject.Properties['reportHost']) { $o.ReportUrl = [string]$Health.reportHost }
+    } catch { }
+    if ($StatusCode -eq 401) { $o.State = 'foreign'; $o.Reason = 'token not ours'; return $o }
+    if ($StatusCode -eq 200 -and $Status) {
+        $rep = ''
+        try { if ($Status.PSObject.Properties['reportUrl']) { $rep = [string]$Status.reportUrl } } catch { $rep = '' }
+        if ($rep) { $o.ReportUrl = $rep }
+        if (-not $rep -or -not $OurUrl -or $rep.TrimEnd('/') -eq $OurUrl.TrimEnd('/')) { $o.State = 'ours' }
+        else { $o.State = 'foreign'; $o.Reason = 'reports to another URL' }
+        return $o
+    }
+    $o.State = 'unknown'; $o.Reason = "status HTTP $StatusCode"
+    return $o
+}
+
+# Who does the companion on this headset belong to? ONE /health (open) + ONE /status with OUR token,
+# over HTTP only (no ADB). Returns @{State;Version;VersionCode;ReportUrl;Reason} (see
+# ConvertTo-CompanionOwnership). Never throws.
+# Example: (Get-CompanionOwnership -IP '192.168.1.243').State
+function Get-CompanionOwnership {
+    param([Parameter(Mandatory)][string]$IP, [int]$CompanionPort = 8765, [int]$TimeoutSec = 2)
+    try {
+        $h = Invoke-CompanionHttpGet -Url "http://${IP}:${CompanionPort}/health" -TimeoutSec $TimeoutSec
+        if ($h.Code -ne 200) { return (ConvertTo-CompanionOwnership -HealthCode $h.Code) }
+        $s = Invoke-CompanionHttpGet -Url "http://${IP}:${CompanionPort}/status" -Token (Get-CompanionToken) -TimeoutSec $TimeoutSec
+        $ours = ''
+        try { $ours = Get-CompanionReportUrl } catch { $ours = '' }
+        return (ConvertTo-CompanionOwnership -HealthCode $h.Code -StatusCode $s.Code -Health $h.Body -Status $s.Body -OurUrl $ours)
+    } catch { return @{ State = 'unreachable'; Version = ''; VersionCode = 0; ReportUrl = ''; Reason = [string]$_ } }
+}
+
+# The stored ownership of one headset (app_kv companion_owner_<id> = {state,version,reportUrl,at}), or $null.
+# Example: (Get-CompanionOwnerState -HeadsetId 3).state
+function Get-CompanionOwnerState {
+    param([Parameter(Mandatory)][int]$HeadsetId)
+    try { return (Get-DbKeyValue -Key ("companion_owner_{0}" -f $HeadsetId)) } catch { return $null }
+}
+
+# Writes companion_owner_<id> only when state / version / reportUrl changed (or older than 5 min).
+# Example: Set-CompanionOwnerState -HeadsetId 3 -Ownership $o
+function Set-CompanionOwnerState {
+    param([Parameter(Mandatory)][int]$HeadsetId, [Parameter(Mandatory)]$Ownership)
+    try {
+        $key = "companion_owner_{0}" -f $HeadsetId
+        $cur = $null
+        try { $cur = Get-DbKeyValue -Key $key } catch { $cur = $null }
+        $same = $cur -and ([string]$cur.state -eq [string]$Ownership.State) -and ([string]$cur.version -eq [string]$Ownership.Version) -and ([string]$cur.reportUrl -eq [string]$Ownership.ReportUrl)
+        if ($same) {
+            $at = ConvertTo-CompanionUtc -Text $cur.at
+            if ($at -and ([datetime]::UtcNow - $at).TotalMinutes -lt 5) { return $false }
+        }
+        Set-DbKeyValue -Key $key -Value ([PSCustomObject]@{ state = [string]$Ownership.State; version = [string]$Ownership.Version; reportUrl = [string]$Ownership.ReportUrl; at = [datetime]::UtcNow.ToString('o') })
+        return $true
+    } catch { return $false }
+}
+
+# Removes the stored ownership (Remove-Headset). Example: Remove-CompanionOwnerState -HeadsetId 3
+function Remove-CompanionOwnerState {
+    param([Parameter(Mandatory)][int]$HeadsetId)
+    try { Remove-DbKeyValue -Key ("companion_owner_{0}" -f $HeadsetId) } catch { }
+}
+
+# Re-attaches the companion of a headset to THIS server (operator action, never automatic): over ADB
+# sends this server's token (settoken), then points the report URL here (/settings, forced) and
+# re-reads the ownership. Returns @{Ok;State;Error}. Never throws. The other server loses the headset.
+# Example: $r = Invoke-CompanionReattach -Headset $row -Device $device
+function Invoke-CompanionReattach {
+    param([Parameter(Mandatory)]$Headset, [Parameter(Mandatory)]$Device, [string]$adb = $global:adbPath)
+    $res = @{ Ok = $false; State = ''; Error = '' }
+    try {
+        $id = [int]$Headset.ID
+        $ip = [string]$Headset.IPAddress
+        if ($id -le 0 -or -not $Device) { $res.Error = 'no device'; return $res }
+        $okTok = [bool](Invoke-CompanionCmd -Device $Device -Cmd 'settoken' -Extra @('--es', 'token', (Get-CompanionToken)) -adb $adb)
+        if (-not $okTok) { $res.Error = (Get-CompanionText -Key 'ReattachTokenFailed' -Fallback 'Could not send the token over ADB'); return $res }
+        $serial = ([string]$Headset.SerialNumber).Trim()
+        if ($serial -match '^[A-Za-z0-9._-]{4,64}$') {
+            [void](Invoke-CompanionCmd -Device $Device -Cmd 'setserial' -Extra @('--es', 'serial', $serial) -adb $adb)
+        }
+        $pushed = $false
+        if ($ip -and -not (Test-UnknownIp $ip)) {
+            for ($k = 0; $k -lt 3 -and -not $pushed; $k++) {
+                if ($k -gt 0) { Start-Sleep -Milliseconds 800 }
+                $pushed = [bool](Set-CompanionReportTarget -IP $ip -Force)
+            }
+        }
+        $o = if ($ip) { Get-CompanionOwnership -IP $ip } else { @{ State = 'unknown'; Version = ''; ReportUrl = '' } }
+        try { [void](Set-CompanionOwnerState -HeadsetId $id -Ownership $o) } catch { }
+        $res.State = [string]$o.State
+        $res.Ok = ($pushed -and $o.State -eq 'ours')
+        if (-not $res.Ok) { $res.Error = (Get-CompanionText -Key 'ReattachIncomplete' -Fallback 'Token sent, but the companion did not accept the new report address yet') }
+        Write-Log ((Get-CompanionText -Key 'Reattached' -Fallback 'Companion on {0}: re-attached to this server ({1})') -f [string]$Headset.Name, $res.State) -Level WARNING
+    } catch { $res.Error = $_.Exception.Message }
+    return $res
+}

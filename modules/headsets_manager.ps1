@@ -943,6 +943,10 @@ function Remove-Headset {
         if (Get-Command Remove-HeadsetKeepAwake -ErrorAction SilentlyContinue) {
             try { Remove-HeadsetKeepAwake -HeadsetId ([int]$headsetToRemove.ID) } catch { }
         }
+        # Stored companion ownership (which server it reports to), another app_kv row.
+        if (Get-Command Remove-CompanionOwnerState -ErrorAction SilentlyContinue) {
+            try { Remove-CompanionOwnerState -HeadsetId ([int]$headsetToRemove.ID) } catch { }
+        }
         # And the last companion telemetry push of that headset.
         if (Get-Command Remove-DbKeyValue -ErrorAction SilentlyContinue) {
             try { Remove-DbKeyValue -Key ('companion_telemetry_' + [int]$headsetToRemove.ID) } catch { }

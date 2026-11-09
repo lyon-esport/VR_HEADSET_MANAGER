@@ -52,6 +52,11 @@
     '.lm-running-name{font-size:12px;color:#888;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
     '[data-theme="light"] .lm-running-label{color:#bbb;}',
     '[data-theme="light"] .lm-running-name{color:#666;}',
+    '.lm-kill-btn{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:5px;border:1px solid #444;background:#2a2a2a;color:#888;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;flex-shrink:0;transition:background 0.12s,border-color 0.12s,color 0.12s;}',
+    '.lm-kill-btn:hover{background:rgba(239,68,68,0.22);border-color:#ef4444;color:#ef4444;}',
+    '.lm-kill-btn:disabled{opacity:0.5;cursor:default;}',
+    '[data-theme="light"] .lm-kill-btn{background:#e8e8e8;border-color:#ccc;color:#555;}',
+    '[data-theme="light"] .lm-kill-btn:hover{background:rgba(239,68,68,0.12);border-color:#ef4444;color:#dc2626;}',
     /* Search */
     '.lm-search-wrap{display:flex;align-items:center;gap:4px;flex:1;margin:0 12px;}',
     '.lm-search{flex:1;background:#111;border:1px solid #333;border-radius:5px;color:#ccc;font-family:inherit;font-size:12px;padding:4px 8px;outline:none;min-width:0;}',
@@ -95,7 +100,7 @@
         '<div class="lm-header">' +
           '<div class="lm-title-wrap">' +
             '<span class="lm-headset-label" id="lm-headset-label"></span>' +
-            '<span class="lm-title">Launch App</span>' +
+            '<span class="lm-title">App Launcher</span>' +
           '</div>' +
           '<div class="lm-running-app" id="lm-running-app" style="display:none">' +
             '<img class="lm-running-icon" id="lm-running-icon" src="" alt="" onerror="this.style.display=\'none\'">' +
@@ -103,6 +108,9 @@
               '<span class="lm-running-label">Running</span>' +
               '<span class="lm-running-name" id="lm-running-name"></span>' +
             '</div>' +
+            '<button class="lm-kill-btn" id="lm-kill-btn" title="Kill the running app">' +
+              '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="2"/></svg> Kill' +
+            '</button>' +
           '</div>' +
           '<div class="lm-search-wrap" id="lm-search-wrap" style="display:none">' +
             '<input class="lm-search" id="lm-search" type="search" placeholder="Search apps..." autocomplete="off" spellcheck="false">' +
@@ -151,6 +159,7 @@
   var _showSystem       = false;
   var _resolvePoller    = null;   // VRHM.poll handle, alive only while a resolve is running
   var _resolveStarting  = false;  // vrhm_common.js is being loaded for the first poll
+  var _runningPkg       = '';     // package of the app shown in the "Running" block
 
   function _stopResolvePolling() {
     if (_resolvePoller) { _resolvePoller.stop(); _resolvePoller = null; }
@@ -212,6 +221,7 @@
     document.getElementById('lm-search-wrap').style.display = 'none';
     document.getElementById('lm-search').value = '';
     document.getElementById('lm-running-app').style.display = 'none';
+    _runningPkg = '';
     document.getElementById('app-launcher').style.display = 'flex';
     // Fetch and display currently running app
     fetch('/api/foregroundapp?name=' + encodeURIComponent(dn))
@@ -229,6 +239,11 @@
         } else {
           icon.style.display = 'none';
         }
+        _runningPkg = d.package;
+        var killBtn = document.getElementById('lm-kill-btn');
+        killBtn.disabled = false;
+        // Meta Home / System UX is the shell, not an app: nothing to kill
+        killBtn.style.display = (d.package === 'com.oculus.vrshell' || d.package === 'com.oculus.systemux') ? 'none' : '';
         wrap.style.display = 'flex';
       })
       .catch(function () {});
@@ -409,8 +424,48 @@
     });
   }
 
+  function killRunningApp() {
+    var dn = _launchDn, pkg = _runningPkg;
+    if (!dn || !pkg) return;
+    var btn = document.getElementById('lm-kill-btn');
+    var statusEl = document.getElementById('lm-status');
+    var label = document.getElementById('lm-running-name').textContent || pkg;
+    btn.disabled = true;
+    statusEl.textContent = 'Killing ' + label + '...';
+    statusEl.className   = 'lm-status';
+    fetch('/api/stopapp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: dn, package: pkg })
+    })
+    .then(function (r) { return r.json(); })
+    .then(function (j) {
+      if (j.ok) {
+        statusEl.textContent = label + ' killed.';
+        statusEl.className   = 'lm-status ok';
+        if (_runningPkg === pkg) {
+          _runningPkg = '';
+          document.getElementById('lm-running-app').style.display = 'none';
+        }
+        setTimeout(function () {
+          if (statusEl.textContent === label + ' killed.') { statusEl.textContent = ''; statusEl.className = 'lm-status'; }
+        }, 3000);
+      } else {
+        statusEl.textContent = 'Failed to kill ' + label + '.';
+        statusEl.className   = 'lm-status err';
+        btn.disabled = false;
+      }
+    })
+    .catch(function () {
+      statusEl.textContent = 'Error communicating with server.';
+      statusEl.className   = 'lm-status err';
+      btn.disabled = false;
+    });
+  }
+
   // ---- Event wiring (deferred until DOM ready) ----
   function init() {
+    document.getElementById('lm-kill-btn').addEventListener('click', killRunningApp);
     // Drag-and-drop for per-headset favorites reordering
     var _lmDragSrc = null;
     var lmList = document.getElementById('lm-list');

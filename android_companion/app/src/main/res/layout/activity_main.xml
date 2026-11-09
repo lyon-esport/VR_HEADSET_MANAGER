@@ -41,6 +41,14 @@
                     android:text="@string/subtitle"
                     android:textColor="@color/vrhm_text_secondary"
                     android:textSize="12sp" />
+                <TextView
+                    android:id="@+id/tv_version"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text=""
+                    android:textColor="@color/vrhm_text_dim"
+                    android:textSize="11sp"
+                    android:fontFamily="monospace" />
             </LinearLayout>
         </LinearLayout>
 
@@ -85,6 +93,14 @@
                 android:textColor="@color/vrhm_text_secondary"
                 android:textSize="12sp"
                 android:layout_marginTop="10dp" />
+            <TextView
+                android:id="@+id/tv_server"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text=""
+                android:textColor="@color/vrhm_text_secondary"
+                android:textSize="12sp"
+                android:layout_marginTop="4dp" />
             <TextView
                 android:id="@+id/tv_engine"
                 android:layout_width="match_parent"

@@ -307,11 +307,63 @@ function Invoke-RouteHeadsetadbtoolsstatus {
             Send-JsonResponse -Response $response -Body @{ ok = $false; error = $r.Error }
         } else {
             $apps = @(Get-HeadsetAdbToolsStatus -Device $r.Device -adb $adbPath -Brand ([string]$r.Brand))
-            Send-JsonResponse -Response $response -Body @{ ok = $true; model = [string]$r.Model; apps = $apps }
+            foreach ($a in $apps) {
+                $a.versionState = Get-CompanionVersionState -Installed ([string]$a.installedVersion) -Available ([string]$a.availableVersion)
+            }
+            # Who the companion reports to (HTTP only), refreshed here because the operator is looking.
+            $owner = $null
+            if ($hsId -gt 0) {
+                try {
+                    $row = Get-HeadsetDiagTarget -Id $hsId
+                    if ($row -and $row.IPAddress -and -not (Test-UnknownIp ([string]$row.IPAddress))) {
+                        $o = Get-CompanionOwnership -IP ([string]$row.IPAddress)
+                        [void](Set-CompanionOwnerState -HeadsetId $hsId -Ownership $o)
+                        $owner = @{ state = [string]$o.State; reportUrl = [string]$o.ReportUrl; version = [string]$o.Version }
+                    }
+                } catch { $owner = $null }
+            }
+            Send-JsonResponse -Response $response -Body @{ ok = $true; model = [string]$r.Model; apps = $apps; owner = $owner }
         }
     } catch {
         try { Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'server error' } -StatusCode 500 } catch {}
     } finally {
+        Close-HttpResponse -Response $response
+    }
+    return
+}
+
+# API: POST /api/headset-companion-reattach  body: {"id":<headsetId>}  - OPERATOR action: makes the
+# companion of that headset report to THIS server (token over ADB, then the report address). The
+# server that owned it loses the headset. Never called automatically.
+function Invoke-RouteHeadsetcompanionreattach {
+    # POST /api/headset-companion-reattach
+    param([Parameter(Mandatory = $true)] $Context)
+    $request  = $Context.Request
+    $response = $Context.Response
+    $claimed  = $false
+    try {
+        $hsId = 0
+        try {
+            $body = Read-RequestBody -Request $request -Response $response -MaxBytes 4096
+            if ($body) { $json = $body | ConvertFrom-Json; [void][int]::TryParse([string]$json.id, [ref]$hsId) }
+        } catch {}
+        if ($hsId -le 0) {
+            Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'id required' } -StatusCode 400
+        } else {
+            $r = Resolve-AdbToolsRouteDevice -Id $hsId
+            if (-not $r.Ok) {
+                Send-JsonResponse -Response $response -Body @{ ok = $false; error = $r.Error }
+            } else {
+                if ($r.Usb) { Set-UsbBusy -Seconds 60; $claimed = $true }
+                $row = Get-HeadsetDiagTarget -Id $hsId
+                $res = Invoke-CompanionReattach -Headset $row -Device $r.Device -adb $adbPath
+                Send-JsonResponse -Response $response -Body @{ ok = [bool]$res.Ok; state = [string]$res.State; error = [string]$res.Error }
+            }
+        }
+    } catch {
+        try { Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'server error' } -StatusCode 500 } catch {}
+    } finally {
+        if ($claimed) { Set-UsbBusy -Seconds 10 }
         Close-HttpResponse -Response $response
     }
     return

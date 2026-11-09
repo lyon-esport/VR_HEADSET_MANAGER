@@ -242,6 +242,7 @@ $script:SlowRoutes = @{
     '/api/headset-storage'               = $true
     '/api/foregroundapp'                 = $true
     '/api/launchapp'                     = $true
+    '/api/stopapp'                       = $true
     '/api/uninstallapp'                  = $true
     '/api/update-app'                    = $true
     '/api/installedapps'                 = $true   # ?refresh=1 pulls the package list over adb
@@ -253,6 +254,7 @@ $script:SlowRoutes = @{
     '/api/installadbautoenable'          = $true   # adb install + grants + tcpip, ~15 s
     '/api/installvrhmcompanion'          = $true   # adb install + grants + provision + tcpip, ~20 s
     '/api/headset-adb-tools-status'      = $true   # 2x dumpsys package over adb
+    '/api/headset-companion-reattach'    = $true   # adb settoken + companion /settings
     '/api/uninstall-headset-app'         = $true   # adb uninstall
     '/api/headsets/push-wifi'            = $true
     '/api/app-update/check'              = $true   # GitHub API
@@ -481,6 +483,7 @@ foreach ($routeRow in @(
     ,@('POST',  '/api/installapk',                        'Invoke-RouteInstallapk')
     ,@('GET',   '/api/foregroundapp',                     'Invoke-RouteForegroundapp')
     ,@('POST',  '/api/launchapp',                         'Invoke-RouteLaunchapp')
+    ,@('POST',  '/api/stopapp',                           'Invoke-RouteStopapp')
     ,@('POST',  '/api/togglefavorite',                    'Invoke-RouteTogglefavorite')
     ,@('GET',   '/api/detectusbheadset',                  'Invoke-RouteDetectusbheadset')
     ,@('POST',  '/api/enablewifiadb',                     'Invoke-RouteEnablewifiadb')
@@ -488,6 +491,7 @@ foreach ($routeRow in @(
     ,@('POST',  '/api/installadbautoenable',              'Invoke-RouteInstalladbautoenable')
     ,@('POST',  '/api/installvrhmcompanion',              'Invoke-RouteInstallvrhmcompanion')
     ,@('GET',   '/api/headset-adb-tools-status',          'Invoke-RouteHeadsetadbtoolsstatus')
+    ,@('POST',  '/api/headset-companion-reattach',        'Invoke-RouteHeadsetcompanionreattach')
     ,@('POST',  '/api/uninstall-headset-app',             'Invoke-RouteUninstallheadsetapp')
     ,@('POST',  '/api/companion/telemetry',               'Invoke-RouteCompaniontelemetry')   # inbound push, fast lane (ADR-0043)
     ,@('POST',  '/api/connectwifi',                       'Invoke-RouteConnectwifi')

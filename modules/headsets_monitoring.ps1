@@ -878,7 +878,32 @@ function Start-VRMonitor {
                             if ($workingInfo.Ping -and [datetime]::Now -ge $nextReportAt -and (Get-Command Set-CompanionReportTarget -ErrorAction SilentlyContinue)) {
                                 $nextReportAt = [datetime]::Now.AddSeconds(60)
                                 $rptUrl = [string]$sharedState['_companion_report_url']
-                                if ($rptUrl -and $liveHeadset.IPAddress -and -not (Test-UnknownIp $liveHeadset.IPAddress)) {
+                                # Ownership: does this companion belong to ANOTHER VRHM server? Only asked
+                                # (HTTP, no ADB) when no push is fresh, at most every 5 min; a fresh
+                                # push means it is ours.
+                                $ownerForeign = $false
+                                if ($liveHeadset.IPAddress -and -not (Test-UnknownIp $liveHeadset.IPAddress) -and (Get-Command Get-CompanionOwnership -ErrorAction SilentlyContinue)) {
+                                    try {
+                                        if (-not $ownerNextAt) { $ownerNextAt = [datetime]::MinValue }
+                                        $ownCt = Get-CompanionTelemetry -HeadsetId ([int]$headset.ID)
+                                        if ($ownCt) {
+                                            $ownVer = ''
+                                            try { $ownVer = [string](Get-CompanionCapability -HeadsetId ([int]$headset.ID)).AppVersion } catch { $ownVer = '' }
+                                            [void](Set-CompanionOwnerState -HeadsetId ([int]$headset.ID) -Ownership @{ State = 'ours'; Version = $ownVer; ReportUrl = '' })
+                                        }
+                                        elseif ([datetime]::Now -ge $ownerNextAt) {
+                                            $ownerNextAt = [datetime]::Now.AddMinutes(5)
+                                            $own = Get-CompanionOwnership -IP ([string]$liveHeadset.IPAddress)
+                                            [void](Set-CompanionOwnerState -HeadsetId ([int]$headset.ID) -Ownership $own)
+                                            if ($own.State -eq 'foreign') { $ownerForeign = $true }
+                                        }
+                                        else {
+                                            $ownCur = Get-CompanionOwnerState -HeadsetId ([int]$headset.ID)
+                                            if ($ownCur -and [string]$ownCur.state -eq 'foreign') { $ownerForeign = $true }
+                                        }
+                                    } catch { }
+                                }
+                                if ($rptUrl -and -not $ownerForeign -and $liveHeadset.IPAddress -and -not (Test-UnknownIp $liveHeadset.IPAddress)) {
                                     # Telemetry v2: a proto-2 app gets its config from every push
                                     # response, so /settings is BOOTSTRAP ONLY (proto-1 or silent
                                     # app, nothing pushed for 5 min, server URL changed).

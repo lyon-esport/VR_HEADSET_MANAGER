@@ -718,6 +718,46 @@ function Invoke-RouteLaunchapp {
     return
 }
 
+# API: POST /api/stopapp  body: {"name":"Q3_BLUE","package":"com.beatgames.beatsaber"}  - force-stops the app
+function Invoke-RouteStopapp {
+    # POST /api/stopapp
+    param([Parameter(Mandatory = $true)] $Context)
+    $request  = $Context.Request
+    $response = $Context.Response
+
+    try {
+        $body = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
+        $json     = $body | ConvertFrom-Json
+        $safeName = [regex]::Match(($json.name -replace ' ','_'), '^[\w\-]+$').Value
+        $safePkg  = [regex]::Match($json.package, '^[\w\.\-]+$').Value
+        if (-not $safeName -or -not $safePkg) { throw "Invalid input" }
+
+        $rows    = Get-KnownHeadsets
+        $headset = $rows | Where-Object { ($_.Name -replace ' ','_') -eq $safeName } | Select-Object -First 1
+        if (-not $headset) { throw "Headset not found" }
+        $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort -adb $adbPath
+        if (-not $device) { throw "Could not connect to headset via ADB" }
+        $ok = Stop-HeadsetApp -Device $device -PackageName $safePkg -adb $adbPath
+        $respBytes = [System.Text.Encoding]::UTF8.GetBytes($(if ($ok) { '{"ok":true}' } else { '{"ok":false}' }))
+        $response.StatusCode      = 200
+        $response.ContentType     = 'application/json; charset=utf-8'
+        $response.Headers.Add('Access-Control-Allow-Origin', '*')
+        $response.ContentLength64 = $respBytes.Length
+        $response.OutputStream.Write($respBytes, 0, $respBytes.Length)
+    } catch {
+        try {
+            $errBytes = [System.Text.Encoding]::UTF8.GetBytes('{"ok":false,"error":"server error"}')
+            $response.StatusCode      = 500
+            $response.ContentType     = 'application/json; charset=utf-8'
+            $response.ContentLength64 = $errBytes.Length
+            $response.OutputStream.Write($errBytes, 0, $errBytes.Length)
+        } catch {}
+    } finally {
+        Close-HttpResponse -Response $response
+    }
+    return
+}
+
 # API: POST /api/togglefavorite  body: {"name":"Q3_BLUE","package":"com.pkg","displayName":"App","favorite":true}
 function Invoke-RouteTogglefavorite {
     # POST /api/togglefavorite

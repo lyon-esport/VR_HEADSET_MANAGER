@@ -1287,14 +1287,75 @@ function Get-AppShortcutFolder {
         (programs there start at Windows logon). $null when Windows cannot give it.
     .EXAMPLE
         Get-AppShortcutFolder -Location Startup
+        Get-AppShortcutFolder -Location Startup -Scope Common   # C:\ProgramData\...\Startup (all users)
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory)][ValidateSet('Desktop', 'Startup')][string]$Location)
+    param(
+        [Parameter(Mandatory)][ValidateSet('Desktop', 'Startup')][string]$Location,
+        [ValidateSet('User', 'Common')][string]$Scope = 'User'
+    )
     try {
-        $f = [Environment]::GetFolderPath($Location)
+        $special = $Location
+        if ($Scope -eq 'Common') {
+            if ($Location -ne 'Startup') { return $null }
+            $special = 'CommonStartup'
+        }
+        $f = [Environment]::GetFolderPath($special)
         if ([string]::IsNullOrWhiteSpace($f)) { return $null }
         return $f
     } catch { return $null }
+}
+
+function Test-AppShortcutFolderWritable {
+    <#
+    .SYNOPSIS
+        $true when a file can really be created and deleted in -Folder (real probe, ACLs included);
+        $false otherwise. Never throws.
+    .EXAMPLE
+        Test-AppShortcutFolderWritable -Folder (Get-AppShortcutFolder -Location Startup -Scope Common)
+    #>
+    [CmdletBinding()]
+    param([string]$Folder)
+    try {
+        if ([string]::IsNullOrWhiteSpace($Folder) -or -not (Test-Path -LiteralPath $Folder -PathType Container)) { return $false }
+        $probe = Join-Path $Folder ('.vrhm_write_probe_{0}.tmp' -f ([guid]::NewGuid().ToString('N')))
+        [System.IO.File]::WriteAllText($probe, 'x')
+        Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+        return $true
+    } catch { return $false }
+}
+
+function Get-VrhmStartupShortcuts {
+    <#
+    .SYNOPSIS
+        Every VRHM boot shortcut of the user Startup AND the all-users Startup folder, whatever install
+        or version it points to: "VR Headset Manager v*.lnk" (any target) plus any .lnk whose target
+        file name starts with START_VR_HEADSET_MANAGER. Returns @(@{Path;Target;Scope}); never throws.
+    .EXAMPLE
+        @(Get-VrhmStartupShortcuts) | ForEach-Object { $_.Path }
+    #>
+    [CmdletBinding()]
+    param()
+    $found = @()
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+        foreach ($scope in @('User', 'Common')) {
+            $folder = Get-AppShortcutFolder -Location Startup -Scope $scope
+            if (-not $folder -or -not (Test-Path -LiteralPath $folder -PathType Container)) { continue }
+            foreach ($f in @(Get-ChildItem -LiteralPath $folder -Filter '*.lnk' -File -ErrorAction SilentlyContinue)) {
+                try {
+                    $t = ''
+                    try { $t = [string]$shell.CreateShortcut($f.FullName).TargetPath } catch { }
+                    $leaf = ''
+                    if ($t) { $leaf = [System.IO.Path]::GetFileName($t) }
+                    if ($f.Name -like 'VR Headset Manager v*.lnk' -or $leaf -like 'START_VR_HEADSET_MANAGER*') {
+                        $found += @{ Path = $f.FullName; Target = $t; Scope = $scope }
+                    }
+                } catch { }
+            }
+        }
+    } catch { }
+    return $found
 }
 
 function Get-AppShortcutFiles {
@@ -1309,18 +1370,23 @@ function Get-AppShortcutFiles {
     param([Parameter(Mandatory)][ValidateSet('Desktop', 'Startup')][string]$Location, [string]$Root = $global:ScriptPath)
     $found = @()
     try {
-        $folder = Get-AppShortcutFolder -Location $Location
-        if (-not $folder -or -not $Root -or -not (Test-Path -LiteralPath $folder -PathType Container)) { return @() }
+        if (-not $Root) { return @() }
         $rootNorm = $Root.TrimEnd('\')
         $shell = New-Object -ComObject WScript.Shell
-        foreach ($f in @(Get-ChildItem -LiteralPath $folder -Filter 'VR Headset Manager v*.lnk' -File -ErrorAction SilentlyContinue)) {
-            try {
-                $s = $shell.CreateShortcut($f.FullName)
-                $t = [string]$s.TargetPath; $w = [string]$s.WorkingDirectory
-                if ($t.StartsWith($rootNorm + '\', [StringComparison]::OrdinalIgnoreCase) -or $w.TrimEnd('\') -ieq $rootNorm) {
-                    $found += @{ Path = $f.FullName; Target = $t }
-                }
-            } catch { }
+        # Startup: the user folder AND the all-users folder (the shortcut lives in either).
+        $folders = @(Get-AppShortcutFolder -Location $Location)
+        if ($Location -eq 'Startup') { $folders += Get-AppShortcutFolder -Location Startup -Scope Common }
+        foreach ($folder in $folders) {
+            if (-not $folder -or -not (Test-Path -LiteralPath $folder -PathType Container)) { continue }
+            foreach ($f in @(Get-ChildItem -LiteralPath $folder -Filter 'VR Headset Manager v*.lnk' -File -ErrorAction SilentlyContinue)) {
+                try {
+                    $s = $shell.CreateShortcut($f.FullName)
+                    $t = [string]$s.TargetPath; $w = [string]$s.WorkingDirectory
+                    if ($t.StartsWith($rootNorm + '\', [StringComparison]::OrdinalIgnoreCase) -or $w.TrimEnd('\') -ieq $rootNorm) {
+                        $found += @{ Path = $f.FullName; Target = $t }
+                    }
+                } catch { }
+            }
         }
     } catch { }
     return $found
@@ -1355,7 +1421,17 @@ function New-AppShortcut {
     [CmdletBinding()]
     param([Parameter(Mandatory)][ValidateSet('Desktop', 'Startup')][string]$Location, [string]$Root = $global:ScriptPath)
     try {
+        $scope = 'User'
         $folder = Get-AppShortcutFolder -Location $Location
+        if ($Location -eq 'Startup') {
+            # All-users Startup when this process can write there, else the user's own Startup folder.
+            $common = Get-AppShortcutFolder -Location Startup -Scope Common
+            if ($common -and (Test-AppShortcutFolderWritable -Folder $common)) {
+                $folder = $common; $scope = 'Common'
+            } else {
+                Write-Log "All-users Startup folder is not writable (not elevated?) - using the user Startup folder." -Level INFO
+            }
+        }
         if (-not $folder) { return @{ Ok = $false; Path = ''; Error = "Windows folder '$Location' not found." } }
         if (-not (Test-Path -LiteralPath $folder -PathType Container)) { New-Item -ItemType Directory -Path $folder -Force | Out-Null }
 
@@ -1372,8 +1448,21 @@ function New-AppShortcut {
         $safeVersion = ($version -replace '[\/:*?"<>|]', '_')
         $lnkPath = Join-Path $folder ("VR Headset Manager v{0}.lnk" -f $safeVersion)
 
-        foreach ($old in @(Get-AppShortcutFiles -Location $Location -Root $Root)) {
+        $removed = 0
+        $olds = @(Get-AppShortcutFiles -Location $Location -Root $Root)
+        if ($Location -eq 'Startup') {
+            # Any other VRHM boot shortcut (other install or version) in either Startup folder goes too.
+            $olds += @(Get-VrhmStartupShortcuts)
+        }
+        foreach ($old in $olds) {
+            if (-not (Test-Path -LiteralPath $old.Path)) { continue }
             Remove-Item -LiteralPath $old.Path -Force -ErrorAction SilentlyContinue
+            if (Test-Path -LiteralPath $old.Path) {
+                Write-Log "Could not remove startup shortcut '$($old.Path)' (access denied?)." -Level WARNING
+            } else {
+                $removed++
+                if ($Location -eq 'Startup') { Write-Log "Removed previous startup shortcut '$($old.Path)'." -Level INFO }
+            }
         }
 
         $shell = New-Object -ComObject WScript.Shell
@@ -1384,7 +1473,7 @@ function New-AppShortcut {
         $s.Description      = 'VR Headset Manager'
         $s.Save()
         if (-not (Test-Path -LiteralPath $lnkPath)) { return @{ Ok = $false; Path = $lnkPath; Error = 'The shortcut file was not created.' } }
-        return @{ Ok = $true; Path = $lnkPath; Error = '' }
+        return @{ Ok = $true; Path = $lnkPath; Error = ''; Scope = $scope; Removed = $removed }
     } catch {
         return @{ Ok = $false; Path = ''; Error = $_.Exception.Message }
     }

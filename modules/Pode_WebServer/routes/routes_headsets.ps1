@@ -489,6 +489,17 @@ function Invoke-RouteHeadsetSettings {
             if (Get-Command Test-HeadsetTlsCapable -ErrorAction SilentlyContinue) { $tlsOk = Test-HeadsetTlsCapable -Headset $headset }
         } catch {}
 
+        # Companion ownership (which server it reports to) and version state, from stored data (no ADB).
+        $compOwner = $null; $compVerState = 'ok'
+        try {
+            $os = Get-CompanionOwnerState -HeadsetId ([int]$headset.ID)
+            if ($os) { $compOwner = @{ state = [string]$os.state; reportUrl = [string]$os.reportUrl; version = [string]$os.version } }
+            $seenVer = ''
+            if ($compCap -and $compCap.Known -and $compCap.AppVersion) { $seenVer = [string]$compCap.AppVersion }
+            elseif ($os -and $os.version) { $seenVer = [string]$os.version }
+            $compVerState = Get-CompanionVersionState -Installed $seenVer -Available ([string]$global:CompanionVersion)
+        } catch {}
+
         try {
         $device = Get-BestAdbDevice -Headset $headset -AdbPort $adbPort -adb $adbPath
         if (-not $device) { throw "Could not connect to headset via ADB" }
@@ -528,6 +539,8 @@ function Invoke-RouteHeadsetSettings {
             infoSourceGlobal = $infoSrcGlobal
             companionInstalled = $ci
             companionCap     = $compCap
+            companionOwner   = $compOwner
+            companionVersionState = $compVerState
             tlsSupported     = $tlsOk
             keepAwake        = $kaWish
             keepAwakeStored  = $kaStored
@@ -539,6 +552,7 @@ function Invoke-RouteHeadsetSettings {
                 ok = $false; error = $_.Exception.Message
                 infoSource = $infoSrc; infoSourceGlobal = $infoSrcGlobal; companionInstalled = $ci
                 companionCap = $compCap; tlsSupported = $tlsOk
+                companionOwner = $compOwner; companionVersionState = $compVerState
                 keepAwake = $kaWish; keepAwakeStored = $kaStored; keepAwakeApplied = $kaApplied
             }
         }
