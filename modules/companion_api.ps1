@@ -1756,8 +1756,10 @@ function ConvertTo-CompanionOwnership {
         $rep = ''
         try { if ($Status.PSObject.Properties['reportUrl']) { $rep = [string]$Status.reportUrl } } catch { $rep = '' }
         if ($rep) { $o.ReportUrl = $rep }
-        if (-not $rep -or -not $OurUrl -or $rep.TrimEnd('/') -eq $OurUrl.TrimEnd('/')) { $o.State = 'ours' }
-        else { $o.State = 'foreign'; $o.Reason = 'reports to another URL' }
+        # A 200 on /status means the companion accepted OUR token, so it belongs to this server even when
+        # its report address differs (this server changed IP: Set-CompanionReportTarget re-points it).
+        $o.State = 'ours'
+        if ($rep -and $OurUrl -and $rep.TrimEnd('/') -ne $OurUrl.TrimEnd('/')) { $o.Reason = 'report address is stale' }
         return $o
     }
     $o.State = 'unknown'; $o.Reason = "status HTTP $StatusCode"
