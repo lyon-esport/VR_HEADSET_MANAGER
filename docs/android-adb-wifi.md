@@ -81,3 +81,15 @@ In the headset, the app is in **Library → Unknown sources**.
 | `Wireless debugging port not found` | The headset must be on Wi-Fi. If the headset showed *"Allow wireless debugging on this network?"*, accept it (tick *Always allow on this network*) and press **Enable** again. |
 | `USB debugging is off` | Developer mode / USB debugging was turned off on the headset. |
 | Nothing happens at startup | *Auto start on headset startup* must be ticked and the app must have been opened at least once after install. Startup only runs after a full reboot, not when waking from sleep. |
+
+### The "Allow wireless debugging on this network?" popup comes back at every start
+
+*Always allow on this network* trusts one **access point** (its hardware address, BSSID), not the
+network name. On a mesh or a site with several access points under the same name, the headset often
+joins another access point after a reboot, and the popup comes back even though the box was ticked
+before. Android does not let an app add access points to that trusted list.
+
+The VRHM Companion app (1.4.5 or later, with *auto-enable ADB WiFi on boot* on) approves this popup
+by itself: it ticks the box and presses **Allow**. To check what it did, read
+`adb logcat -d -s VRHMApprove` after a start: a line `popup still present after approve click`
+means the click did not close the popup, and the line lists what the popup showed.

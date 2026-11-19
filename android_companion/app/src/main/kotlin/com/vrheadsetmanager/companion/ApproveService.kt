@@ -33,6 +33,7 @@ class ApproveService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
     private var retriesLeft = 0
     private var scheduled = false
+    private var stillThereRetries = 0
 
     private val POPUP_WINDOW_TITLE = "vrusb"
     private val ALWAYS_ALLOW_BUTTON_ID = "android:id/button3" // AlertDialog neutral = "Always allow..."
@@ -90,14 +91,18 @@ class ApproveService : AccessibilityService() {
 
     /** @return true when a popup was found and acted on (so the burst can stop). */
     private fun scanOnce(): Boolean {
-        val popup = findPopupWindow() ?: return false
-        val root = popup.root ?: return false
+        val found = findPopupWindow() ?: return false
+        val root = found.window.root ?: return false
         val budget = intArrayOf(600)
         val texts = ArrayList<String>()
         collectText(root, texts, 0, budget)
-        Log.i(TAG, "VrUsb popup: " + texts.joinToString(" | ").take(400))
+        Log.i(TAG, (if (found.byTitle) "VrUsb popup: " else "network popup (system window): ") +
+            texts.joinToString(" | ").take(400))
 
         val fp = extractFingerprint(texts)
+        // A window matched by its CONTENT (not the VrUsb title) is only ever the network popup: never
+        // approve a per-computer key from such a window.
+        if (!found.byTitle && (fp != null || !isNetworkPopup(texts))) return false
         val ownKeyFp = try { SelfAdb.get(this).fingerprint() } catch (_: Throwable) { null }
         val popupIsOwnKey = fp != null && ownKeyFp != null && ownKeyFp.equals(fp, ignoreCase = true)
 
@@ -130,7 +135,29 @@ class ApproveService : AccessibilityService() {
             Log.w(TAG, "popup not identified (no fingerprint, not the network popup) - leaving it for a human")
             return true
         }
-        return approve(root)
+        val ok = approve(root)
+        if (ok) scheduleStillThereCheck()
+        return ok
+    }
+
+    /**
+     * After a click, look once more: a popup still on screen means the click did not take (wrong
+     * node, checkbox ticked but Allow not pressed, ...). One WARNING with the visible nodes, so the
+     * next failure can be read from logcat alone; then a fresh scan burst.
+     */
+    private fun scheduleStillThereCheck() {
+        handler.postDelayed({
+            try {
+                val again = findPopupWindow()
+                if (again == null) { stillThereRetries = 0; return@postDelayed }
+                val texts = ArrayList<String>()
+                collectText(again.window.root, texts, 0, intArrayOf(200))
+                Log.w(TAG, "popup still present after approve click (retry $stillThereRetries): " +
+                    texts.joinToString(" | ").take(400))
+                // Bounded: a click that "works" but never closes the popup must not loop forever.
+                if (stillThereRetries < 3) { stillThereRetries++; kick() }
+            } catch (_: Throwable) {}
+        }, 800)
     }
 
     /**
@@ -152,7 +179,12 @@ class ApproveService : AccessibilityService() {
      * app mentioning debugging. The popup's own window is reliably titled "VrUsb" on Horizon, and
      * our own package is excluded defensively.
      */
-    private fun findPopupWindow(): AccessibilityWindowInfo? {
+    private class FoundPopup(val window: AccessibilityWindowInfo, val byTitle: Boolean)
+
+    /** System packages that may host the "allow wireless debugging on this network" popup. */
+    private val NETWORK_POPUP_PACKAGES = setOf("com.android.systemui", "com.android.settings")
+
+    private fun findPopupWindow(): FoundPopup? {
         val all = ArrayList<AccessibilityWindowInfo>()
         if (Build.VERSION.SDK_INT >= 30) {
             try {
@@ -162,11 +194,27 @@ class ApproveService : AccessibilityService() {
         }
         if (all.isEmpty()) windows?.let { all.addAll(it) }
 
-        return all.firstOrNull { w ->
+        all.firstOrNull { w ->
             w.title?.toString()?.lowercase()?.contains(POPUP_WINDOW_TITLE) == true &&
                 w.root?.packageName?.toString() != packageName
+        }?.let { return FoundPopup(it, true) }
+
+        // The network popup is not always in the VrUsb window (stock Android: SystemUI's
+        // WifiDebuggingActivity). Accept a system window ONLY when its content is positively the
+        // network popup (SSID/BSSID, no per-computer key wording). Bounded text read per window.
+        for (w in all) {
+            val root = w.root ?: continue
+            if (root.packageName?.toString() !in NETWORK_POPUP_PACKAGES) continue
+            val texts = ArrayList<String>()
+            collectText(root, texts, 0, intArrayOf(200))
+            if (extractFingerprint(texts) == null && isNetworkPopup(texts)) return FoundPopup(w, false)
         }
+        return null
     }
+
+    private fun isCheckboxNode(n: AccessibilityNodeInfo): Boolean =
+        n.isCheckable || n.className?.toString()?.contains("CheckBox") == true ||
+            n.className?.toString()?.contains("Switch") == true
 
     private fun approve(root: AccessibilityNodeInfo): Boolean {
         // Preferred: the neutral "always allow" button (button3).
@@ -177,18 +225,23 @@ class ApproveService : AccessibilityService() {
         }
         // Horizon VR panel: the choice is a clickable node with no android:id, matched by its text
         // ("Toujours autoriser depuis cet ordinateur" / "Always allow from this computer").
-        find(root) { it.isClickable && fold(nodeText(it)).let { s ->
+        // A CHECKBOX labelled "always allow on this network" is NOT that button: clicking it only
+        // ticks it and the popup stays (the Allow button must still be pressed), so skip it here.
+        find(root) { it.isClickable && !isCheckboxNode(it) && fold(nodeText(it)).let { s ->
             s.contains("toujours autoriser") || s.contains("always allow") } }?.let { btn ->
             val ok = btn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             Log.i(TAG, "clicked always-allow by text (${btn.text}) -> $ok")
             if (ok) return true
         }
-        // Fallback shape: tick an "always allow" checkbox, then click the positive button.
-        find(root) { (it.isCheckable || it.className?.contains("CheckBox") == true) &&
+        // Checkbox shape: tick the "always allow" checkbox if unticked, then ALWAYS click Allow.
+        find(root) { isCheckboxNode(it) &&
             fold(nodeText(it)).let { s -> s.contains("toujours") || s.contains("always") } }
-            ?.let { cb -> if (cb.isCheckable && !cb.isChecked) Log.i(TAG, "tick always -> " + cb.performAction(AccessibilityNodeInfo.ACTION_CLICK)) }
+            ?.let { cb -> if (!cb.isChecked) Log.i(TAG, "tick always -> " + cb.performAction(AccessibilityNodeInfo.ACTION_CLICK)) }
         val pos = root.findAccessibilityNodeInfosByViewId(POSITIVE_BUTTON_ID)?.firstOrNull()
-            ?: find(root) { it.isClickable && fold(nodeText(it)).let { s -> s == "autoriser" || s == "allow" || s == "ok" } }
+            ?: find(root) { it.isClickable && !isCheckboxNode(it) && fold(nodeText(it)).trim().let { s ->
+                (s == "autoriser" || s == "allow" || s == "ok" ||
+                    s.startsWith("autoriser ") || s.startsWith("allow ")) &&
+                    !s.contains("toujours") && !s.contains("always") } }
         if (pos != null) {
             val ok = pos.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             Log.i(TAG, "clicked positive (id=${pos.viewIdResourceName} text=${pos.text}) -> $ok")
