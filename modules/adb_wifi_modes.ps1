@@ -33,7 +33,9 @@ function ConvertFrom-AdbMdnsServices {
     .DESCRIPTION
     Pure parser (no adb), so it is testable with canned text. Pairing services (_adb-tls-pairing._tcp)
     and classic ones (_adb._tcp, advertised once tcpip is on) are ignored. Duplicate lines (one per
-    network interface) are collapsed on Serial + Ip + Port. Never throws; @() on empty input.
+    network interface) are collapsed on Serial + Ip + Port. An instance name with an mDNS conflict
+    suffix (" (2)") is accepted, so one serial can come back with several ports (a stale cached
+    one and the live one); Select-AdbTlsLiveEndpoint picks. Never throws; @() on empty input.
 
     .EXAMPLE
     ConvertFrom-AdbMdnsServices -Text (& $global:adbPath mdns services)
@@ -47,7 +49,10 @@ function ConvertFrom-AdbMdnsServices {
         $seen = @{}
         foreach ($line in $lines) {
             if ($null -eq $line) { continue }
-            $m = [regex]::Match([string]$line, '^adb-(?<serial>[A-Za-z0-9]+)-(?<rand>\S+)\s+_adb-tls-connect\._tcp\.?\s+(?<ip>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(?<port>\d{1,5})')
+            # An instance renamed by an mDNS conflict carries a " (N)" suffix: adbd restarted
+            # with a new port while adb still caches the old record (measured 2026-11-22: the
+            # live port was ONLY on the "(2)" line). Accept it.
+            $m = [regex]::Match([string]$line, '^adb-(?<serial>[A-Za-z0-9]+)-(?<rand>\S+)(?:\s+\(\d+\))?\s+_adb-tls-connect\._tcp\.?\s+(?<ip>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(?<port>\d{1,5})')
             if (-not $m.Success) { continue }
             $port = [int]$m.Groups['port'].Value
             if ($port -lt 1 -or $port -gt 65535) { continue }
@@ -268,6 +273,81 @@ function Repair-AdbTlsEndpointAddress {
 }
 
 
+function Select-AdbTlsLiveEndpoint {
+    <#
+    .SYNOPSIS
+    Keeps ONE endpoint per serial: when mDNS lists a serial on several ports, the one that answers TCP.
+
+    .DESCRIPTION
+    After an adbd restart (headset sleep/wake, wireless debugging toggled) the TLS port changes, the
+    headset re-announces under a conflict-renamed instance ("adb-<serial>-<rand> (2)") and adb keeps
+    the old record in its cache for a long time. Measured 2026-11-22 on Q3 BLUE: 41165 (stale, TCP
+    closed) and 37361 (live) listed together; the stale one was published and every reader dialled
+    a dead port. For a serial with more than one candidate: ONE TCP probe per candidate
+    (-TimeoutMs), the first open one wins. None open: the port in -Previous when listed, else the
+    last candidate. The verdict is memoised per serial + candidate set (60 s), so a steady state
+    costs no probe. A serial with a single endpoint passes unchanged with no probe. Without
+    Test-Port loaded the endpoints pass unchanged. Never throws.
+
+    .EXAMPLE
+    Select-AdbTlsLiveEndpoint -Endpoints @(Get-AdbTlsServices) -Previous @(Get-PublishedAdbTlsEndpoints -IncludeStale)
+    #>
+    param($Endpoints, $Previous = @(), [int]$TimeoutMs = 300)
+
+    $list = @($Endpoints | Where-Object { $_ -and $_.Serial })
+    try {
+        if ($list.Count -le 1) { return $list }
+        $groups = [ordered]@{}
+        foreach ($e in $list) {
+            $s = [string]$e.Serial
+            if (-not $groups.Contains($s)) { $groups[$s] = @() }
+            $groups[$s] += $e
+        }
+        $canProbe = [bool](Get-Command Test-Port -ErrorAction SilentlyContinue)
+        if ($null -eq $script:AdbTlsLiveMemo) { $script:AdbTlsLiveMemo = @{} }
+        $now = [datetime]::UtcNow
+
+        $out = @()
+        foreach ($serial in $groups.Keys) {
+            $cands = @($groups[$serial])
+            if ($cands.Count -eq 1 -or -not $canProbe) {
+                if ($cands.Count -eq 1) { $out += $cands[0] } else { $out += $cands }
+                continue
+            }
+            $memoKey = $serial + '|' + ((@($cands | ForEach-Object { '{0}:{1}' -f $_.Ip, $_.Port }) | Sort-Object) -join ',')
+            $memo = $script:AdbTlsLiveMemo[$memoKey]
+            if ($memo -and ($now - $memo.At).TotalSeconds -lt 60) {
+                $out += $cands[[int]$memo.Index]
+                continue
+            }
+            $pick = -1
+            for ($i = 0; $i -lt $cands.Count; $i++) {
+                if ([bool](Test-Port -hostname ([string]$cands[$i].Ip) -port ([int]$cands[$i].Port) -timeout $TimeoutMs).open) { $pick = $i; break }
+            }
+            if ($pick -lt 0) {
+                $prev = @($Previous | Where-Object { $_ -and [string]$_.Serial -eq $serial }) | Select-Object -First 1
+                if ($prev) {
+                    for ($i = 0; $i -lt $cands.Count; $i++) {
+                        if ([int]$cands[$i].Port -eq [int]$prev.Port -and [string]$cands[$i].Ip -eq [string]$prev.Ip) { $pick = $i; break }
+                    }
+                }
+                if ($pick -lt 0) { $pick = $cands.Count - 1 }
+            }
+            if ($script:AdbTlsLiveMemo.Count -gt 200) { $script:AdbTlsLiveMemo.Clear() }
+            $script:AdbTlsLiveMemo[$memoKey] = @{ Index = $pick; At = $now }
+            if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
+                Write-Log ("ADB TLS: mDNS lists serial {0} on {1} endpoints ({2}) - using {3}:{4}" -f $serial, $cands.Count,
+                    ((@($cands | ForEach-Object { '{0}:{1}' -f $_.Ip, $_.Port })) -join ', '), $cands[$pick].Ip, $cands[$pick].Port) -Level DEBUG
+            }
+            $out += $cands[$pick]
+        }
+        return @($out)
+    } catch {
+        return $list
+    }
+}
+
+
 function Publish-AdbTlsEndpoints {
     <#
     .SYNOPSIS
@@ -301,7 +381,9 @@ function Publish-AdbTlsEndpoints {
 
         $merged = [ordered]@{}
         # mDNS can give a serial the IP of ANOTHER device (shared host name): fix it first.
-        foreach ($e in @(Repair-AdbTlsEndpointAddress -Endpoints $Endpoints)) {
+        # A serial listed on several ports (stale mDNS cache after an adbd restart): keep the live one.
+        $repaired = @(Repair-AdbTlsEndpointAddress -Endpoints $Endpoints)
+        foreach ($e in @(Select-AdbTlsLiveEndpoint -Endpoints $repaired -Previous $previous)) {
             if ($null -eq $e -or -not $e.Serial -or -not $e.Ip -or -not $e.Port) { continue }
             $merged[[string]$e.Serial] = [PSCustomObject]@{ Serial = [string]$e.Serial; Ip = [string]$e.Ip; Port = [int]$e.Port; Seen = $nowText }
         }

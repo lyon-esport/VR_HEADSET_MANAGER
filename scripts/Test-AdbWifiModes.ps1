@@ -144,6 +144,44 @@ $script:kv['adb_tls_endpoints'] = 'not json'
 $script:AdbTlsCache = $null
 Assert-Case 'read: unreadable row -> empty, no throw' (@(Get-PublishedAdbTlsEndpoints).Count -eq 0)
 
+# ------------------------------------------------------------------ stale mDNS port after adbd restart
+# Measured 2026-11-22 on Q3 BLUE: adb kept the old record (41165, dead) and the live port was only on
+# the conflict-renamed "(2)" instance. The parser must keep both; the publisher must pick the live one.
+$stale = @"
+List of discovered mdns services
+adb-2G0YC5ZG1W00ZJ-XUIVEi`t_adb-tls-connect._tcp`t192.168.1.243:41165
+adb-2G0YC5ZG5400PS-Z1KewF (2)`t_adb-tls-connect._tcp`t192.168.1.244:34219
+adb-2G0YC5ZG1W00ZJ-XUIVEi (2)`t_adb-tls-connect._tcp`t192.168.1.243:37361
+adb-2G0YC5ZG5400PS-Z1KewF`t_adb-tls-connect._tcp`t192.168.1.244:40857
+"@
+$ps = @(ConvertFrom-AdbMdnsServices -Text $stale)
+Assert-Case 'parser: "(2)" instance lines kept' ($ps.Count -eq 4) ("got {0}" -f $ps.Count)
+$blue2 = $ps | Where-Object { $_.Port -eq 37361 }
+Assert-Case 'parser: "(2)" line name has no suffix' ($blue2 -and $blue2.Name -eq 'adb-2G0YC5ZG1W00ZJ-XUIVEi' -and $blue2.Serial -eq '2G0YC5ZG1W00ZJ') ("got {0}" -f $blue2.Name)
+
+function Test-Port { param([string]$hostname, [int]$port, [int]$timeout = 200) $script:probes++; return @{ open = ($script:openPorts -contains ('{0}:{1}' -f $hostname, $port)) } }
+$script:openPorts = @('192.168.1.243:37361', '192.168.1.244:40857'); $script:probes = 0; $script:AdbTlsLiveMemo = $null
+$sel = @(Select-AdbTlsLiveEndpoint -Endpoints $ps)
+Assert-Case 'select: one endpoint per serial' ($sel.Count -eq 2) ("got {0}" -f $sel.Count)
+Assert-Case 'select: live port wins (suffixed line)' ((($sel | Where-Object Serial -eq '2G0YC5ZG1W00ZJ').Port) -eq 37361)
+Assert-Case 'select: live port wins (plain line)' ((($sel | Where-Object Serial -eq '2G0YC5ZG5400PS').Port) -eq 40857)
+$n = $script:probes
+[void](Select-AdbTlsLiveEndpoint -Endpoints $ps)
+Assert-Case 'select: verdict memoised (no new probe)' ($script:probes -eq $n) ("probes {0} -> {1}" -f $n, $script:probes)
+$script:openPorts = @(); $script:AdbTlsLiveMemo = $null
+$prevSet = @([PSCustomObject]@{ Serial = '2G0YC5ZG1W00ZJ'; Ip = '192.168.1.243'; Port = 41165 })
+$sel = @(Select-AdbTlsLiveEndpoint -Endpoints $ps -Previous $prevSet)
+Assert-Case 'select: none open -> previous port kept' ((($sel | Where-Object Serial -eq '2G0YC5ZG1W00ZJ').Port) -eq 41165)
+$single = @(Select-AdbTlsLiveEndpoint -Endpoints @($q3))
+Assert-Case 'select: single endpoint passes unchanged' ($single.Count -eq 1 -and $single[0].Port -eq 46443)
+Reset-TlsState
+$script:openPorts = @('192.168.1.243:37361', '192.168.1.244:40857'); $script:AdbTlsLiveMemo = $null
+[void](Publish-AdbTlsEndpoints -Endpoints $ps)
+Assert-Case 'publish: stale port not published' ((Find-AdbTlsEndpointBySerial -Serial '2G0YC5ZG1W00ZJ' -MaxAgeSec 0).Port -eq 37361)
+Remove-Item -Path function:Test-Port -ErrorAction SilentlyContinue
+$script:AdbTlsLiveMemo = $null
+Reset-TlsState
+
 # ------------------------------------------------------------------ S10-3: mode-aware resolution
 $script:logLines = @()
 function Write-Log { param($Message, $Level = 'INFO') $script:logLines += ('{0}|{1}' -f $Level, $Message) }

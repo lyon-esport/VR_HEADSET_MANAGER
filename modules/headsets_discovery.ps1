@@ -466,8 +466,15 @@ function Invoke-HeadsetNetworkSweep {
                 $devList = Invoke-Adb -Arguments @('devices') -Adb $adb -TimeoutSeconds 5
                 $line = @($devList.StdOut | Where-Object { $_ -match ('^' + [regex]::Escape($deviceId) + '\s') }) | Select-Object -First 1
                 if (-not $line -or ([string]$line) -notmatch '\sdevice\s*$') {
-                    $skippedAuth[$mdnsSerial] = $true
-                    Write-Log ("Headset discovery: " + $mdnsSerial + " at " + $deviceId + " advertises ADB over TLS but this PC is not authorised (needs USB authorisation once) - skipped.") -Level DEBUG
+                    # Only a real "unauthorized" state means this PC's key is refused. No line or
+                    # "offline" is an endpoint that does not answer (often a stale mDNS port after an
+                    # adbd restart): try the serial's other endpoints instead of giving up on it.
+                    if ($line -and ([string]$line) -match '\sunauthorized\s*$') {
+                        $skippedAuth[$mdnsSerial] = $true
+                        Write-Log ("Headset discovery: " + $mdnsSerial + " at " + $deviceId + " advertises ADB over TLS but this PC is not authorised (needs USB authorisation once) - skipped.") -Level DEBUG
+                    } else {
+                        Write-Log ("Headset discovery: " + $mdnsSerial + " TLS endpoint " + $deviceId + " did not answer (stale mDNS entry or adbd restarting) - skipped.") -Level DEBUG
+                    }
                     continue
                 }
 
