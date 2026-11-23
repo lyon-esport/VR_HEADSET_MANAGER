@@ -50,6 +50,12 @@
     .rc-btn.danger { color: #f87171; }
     .rc-btn.danger:hover:not(:disabled) { background: rgba(239,68,68,0.12); border-color: rgba(239,68,68,0.5); color: #f87171; }
     .rc-spacer { margin-left: auto; display: flex; gap: 8px; }
+    /* Recordings / Screenshots visibility toggles */
+    .kind-btn { opacity: 0.55; }
+    .kind-btn.on { opacity: 1; background: rgba(59,130,246,0.16); border-color: rgba(59,130,246,0.6); color: var(--accent); }
+    #btn-kind-shot.on { background: rgba(245,197,24,0.14); border-color: rgba(245,197,24,0.6); color: #f5c518; }
+    [data-theme="light"] .kind-btn.on { background: rgba(59,130,246,0.14); }
+    [data-theme="light"] #btn-kind-shot.on { color: #a07800; background: rgba(245,197,24,0.18); }
 
     .rc-panel { border: 1px solid var(--border); border-radius: 6px; background: var(--panel-bg); padding: 16px; margin-bottom: 16px; }
     .rc-msg { font-size: 13px; padding: 10px 14px; border-radius: 5px; margin-bottom: 12px; display: none; }
@@ -80,6 +86,35 @@
     .tl-bar.selected { outline: 2px solid #fff; opacity: 1; }
     @keyframes rcPulse { 0%,100% { opacity: 0.95; } 50% { opacity: 0.45; } }
     .tl-playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: #22c55e; pointer-events: none; display: none; z-index: 3; }
+    /* Screenshot marker: a star at the time the picture was taken, above the recording bars. */
+    .tl-star {
+      position: absolute; top: 50%; transform: translate(-50%, -50%); z-index: 2;
+      font-size: 18px; line-height: 1; color: #f5c518; cursor: zoom-in;
+      text-shadow: 0 0 2px #000, 0 0 4px rgba(0,0,0,0.8);
+    }
+    .tl-star:hover { color: #ffe066; font-size: 22px; }
+    .tl-tip img { display: block; max-width: 300px; max-height: 170px; margin-bottom: 4px; border-radius: 3px; background: #111; }
+
+    /* Screenshots grid */
+    .shot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+    .shot-card { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: var(--lane-bg); display: flex; flex-direction: column; }
+    .shot-card img { width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: #000; cursor: zoom-in; display: block; }
+    .shot-meta { padding: 6px 8px 2px; font-size: 12px; font-variant-numeric: tabular-nums; }
+    .shot-meta .shot-sub { color: #888; font-size: 11px; }
+    .shot-act { padding: 6px 8px 8px; display: flex; gap: 4px; flex-wrap: wrap; }
+    .shot-act .rc-btn, .shot-act a.rc-btn { padding: 3px 9px; font-size: 11px; text-decoration: none; display: inline-block; }
+    .shot-title { font-size: 12px; color: #999; margin-bottom: 10px; }
+    .shot-title b { color: #f5c518; }
+
+    /* Screenshot viewer */
+    .shot-view { background: var(--panel-bg); border: 1px solid #444; border-radius: 8px; padding: 12px; max-width: 96vw; max-height: 94vh; display: flex; flex-direction: column; gap: 8px; }
+    .shot-view img { max-width: calc(96vw - 26px); max-height: calc(94vh - 80px); object-fit: contain; background: #000; display: block; margin: 0 auto; }
+    .shot-view .bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; }
+    .shot-view .bar .cap { margin-right: auto; color: #aaa; }
+    .shot-view .bar a.rc-btn { text-decoration: none; }
+    .shot-view .bar .rc-btn { padding: 8px 16px; font-size: 13px; }
+    .shot-view .bar .rc-btn.shot-nav { display: inline-flex; align-items: center; gap: 8px; min-width: 120px; justify-content: center; font-size: 14px; }
+    .shot-view .bar .rc-btn.shot-nav:not(:disabled) { color: var(--text); border-color: rgba(59,130,246,0.6); }
     .tl-tip {
       position: fixed; z-index: 50; background: #000; color: #eee; border: 1px solid #444; border-radius: 4px;
       padding: 6px 9px; font-size: 12px; line-height: 1.5; pointer-events: none; display: none; max-width: 320px;
@@ -169,6 +204,8 @@
       <span class="lbl">Headset</span>
       <select id="sel-headset"><option value="">Loading...</option></select>
       <label class="rc-check"><input type="checkbox" id="chk-all"> All headsets</label>
+      <button class="rc-btn kind-btn" id="btn-kind-rec" type="button" title="Show or hide the recordings">&#127909; Recordings</button>
+      <button class="rc-btn kind-btn" id="btn-kind-shot" type="button" title="Show or hide the screenshots (stars on the timeline)">&#9733; Screenshots</button>
       <span class="lbl">Date</span>
       <select id="sel-date"></select>
       <span class="lbl">From</span>
@@ -214,7 +251,13 @@
       </div>
     </div>
 
-    <div class="rc-panel">
+    <div class="rc-panel" id="shot-panel" style="display:none">
+      <div class="shot-title"><b>&#9733;</b> Screenshots <span id="shot-count"></span></div>
+      <div class="shot-grid" id="shot-grid"></div>
+      <div class="rc-empty" id="shot-empty" style="display:none">No screenshots for this selection.</div>
+    </div>
+
+    <div class="rc-panel" id="rec-panel">
       <div style="overflow-x:auto">
         <table class="rc-table">
           <thead><tr>
@@ -230,6 +273,26 @@
 
   <div class="rc-tip tl-tip" id="tip"></div>
   <div class="rc-toast" id="toast"></div>
+
+  <div class="rc-modal-bg" id="shot-bg">
+    <div class="shot-view">
+      <img id="shot-img" alt="Screenshot">
+      <div class="bar">
+        <span class="cap" id="shot-cap"></span>
+        <button class="rc-btn shot-nav" id="shot-prev" title="Previous screenshot (Left arrow key)">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+          Previous
+        </button>
+        <button class="rc-btn shot-nav" id="shot-next" title="Next screenshot (Right arrow key)">
+          Next
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+        </button>
+        <a class="rc-btn" id="shot-dl" href="#">Download</a>
+        <button class="rc-btn danger" id="shot-del">Delete</button>
+        <button class="rc-btn" id="shot-close" title="Close (Esc)">Close</button>
+      </div>
+    </div>
+  </div>
 
   <div class="rc-modal-bg" id="wipe-bg">
     <div class="rc-modal">
@@ -309,16 +372,17 @@
     }
 
     // -- State ----------------------------------------------------------------
-    var state = { safe: '', date: '', from: 0, to: 24, all: false };
+    var state = { safe: '', date: '', from: 0, to: 24, all: false, kind: 'all' };
     var headsets = [];
     var recs = [];
+    var shots = [];   // screenshots (png) of the selection, oldest first
     var playbackInfo = { ok: true, reason: '' };
     var selectedId = 0;
     var laneKeys = [];
 
     function syncUrl() {
       var q = '?safe=' + encodeURIComponent(state.safe) + '&date=' + encodeURIComponent(state.date) +
-              '&from=' + state.from + '&to=' + state.to + '&all=' + (state.all ? 1 : 0);
+              '&from=' + state.from + '&to=' + state.to + '&all=' + (state.all ? 1 : 0) + '&kind=' + state.kind;
       try { history.replaceState(null, '', location.pathname + q); } catch (e) {}
     }
     (function readUrl() {
@@ -329,6 +393,8 @@
       state.from = (f >= 0 && f <= 23) ? f : 0;
       state.to = (t >= 1 && t <= 24 && t > state.from) ? t : 24;
       state.all = p.get('all') === '1';
+      var k = p.get('kind');
+      state.kind = (k === 'rec' || k === 'shot') ? k : 'all';
     })();
 
     // -- Controls -------------------------------------------------------------
@@ -348,7 +414,8 @@
         }
         $('sel-headset').innerHTML = headsets.map(function (h) {
           return '<option value="' + esc(h.safeName) + '"' + (h.safeName === state.safe ? ' selected' : '') + '>' +
-                 esc(h.name || h.safeName) + (h.inRegistry ? '' : ' (not in registry)') + ' (' + h.count + ')</option>';
+                 esc(h.name || h.safeName) + (h.inRegistry ? '' : ' (not in registry)') +
+                 (h.count ? ' (' + h.count + ')' : ' (screenshots only)') + '</option>';
         }).join('') || '<option value="">No recordings</option>';
         $('chk-all').checked = state.all;
         $('sel-headset').disabled = state.all;
@@ -369,16 +436,28 @@
 
     function wipeOpen() { return $('wipe-bg').classList.contains('open'); }
 
+    function listQuery() {
+      return '?safeName=' + encodeURIComponent(state.safe) +
+             '&date=' + encodeURIComponent(state.date) + '&from=' + state.from + '&to=' + state.to +
+             (state.all ? '&all=1' : '');
+    }
+    function asArray(x) { return Array.isArray(x) ? x : (x ? [x] : []); }
+
     function loadList() {
-      if (!state.date || (!state.all && !state.safe)) { recs = []; renderAll(); return Promise.resolve(); }
-      var url = '/api/recordings/list?safeName=' + encodeURIComponent(state.safe) +
-                '&date=' + encodeURIComponent(state.date) + '&from=' + state.from + '&to=' + state.to +
-                (state.all ? '&all=1' : '');
-      return api(url).then(function (j) {
-        if (!j.ok) { showError('Could not load recordings: ' + j.error); return; }
-        clearError();
-        recs = j.recordings || [];
+      if (!state.date || (!state.all && !state.safe)) { recs = []; shots = []; renderAll(); return Promise.resolve(); }
+      var q = listQuery(), errs = [];
+      var pRec = api('/api/recordings/list' + q).then(function (j) {
+        if (!j.ok) { errs.push('Could not load recordings: ' + j.error); return; }
+        recs = asArray(j.recordings);
         playbackInfo = j.playback || { ok: true, reason: '' };
+      });
+      var pShot = (state.kind === 'rec') ? Promise.resolve((shots = [])) :
+        api('/api/recordings/snapshots' + q).then(function (j) {
+          if (!j.ok) { errs.push('Could not load screenshots: ' + j.error); return; }
+          shots = asArray(j.snapshots);
+        });
+      return Promise.all([pRec, pShot]).then(function () {
+        if (errs.length) showError(errs.join(' / ')); else clearError();
         renderAll();
       });
     }
@@ -395,6 +474,23 @@
       syncUrl(); loadDates().then(function () { syncUrl(); loadList(); });
     });
     $('sel-date').addEventListener('change', function (e) { state.date = e.target.value; syncUrl(); loadList(); });
+    // Two on/off buttons; at least one stays on (turning off the last one turns the other on).
+    function updateKindButtons() {
+      $('btn-kind-rec').classList.toggle('on', state.kind !== 'shot');
+      $('btn-kind-shot').classList.toggle('on', state.kind !== 'rec');
+      $('btn-kind-rec').setAttribute('aria-pressed', String(state.kind !== 'shot'));
+      $('btn-kind-shot').setAttribute('aria-pressed', String(state.kind !== 'rec'));
+    }
+    function toggleKind(which) {
+      var rec = state.kind !== 'shot', shot = state.kind !== 'rec';
+      if (which === 'rec') rec = !rec; else shot = !shot;
+      if (!rec && !shot) { if (which === 'rec') shot = true; else rec = true; }
+      state.kind = rec && shot ? 'all' : (rec ? 'rec' : 'shot');
+      updateKindButtons(); syncUrl(); loadList();
+    }
+    $('btn-kind-rec').addEventListener('click', function () { toggleKind('rec'); });
+    $('btn-kind-shot').addEventListener('click', function () { toggleKind('shot'); });
+    updateKindButtons();
     $('sel-from').addEventListener('change', function (e) {
       state.from = parseInt(e.target.value, 10);
       if (state.to <= state.from) { state.to = Math.min(24, state.from + 1); $('sel-to').value = String(state.to); }
@@ -427,6 +523,8 @@
       if (r.durationSec != null) return r.durationSec;
       return (recEndMs(r) - recStartMs(r)) / 1000;
     }
+    function shotMs(s) { return toDate(s.taken).getTime(); }
+    function shotUrl(s, dl) { return '/api/recordings/snapshot?rel=' + encodeURIComponent(s.rel) + (dl ? '&download=1' : ''); }
     function pct(ms, b) { return Math.max(0, Math.min(100, (ms - b.t0) / (b.t1 - b.t0) * 100)); }
 
     function renderTimeline() {
@@ -443,26 +541,34 @@
       }
       axis.innerHTML = ticks;
 
+      var showRec = state.kind !== 'shot', showShot = state.kind !== 'rec';
       laneKeys = [];
       if (state.all) {
-        recs.forEach(function (r) { if (laneKeys.indexOf(r.safeName) === -1) laneKeys.push(r.safeName); });
+        if (showRec) recs.forEach(function (r) { if (laneKeys.indexOf(r.safeName) === -1) laneKeys.push(r.safeName); });
+        if (showShot) shots.forEach(function (s) { if (laneKeys.indexOf(s.safeName) === -1) laneKeys.push(s.safeName); });
       } else {
         laneKeys = [state.safe];
       }
       labels.innerHTML = laneKeys.map(function (k) {
         var r = recs.filter(function (x) { return x.safeName === k; })[0];
-        var nm = r ? (r.headsetName || k) : (state.all ? k : ((headsets.filter(function (x) { return x.safeName === k; })[0] || {}).name || k));
+        var s = shots.filter(function (x) { return x.safeName === k; })[0];
+        var nm = r ? (r.headsetName || k) : (s ? (s.headsetName || k) :
+                 (state.all ? k : ((headsets.filter(function (x) { return x.safeName === k; })[0] || {}).name || k)));
         return '<div title="' + esc(nm) + '">' + esc(nm) + '</div>';
       }).join('');
 
       var html = '';
       laneKeys.forEach(function (k, li) {
         html += '<div class="tl-lane" data-lane="' + li + '">' + grid;
-        recs.filter(function (r) { return r.safeName === k; }).forEach(function (r) {
+        if (showRec) recs.filter(function (r) { return r.safeName === k; }).forEach(function (r) {
           var l = pct(recStartMs(r), b), rt = pct(recEndMs(r), b);
           var w = Math.max(rt - l, 0.15);
           html += '<div class="tl-bar ' + esc(r.status) + (r.id === selectedId ? ' selected' : '') + '" data-id="' + r.id +
                   '" style="left:' + l + '%;width:' + w + '%">' + (r.keep ? '&#128274;' : '') + '</div>';
+        });
+        if (showShot) shots.forEach(function (s, si) {
+          if (s.safeName !== k) return;
+          html += '<span class="tl-star" data-shot="' + si + '" style="left:' + pct(shotMs(s), b) + '%">&#9733;</span>';
         });
         html += '</div>';
       });
@@ -481,8 +587,23 @@
     }
 
     $('tl-lanes').addEventListener('mousemove', function (e) {
-      var bar = e.target.closest ? e.target.closest('.tl-bar') : null;
       var tip = $('tip');
+      var star = e.target.closest ? e.target.closest('.tl-star') : null;
+      if (star) {
+        var s = shots[parseInt(star.dataset.shot, 10)];
+        if (!s) { tip.style.display = 'none'; return; }
+        if (tip.dataset.shot !== s.rel) {
+          tip.dataset.shot = s.rel;
+          tip.innerHTML = '<img src="' + esc(shotUrl(s)) + '" alt="">' + '<b>&#9733; ' + esc(fmtTime(toDate(s.taken))) + '</b>' +
+                          (state.all ? ' - ' + esc(s.headsetName || s.safeName) : '') + '<br>Click to open';
+        }
+        tip.style.display = 'block';
+        tip.style.left = Math.min(e.clientX + 14, window.innerWidth - 340) + 'px';
+        tip.style.top = Math.min(e.clientY + 16, window.innerHeight - 230) + 'px';
+        return;
+      }
+      tip.dataset.shot = '';
+      var bar = e.target.closest ? e.target.closest('.tl-bar') : null;
       if (!bar) { tip.style.display = 'none'; return; }
       var r = findRec(parseInt(bar.dataset.id, 10));
       if (!r) { tip.style.display = 'none'; return; }
@@ -491,9 +612,12 @@
       tip.style.left = Math.min(e.clientX + 14, window.innerWidth - 340) + 'px';
       tip.style.top = (e.clientY + 16) + 'px';
     });
-    $('tl-lanes').addEventListener('mouseleave', function () { $('tip').style.display = 'none'; });
+    $('tl-lanes').addEventListener('mouseleave', function () { $('tip').style.display = 'none'; $('tip').dataset.shot = ''; });
 
     $('tl-lanes').addEventListener('click', function (e) {
+      var star = e.target.closest ? e.target.closest('.tl-star') : null;
+      if (star) { $('tip').style.display = 'none'; openShot(shots[parseInt(star.dataset.shot, 10)]); return; }
+      if (state.kind === 'shot') return;
       var lane = e.target.closest ? e.target.closest('.tl-lane') : null;
       if (!lane) return;
       var rect = lane.getBoundingClientRect();
@@ -595,7 +719,88 @@
       });
     }
 
-    function renderAll() { renderTimeline(); renderTable(); updatePlayerUi(); }
+    // -- Screenshots ----------------------------------------------------------
+    function renderShots() {
+      var show = state.kind !== 'rec';
+      $('shot-panel').style.display = show ? '' : 'none';
+      $('rec-panel').style.display = state.kind === 'shot' ? 'none' : '';
+      if (!show) { $('shot-grid').innerHTML = ''; return; }
+      $('shot-count').textContent = shots.length ? '(' + shots.length + ')' : '';
+      $('shot-empty').style.display = shots.length ? 'none' : 'block';
+      // Newest first in the grid (the timeline keeps time order).
+      var html = '';
+      for (var i = shots.length - 1; i >= 0; i--) {
+        var s = shots[i];
+        html += '<div class="shot-card">' +
+          '<img loading="lazy" src="' + esc(shotUrl(s)) + '" alt="" data-act="open" data-shot="' + i + '" title="Click to enlarge">' +
+          '<div class="shot-meta">&#9733; ' + esc(fmtTime(toDate(s.taken))) +
+            '<div class="shot-sub">' + (state.all ? esc(s.headsetName || s.safeName) + ' - ' : '') + fmtSize(s.sizeBytes) + '</div></div>' +
+          '<div class="shot-act">' +
+            '<button class="rc-btn" data-act="open" data-shot="' + i + '">Open</button>' +
+            '<a class="rc-btn" href="' + esc(shotUrl(s, true)) + '">Download</a>' +
+            '<button class="rc-btn danger" data-act="delete" data-shot="' + i + '">Delete</button>' +
+          '</div></div>';
+      }
+      $('shot-grid').innerHTML = html;
+    }
+
+    $('shot-grid').addEventListener('click', function (e) {
+      var el = e.target.closest ? e.target.closest('[data-act]') : null;
+      if (!el || el.dataset.shot == null) return;
+      var s = shots[parseInt(el.dataset.shot, 10)];
+      if (!s) return;
+      if (el.dataset.act === 'open') openShot(s);
+      else if (el.dataset.act === 'delete') deleteShot(s);
+    });
+
+    var shotCur = null;   // rel of the screenshot shown in the viewer
+    function shotOpen() { return $('shot-bg').classList.contains('open'); }
+    function shotIndex(rel) { for (var i = 0; i < shots.length; i++) if (shots[i].rel === rel) return i; return -1; }
+    function openShot(s) {
+      if (!s) return;
+      shotCur = s.rel;
+      var i = shotIndex(s.rel);
+      $('shot-img').src = shotUrl(s);
+      $('shot-cap').textContent = (s.headsetName || s.safeName) + ' - ' + s.taken.replace('T', ' ') + ' - ' + s.fileName +
+                                  (i >= 0 ? '  (' + (i + 1) + '/' + shots.length + ')' : '');
+      $('shot-dl').href = shotUrl(s, true);
+      $('shot-prev').disabled = i <= 0;
+      $('shot-next').disabled = i < 0 || i >= shots.length - 1;
+      $('shot-bg').classList.add('open');
+    }
+    function closeShot() { $('shot-bg').classList.remove('open'); $('shot-img').removeAttribute('src'); shotCur = null; }
+    function stepShot(d) {
+      var i = shotIndex(shotCur);
+      if (i < 0) return;
+      var n = shots[i + d];
+      if (n) openShot(n);
+    }
+    function deleteShot(s) {
+      if (!confirm('Delete this screenshot permanently?\n\n' + (s.headsetName || s.safeName) + ' - ' + s.fileName +
+                   '\n\nThe image file is removed from disk. This cannot be undone.')) return;
+      api('/api/recordings/snapshot-delete', { rel: s.rel }).then(function (j) {
+        if (!j.ok) { showError('Could not delete the screenshot: ' + j.error); return; }
+        toast('Screenshot deleted');
+        if (shotCur === s.rel) closeShot();
+        loadList();
+      });
+    }
+    $('shot-prev').addEventListener('click', function () { stepShot(-1); });
+    $('shot-next').addEventListener('click', function () { stepShot(1); });
+    $('shot-close').addEventListener('click', closeShot);
+    $('shot-del').addEventListener('click', function () {
+      var i = shotIndex(shotCur);
+      if (i >= 0) deleteShot(shots[i]);
+    });
+    $('shot-bg').addEventListener('click', function (e) { if (e.target === $('shot-bg')) closeShot(); });
+    document.addEventListener('keydown', function (e) {
+      if (!shotOpen()) return;
+      if (e.key === 'Escape') { e.preventDefault(); closeShot(); }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); stepShot(-1); }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); stepShot(1); }
+    });
+
+    function renderAll() { renderTimeline(); renderTable(); renderShots(); updatePlayerUi(); }
 
     // -- Player ---------------------------------------------------------------
     var cur = null;  // { rec, token, offset, speed, handle, playing, paused, pos }
@@ -784,7 +989,7 @@
       if (!cur || e.ctrlKey || e.altKey || e.metaKey || e.repeat) return;
       var t = e.target, tag = t && t.tagName ? t.tagName.toUpperCase() : '';
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (t && t.isContentEditable)) return;
-      if ($('wipe-bg').classList.contains('open')) return;
+      if ($('wipe-bg').classList.contains('open') || shotOpen()) return;
       e.preventDefault();
       // A focused button would also "click" on Space; drop focus so the toggle runs once.
       if (tag === 'BUTTON' && t.blur) t.blur();

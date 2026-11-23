@@ -1,0 +1,16 @@
+{
+	"compilerOptions": {
+		"lib": ["es2023"],
+		"target": "es2022",
+		"strict": true,
+		"esModuleInterop": true,
+		"skipLibCheck": true,
+		"customConditions": ["node"],
+		"module": "ES2022",
+		"moduleResolution": "Bundler",
+		"noImplicitOverride": true,
+		"experimentalDecorators": false
+	},
+	"include": ["src/**/*.ts"],
+	"exclude": ["node_modules"]
+}

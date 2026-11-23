@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+	<head lang="en">
+		<meta charset="utf-8" />
+		<title>VRHM</title>
+		<script src="sdpi-components.js"></script>
+	</head>
+	<body>
+		<sdpi-item label="Setting">
+			<sdpi-select setting="key" default="guardian">
+				<option value="guardian">Guardian on / off</option>
+				<option value="guardianSetup">Guardian setup (opens it on the headset)</option>
+				<option value="doubleTap">Side double tap (passthrough) on / off</option>
+				<option value="wideMotion">Hand tracking wide motion on / off</option>
+				<option value="keepAwake">Keep headset awake on / off</option>
+				<option value="sharpening">Image sharpening (off / CAS / MQSR)</option>
+				<option value="refreshRate">Refresh rate (cycle)</option>
+				<option value="updates">OTA updates allowed / blocked</option>
+				<option value="reapply">Re-apply settings after reboot</option>
+				<option value="reload">Reload settings from the headset</option>
+			</sdpi-select>
+		</sdpi-item>
+		<p style="font-size:11px;opacity:.7;padding:0 8px">Acts on the selected headset. Most settings last until the headset restarts; turn on "Re-apply after reboot" to keep them.</p>
+		<sdpi-item label="VRHM server">
+			<sdpi-textfield setting="serverUrl" global placeholder="http://localhost:8080"></sdpi-textfield>
+		</sdpi-item>
+	</body>
+</html>

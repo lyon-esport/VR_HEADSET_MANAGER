@@ -1,0 +1,88 @@
+{
+	"Name": "VR Headset Manager",
+	"Version": "1.0.0.0",
+	"Author": "Lyon e-Sport",
+	"Actions": [
+		{
+			"Name": "Headset status",
+			"UUID": "com.lyonesport.vrhm.headset",
+			"Icon": "imgs/actions/headset/icon",
+			"Tooltip": "Live state of one headset. Press to open its page.",
+			"PropertyInspectorPath": "ui/headset.html",
+			"Controllers": ["Keypad"],
+			"States": [{ "Image": "imgs/actions/headset/key", "ShowTitle": false }]
+		},
+		{
+			"Name": "Headset command",
+			"UUID": "com.lyonesport.vrhm.command",
+			"Icon": "imgs/actions/command/icon",
+			"Tooltip": "Recording, capture, snapshot, sound, brightness, apps, capture profile, settings, kiosk, reboot...",
+			"PropertyInspectorPath": "ui/command.html",
+			"Controllers": ["Keypad"],
+			"States": [{ "Image": "imgs/actions/command/key", "ShowTitle": false }]
+		},
+		{
+			"Name": "Headset timer",
+			"UUID": "com.lyonesport.vrhm.timer",
+			"Icon": "imgs/actions/timer/icon",
+			"Tooltip": "Press: start / pause / resume. Hold: stop and reset.",
+			"PropertyInspectorPath": "ui/timer.html",
+			"Controllers": ["Keypad"],
+			"States": [{ "Image": "imgs/actions/timer/key", "ShowTitle": false }]
+		},
+		{
+			"Name": "Favourite app slot",
+			"UUID": "com.lyonesport.vrhm.app",
+			"Icon": "imgs/actions/app/icon",
+			"Tooltip": "N-th favourite app of the selected headset. Press to launch it.",
+			"PropertyInspectorPath": "ui/slot.html",
+			"Controllers": ["Keypad"],
+			"States": [{ "Image": "imgs/actions/app/key", "ShowTitle": false }]
+		},
+		{
+			"Name": "Kiosk slot",
+			"UUID": "com.lyonesport.vrhm.kiosk",
+			"Icon": "imgs/actions/kiosk/icon",
+			"Tooltip": "N-th kiosk screen. Press to cast the selected headset on it.",
+			"PropertyInspectorPath": "ui/slot.html",
+			"Controllers": ["Keypad"],
+			"States": [{ "Image": "imgs/actions/kiosk/key", "ShowTitle": false }]
+		},
+		{
+			"Name": "Screen profile slot",
+			"UUID": "com.lyonesport.vrhm.view",
+			"Icon": "imgs/actions/view/icon",
+			"Tooltip": "Eye (L / R / merged) or N-th view of the selected headset. Press to apply it.",
+			"PropertyInspectorPath": "ui/view.html",
+			"Controllers": ["Keypad"],
+			"States": [{ "Image": "imgs/actions/view/key", "ShowTitle": false }]
+		},
+		{
+			"Name": "Headset setting",
+			"UUID": "com.lyonesport.vrhm.setting",
+			"Icon": "imgs/actions/setting/icon",
+			"Tooltip": "One setting of the selected headset (guardian, double tap, keep awake, sharpening, refresh rate...). Press to change it.",
+			"PropertyInspectorPath": "ui/setting.html",
+			"Controllers": ["Keypad"],
+			"States": [{ "Image": "imgs/actions/setting/key", "ShowTitle": false }]
+		}
+	],
+	"Profiles": [
+		{ "Name": "profiles/vrhm-main", "DeviceType": 0, "Readonly": false, "DontAutoSwitchWhenInstalled": false },
+		{ "Name": "profiles/vrhm-headset", "DeviceType": 0, "Readonly": true, "DontAutoSwitchWhenInstalled": true },
+		{ "Name": "profiles/vrhm-apps", "DeviceType": 0, "Readonly": true, "DontAutoSwitchWhenInstalled": true },
+		{ "Name": "profiles/vrhm-kiosks", "DeviceType": 0, "Readonly": true, "DontAutoSwitchWhenInstalled": true },
+		{ "Name": "profiles/vrhm-views", "DeviceType": 0, "Readonly": true, "DontAutoSwitchWhenInstalled": true },
+		{ "Name": "profiles/vrhm-settings", "DeviceType": 0, "Readonly": true, "DontAutoSwitchWhenInstalled": true }
+	],
+	"Category": "VR Headset Manager",
+	"CategoryIcon": "imgs/plugin/category-icon",
+	"CodePath": "bin/plugin.js",
+	"Description": "Drive the VR Headset Manager fleet (status, capture, recording, timer, apps, kiosks) through its web API.",
+	"Icon": "imgs/plugin/marketplace",
+	"SDKVersion": 3,
+	"Software": { "MinimumVersion": "7.1" },
+	"OS": [{ "Platform": "windows", "MinimumVersion": "10" }],
+	"Nodejs": { "Version": "24", "Debug": "disabled" },
+	"UUID": "com.lyonesport.vrhm"
+}

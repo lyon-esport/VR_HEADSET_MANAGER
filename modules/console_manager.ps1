@@ -869,6 +869,7 @@ function Get-HeadsetPanelKeymap {
         @{ Key = 'S'; Group = 'Setup';   Label = $c.PanelSession },
         @{ Key = '7'; Group = 'Device';  Label = $c.PanelLaunchApp },
         @{ Key = 'G'; Group = 'Device';  Label = $c.PanelFrame },
+        @{ Key = 'P'; Group = 'Device';  Label = $c.PanelSnapshot },
         @{ Key = 'E'; Group = 'Device';  Label = $c.PanelEdit },
         @{ Key = 'B'; Group = 'Device';  Label = $c.PanelDiag },
         @{ Key = 'C'; Group = 'Setup';   Label = $c.PanelCompanion },
@@ -1046,6 +1047,13 @@ function Show-HeadsetPanel {
             '9' { Show-SubMenu-PushHeadsetWifi -Headset $row }
             'S' { Show-SubMenu-HeadsetSessionSettings -Headset $row }
             'G' { Show-SubMenu-CaptureHeadsetFrame -Headset $row }
+            'P' {
+                # Same action as the Stream Deck snapshot key (POST /api/headset-snapshot).
+                Set-CockpitNotice -Text ($c.SnapshotRunning -f $row.Name) -Kind info
+                $snap = Save-HeadsetStreamSnapshot -Headset $row
+                if ($snap.Ok) { Set-CockpitNotice -Text ($c.SnapshotDone -f $row.Name, $snap.Path) -Kind ok }
+                else { Set-CockpitNotice -Text ($c.SnapshotFailed -f $row.Name, $snap.Error) -Kind err }
+            }
             'E' { Show-SubMenu-EditHeadset -Headset $row }
             'B' {
                 if ($global:WebServer_enabled) {
@@ -4899,4 +4907,5 @@ function Add-Headset-Manually {
     Add-Headset -IPAddress $ip -Name $name
 
     Write-Host "Headset added successfully!" -ForegroundColor Cyan
-} #OK
+} #OK
+

@@ -1,0 +1,17 @@
+<!doctype html>
+<html>
+	<head lang="en">
+		<meta charset="utf-8" />
+		<title>VRHM</title>
+		<script src="sdpi-components.js"></script>
+	</head>
+	<body>
+		<sdpi-item label="Headset">
+			<sdpi-select setting="target" datasource="getTargets" hot-reload loading="Loading headsets..."></sdpi-select>
+		</sdpi-item>
+		<p style="font-size:11px;opacity:.7;padding:0 8px">Press: start / pause / resume. Hold: stop and reset. Duration and mode are set in the VRHM timer page.</p>
+		<sdpi-item label="VRHM server">
+			<sdpi-textfield setting="serverUrl" global placeholder="http://localhost:8080"></sdpi-textfield>
+		</sdpi-item>
+	</body>
+</html>

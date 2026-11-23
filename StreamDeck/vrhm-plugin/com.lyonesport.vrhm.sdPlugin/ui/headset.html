@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+	<head lang="en">
+		<meta charset="utf-8" />
+		<title>VRHM</title>
+		<script src="sdpi-components.js"></script>
+	</head>
+	<body>
+		<sdpi-item label="Headset">
+			<sdpi-select setting="target" datasource="getTargets" hot-reload loading="Loading headsets..."></sdpi-select>
+		</sdpi-item>
+		<sdpi-item label="On press">
+			<sdpi-select setting="onPress" default="config">
+				<option value="config">Open headset page</option>
+				<option value="none">Select only</option>
+			</sdpi-select>
+		</sdpi-item>
+		<sdpi-item label="VRHM server">
+			<sdpi-textfield setting="serverUrl" global placeholder="http://localhost:8080"></sdpi-textfield>
+		</sdpi-item>
+		<p style="font-size:11px;opacity:.7;padding:0 8px">Slot N = N-th headset in the VRHM list order. Colours: grey off, amber no ADB, green ready, blue live, purple starting, red frame recording.</p>
+	</body>
+</html>

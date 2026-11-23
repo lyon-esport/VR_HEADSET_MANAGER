@@ -785,9 +785,11 @@ function Get-RecordingHeadsets {
     .DESCRIPTION
         Returns @(@{SafeName;ID;Name;InRegistry;Count}) sorted by registry order, then name. A headset
         removed from the registry keeps appearing (InRegistry = $false) under its stored name.
+        -IncludeSnapshots also lists headsets that only have screenshots (Count 0).
     .EXAMPLE
         Get-RecordingHeadsets | ForEach-Object { '{0} ({1})' -f $_.Name, $_.Count }
     #>
+    param([switch]$IncludeSnapshots)
     $out = New-Object System.Collections.Generic.List[object]
     try {
         $reg = @{}
@@ -821,6 +823,33 @@ function Get-RecordingHeadsets {
                     SortKey    = $(if ($inReg) { $order[$id] } else { [int]::MaxValue })
                 })
         }
+        if ($IncludeSnapshots) {
+            # Headsets that only have screenshots (no recording) are listed with Count 0.
+            $known = @{}
+            foreach ($o in $out) { $known[[string]$o.SafeName] = $true }
+            $bySafe = @{}
+            foreach ($h in $reg.Values) {
+                $sn = Convert-Displayname -displayName ([string]$h.Name)
+                if ($sn -and -not $bySafe.ContainsKey($sn)) { $bySafe[$sn] = $h }
+            }
+            foreach ($s in @(Get-RecordingSnapshotDays)) {
+                foreach ($sn in @($s.SafeNames)) {
+                    if ($known.ContainsKey($sn)) { continue }
+                    $known[$sn] = $true
+                    $h = $bySafe[$sn]
+                    $hid = $null
+                    if ($h) { $hid = [int]$h.ID }
+                    $out.Add([PSCustomObject]@{
+                            SafeName   = $sn
+                            ID         = $hid
+                            Name       = $(if ($h) { [string]$h.Name } else { $sn })
+                            InRegistry = [bool]$h
+                            Count      = 0
+                            SortKey    = $(if ($h) { $order[$hid] } else { [int]::MaxValue })
+                        })
+                }
+            }
+        }
     }
     catch {
         Write-Log ("Get-RecordingHeadsets failed: {0}" -f $_.Exception.Message) -Level WARNING
@@ -832,17 +861,29 @@ function Get-RecordingDates {
     <#
     .SYNOPSIS
         Days (yyyy-MM-dd, newest first) holding at least one recording, optionally for one headset.
+        -IncludeSnapshots also counts days holding only screenshots.
     .EXAMPLE
         Get-RecordingDates -SafeName 'Q3_RED'
     #>
-    param([string]$SafeName = '')
+    param(
+        [string]$SafeName = '',
+        [switch]$IncludeSnapshots
+    )
+    $days = @()
     try {
-        return @(@(Invoke-DbQuery -Name 'recordings.dates' -Parameters @{ safe_name = $SafeName }) | ForEach-Object { [string]$_.day })
+        $days = @(@(Invoke-DbQuery -Name 'recordings.dates' -Parameters @{ safe_name = $SafeName }) | ForEach-Object { [string]$_.day })
     }
     catch {
         Write-Log ("Get-RecordingDates failed: {0}" -f $_.Exception.Message) -Level WARNING
-        return @()
     }
+    if (-not $IncludeSnapshots) { return @($days) }
+    # Days that only hold screenshots (Get-RecordingSnapshotDays) are merged in too.
+    $set = @{}
+    foreach ($d in $days) { $set[$d] = $true }
+    foreach ($s in @(Get-RecordingSnapshotDays)) {
+        if (-not $SafeName -or (@($s.SafeNames) -contains $SafeName)) { $set[[string]$s.Date] = $true }
+    }
+    return @($set.Keys | Sort-Object -Descending)
 }
 
 function Get-HeadsetRecordings {
@@ -1095,6 +1136,296 @@ function Remove-OldRecordings {
         $res.Ok = $false
         $res.Error = $_.Exception.Message
         Write-Log ("Remove-OldRecordings failed: {0}" -f $_.Exception.Message) -Level WARNING
+    }
+    return $res
+}
+
+
+function Save-HeadsetStreamSnapshot {
+    <#
+    .SYNOPSIS
+        Saves ONE picture of a headset's live stream into the recordings folder.
+    .DESCRIPTION
+        Same layout as the recordings (ADR-0029):
+        <recordFolder>\<yyyy-MM-dd>\<SafeName>\<SafeName>_<yyyyMMddHHmmss>.png.
+        Source 'stream': one frame read by ffmpeg from the headset's mediamtx RTSP path, i.e. the
+        picture viewers see (view crop, eye merge). Used when mediamtx runs, the capture mode is
+        not LocalWindow and the path is ready. Otherwise source 'capture': Get-HeadsetScreenFrame
+        (scrcpy one-frame capture of the FULL uncropped headset frame, ~5 s).
+        Refused when the recording drive is low. The png files are not indexed by the recordings
+        catalogue (it only imports *.mkv). Returns @{Ok;Path;Source;Error}; never throws.
+    .EXAMPLE
+        Save-HeadsetStreamSnapshot -Headset (Get-HeadsetDiagTarget -Id 10)
+    #>
+    param(
+        [Parameter(Mandatory = $true)] $Headset,
+        [ValidateRange(3, 30)] [int]$TimeoutSec = 10
+    )
+    $res = @{ Ok = $false; Path = $null; Source = $null; Error = $null }
+    try {
+        $root = [string]$global:scrcpyRecordFolder
+        if (-not $root) { $res.Error = 'Record folder is not configured.'; return $res }
+        if (-not $global:ffmpegFilePath -or -not (Test-Path -LiteralPath $global:ffmpegFilePath)) {
+            $res.Error = "ffmpeg.exe not found at: $global:ffmpegFilePath"
+            return $res
+        }
+
+        $rdInfo = $null
+        try {
+            $mon = Get-DbKeyValue -Key 'computer_monitoring'
+            if ($mon) { $rdInfo = $mon.RecordingDrive }
+        } catch {}
+        if (-not $rdInfo) { try { $rdInfo = Get-RecordingDriveInfo } catch {} }
+        if ($rdInfo -and $rdInfo.IsLow) {
+            $res.Error = ("Recording drive {0} is low on space ({1} GB free)." -f $rdInfo.DriveLetter, $rdInfo.FreeGB)
+            return $res
+        }
+
+        $name = [string]$Headset.Name
+        $safe = Convert-Displayname -displayName $name
+        $now  = Get-Date
+        $dir  = Join-Path (Join-Path $root ($now.ToString('yyyy-MM-dd'))) $safe
+        if (-not [System.IO.Directory]::Exists($dir)) { [void][System.IO.Directory]::CreateDirectory($dir) }
+        $out = Join-Path $dir ("{0}_{1}.png" -f $safe, $now.ToString('yyyyMMddHHmmss'))
+        if ([System.IO.File]::Exists($out)) {
+            $out = Join-Path $dir ("{0}_{1}_{2}.png" -f $safe, $now.ToString('yyyyMMddHHmmss'), $now.ToString('fff'))
+        }
+
+        # Is the stream published right now?
+        $pathName = ConvertTo-RestreamPathName -HeadsetName $name
+        $streamReady = $false
+        if ($global:mediamtxEnabled -and $global:CaptureMode -ne 'LocalWindow') {
+            $states = $null
+            try { $states = Get-MediaMtxPathStates -TimeoutMs 1500 } catch {}
+            if ($states -and $states.ContainsKey($pathName) -and $states[$pathName].Ready) { $streamReady = $true }
+        }
+
+        if ($streamReady) {
+            $url = "rtsp://127.0.0.1:{0}/{1}" -f $global:mediamtxRtspPort, $pathName
+            $psi = [System.Diagnostics.ProcessStartInfo]::new()
+            $psi.FileName               = $global:ffmpegFilePath
+            $psi.Arguments              = ('-hide_banner -loglevel error -nostdin -y -rtsp_transport tcp -i "{0}" -frames:v 1 -update 1 "{1}"' -f $url, $out)
+            $psi.RedirectStandardError  = $true
+            $psi.RedirectStandardOutput = $true
+            $psi.StandardErrorEncoding  = [System.Text.Encoding]::UTF8
+            $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+            $psi.UseShellExecute        = $false
+            $psi.CreateNoWindow         = $true
+            $proc = [System.Diagnostics.Process]::new()
+            $proc.StartInfo = $psi
+            $ffErr = ''
+            try {
+                [void]$proc.Start()
+                $errTask = $proc.StandardError.ReadToEndAsync()
+                $outTask = $proc.StandardOutput.ReadToEndAsync()
+                if (-not $proc.WaitForExit($TimeoutSec * 1000)) {
+                    try { $proc.Kill() } catch {}
+                    [void]$proc.WaitForExit(2000)
+                }
+                $ffErr = [string]$errTask.GetAwaiter().GetResult()
+                [void]$outTask.GetAwaiter().GetResult()
+            } finally {
+                $proc.Dispose()
+            }
+            if ([System.IO.File]::Exists($out) -and ([System.IO.FileInfo]::new($out)).Length -gt 0) {
+                $res.Ok = $true; $res.Path = $out; $res.Source = 'stream'
+                Write-Log ("Snapshot of '{0}' (stream) saved to {1}" -f $name, $out) -Level INFO
+                return $res
+            }
+            $tail = (@($ffErr -split "`r?`n" | Where-Object { $_.Trim() }) | Select-Object -Last 2) -join ' | '
+            Write-Log ("Snapshot of '{0}': stream frame failed ({1}), trying a direct capture" -f $name, $tail) -Level WARNING
+        }
+
+        $cap = Get-HeadsetScreenFrame -Headset $Headset -OutFile $out
+        if ($cap.Ok) {
+            $res.Ok = $true; $res.Path = $out; $res.Source = 'capture'
+            Write-Log ("Snapshot of '{0}' (capture) saved to {1}" -f $name, $out) -Level INFO
+        } else {
+            $res.Error = [string]$cap.Error
+        }
+    } catch {
+        $res.Error = $_.Exception.Message
+        Write-Log ("Save-HeadsetStreamSnapshot failed: {0}" -f $_.Exception.Message) -Level ERROR
+    }
+    return $res
+}
+
+
+# --------------------------------------------------------------------
+# Screenshots (png files written by Save-HeadsetStreamSnapshot). Not in the database: listed
+# straight from <recordFolder>\<yyyy-MM-dd>\<SafeName>\*.png, one day folder per request.
+# --------------------------------------------------------------------
+
+function Get-HeadsetSnapshotStamp {
+    <#
+    .SYNOPSIS
+        Time a screenshot was taken, from its file name (<Safe>_<yyyyMMddHHmmss>[_fff].png), or $null.
+    .EXAMPLE
+        Get-HeadsetSnapshotStamp -FileName 'Q3_RED_20261123101500.png'
+    #>
+    param([Parameter(Mandatory = $true)][string]$FileName)
+    $m = [regex]::Match($FileName, '_(\d{14})(?:_(\d{3}))?\.png$', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if (-not $m.Success) { return $null }
+    $parsed = [datetime]::MinValue
+    if ([datetime]::TryParseExact($m.Groups[1].Value, 'yyyyMMddHHmmss', [System.Globalization.CultureInfo]::InvariantCulture,
+            [System.Globalization.DateTimeStyles]::None, [ref]$parsed)) {
+        if ($m.Groups[2].Success) { $parsed = $parsed.AddMilliseconds([int]$m.Groups[2].Value) }
+        return $parsed
+    }
+    return $null
+}
+
+function Get-HeadsetSnapshots {
+    <#
+    .SYNOPSIS
+        Screenshots of one day inside an hour window, for one headset or for all of them.
+    .DESCRIPTION
+        Scans <recordFolder>\<Date>\<SafeName>\*.png (every SafeName folder with -AllHeadsets).
+        -FromHour/-ToHour are 0..24 as in Get-HeadsetRecordings. Returns, oldest first,
+        @(@{safeName;headsetName;fileName;rel;taken;sizeBytes}); rel = '<date>/<safe>/<file>'
+        (the key of /api/recordings/snapshot). Never throws.
+    .EXAMPLE
+        Get-HeadsetSnapshots -SafeName 'Q3_RED' -Date '2026-11-23' -FromHour 9 -ToHour 12
+    #>
+    param(
+        [string]$SafeName = '',
+        [Parameter(Mandatory = $true)][string]$Date,
+        [int]$FromHour = 0,
+        [int]$ToHour = 24,
+        [switch]$AllHeadsets
+    )
+    $out = New-Object System.Collections.Generic.List[object]
+    try {
+        $root = [string]$global:scrcpyRecordFolder
+        if (-not $root) { return @() }
+        $day = [datetime]::MinValue
+        if (-not [datetime]::TryParseExact($Date, 'yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture,
+                [System.Globalization.DateTimeStyles]::None, [ref]$day)) { return @() }
+        $FromHour = [math]::Min(24, [math]::Max(0, $FromHour))
+        $ToHour = [math]::Min(24, [math]::Max(0, $ToHour))
+        if ($ToHour -le $FromHour) { $ToHour = [math]::Min(24, $FromHour + 1); if ($ToHour -le $FromHour) { $FromHour = 23 } }
+        $from = $day.AddHours($FromHour)
+        $to = $day.AddHours($ToHour)
+
+        $dayDir = Join-Path $root $Date
+        if (-not [System.IO.Directory]::Exists($dayDir)) { return @() }
+        $dirs = @()
+        if ($AllHeadsets) { $dirs = @([System.IO.Directory]::GetDirectories($dayDir)) }
+        elseif ($SafeName) {
+            $d = Join-Path $dayDir $SafeName
+            if ([System.IO.Directory]::Exists($d)) { $dirs = @($d) }
+        }
+        if ($dirs.Count -eq 0) { return @() }
+
+        $names = @{}
+        try {
+            foreach ($h in @(Get-KnownHeadsets)) {
+                $sn = Convert-Displayname -displayName ([string]$h.Name)
+                if ($sn -and -not $names.ContainsKey($sn)) { $names[$sn] = [string]$h.Name }
+            }
+        } catch {}
+
+        foreach ($dir in $dirs) {
+            $safe = [System.IO.Path]::GetFileName($dir)
+            foreach ($f in [System.IO.Directory]::GetFiles($dir, '*.png')) {
+                $leaf = [System.IO.Path]::GetFileName($f)
+                $taken = Get-HeadsetSnapshotStamp -FileName $leaf
+                if ($null -eq $taken) { $taken = [System.IO.File]::GetLastWriteTime($f) }
+                if ($taken -lt $from -or $taken -ge $to) { continue }
+                $out.Add([PSCustomObject]@{
+                        safeName    = $safe
+                        headsetName = $(if ($names.ContainsKey($safe)) { $names[$safe] } else { $safe })
+                        fileName    = $leaf
+                        rel         = ('{0}/{1}/{2}' -f $Date, $safe, $leaf)
+                        taken       = (Format-RecordingTimestamp -Date $taken)
+                        sizeBytes   = ([System.IO.FileInfo]::new($f)).Length
+                    })
+            }
+        }
+    }
+    catch {
+        Write-Log ("Get-HeadsetSnapshots failed: {0}" -f $_.Exception.Message) -Level WARNING
+    }
+    return @($out | Sort-Object -Property taken, safeName)
+}
+
+function Get-RecordingSnapshotDays {
+    <#
+    .SYNOPSIS
+        Day folders (yyyy-MM-dd) holding at least one screenshot, with the SafeName folders that have one.
+    .DESCRIPTION
+        Returns @(@{Date;SafeNames}) in no particular order. Used to merge screenshot-only days and
+        headsets into the Recordings page lists. Never throws.
+    .EXAMPLE
+        Get-RecordingSnapshotDays | ForEach-Object { $_.Date }
+    #>
+    $out = New-Object System.Collections.Generic.List[object]
+    try {
+        $root = [string]$global:scrcpyRecordFolder
+        if (-not $root -or -not [System.IO.Directory]::Exists($root)) { return @() }
+        foreach ($dayDir in [System.IO.Directory]::GetDirectories($root)) {
+            $day = [System.IO.Path]::GetFileName($dayDir)
+            if ($day -notmatch '^\d{4}-\d{2}-\d{2}$') { continue }
+            $safes = New-Object System.Collections.Generic.List[string]
+            foreach ($sd in [System.IO.Directory]::GetDirectories($dayDir)) {
+                $any = $false
+                foreach ($e in [System.IO.Directory]::EnumerateFiles($sd, '*.png')) { $any = $true; break }
+                if ($any) { $safes.Add([System.IO.Path]::GetFileName($sd)) }
+            }
+            if ($safes.Count -gt 0) { $out.Add([PSCustomObject]@{ Date = $day; SafeNames = [string[]]$safes.ToArray() }) }
+        }
+    }
+    catch {
+        Write-Log ("Get-RecordingSnapshotDays failed: {0}" -f $_.Exception.Message) -Level WARNING
+    }
+    return $out.ToArray()
+}
+
+function Resolve-HeadsetSnapshotPath {
+    <#
+    .SYNOPSIS
+        Full path of a screenshot from its 'rel' key (<date>/<safe>/<file>.png), or $null.
+    .DESCRIPTION
+        Strict pattern check, then the full path must stay under the record folder and exist.
+        Path-traversal guard of the snapshot routes. Never throws.
+    .EXAMPLE
+        Resolve-HeadsetSnapshotPath -Rel '2026-11-23/Q3_RED/Q3_RED_20261123101500.png'
+    #>
+    param([string]$Rel)
+    try {
+        if (-not $Rel -or $Rel -notmatch '^\d{4}-\d{2}-\d{2}/[A-Za-z0-9_.-]{1,80}/[A-Za-z0-9_.-]{1,120}\.png$') { return $null }
+        if ($Rel -match '\.\.') { return $null }
+        $root = [string]$global:scrcpyRecordFolder
+        if (-not $root -or -not [System.IO.Directory]::Exists($root)) { return $null }
+        $rootFull = [System.IO.Path]::GetFullPath($root).TrimEnd('\', '/')
+        $full = [System.IO.Path]::GetFullPath((Join-Path $rootFull ($Rel -replace '/', '\')))
+        if (-not $full.StartsWith($rootFull + '\', [System.StringComparison]::OrdinalIgnoreCase)) { return $null }
+        if (-not [System.IO.File]::Exists($full)) { return $null }
+        return $full
+    }
+    catch { return $null }
+}
+
+function Remove-HeadsetSnapshot {
+    <#
+    .SYNOPSIS
+        Deletes ONE screenshot by its 'rel' key, then the emptied day/headset folders. Returns @{Ok;Error}.
+    .EXAMPLE
+        Remove-HeadsetSnapshot -Rel '2026-11-23/Q3_RED/Q3_RED_20261123101500.png'
+    #>
+    param([Parameter(Mandatory = $true)][string]$Rel)
+    $res = @{ Ok = $false; Error = $null }
+    try {
+        $path = Resolve-HeadsetSnapshotPath -Rel $Rel
+        if (-not $path) { $res.Error = 'Screenshot not found.'; return $res }
+        Remove-Item -LiteralPath $path -Force -ErrorAction Stop
+        Remove-EmptyRecordingFolders -Directories @([System.IO.Path]::GetDirectoryName($path))
+        Write-Log ("Screenshot deleted: {0}" -f $Rel) -Level INFO
+        $res.Ok = $true
+    }
+    catch {
+        $res.Error = $_.Exception.Message
+        Write-Log ("Remove-HeadsetSnapshot failed for {0}: {1}" -f $Rel, $_.Exception.Message) -Level WARNING
     }
     return $res
 }

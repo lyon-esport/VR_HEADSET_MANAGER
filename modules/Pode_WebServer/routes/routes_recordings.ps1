@@ -35,7 +35,7 @@ function Invoke-RouteRecordings {
         $recQ = $request.QueryString
 
         if ($recGet -and $recPath -eq '/api/recordings/headsets') {
-            $rows = @(Get-RecordingHeadsets | ForEach-Object {
+            $rows = @(Get-RecordingHeadsets -IncludeSnapshots | ForEach-Object {
                 @{ safeName = $_.SafeName; id = $_.ID; name = $_.Name; inRegistry = [bool]$_.InRegistry; count = $_.Count }
             })
             Send-JsonResponse -Response $response -Body @{ ok = $true; headsets = $rows }
@@ -43,7 +43,7 @@ function Invoke-RouteRecordings {
         } elseif ($recGet -and $recPath -eq '/api/recordings/dates') {
             $sn = [string]$recQ['safeName']
             if ($sn.Length -gt 80) { throw 'BAD_INPUT' }
-            $dates = if ($sn) { @(Get-RecordingDates -SafeName $sn) } else { @(Get-RecordingDates) }
+            $dates = if ($sn) { @(Get-RecordingDates -SafeName $sn -IncludeSnapshots) } else { @(Get-RecordingDates -IncludeSnapshots) }
             Send-JsonResponse -Response $response -Body @{ ok = $true; dates = @($dates) }
 
         } elseif ($recGet -and $recPath -eq '/api/recordings/list') {
@@ -69,6 +69,51 @@ function Invoke-RouteRecordings {
                 recordings = @($recs)
                 playback   = @{ ok = [bool]$pb.Ok; reason = $pb.Reason }
             }
+
+        } elseif ($recGet -and $recPath -eq '/api/recordings/snapshots') {
+            # Screenshots (png) of one day/hour window, listed from the file system.
+            $sn   = [string]$recQ['safeName']
+            $date = [string]$recQ['date']
+            if ($date -notmatch '^\d{4}-\d{2}-\d{2}$') { throw 'BAD_INPUT' }
+            if ($sn.Length -gt 80) { throw 'BAD_INPUT' }
+            $fromH = 0; $toH = 24
+            if ($recQ['from']) { [void][int]::TryParse([string]$recQ['from'], [ref]$fromH) }
+            if ($recQ['to'])   { [void][int]::TryParse([string]$recQ['to'],   [ref]$toH) }
+            $shots = if ($recQ['all'] -eq '1') {
+                @(Get-HeadsetSnapshots -Date $date -FromHour $fromH -ToHour $toH -AllHeadsets)
+            } else {
+                if (-not $sn) { throw 'BAD_INPUT' }
+                @(Get-HeadsetSnapshots -SafeName $sn -Date $date -FromHour $fromH -ToHour $toH)
+            }
+            Send-JsonResponse -Depth 4 -Response $response -Body @{ ok = $true; snapshots = @($shots) }
+
+        } elseif ($recGet -and $recPath -eq '/api/recordings/snapshot') {
+            # One screenshot file (inline, or as an attachment with download=1). Small file: sync copy.
+            $rel = [string]$recQ['rel']
+            if ($rel.Length -gt 220) { throw 'BAD_INPUT' }
+            $shotPath = Resolve-HeadsetSnapshotPath -Rel $rel
+            if (-not $shotPath) {
+                Send-JsonResponse -Response $response -Body @{ ok = $false; error = 'Screenshot not found.' } -StatusCode 404
+            } else {
+                $shotInfo = [System.IO.FileInfo]::new($shotPath)
+                $response.StatusCode      = 200
+                $response.ContentType     = 'image/png'
+                $response.AddHeader('Cache-Control', 'private, max-age=3600')
+                if ($recQ['download'] -eq '1') {
+                    $response.AddHeader('Content-Disposition', ('attachment; filename="{0}"' -f $shotInfo.Name))
+                }
+                $response.ContentLength64 = $shotInfo.Length
+                $fs = [System.IO.FileStream]::new($shotPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+                try { $fs.CopyTo($response.OutputStream) } finally { $fs.Dispose() }
+            }
+
+        } elseif ($recPost -and $recPath -eq '/api/recordings/snapshot-delete') {
+            $j = & $recReadBody
+            $rel = [string]$j.rel
+            if (-not $rel -or $rel.Length -gt 220) { throw 'BAD_INPUT' }
+            $d = Remove-HeadsetSnapshot -Rel $rel
+            $code = if ($d.Ok) { 200 } elseif ($d.Error -eq 'Screenshot not found.') { 404 } else { 500 }
+            Send-JsonResponse -Response $response -StatusCode $code -Body @{ ok = [bool]$d.Ok; rel = $rel; error = $d.Error }
 
         } elseif ($recPost -and $recPath -eq '/api/recordings/rescan') {
             $sync = Sync-RecordingCatalog -Force
@@ -196,6 +241,42 @@ function Invoke-RouteRecordings {
         try { Send-JsonResponse -Response $response -Body @{ ok = $false; error = $txt } -StatusCode $code } catch {}
     } finally {
         if (-not $recDeferClose) { Close-HttpResponse -Response $response }
+    }
+    return
+}
+
+# API: POST /api/headset-snapshot {id} - one picture of a headset's live stream saved into the
+# recordings folder (Save-HeadsetStreamSnapshot, recordings_library.ps1). Slow lane (ffmpeg on
+# the RTSP path, or a scrcpy capture when the stream is not published, up to ~10 s).
+# Used by the Stream Deck plugin; console counterpart: headset panel key P.
+function Invoke-RouteHeadsetSnapshot {
+    # POST /api/headset-snapshot
+    param([Parameter(Mandatory = $true)] $Context)
+    $request  = $Context.Request
+    $response = $Context.Response
+    try {
+        if ($request.ContentLength64 -gt 4096) { throw "Request body too large" }
+        $body = Read-RequestBody -Request $request -Response $response -MaxBytes 4096
+        $json = $body | ConvertFrom-Json
+        $snapId = 0
+        if (-not [int]::TryParse([string]$json.id, [ref]$snapId) -or $snapId -le 0) { throw "INVALID_ID" }
+        $snapHeadset = Get-HeadsetDiagTarget -Id $snapId
+        if (-not $snapHeadset) { throw "UNKNOWN_HEADSET" }
+        $snap = Save-HeadsetStreamSnapshot -Headset $snapHeadset
+        $snapFile = if ($snap.Path) { Split-Path -Path $snap.Path -Leaf } else { $null }
+        Send-JsonResponse -Response $response -StatusCode $(if ($snap.Ok) { 200 } else { 500 }) -Body @{
+            ok = [bool]$snap.Ok; id = $snapId; name = [string]$snapHeadset.Name
+            source = $snap.Source; file = $snapFile; path = $snap.Path; error = $snap.Error
+        }
+    } catch {
+        $errMsg = switch -Regex ($_.Exception.Message) {
+            'INVALID_ID'      { 'Invalid or missing headset id.' }
+            'UNKNOWN_HEADSET' { 'This headset is not registered on this server.' }
+            default           { $_.Exception.Message }
+        }
+        Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = $errMsg }
+    } finally {
+        Close-HttpResponse -Response $response
     }
     return
 }

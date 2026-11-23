@@ -1,0 +1,47 @@
+<!doctype html>
+<html>
+	<head lang="en">
+		<meta charset="utf-8" />
+		<title>VRHM</title>
+		<script src="sdpi-components.js"></script>
+	</head>
+	<body>
+		<sdpi-item label="Command">
+			<sdpi-select setting="command" default="record">
+				<optgroup label="Stream">
+					<option value="record">Snapshot (press) / recording on-off (hold)</option>
+					<option value="capture">Capture start / stop</option>
+					<option value="snapshot">Snapshot to recordings folder</option>
+					<option value="size">Capture profile (view + eye page)</option>
+					<option value="settings">Headset settings (page)</option>
+					<option value="kiosks">Send to kiosk (page)</option>
+				</optgroup>
+				<optgroup label="Headset">
+					<option value="info">Status (press = refresh)</option>
+					<option value="resetui">Reset UI view</option>
+					<option value="volup">Volume +</option>
+					<option value="voldown">Volume -</option>
+					<option value="brightup">Brightness +</option>
+					<option value="brightdown">Brightness -</option>
+					<option value="apps">Start app (favourites page)</option>
+					<option value="closeapp">Close running app</option>
+					<option value="reboot">Reboot (hold)</option>
+					<option value="shutdown">Shutdown (hold)</option>
+				</optgroup>
+				<optgroup label="Navigation">
+					<option value="home">Home (main page)</option>
+					<option value="headsetpage">Back to headset page</option>
+				</optgroup>
+			</sdpi-select>
+		</sdpi-item>
+		<sdpi-item label="Headset">
+			<sdpi-select setting="target" datasource="getTargets" hot-reload loading="Loading headsets..."></sdpi-select>
+		</sdpi-item>
+		<sdpi-item label="Step (%)">
+			<sdpi-range setting="step" min="5" max="50" step="5" default="10" showlabels></sdpi-range>
+		</sdpi-item>
+		<sdpi-item label="VRHM server">
+			<sdpi-textfield setting="serverUrl" global placeholder="http://localhost:8080"></sdpi-textfield>
+		</sdpi-item>
+	</body>
+</html>

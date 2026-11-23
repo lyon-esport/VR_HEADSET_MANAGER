@@ -230,6 +230,7 @@ $script:SlowRoutes = @{
     '/api/companion-settings'            = $true
     '/api/headset-keep-awake'            = $true   # companion HTTP or ADB to the headset
     '/api/headset-screen-frame'          = $true   # scrcpy capture, 3-5 s
+    '/api/headset-snapshot'              = $true   # ffmpeg RTSP frame or scrcpy capture, up to ~10 s
     '/api/eye-merge/frame'               = $true
     '/api/eye-merge/calibrate'           = $true
     '/api/headset-diag'                  = $true   # adb sections, up to 7 s
@@ -410,6 +411,7 @@ foreach ($routeRow in @(
     ,@('GET',   '/api/headset-firmware',                  'Invoke-RouteHeadsetFirmware')
     ,@('GET',   '/api/headset-diag',                      'Invoke-RouteHeadsetDiag')
     ,@('POST',  '/api/headset-screen-frame',              'Invoke-RouteHeadsetScreenFrame')
+    ,@('POST',  '/api/headset-snapshot',                  'Invoke-RouteHeadsetSnapshot')
     ,@('GET',   '/api/eye-merge',                         'Invoke-RouteEyeMerge')
     ,@('GET',   '/api/stream-mask',                       'Invoke-RouteStreamMask')
     ,@('POST',  '/api/eye-merge/frame',                   'Invoke-RouteEyeMergeFrameOrCalibrate')

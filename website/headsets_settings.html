@@ -1090,11 +1090,8 @@
                   </svg>
                   Initialization
                 </button>
-                <button class="hs-adv-btn" id="adv-guardian-pause" style="font-size:.8rem" title="Session only - resets on reboot">
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
-                  </svg>
-                  <span id="adv-guardian-pause-label">Disable (session)</span>
+                <button class="toggle-btn" id="adv-guardian-pause" style="font-size:.8rem" title="Current Guardian state. Click to switch. Disabling is session only - Guardian comes back on at reboot unless re-apply is on.">
+                  <span id="adv-guardian-pause-label">--</span>
                 </button>
               </div>
             </div>
@@ -3031,7 +3028,7 @@
             sharpSel.value = (j.sharpening === 'fcas' || j.sharpening === 'mqsr') ? j.sharpening : 'none';
             sharpSel.disabled = false;
           }
-          setAdvToggleState('adv-guardian-pause', 'adv-guardian-pause-label', j.guardianPaused, 'Enable (session)', 'Disable (session)');
+          setAdvToggleState('adv-guardian-pause', 'adv-guardian-pause-label', j.guardianPaused, 'Disabled', 'Enabled', true);
           setAdvToggleState('adv-keepawake-toggle', 'adv-keepawake-label', j.keepAwake !== false, 'On', 'Off');
           var kaNote = document.getElementById('adv-keepawake-note');
           if (kaNote) {
@@ -3340,7 +3337,7 @@
 
     // Session-only settings (ADR-0040). The Guardian pause now reads its real state from the
     // headset and the proximity override can be handed back; the three new ones share the helper.
-    bindAdvToggle('adv-guardian-pause', 'adv-guardian-pause-label', 'guardianPause', 'Enable (session)', 'Disable (session)');
+    bindAdvToggle('adv-guardian-pause', 'adv-guardian-pause-label', 'guardianPause', 'Disabled', 'Enabled', true);
     (function() {
       var btn = document.getElementById('adv-keepawake-toggle');
       if (!btn) return;

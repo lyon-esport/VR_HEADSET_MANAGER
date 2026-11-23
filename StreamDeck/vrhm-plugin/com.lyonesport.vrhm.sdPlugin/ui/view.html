@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+	<head lang="en">
+		<meta charset="utf-8" />
+		<title>VRHM</title>
+		<script src="sdpi-components.js"></script>
+	</head>
+	<body>
+		<sdpi-item label="Key type">
+			<sdpi-select setting="kind" default="view">
+				<option value="view">View (N-th view of the model)</option>
+				<option value="eye">Eye</option>
+			</sdpi-select>
+		</sdpi-item>
+		<sdpi-item label="Eye">
+			<sdpi-select setting="eye" default="R">
+				<option value="L">Left</option>
+				<option value="R">Right</option>
+				<option value="M">Merged (calibrated models)</option>
+			</sdpi-select>
+		</sdpi-item>
+		<sdpi-item label="View number">
+			<sdpi-textfield setting="index" pattern="[0-9]+" placeholder="1"></sdpi-textfield>
+		</sdpi-item>
+		<p style="font-size:11px;opacity:.7;padding:0 8px">Acts on the selected headset. Eye is used when Key type = Eye, View number when Key type = View.</p>
+		<sdpi-item label="VRHM server">
+			<sdpi-textfield setting="serverUrl" global placeholder="http://localhost:8080"></sdpi-textfield>
+		</sdpi-item>
+	</body>
+</html>
