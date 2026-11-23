@@ -168,6 +168,11 @@ Assert-Case 'select: live port wins (plain line)' ((($sel | Where-Object Serial 
 $n = $script:probes
 [void](Select-AdbTlsLiveEndpoint -Endpoints $ps)
 Assert-Case 'select: verdict memoised (no new probe)' ($script:probes -eq $n) ("probes {0} -> {1}" -f $n, $script:probes)
+# mDNS lists the candidates in no fixed order: a memo hit must still give the LIVE port (2026-11-23).
+$rev = @($ps[3], $ps[2], $ps[1], $ps[0])
+$n = $script:probes
+$sel = @(Select-AdbTlsLiveEndpoint -Endpoints $rev)
+Assert-Case 'select: memo hit with reversed order keeps live port' (((($sel | Where-Object Serial -eq '2G0YC5ZG1W00ZJ').Port) -eq 37361) -and ((($sel | Where-Object Serial -eq '2G0YC5ZG5400PS').Port) -eq 40857) -and $script:probes -eq $n) ("probes {0} -> {1}" -f $n, $script:probes)
 $script:openPorts = @(); $script:AdbTlsLiveMemo = $null
 $prevSet = @([PSCustomObject]@{ Serial = '2G0YC5ZG1W00ZJ'; Ip = '192.168.1.243'; Port = 41165 })
 $sel = @(Select-AdbTlsLiveEndpoint -Endpoints $ps -Previous $prevSet)
@@ -502,6 +507,10 @@ Set-Modes $true $true 'classic'
 # Running capture vs its WiFi mode.
 Reset-SwitchState
 $script:kv['adb_tls_endpoints'] = ConvertTo-Json -Compress -InputObject @([PSCustomObject]@{ Serial = '1WMHH8242N0366'; Ip = '192.168.1.242'; Port = 34941; Seen = [datetime]::UtcNow.ToString('o') })
+$script:openPorts = @('192.168.1.242:38987')
+$c = Get-AdbWifiCaptureModeDecision -Headset $q2Row -CurrentWifiMode TLS -CurrentEndpoint '192.168.1.242:38987' -LiveWifiMode Classic -SwitchMode next_start
+Assert-Case 'capture: published port moved but stored port open (stale mDNS) -> no restart' (-not $c.Restart -and -not $c.Dead)
+$script:openPorts = @()
 $c = Get-AdbWifiCaptureModeDecision -Headset $q2Row -CurrentWifiMode TLS -CurrentEndpoint '192.168.1.242:38987' -LiveWifiMode Classic -SwitchMode next_start
 Assert-Case 'capture: TLS port moved (adbd restarted) -> restart at once' ($c.Restart -and $c.Dead)
 $script:openPorts = @()

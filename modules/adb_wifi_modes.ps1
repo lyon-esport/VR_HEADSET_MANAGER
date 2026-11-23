@@ -285,7 +285,8 @@ function Select-AdbTlsLiveEndpoint {
     closed) and 37361 (live) listed together; the stale one was published and every reader dialled
     a dead port. For a serial with more than one candidate: ONE TCP probe per candidate
     (-TimeoutMs), the first open one wins. None open: the port in -Previous when listed, else the
-    last candidate. The verdict is memoised per serial + candidate set (60 s), so a steady state
+    last candidate. The chosen ip:port is memoised per serial + candidate set (60 s, by value, never
+    by position: mDNS lists the candidates in no fixed order), so a steady state
     costs no probe. A serial with a single endpoint passes unchanged with no probe. Without
     Test-Port loaded the endpoints pass unchanged. Never throws.
 
@@ -315,10 +316,16 @@ function Select-AdbTlsLiveEndpoint {
                 continue
             }
             $memoKey = $serial + '|' + ((@($cands | ForEach-Object { '{0}:{1}' -f $_.Ip, $_.Port }) | Sort-Object) -join ',')
+            # The memo holds the chosen endpoint by VALUE: adb mdns lists the candidates in no fixed
+            # order, so an index taken from one call pointed at the stale port on the next call
+            # (measured 2026-11-23: Q3 RED capture restarted 17 times in 90 min).
             $memo = $script:AdbTlsLiveMemo[$memoKey]
             if ($memo -and ($now - $memo.At).TotalSeconds -lt 60) {
-                $out += $cands[[int]$memo.Index]
-                continue
+                $hit = @($cands | Where-Object { [int]$_.Port -eq [int]$memo.Port -and [string]$_.Ip -eq [string]$memo.Ip }) | Select-Object -First 1
+                if ($hit) {
+                    $out += $hit
+                    continue
+                }
             }
             $pick = -1
             for ($i = 0; $i -lt $cands.Count; $i++) {
@@ -334,7 +341,7 @@ function Select-AdbTlsLiveEndpoint {
                 if ($pick -lt 0) { $pick = $cands.Count - 1 }
             }
             if ($script:AdbTlsLiveMemo.Count -gt 200) { $script:AdbTlsLiveMemo.Clear() }
-            $script:AdbTlsLiveMemo[$memoKey] = @{ Index = $pick; At = $now }
+            $script:AdbTlsLiveMemo[$memoKey] = @{ Ip = [string]$cands[$pick].Ip; Port = [int]$cands[$pick].Port; At = $now }
             if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
                 Write-Log ("ADB TLS: mDNS lists serial {0} on {1} endpoints ({2}) - using {3}:{4}" -f $serial, $cands.Count,
                     ((@($cands | ForEach-Object { '{0}:{1}' -f $_.Ip, $_.Port })) -join ', '), $cands[$pick].Ip, $cands[$pick].Port) -Level DEBUG
@@ -1238,8 +1245,10 @@ function Get-AdbWifiCaptureModeDecision {
     Called by Get-ScrcpyTransportDecision for a session launched over WiFi. -CurrentWifiMode and
     -CurrentEndpoint are what start-screenCopy stored ('Classic'/'TLS', 'ip:port');
     -LiveWifiMode is the live status AdbWifiMode (first mode, in preference order, that answers).
-      1. Endpoint dead -> restart at once: the published TLS port of the serial moved (adbd was
-         restarted, scrcpy hangs instead of exiting - S10-0), or the stored port refused TCP on
+      1. Endpoint dead -> restart at once: the published TLS port of the serial moved AND the
+         stored port refuses one TCP probe (adbd was restarted, scrcpy hangs instead of exiting -
+         S10-0; a moved publish with the stored port still open is a stale mDNS entry and is
+         ignored), or the stored port refused TCP on
          2 checks in a row (one failed probe is not enough to cut a recording).
       2. Live mode differs from the session's (the preferred mode is back): scrcpy.usb_switch_mode
          'immediate' -> restart; 'stable' -> once the difference lasted -StableSec and not
@@ -1277,7 +1286,13 @@ function Get-AdbWifiCaptureModeDecision {
             $k = Get-AdbWifiHeadsetKey -Headset $Headset
             if ($CurrentWifiMode -eq 'TLS' -and $k.Serial) {
                 $ep = Find-AdbTlsEndpointBySerial -Serial $k.Serial
-                if ($ep -and ([int]$ep.Port -ne $port -or [string]$ep.Ip -ne $ip)) { $dead = $true }
+                if ($ep -and ([int]$ep.Port -ne $port -or [string]$ep.Ip -ne $ip)) {
+                    # A moved publish alone is not proof: adb's mDNS cache can list a stale port.
+                    # A real adbd restart closes the old port, so one refused probe confirms it.
+                    $canProbe = [bool](Get-Command Test-Port -ErrorAction SilentlyContinue)
+                    if (-not $canProbe -or -not (Test-Port -hostname $ip -port $port -timeout 400).open) { $dead = $true }
+                    else { $st.DeadCount = 0 }
+                }
             }
             if (-not $dead -and (Get-Command Test-Port -ErrorAction SilentlyContinue)) {
                 if ((Test-Port -hostname $ip -port $port -timeout 400).open) { $st.DeadCount = 0 }
