@@ -940,8 +940,8 @@ function Write-HeadsetPanelCard {
             }
             $seenVer = ''
             if ($cap -and $cap.Known -and $cap.AppVersion) { $seenVer = [string]$cap.AppVersion } elseif ($os -and $os.version) { $seenVer = [string]$os.version }
-            if ((Get-CompanionVersionState -Installed $seenVer -Available ([string]$global:CompanionVersion)) -eq 'older') {
-                $lines += , (& $cell $msg.Companion.OwnerLabel ($msg.Companion.VersionOlder -f $seenVer, $global:CompanionVersion) 'Yellow' $Width)
+            if ((Get-CompanionVersionState -Installed $seenVer -Available (Get-CompanionBundledVersion)) -eq 'older') {
+                $lines += , (& $cell $msg.Companion.OwnerLabel ($msg.Companion.VersionOlder -f $seenVer, (Get-CompanionBundledVersion)) 'Yellow' $Width)
             }
         }
     } catch { }
@@ -1069,7 +1069,7 @@ function Show-HeadsetPanel {
                 try { [void](Set-CompanionOwnerState -HeadsetId $id -Ownership $o) } catch { }
                 $cap = $null; try { $cap = Get-CompanionCapability -HeadsetId $id } catch { }
                 $seenVer = if ($o.Version) { [string]$o.Version } elseif ($cap -and $cap.Known) { [string]$cap.AppVersion } else { '' }
-                $verState = Get-CompanionVersionState -Installed $seenVer -Available ([string]$global:CompanionVersion)
+                $verState = Get-CompanionVersionState -Installed $seenVer -Available (Get-CompanionBundledVersion)
                 if ($o.State -eq 'foreign') {
                     $ans = (Read-Host ($msg.Companion.ReattachConfirm -f $row.Name)).Trim().ToUpper()
                     if ($ans -in @('Y', 'O')) {

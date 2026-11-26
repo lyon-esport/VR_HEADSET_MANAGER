@@ -13,8 +13,7 @@
                 "adbAutoEnablePackageName":  "eu.project_simple.adbautoenable",
                 "companionFolder":  "VRHM Companion",
                 "companionApk":  "VRHM-Companion.apk",
-                "companionPackageName":  "com.vrheadsetmanager.companion",
-                "companionVersion": "1.4.5"
+                "companionPackageName":  "com.vrheadsetmanager.companion"
             },
     "companion":  {
                       "telemetry_stale_sec":  10,

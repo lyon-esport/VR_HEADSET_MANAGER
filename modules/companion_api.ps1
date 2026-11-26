@@ -403,6 +403,125 @@ function Get-HeadsetAppVersion {
 }
 
 
+function Get-ApkManifestInfo {
+    <#
+    .SYNOPSIS
+    Package, versionName and versionCode of a local .apk file, read from its binary
+    AndroidManifest.xml (Android AXML: string pool + resource map + start elements). No Android SDK
+    needed. Memoised per process on path + size + last write time. Returns
+    @{Package;VersionName;VersionCode} or $null when the file is missing or cannot be parsed. Never throws.
+    .EXAMPLE
+    (Get-ApkManifestInfo -Path $global:CompanionAPK).VersionName
+    #>
+    param([Parameter(Mandatory)][string]$Path)
+    try {
+        if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+        $fi = Get-Item -LiteralPath $Path
+        $key = '{0}|{1}|{2}' -f $fi.FullName, $fi.Length, $fi.LastWriteTimeUtc.Ticks
+        if (-not $script:ApkManifestMemo) { $script:ApkManifestMemo = @{} }
+        if ($script:ApkManifestMemo.ContainsKey($key)) { return $script:ApkManifestMemo[$key] }
+
+        Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($fi.FullName)
+        try {
+            $entry = $zip.GetEntry('AndroidManifest.xml')
+            if (-not $entry) { return $null }
+            $ms = New-Object System.IO.MemoryStream
+            $s = $entry.Open(); try { $s.CopyTo($ms) } finally { $s.Dispose() }
+            $b = $ms.ToArray()
+        } finally { $zip.Dispose() }
+
+        $strings = @(); $resIds = @()
+        $info = @{ Package = $null; VersionName = $null; VersionCode = $null }
+        $none = [uint32]::MaxValue
+        $pos = 8   # skip the XML file header chunk
+        while ($pos + 8 -le $b.Length) {
+            $type = [BitConverter]::ToUInt16($b, $pos)
+            $hsz  = [BitConverter]::ToUInt16($b, $pos + 2)
+            $size = [int][BitConverter]::ToUInt32($b, $pos + 4)
+            if ($size -le 0) { break }
+            if ($type -eq 0x0001) {
+                # String pool
+                $count = [int][BitConverter]::ToUInt32($b, $pos + 8)
+                $utf8  = ([BitConverter]::ToUInt32($b, $pos + 16) -band 0x100) -ne 0
+                $start = [int][BitConverter]::ToUInt32($b, $pos + 20)
+                $list = New-Object System.Collections.Generic.List[string]
+                for ($i = 0; $i -lt $count; $i++) {
+                    $p = $pos + $start + [int][BitConverter]::ToUInt32($b, $pos + $hsz + 4 * $i)
+                    if ($utf8) {
+                        if ($b[$p] -band 0x80) { $p += 2 } else { $p += 1 }
+                        $n = [int]$b[$p]
+                        if ($n -band 0x80) { $n = (($n -band 0x7F) -shl 8) -bor [int]$b[$p + 1]; $p += 2 } else { $p += 1 }
+                        $list.Add([Text.Encoding]::UTF8.GetString($b, $p, $n))
+                    } else {
+                        $n = [int][BitConverter]::ToUInt16($b, $p)
+                        if ($n -band 0x8000) { $n = (($n -band 0x7FFF) -shl 16) -bor [int][BitConverter]::ToUInt16($b, $p + 2); $p += 4 } else { $p += 2 }
+                        $list.Add([Text.Encoding]::Unicode.GetString($b, $p, $n * 2))
+                    }
+                }
+                $strings = $list.ToArray()
+            } elseif ($type -eq 0x0180) {
+                # Resource map: attribute string index -> android resource id
+                $ids = New-Object System.Collections.Generic.List[uint32]
+                for ($o = $pos + 8; $o -lt $pos + $size; $o += 4) { $ids.Add([BitConverter]::ToUInt32($b, $o)) }
+                $resIds = $ids.ToArray()
+            } elseif ($type -eq 0x0102) {
+                # Start element: only <manifest> carries the package and version attributes
+                $ni = [int][BitConverter]::ToUInt32($b, $pos + 20)
+                if ($ni -lt $strings.Count -and $strings[$ni] -eq 'manifest') {
+                    $aStart = [BitConverter]::ToUInt16($b, $pos + 24)
+                    $aSize  = [BitConverter]::ToUInt16($b, $pos + 26)
+                    $aCount = [BitConverter]::ToUInt16($b, $pos + 28)
+                    for ($i = 0; $i -lt $aCount; $i++) {
+                        $a = $pos + 16 + $aStart + $i * $aSize
+                        $an   = [int][BitConverter]::ToUInt32($b, $a + 4)
+                        $raw  = [BitConverter]::ToUInt32($b, $a + 8)
+                        $dt   = $b[$a + 15]
+                        $data = [BitConverter]::ToUInt32($b, $a + 16)
+                        $name = if ($an -lt $strings.Count) { $strings[$an] } else { '' }
+                        $rid  = if ($an -lt $resIds.Count) { $resIds[$an] } else { [uint32]0 }
+                        $str  = if ($raw -ne $none -and $raw -lt $strings.Count) { $strings[[int]$raw] }
+                                elseif ($dt -eq 3 -and $data -lt $strings.Count) { $strings[[int]$data] } else { $null }
+                        if ($name -eq 'versionName' -or $rid -eq 0x0101021c) { $info.VersionName = $(if ($null -ne $str) { [string]$str } else { [string]$data }) }
+                        elseif ($name -eq 'versionCode' -or $rid -eq 0x0101021b) { $info.VersionCode = [int64]$data }
+                        elseif ($name -eq 'package') { $info.Package = [string]$str }
+                    }
+                    break
+                }
+            }
+            $pos += $size
+        }
+        if (-not $info.Package -and -not $info.VersionName) { return $null }
+        $script:ApkManifestMemo[$key] = $info
+        return $info
+    } catch {
+        return $null
+    }
+}
+
+
+function Get-CompanionBundledVersion {
+    <#
+    .SYNOPSIS
+    versionName of the VRHM Companion APK shipped with this install ($global:CompanionAPK), read from
+    the APK itself (Get-ApkManifestInfo), so the "available" version can never drift from the file an
+    install would push. Falls back to the legacy config value apk.companionVersion
+    ($global:CompanionVersion) when the APK cannot be read, '' when neither is known. Never throws.
+    .EXAMPLE
+    Get-CompanionBundledVersion
+    #>
+    $v = ''
+    try {
+        if ($global:CompanionAPK) {
+            $i = Get-ApkManifestInfo -Path $global:CompanionAPK
+            if ($i -and $i.VersionName) { $v = [string]$i.VersionName }
+        }
+    } catch { $v = '' }
+    if (-not $v) { $v = [string]$global:CompanionVersion }
+    return $v
+}
+
+
 function Get-HeadsetAdbToolsStatus {
     <#
     .SYNOPSIS
@@ -420,9 +539,11 @@ function Get-HeadsetAdbToolsStatus {
     )
     $compPkg = $global:CompanionPackageName
     $aePkg   = $global:ADBAutoEnablePackageName
-    $compAvail = [string]$global:CompanionVersion
+    $compAvail = Get-CompanionBundledVersion
     $aeAvail = ''
-    if ($global:ADBAutoEnableAPK -match '[-_](\d+(?:\.\d+)+)\.apk$') { $aeAvail = $Matches[1] }
+    $aeInfo = if ($global:ADBAutoEnableAPK) { Get-ApkManifestInfo -Path $global:ADBAutoEnableAPK } else { $null }
+    if ($aeInfo -and $aeInfo.VersionName) { $aeAvail = [string]$aeInfo.VersionName }
+    elseif ($global:ADBAutoEnableAPK -match '[-_](\d+(?:\.\d+)+)\.apk$') { $aeAvail = $Matches[1] }
 
     $compVer = Get-HeadsetAppVersion -Device $Device -Pkg $compPkg -adb $adb
     $result = @(

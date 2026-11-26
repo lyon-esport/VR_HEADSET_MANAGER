@@ -497,7 +497,7 @@ function Invoke-RouteHeadsetSettings {
             $seenVer = ''
             if ($compCap -and $compCap.Known -and $compCap.AppVersion) { $seenVer = [string]$compCap.AppVersion }
             elseif ($os -and $os.version) { $seenVer = [string]$os.version }
-            $compVerState = Get-CompanionVersionState -Installed $seenVer -Available ([string]$global:CompanionVersion)
+            $compVerState = Get-CompanionVersionState -Installed $seenVer -Available (Get-CompanionBundledVersion)
         } catch {}
 
         try {

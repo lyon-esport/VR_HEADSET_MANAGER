@@ -277,8 +277,10 @@ function Get-Config {
     $global:CompanionAPK = Join-Path -Path (Join-Path -Path $sourcesPath -ChildPath $companionFolder) -ChildPath $companionApk
     $global:CompanionPackageName = if ($configContent.apk.companionPackageName) { [string]$configContent.apk.companionPackageName } else { "com.vrheadsetmanager.companion" }
     $global:CompanionApproveService = "$($global:CompanionPackageName)/$($global:CompanionPackageName).ApproveService"
-    # Keep in sync with android_companion\app\build.gradle versionName (used for "upgrade available").
-    $global:CompanionVersion = if ($configContent.apk.companionVersion) { [string]$configContent.apk.companionVersion } else { "1.0" }
+    # Legacy fallback only: the bundled companion version is read from the APK itself
+    # (Get-CompanionBundledVersion). apk.companionVersion is no longer shipped in the template;
+    # an older config.json may still carry it, used only when the APK cannot be read.
+    $global:CompanionVersion = if ($configContent.apk.companionVersion) { [string]$configContent.apk.companionVersion } else { '' }
 
     # Companion telemetry push (ADR-0043). telemetry_stale_sec: how long a pushed snapshot stays
     # trusted before the ADB telemetry poll resumes as fallback (floor 2 s). report_interval_sec:
