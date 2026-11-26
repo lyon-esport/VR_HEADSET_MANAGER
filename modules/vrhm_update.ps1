@@ -800,11 +800,13 @@ function Test-AppDevDiffGuard {
     .SYNOPSIS
         Pure guard of a dev-mode diff (spec S10) -> @{Blocked;BlockReasons;Warnings}.
         -Files: objects with Path, Status, PreviousPath. Templates are JSON text (empty = skip key check).
+        -RetiredKeys (ADR-0047): key paths the target's config_changes.json retires or renames on purpose;
+        a removed key equal to one of them (or below it) is a warning, not a block.
     .EXAMPLE
-        Test-AppDevDiffGuard -Files $diff.Files -OldTemplateJson $a -NewTemplateJson $b -InstalledDbSchema 9
+        Test-AppDevDiffGuard -Files $diff.Files -OldTemplateJson $a -NewTemplateJson $b -InstalledDbSchema 9 -RetiredKeys @('apk.companionVersion')
     #>
     [CmdletBinding()]
-    param($Files, [string]$OldTemplateJson = '', [string]$NewTemplateJson = '', [int]$InstalledDbSchema = 0)
+    param($Files, [string]$OldTemplateJson = '', [string]$NewTemplateJson = '', [int]$InstalledDbSchema = 0, [string[]]$RetiredKeys = @())
 
     $block = New-Object System.Collections.ArrayList
     $warn = New-Object System.Collections.ArrayList
@@ -834,7 +836,15 @@ function Test-AppDevDiffGuard {
             $nk = @(Get-JsonKeyPath -Value $new)
             $oh = @{}; foreach ($k in $ok) { $oh[$k] = $true }
             $nh = @{}; foreach ($k in $nk) { $nh[$k] = $true }
-            $gone = @($ok | Where-Object { -not $nh.ContainsKey($_) })
+            $goneAll = @($ok | Where-Object { -not $nh.ContainsKey($_) })
+            $retired = @($RetiredKeys | Where-Object { $_ })
+            $isRetired = { param($k) foreach ($r in $retired) { if ($k -eq $r -or $k.StartsWith($r + '.')) { return $true } }; return $false }
+            $gone = @($goneAll | Where-Object { -not (& $isRetired $_) })
+            $goneRetired = @($goneAll | Where-Object { & $isRetired $_ })
+            if ($goneRetired.Count -gt 0) {
+                $show = ($goneRetired | Select-Object -First 5) -join ', '
+                [void]$warn.Add("Config key(s) retired by this update (removed from config.json at the next start): $show" + $(if ($goneRetired.Count -gt 5) { " (+$($goneRetired.Count - 5) more)" } else { '' }))
+            }
             $added = @($nk | Where-Object { -not $oh.ContainsKey($_) })
             if ($gone.Count -gt 0) {
                 $show = ($gone | Select-Object -First 5) -join ', '
@@ -866,7 +876,7 @@ function Get-AppDevDiff {
     $res = @{
         Ok = $false; Available = $false; Reason = ''; Error = $null; FromCommit = ''; ToCommit = ''; AheadBy = 0
         Files = @(); Blocked = $false; BlockReasons = @(); Warnings = @()
-        Counts = @{ Changed = 0; Added = 0; Removed = 0; Ignored = 0 }; LocalEdits = @()
+        Counts = @{ Changed = 0; Added = 0; Removed = 0; Ignored = 0 }; LocalEdits = @(); ConfigChanges = @()
     }
     try {
         $opt = $(if ($null -ne $Releases) { Get-AppUpdateOptions -Root $Root -Releases $Releases } else { Get-AppUpdateOptions -Root $Root })
@@ -936,7 +946,13 @@ function Get-AppDevDiff {
         }
         $dbs = 0
         if ($info.Installed -and $info.Installed.PSObject.Properties['dbSchema'] -and $null -ne $info.Installed.dbSchema) { $dbs = [int]$info.Installed.dbSchema }
-        $g = Test-AppDevDiffGuard -Files @($files.ToArray()) -OldTemplateJson $oldTpl -NewTemplateJson $newTpl -InstalledDbSchema $dbs
+        # Config changes of the target (ADR-0047): retired keys are not a block, and the operator sees
+        # (and decides) what the update changes in config.json. A commit without the file declares nothing.
+        $chgTxt = Get-UpdateRawText -Url (Get-UpdateRawUrl -Repo $repo -Sha $res.ToCommit -Path 'templates/config/config_changes.json')
+        $chgCatalog = @(Get-ConfigChangesCatalog -Json $(if ($chgTxt) { $chgTxt } else { '' }))
+        $cc = Get-AppUpdateConfigChanges -Target 'dev' -Root $Root -CatalogJson $(if ($chgTxt) { $chgTxt } else { '' })
+        $res.ConfigChanges = @($cc.Items)
+        $g = Test-AppDevDiffGuard -Files @($files.ToArray()) -OldTemplateJson $oldTpl -NewTemplateJson $newTpl -InstalledDbSchema $dbs -RetiredKeys @(Get-ConfigChangesRetiredKeys -Changes $chgCatalog)
         $res.Files = @($files.ToArray() | Sort-Object { -not $_.LocalModified }, { $_.Path })
         $res.Counts = $cnt
         $res.LocalEdits = @($edits.ToArray() | Sort-Object)
@@ -1515,6 +1531,464 @@ function Merge-ConfigTemplate {
     }
     & $walk $Config $Template ''
     return @{ Config = $Config; Added = @($added.ToArray()) }
+}
+
+# ---------------------------------------------------------------------------------------------
+# Config changes (ADR-0047): templates\config\config_changes.json lists the config changes a
+# version makes on purpose - retire (key removed), rename (value moved), set (new recommended value,
+# operator accepts or keeps) and choose (operator picks one option). The file is CUMULATIVE: an
+# entry is never removed, so the catalogue of the target version covers every hop. Decisions are
+# taken before an update (web / console preview) or afterwards ("pending config changes"), stored in
+# data\update\config_changes.json {applied:[ids]; decisions:{id:decision}} and applied once at start.
+# A decision is 'accept' / 'keep' (set) or 'opt:<n>' / 'keep' (choose).
+# ---------------------------------------------------------------------------------------------
+
+function Get-ConfigKeyValue {
+    <#
+    .SYNOPSIS
+        Pure. Value of a dotted key path in a parsed JSON object: @{Found;Value}.
+    .EXAMPLE
+        (Get-ConfigKeyValue -Object $cfg -Key 'apk.companionVersion').Found
+    #>
+    param($Object, [Parameter(Mandatory)][string]$Key)
+    $cur = $Object
+    foreach ($seg in $Key.Split('.')) {
+        if ($cur -isnot [System.Management.Automation.PSCustomObject]) { return @{ Found = $false; Value = $null } }
+        $p = $cur.PSObject.Properties[$seg]
+        if ($null -eq $p) { return @{ Found = $false; Value = $null } }
+        $cur = $p.Value
+    }
+    return @{ Found = $true; Value = $cur }
+}
+
+function Set-ConfigKeyValue {
+    <#
+    .SYNOPSIS
+        Pure. Sets a dotted key path in a parsed JSON object IN PLACE, creating the intermediate objects.
+        $false when a segment on the way is not an object.
+    .EXAMPLE
+        Set-ConfigKeyValue -Object $cfg -Key 'Update.health_timeout_sec' -Value 300
+    #>
+    param($Object, [Parameter(Mandatory)][string]$Key, $Value)
+    $segs = $Key.Split('.')
+    $cur = $Object
+    for ($i = 0; $i -lt $segs.Count - 1; $i++) {
+        if ($cur -isnot [System.Management.Automation.PSCustomObject]) { return $false }
+        $p = $cur.PSObject.Properties[$segs[$i]]
+        if ($null -eq $p) {
+            $cur | Add-Member -NotePropertyName $segs[$i] -NotePropertyValue ([pscustomobject]@{})
+            $p = $cur.PSObject.Properties[$segs[$i]]
+        }
+        $cur = $p.Value
+    }
+    if ($cur -isnot [System.Management.Automation.PSCustomObject]) { return $false }
+    $last = $segs[$segs.Count - 1]
+    if ($cur.PSObject.Properties[$last]) { $cur.$last = $Value }
+    else { $cur | Add-Member -NotePropertyName $last -NotePropertyValue $Value }
+    return $true
+}
+
+function Remove-ConfigKey {
+    <#
+    .SYNOPSIS
+        Pure. Removes a dotted key path from a parsed JSON object IN PLACE. $true when it was there.
+    .EXAMPLE
+        Remove-ConfigKey -Object $cfg -Key 'apk.companionVersion'
+    #>
+    param($Object, [Parameter(Mandatory)][string]$Key)
+    $segs = $Key.Split('.')
+    $parentKey = ($segs | Select-Object -First ($segs.Count - 1)) -join '.'
+    $parent = $(if ($parentKey) { (Get-ConfigKeyValue -Object $Object -Key $parentKey).Value } else { $Object })
+    if ($parent -isnot [System.Management.Automation.PSCustomObject]) { return $false }
+    $last = $segs[$segs.Count - 1]
+    if ($null -eq $parent.PSObject.Properties[$last]) { return $false }
+    $parent.PSObject.Properties.Remove($last)
+    return $true
+}
+
+function ConvertTo-ConfigChangeText {
+    # Compact JSON text of a config value, for display and equality checks ('' for $null).
+    param($Value)
+    if ($null -eq $Value) { return 'null' }
+    try { return [string](ConvertTo-Json -InputObject $Value -Compress -Depth 10) } catch { return [string]$Value }
+}
+
+function Get-ConfigChangesCatalog {
+    <#
+    .SYNOPSIS
+        Pure. Parses the text of config_changes.json (-Json) or reads the file (-Path) into normalized
+        entries @{Id;Since;Kind;Key;To;Value;HasValue;Options=@(@{Value;Label});Default;Reason}.
+        Entries with an unknown kind, a bad id or a missing key are skipped. @() when absent or invalid.
+    .EXAMPLE
+        @(Get-ConfigChangesCatalog -Path (Join-Path $global:ScriptPath 'templates\config\config_changes.json'))
+    #>
+    [CmdletBinding()]
+    param([string]$Json = '', [string]$Path = '')
+    $out = New-Object System.Collections.ArrayList
+    try {
+        if (-not $Json -and $Path) {
+            if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return @() }
+            $Json = [System.IO.File]::ReadAllText($Path, (New-Object System.Text.UTF8Encoding($false)))
+        }
+        if ([string]::IsNullOrWhiteSpace($Json)) { return @() }
+        $doc = $Json.TrimStart([char]0xFEFF) | ConvertFrom-Json
+        if ($null -eq $doc -or -not $doc.PSObject.Properties['changes']) { return @() }
+        foreach ($c in @($doc.changes | ForEach-Object { $_ })) {
+            if ($null -eq $c) { continue }
+            $id = [string]$c.id; $kind = ([string]$c.kind).ToLowerInvariant(); $key = [string]$c.key
+            if ($id -notmatch '^[\w.+-]{1,80}$' -or $kind -notin @('retire', 'rename', 'set', 'choose')) { continue }
+            if ($key -notmatch '^[\w-]+(\.[\w-]+)*$') { continue }
+            $e = @{
+                Id = $id; Since = [string]$c.since; Kind = $kind; Key = $key; To = ''
+                Value = $null; HasValue = $false; Options = @(); Default = ''; Reason = [string]$c.reason
+            }
+            if ($kind -eq 'rename') {
+                $e.To = [string]$c.to
+                if ($e.To -notmatch '^[\w-]+(\.[\w-]+)*$' -or $e.To -eq $key) { continue }
+            }
+            if ($kind -eq 'set') {
+                if (-not $c.PSObject.Properties['value']) { continue }
+                $e.Value = $c.value; $e.HasValue = $true
+                $e.Default = $(if ([string]$c.default -eq 'keep') { 'keep' } else { 'accept' })
+            }
+            if ($kind -eq 'choose') {
+                $opts = New-Object System.Collections.ArrayList
+                foreach ($o in @($c.options | ForEach-Object { $_ })) {
+                    if ($null -eq $o -or -not $o.PSObject.Properties['value']) { continue }
+                    $lbl = $(if ($o.label) { [string]$o.label } else { ConvertTo-ConfigChangeText -Value $o.value })
+                    [void]$opts.Add(@{ Value = $o.value; Label = $lbl })
+                }
+                if ($opts.Count -lt 2) { continue }
+                $e.Options = @($opts.ToArray())
+                $e.Default = 'opt:0'
+                if ($c.PSObject.Properties['default']) {
+                    $dt = ConvertTo-ConfigChangeText -Value $c.default
+                    for ($i = 0; $i -lt $opts.Count; $i++) { if ((ConvertTo-ConfigChangeText -Value $opts[$i].Value) -eq $dt) { $e.Default = 'opt:' + $i; break } }
+                }
+            }
+            [void]$out.Add($e)
+        }
+    } catch {
+        Write-UpdateLog ("Config changes catalogue unreadable: {0}" -f $_.Exception.Message) 'WARNING'
+        return @()
+    }
+    return @($out.ToArray())
+}
+
+function Get-ConfigChangesRetiredKeys {
+    <#
+    .SYNOPSIS
+        Pure. Key paths a catalogue removes on purpose: the key of every retire and rename entry.
+    .EXAMPLE
+        Get-ConfigChangesRetiredKeys -Changes (Get-ConfigChangesCatalog -Json $txt)
+    #>
+    param($Changes)
+    return @(@($Changes) | Where-Object { $_ -and $_.Kind -in @('retire', 'rename') } | ForEach-Object { [string]$_.Key })
+}
+
+function Test-ConfigChangeDecision {
+    # $true for a well-formed decision text: accept, keep or opt:<n>.
+    param([string]$Decision)
+    return ($Decision -match '^(accept|keep|opt:\d{1,2})$')
+}
+
+function Get-ConfigChangesPreview {
+    <#
+    .SYNOPSIS
+        Pure. What a catalogue would change in -Config: one item per entry not yet applied that has an
+        effect. Item @{Id;Kind;Key;To;Reason;Since;HasCurrent;Current;Proposed;Options=@(@{Index;Label;Value});
+        Default;NeedsDecision}. Current/Proposed/option Value are compact JSON text. retire/rename are shown
+        only when the old key is present; set only when the key exists with another value; choose unless the
+        key already holds the default option.
+    .EXAMPLE
+        Get-ConfigChangesPreview -Config $cfg -Changes $catalog -Applied @()
+    #>
+    param($Config, $Changes, [string[]]$Applied = @())
+    $done = @{}; foreach ($a in @($Applied)) { if ($a) { $done[[string]$a] = $true } }
+    $items = New-Object System.Collections.ArrayList
+    foreach ($e in @($Changes)) {
+        if ($null -eq $e -or $done.ContainsKey($e.Id)) { continue }
+        $cur = Get-ConfigKeyValue -Object $Config -Key $e.Key
+        $curText = $(if ($cur.Found) { ConvertTo-ConfigChangeText -Value $cur.Value } else { '' })
+        $it = @{
+            Id = $e.Id; Kind = $e.Kind; Key = $e.Key; To = $e.To; Reason = $e.Reason; Since = $e.Since
+            HasCurrent = [bool]$cur.Found; Current = $curText; Proposed = ''; Options = @(); Default = ''; NeedsDecision = $false
+        }
+        # 'continue' inside a switch only leaves the switch, so a skip is a flag.
+        $skip = $false
+        switch ($e.Kind) {
+            'retire' { if (-not $cur.Found) { $skip = $true } }
+            'rename' { if (-not $cur.Found) { $skip = $true } }
+            'set' {
+                $it.Proposed = ConvertTo-ConfigChangeText -Value $e.Value
+                if (-not $cur.Found -or $it.Proposed -eq $curText) { $skip = $true }
+                else { $it.Default = $e.Default; $it.NeedsDecision = $true }
+            }
+            'choose' {
+                $opts = @()
+                for ($i = 0; $i -lt @($e.Options).Count; $i++) {
+                    $opts += @{ Index = $i; Label = [string]$e.Options[$i].Label; Value = (ConvertTo-ConfigChangeText -Value $e.Options[$i].Value) }
+                }
+                $it.Options = $opts
+                $it.Default = $e.Default
+                $defIdx = [int](([string]$e.Default).Substring(4))
+                if ($cur.Found -and $defIdx -lt $opts.Count -and $opts[$defIdx].Value -eq $curText) { $skip = $true }
+                else {
+                    if ($cur.Found) { foreach ($o in $opts) { if ($o.Value -eq $curText) { $it.Default = 'opt:' + $o.Index } } }
+                    $it.NeedsDecision = $true
+                }
+            }
+        }
+        if (-not $skip) { [void]$items.Add($it) }
+    }
+    return @($items.ToArray())
+}
+
+function Get-AppConfigChangesState {
+    <#
+    .SYNOPSIS
+        data\update\config_changes.json as @{Applied=@(ids);Decisions=@{id=decision}}; empty when absent.
+    .EXAMPLE
+        (Get-AppConfigChangesState).Applied
+    #>
+    param([string]$Root = $global:ScriptPath)
+    $st = @{ Applied = @(); Decisions = @{} }
+    $j = Read-UpdateJsonFile -Path (Join-Path (Get-AppUpdateDataPath -Root $Root) 'config_changes.json')
+    if ($j) {
+        if ($j.PSObject.Properties['applied']) { $st.Applied = @($j.applied | ForEach-Object { [string]$_ } | Where-Object { $_ }) }
+        if ($j.PSObject.Properties['decisions'] -and $j.decisions) {
+            foreach ($p in $j.decisions.PSObject.Properties) { if (Test-ConfigChangeDecision -Decision ([string]$p.Value)) { $st.Decisions[$p.Name] = [string]$p.Value } }
+        }
+    }
+    return $st
+}
+
+function Save-AppConfigChangesState {
+    # Writes data\update\config_changes.json (UTF-8 no BOM).
+    param([string]$Root = $global:ScriptPath, [string[]]$Applied = @(), [hashtable]$Decisions = @{})
+    $dec = [ordered]@{}
+    foreach ($k in ($Decisions.Keys | Sort-Object)) { $dec[$k] = [string]$Decisions[$k] }
+    $doc = [ordered]@{ applied = @($Applied | Select-Object -Unique); decisions = $dec }
+    Write-UpdateTextFile -Path (Join-Path (Get-AppUpdateDataPath -Root $Root -Create) 'config_changes.json') -Content ($doc | ConvertTo-Json -Depth 5)
+}
+
+function Save-AppConfigDecisions {
+    <#
+    .SYNOPSIS
+        Records operator decisions (id -> 'accept' | 'keep' | 'opt:<n>') for config changes, merged into
+        data\update\config_changes.json. Invalid ids or values are ignored. Returns the number stored.
+        They are applied by Invoke-AppConfigChanges (next start, or at once by the caller).
+    .EXAMPLE
+        Save-AppConfigDecisions -Decisions @{ '2026-12.RC1-stream-fps' = 'accept' }
+    #>
+    param([Parameter(Mandatory)]$Decisions, [string]$Root = $global:ScriptPath)
+    $st = Get-AppConfigChangesState -Root $Root
+    $n = 0
+    $pairs = @()
+    if ($Decisions -is [hashtable]) { foreach ($k in $Decisions.Keys) { $pairs += , @([string]$k, [string]$Decisions[$k]) } }
+    elseif ($Decisions) { foreach ($p in $Decisions.PSObject.Properties) { $pairs += , @([string]$p.Name, [string]$p.Value) } }
+    foreach ($pr in $pairs) {
+        if ($pr[0] -notmatch '^[\w.+-]{1,80}$' -or -not (Test-ConfigChangeDecision -Decision $pr[1])) { continue }
+        $st.Decisions[$pr[0]] = $pr[1]; $n++
+    }
+    if ($n -gt 0) { Save-AppConfigChangesState -Root $Root -Applied $st.Applied -Decisions $st.Decisions }
+    return $n
+}
+
+function Invoke-AppConfigChanges {
+    <#
+    .SYNOPSIS
+        Applies templates\config\config_changes.json to config\config.json at start (every start, cheap
+        when nothing is due; Main process; dev tree and test builds skipped unless -Force): retire and
+        rename at once, set / choose when the operator decided (keep = nothing written), then adds the
+        template keys still missing (Merge-ConfigTemplate, so a dev-mode update gets new keys too).
+        Undecided set / choose entries stay pending (Get-AppConfigChangesPending). Config written once,
+        under the lock. Never throws. Returns @{Ran;Applied;Changed;Added;Pending;Error}.
+    .EXAMPLE
+        $r = Invoke-AppConfigChanges; $r.Changed
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$Root = $global:ScriptPath,
+        [string]$ConfigPath = '',
+        [string]$TemplatePath = '',
+        [string]$CatalogPath = '',
+        [switch]$NoReload,
+        [switch]$Force
+    )
+    $res = @{ Ran = $false; Applied = @(); Changed = @(); Added = @(); Pending = @(); Error = $null }
+    $lock = $null
+    try {
+        if (-not $Force) {
+            $info = Get-AppVersionInfo -Root $Root
+            if ($info.DevTree -or $info.Parsed.Kind -ne 'Release') { return $res }
+        }
+        if (-not $ConfigPath) { $ConfigPath = if ($global:ConfigFilePath) { [string]$global:ConfigFilePath } else { Join-Path (Join-Path $Root 'config') 'config.json' } }
+        if (-not $TemplatePath) { $TemplatePath = Join-Path (Join-Path (Join-Path $Root 'templates') 'config') 'config.json' }
+        if (-not $CatalogPath) { $CatalogPath = Join-Path (Join-Path (Join-Path $Root 'templates') 'config') 'config_changes.json' }
+        if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) { return $res }
+        $catalog = @(Get-ConfigChangesCatalog -Path $CatalogPath)
+        $st = Get-AppConfigChangesState -Root $Root
+        $applied = New-Object System.Collections.ArrayList
+        foreach ($a in $st.Applied) { [void]$applied.Add($a) }
+        $done = @{}; foreach ($a in $st.Applied) { $done[$a] = $true }
+
+        if (Get-Command -Name Enter-VqaLock -ErrorAction SilentlyContinue) { $lock = Enter-VqaLock }
+        $cfg = Read-UpdateJsonFile -Path $ConfigPath
+        if ($null -eq $cfg) { $res.Error = 'config.json unreadable'; return $res }
+        $res.Ran = $true
+        $changed = New-Object System.Collections.ArrayList
+        $newApplied = New-Object System.Collections.ArrayList
+        foreach ($e in $catalog) {
+            if ($done.ContainsKey($e.Id)) { continue }
+            $cur = Get-ConfigKeyValue -Object $cfg -Key $e.Key
+            $dec = $(if ($st.Decisions.ContainsKey($e.Id)) { $st.Decisions[$e.Id] } else { '' })
+            $isDone = $false
+            switch ($e.Kind) {
+                'retire' {
+                    if ($cur.Found -and (Remove-ConfigKey -Object $cfg -Key $e.Key)) { [void]$changed.Add(('removed {0}' -f $e.Key)) }
+                    $isDone = $true
+                }
+                'rename' {
+                    if ($cur.Found) {
+                        if (Set-ConfigKeyValue -Object $cfg -Key $e.To -Value $cur.Value) {
+                            [void](Remove-ConfigKey -Object $cfg -Key $e.Key)
+                            [void]$changed.Add(('renamed {0} -> {1}' -f $e.Key, $e.To))
+                        }
+                    }
+                    $isDone = $true
+                }
+                'set' {
+                    $want = ConvertTo-ConfigChangeText -Value $e.Value
+                    if (-not $cur.Found -or (ConvertTo-ConfigChangeText -Value $cur.Value) -eq $want) { $isDone = $true }
+                    elseif ($dec -eq 'keep') { $isDone = $true }
+                    elseif ($dec -eq 'accept') {
+                        [void](Set-ConfigKeyValue -Object $cfg -Key $e.Key -Value $e.Value)
+                        [void]$changed.Add(('{0} = {1}' -f $e.Key, $want))
+                        $isDone = $true
+                    }
+                }
+                'choose' {
+                    $defIdx = [int](([string]$e.Default).Substring(4))
+                    $curTxt = $(if ($cur.Found) { ConvertTo-ConfigChangeText -Value $cur.Value } else { '' })
+                    if ($cur.Found -and $curTxt -eq (ConvertTo-ConfigChangeText -Value $e.Options[$defIdx].Value)) { $isDone = $true }
+                    elseif ($dec -eq 'keep') { $isDone = $true }
+                    elseif ($dec -match '^opt:(\d+)$' -and [int]$Matches[1] -lt @($e.Options).Count) {
+                        $ov = $e.Options[[int]$Matches[1]].Value
+                        [void](Set-ConfigKeyValue -Object $cfg -Key $e.Key -Value $ov)
+                        [void]$changed.Add(('{0} = {1}' -f $e.Key, (ConvertTo-ConfigChangeText -Value $ov)))
+                        $isDone = $true
+                    }
+                }
+            }
+            if ($isDone) { [void]$applied.Add($e.Id); [void]$newApplied.Add($e.Id); $done[$e.Id] = $true; [void]$st.Decisions.Remove($e.Id) }
+        }
+
+        $tpl = Read-UpdateJsonFile -Path $TemplatePath
+        if ($null -ne $tpl) {
+            $m = Merge-ConfigTemplate -Config $cfg -Template $tpl
+            $res.Added = @($m.Added)
+        }
+        if ($changed.Count -gt 0 -or $res.Added.Count -gt 0) {
+            if ((Get-Command -Name Write-ConfigJson -ErrorAction SilentlyContinue) -and $ConfigPath -eq [string]$global:ConfigFilePath) {
+                Write-ConfigJson -Object $cfg -Depth 20
+            } else {
+                Write-UpdateTextFile -Path $ConfigPath -Content ($cfg | ConvertTo-Json -Depth 20)
+            }
+            if ($changed.Count -gt 0) { Write-UpdateLog ("Config changes applied: {0}" -f ($changed -join '; ')) 'INFO' }
+            if ($res.Added.Count -gt 0) { Write-UpdateLog ("Config: added {0} template key(s): {1}" -f $res.Added.Count, ($res.Added -join ', ')) 'INFO' }
+        }
+        if ($newApplied.Count -gt 0) { Save-AppConfigChangesState -Root $Root -Applied @($applied.ToArray()) -Decisions $st.Decisions }
+        $res.Applied = @($newApplied.ToArray())
+        $res.Changed = @($changed.ToArray())
+        $res.Pending = @(Get-ConfigChangesPreview -Config $cfg -Changes $catalog -Applied @($applied.ToArray()) | Where-Object { $_.NeedsDecision })
+        if ($res.Pending.Count -gt 0) { Write-UpdateLog ("Config changes waiting for an operator decision: {0}" -f (($res.Pending | ForEach-Object { $_.Key }) -join ', ')) 'WARNING' }
+    } catch {
+        $res.Error = $_.Exception.Message
+        Write-UpdateLog ("Config changes failed: {0}" -f $_.Exception.Message) 'ERROR'
+    } finally {
+        if ($lock -and (Get-Command -Name Exit-VqaLock -ErrorAction SilentlyContinue)) { Exit-VqaLock -Stream $lock }
+    }
+    if (-not $NoReload -and ($res.Changed.Count -gt 0 -or $res.Added.Count -gt 0) -and (Get-Command -Name Get-Config -ErrorAction SilentlyContinue)) {
+        try { Get-Config | Out-Null } catch { }
+    }
+    return $res
+}
+
+function Get-AppConfigChangesPending {
+    <#
+    .SYNOPSIS
+        The config changes of the INSTALLED version still waiting for an operator decision (set / choose
+        not applied): preview items as Get-ConfigChangesPreview returns them. @() when none. Never throws.
+    .EXAMPLE
+        @(Get-AppConfigChangesPending) | ForEach-Object { $_.Key }
+    #>
+    param([string]$Root = $global:ScriptPath, [string]$ConfigPath = '')
+    try {
+        if (-not $ConfigPath) { $ConfigPath = if ($global:ConfigFilePath) { [string]$global:ConfigFilePath } else { Join-Path (Join-Path $Root 'config') 'config.json' } }
+        $cfg = Read-UpdateJsonFile -Path $ConfigPath
+        if ($null -eq $cfg) { return @() }
+        $catalog = @(Get-ConfigChangesCatalog -Path (Join-Path (Join-Path (Join-Path $Root 'templates') 'config') 'config_changes.json'))
+        $st = Get-AppConfigChangesState -Root $Root
+        return @(Get-ConfigChangesPreview -Config $cfg -Changes $catalog -Applied $st.Applied | Where-Object { $_.NeedsDecision })
+    } catch { return @() }
+}
+
+function Get-AppUpdateConfigChanges {
+    <#
+    .SYNOPSIS
+        Preview of the config changes an update to -Target ('dev' or a version) would make on this install:
+        reads the TARGET's config_changes.json (an uploaded zip from -ZipPaths first, else GitHub raw at the
+        tag V<version> or at the dev branch head) and compares it with the live config and the applied list.
+        Returns @{Ok;Error;Source;Items}. Items as Get-ConfigChangesPreview.
+    .EXAMPLE
+        (Get-AppUpdateConfigChanges -Target '2026-11.RC2').Items | Format-Table Kind, Key, Current, Proposed
+    #>
+    [CmdletBinding()]
+    # -CatalogJson is untyped on purpose: a [string] parameter turns $null into '' and the fetch never runs.
+    param([Parameter(Mandatory)][string]$Target, [string[]]$ZipPaths = @(), [string]$Root = $global:ScriptPath, $CatalogJson = $null)
+    $res = @{ Ok = $false; Error = $null; Source = ''; Items = @() }
+    try {
+        $txt = $CatalogJson
+        if ($null -eq $txt) {
+            foreach ($z in @($ZipPaths)) {
+                $m = $(if ($z) { Get-AppReleaseManifest -ZipPath $z } else { $null })
+                if (-not $m -or [string]$m.version -ne $Target) { continue }
+                $zip = $null
+                try {
+                    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+                    $zip = [System.IO.Compression.ZipFile]::OpenRead($z)
+                    foreach ($en in $zip.Entries) {
+                        if (($en.FullName -replace '\\', '/') -match '^[^/]+/templates/config/config_changes\.json$') {
+                            $sr = New-Object System.IO.StreamReader($en.Open(), (New-Object System.Text.UTF8Encoding($false)), $true)
+                            try { $txt = $sr.ReadToEnd() } finally { $sr.Dispose() }
+                            break
+                        }
+                    }
+                } finally { if ($zip) { $zip.Dispose() } }
+                if ($null -eq $txt) { $txt = '' }
+                $res.Source = 'zip'
+                break
+            }
+        }
+        if ($null -eq $txt) {
+            $repo = Get-UpdateSetting -Name github_repo
+            $ref = $(if ($Target -eq 'dev') { Get-UpdateSetting -Name dev_branch } else { 'V' + $Target })
+            $txt = Get-UpdateRawText -Url (Get-UpdateRawUrl -Repo $repo -Sha $ref -Path 'templates/config/config_changes.json')
+            if ($null -eq $txt) { $txt = '' }   # a version without the file makes no declared change
+            $res.Source = 'github'
+        }
+        $catalog = @(Get-ConfigChangesCatalog -Json $txt)
+        $cfgPath = $(if ($global:ConfigFilePath) { [string]$global:ConfigFilePath } else { Join-Path (Join-Path $Root 'config') 'config.json' })
+        $cfg = Read-UpdateJsonFile -Path $cfgPath
+        if ($null -eq $cfg) { $res.Error = 'config.json unreadable'; return $res }
+        $st = Get-AppConfigChangesState -Root $Root
+        $res.Items = @(Get-ConfigChangesPreview -Config $cfg -Changes $catalog -Applied $st.Applied)
+        $res.Ok = $true
+    } catch {
+        $res.Error = $_.Exception.Message
+    }
+    return $res
 }
 
 function Get-UpgradeFolderVersion {

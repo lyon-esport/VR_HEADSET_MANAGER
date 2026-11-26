@@ -309,6 +309,16 @@ if ($dbRole -eq 'Main' -and (Get-Command Initialize-AppNamesCache -ErrorAction S
     catch { Write-Log ("App catalogue seed failed: " + $_.Exception.Message) -Level WARNING }
 }
 
+# Config changes (ADR-0047): every start, before the upgrade steps - retire / rename keys and apply the
+# operator's set / choose decisions from templates\config\config_changes.json, then add missing template
+# keys (also after a dev-mode update, which the version-gated upgrade steps skip). Cheap when nothing is due.
+if ($dbRole -eq 'Main' -and (Get-Command Invoke-AppConfigChanges -ErrorAction SilentlyContinue)) {
+    try {
+        $cfgChangesResult = Invoke-AppConfigChanges
+        if ($cfgChangesResult.Error) { Write-Log ("Config changes reported: " + $cfgChangesResult.Error) -Level WARNING }
+    } catch { Write-Log ("Config changes failed: " + $_.Exception.Message) -Level WARNING }
+}
+
 # App self-update (ADR-0041, spec S9): first start of a new version - merge new template config keys,
 # switch pinned binaries, run modules\upgrade steps. Main process only, before any service starts.
 if ($dbRole -eq 'Main' -and (Get-Command Invoke-AppUpgradeSteps -ErrorAction SilentlyContinue)) {

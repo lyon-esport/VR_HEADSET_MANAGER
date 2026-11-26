@@ -137,6 +137,96 @@ function Invoke-RouteAppUpdateDevDiff {
     return
 }
 
+# Config change decisions from a request body object {id: 'accept'|'keep'|'opt:<n>'} as a hashtable
+# (invalid entries dropped; at most 100).
+function ConvertFrom-ConfigDecisionBody {
+    param($Object)
+    $h = @{}
+    if ($null -eq $Object -or $Object -isnot [System.Management.Automation.PSCustomObject]) { return $h }
+    foreach ($p in $Object.PSObject.Properties) {
+        if ($h.Count -ge 100) { break }
+        $v = [string]$p.Value
+        if ($p.Name -match '^[\w.+-]{1,80}$' -and $v -match '^(accept|keep|opt:\d{1,2})$') { $h[$p.Name] = $v }
+    }
+    return $h
+}
+
+# POST /api/app-update/config-changes {target, tempIds} (ADR-0047) - what an update to target would change
+# in config.json (retire / rename / set / choose). Slow lane: reads the target catalogue from GitHub.
+function Invoke-RouteAppUpdateConfigChanges {
+    # POST /api/app-update/config-changes
+    param([Parameter(Mandatory = $true)] $Context)
+    $request  = $Context.Request
+    $response = $Context.Response
+
+    try {
+        $ccBody = try { (Read-RequestBody -Request $request -Response $response -MaxBytes 4096) | ConvertFrom-Json } catch { $null }
+        $ccTarget = $(if ($ccBody) { [string]$ccBody.target } else { '' })
+        if ($ccTarget -ne 'dev' -and $ccTarget -notmatch '^[\w.+-]{3,60}$') {
+            Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = 'Invalid target version.' }
+            return
+        }
+        $ccZips = New-Object System.Collections.ArrayList
+        if ($ccBody -and $ccBody.PSObject.Properties['tempIds']) {
+            $ccDir = Get-AppUpdateDataPath
+            foreach ($tid in @($ccBody.tempIds | ForEach-Object { $_ })) {
+                if ([string]$tid -match '^[\w-]{1,64}$') {
+                    $zp = Join-Path $ccDir ('upload_{0}.zip' -f $tid)
+                    if (Test-Path -LiteralPath $zp -PathType Leaf) { [void]$ccZips.Add($zp) }
+                }
+            }
+        }
+        $cc = Get-AppUpdateConfigChanges -Target $ccTarget -ZipPaths @($ccZips.ToArray())
+        Send-JsonResponse -Response $response -Depth 8 -Body @{ ok = [bool]$cc.Ok; error = $cc.Error; source = $cc.Source; items = @($cc.Items) }
+    } catch {
+        Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+    } finally { Close-HttpResponse -Response $response }
+    return
+}
+
+# GET /api/app-update/config-pending (ADR-0047) - config changes of the installed version still waiting
+# for an operator decision.
+function Invoke-RouteAppUpdateConfigPending {
+    # GET /api/app-update/config-pending
+    param([Parameter(Mandatory = $true)] $Context)
+    $response = $Context.Response
+
+    try {
+        Send-JsonResponse -Response $response -Depth 8 -Body @{ ok = $true; items = @(Get-AppConfigChangesPending) }
+    } catch {
+        Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+    } finally { Close-HttpResponse -Response $response }
+    return
+}
+
+# POST /api/app-update/config-decide {decisions:{id:decision}} (ADR-0047) - stores the decisions and applies
+# them now (Invoke-AppConfigChanges). A config writer path (ConfigWriterPattern).
+function Invoke-RouteAppUpdateConfigDecide {
+    # POST /api/app-update/config-decide
+    param([Parameter(Mandatory = $true)] $Context)
+    $request  = $Context.Request
+    $response = $Context.Response
+
+    try {
+        $cdBody = try { (Read-RequestBody -Request $request -Response $response -MaxBytes 16384) | ConvertFrom-Json } catch { $null }
+        $cdDec = ConvertFrom-ConfigDecisionBody -Object $(if ($cdBody) { $cdBody.decisions } else { $null })
+        if ($cdDec.Count -eq 0) {
+            Send-JsonResponse -Response $response -StatusCode 400 -Body @{ ok = $false; error = 'No valid decision.' }
+            return
+        }
+        $cdSaved = Save-AppConfigDecisions -Decisions $cdDec
+        $cdRes = Invoke-AppConfigChanges
+        Write-Log ("Web: config change decisions saved ({0}), applied: {1}" -f $cdSaved, (@($cdRes.Changed) -join '; ')) -Level INFO
+        Send-JsonResponse -Response $response -Depth 8 -Body @{
+            ok = (-not $cdRes.Error); error = $cdRes.Error; saved = $cdSaved
+            changed = @($cdRes.Changed); pending = @($cdRes.Pending)
+        }
+    } catch {
+        Send-JsonResponse -Response $response -StatusCode 500 -Body @{ ok = $false; error = $_.Exception.Message }
+    } finally { Close-HttpResponse -Response $response }
+    return
+}
+
 # POST /api/app-update/upload - raw zip body streamed to data\update\upload_<id>.zip (cap 2 GB).
 function Invoke-RouteAppUpdateUpload {
     # POST /api/app-update/upload
@@ -209,6 +299,12 @@ function Invoke-RouteAppUpdateApply {
         $updItems = New-Object System.Collections.ArrayList
         foreach ($t in @($updBody.importItems)) { if ([string]$t -match '^\w{1,32}$') { [void]$updItems.Add([string]$t) } }
         $updForce = ([string]$updBody.force -in @('True', 'true'))
+        # Operator decisions on the target's config changes (ADR-0047): stored now, applied by the new
+        # version at its first start (data\update\ is never touched by the updater).
+        if ($updBody.PSObject.Properties['configDecisions']) {
+            $updDec = ConvertFrom-ConfigDecisionBody -Object $updBody.configDecisions
+            if ($updDec.Count -gt 0) { [void](Save-AppConfigDecisions -Decisions $updDec) }
+        }
         if ($script:appUpdateJob) {
             try { Remove-Job -Job $script:appUpdateJob -Force -ErrorAction SilentlyContinue } catch {}
             $script:appUpdateJob = $null

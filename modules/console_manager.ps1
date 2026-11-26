@@ -3910,12 +3910,14 @@ function Invoke-AppUpdateToReleaseScreen {
     $brk = @($rel.Breaking | ForEach-Object { [string]$_ } | Where-Object { $_ })
     if ($brk.Count -gt 0) { Write-UiMessage -Text ($u.Breaking -f ($brk -join '; ')) -Kind warn }
     if ($rel.Warning) { Write-UiMessage -Text $u.Prerelease -Kind warn }
+    $cfgDec = Read-AppConfigChangeDecisions -Items (Get-AppUpdateConfigItemsForConsole -Target ([string]$rel.Version))
     $ack = ([string](Read-Host $u.ConfirmApply)).Trim().ToUpper()
     if ($ack -notin @('Y', 'O')) {
         Write-Host ('  ' + $u.Cancelled) -ForegroundColor DarkGray
         Wait-UiKey -Prompt $u.PressKey
         return
     }
+    Save-AppConfigDecisionsForConsole -Decisions $cfgDec
     Invoke-AppUpdateStartAndReport -Target ([string]$rel.Version)
 }
 
@@ -3950,18 +3952,22 @@ function Invoke-AppUpdateDevScreen {
         foreach ($e in $edits) { Write-Host ('  ' + [string]$e) }
     }
     foreach ($w in @($d.Warnings | Where-Object { $_ })) { Write-UiMessage -Text ($u.DevWarn -f [string]$w) -Kind warn }
-    $blocked = @($d.Blocked | Where-Object { $_ })
+    # BlockReasons holds the texts; Blocked is only the flag (the old code printed "True").
+    $blocked = @($d.BlockReasons | Where-Object { $_ })
+    if ($d.Blocked -and $blocked.Count -eq 0) { $blocked = @('-') }
     foreach ($b in $blocked) { Write-UiMessage -Text ($u.DevBlockedBy -f [string]$b) -Kind err }
     if ($blocked.Count -gt 0) {
         Wait-UiKey -Prompt $u.PressKey
         return
     }
+    $cfgDec = Read-AppConfigChangeDecisions -Items @($d.ConfigChanges)
     $ack = ([string](Read-Host $u.ConfirmApply)).Trim().ToUpper()
     if ($ack -notin @('Y', 'O')) {
         Write-Host ('  ' + $u.Cancelled) -ForegroundColor DarkGray
         Wait-UiKey -Prompt $u.PressKey
         return
     }
+    Save-AppConfigDecisionsForConsole -Decisions $cfgDec
     Invoke-AppUpdateStartAndReport -Target 'dev'
 }
 
@@ -3987,12 +3993,14 @@ function Invoke-AppUpdateZipScreen {
         return
     }
     Write-UiMessage -Text ($u.ZipInfo -f [string]$m.version, [string]$m.type) -Kind info
+    $cfgDec = Read-AppConfigChangeDecisions -Items (Get-AppUpdateConfigItemsForConsole -Target ([string]$m.version) -ZipPaths @($p))
     $ack = ([string](Read-Host $u.ConfirmApply)).Trim().ToUpper()
     if ($ack -notin @('Y', 'O')) {
         Write-Host ('  ' + $u.Cancelled) -ForegroundColor DarkGray
         Wait-UiKey -Prompt $u.PressKey
         return
     }
+    Save-AppConfigDecisionsForConsole -Decisions $cfgDec
     Invoke-AppUpdateStartAndReport -Target ([string]$m.version) -ZipPaths @($p)
 }
 
@@ -4066,6 +4074,90 @@ function Invoke-AppUpdateStateScreen {
     Wait-UiKey -Prompt $u.PressKey
 }
 
+function Read-AppConfigChangeDecisions {
+    # ADR-0047. Shows config change items (Get-ConfigChangesPreview shape) and asks a decision for each
+    # set / choose one. Returns a hashtable id -> 'accept' | 'keep' | 'opt:<n>' (Enter = the default).
+    param([object[]]$Items, [string]$Title = '')
+    $u = $msg.Update
+    $dec = @{}
+    $list = @($Items | Where-Object { $_ })
+    if ($list.Count -eq 0) { return $dec }
+    Write-Host ''
+    Write-Host $(if ($Title) { $Title } else { $u.CfgTitle }) -ForegroundColor Yellow
+    foreach ($it in $list) {
+        switch ([string]$it.Kind) {
+            'retire' {
+                Write-UiMessage -Text ($u.CfgRetire -f $it.Key, $it.Current) -Kind warn
+                if ($it.Reason) { Write-Host ($u.CfgReason -f $it.Reason) -ForegroundColor DarkGray }
+            }
+            'rename' {
+                Write-UiMessage -Text ($u.CfgRename -f $it.Key, $it.To, $it.Current) -Kind warn
+                if ($it.Reason) { Write-Host ($u.CfgReason -f $it.Reason) -ForegroundColor DarkGray }
+            }
+            'set' {
+                Write-UiMessage -Text ($u.CfgSet -f $it.Key, $it.Proposed, $it.Current) -Kind info
+                if ($it.Reason) { Write-Host ($u.CfgReason -f $it.Reason) -ForegroundColor DarkGray }
+                $defKey = $(if ($it.Default -eq 'keep') { 'N' } else { 'Y' })
+                $ans = ([string](Read-Host ($u.CfgSetPrompt -f $defKey))).Trim().ToUpper()
+                if (-not $ans) { $ans = $defKey }
+                $dec[[string]$it.Id] = $(if ($ans -in @('Y', 'O')) { 'accept' } else { 'keep' })
+            }
+            'choose' {
+                Write-UiMessage -Text ($u.CfgChoose -f $it.Key) -Kind info
+                if ($it.Reason) { Write-Host ($u.CfgReason -f $it.Reason) -ForegroundColor DarkGray }
+                $opts = @($it.Options)
+                foreach ($o in $opts) { Write-Host ($u.CfgOption -f ([int]$o.Index + 1), $o.Label, $o.Value) }
+                if ($it.HasCurrent) { Write-Host ($u.CfgKeepOption -f $it.Current) }
+                $defShow = $(if ([string]$it.Default -match '^opt:(\d+)$') { [string]([int]$Matches[1] + 1) } else { 'K' })
+                $ans = ([string](Read-Host ($u.CfgChoosePrompt -f $defShow))).Trim().ToUpper()
+                if (-not $ans) { $ans = $defShow }
+                if ($ans -eq 'K' -and $it.HasCurrent) { $dec[[string]$it.Id] = 'keep' }
+                elseif ($ans -match '^\d+$' -and [int]$ans -ge 1 -and [int]$ans -le $opts.Count) { $dec[[string]$it.Id] = 'opt:' + ([int]$ans - 1) }
+                else { $dec[[string]$it.Id] = [string]$it.Default }
+            }
+        }
+    }
+    return $dec
+}
+
+function Get-AppUpdateConfigItemsForConsole {
+    # Config change preview of an update target (ADR-0047), @() when the backend is missing or fails.
+    param([string]$Target, [string[]]$ZipPaths = @())
+    if (-not (Get-Command -Name Get-AppUpdateConfigChanges -ErrorAction SilentlyContinue)) { return @() }
+    $cc = Get-AppUpdateConfigChanges -Target $Target -ZipPaths $ZipPaths
+    if (-not $cc.Ok) { return @() }
+    return @($cc.Items)
+}
+
+function Save-AppConfigDecisionsForConsole {
+    # Stores the decisions taken before an update (applied by the new version at its first start).
+    param([hashtable]$Decisions)
+    if ($Decisions -and $Decisions.Count -gt 0 -and (Get-Command -Name Save-AppConfigDecisions -ErrorAction SilentlyContinue)) {
+        [void](Save-AppConfigDecisions -Decisions $Decisions)
+    }
+}
+
+function Invoke-AppConfigPendingScreen {
+    # Option C: config changes of the installed version still waiting for a decision (ADR-0047).
+    $u = $msg.Update
+    $items = @()
+    if (Get-Command -Name Get-AppConfigChangesPending -ErrorAction SilentlyContinue) { $items = @(Get-AppConfigChangesPending) }
+    if ($items.Count -eq 0) {
+        Write-UiMessage -Text $u.CfgNone -Kind ok
+        Wait-UiKey -Prompt $u.PressKey
+        return
+    }
+    $dec = Read-AppConfigChangeDecisions -Items $items -Title $u.CfgPendingTitle
+    if ($dec.Count -gt 0) {
+        [void](Save-AppConfigDecisions -Decisions $dec)
+        $r = Invoke-AppConfigChanges
+        if ($r.Error) { Write-UiMessage -Text ($u.CfgFailed -f [string]$r.Error) -Kind err }
+        elseif (@($r.Changed).Count -gt 0) { Write-UiMessage -Text ($u.CfgApplied -f (@($r.Changed) -join '; ')) -Kind ok }
+        else { Write-UiMessage -Text $u.CfgNothingChanged -Kind ok }
+    }
+    Wait-UiKey -Prompt $u.PressKey
+}
+
 function Show-SubMenu-AppUpdate {
     # Console counterpart of the web Updates accordion (spec S12). Single-key Write-UiMenu layout.
     $u = $msg.Update
@@ -4083,6 +4175,10 @@ function Show-SubMenu-AppUpdate {
             @{ Key = 'I'; Label = $u.MenuImport },
             @{ Key = 'S'; Label = $u.MenuState }
         )
+        # Option C only while the installed version has config changes waiting for a decision (ADR-0047).
+        $pendingCfg = 0
+        if (Get-Command -Name Get-AppConfigChangesPending -ErrorAction SilentlyContinue) { $pendingCfg = @(Get-AppConfigChangesPending).Count }
+        if ($pendingCfg -gt 0) { $items += @{ Key = 'C'; Label = ($u.MenuConfigChanges -f $pendingCfg); Color = 'Yellow' } }
         Write-UiMenu -Title $u.Title -Subtitle $u.Subtitle -Items $items -Footer $msg.Console.Back -Bg 'DarkBlue'
         $choice = Read-UiKey
         if ($choice -in @('0', 'ESC')) { return }
@@ -4093,6 +4189,7 @@ function Show-SubMenu-AppUpdate {
             '4' { Invoke-AppUpdateZipScreen }
             'I' { Invoke-AppUpdateImportScreen }
             'S' { Invoke-AppUpdateStateScreen }
+            'C' { if ($pendingCfg -gt 0) { Invoke-AppConfigPendingScreen } }
         }
     } while ($true)
 }

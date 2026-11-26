@@ -461,6 +461,7 @@
       <div class="acc-body" id="acc-updates-body">
         <div class="fld-subgroup">Installed</div>
         <div id="upd-installed" style="padding:12px 20px">Loading...</div>
+        <div id="upd-cfg-pending" style="display:none;padding:10px 20px;border-top:1px solid var(--card-border)"></div>
         <div id="upd-progress" style="display:none;padding:10px 20px;font-size:12px;border-top:1px solid var(--card-border)"></div>
         <div class="fld-subgroup">Releases</div>
         <div style="padding:12px 20px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
@@ -1635,6 +1636,86 @@
       return Array.isArray(x) ? x : [x];
     }
 
+    // ── Config changes of an update (ADR-0047) ──────────────────────────────
+    // Items come from /api/app-update/config-changes, dev-diff (ConfigChanges) or config-pending.
+    // retire / rename are applied automatically (warning only); set / choose ask for a decision:
+    // 'accept' | 'keep' | 'opt:<n>'.
+    var _updCfg = {};   // prefix -> items shown under that prefix
+
+    function updCfgHtml(items, prefix) {
+      items = updAsList(items);
+      _updCfg[prefix] = items;
+      if (!items.length) return '';
+      var h = '<div style="font-size:12px;margin-top:6px;border:1px solid #d97706;border-radius:6px;padding:8px 10px">'
+        + '<div style="color:#d97706;font-weight:700;margin-bottom:4px">&#9888; Configuration changes</div>';
+      items.forEach(function(it, i) {
+        var why = it.Reason ? ' <span class="fld-def">(' + esc(it.Reason) + ')</span>' : '';
+        h += '<div style="margin:6px 0">';
+        if (it.Kind === 'retire') {
+          h += '<b>' + esc(it.Key) + '</b> is no longer used and will be removed' + why
+            + '<div class="fld-def" style="display:block">Current value: ' + esc(it.Current) + '</div>';
+        } else if (it.Kind === 'rename') {
+          h += '<b>' + esc(it.Key) + '</b> is renamed to <b>' + esc(it.To) + '</b>, value kept' + why
+            + '<div class="fld-def" style="display:block">Value: ' + esc(it.Current) + '</div>';
+        } else if (it.Kind === 'set') {
+          var n = 'updcfg-' + prefix + '-' + i;
+          h += '<b>' + esc(it.Key) + '</b>: new recommended value' + why
+            + '<div><label style="display:inline-flex;gap:5px;margin-right:14px"><input type="radio" name="' + n + '" value="accept"' + (it.Default !== 'keep' ? ' checked' : '') + '> Use new value: <code>' + esc(it.Proposed) + '</code></label>'
+            + '<label style="display:inline-flex;gap:5px"><input type="radio" name="' + n + '" value="keep"' + (it.Default === 'keep' ? ' checked' : '') + '> Keep current: <code>' + esc(it.Current) + '</code></label></div>';
+        } else if (it.Kind === 'choose') {
+          var nn = 'updcfg-' + prefix + '-' + i;
+          h += '<b>' + esc(it.Key) + '</b>: choose a value' + why + '<div>';
+          updAsList(it.Options).forEach(function(o) {
+            var v = 'opt:' + o.Index;
+            h += '<label style="display:inline-flex;gap:5px;margin-right:14px"><input type="radio" name="' + nn + '" value="' + v + '"' + (it.Default === v ? ' checked' : '') + '> ' + esc(o.Label) + ' <code>' + esc(o.Value) + '</code></label>';
+          });
+          if (it.HasCurrent) h += '<label style="display:inline-flex;gap:5px"><input type="radio" name="' + nn + '" value="keep"> Keep current: <code>' + esc(it.Current) + '</code></label>';
+          h += '</div>';
+        }
+        h += '</div>';
+      });
+      return h + '</div>';
+    }
+
+    function updCfgCollect(prefix) {
+      var out = {};
+      updAsList(_updCfg[prefix]).forEach(function(it, i) {
+        if (!it.NeedsDecision) return;
+        var sel = document.querySelector('input[name="updcfg-' + prefix + '-' + i + '"]:checked');
+        out[it.Id] = sel ? sel.value : (it.Default || 'keep');
+      });
+      return out;
+    }
+
+    function updCfgConfirmText(prefix) {
+      var items = updAsList(_updCfg[prefix]);
+      if (!items.length) return '';
+      return '\n\nConfiguration changes: ' + items.length + ' (see the list on the page).';
+    }
+
+    function updLoadPending() {
+      var el = document.getElementById('upd-cfg-pending');
+      if (!el) return;
+      fetch('/api/app-update/config-pending').then(function(r) { return r.json(); }).then(function(j) {
+        var items = (j && j.ok) ? updAsList(j.items) : [];
+        if (!items.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
+        el.style.display = 'block';
+        el.innerHTML = '<div style="font-size:12px">The installed version proposes configuration changes. Choose and apply:</div>'
+          + updCfgHtml(items, 'pending')
+          + '<div style="margin-top:6px"><button class="action-btn" id="btn-upd-cfg-apply" style="width:auto;padding:9px 14px;font-size:12px;border-color:var(--accent)"><div>Apply these choices</div></button></div>';
+      }).catch(function() { el.style.display = 'none'; });
+    }
+
+    function updDecidePending() {
+      var dec = updCfgCollect('pending');
+      if (!Object.keys(dec).length) return;
+      updJson('/api/app-update/config-decide', { decisions: dec }).then(function(j) {
+        if (j && j.ok) showToast('Configuration updated' + (updAsList(j.changed).length ? ': ' + updAsList(j.changed).join(', ') : ''), 4000);
+        else showToast('Config change failed: ' + ((j && j.error) || 'unknown error'), 4000);
+        updLoadPending();
+      }).catch(function() { showToast('Server unreachable', 3000); });
+    }
+
     // Bundled programs sub-card (scrcpy / mediamtx / ffmpeg). Moved here from
     // Advanced / Internal; element ids and handlers are unchanged.
     // â”€â”€ Shortcuts (General): Desktop + Windows startup, /api/shortcuts â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -1751,6 +1832,8 @@
       var el = document.getElementById('upd-releases');
       if (!el) return;
       var rels = (_updOpts && _updOpts.Releases) || [];
+      // A redraw empties the per-release config change boxes: forget them so the next click reloads them.
+      Object.keys(_updCfg).forEach(function(k) { if (k.indexOf('rel') === 0) delete _updCfg[k]; });
       if (!rels.length) { el.innerHTML = ''; return; }
       var h = '';
       rels.forEach(function(r, idx) {
@@ -1790,6 +1873,7 @@
             });
             h += '</div></div>';
           }
+          h += '<div id="upd-cfg-rel-' + idx + '"></div>';
           h += '<div><button class="action-btn" data-upd-apply="' + idx + '" style="width:auto;padding:9px 14px;font-size:12px;border-color:var(--accent)"' + (_updBusy ? ' disabled' : '') + '><div>Update to ' + esc(r.Version) + '</div></button></div>';
         }
         h += '</div>';
@@ -1797,10 +1881,10 @@
       el.innerHTML = h;
     }
 
-    function updApply(target, tempIds, importItems, confirmText) {
+    function updApply(target, tempIds, importItems, confirmText, configDecisions) {
       if (!confirm(confirmText)) return;
       _updBusy = true;
-      updJson('/api/app-update/apply', { target: target, tempIds: tempIds, importItems: importItems, confirm: true })
+      updJson('/api/app-update/apply', { target: target, tempIds: tempIds, importItems: importItems, confirm: true, configDecisions: configDecisions || {} })
         .then(function(j) {
           if (!j || !j.ok) {
             _updBusy = false;
@@ -1814,10 +1898,30 @@
         .catch(function() { _updBusy = false; showToast('Server unreachable', 3000); });
     }
 
+    // First click: load the target's config changes; when there are some, show them above the button and
+    // wait for a second click ("Confirm and update"). No change: go straight to the confirmation.
     function updApplyRelease(idx) {
       var rels = (_updOpts && _updOpts.Releases) || [];
       var r = rels[idx];
       if (!r) return;
+      var prefix = 'rel' + idx;
+      if (_updCfg[prefix] === undefined) {
+        var box = document.getElementById('upd-cfg-rel-' + idx);
+        var btn = document.querySelector('[data-upd-apply="' + idx + '"]');
+        if (box) box.innerHTML = '<div class="fld-def" style="display:block">Checking configuration changes...</div>';
+        if (btn) btn.disabled = true;
+        updJson('/api/app-update/config-changes', { target: r.Version, tempIds: _updUploads.map(function(u) { return u.tempId; }) })
+          .then(function(j) {
+            if (btn) btn.disabled = false;
+            var items = (j && j.ok) ? updAsList(j.items) : [];
+            if (box) box.innerHTML = updCfgHtml(items, prefix) + ((j && !j.ok) ? '<div class="fld-def" style="display:block">Configuration changes could not be read: ' + esc(j.error || '') + '</div>' : '');
+            _updCfg[prefix] = items;
+            if (items.length) { if (btn) btn.innerHTML = '<div>Confirm and update to ' + esc(r.Version) + '</div>'; }
+            else updApplyRelease(idx);
+          })
+          .catch(function() { if (btn) btn.disabled = false; if (box) box.textContent = 'Server unreachable'; });
+        return;
+      }
       var hops = updAsList(r.Hops);
       var major = updHopsHaveMajor(r);
       var items = [];
@@ -1829,8 +1933,9 @@
         if (b.length) txt += '\nBreaking changes in ' + v + ':\n - ' + b.map(function(x) { return typeof x === 'string' ? x : JSON.stringify(x); }).join('\n - ') + '\n';
       });
       if (major) txt += '\nA MAJOR release installs in a NEW folder and imports the ticked data (' + (items.join(', ') || 'nothing') + '). The current folder is left untouched.\n';
+      txt += updCfgConfirmText(prefix);
       txt += '\nThe application will restart and this page will go offline for a moment.';
-      updApply(r.Version, _updUploads.map(function(u) { return u.tempId; }), items, txt);
+      updApply(r.Version, _updUploads.map(function(u) { return u.tempId; }), items, txt, updCfgCollect(prefix));
     }
 
     function renderUpdateDev() {
@@ -1875,6 +1980,7 @@
           w.forEach(function(x) { h += '<li>' + esc(x) + '</li>'; });
           h += '</ul></div>';
         }
+        h += updCfgHtml(d.ConfigChanges, 'dev');
         var ordered = local.concat(files.filter(function(f) { return !(f.Included && f.LocalModified); }));
         h += '<div style="max-height:240px;overflow:auto;font-size:11px;margin-top:6px;font-family:monospace">';
         ordered.forEach(function(f) {
@@ -1890,7 +1996,8 @@
     function updApplyDev() {
       updApply('dev', [], [],
         'Apply the dev update?\n\nFiles changed on the development branch are downloaded and applied. ' +
-        'Local edits to those files are overwritten (a backup is kept).\n\nThe application will restart and this page will go offline for a moment.');
+        'Local edits to those files are overwritten (a backup is kept).' + updCfgConfirmText('dev') + '\n\nThe application will restart and this page will go offline for a moment.',
+        updCfgCollect('dev'));
     }
 
     function renderUpdateUploads() {
@@ -2047,12 +2154,14 @@
         if (t.closest('#btn-upd-zip')) { document.getElementById('upd-zip-input').click(); return; }
         if (t.closest('#btn-upd-imp-browse')) { updImpBrowse(); return; }
         if (t.closest('#btn-upd-imp-run')) { updImpRun(); return; }
+        if (t.closest('#btn-upd-cfg-apply')) { updDecidePending(); return; }
       });
       document.getElementById('upd-zip-input').addEventListener('change', function() {
         updUploadFiles(this.files);
         this.value = '';
       });
       updLoadStatus();
+      updLoadPending();
       renderUpdateDev();
       updPollStart();
     }

@@ -278,8 +278,8 @@ function Get-Config {
     $global:CompanionPackageName = if ($configContent.apk.companionPackageName) { [string]$configContent.apk.companionPackageName } else { "com.vrheadsetmanager.companion" }
     $global:CompanionApproveService = "$($global:CompanionPackageName)/$($global:CompanionPackageName).ApproveService"
     # Legacy fallback only: the bundled companion version is read from the APK itself
-    # (Get-CompanionBundledVersion). apk.companionVersion is no longer shipped in the template;
-    # an older config.json may still carry it, used only when the APK cannot be read.
+    # (Get-CompanionBundledVersion). apk.companionVersion is retired (templates\config\config_changes.json,
+    # ADR-0047) and removed from config.json at the next start; read here only while it is still there.
     $global:CompanionVersion = if ($configContent.apk.companionVersion) { [string]$configContent.apk.companionVersion } else { '' }
 
     # Companion telemetry push (ADR-0043). telemetry_stale_sec: how long a pushed snapshot stays

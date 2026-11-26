@@ -1,0 +1,13 @@
+{
+    "schema": 1,
+    "about": "Config changes made on purpose by a version (ADR-0047). CUMULATIVE: never remove an entry. kind: retire (key removed from config.json), rename (value moved to 'to'), set (new recommended 'value', operator accepts or keeps; 'default': accept|keep), choose ('options': [{value,label}], 'default': one option value). Applied once per install at start; set/choose wait for an operator decision (Updates panel / console Config > Update > C).",
+    "changes": [
+        {
+            "id": "2026-11.RC2-companion-version",
+            "since": "2026-11.RC2",
+            "kind": "retire",
+            "key": "apk.companionVersion",
+            "reason": "The bundled companion version is now read from the APK file itself"
+        }
+    ]
+}

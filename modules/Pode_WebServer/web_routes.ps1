@@ -261,6 +261,7 @@ $script:SlowRoutes = @{
     '/api/app-update/check'              = $true   # GitHub API
     '/api/app-update/dev-diff'           = $true   # GitHub compare + raw
     '/api/app-update/import'             = $true   # reads another install's database, copies icons
+    '/api/app-update/config-changes'     = $true   # target config_changes.json from GitHub raw
 }
 
 $script:PriorityRoutes = @{
@@ -277,7 +278,7 @@ $script:PriorityRoutes = @{
 # Paths after which config\config.json may have changed and Get-Config re-ran in the runspace
 # that served them. The OTHER runspace's $global: values are then stale (adb path after a
 # scrcpy update, streaming settings after a save): see Set-WebRouteConfigWritten.
-$script:ConfigWriterPattern = '^/api/(config/|[a-z]+-update$|[a-z]+-switch-version$|vqa/|eye-merge/|capture-mode$|benchmark/apply$|appnames/clear$|app-update/import$)'
+$script:ConfigWriterPattern = '^/api/(config/|[a-z]+-update$|[a-z]+-switch-version$|vqa/|eye-merge/|capture-mode$|benchmark/apply$|appnames/clear$|app-update/import$|app-update/config-decide$)'
 
 function Get-MainProcessList {
     # The main.ps1 console process(es): the one whose menu loop owns Invoke-AppShutdown, and
@@ -467,6 +468,9 @@ foreach ($routeRow in @(
     ,@('POST',  '/api/app-update/apply',                  'Invoke-RouteAppUpdateApply')
     ,@('GET',   '/api/app-update/progress',               'Invoke-RouteAppUpdateProgress')
     ,@('POST',  '/api/app-update/cancel',                 'Invoke-RouteAppUpdateCancel')
+    ,@('POST',  '/api/app-update/config-changes',         'Invoke-RouteAppUpdateConfigChanges')
+    ,@('GET',   '/api/app-update/config-pending',         'Invoke-RouteAppUpdateConfigPending')
+    ,@('POST',  '/api/app-update/config-decide',          'Invoke-RouteAppUpdateConfigDecide')
     ,@('GET',   '/api/benchmark/options',                 'Invoke-RouteBenchmarkOptions')
     ,@('POST',  '/api/benchmark/plan',                    'Invoke-RouteBenchmarkPlan')
     ,@('POST',  '/api/benchmark/start',                   'Invoke-RouteBenchmarkStart')

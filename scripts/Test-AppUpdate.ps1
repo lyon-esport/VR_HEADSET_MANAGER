@@ -454,6 +454,97 @@ try {
     if (Test-Path -LiteralPath $t10) { Remove-Item -LiteralPath $t10 -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
+# ------------------------------------------------------------------ ADR-0047 config changes
+$ccJson = @'
+{ "schema": 1, "changes": [
+  { "id": "c-retire", "since": "2026-11.RC1.4", "kind": "retire", "key": "apk.old", "reason": "gone" },
+  { "id": "c-rename", "since": "2026-11.RC1.4", "kind": "rename", "key": "x.oldName", "to": "x.newName" },
+  { "id": "c-set", "since": "2026-11.RC1.4", "kind": "set", "key": "s.fps", "value": 30 },
+  { "id": "c-set-same", "since": "2026-11.RC1.4", "kind": "set", "key": "s.same", "value": "a" },
+  { "id": "c-choose", "since": "2026-11.RC1.4", "kind": "choose", "key": "s.mode", "default": "tls",
+    "options": [ { "value": "tls", "label": "TLS" }, { "value": "classic", "label": "Classic" } ] },
+  { "id": "bad id!", "kind": "retire", "key": "a" },
+  { "id": "c-unknown", "kind": "explode", "key": "a" },
+  { "id": "c-choose-one", "kind": "choose", "key": "a", "options": [ { "value": 1 } ] }
+] }
+'@
+$cat = @(Get-ConfigChangesCatalog -Json $ccJson)
+Assert-Case 'cfgchg: catalogue keeps valid entries only' ($cat.Count -eq 5) ("got $($cat.Count)")
+Assert-Case 'cfgchg: choose default resolved to option index' (($cat | Where-Object { $_.Id -eq 'c-choose' }).Default -eq 'opt:0')
+Assert-Case 'cfgchg: missing / empty catalogue = none' (@(Get-ConfigChangesCatalog -Json '').Count -eq 0 -and @(Get-ConfigChangesCatalog -Path 'C:\nope\x.json').Count -eq 0)
+Assert-Case 'cfgchg: retired keys = retire + rename keys' ((@(Get-ConfigChangesRetiredKeys -Changes $cat) -join ',') -eq 'apk.old,x.oldName')
+
+$ccCfgJson = '{"apk":{"old":"1.4.3","keep":1},"x":{"oldName":7},"s":{"fps":45,"same":"a","mode":"classic"}}'
+$pv = @(Get-ConfigChangesPreview -Config ($ccCfgJson | ConvertFrom-Json) -Changes $cat)
+$pvIds = ($pv | ForEach-Object { $_.Id }) -join ','
+Assert-Case 'cfgchg: preview lists effective changes only' ($pvIds -eq 'c-retire,c-rename,c-set,c-choose') $pvIds
+$pvSet = $pv | Where-Object { $_.Id -eq 'c-set' }
+Assert-Case 'cfgchg: set item current/proposed/default' ($pvSet.Current -eq '45' -and $pvSet.Proposed -eq '30' -and $pvSet.Default -eq 'accept' -and $pvSet.NeedsDecision)
+Assert-Case 'cfgchg: choose default follows the current option' (($pv | Where-Object { $_.Id -eq 'c-choose' }).Default -eq 'opt:1')
+Assert-Case 'cfgchg: retire needs no decision' (-not ($pv | Where-Object { $_.Id -eq 'c-retire' }).NeedsDecision)
+$pv2 = @(Get-ConfigChangesPreview -Config ('{"s":{"fps":30,"mode":"tls"}}' | ConvertFrom-Json) -Changes $cat)
+Assert-Case 'cfgchg: absent keys / already at value / default option = nothing' ($pv2.Count -eq 0) ((($pv2 | ForEach-Object { $_.Id }) -join ','))
+Assert-Case 'cfgchg: applied ids skipped' (@(Get-ConfigChangesPreview -Config ($ccCfgJson | ConvertFrom-Json) -Changes $cat -Applied @('c-retire', 'c-rename', 'c-set', 'c-choose')).Count -eq 0)
+
+$tplOldCc = '{"apk":{"old":"1","keep":1},"b":2}'
+$gr1 = Test-AppDevDiffGuard -Files @() -OldTemplateJson $tplOldCc -NewTemplateJson '{"apk":{"keep":1},"b":2}' -RetiredKeys @('apk.old')
+Assert-Case 'cfgchg guard: retired key removal is a warning' (-not $gr1.Blocked -and (@($gr1.Warnings) -join ' ') -like '*retired*apk.old*')
+$gr2 = Test-AppDevDiffGuard -Files @() -OldTemplateJson $tplOldCc -NewTemplateJson '{"apk":{"keep":1}}' -RetiredKeys @('apk.old')
+Assert-Case 'cfgchg guard: undeclared removal still blocks' ($gr2.Blocked -and (@($gr2.BlockReasons) -join ' ') -like '*b*')
+$gr3 = Test-AppDevDiffGuard -Files @() -OldTemplateJson '{"apk":{"sub":{"x":1}},"b":2}' -NewTemplateJson '{"b":2}' -RetiredKeys @('apk')
+Assert-Case 'cfgchg guard: keys below a retired key are covered' (-not $gr3.Blocked)
+
+$tmp4 = Join-Path ([System.IO.Path]::GetTempPath()) ('vrhm_cfgchg_' + [guid]::NewGuid().ToString('N'))
+try {
+    $enc4 = New-Object System.Text.UTF8Encoding($false)
+    foreach ($d in 'config', 'templates\config', 'data') { New-Item -ItemType Directory -Path (Join-Path $tmp4 $d) -Force | Out-Null }
+    [System.IO.File]::WriteAllText((Join-Path $tmp4 'version.txt'), '2026-11.RC1.4', $enc4)
+    $cp4 = Join-Path $tmp4 'config\config.json'
+    [System.IO.File]::WriteAllText($cp4, $ccCfgJson, $enc4)
+    [System.IO.File]::WriteAllText((Join-Path $tmp4 'templates\config\config.json'), '{"apk":{"keep":1},"x":{"newName":0},"s":{"fps":30,"same":"a","mode":"tls","added":5}}', $enc4)
+    [System.IO.File]::WriteAllText((Join-Path $tmp4 'templates\config\config_changes.json'), $ccJson, $enc4)
+
+    $i1 = Invoke-AppConfigChanges -Root $tmp4 -ConfigPath $cp4 -NoReload
+    $c1 = Get-Content -LiteralPath $cp4 -Raw -Encoding UTF8 | ConvertFrom-Json
+    Assert-Case 'cfgchg apply: retire removes the key' ($i1.Ran -and $null -eq $c1.apk.PSObject.Properties['old'] -and $c1.apk.keep -eq 1) ("$($i1.Error)")
+    Assert-Case 'cfgchg apply: rename moves the value' ($c1.x.newName -eq 7 -and $null -eq $c1.x.PSObject.Properties['oldName'])
+    Assert-Case 'cfgchg apply: undecided set/choose kept, pending' ($c1.s.fps -eq 45 -and $c1.s.mode -eq 'classic' -and (($i1.Pending | ForEach-Object { $_.Id }) -join ',') -eq 'c-set,c-choose')
+    Assert-Case 'cfgchg apply: missing template key added' ($c1.s.added -eq 5 -and $i1.Added -contains 's.added')
+    $pend = @(Get-AppConfigChangesPending -Root $tmp4 -ConfigPath $cp4)
+    Assert-Case 'cfgchg pending: lists set + choose' ($pend.Count -eq 2)
+
+    $n = Save-AppConfigDecisions -Root $tmp4 -Decisions @{ 'c-set' = 'accept'; 'c-choose' = 'opt:0'; 'bad id!' = 'accept'; 'c-x' = 'maybe' }
+    Assert-Case 'cfgchg decisions: invalid ones ignored' ($n -eq 2)
+    $i2 = Invoke-AppConfigChanges -Root $tmp4 -ConfigPath $cp4 -NoReload
+    $c2 = Get-Content -LiteralPath $cp4 -Raw -Encoding UTF8 | ConvertFrom-Json
+    Assert-Case 'cfgchg apply: accepted set and chosen option written' ($c2.s.fps -eq 30 -and $c2.s.mode -eq 'tls' -and @($i2.Pending).Count -eq 0)
+    $st = Get-AppConfigChangesState -Root $tmp4
+    Assert-Case 'cfgchg state: all applied, decisions consumed' ($st.Applied.Count -eq 5 -and $st.Decisions.Count -eq 0) ("applied $($st.Applied -join ',')")
+    $i3 = Invoke-AppConfigChanges -Root $tmp4 -ConfigPath $cp4 -NoReload
+    Assert-Case 'cfgchg apply: second run changes nothing' (@($i3.Changed).Count -eq 0 -and @($i3.Applied).Count -eq 0 -and @($i3.Added).Count -eq 0)
+
+    # keep decision: nothing written, entry closed
+    Remove-Item -LiteralPath (Join-Path $tmp4 'data\update\config_changes.json') -Force
+    [System.IO.File]::WriteAllText($cp4, '{"s":{"fps":45,"same":"a","mode":"tls","added":5},"apk":{"keep":1},"x":{"newName":7}}', $enc4)
+    [void](Save-AppConfigDecisions -Root $tmp4 -Decisions @{ 'c-set' = 'keep' })
+    $i4 = Invoke-AppConfigChanges -Root $tmp4 -ConfigPath $cp4 -NoReload
+    $c4 = Get-Content -LiteralPath $cp4 -Raw -Encoding UTF8 | ConvertFrom-Json
+    Assert-Case 'cfgchg apply: keep leaves the value, closes the entry' ($c4.s.fps -eq 45 -and (Get-AppConfigChangesState -Root $tmp4).Applied -contains 'c-set' -and @($i4.Pending).Count -eq 0)
+
+    # preview of an update target from catalogue text
+    $global:ConfigFilePath = $cp4
+    $u = Get-AppUpdateConfigChanges -Target '2026-12.RC1' -Root $tmp4 -CatalogJson '{"changes":[{"id":"n-retire","kind":"retire","key":"apk.keep"}]}'
+    Assert-Case 'cfgchg target preview: from catalogue text' ($u.Ok -and @($u.Items).Count -eq 1 -and $u.Items[0].Key -eq 'apk.keep')
+    Remove-Variable -Name ConfigFilePath -Scope Global -ErrorAction SilentlyContinue
+
+    [System.IO.File]::WriteAllText((Join-Path $tmp4 'version.txt'), 'DEVELOPPMENT-VERSION', $enc4)
+    $i5 = Invoke-AppConfigChanges -Root $tmp4 -ConfigPath $cp4 -NoReload
+    Assert-Case 'cfgchg apply: dev tree does nothing' (-not $i5.Ran)
+}
+finally {
+    if (Test-Path -LiteralPath $tmp4) { Remove-Item -LiteralPath $tmp4 -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 # ------------------------------------------------------------------ (later tasks append sections here)
 
 Write-Host ("{0} case(s), {1} failure(s)" -f $script:count, $script:fails)
