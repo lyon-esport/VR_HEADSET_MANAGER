@@ -349,6 +349,13 @@ function Invoke-RouteAppUpdateProgress {
             $parsed = try { $raw | ConvertFrom-Json } catch { $null }
             if (-not $parsed) { $raw = '{"status":"idle"}' }
             elseif ($parsed.status -eq 'running' -and -not $jobAlive) { $raw = '{"status":"idle"}' }
+            # 'restarting' is written just before the restart stops this web server. Read by a process that
+            # did not start that restart, it is a leftover of the previous run: report idle and reset the
+            # file, otherwise the page stays busy and every Update button is disabled.
+            elseif ($parsed.status -eq 'restarting' -and -not $script:appUpdateRestarting) {
+                $raw = '{"status":"idle"}'
+                try { [System.IO.File]::WriteAllText($script:appUpdateProgFile, $raw) } catch { }
+            }
             elseif ($parsed.status -eq 'staged' -and -not $jobAlive -and -not $script:appUpdateRestarting) {
                 # Staging finished: restart through the updater when the backend has it, else stay 'staged'.
                 if (Get-Command -Name Invoke-AppUpdateRestart -ErrorAction SilentlyContinue) {
