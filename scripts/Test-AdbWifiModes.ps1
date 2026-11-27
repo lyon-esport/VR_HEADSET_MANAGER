@@ -622,6 +622,70 @@ Assert-Case 'mdns repair: unknown serial passes unchanged' ((@(Repair-AdbTlsEndp
 Remove-Item Function:\Get-KnownHeadsets
 $script:AdbTlsRegistryMap = $null; $script:AdbTlsAddressMemo = $null
 
+# ------------------------------------------------------------------ companion boot mode: pushed once per GLOBAL change
+. (Join-Path $root 'modules\companion_api.ps1')
+$script:bkv = @{}
+function Set-DbKeyValue { param([string]$Key, $Value) $script:bkv[$Key] = ($Value | ConvertTo-Json -Compress) }
+function Get-DbKeyValue { param([string]$Key, $Default = $null) if ($script:bkv.ContainsKey($Key)) { return ($script:bkv[$Key] | ConvertFrom-Json) } else { return $Default } }
+function Remove-DbKeyValue { param([string]$Key) [void]$script:bkv.Remove($Key) }
+function Get-CompanionToken { 'tok' }
+$script:compStatus = $null; $script:pushes = @()
+function Get-CompanionStatus { param([string]$IP) $script:compStatus }
+function Set-CompanionBootMode { param([string]$IP, [string]$Mode, [int]$Port, [string]$Token) $script:pushes += ('{0}|{1}' -f $Mode, $Port); $true }
+function Reset-BootModeMemo { $script:CompanionBootModeGlobalMemo = $null }
+$q3Row = [PSCustomObject]@{ ID = 2; Name = 'RED DEVIL'; Brand = 'Oculus'; IPAddress = '192.168.1.244' }
+$picoRow = [PSCustomObject]@{ ID = 9; Name = 'PICO'; Brand = 'Pico'; IPAddress = '192.168.1.250' }
+
+Set-Modes $true $true 'classic'
+$g1 = Update-CompanionBootModeGeneration
+Assert-Case 'bootmode: first run creates generation 1 (CLASSIC|5555)' ($g1.Changed -and $g1.Gen -eq 1 -and $g1.Mode -eq 'CLASSIC' -and $g1.Port -eq 5555) ("got {0} {1} {2}" -f $g1.Gen, $g1.Mode, $g1.Port)
+$g1b = Update-CompanionBootModeGeneration
+Assert-Case 'bootmode: same choice again (restart) -> no bump' (-not $g1b.Changed -and $g1b.Gen -eq 1)
+
+$st = @{}
+$script:compStatus = [PSCustomObject]@{ bootMode = 'TLS'; classicPort = 5555 }
+Reset-BootModeMemo
+Assert-Case 'bootmode: capturing -> pending, no push' (-not (Sync-CompanionBootMode -Headset $q3Row -IP '192.168.1.244' -Capturing $true -State $st) -and $script:pushes.Count -eq 0)
+Assert-Case 'bootmode: benchmark/USB busy -> pending, no push' (-not (Sync-CompanionBootMode -Headset $q3Row -IP '192.168.1.244' -Blocked $true -State $st) -and $script:pushes.Count -eq 0)
+$r = Sync-CompanionBootMode -Headset $q3Row -IP '192.168.1.244' -State $st
+Assert-Case 'bootmode: new headset on TLS -> ONE push CLASSIC|5555' ($r -and $script:pushes.Count -eq 1 -and $script:pushes[0] -eq 'CLASSIC|5555') ("pushes {0}" -f ($script:pushes -join ','))
+Assert-Case 'bootmode: stamp written at gen 1' ((Get-DbKeyValue -Key 'companion_bootmode_2').gen -eq 1)
+
+# Operator sets TLS ON the headset afterwards: no global change -> left alone.
+$script:compStatus = [PSCustomObject]@{ bootMode = 'TLS'; classicPort = 5555 }
+Assert-Case 'bootmode: local change on headset kept (no push)' (-not (Sync-CompanionBootMode -Headset $q3Row -IP '192.168.1.244' -State $st) -and $script:pushes.Count -eq 1)
+Assert-Case 'bootmode: fresh runspace state, stamp up to date -> no push' (-not (Sync-CompanionBootMode -Headset $q3Row -IP '192.168.1.244' -State @{}) -and $script:pushes.Count -eq 1)
+
+# Global change -> one push per headset.
+Set-Modes $true $true 'tls'
+$g2 = Update-CompanionBootModeGeneration
+Assert-Case 'bootmode: global change -> generation 2' ($g2.Changed -and $g2.Gen -eq 2 -and $g2.Mode -eq 'TLS')
+Reset-BootModeMemo
+$script:compStatus = [PSCustomObject]@{ bootMode = 'CLASSIC'; classicPort = 5555 }
+$r2 = Sync-CompanionBootMode -Headset $q3Row -IP '192.168.1.244' -State $st
+Assert-Case 'bootmode: after global change -> ONE push TLS' ($r2 -and $script:pushes.Count -eq 2 -and $script:pushes[1] -eq 'TLS|5555') ("pushes {0}" -f ($script:pushes -join ','))
+Assert-Case 'bootmode: delivered once (second cycle no push)' (-not (Sync-CompanionBootMode -Headset $q3Row -IP '192.168.1.244' -State $st) -and $script:pushes.Count -eq 2)
+
+# Already on target -> stamped without push.
+$script:bkv.Remove('companion_bootmode_2')
+$script:compStatus = [PSCustomObject]@{ bootMode = 'TLS'; classicPort = 5555 }
+Assert-Case 'bootmode: companion already on target -> stamp, no push' (-not (Sync-CompanionBootMode -Headset $q3Row -IP '192.168.1.244' -State @{}) -and $script:pushes.Count -eq 2 -and (Get-DbKeyValue -Key 'companion_bootmode_2').gen -eq 2)
+
+# Pico -> stamped, never pushed.
+Assert-Case 'bootmode: Pico stamped without push' (-not (Sync-CompanionBootMode -Headset $picoRow -IP '192.168.1.250' -State @{}) -and $script:pushes.Count -eq 2 -and (Get-DbKeyValue -Key 'companion_bootmode_9').mode -eq 'skipped-pico')
+
+# Unreachable companion -> no stamp, backoff.
+$script:bkv.Remove('companion_bootmode_2'); $script:compStatus = $null; $bst = @{}
+[void](Sync-CompanionBootMode -Headset $q3Row -IP '192.168.1.244' -State $bst)
+Assert-Case 'bootmode: unreachable -> no stamp, backoff set' (-not $script:bkv.ContainsKey('companion_bootmode_2') -and $bst.Failures -eq 1 -and $bst.NextAt -gt [datetime]::UtcNow)
+$script:compStatus = [PSCustomObject]@{ bootMode = 'CLASSIC'; classicPort = 5555 }
+Assert-Case 'bootmode: inside backoff -> no push' (-not (Sync-CompanionBootMode -Headset $q3Row -IP '192.168.1.244' -State $bst) -and $script:pushes.Count -eq 2)
+
+$script:bkv['companion_bootmode_2'] = '{"gen":2,"mode":"TLS"}'
+Remove-CompanionBootModeStamp -HeadsetId 2
+Assert-Case 'bootmode: Remove-CompanionBootModeStamp clears the stamp' (-not $script:bkv.ContainsKey('companion_bootmode_2'))
+Remove-Variable -Name ADB_wifi_classic_enabled, ADB_wifi_tls_enabled, ADB_wifi_preferred_mode, ADB_wifi_effective_preferred -Scope Global -ErrorAction SilentlyContinue
+
 Write-Host ''
 Write-Host ("{0} case(s), {1} failed" -f $script:count, $script:fails)
 if ($script:fails -gt 0) { exit 1 } else { exit 0 }

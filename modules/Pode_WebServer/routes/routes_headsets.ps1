@@ -283,29 +283,82 @@ function Invoke-RouteShutdownAll {
     try {
         $filter          = $null
         $alsoShutdownApp = $false
+        $kioskIds        = @()
+        $waitKiosks      = $false
+        $headsetsGiven   = $false
         if ($request.HasEntityBody) {
             $bodyStr = Read-RequestBody -Request $request -Response $response -MaxBytes 65536
             if ($bodyStr -and $bodyStr.Trim() -ne '') {
                 try {
                     $parsed = $bodyStr | ConvertFrom-Json
+                    $names  = @($parsed.PSObject.Properties.Name)
+                    if ($names -contains 'headsets') { $headsetsGiven = $true }
                     if ($parsed.headsets) { $filter = @($parsed.headsets) }
-                    if ($parsed.PSObject.Properties.Name -contains 'alsoShutdownApp') {
+                    if ($names -contains 'alsoShutdownApp') {
                         $alsoShutdownApp = [bool]$parsed.alsoShutdownApp
                     }
+                    if ($parsed.kiosks) {
+                        $kioskIds = @(@($parsed.kiosks) | ForEach-Object { $v = 0; if ([int]::TryParse([string]$_, [ref]$v) -and $v -gt 0) { $v } } | Select-Object -Unique -First 64)
+                    }
+                    if ($names -contains 'waitKiosks') { $waitKiosks = [bool]$parsed.waitKiosks }
                 } catch {}
             }
         }
-        $rows = Get-KnownHeadsets
-        if ($filter) { $rows = $rows | Where-Object { $filter -contains ($_.Name -replace ' ', '_') } }
+        # An explicit empty headset list with kiosks selected means "kiosks only".
+        $rows = @()
+        if (-not ($headsetsGiven -and -not $filter -and $kioskIds.Count -gt 0)) {
+            $rows = Get-KnownHeadsets
+            if ($filter) { $rows = $rows | Where-Object { $filter -contains ($_.Name -replace ' ', '_') } }
+        }
         # Priority route (S6-1): every headset is powered off AT THE SAME TIME (one adb
         # process each, no connect / ping first) and the whole batch is bounded, so an
         # offline fleet no longer costs ~1 minute and nothing here waits for slow work.
         $results = @()
-        foreach ($r in @(Invoke-HeadsetShutdownBatch -Headsets @($rows) -adb $adbPath -AdbPort $adbPort -TimeoutSec 8)) {
-            $results += @{ name = ($r.Name -replace ' ', '_'); ok = [bool]$r.Ok }
+        if (@($rows).Count -gt 0) {
+            foreach ($r in @(Invoke-HeadsetShutdownBatch -Headsets @($rows) -adb $adbPath -AdbPort $adbPort -TimeoutSec 8)) {
+                $results += @{ name = ($r.Name -replace ' ', '_'); ok = [bool]$r.Ok }
+            }
         }
-        $respJson  = if ($results.Count -gt 0) { ConvertTo-Json -InputObject @($results) -Compress } else { '[]' }
-        $respBytes = [System.Text.Encoding]::UTF8.GetBytes("{`"ok`":true,`"results`":$respJson}")
+
+        # Kiosk computers (advanced agent: queued command, else CDP sentinel).
+        $kioskResults = @()
+        if ($kioskIds.Count -gt 0) {
+            $knownKiosks = @(Get-KnownKiosks)
+            $agentNonces = @()
+            foreach ($kid in $kioskIds) {
+                $k = $knownKiosks | Where-Object { [int]$_.ID -eq $kid } | Select-Object -First 1
+                if (-not $k) {
+                    $kioskResults += [ordered]@{ id = $kid; name = ''; ok = $false; method = ''; delivered = $false; error = 'Kiosk not found' }
+                    continue
+                }
+                $pr = Invoke-KioskPowerAction -IPAddress $k.IPAddress -Port ([int]$k.Port) -Action 'shutdown'
+                $lvl = if ($pr.Success) { 'SUCCESS' } else { 'ERROR' }
+                Write-KioskLog "shutdown-all id=$($k.ID) name=$($k.Name) ip=$($k.IPAddress) action=shutdown result=$(if ($pr.Success) { 'success' } else { 'failed' }) method=$($pr.Method) nonce=$($pr.Nonce) error=$($pr.Error)" -Level $lvl
+                if ($pr.Success -and $pr.Method -eq 'agent' -and $pr.Nonce) { $agentNonces += [int64]$pr.Nonce }
+                $kioskResults += [ordered]@{
+                    id = [int]$k.ID; name = [string]$k.Name; ok = [bool]$pr.Success; method = [string]$pr.Method
+                    delivered = ($pr.Success -and $pr.Method -ne 'agent'); error = $pr.Error; nonce = $pr.Nonce
+                }
+            }
+            # The app or host goes down right after this answer: give each agent the
+            # time to collect its command first (it reports every few seconds).
+            if (($alsoShutdownApp -or $waitKiosks) -and $agentNonces.Count -gt 0) {
+                [void](Wait-KioskCommandsDelivered -Nonces $agentNonces -TimeoutSec 15)
+                foreach ($kr in $kioskResults) {
+                    if ($kr.ok -and $kr.method -eq 'agent' -and $kr.nonce) {
+                        $left = 1
+                        try { $left = [int](Invoke-DbScalar -Name 'kiosk_commands.pending_count' -Parameters @{ nonce = [int64]$kr.nonce }) } catch {}
+                        $kr.delivered = ($left -eq 0)
+                    }
+                }
+            }
+            foreach ($kr in $kioskResults) { $kr.Remove('nonce') }
+            Write-Log ("Shutdown all: {0}/{1} kiosk computer(s) ordered to shut down." -f @($kioskResults | Where-Object { $_.ok }).Count, $kioskResults.Count) -Level INFO
+        }
+
+        $respJson   = if ($results.Count -gt 0) { ConvertTo-Json -InputObject @($results) -Compress } else { '[]' }
+        $kioskJson  = if ($kioskResults.Count -gt 0) { ConvertTo-Json -InputObject @($kioskResults) -Compress -Depth 3 } else { '[]' }
+        $respBytes = [System.Text.Encoding]::UTF8.GetBytes("{`"ok`":true,`"results`":$respJson,`"kiosks`":$kioskJson}")
         $response.StatusCode      = 200
         $response.ContentType     = 'application/json; charset=utf-8'
         $response.Headers.Add('Access-Control-Allow-Origin', '*')

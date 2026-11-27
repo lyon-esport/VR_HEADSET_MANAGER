@@ -959,6 +959,10 @@
         This will power off every ADB-connected headset.
       </div>
       <div id="shutdownAllList"></div>
+      <label class="shutdown-all-modal__app-row shutdown-all-modal__kiosk-row is-disabled" id="shutdownAllKioskRow">
+        <input type="checkbox" id="shutdownAllKioskChk" disabled>
+        <span id="shutdownAllKioskLabel">Also shutdown kiosk computers (checking...)</span>
+      </label>
       <label class="shutdown-all-modal__app-row" id="shutdownAllAppRow" style="display:none">
         <input type="checkbox" id="shutdownAllAppChk">
         <span id="shutdownAllAppChkLabel">Also shutdown VRHM application</span>
@@ -2603,14 +2607,17 @@
     })();
 
     // -- Shutdown-all modal -------------------------------------------------
+    var _shutdownKioskIds = [];
     function updateShutdownConfirmBtn() {
       var anyHeadset = !!document.querySelector('.shutdown-headset-chk:checked');
+      var kioskChk   = document.getElementById('shutdownAllKioskChk').checked;
       var appChk     = document.getElementById('shutdownAllAppChk').checked;
       var hostChk    = document.getElementById('shutdownAllHostChk').checked;
       var inputOk    = document.getElementById('shutdownAllInput').value === 'YES';
       document.getElementById('shutdownAllConfirmBtn').disabled =
-        (!anyHeadset && !appChk && !hostChk) || !inputOk;
+        (!anyHeadset && !kioskChk && !appChk && !hostChk) || !inputOk;
     }
+    document.getElementById('shutdownAllKioskChk').addEventListener('change', updateShutdownConfirmBtn);
 
     // Shutting down the host powers off the app too - auto-check and lock that row.
     function setHostShutdownChecked(val) {
@@ -2676,6 +2683,18 @@
 
       document.getElementById('shutdownAllInput').value = '';
       document.getElementById('shutdownAllAppChk').checked = false;
+      _shutdownKioskIds = [];
+      var kioskRow = document.getElementById('shutdownAllKioskRow');
+      var kioskChk = document.getElementById('shutdownAllKioskChk');
+      var kioskLbl = document.getElementById('shutdownAllKioskLabel');
+      kioskChk.checked = false;
+      kioskChk.disabled = true;
+      kioskRow.classList.add('is-disabled');
+      kioskLbl.textContent = 'Also shutdown kiosk computers (checking...)';
+      TopBar._loadShutdownKiosks(kioskRow, kioskChk, kioskLbl, function(ids) {
+        _shutdownKioskIds = ids;
+        updateShutdownConfirmBtn();
+      });
       document.getElementById('shutdownAllStatus').style.display = 'none';
       document.getElementById('shutdownAllModal').style.display = 'flex';
       updateShutdownConfirmBtn();
@@ -2717,12 +2736,13 @@
       var hostShutdown     = document.getElementById('shutdownAllHostChk').checked;
       var selected = Array.from(document.querySelectorAll('.shutdown-headset-chk:checked'))
                          .map(function(c) { return c.dataset.dn; });
+      var kiosks = document.getElementById('shutdownAllKioskChk').checked ? _shutdownKioskIds.slice() : [];
 
       statusEl.style.display = 'block';
       document.getElementById('shutdownAllConfirmBtn').disabled = true;
       document.getElementById('shutdownAllCancelBtn').disabled  = true;
 
-      if (selected.length === 0) {
+      if (selected.length === 0 && kiosks.length === 0) {
         if (hostShutdown) {
           statusEl.textContent = 'Shutting down host computer...';
           fetch('/api/host-shutdown', { method: 'POST' }).catch(function() {});
@@ -2736,16 +2756,19 @@
         return;
       }
 
-      statusEl.textContent = hostShutdown ? 'Shutting down selected headsets, then the host computer...' : 'Shutting down selected headsets...';
+      var what = selected.length > 0 && kiosks.length > 0 ? 'selected headsets and ' + kiosks.length + ' kiosk computer(s)'
+               : (kiosks.length > 0 ? kiosks.length + ' kiosk computer(s)' : 'selected headsets');
+      statusEl.textContent = 'Shutting down ' + what + (hostShutdown ? ', then the host computer...' : '...') +
+        (kiosks.length > 0 && (hostShutdown || alsoShutdownApp) ? ' (waiting for the kiosks to collect the order)' : '');
       fetch('/api/shutdown-all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ headsets: selected, alsoShutdownApp: hostShutdown ? false : alsoShutdownApp })
+        body: JSON.stringify({ headsets: selected, kiosks: kiosks, waitKiosks: hostShutdown, alsoShutdownApp: hostShutdown ? false : alsoShutdownApp })
       }).then(function(r) { return r.json(); }).then(function(data) {
-        statusEl.textContent = data.ok ? 'Done. Selected headsets shutting down.' : ('Error: ' + (data.error || 'unknown'));
+        statusEl.textContent = data.ok ? ('Done. Shutdown ordered.' + TopBar._kioskShutdownSummary(data, kiosks.length)) : ('Error: ' + (data.error || 'unknown'));
         if (hostShutdown) fetch('/api/host-shutdown', { method: 'POST' }).catch(function() {});
         document.getElementById('shutdownAllCancelBtn').disabled = false;
-        setTimeout(function() { document.getElementById('shutdownAllModal').style.display = 'none'; }, 2000);
+        setTimeout(function() { document.getElementById('shutdownAllModal').style.display = 'none'; }, kiosks.length > 0 ? 4000 : 2000);
       }).catch(function() {
         statusEl.textContent = 'Request failed.';
         document.getElementById('shutdownAllCancelBtn').disabled = false;

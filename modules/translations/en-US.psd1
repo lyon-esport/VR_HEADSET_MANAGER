@@ -963,6 +963,7 @@
 
     # VRHM Companion app install/provision (ADR-0042; console Add-headset C, web add-headset).
     Companion = @{
+        BootModeSynced = "Companion on {0}: boot ADB mode set to {1} (global change)"
         CapLabel       = "Companion"
         CapLine        = "{0} - foreground: {1} - controllers: {2} - thermal: {3}"
         OwnerLabel     = "Companion owner"

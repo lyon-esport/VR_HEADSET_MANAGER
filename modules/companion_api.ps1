@@ -205,6 +205,166 @@ function Set-CompanionBootMode {
 }
 
 
+# ---------------------------------------------------------------------------
+# Companion boot mode follows the GLOBAL WiFi ADB choice, pushed ONCE per change.
+# The global choice (preferred mode + classic port) is turned into a generation number stored in
+# the app_kv row companion_bootmode_global = { sig; gen; at } (single writer: the VRMonitor slow
+# tick). Each headset keeps a stamp companion_bootmode_<id> = { gen; mode; at } of the generation
+# it received. A headset is pushed only when its stamp is missing or older than the global
+# generation, so a boot mode changed on the headset itself is left alone until the next GLOBAL
+# change. POST /adb/mode runs "tcpip" at once in CLASSIC mode on the companion (adbd restarts),
+# hence a pending push waits while the headset captures.
+# ---------------------------------------------------------------------------
+
+# The boot mode the global config asks for: @{ Mode = 'CLASSIC'|'TLS'; Port; Sig }. The first
+# entry of Get-AdbWifiModeOrder is the preferred mode, or the single enabled one. Never throws.
+function Get-CompanionBootModeTarget {
+    $mode = 'TLS'
+    try {
+        $first = @(Get-AdbWifiModeOrder) | Select-Object -First 1
+        if ([string]$first -eq 'Classic') { $mode = 'CLASSIC' }
+    } catch { $mode = 'TLS' }
+    $port = 5555
+    try { $port = [int](Get-ClassicAdbPort) } catch { $port = 5555 }
+    return @{ Mode = $mode; Port = $port; Sig = ('{0}|{1}' -f $mode, $port) }
+}
+
+# VRMonitor slow tick (main thread, the single writer): bumps the global boot mode generation when
+# the global WiFi ADB choice changed since the stored one. Persisted, so an app restart is not a
+# change. Returns @{Mode;Port;Gen;Changed}. Never throws.
+# Example: $g = Update-CompanionBootModeGeneration; if ($g.Changed) { 'pushing ' + $g.Mode }
+function Update-CompanionBootModeGeneration {
+    $t = Get-CompanionBootModeTarget
+    $res = @{ Mode = $t.Mode; Port = $t.Port; Gen = 0; Changed = $false }
+    try {
+        $cur = Get-DbKeyValue -Key 'companion_bootmode_global'
+        $gen = 0
+        if ($cur -and $null -ne $cur.gen) { $gen = [int]$cur.gen }
+        if (-not $cur -or [string]$cur.sig -ne $t.Sig) {
+            $gen = $gen + 1
+            Set-DbKeyValue -Key 'companion_bootmode_global' -Value @{ sig = $t.Sig; gen = $gen; at = [datetime]::UtcNow.ToString('o') } | Out-Null
+            $res.Changed = $true
+            Write-Log ("Companion boot mode: global choice is now {0} (generation {1})" -f $t.Sig, $gen) -Level INFO
+        }
+        $res.Gen = $gen
+        $script:CompanionBootModeGlobalMemo = $null
+    } catch {
+        Write-Log "Update-CompanionBootModeGeneration failed: $_" -Level DEBUG
+    }
+    return $res
+}
+
+# The stored global generation @{Sig;Gen} (2 s memo per process/runspace), $null when none yet.
+function Get-CompanionBootModeGlobal {
+    $m = $script:CompanionBootModeGlobalMemo
+    if ($m -and ([datetime]::UtcNow - $m.At).TotalSeconds -lt 2) { return $m.Val }
+    $val = $null
+    try {
+        $raw = Get-DbKeyValue -Key 'companion_bootmode_global'
+        if ($raw -and $null -ne $raw.gen) { $val = @{ Sig = [string]$raw.sig; Gen = [int]$raw.gen } }
+    } catch { $val = $null }
+    $script:CompanionBootModeGlobalMemo = @{ At = [datetime]::UtcNow; Val = $val }
+    return $val
+}
+
+# Forgets the boot mode stamp of a removed headset, so a re-added one counts as new. Called by
+# Remove-Headset. Never throws. Example: Remove-CompanionBootModeStamp -HeadsetId 3
+function Remove-CompanionBootModeStamp {
+    param([Parameter(Mandatory)][int]$HeadsetId)
+    try { Remove-DbKeyValue -Key ("companion_bootmode_{0}" -f $HeadsetId) } catch { }
+}
+
+# Poll runspace step: delivers a pending global boot mode change to ONE headset's companion.
+# Pending = no stamp yet (new headset) or a stamp older than the global generation. Waits while the
+# headset captures, a benchmark runs or USB is busy (-Blocked). A Pico is stamped without a push
+# (the app does not manage ADB there, ADR-0038). When the companion already has the target mode it
+# is stamped without a push (no needless tcpip). $null status or a failed push: no stamp, retry
+# with backoff (60 s x failures, capped 600 s) kept in -State. Returns $true when it pushed.
+# Never throws. Example: Sync-CompanionBootMode -Headset $row -IP $ip -Capturing $false -State $st
+function Sync-CompanionBootMode {
+    param(
+        [Parameter(Mandatory)]$Headset,
+        [Parameter(Mandatory)][string]$IP,
+        [bool]$Capturing = $false,
+        [bool]$Blocked = $false,
+        [hashtable]$State = @{}
+    )
+    try {
+        $id = [int]$Headset.ID
+        if ($id -le 0 -or -not $IP) { return $false }
+        $glob = Get-CompanionBootModeGlobal
+        if (-not $glob -or $glob.Gen -le 0) { return $false }
+        $key = "companion_bootmode_{0}" -f $id
+        $stampGen = -1
+        if ($State.ContainsKey('StampGen')) { $stampGen = [int]$State.StampGen }
+        if ($stampGen -lt $glob.Gen) {
+            # Re-read the stored stamp only when the cached one says pending (another process or an
+            # older runspace may have stamped it).
+            try {
+                $raw = Get-DbKeyValue -Key $key
+                if ($raw -and $null -ne $raw.gen) { $stampGen = [int]$raw.gen } else { $stampGen = -1 }
+            } catch { $stampGen = -1 }
+            $State.StampGen = $stampGen
+        }
+        if ($stampGen -ge $glob.Gen) { return $false }
+
+        $target = Get-CompanionBootModeTarget
+        $name = [string]$Headset.Name
+        $stamp = {
+            param($mode)
+            Set-DbKeyValue -Key $key -Value @{ gen = $glob.Gen; mode = $mode; at = [datetime]::UtcNow.ToString('o') } | Out-Null
+            $State.StampGen = $glob.Gen
+            $State.Failures = 0
+            $State.LastReason = ''
+        }
+
+        if (-not (Test-HeadsetAdbTlsSupported -Brand ([string]$Headset.Brand))) {
+            & $stamp 'skipped-pico'
+            return $false
+        }
+        $reason = ''
+        if ($Capturing) { $reason = 'capture running' }
+        elseif ($Blocked) { $reason = 'benchmark or USB busy' }
+        elseif ($State.NextAt -and [datetime]::UtcNow -lt [datetime]$State.NextAt) { $reason = 'backoff' }
+        if ($reason) {
+            if ([string]$State.LastReason -ne $reason) {
+                $State.LastReason = $reason
+                Write-Log ("Companion boot mode on {0}: {1} pending ({2})" -f $name, $target.Mode, $reason) -Level DEBUG
+            }
+            return $false
+        }
+
+        $fail = {
+            $State.Failures = [int]$State.Failures + 1
+            $State.NextAt = [datetime]::UtcNow.AddSeconds([Math]::Min(600, 60 * [int]$State.Failures))
+        }
+        $st = Get-CompanionStatus -IP $IP
+        if (-not $st) { & $fail; return $false }
+        if (-not $st.PSObject.Properties['bootMode']) {
+            # Companion too old for boot modes: never retried until the next global change.
+            & $stamp 'unsupported'
+            return $false
+        }
+        $curMode = ([string]$st.bootMode).ToUpperInvariant()
+        $curPort = 0
+        if ($st.PSObject.Properties['classicPort']) { try { $curPort = [int]$st.classicPort } catch { $curPort = 0 } }
+        if ($curMode -eq $target.Mode -and ($target.Mode -ne 'CLASSIC' -or $curPort -eq $target.Port)) {
+            & $stamp $target.Mode
+            return $false
+        }
+        $ok = Set-CompanionBootMode -IP $IP -Mode $target.Mode -Port $target.Port -Token (Get-CompanionToken)
+        if (-not $ok) { & $fail; return $false }
+        & $stamp $target.Mode
+        $txt = Get-CompanionText -Key 'BootModeSynced' -Fallback 'Companion on {0}: boot ADB mode set to {1} (global change)'
+        Write-Log ($txt -f $name, $target.Mode) -Level INFO
+        return $true
+    } catch {
+        Write-Log "Sync-CompanionBootMode failed: $_" -Level DEBUG
+        return $false
+    }
+}
+
+
 function Invoke-CompanionForce {
     <#
     .SYNOPSIS

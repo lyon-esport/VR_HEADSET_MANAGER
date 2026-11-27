@@ -284,13 +284,56 @@ Write-Host "Chrome found at: $resolvedChromePath" -ForegroundColor Green
 $userDataDir = Join-Path $env:LOCALAPPDATA "VRHM_KioskChrome"
 $portMarker = "--remote-debugging-port=$Port"
 
-$existingChrome = Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -and $_.CommandLine -like "*$portMarker*" }
+$profileMarker = Split-Path -Leaf $userDataDir
 
-if ($existingChrome) {
+# The browser process carries the port flag; its children (crashpad, GPU,
+# utility) only carry the profile folder. A child left alive after the browser
+# died (window closed with Alt+F4, crash) can keep owning the profile or the
+# port until a reboot, so both are matched.
+$existingChrome = @(Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -and ($_.CommandLine -like "*$portMarker*" -or $_.CommandLine -like "*$profileMarker*") })
+
+if ($existingChrome.Count -gt 0) {
     Write-Host "Closing previous kiosk Chrome instance on port $Port..." -ForegroundColor Yellow
     foreach ($proc in $existingChrome) {
         Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+    $ids = @($existingChrome | ForEach-Object { [int]$_.ProcessId })
+    $deadline = (Get-Date).AddSeconds(5)
+    while ((Get-Date) -lt $deadline) {
+        if (@($ids | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }).Count -eq 0) { break }
+        Start-Sleep -Milliseconds 200
+    }
+}
+
+# A previous run closed with its window (Alt+F4) never reaches its cleanup: the
+# netsh port forward is persistent and the IP Helper service keeps listening
+# on 0.0.0.0:$Port, so the new Chrome could not get its debug port until a
+# reboot. Remove the forward BEFORE launching, and restart the IP Helper
+# service when it still holds the socket afterwards.
+netsh interface portproxy delete v4tov4 listenaddress=0.0.0.0 listenport=$Port 2>&1 | Out-Null
+netsh interface portproxy delete v4tov6 listenaddress=0.0.0.0 listenport=$Port 2>&1 | Out-Null
+for ($attempt = 1; $attempt -le 2; $attempt++) {
+    $held = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+    if ($held.Count -eq 0) { break }
+    foreach ($h in $held) {
+        $ownerPid = [int]$h.OwningProcess
+        $owner = Get-Process -Id $ownerPid -ErrorAction SilentlyContinue
+        if ($owner -and $owner.ProcessName -eq 'chrome') {
+            Write-Host "Port $Port is still held by a leftover Chrome (PID $ownerPid) - closing it." -ForegroundColor Yellow
+            Stop-Process -Id $ownerPid -Force -ErrorAction SilentlyContinue
+        } elseif ($owner -and $owner.ProcessName -eq 'svchost') {
+            $svc = @(Get-CimInstance Win32_Service -Filter "ProcessId = $ownerPid" -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
+            if ($svc -contains 'iphlpsvc') {
+                Write-Host "Port $Port is still held by a stale port forward (IP Helper service) - restarting the service." -ForegroundColor Yellow
+                try { Restart-Service -Name iphlpsvc -Force -ErrorAction Stop } catch {
+                    Write-Host "Could not restart the IP Helper service: $($_.Exception.Message)" -ForegroundColor Red
+                }
+            }
+        } elseif ($attempt -eq 2) {
+            $ownerText = if ($owner) { "$($owner.ProcessName) (PID $ownerPid)" } else { "PID $ownerPid, process already gone" }
+            Write-Host "Port $Port is still in use on $($h.LocalAddress) by $ownerText - Chrome may not get its debug port." -ForegroundColor Red
+        }
     }
     Start-Sleep -Seconds 1
 }

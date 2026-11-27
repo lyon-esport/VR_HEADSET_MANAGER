@@ -947,6 +947,10 @@ function Remove-Headset {
         if (Get-Command Remove-CompanionOwnerState -ErrorAction SilentlyContinue) {
             try { Remove-CompanionOwnerState -HeadsetId ([int]$headsetToRemove.ID) } catch { }
         }
+        # Companion boot ADB mode stamp: a re-added headset must count as new.
+        if (Get-Command Remove-CompanionBootModeStamp -ErrorAction SilentlyContinue) {
+            try { Remove-CompanionBootModeStamp -HeadsetId ([int]$headsetToRemove.ID) } catch { }
+        }
         # And the last companion telemetry push of that headset.
         if (Get-Command Remove-DbKeyValue -ErrorAction SilentlyContinue) {
             try { Remove-DbKeyValue -Key ('companion_telemetry_' + [int]$headsetToRemove.ID) } catch { }

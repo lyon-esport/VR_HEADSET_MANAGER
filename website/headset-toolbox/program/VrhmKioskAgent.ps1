@@ -252,20 +252,176 @@ function Remove-KioskFirewallRules {
 # Browser lifecycle
 # ---------------------------------------------------------------------------
 
+function Get-KioskChromeProcesses {
+    # Every chrome.exe of the kiosk: the browser process (carries the debug port
+    # flag) AND its children (crashpad handler, GPU, utility, renderers), which
+    # only carry the profile folder. Matching on the port flag alone left those
+    # children alive when the browser process died (operator Alt+F4 on the
+    # console, crash): one of them could keep owning the profile, so the next
+    # launch was handed off to it and the debug flag ignored, or keep an
+    # inherited listening socket, so the port stayed busy until a reboot.
+    $portMarker = "--remote-debugging-port=$script:KioskPort"
+    $profileMarker = Split-Path -Leaf $script:KioskUserDataDir
+    return @(Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe'" -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.CommandLine -and (
+                $_.CommandLine -like "*$portMarker*" -or
+                $_.CommandLine -like "*$profileMarker*"
+            )
+        })
+}
+
 function Stop-ExistingKioskChrome {
     # Chrome refuses a second remote-debugging listener on the same port, so any
     # previous instance using it has to go first.
-    $portMarker = "--remote-debugging-port=$script:KioskPort"
-    $existingChrome = Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -and $_.CommandLine -like "*$portMarker*" }
-
-    if ($existingChrome) {
-        Write-Host "Closing previous kiosk Chrome instance on port $script:KioskPort..." -ForegroundColor Yellow
+    $existingChrome = @(Get-KioskChromeProcesses)
+    if ($existingChrome.Count -gt 0) {
+        Write-Host "Closing previous kiosk Chrome instance on port $script:KioskPort ($($existingChrome.Count) process(es))..." -ForegroundColor Yellow
         foreach ($proc in $existingChrome) {
             Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
         }
+        # Wait for them to really exit (a forced kill is asynchronous) instead of
+        # a fixed sleep: a process still exiting keeps the port and the profile.
+        $ids = @($existingChrome | ForEach-Object { [int]$_.ProcessId })
+        $deadline = (Get-Date).AddSeconds(5)
+        while ((Get-Date) -lt $deadline) {
+            $alive = @($ids | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+            if ($alive.Count -eq 0) { break }
+            Start-Sleep -Milliseconds 200
+        }
+    }
+}
+
+function Get-KioskPortListeners {
+    # The listening sockets on the debug port with their owner, as
+    # @{Address;Pid;Name;Services}. Name is '' when the owner PID no longer
+    # exists (a socket inherited by a process that already died).
+    $port = $script:KioskPort
+    $result = @()
+    foreach ($l in @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)) {
+        $ownerPid = [int]$l.OwningProcess
+        $name = ''
+        $proc = Get-Process -Id $ownerPid -ErrorAction SilentlyContinue
+        if ($proc) { $name = $proc.ProcessName }
+        $services = ''
+        if ($name -eq 'svchost') {
+            $services = (@(Get-CimInstance Win32_Service -Filter "ProcessId = $ownerPid" -ErrorAction SilentlyContinue |
+                ForEach-Object { $_.Name }) -join ',')
+        }
+        $result += [PSCustomObject]@{ Address = $l.LocalAddress; Pid = $ownerPid; Name = $name; Services = $services }
+    }
+    return $result
+}
+
+function Clear-KioskDebugPort {
+    <#
+    .SYNOPSIS
+    Frees the debug port BEFORE Chrome is launched. Returns $true when the port
+    is free afterwards.
+
+    .DESCRIPTION
+    An agent closed with its console window (Alt+F4) never runs its cleanup, so
+    the netsh port forward it created stays: it is persistent, and the IP Helper
+    service (iphlpsvc) keeps listening on 0.0.0.0:<port>. Chrome launched in
+    that state could not bind its DevTools listener properly and the kiosk
+    stayed unreachable until a reboot. Order matters: forward removed first,
+    leftover Chrome killed, and when iphlpsvc still holds the socket after the
+    delete (netsh does not always release it) the service is restarted - which
+    is what the reboot used to do.
+    #>
+    $port = $script:KioskPort
+    Remove-DebugPortForward
+
+    for ($attempt = 1; $attempt -le 2; $attempt++) {
+        $listeners = @(Get-KioskPortListeners)
+        if ($listeners.Count -eq 0) { return $true }
+
+        foreach ($l in $listeners) {
+            if ($l.Name -eq 'chrome') {
+                Write-Host "Port $port is still held by a leftover Chrome (PID $($l.Pid)) - closing it." -ForegroundColor Yellow
+                Stop-Process -Id $l.Pid -Force -ErrorAction SilentlyContinue
+            }
+            elseif ($l.Name -eq 'svchost' -and $l.Services -match '(?i)\biphlpsvc\b') {
+                Write-Host "Port $port is still held by a stale port forward (IP Helper service) - restarting the service." -ForegroundColor Yellow
+                try {
+                    Restart-Service -Name iphlpsvc -Force -ErrorAction Stop
+                } catch {
+                    Write-Host "Could not restart the IP Helper service: $($_.Exception.Message)" -ForegroundColor Red
+                }
+            }
+        }
         Start-Sleep -Seconds 1
     }
+
+    $left = @(Get-KioskPortListeners)
+    if ($left.Count -eq 0) { return $true }
+    foreach ($l in $left) {
+        $owner = if ($l.Name) { "$($l.Name) (PID $($l.Pid))" } else { "PID $($l.Pid), process already gone" }
+        if ($l.Services) { $owner += " services: $($l.Services)" }
+        Write-Host "Port $port is still in use on $($l.Address) by $owner - Chrome may not get its debug port." -ForegroundColor Red
+    }
+    return $false
+}
+
+function Write-KioskPortDiagnostic {
+    # Printed when the debug endpoint does not come up, so a field report says
+    # who holds the port instead of only "debug closed".
+    $port = $script:KioskPort
+    Write-Host "---- Debug port $port diagnostic ----" -ForegroundColor DarkYellow
+    $listeners = @(Get-KioskPortListeners)
+    if ($listeners.Count -eq 0) {
+        Write-Host "No process listens on port $port." -ForegroundColor DarkYellow
+    }
+    foreach ($l in $listeners) {
+        $owner = if ($l.Name) { "$($l.Name) (PID $($l.Pid))" } else { "PID $($l.Pid), process already gone" }
+        if ($l.Services) { $owner += " services: $($l.Services)" }
+        Write-Host "Listening on $($l.Address):$port - $owner" -ForegroundColor DarkYellow
+    }
+    Write-Host "Kiosk Chrome processes: $(@(Get-KioskChromeProcesses).Count)" -ForegroundColor DarkYellow
+    $proxy = @(netsh interface portproxy show all 2>&1 | Where-Object { "$_" -match "\b$port\b" })
+    if ($proxy.Count -gt 0) {
+        Write-Host "Port forward rules for $port :" -ForegroundColor DarkYellow
+        $proxy | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkYellow }
+    } else {
+        Write-Host "No port forward rule for $port." -ForegroundColor DarkYellow
+    }
+    Write-Host "-------------------------------------" -ForegroundColor DarkYellow
+}
+
+function Wait-KioskCdp {
+    param([int]$TimeoutSec = 10)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        if (Get-LocalCdpVersion) { return $true }
+        Start-Sleep -Seconds 1
+    }
+    return $false
+}
+
+function Start-KioskBrowserChecked {
+    <#
+    .SYNOPSIS
+    The full launch cycle used at start and on every restart: stop the previous
+    Chrome, free the port, launch, set up the LAN forward, wait for the debug
+    endpoint. When it does not answer, prints the diagnostic and retries the
+    whole cycle ONCE. Returns $true when the endpoint answers.
+    #>
+    for ($attempt = 1; $attempt -le 2; $attempt++) {
+        Stop-ExistingKioskChrome
+        Clear-KioskDebugPort | Out-Null
+        $script:ChromeProcess = Start-KioskBrowser -StartUrl $script:KioskUrl
+        Update-DebugPortForward
+        if (Wait-KioskCdp -TimeoutSec 10) {
+            Write-Host "Chrome debug endpoint is online." -ForegroundColor Green
+            return $true
+        }
+        Write-Host "Chrome started, but its debug endpoint did not answer." -ForegroundColor Yellow
+        Write-KioskPortDiagnostic
+        if ($attempt -eq 1) {
+            Write-Host "Retrying the browser launch once..." -ForegroundColor Yellow
+        }
+    }
+    return $false
 }
 
 function Start-KioskBrowser {
@@ -432,21 +588,7 @@ function Restart-KioskBrowser {
     param([string]$Reason = "operator request")
 
     Write-Host "Restarting the kiosk browser ($Reason)..." -ForegroundColor Yellow
-    Remove-DebugPortForward
-    Stop-ExistingKioskChrome
-    $script:ChromeProcess = Start-KioskBrowser -StartUrl $script:KioskUrl
-    Update-DebugPortForward
-
-    $deadline = (Get-Date).AddSeconds(10)
-    while ((Get-Date) -lt $deadline) {
-        if (Get-LocalCdpVersion) {
-            Write-Host "Chrome debug endpoint is online after restart." -ForegroundColor Green
-            return $true
-        }
-        Start-Sleep -Seconds 1
-    }
-    Write-Host "Chrome restarted, but the local debug endpoint did not answer yet." -ForegroundColor Yellow
-    return $false
+    return (Start-KioskBrowserChecked)
 }
 
 function Stop-VrhmKioskAgent {
@@ -824,10 +966,10 @@ function Start-VrhmKioskAgent {
     # 2. Firewall.
     Add-KioskFirewallRules -Port $Port
 
-    # 3. Browser + agent loop.
-    Stop-ExistingKioskChrome
-    $script:ChromeProcess = Start-KioskBrowser -StartUrl $script:KioskUrl
-    Update-DebugPortForward
+    # 3. Browser + agent loop. Start-KioskBrowserChecked also clears what a
+    #    previous agent closed with its console window left behind (port
+    #    forward, stale listener, leftover Chrome processes).
+    Start-KioskBrowserChecked | Out-Null
 
     $script:StartedAt               = Get-Date
     $script:MachineId               = Get-MachineIdentifier

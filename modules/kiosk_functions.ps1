@@ -817,16 +817,28 @@ function Add-KioskCommand {
     $queuedAt = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
 
     try {
-        Invoke-DbNonQuery -Name 'kiosk_commands.insert' -Parameters @{
-            ip_address  = $IPAddress
-            cmd         = $Cmd
-            nonce       = $nonce
-            delay_sec   = $DelaySec
-            queued_at   = $queuedAt
-            # Seconds, not milliseconds: the claim compares this against a
-            # wall-clock age in seconds.
-            queued_unix = [int64]$now.ToUnixTimeSeconds()
-        } | Out-Null
+        # The nonce column is UNIQUE: several kiosks queued in the same millisecond
+        # (Shutdown All) would collide, so a refused insert retries with the next value.
+        $attempt = 0
+        while ($true) {
+            try {
+                Invoke-DbNonQuery -Name 'kiosk_commands.insert' -Parameters @{
+                    ip_address  = $IPAddress
+                    cmd         = $Cmd
+                    nonce       = $nonce
+                    delay_sec   = $DelaySec
+                    queued_at   = $queuedAt
+                    # Seconds, not milliseconds: the claim compares this against a
+                    # wall-clock age in seconds.
+                    queued_unix = [int64]$now.ToUnixTimeSeconds()
+                } | Out-Null
+                break
+            } catch {
+                $attempt++
+                if ($attempt -ge 5 -or $_.Exception.Message -notmatch 'UNIQUE') { throw }
+                $nonce++
+            }
+        }
         Write-Log "Add-KioskCommand: queued '$Cmd' for kiosk $IPAddress (nonce $nonce)." -Level INFO
         Write-KioskLog "command queued ip=$IPAddress cmd=$Cmd nonce=$nonce delaySec=$DelaySec" -Level INFO
         return $nonce
@@ -835,6 +847,46 @@ function Add-KioskCommand {
         Write-KioskLog "command queue failed ip=$IPAddress cmd=$Cmd error=$($_.Exception.Message)" -Level ERROR
         return $null
     }
+}
+
+
+function Wait-KioskCommandsDelivered {
+    <#
+    .SYNOPSIS
+    Waits until the agent of each kiosk has collected its queued command (the claim
+    deletes the row), or the timeout elapses. Used before the application or the
+    host shuts down: an agent polls every few seconds, so a command queued just
+    before the server stops would otherwise never be delivered.
+    Returns the number of commands still pending (0 = all delivered). Never throws.
+    .EXAMPLE
+    Wait-KioskCommandsDelivered -Nonces @($r1.Nonce, $r2.Nonce) -TimeoutSec 15
+    #>
+    param(
+        [int64[]]$Nonces = @(),
+        [int]$TimeoutSec = 15
+    )
+
+    $pending = @($Nonces | Where-Object { $_ -gt 0 })
+    if ($pending.Count -eq 0) { return 0 }
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($true) {
+        $still = @()
+        foreach ($n in $pending) {
+            try {
+                $c = [int](Invoke-DbScalar -Name 'kiosk_commands.pending_count' -Parameters @{ nonce = $n })
+                if ($c -gt 0) { $still += $n }
+            } catch {
+                $still += $n
+            }
+        }
+        $pending = $still
+        if ($pending.Count -eq 0 -or $sw.Elapsed.TotalSeconds -ge $TimeoutSec) { break }
+        Start-Sleep -Milliseconds 500
+    }
+    if ($pending.Count -gt 0) {
+        Write-KioskLog "shutdown-all: $($pending.Count) kiosk command(s) not collected within ${TimeoutSec}s" -Level WARNING
+    }
+    return $pending.Count
 }
 
 

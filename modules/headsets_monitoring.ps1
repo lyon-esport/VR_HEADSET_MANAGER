@@ -818,6 +818,8 @@ function Start-VRMonitor {
             # Companion report-target push cadence (ADR-0043): tell the companion where to POST.
             $nextReportAt     = [datetime]::MinValue
             $nextGapAt        = [datetime]::MinValue
+            # Companion boot ADB mode delivery (Sync-CompanionBootMode): stamp memo + backoff.
+            $bootModeState    = @{}
             $blackState      = @{}
             # The serial this runspace learned from the headset itself. $headset was captured
             # at startup, so a row added from an IP alone has no serial in it - without this
@@ -914,6 +916,16 @@ function Start-VRMonitor {
                                     if ($bootNeeded) {
                                         try { [void](Set-CompanionReportTarget -IP ([string]$liveHeadset.IPAddress) -ReportUrl $rptUrl) } catch { }
                                     }
+                                }
+                                # Companion boot ADB mode: pushed ONCE per global WiFi ADB change (or to a
+                                # headset never pushed to). Waits while capturing: the companion runs tcpip
+                                # at once in CLASSIC mode, which restarts adbd.
+                                if (-not $ownerForeign -and $liveHeadset.IPAddress -and -not (Test-UnknownIp $liveHeadset.IPAddress) -and (Get-Command Sync-CompanionBootMode -ErrorAction SilentlyContinue)) {
+                                    try {
+                                        $bmBlocked = [bool]$sharedState['_benchmark_active']
+                                        if (-not $bmBlocked -and (Get-Command Test-UsbBusy -ErrorAction SilentlyContinue)) { $bmBlocked = [bool](Test-UsbBusy) }
+                                        [void](Sync-CompanionBootMode -Headset $liveHeadset -IP ([string]$liveHeadset.IPAddress) -Capturing ([string]$workingInfo.SCRCPY -eq 'OK') -Blocked $bmBlocked -State $bootModeState)
+                                    } catch { }
                                 }
                             }
                             try {
@@ -2062,7 +2074,9 @@ function Start-VRMonitor {
                 }
 
                 # ---- FAST PATH: kiosk status snapshot (write-on-change, mirrors above) ----
-                $kioskKeys = @($sharedState.Keys | Where-Object { $_ -like "kiosk_*" })
+                # Key snapshot under SyncRoot: the kiosk runspaces add keys concurrently and a
+                # bare .Keys enumeration threw "collection was modified", losing the fast tick.
+                $kioskKeys = @(Get-SyncTableKeys -Table $sharedState | Where-Object { $_ -like "kiosk_*" })
                 if ($kioskKeys.Count -gt 0) {
                     $kioskStatuses = @($kioskKeys | ForEach-Object { $sharedState[$_] } | Where-Object { $_ })
                     $kioskFp = ($kioskStatuses | ForEach-Object {
@@ -2152,6 +2166,13 @@ function Start-VRMonitor {
                         } catch {
                             Write-Log ("VRMonitor: WiFi ADB mode tick failed: " + $_.Exception.Message) -Level WARNING
                         }
+                    }
+
+                    # Companion boot ADB mode generation: bumped only when the GLOBAL WiFi ADB
+                    # choice changed (persisted, so a restart is no change). The poll runspaces
+                    # deliver it once per headset (Sync-CompanionBootMode). Single writer: here.
+                    if (Get-Command Update-CompanionBootModeGeneration -ErrorAction SilentlyContinue) {
+                        try { [void](Update-CompanionBootModeGeneration) } catch { }
                     }
 
                     # Companion telemetry report target (ADR-0043): this server's LAN report URL,

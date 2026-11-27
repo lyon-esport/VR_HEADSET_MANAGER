@@ -963,6 +963,7 @@
 
     # Installation/provisionnement de l'appli VRHM Companion (ADR-0042 ; console ajout casque C, web).
     Companion = @{
+        BootModeSynced = "Companion de {0} : mode ADB au demarrage regle sur {1} (changement global)"
         CapLabel       = "Companion"
         CapLine        = "{0} - premier plan : {1} - manettes : {2} - thermique : {3}"
         OwnerLabel     = "Proprietaire companion"
