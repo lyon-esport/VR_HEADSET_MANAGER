@@ -131,10 +131,36 @@
       #btn-record.on .ic-on { fill: #ef4444; }
       #btn-record.on:hover { background: rgba(239,68,68,0.35); color: #ef4444; }
       #btn-record.on .ic-off, #btn-record.off .ic-on { display: none; }
+      /* Screenshot button - bottom-right, mirrors the timer control (bottom-left); same corner as
+         the screenshot button of the video_monitor.html cells */
+      #btn-snapshot {
+        position: absolute;
+        bottom: 14px; right: 14px;
+        z-index: 40;
+        padding: 0;
+        opacity: 0;
+        transition: opacity 0.15s, background 0.15s, color 0.15s, border-color 0.15s;
+      }
+      body:hover #btn-snapshot,
+      #btn-snapshot:focus-visible,
+      #btn-snapshot.busy,
+      #btn-snapshot.done { opacity: 1; }
+      #btn-snapshot.busy { cursor: wait; animation: snapshot-pulse 0.9s ease-in-out infinite; }
+      #btn-snapshot.done { color: #22c55e; border-color: rgba(34,197,94,0.7); }
+      @keyframes snapshot-pulse { 50% { opacity: 0.45; } }
+      /* Headset settings overlay (embeds headsets_settings.html?embed=1), same as video_monitor.html */
+      #settings-overlay { position: fixed; inset: 0; z-index: 10000; background: rgba(0,0,0,0.6); }
+      #settings-overlay[hidden] { display: none; }
+      #settings-overlay-frame { width: 100%; height: 100%; border: 0; display: block; background: transparent; }
+      #settings-overlay-close { position: absolute; top: 12px; right: 16px; z-index: 1; width: 34px; height: 34px;
+        border: 1px solid rgba(255,255,255,0.35); border-radius: 50%; background: rgba(20,20,20,0.85); color: #fff;
+        font-size: 22px; line-height: 1; cursor: pointer; }
+      #settings-overlay-close:hover { background: #000; }
       /* Touch devices: larger tap targets, always-visible buttons */
       @media (pointer: coarse) {
         #actions-left  { opacity: 1; gap: 10px; top: 14px; left: 14px; }
         #actions-right { opacity: 1; gap: 10px; top: 14px; right: 14px; }
+        #btn-snapshot  { opacity: 1; }
         .action-btn { width: 48px; height: 48px; border-radius: 10px; }
         .btn-icon { width: 20px; height: 20px; }
       }
@@ -203,6 +229,15 @@
     </div>
 
     <div id="actions-left">
+      <!-- Headset settings (same top-left slot as the video_monitor.html cells; no drag grip here) -->
+      <button class="action-btn" id="btn-settings" title="Headset settings" aria-label="Headset settings" onclick="openSettingsOverlay()">
+        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/>
+          <line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/>
+          <line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/>
+          <line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>
+        </svg>
+      </button>
       <!-- Monitoring overlay -->
       <button class="action-btn" id="btn-monitoring" title="Show monitoring" aria-label="Show monitoring" onclick="toggleMonitoring()">
         <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -250,8 +285,22 @@
       </svg>
     </button>
 
+    <!-- Screenshot of the live stream (POST /api/headset-snapshot) -->
+    <button class="action-btn" id="btn-snapshot" type="button" title="Take screenshot" aria-label="Take screenshot" onclick="takeSnapshot()">
+      <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+        <circle cx="12" cy="13" r="4"/>
+      </svg>
+    </button>
+
     <div id="monitoring-overlay">
       <iframe src="<%= $display_name %>[monitoring].html" scrolling="no" allow="autoplay"></iframe>
+    </div>
+
+    <!-- Headset settings overlay -->
+    <div id="settings-overlay" hidden>
+      <button type="button" id="settings-overlay-close" title="Close (Esc)" aria-label="Close">&times;</button>
+      <iframe id="settings-overlay-frame" src="about:blank"></iframe>
     </div>
 
     <script src="/assets/vrhm_common.js"></script>
@@ -308,6 +357,61 @@
         if (capture.known && !capture.scrcpy && !capture.autoRestart) { return ['Capture stopped', false]; }
         return ['Stream unavailable - retrying...', false];
       }
+
+      // ---- Screenshot (POST /api/headset-snapshot, same backend as video_monitor.html, the Stream
+      // Deck and the console headset panel key P). Saved next to the recordings. ----
+      function takeSnapshot() {
+        var btn = document.getElementById('btn-snapshot');
+        if (btn.classList.contains('busy')) return;
+        var title = 'Take screenshot';
+        btn.classList.remove('done');
+        btn.classList.add('busy');
+        btn.title = 'Taking screenshot...';
+        fetch('/api/headset-snapshot', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: parseInt(CAPTURE_ID, 10) })
+        })
+          .then(function(r) { return r.json().catch(function() { return {}; }); })
+          .then(function(j) {
+            btn.classList.remove('busy');
+            if (j && j.ok) {
+              btn.classList.add('done');
+              btn.title = 'Saved: ' + (j.file || 'screenshot');
+              setTimeout(function() { btn.classList.remove('done'); btn.title = title; }, 2500);
+            } else {
+              btn.title = title;
+              alert('Screenshot failed: ' + ((j && j.error) || 'server error'));
+            }
+          })
+          .catch(function(err) {
+            btn.classList.remove('busy');
+            btn.title = title;
+            alert('Screenshot failed: ' + err);
+          });
+      }
+
+      // ---- Headset settings overlay (same as video_monitor.html; the stream keeps playing) ----
+      function openSettingsOverlay() {
+        if (window.self !== window.top) return;
+        document.getElementById('settings-overlay-frame').src =
+          'headsets_settings.html?embed=1&headset=' + encodeURIComponent('<%= $display_name %>');
+        document.getElementById('settings-overlay').hidden = false;
+      }
+      function closeSettingsOverlay() {
+        var ov = document.getElementById('settings-overlay');
+        if (ov.hidden) return;
+        ov.hidden = true;
+        document.getElementById('settings-overlay-frame').src = 'about:blank';
+      }
+      document.getElementById('settings-overlay-close').addEventListener('click', closeSettingsOverlay);
+      document.getElementById('settings-overlay').addEventListener('click', function(e) {
+        if (e.target === this) closeSettingsOverlay();
+      });
+      document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeSettingsOverlay(); });
+      window.addEventListener('message', function(e) {
+        if (e.data === 'vrhm-close-settings') closeSettingsOverlay();
+      });
 
       // ---- Recording toggle (POST /api/recording, same backend as the settings page and console) ----
       // The icon flips at once on click and is held for 6 s so a poll still carrying the old
@@ -615,6 +719,8 @@
         if (inIframe) {
           document.getElementById('actions-left').style.display  = 'none';
           document.getElementById('actions-right').style.display = 'none';
+          // The video_monitor.html cell carries its own screenshot button
+          document.getElementById('btn-snapshot').style.display  = 'none';
         }
 
         // Auto-show overlays by default, unless embedded, previously dismissed, or ?nooverlay=1

@@ -145,6 +145,25 @@
     .cell:hover .settings-corner-btn,
     .cell:focus-within .settings-corner-btn,
     .cell-action-btn.settings-corner-btn:focus-visible { opacity: 1; }
+    /* Screenshot button: bottom-right corner, shown on hover like the other cell buttons */
+    .cell-action-btn.snapshot-btn {
+      position: absolute;
+      bottom: 8px; right: 8px;
+      z-index: 30;
+      padding: 0;
+      opacity: 0;
+      transition: opacity 0.15s, background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    .cell:hover .snapshot-btn,
+    .cell:focus-within .snapshot-btn,
+    .cell-action-btn.snapshot-btn:focus-visible,
+    .cell-action-btn.snapshot-btn.busy,
+    .cell-action-btn.snapshot-btn.done { opacity: 1; }
+    .cell-action-btn.snapshot-btn.hidden,
+    .cell.no-stream .snapshot-btn { display: none; }
+    .cell-action-btn.snapshot-btn.busy { cursor: wait; animation: snapshot-pulse 0.9s ease-in-out infinite; }
+    .cell-action-btn.snapshot-btn.done { color: #22c55e; border-color: rgba(34,197,94,0.7); }
+    @keyframes snapshot-pulse { 50% { opacity: 0.45; } }
     /* Iframes swallow dragover/drop events: let them reach the cells while dragging */
     #grid.reordering iframe { pointer-events: none; }
     .cell.dragging { opacity: 0.5; }
@@ -1105,6 +1124,38 @@
         });
     }
 
+    // Screenshot of the live stream (POST /api/headset-snapshot, same backend as the Stream Deck and
+    // the console headset panel key P). Saved next to the recordings; shown on recordings.html.
+    function takeSnapshot(btn) {
+      if (btn.classList.contains('busy')) return;
+      var title = 'Take screenshot';
+      btn.classList.remove('done');
+      btn.classList.add('busy');
+      btn.title = 'Taking screenshot...';
+      fetch('/api/headset-snapshot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: parseInt(btn.dataset.snapshotId, 10) })
+      })
+        .then(function(r) { return r.json().catch(function() { return {}; }); })
+        .then(function(j) {
+          btn.classList.remove('busy');
+          if (j && j.ok) {
+            btn.classList.add('done');
+            btn.title = 'Saved: ' + (j.file || 'screenshot');
+            setTimeout(function() { btn.classList.remove('done'); btn.title = title; }, 2500);
+          } else {
+            btn.title = title;
+            alert('Screenshot failed: ' + ((j && j.error) || 'server error'));
+          }
+        })
+        .catch(function(err) {
+          btn.classList.remove('busy');
+          btn.title = title;
+          alert('Screenshot failed: ' + err);
+        });
+    }
+
     // Headset settings shown over the wall (the page stays loaded, so streams keep playing)
     function openSettingsOverlay(dn) {
       var ov = document.getElementById('settings-overlay');
@@ -1148,6 +1199,8 @@
       }
       var recBtn = e.target.closest('.record-btn');
       if (recBtn) { e.stopPropagation(); toggleRecording(recBtn.dataset.recordHeadset, recBtn); return; }
+      var snapBtn = e.target.closest('.snapshot-btn');
+      if (snapBtn) { e.stopPropagation(); takeSnapshot(snapBtn); return; }
       var castBtn = e.target.closest('.cast-btn');
       if (castBtn) { e.stopPropagation(); openCastPanel(castBtn); }
     });
@@ -1754,6 +1807,12 @@
         '<button class="cell-timer-btn" data-timer-cell="' + id + '" title="Start timer (long press: reset)" aria-label="Timer control">' +
           '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
             '<path d="M5 2h14M5 22h14M7 2v5l5 5-5 5v5M17 2v5l-5 5 5 5v5"/>' +
+          '</svg>' +
+        '</button>' +
+        '<button type="button" class="cell-action-btn snapshot-btn" data-snapshot-id="' + id + '" title="Take screenshot" aria-label="Take screenshot">' +
+          '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+            '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>' +
+            '<circle cx="12" cy="13" r="4"/>' +
           '</svg>' +
         '</button>' +
         '<div class="offline-overlay">OFFLINE</div>' +
